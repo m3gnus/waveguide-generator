@@ -262,16 +262,16 @@ describe('CadLinkPanel', () => {
     expect([...host.querySelectorAll<HTMLButtonElement>('button')].some((button) => button.textContent === 'Dismiss')).toBe(false);
   });
 
-  it('shows only durable interrupted mutations with their journal phase and recovery actions', async () => {
-    await renderAndSelect();
-    await clickIngest();
+  /** The active Fusion document reports the interrupted update `operationId`,
+   * which is what makes its recovery card loud. */
+  const reportRecovery = async (operationId: string) => {
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
       String(input).endsWith('/fusion-status')
         ? json({
           ...currentFusion,
           recoveryRequired: {
-            operationId: 'op-update', kind: 'update', instanceId: 'instance-a', exportId: 'wge_2', phase: 'applied',
+            operationId, kind: 'update', instanceId: 'instance-a', exportId: 'wge_2', phase: 'applied',
           },
         })
         : base(input, init)
@@ -280,6 +280,12 @@ describe('CadLinkPanel', () => {
       window.dispatchEvent(new Event('focus'));
       await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
     });
+  };
+
+  it('shows only durable interrupted mutations the active document reports, with their recovery actions', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    await reportRecovery('op-update');
     act(() => {
       const { apply } = useCadOperationsStore.getState();
       apply(cadOperation({ operationId: 'op-return', kind: 'request_return', state: 'recovery_required' }));
@@ -289,14 +295,17 @@ describe('CadLinkPanel', () => {
     const card = operationCard('op-update');
     expect(host.querySelectorAll('.cad-operation')).toHaveLength(1);
     expect(card.textContent).toContain('Update interrupted — recovery required');
-    expect(card.textContent).toContain('Journal phase: applied');
     expect(card.textContent).toContain('Fusion has no transaction covering these edits');
+    // The journal and the operation id are WG's bookkeeping, not the user's.
+    expect(card.textContent).not.toContain('Journal phase');
+    expect(card.textContent).not.toContain('op-update');
     expect(buttonTexts(card)).toEqual(['Dismiss', 'Check Fusion again']);
   });
 
   it('settles a recovery card from Fusion evidence without offering the update again', async () => {
     await renderAndSelect();
     await clickIngest();
+    await reportRecovery('op-update');
     const posted = recordOperationRequests({ reconcileAccepted: ['op-update'] });
     act(() => useCadOperationsStore.getState().apply(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
@@ -322,6 +331,7 @@ describe('CadLinkPanel', () => {
   it('does not claim Fusion reported an interruption when reconciliation finds no current evidence', async () => {
     await renderAndSelect();
     await clickIngest();
+    await reportRecovery('op-update');
     const posted = recordOperationRequests();
     act(() => useCadOperationsStore.getState().apply(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
@@ -408,7 +418,12 @@ describe('CadLinkPanel', () => {
     expect(engine.textContent).toContain('solver selector');
     expect(buttonTexts(engine)).toEqual(['Dismiss', 'Open Simulation', 'Solve now']);
     expect(buttonLabels(engine)[0]).toBe('Dismiss: operation op-engine');
-    expect(setup.textContent).toContain('Choose the solve settings for this model in WG');
+    // The model is on screen, so the card's own guidance replaces the backend's
+    // message; only the collapsed Solve inputs record keeps it, as reported.
+    expect(setup.querySelector(':scope > div > span:not([role])')?.textContent).toContain('This model is on screen');
+    expect([...setup.querySelectorAll(':scope > div > span')].map((span) => span.textContent).join(' '))
+      .not.toContain('Choose the solve settings for this model in WG');
+    expect(setup.querySelector('.cad-solve-inputs-reported')?.textContent).toContain('Choose the solve settings for this model in WG');
     expect(buttonTexts(setup)).toEqual(['Dismiss', 'Open Simulation', 'Use these settings and solve']);
 
     await act(async () => { ready.querySelector<HTMLButtonElement>('button.primary')!.click(); });
@@ -447,9 +462,10 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(card.textContent).toContain('Could not read the findings'));
     expect(buttonIn(card, 'Approve and solve')).toBeUndefined();
     await act(async () => { buttonIn(card, 'Retry')!.click(); });
-    await vi.waitFor(() => expect(card.textContent).toContain('finding-a'));
+    await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('freshness'));
     expect(card.textContent).not.toContain('Could not read the findings');
-    expect(card.textContent).toContain('freshness');
+    // In words, never by id.
+    expect(card.textContent).not.toContain('finding-a');
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toEqual({
@@ -603,8 +619,11 @@ describe('CadLinkPanel', () => {
         snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Tritonia', projectLineageId: 'wgl_other' },
       }));
     });
+    // Not the model on screen: one quiet line under Earlier requests, which
+    // can still open its project.
     const card = operationCard('op-other');
-    expect(buttonTexts(card)).toEqual(['Dismiss', 'Open Tritonia', 'Solve now']);
+    expect(card.closest('.cad-earlier-requests')).not.toBeNull();
+    expect(buttonTexts(card)).toEqual(['Open Tritonia', 'Dismiss']);
 
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
     act(() => {
@@ -628,13 +647,13 @@ describe('CadLinkPanel', () => {
     // The coordinator says what the open found; the card does not talk over it.
     await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toContain('Project design loaded'));
     expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Opened');
-    // Its return is not on screen, and the project may have recorded settings
-    // by now: the request is solvable from here.
-    await act(async () => { buttonIn(operationCard('op-other'), 'Solve now')!.click(); });
-    await vi.waitFor(() => expect(prepared).toEqual([{ submit: true }]));
+    // Its return is still not on screen: it stays a quiet line, and nothing is
+    // prepared from here.
+    expect(buttonIn(operationCard('op-other'), 'Solve now')).toBeUndefined();
+    expect(prepared).toEqual([]);
   });
 
-  it('lets each waiting version of one project be solved once its project’s settings are recorded', async () => {
+  it('solves the waiting version on screen with its settings, and keeps the other one a quiet line', async () => {
     // The ingestion files the model on screen under the project both versions belong to.
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
@@ -664,15 +683,12 @@ describe('CadLinkPanel', () => {
     await act(async () => { buttonIn(operationCard('op-v2'), 'Use these settings and solve')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[0]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_other' } });
-    // v1's return is not on screen, and may have left the returns folder: it is
-    // solved from the setup its project has now.
-    expect(buttonTexts(operationCard('op-v1'))).toEqual(['Dismiss', 'Open Tritonia v1', 'Solve now']);
-    await act(async () => { buttonIn(operationCard('op-v1'), 'Solve now')!.click(); });
-    await vi.waitFor(() => expect(posted).toHaveLength(3));
-    expect(posted[2]).toEqual({ path: '/api/cadlink/operations/op-v1/prepare', body: { submit: true } });
+    // v1's return is not on screen: one quiet line under Earlier requests.
+    expect(operationCard('op-v1').closest('.cad-earlier-requests')).not.toBeNull();
+    expect(buttonTexts(operationCard('op-v1'))).toEqual(['Open Tritonia v1', 'Dismiss']);
   });
 
-  it('asks for the return to be selected first when its model has no project yet', async () => {
+  it('lists a request whose model has no project yet as a quiet line to dismiss', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => {
       useCadOperationsStore.getState().apply(cadOperation({
@@ -682,7 +698,8 @@ describe('CadLinkPanel', () => {
       }));
     });
     const card = operationCard('op-first');
-    expect(card.textContent).toContain('Select Tritonia v2 in the return list first');
+    expect(card.closest('.cad-earlier-requests')).not.toBeNull();
+    expect(card.textContent).toContain('Tritonia v2');
     expect(buttonTexts(card)).toEqual(['Dismiss']);
   });
 

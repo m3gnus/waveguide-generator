@@ -5,6 +5,7 @@ import { listCadProjects } from '../api/cadProjects';
 import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
+import { fullTime, relativeTime } from './cadTime';
 import { workspaceNavigation } from './workspaceNavigation';
 import { CadSolveInputs } from './CadSolveInputs';
 import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
@@ -111,7 +112,12 @@ export interface SolveGateStep {
 }
 
 function findingCount(count: number): string {
-  return `${count} blocking finding${count === 1 ? '' : 's'}`;
+  return `${count} finding${count === 1 ? '' : 's'}`;
+}
+
+/** A finding in words: what kind it is and what it says, never its id. */
+function findingWords(finding: CadReturnFinding): string {
+  return `${finding.kind.replaceAll('-', ' ')}${finding.detail ? ` — ${finding.detail}` : ''}`;
 }
 
 /**
@@ -131,9 +137,6 @@ export function solveGateLadder(
   const blocking = review?.findingIds ?? [];
   const approved = new Set(review?.approvedIds ?? []);
   const unapproved = blocking.filter((id) => !approved.has(id));
-  const submit: SolveGateStep = {
-    gate: 'solve', current: false, text: 'Then WG submits the solve, and its results open in Results.',
-  };
   switch (operation.reason) {
     case 'frame_confirmation_required':
       return [
@@ -141,68 +144,49 @@ export function solveGateLadder(
           gate: 'frame', current: true,
           text: 'Now: confirm the solver frame — the axis this model radiates along — below.',
         },
-        ...(blocking.length ? [{
+        // Confirming the frame approves nothing: a finding still unapproved
+        // is the next stop, and only then is it named.
+        ...(unapproved.length ? [{
           gate: 'findings' as const, current: false,
-          text: `Then: review ${findingCount(blocking.length)} this model's preparation reported. Confirming the frame prepares it again, so they are approved on that preparation.`,
+          text: `Then: approve ${findingCount(unapproved.length)}.`,
         }] : []),
-        submit,
       ];
     case 'findings_need_review':
-      return [
-        {
-          gate: 'findings', current: true,
-          text: `Now: review ${findingCount(unapproved.length || blocking.length)}, then Approve and solve.`,
-        },
-        submit,
-      ];
+      return [{
+        gate: 'findings', current: true,
+        text: `Now: review ${findingCount(unapproved.length || blocking.length)}, then Approve and solve.`,
+      }];
     case 'ready_to_solve':
       return [{ gate: 'solve', current: true, text: 'Now: press Solve now to start it.' }];
     default:
       return [
         { gate: 'other', current: true, text: `Now: ${REASON_COPY[operation.reason ?? ''] ?? 'it needs your attention'} — see below.` },
-        { gate: 'solve', current: false, text: 'Then WG prepares it again. Any further check it stops at is listed here.' },
       ];
   }
 }
 
 type OperationAction = 'solve' | 'approve' | 'use-settings' | 'dismiss';
 
+/** Reasons whose backend message the card on screen already says in its own
+ * guidance and controls. */
+const SAID_BY_THE_CARD: ReadonlySet<string> = new Set(['setup_required', 'frame_confirmation_required']);
+
 interface Guidance {
   text: string | null;
   simulation: boolean;
   /** The action the reason calls for, offered while the operation waits. */
-  action: Exclude<OperationAction, 'dismiss'> | 'open-project' | 'confirm-frame' | null;
-  /** Solve now beside it: the backend answers from the project's recorded setup. */
-  alsoSolve?: boolean;
+  action: Exclude<OperationAction, 'dismiss'> | 'confirm-frame' | null;
 }
 
-/** What the user can do about the reason an operation waits. */
-function guidance(operation: CadOperationSummary, onScreen: boolean): Guidance {
-  const name = operation.snapshot?.documentName ?? 'this model';
+/** What the user can do about the reason an operation waits. A card is only
+ * ever shown for the model on screen (`CadOperationsSection`). */
+function guidance(operation: CadOperationSummary): Guidance {
   switch (operation.reason) {
     case 'setup_required':
-      if (onScreen) {
-        return {
-          text: 'This model is on screen: check its solve settings in Simulation, then use them to solve it.',
-          simulation: true,
-          action: 'use-settings',
-        };
-      }
-      if (operation.snapshot?.projectLineageId) {
-        // Its return need not be the one opening the project puts on screen --
-        // a newer version, or none left in the returns folder -- so it is also
-        // solvable from here once the project's settings are recorded.
-        return {
-          text: `No solve settings were recorded for ${name}’s project and sources when it was sent. Open it to choose them, or press Solve now if they have been recorded since.`,
-          simulation: false,
-          action: 'open-project',
-          alsoSolve: true,
-        };
-      }
       return {
-        text: `Select ${name} in the return list first. WG files it under a project when it prepares it; then choose its solve settings and use them to solve it.`,
-        simulation: false,
-        action: null,
+        text: 'This model is on screen: check its solve settings in Simulation, then use them to solve it.',
+        simulation: true,
+        action: 'use-settings',
       };
     case 'engine_unavailable':
       return {
@@ -225,11 +209,8 @@ function guidance(operation: CadOperationSummary, onScreen: boolean): Guidance {
     case 'frame_confirmation_required':
       // An unlinked model: the backend solves nothing until its project's
       // solver frame is confirmed, whichever way the solve was asked for.
-      return {
-        text: `${name} was authored in CAD. Confirm the axis it radiates along — once for its project — and WG solves it in that frame.`,
-        simulation: false,
-        action: 'confirm-frame',
-      };
+      // The frame chooser says why; nothing here repeats it.
+      return { text: null, simulation: false, action: 'confirm-frame' };
     case 'update_restart_pending':
       // The backend queues it again by itself; Solve now would only be refused until then.
       return {
@@ -242,10 +223,7 @@ function guidance(operation: CadOperationSummary, onScreen: boolean): Guidance {
   }
 }
 
-function CadOperationCard({ operation, record }: {
-  operation: CadOperationSummary;
-  record: CadReturnIngestRecord | null;
-}) {
+function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
@@ -259,13 +237,9 @@ function CadOperationCard({ operation, record }: {
     && asked.attemptGeneration === operation.attemptGeneration && asked.state === operation.state
     ? asked.action
     : null;
-  const [opening, setOpening] = useState(false);
-  const openingRef = useRef(false);
   const review = useFindingReview(operation);
-  const manifest = operation.snapshot?.manifestSha256 ?? null;
   const documentName = operation.snapshot?.documentName ?? null;
-  const onScreen = Boolean(record && manifest && record.manifest_sha256 === manifest);
-  const help = guidance(operation, onScreen);
+  const help = guidance(operation);
   const solve = operation.kind === 'prepare_and_solve';
   // A received operation is the backend's own loop to prepare.
   const waiting = solve && operation.state === 'needs_user_input';
@@ -288,44 +262,28 @@ function CadOperationCard({ operation, record }: {
     setAsked({ action, attemptGeneration: operation.attemptGeneration, state: operation.state });
     void request().catch(() => setAsked(null));
   };
-  // The project switcher's own open: it asks before discarding a design that
-  // exists nowhere else, and never opens over anything opened since. What the
-  // open found is the coordinator's to say.
-  const openProject = async () => {
-    const lineageId = operation.snapshot?.projectLineageId;
-    // Held from the first click, before the question, as the switcher is.
-    if (!lineageId || openingRef.current) return;
-    openingRef.current = true;
-    setOpening(true);
-    try {
-      const project = (await listCadProjects()).find((item) => item.lineageId === lineageId);
-      if (!project) throw new Error(`This copy of WG does not hold the project ${label} belongs to.`);
-      await openCadProject(project);
-    } catch (reason) {
-      coordinator.reportError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      openingRef.current = false;
-      setOpening(false);
-    }
-  };
-  const solveNow = (primary: boolean) => <button
-    className={primary ? 'primary' : undefined}
+  const solveNow = <button
+    className="primary"
     disabled={heldAction === 'solve'}
     aria-label={`Solve now: ${label}`}
     title="Prepare this model from its project’s own solve settings and start the solve."
     onClick={() => ask('solve', solveRequest)}
   >Solve now</button>;
+  // The stage is the backend's bookkeeping ("validating"); the state and the
+  // reason are what the user acts on.
   const status = [
     STATE_COPY[operation.state] ?? operation.state,
-    operation.stage,
     operation.reason ? REASON_COPY[operation.reason] ?? operation.reason : null,
   ].filter(Boolean).join(' · ');
+  // For the model on screen the card's own guidance and controls say what the
+  // backend's message says, which named menus for a model not on screen.
+  const message = SAID_BY_THE_CARD.has(operation.reason ?? '') ? null : operation.message;
   const ladder = solveGateLadder(operation, review.error ? null : review);
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId}>
     <div>
       <b>{solve ? (manual ? 'Your solve is waiting' : 'Fusion asked for a solve') : `CAD operation · ${operation.kind}`}{documentName ? ` · ${documentName}` : ''}</b>
       <span role="status">{status}</span>
-      {operation.message && <span>{operation.message}</span>}
+      {message && <span>{message}</span>}
       {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">
         {ladder.map((step) => <li
           key={step.gate}
@@ -334,12 +292,11 @@ function CadOperationCard({ operation, record }: {
           className={step.current ? 'current' : undefined}
         >{step.text}</li>)}
       </ol>}
-      {reviewedPreparation && <ul className="cad-operation-findings">
+      {/* Listed at the gate that approves them, where Approve and solve is. */}
+      {reviewedPreparation && operation.reason === 'findings_need_review' && <ul className="cad-operation-findings">
         {review.findingIds.map((id) => {
           const finding = review.findings.find((item) => item.id === id);
-          return <li key={id}>
-            <code>{id}</code>{finding ? ` · ${finding.kind}${finding.detail ? ` — ${finding.detail}` : ''}` : ''}
-          </li>;
+          return <li key={id}>{finding ? findingWords(finding) : 'A finding whose details could not be read'}</li>;
         })}
       </ul>}
       {/* At the frame gate the read only forecasts the next gate; failing it
@@ -385,65 +342,160 @@ function CadOperationCard({ operation, record }: {
         title="Record the settings on screen as this model’s project setup, then prepare and solve it."
         onClick={() => ask('use-settings', () => coordinator.solveOperationWithSettings(operation.operationId))}
       >Use these settings and solve</button>}
-      {waiting && help.action === 'open-project' && <button
-        className="primary"
-        disabled={opening}
-        aria-label={`Open ${documentName ?? 'the project'} to choose its solve settings`}
-        onClick={() => void openProject()}
-      >Open {documentName ?? 'its project'}</button>}
-      {waiting && help.action === 'open-project' && help.alsoSolve && solveNow(false)}
-      {waiting && help.action === 'solve' && solveNow(true)}
+      {waiting && help.action === 'solve' && solveNow}
     </div>
   </div>;
 }
 
+/** An interrupted Fusion update the active document still reports: the one
+ * recovery that is about the model in front of the user. */
 function RecoveryOperationCard({ operation }: { operation: CadOperationSummary }) {
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
   const [asked, setAsked] = useState<'dismiss' | 'reconcile' | null>(null);
-  const reported = coordinator.fusionStatus?.recoveryRequired;
-  const phase = reported?.operationId === operation.operationId ? reported.phase : null;
+  const documentName = operation.snapshot?.documentName ?? coordinator.fusionStatus?.documentName ?? null;
+  const label = documentName ?? 'the Fusion document';
   const ask = (action: 'dismiss' | 'reconcile', request: () => Promise<void>) => {
     setAsked(action);
     void request().then(() => setAsked(null), () => setAsked(null));
   };
   return <div className="cad-direction-alert cad-operation cad-operation-recovery" data-operation-id={operation.operationId}>
     <div>
-      <b>Update interrupted — recovery required</b>
-      <span role="status">Journal phase: {phase ?? 'not reported'}</span>
+      <b>Update interrupted — recovery required{documentName ? ` · ${documentName}` : ''}</b>
       <span>Fusion has no transaction covering these edits. Use Undo in Fusion to recover the document, or repair the link; do not continue modelling on a partially failed rebuild.</span>
-      <span>Dismissing this card retires WG’s durable operation notice. It does not repair Fusion, and WGLink will not repeat the operation.</span>
-      <span className="cad-operation-ids">Operation <code>{operation.operationId}</code></span>
+      <span>Dismissing this card does not repair Fusion, and WGLink will not repeat the update.</span>
     </div>
     <div className="cad-confirm-actions">
       <button
         disabled={asked !== null}
-        aria-label={`Dismiss recovery notice: ${operation.operationId}`}
+        aria-label={`Dismiss recovery notice: ${label}`}
         onClick={() => ask('dismiss', () => coordinator.dismissOperation(operation.operationId))}
       >Dismiss</button>
       <button
         className="primary"
         disabled={asked !== null}
-        aria-label={`Check Fusion again: ${operation.operationId}`}
+        aria-label={`Check Fusion again: ${label}`}
         onClick={() => ask('reconcile', () => coordinator.reconcileOperation(operation.operationId))}
       >Check Fusion again</button>
     </div>
   </div>;
 }
 
+/** What an earlier request was, in a few quiet words. */
+function earlierRequestLabel(operation: CadOperationSummary): string {
+  const name = operation.snapshot?.documentName ?? null;
+  if (operation.kind === 'prepare_and_solve') return `Solve request · ${name ?? 'a model not on screen'}`;
+  return `Interrupted Fusion update · ${name ?? 'another document'}`;
+}
+
+/** Requests about a model that is not on screen: a line each, never a card. */
+function EarlierRequests({ operations }: { operations: CadOperationSummary[] }) {
+  const coordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
+  );
+  const [dismissing, setDismissing] = useState<ReadonlySet<string>>(new Set());
+  const [opening, setOpening] = useState(false);
+  const openingRef = useRef(false);
+  const dismiss = (ids: string[]) => {
+    setDismissing((held) => new Set([...held, ...ids]));
+    void (async () => {
+      for (const id of ids) {
+        await coordinator.dismissOperation(id).catch(() => undefined);
+      }
+    })().finally(() => setDismissing((held) => new Set([...held].filter((id) => !ids.includes(id)))));
+  };
+  // A solve waiting on its project's settings can still be taken up: opening
+  // its project puts the model on screen, where its card offers the rest. The
+  // project switcher's own open: it asks before discarding a design that
+  // exists nowhere else, and never opens over anything opened since. What the
+  // open found is the coordinator's to say.
+  const openProject = async (operation: CadOperationSummary) => {
+    const lineageId = operation.snapshot?.projectLineageId;
+    // Held from the first click, before the question, as the switcher is.
+    if (!lineageId || openingRef.current) return;
+    openingRef.current = true;
+    setOpening(true);
+    try {
+      const project = (await listCadProjects()).find((item) => item.lineageId === lineageId);
+      if (!project) throw new Error(`This copy of WG does not hold the project ${operation.snapshot?.documentName ?? 'this request'} belongs to.`);
+      await openCadProject(project);
+    } catch (reason) {
+      coordinator.reportError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      openingRef.current = false;
+      setOpening(false);
+    }
+  };
+  return <details className="cad-earlier-requests">
+    <summary>Earlier requests ({operations.length})</summary>
+    <ul>
+      {operations.map((operation) => {
+        const label = earlierRequestLabel(operation);
+        const name = operation.snapshot?.documentName ?? null;
+        const openable = operation.kind === 'prepare_and_solve' && operation.state === 'needs_user_input'
+          && operation.reason === 'setup_required' && Boolean(operation.snapshot?.projectLineageId);
+        return <li key={operation.operationId} data-operation-id={operation.operationId}>
+          <span>{label}</span>
+          {operation.createdAt && <time dateTime={operation.createdAt} title={fullTime(operation.createdAt)}>{relativeTime(operation.createdAt)}</time>}
+          {openable && <button
+            className="link-button"
+            disabled={opening}
+            aria-label={`Open ${name ?? 'the project'} to choose its solve settings`}
+            onClick={() => void openProject(operation)}
+          >Open {name ?? 'its project'}</button>}
+          {operation.state !== 'cancel_requested' && <button
+            className="link-button"
+            disabled={dismissing.has(operation.operationId)}
+            aria-label={`Dismiss: ${label}`}
+            onClick={() => dismiss([operation.operationId])}
+          >Dismiss</button>}
+        </li>;
+      })}
+    </ul>
+    <button
+      className="link-button"
+      disabled={operations.every((operation) => dismissing.has(operation.operationId))}
+      onClick={() => dismiss(operations.filter((operation) => operation.state !== 'cancel_requested').map((operation) => operation.operationId))}
+    >Clear all</button>
+  </details>;
+}
+
+/** Whether an operation is about what is in front of the user: a solve of the
+ * model on screen (the same snapshot), or a recovery the active Fusion
+ * document still reports. */
+function aboutWhatIsOnScreen(
+  operation: CadOperationSummary,
+  record: CadReturnIngestRecord | null,
+  reportedRecovery: string | null,
+): boolean {
+  if (operation.kind === 'prepare_and_solve') {
+    const manifest = operation.snapshot?.manifestSha256 ?? null;
+    return Boolean(record && manifest && record.manifest_sha256 === manifest);
+  }
+  return reportedRecovery !== null && operation.operationId === reportedRecovery;
+}
+
 /** The CAD operations still waiting or running: the solves Fusion sent, which
- * the backend prepares from each project's own setup. */
+ * the backend prepares from each project's own setup. Only those about the
+ * model on screen get a card; the rest are one quiet line each. */
 export function CadOperationsSection({ record }: { record: CadReturnIngestRecord | null }) {
   const operations = useCadOperationsStore((state) => state.operations);
+  const coordinator = useSyncExternalStore(
+    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
+  );
   const pending = pendingCadOperations(operations)
     .filter((operation) => operation.kind === 'prepare_and_solve'
       || (operation.state === 'recovery_required'
         && (operation.kind === 'insert_link' || operation.kind === 'update_link')));
   if (!pending.length) return null;
+  const reportedRecovery = coordinator.fusionStatus?.recoveryRequired?.operationId ?? null;
+  const current = pending.filter((operation) => aboutWhatIsOnScreen(operation, record, reportedRecovery));
+  const earlier = pending.filter((operation) => !aboutWhatIsOnScreen(operation, record, reportedRecovery));
   return <div className="cad-operations">
-    {pending.map((operation) => operation.kind === 'prepare_and_solve'
-      ? <CadOperationCard key={operation.operationId} operation={operation} record={record}/>
+    {current.map((operation) => operation.kind === 'prepare_and_solve'
+      ? <CadOperationCard key={operation.operationId} operation={operation}/>
       : <RecoveryOperationCard key={operation.operationId} operation={operation}/>)}
+    {earlier.length > 0 && <EarlierRequests operations={earlier}/>}
   </div>;
 }

@@ -207,3 +207,8 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-delivery-waiting { color: var(--amber); }
 .cad-delivery-refusals ul { margin: 4px 0 0; padding-left: 16px; color: var(--fg2); }
 .cad-model-provenance { overflow-wrap: anywhere; }
+.cad-earlier-requests { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
+.cad-earlier-requests summary { cursor: pointer; }
+.cad-earlier-requests ul { margin: 4px 0; padding-left: 16px; }
+.cad-earlier-requests li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.cad-earlier-requests time { color: var(--fg4); }

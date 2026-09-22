@@ -220,7 +220,8 @@ export function CadSolverFrameConfirm({ snapshot, label, onConfirmed, mode = 'co
         : `Choose a solver frame axis: ${label}`}
       onClick={confirm}
     >{axis === null
-        ? 'Choose an axis'
+        // An instruction, not a dead button: the choice is the radios above.
+        ? 'Pick an axis above'
         : mode === 'confirm' ? `Confirm ${axis} and solve` : `Use ${axis} for this project`}</button>
   </div>;
 }

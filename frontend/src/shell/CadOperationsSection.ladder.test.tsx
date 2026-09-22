@@ -1,11 +1,12 @@
 /**
  * V5 / F6: every `needs_user_input` gate is visible and actionable, not only
  * the first. `reason` names one current gate; the rest of the ladder comes
- * from the preparation's blocking findings and the submission behind them.
+ * from the preparation's blocking findings still to approve.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { useCadOperationsStore } from '../stores/cadOperations';
 
@@ -42,6 +43,9 @@ const operation = (reason: string, overrides: Partial<CadOperationSummary> = {})
   legacy: false, createdAt: 'now', updatedAt: 'now',
   ...overrides,
 });
+
+// Cards are shown for the model on screen only.
+const onScreen = { manifest_sha256: `sha256:${'a'.repeat(64)}` } as CadReturnIngestRecord;
 
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
@@ -86,7 +90,7 @@ describe('the needs_user_input ladder', () => {
 
   async function show(summary: CadOperationSummary): Promise<HTMLOListElement> {
     useCadOperationsStore.setState({ operations: { [summary.operationId]: summary } });
-    await act(async () => root.render(<CadOperationsSection record={null}/>));
+    await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
     await vi.waitFor(() => expect(host.querySelector('.cad-operation-ladder')).not.toBeNull());
     return host.querySelector<HTMLOListElement>('.cad-operation-ladder')!;
   }
@@ -95,15 +99,14 @@ describe('the needs_user_input ladder', () => {
     gate: item.dataset.gate, current: item.getAttribute('aria-current') === 'step', text: item.textContent ?? '',
   }));
 
-  it('at the frame gate, shows the frame now, the findings behind it, and the solve after them', async () => {
+  it('at the frame gate, shows the frame now and the findings still to approve behind it', async () => {
     stubBackend();
     const ladder = await show(operation('frame_confirmation_required'));
-    await vi.waitFor(() => expect(steps(ladder).map((step) => step.gate)).toEqual(['frame', 'findings', 'solve']));
-    const [frame, findings, solve] = steps(ladder);
+    await vi.waitFor(() => expect(steps(ladder).map((step) => step.gate)).toEqual(['frame', 'findings']));
+    const [frame, findings] = steps(ladder);
     expect(frame.current).toBe(true);
     expect(findings.current).toBe(false);
-    expect(findings.text).toContain('1 blocking finding');
-    expect(solve.text).toContain('submits the solve');
+    expect(findings.text).toBe('Then: approve 1 finding.');
     // The current gate's action is on the card.
     const confirm = host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!;
     expect(confirm).not.toBeNull();
@@ -116,7 +119,7 @@ describe('the needs_user_input ladder', () => {
     expect(host.textContent).toContain('Your solve is waiting');
   });
 
-  it('at the frame gate with no blocking findings, lists only the frame and the solve', async () => {
+  it('at the frame gate with no blocking findings, lists only the frame', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).startsWith('/api/cadlink/operations/')) {
         return json({
@@ -128,15 +131,17 @@ describe('the needs_user_input ladder', () => {
     }));
     const ladder = await show(operation('frame_confirmation_required'));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-    expect(steps(ladder).map((step) => step.gate)).toEqual(['frame', 'solve']);
+    expect(steps(ladder).map((step) => step.gate)).toEqual(['frame']);
   });
 
   it('at the findings gate, names the findings and offers Approve and solve', async () => {
     stubBackend();
     const ladder = await show(operation('findings_need_review', { attemptGeneration: 2 }));
     await vi.waitFor(() => expect(host.querySelector('button[aria-label="Approve and solve: PartyMEH"]')).not.toBeNull());
-    expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['findings', true], ['solve', false]]);
-    expect(host.textContent).toContain(FINDING);
+    expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['findings', true]]);
+    // In words, never by id.
+    expect(host.textContent).toContain('scope degradation — skipped bodies: Body11');
+    expect(host.textContent).not.toContain(FINDING);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
     expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1', {
       preparationId: 'wgi_prep1', findingIds: [FINDING],
@@ -174,13 +179,13 @@ describe('the needs_user_input ladder', () => {
       return json({ findings: [] });
     }));
     const ladder = await show(operation('findings_need_review'));
-    await vi.waitFor(() => expect(steps(ladder)[0].text).toContain('1 blocking finding'));
-    expect(steps(ladder)[0].text).not.toContain('2 blocking findings');
+    await vi.waitFor(() => expect(steps(ladder)[0].text).toContain('1 finding'));
+    expect(steps(ladder)[0].text).not.toContain('2 findings');
   });
 
   it('counts only findings not already approved on this preparation', () => {
     const ladder = solveGateLadder(operation('findings_need_review'), { findingIds: ['a', 'b'], approvedIds: ['a'] });
-    expect(ladder[0].text).toContain('1 blocking finding');
+    expect(ladder[0].text).toContain('1 finding');
   });
 
   it('lists nothing for an operation that is not waiting (the positive control is every case above)', () => {
