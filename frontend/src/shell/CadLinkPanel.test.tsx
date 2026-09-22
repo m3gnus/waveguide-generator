@@ -481,12 +481,13 @@ describe('CadLinkPanel', () => {
     });
   });
 
-  /** A solve started from Simulation → Solve binds its settings once, on the
-   * first prepare. Its follow-ups used to send none, so the backend looked for
-   * a project setup a first-time project does not have, answered
-   * setup_required, and dropped the approvals. They now send the settings on
-   * screen, as "Use these settings and solve" does. */
-  it('sends the settings on screen with every follow-up of a solve started in WG', async () => {
+  /** A continuation -- an approval, a frame confirmation, a retry -- keeps the
+   * setup revision the operation already holds, which the backend reuses. It
+   * used to rebuild the settings from the controls: a different revision (no
+   * run label), so a new preparation, the approval lost, and no job. Only an
+   * action that chooses settings sends them: here, a new engine after
+   * engine_unavailable. */
+  it('continues a solve with the settings it holds, and sends new ones only when the card asks for them', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
       if (path.endsWith('/returns')) return json(listing);
@@ -514,23 +515,28 @@ describe('CadLinkPanel', () => {
     const card = operationCard(manual);
     await vi.waitFor(() => expect(buttonIn(card, 'Approve and solve')).toBeDefined());
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
-    await vi.waitFor(() => expect(posted).toHaveLength(2));
-    expect(posted[0]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_speaker' } });
-    expect(posted[1]).toEqual({
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toEqual({
       path: `/api/cadlink/operations/${encodeURIComponent(manual)}/prepare`,
-      body: { setupRevisionId: 'wgs_9', submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+      body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
     });
     // Its progress line is about the user's own solve, not one Fusion sent.
     await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toBeTruthy());
     expect(host.querySelector('.cad-status-strip')?.textContent).not.toContain('Fusion sent');
 
-    // Positive control: a solve Fusion asked for keeps its project's own setup.
+    // After engine_unavailable the card asks for another engine, then Solve
+    // now: that press records the settings on screen and sends that revision.
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({ operationId: 'op-fusion', createdAt: '2026-09-14T10:00:03Z' }));
+      useCadOperationsStore.getState().apply(cadOperation({
+        operationId: 'op-fusion', reason: 'engine_unavailable', createdAt: '2026-09-14T10:00:03Z',
+      }));
     });
     await act(async () => { buttonIn(operationCard('op-fusion'), 'Solve now')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(3));
-    expect(posted[2]).toEqual({ path: '/api/cadlink/operations/op-fusion/prepare', body: { submit: true } });
+    expect(posted[1]).toMatchObject({ path: '/api/cadlink/project-setups', body: { lineageId: 'wgl_speaker' } });
+    expect(posted[2]).toEqual({
+      path: '/api/cadlink/operations/op-fusion/prepare', body: { setupRevisionId: 'wgs_9', submit: true },
+    });
   });
 
   it('holds an action until its operation moves on, offers it again when the request fails, and leaves a received one to the backend', async () => {

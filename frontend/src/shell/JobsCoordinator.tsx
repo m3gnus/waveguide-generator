@@ -29,6 +29,7 @@ import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '.
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
+import { recordOnScreenSettings, waitingForFirstSettings } from './cadOnScreenSettings';
 import { solveAttention, useOperationAttention } from './solveAttention';
 
 /**
@@ -430,6 +431,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
+      // A request for this very snapshot already waits for its first settings
+      // (Fusion's "Solve in WG", say): this press gives it the settings on
+      // screen and continues that operation. The same operation id is the
+      // explicit continuation, so there is one request and one card, and
+      // nothing is inferred from equal manifests on the backend.
+      const waiting = waitingForFirstSettings(useCadOperationsStore.getState().operations, cad.ingestRecord);
+      if (waiting) {
+        solveAttention.bindOperation(waiting.operationId);
+        const setupRevisionId = await recordOnScreenSettings(waiting.operationId);
+        const continued = await prepareCadOperation(waiting.operationId, { setupRevisionId, submit: true });
+        useCadOperationsStore.getState().apply(continued);
+        return 'submitted' as const;
+      }
       let identity = manualCadSolveIdentity(ingestId, () => {
         const designName = currentRunNameSource().name;
         return { designName, label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()) };

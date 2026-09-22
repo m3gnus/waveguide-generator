@@ -246,17 +246,16 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
   // Only the preparation the operation names: an approval never carries to another.
   const reviewedPreparation = review.findingIds.length > 0
     && review.preparationId === operation.preparationId ? review.preparationId : null;
-  // A solve started from Simulation → Solve bound its settings on its first
-  // prepare only, and no project setup was recorded for it. Every follow-up
-  // therefore sends the settings on screen, as "Use these settings and solve"
-  // does; one without them falls back to the project setup and stops again.
   const manual = operation.operationId.startsWith('manual-solve:');
-  const solveRequest = () => (manual
+  // A continuation -- a frame confirmation, an approval, a retry -- sends no
+  // settings: the backend reuses the setup revision the operation holds, so
+  // its preparation and the approvals given on it still apply. Only the
+  // recovery from engine_unavailable chooses settings: the card asks for
+  // another engine, so its Solve now sends the settings on screen.
+  const chooseSettings = operation.reason === 'engine_unavailable';
+  const solveRequest = () => (chooseSettings
     ? coordinator.solveOperationWithSettings(operation.operationId)
     : coordinator.solveOperation(operation.operationId));
-  const approveRequest = (approvals: { preparationId: string; findingIds: string[] }) => (manual
-    ? coordinator.solveOperationWithSettings(operation.operationId, approvals)
-    : coordinator.approveOperation(operation.operationId, approvals));
   const ask = (action: OperationAction, request: () => Promise<void>) => {
     setAsked({ action, attemptGeneration: operation.attemptGeneration, state: operation.state });
     void request().catch(() => setAsked(null));
@@ -265,7 +264,9 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
     className="primary"
     disabled={heldAction === 'solve'}
     aria-label={`Solve now: ${label}`}
-    title="Prepare this model from its project’s own solve settings and start the solve."
+    title={chooseSettings
+      ? 'Record the settings on screen, with the engine now selected, and solve this model with them.'
+      : 'Prepare this model with the solve settings it already has and start the solve.'}
     onClick={() => ask('solve', solveRequest)}
   >Solve now</button>;
   // The stage is the backend's bookkeeping ("validating"); the state and the
@@ -306,7 +307,7 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
         key={`${operation.operationId}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`}
         snapshot={{ operationId: operation.operationId }}
         label={label}
-        onConfirmed={() => ask('solve', solveRequest)}
+        onConfirmed={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
       />}
     </div>
     <div className="cad-confirm-actions">
@@ -325,7 +326,7 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
         className="primary"
         disabled={heldAction === 'approve'}
         aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask('approve', () => approveRequest({
+        onClick={() => ask('approve', () => coordinator.approveOperation(operation.operationId, {
           preparationId: reviewedPreparation, findingIds: review.findingIds,
         }))}
       >Approve and solve</button>}

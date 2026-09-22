@@ -111,10 +111,10 @@ describe('the needs_user_input ladder', () => {
     const confirm = host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!;
     expect(confirm).not.toBeNull();
     await act(async () => { confirm.click(); });
-    // A solve started in WG: the confirmation solves with the settings on
-    // screen, never with none (that fell back to setup_required).
-    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1');
-    expect(coordinator.solveOperation).not.toHaveBeenCalled();
+    // A continuation: the operation keeps the settings it already holds. New
+    // settings from the controls would be a new preparation and lose approvals.
+    expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
+    expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
     // A manual solve is the user's own, never "Fusion asked for a solve".
     expect(host.textContent).toContain('Your solve is waiting');
   });
@@ -143,10 +143,11 @@ describe('the needs_user_input ladder', () => {
     expect(host.textContent).toContain('scope degradation — skipped bodies: Body11');
     expect(host.textContent).not.toContain(FINDING);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
-    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1', {
+    // The approval continues the preparation it was given for, with its settings.
+    expect(coordinator.approveOperation).toHaveBeenCalledWith('manual-solve:op-1', {
       preparationId: 'wgi_prep1', findingIds: [FINDING],
     });
-    expect(coordinator.approveOperation).not.toHaveBeenCalled();
+    expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
   });
 
   it('at the last gate, offers Solve now', async () => {
@@ -155,7 +156,27 @@ describe('the needs_user_input ladder', () => {
     expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['solve', true]]);
     const solve = host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!;
     await act(async () => { solve.click(); });
-    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith('manual-solve:op-1');
+    expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
+    expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(['manual-solve:op-1', 'op-fusion'])('retries %s after a failed preparation with the settings it holds', async (operationId) => {
+    stubBackend();
+    await show(operation('preparation_failed', { operationId }));
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
+    expect(coordinator.solveOperation).toHaveBeenCalledWith(operationId);
+    expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(['manual-solve:op-1', 'op-fusion'])('after engine_unavailable, solves %s with the engine now selected on screen', async (operationId) => {
+    stubBackend();
+    await show(operation('engine_unavailable', { operationId }));
+    // The card asks for another engine to be picked, then Solve now: that
+    // press has to send the new pick, not retry the engine that was refused.
+    expect(host.textContent).toContain('Pick one of the engines');
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
+    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith(operationId);
+    expect(coordinator.solveOperation).not.toHaveBeenCalled();
   });
 
   it('counts an approval only on the preparation it was given for, as the backend records them', async () => {

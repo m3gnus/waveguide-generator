@@ -8,7 +8,7 @@ import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
 import { SolveSubmissionRefused, type ImportedSolveSubmission } from '../jobs/actions';
-import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { bundleIdentity, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
@@ -35,6 +35,7 @@ const mocks = vi.hoisted(() => ({
   createCadOperation: vi.fn(),
   prepareCadOperation: vi.fn(),
   getCadOperation: vi.fn(),
+  putProjectSetup: vi.fn(),
   solvePlan: {
     engine: 'metal', formulation: 'full-3d' as const,
     reason: "explicit solver_mode='full_3d'", eligibility_reasons: [] as string[],
@@ -68,6 +69,7 @@ vi.mock('../api/cadOperations', async (importOriginal) => {
     createCadOperation: mocks.createCadOperation,
     prepareCadOperation: mocks.prepareCadOperation,
     getCadOperation: mocks.getCadOperation,
+    putProjectSetup: mocks.putProjectSetup,
   };
 });
 
@@ -759,6 +761,79 @@ describe('solve invocation mutex', () => {
     } = old.geometry;
     expect(setup.geometry).toEqual(oldGeometry);
     expect(setup.options).toEqual(old.options);
+  });
+
+  /** The model on screen, prepared from this listing and filed under its
+   * project: what the settings on screen may be recorded for. */
+  function filedCad(ingestId: string): CadReturnIngestRecord {
+    const record = { ...readyCad(ingestId), project: { lineage_id: 'wgl_test' } } as CadReturnIngestRecord;
+    const bundle = useCadReturnStore.getState().selectedBundle!;
+    useCadReturnStore.setState({ ingestRecord: record, ingestedBundleIdentity: bundleIdentity(bundle) });
+    return record;
+  }
+
+  it("continues a request for the model on screen that waits for its first settings, instead of adding a second", async () => {
+    const record = filedCad('wgi_waiting');
+    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
+    act(() => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', {
+        reason: 'setup_required',
+        snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
+      }));
+    });
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+
+    // The same operation id: no second request, no second card.
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.putProjectSetup).toHaveBeenCalledWith(expect.objectContaining({ lineageId: 'wgl_test' }));
+    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
+    expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-fusion', { setupRevisionId: 'wgs_project', submit: true });
+  });
+
+  it('continues the request for this snapshot even when an older one for another snapshot also waits', async () => {
+    const record = filedCad('wgi_two_waiting');
+    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
+    act(() => {
+      useCadOperationsStore.getState().apply(operation('op-older', 'needs_user_input', {
+        reason: 'setup_required', createdAt: '2026-09-15T09:00:00Z',
+        snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' },
+      }));
+      useCadOperationsStore.getState().apply(operation('op-this', 'needs_user_input', {
+        reason: 'setup_required',
+        snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
+      }));
+    });
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-this', { setupRevisionId: 'wgs_project', submit: true });
+  });
+
+  it.each([
+    ['another snapshot', { reason: 'setup_required', snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
+    ['another gate', { reason: 'frame_confirmation_required', snapshot: { manifestSha256: `sha256:${'1'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
+  ] as const)('still starts a new solve beside a request waiting for %s', async (_case, waiting) => {
+    filedCad('wgi_other');
+    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
+    act(() => {
+      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', waiting));
+    });
+
+    await act(async () => {
+      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+    });
+
+    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
+    const created = mocks.createCadOperation.mock.calls[0][0].operationId as string;
+    expect(created).not.toBe('op-fusion');
+    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(created, { setupRevisionId: 'wgs_manual', submit: true });
+    expect(mocks.putProjectSetup).not.toHaveBeenCalled();
   });
 
   it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
