@@ -223,9 +223,8 @@ function hasAngle(
   return patterns?.some((pattern) => pattern.some(([sampleAngle]) => sampleAngle === angle)) === true;
 }
 
-// The convention the Fusion addin already uses successfully with VituixCAD --
-// see hornlab-fusion-addin scripts/solve_fusion_wg_metal.py, _write_frd and
-// _VITUIXCAD_PLANE_DIRS. Plane subfolders exist so the last token of the
+// The convention used by the frozen standalone legacy WGMetalPipeline app's
+// FRD export with VituixCAD. Plane subfolders exist so the last token of the
 // filename is the angle, which is what VituixCAD's measurement parser keys on.
 //
 // This is NOT the `Phi[mmm]Theta[ppp]` spelling: that is VituixCAD's VACS

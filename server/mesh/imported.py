@@ -964,8 +964,8 @@ def verify_symmetry_cut(
     reduced domain lies: a cut plane that comes back closed meshes as a rigid
     baffle instead of a mirror, and an off-plane free edge is a hole the
     mirrored solve radiates through. Both produce a wrong answer rather than
-    an error, so neither may pass silently. This is the policy the sibling CLI
-    already enforces (``prepare_step_for_wg_metal.py:1264-1276,1379-1385``).
+    an error, so neither may pass silently. The frozen standalone legacy
+    WGMetalPipeline app enforces the same policy during mesh preparation.
 
     Uncut returns are not judged: a full domain has no mirror to be wrong
     about, and an imported open shell (a standalone source sheet, say) is a

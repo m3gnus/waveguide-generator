@@ -1,14 +1,14 @@
 """Combine solved drive-channel bases into one summed response.
 
-Ports the Fusion add-in's LR4 time-aligned on-axis sum
-(``solve_fusion_wg_metal.py`` — crossover weights, level match,
-phase-equivalent alignment delays) onto WG's solve-time channel results, then
+Ports the frozen standalone legacy WGMetalPipeline app's LR4 time-aligned
+on-axis sum (crossover weights, level match, phase-equivalent alignment delays)
+onto WG's solve-time channel results, then
 generalises it: any channel may carry its own high-pass and low-pass section
 from any supported family, its own gain and delay (auto or manual) and its own
 polarity (CADLINK-CROSSOVER-DRIVERS.md §2). A legacy LR4 spec expands into
 that per-channel form, so the two paths are one code path.
 Because every channel of one job shares a single observation grid, the
-add-in's grid harmonisation stage has no equivalent here.
+legacy app's grid harmonisation stage has no equivalent here.
 
 Convention boundary (the only one): weights are defined in the engineering
 ``e^{+jωt}`` convention, where a filter transfer function and a delay
