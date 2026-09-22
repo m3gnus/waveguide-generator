@@ -284,7 +284,6 @@ class DeliveryAnswer:
     result: str
     digest: str
     retention: object | None
-    superseded: tuple[dict[str, Any], ...] = ()
 
 
 def accept_delivery(
@@ -304,26 +303,14 @@ def accept_delivery(
 
     target, inputs = item.request()
     digest = request_digest(item.kind, target, inputs)
-    if item.kind == PREPARE_AND_SOLVE:
-        row, result, superseded = store.accept_solve_operation(
-            item.operation_id, digest, target, inputs
-        )
-    else:
-        row, result = store.accept_operation(item.operation_id, item.kind, digest, target, inputs)
-        superseded = []
+    row, result = store.accept_operation(item.operation_id, item.kind, digest, target, inputs)
     if retain is None:
-        return DeliveryAnswer(
-            row=row,
-            result=result,
-            digest=digest,
-            retention=None,
-            superseded=tuple(superseded),
-        )
+        return DeliveryAnswer(row=row, result=result, digest=digest, retention=None)
     retention = retain(item.operation_id)
     current = store.get_operation(item.operation_id)
     return DeliveryAnswer(
         row=current if current is not None else row, result=result, digest=digest,
-        retention=retention, superseded=tuple(superseded),
+        retention=retention,
     )
 
 
@@ -1123,8 +1110,6 @@ def collect_solve_deliveries(
                 accepted = accept_delivery(
                     store, DeliveredItem.from_command(command), retain=retain
                 )
-                for superseded in accepted.superseded:
-                    tell(superseded)
                 tell(accepted.row)
                 if accepted.result == "conflict":
                     conflict = _delivery_conflict(accepted.row, accepted.digest)

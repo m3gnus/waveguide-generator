@@ -151,8 +151,6 @@ async def post_live_delivery(
             LiveRefusal(503, "store_busy", "WG's operation store is busy; retry shortly.", retryable=True)
         )
     answer = delivered.answer
-    for superseded in answer.superseded:
-        preparation._publish(ctx, superseded)
     if delivered.status == solve_command.LIVE_CONFLICT:
         logger.warning(
             "Refused live CAD Link delivery %r: the id already names a different request.",
