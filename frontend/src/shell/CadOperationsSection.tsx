@@ -168,7 +168,11 @@ type OperationAction = 'solve' | 'approve' | 'use-settings' | 'dismiss';
 
 /** Reasons whose backend message the card on screen already says in its own
  * guidance and controls. */
-const SAID_BY_THE_CARD: ReadonlySet<string> = new Set(['setup_required', 'frame_confirmation_required']);
+const SAID_BY_THE_CARD: ReadonlySet<string> = new Set([
+  'setup_required', 'frame_confirmation_required',
+  // Its message lists the findings by id; the card lists them in words.
+  'findings_need_review',
+]);
 
 interface Guidance {
   text: string | null;
