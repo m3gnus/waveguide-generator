@@ -160,12 +160,25 @@ describe('the needs_user_input ladder', () => {
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
   });
 
-  it.each(['manual-solve:op-1', 'op-fusion'])('retries %s after a failed preparation with the settings it holds', async (operationId) => {
+  it.each([
+    ['manual-solve:op-1', 'preparation_failed'], ['op-fusion', 'preparation_failed'],
+    ['manual-solve:op-1', 'interrupted'], ['op-fusion', 'interrupted'],
+  ])('retries %s after %s with the settings it holds', async (operationId, reason) => {
     stubBackend();
-    await show(operation('preparation_failed', { operationId }));
+    await show(operation(reason, { operationId }));
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
     expect(coordinator.solveOperation).toHaveBeenCalledWith(operationId);
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
+  });
+
+  it.each(['manual-solve:op-1', 'op-fusion'])('after submission_refused, solves %s with the settings now on screen', async (operationId) => {
+    stubBackend();
+    await show(operation('submission_refused', { operationId }));
+    // Its card, too, asks for another engine and then Solve now.
+    expect(host.textContent).toContain('pick one in the solver selector');
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
+    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith(operationId);
+    expect(coordinator.solveOperation).not.toHaveBeenCalled();
   });
 
   it.each(['manual-solve:op-1', 'op-fusion'])('after engine_unavailable, solves %s with the engine now selected on screen', async (operationId) => {

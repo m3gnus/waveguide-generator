@@ -250,9 +250,10 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
   // A continuation -- a frame confirmation, an approval, a retry -- sends no
   // settings: the backend reuses the setup revision the operation holds, so
   // its preparation and the approvals given on it still apply. Only the
-  // recovery from engine_unavailable chooses settings: the card asks for
-  // another engine, so its Solve now sends the settings on screen.
-  const chooseSettings = operation.reason === 'engine_unavailable';
+  // recovery from engine_unavailable or submission_refused chooses settings:
+  // those cards ask for another engine, so their Solve now sends the settings
+  // on screen.
+  const chooseSettings = operation.reason === 'engine_unavailable' || operation.reason === 'submission_refused';
   const solveRequest = () => (chooseSettings
     ? coordinator.solveOperationWithSettings(operation.operationId)
     : coordinator.solveOperation(operation.operationId));
