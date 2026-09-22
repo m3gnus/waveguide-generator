@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import fixture from '../viewport/solverFrame.fixture.json';
+import { useCadOperationsStore } from '../stores/cadOperations';
 import { SolverFrameSection } from './CadLinkPanel';
 
 const AXES = ['+z', '-z', '+x', '-x', '+y', '-y'] as const;
@@ -23,8 +24,10 @@ const preview = (confirmed: string | null, recordAxis = '+z') => ({
   })),
 });
 
+const MANIFEST = `sha256:${'a'.repeat(64)}`;
 const record = (verdict: 'unlinked' | 'per-instance') => ({
   ingest_id: 'wgi_1',
+  manifest_sha256: MANIFEST,
   freshness: { verdict, instances: [] },
   project: { lineage_id: 'wgl_1', design_id: null, document_native_id: 'urn:x', document_name: 'Authored horn', archive_stem: null },
 }) as unknown as CadReturnIngestRecord;
@@ -47,6 +50,42 @@ describe('changing a project solver frame', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    useCadOperationsStore.setState({ operations: {} });
+  });
+
+  const unconfirmedFetcher = () => vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.startsWith('/api/cadlink/solver-frame?')) return json(preview(null));
+    if (url.endsWith('/viewport-mesh')) return new Response(MSH, { status: 200 });
+    throw new Error(`unexpected ${url}`);
+  });
+
+  it('asks nothing while the waiting solve on screen already asks for the frame', async () => {
+    useCadOperationsStore.setState({ operations: { 'manual-solve:op': {
+      operationId: 'manual-solve:op', kind: 'prepare_and_solve', state: 'needs_user_input', stage: 'ready',
+      reason: 'frame_confirmation_required', message: null, jobId: null, attemptGeneration: 1,
+      setupRevisionId: 'wgs_1', preparationId: 'wgi_1',
+      snapshot: { manifestSha256: MANIFEST, documentName: 'Authored horn', projectLineageId: 'wgl_1' },
+      legacy: false, createdAt: 'now', updatedAt: 'now',
+    } } });
+    const fetcher = unconfirmedFetcher();
+    await act(async () => root.render(<SolverFrameSection record={record('unlinked')} fetcher={fetcher}/>));
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(host.textContent).toBe('');
+  });
+
+  it('offers a first choice, never change-mode copy, for a frame that was never set', async () => {
+    const fetcher = unconfirmedFetcher();
+    await act(async () => root.render(<SolverFrameSection record={record('unlinked')} fetcher={fetcher}/>));
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame-line')?.textContent)
+      .toBe('Solver frame not chosen yet · WG asks before the first solve · Choose now'));
+    expect(host.querySelector('.cad-state-chip.warn')).toBeNull();
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); });
+    await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
+    expect(host.textContent).not.toContain('Confirmed for this project');
+    expect(host.textContent).not.toContain('nothing yet');
+    expect(host.textContent).toContain('Choose the model axis that points out of the mouth');
   });
 
   it('shows the confirmed axis and changes it for later preparations only', async () => {
@@ -65,15 +104,16 @@ describe('changing a project solver frame', () => {
       throw new Error(`unexpected ${url}`);
     });
     await act(async () => root.render(<SolverFrameSection record={record('unlinked')} fetcher={fetcher}/>));
-    await vi.waitFor(() => expect(host.textContent).toContain('along +y'));
-    await act(async () => { host.querySelector<HTMLButtonElement>('.section-head')!.click(); });
+    // One quiet line, not a drawer with a warning chip.
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame-line')?.textContent).toBe('Radiates along +y · Change'));
+    expect(host.querySelector('.cad-drawer')).toBeNull();
     expect(host.textContent).toContain('This preparation was meshed along +z: prepare it again to solve along +y.');
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); });
     await vi.waitFor(() => expect(host.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
     expect(host.textContent).toContain('runs already solved keep the frame they were solved in');
     await act(async () => { host.querySelector<HTMLInputElement>('input[value="+x"]')!.click(); });
     await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!.click(); });
-    await vi.waitFor(() => expect(host.textContent).toContain('along +x'));
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame-line')?.textContent).toBe('Radiates along +x · Change'));
     expect(puts).toEqual([{ ingestId: 'wgi_1', axis: '+x' }]);
     expect(host.querySelector('[data-frame-preview]')).toBeNull();
   });

@@ -212,3 +212,7 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-earlier-requests ul { margin: 4px 0; padding-left: 16px; }
 .cad-earlier-requests li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .cad-earlier-requests time { color: var(--fg4); }
+.cad-solver-frame-section { margin-top: 8px; }
+.cad-solver-frame-line { margin: 0; }
+.cad-model-details { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
+.cad-model-details summary { cursor: pointer; }

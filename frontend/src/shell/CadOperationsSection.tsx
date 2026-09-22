@@ -7,7 +7,6 @@ import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
 import { fullTime, relativeTime } from './cadTime';
 import { workspaceNavigation } from './workspaceNavigation';
-import { CadSolveInputs } from './CadSolveInputs';
 import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
 
 /** The hash of a `sha256:` digest, cut to what a person can read and compare. */
@@ -309,11 +308,6 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
         label={label}
         onConfirmed={() => ask('solve', solveRequest)}
       />}
-      <CadSolveInputs
-        operationId={operation.operationId}
-        operation={operation}
-        engineSource="setup-revision"
-      />
     </div>
     <div className="cad-confirm-actions">
       {operation.state !== 'cancel_requested' && <button
@@ -474,6 +468,15 @@ function aboutWhatIsOnScreen(
     return Boolean(record && manifest && record.manifest_sha256 === manifest);
   }
   return reportedRecovery !== null && operation.operationId === reportedRecovery;
+}
+
+/** The waiting or running solves of the model on screen. */
+export function onScreenSolves(
+  operations: Record<string, CadOperationSummary>,
+  record: CadReturnIngestRecord | null,
+): CadOperationSummary[] {
+  return pendingCadOperations(operations)
+    .filter((operation) => operation.kind === 'prepare_and_solve' && aboutWhatIsOnScreen(operation, record, null));
 }
 
 /** The CAD operations still waiting or running: the solves Fusion sent, which

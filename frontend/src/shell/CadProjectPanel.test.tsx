@@ -225,6 +225,17 @@ describe('CAD project history', () => {
 
     expect(host.querySelector('.cad-run-list')).toBeNull();
     expect(host.textContent).toContain('No runs yet');
+    // Positive control for the case below: with no model on screen, it says how to get one.
+    expect(host.textContent).toContain('Bring geometry in from CAD');
+  });
+
+  it('says only "No runs yet." once a model is on screen: its geometry is already in', async () => {
+    setJobs([]);
+    useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_on_screen' } as never });
+
+    await render(<CadProjectHistory/>);
+
+    expect(host.querySelector('.empty-state')?.textContent).toBe('No runs yet.');
   });
 
   it('renders nothing at all when no project is open', async () => {

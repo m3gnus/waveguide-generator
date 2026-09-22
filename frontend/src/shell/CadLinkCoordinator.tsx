@@ -1037,7 +1037,8 @@ export function CadLinkCoordinator() {
       }
       if (request === ingestRequest.current && mounted.current) {
         rememberCadProject(record.project?.lineage_id);
-        setStatus(`Ingested ${record.ingest_id}. Review the verdicts before solving.`);
+        const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
+        setStatus(`Received ${current.selectedBundle.documentName || current.selectedBundle.name} from ${origin}.`);
         // Before the display, so the viewport adopts the CAD slot rather than
         // loading it invisibly behind the parametric design.
         enterCadWorkspace();
