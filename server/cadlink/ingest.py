@@ -1620,6 +1620,7 @@ def ingest_bundle(
             "viewport_mesh": (
                 {
                     "available": True,
+                    "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
                     "store_path": str(viewport_mesh_path),
                     "cache_key": viewport_cache_key,
                     "content_sha256": viewport_artifact["content_sha256"],
@@ -1633,6 +1634,7 @@ def ingest_bundle(
                 if viewport_artifact is not None
                 else {
                     "available": False,
+                    "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
                     # The lookup key is derived from the bundle and the prep
                     # options alone, so it is knowable before the tessellation
                     # exists. Recording it is what lets a sealed record point at
@@ -1767,6 +1769,52 @@ def deferred_viewport_lookup_key(record: Mapping[str, Any]) -> str | None:
     return str(key) if isinstance(key, str) and len(key) == 64 else None
 
 
+def current_viewport_record(record: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Return a view of a persisted record that obeys today's viewport contract.
+
+    Ingestion records are immutable, so records sealed before the viewport
+    contract was recorded cannot be rewritten.  Their saved artifact or index
+    key is deliberately not trusted as current.  Instead, derive a v2-namespaced
+    migration key and expose the record as pending; the ordinary deferred path
+    then builds and verifies the artifact under that key.
+    """
+
+    viewport = record.get("viewport_mesh")
+    if not isinstance(viewport, Mapping):
+        return record
+    if viewport.get("pipeline_contract") == IMPORT_VIEWPORT_PIPELINE_CONTRACT:
+        return record
+    if viewport.get("available") is not True and viewport.get("pending") is not True:
+        return record
+    legacy_identity = (
+        viewport.get("lookup_key")
+        or viewport.get("cache_key")
+        or viewport.get("content_sha256")
+        or "unknown"
+    )
+    lookup_key = hashlib.sha256(
+        _canonical(
+            {
+                "viewport_pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+                "legacy_viewport_identity": legacy_identity,
+                "artifact_sha256": record.get("artifact_sha256"),
+                "manifest_sha256": record.get("manifest_sha256"),
+                "transformed_geometry_hash": record.get("transformed_geometry_hash"),
+            }
+        )
+    ).hexdigest()
+    return {
+        **record,
+        "viewport_mesh": {
+            "available": False,
+            "pending": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+            "lookup_key": lookup_key,
+            "reason": "the saved display tessellation predates the current contract",
+        },
+    }
+
+
 def resolve_deferred_viewport(
     record: Mapping[str, Any], data_dir: str | Path
 ) -> dict[str, Any] | None:
@@ -1855,6 +1903,7 @@ __all__ = [
     "IngestRefusal",
     "build_deferred_viewport",
     "compute_freshness",
+    "current_viewport_record",
     "deferred_viewport_lookup_key",
     "evaluate_instance_freshness",
     "get_ingestion_record",

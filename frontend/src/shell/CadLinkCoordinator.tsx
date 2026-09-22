@@ -369,8 +369,12 @@ function upgradeToDisplayMesh(
       wake?.();
     });
     try {
-      for (const delay of DISPLAY_UPGRADE_FALLBACK_DELAYS_MS) {
-        if (signalled) {
+      for (const [attempt, delay] of DISPLAY_UPGRADE_FALLBACK_DELAYS_MS.entries()) {
+        // The first read immediately after subscribing closes the race where
+        // completion landed between the endpoint's 202 and this subscription.
+        if (attempt === 0) {
+          signalled = false;
+        } else if (signalled) {
           signalled = false;
         } else {
           await new Promise<void>((resolve) => {

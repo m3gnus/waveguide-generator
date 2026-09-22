@@ -9,6 +9,7 @@ import inspect
 import math
 import os
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 import asyncio
 
@@ -1205,6 +1206,7 @@ def test_viewport_mesh_endpoint_distinguishes_absence_and_corruption(
         "ingest_id": ingest_id,
         "viewport_mesh": {
             "available": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
             "store_path": str(viewport_path),
             "content_sha256": mesh_text_sha256("different"),
         },
@@ -1220,6 +1222,80 @@ def test_viewport_mesh_endpoint_distinguishes_absence_and_corruption(
         get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app))
     )
     assert response.body == b"visual"
+
+
+@pytest.mark.parametrize("legacy_kind", ["available", "pending"])
+def test_viewport_endpoint_rebuilds_a_persisted_pre_v2_artifact_or_lookup(
+    monkeypatch, tmp_path: Path, legacy_kind: str
+) -> None:
+    """A sealed legacy record cannot make its old display mesh current."""
+
+    ingest_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C"
+    geometry_hash = "sha256:" + "3" * 64
+    legacy_key = "4" * 64
+    old_path = tmp_path / "old-viewport.msh"
+    old_path.write_text("old visual", encoding="utf-8")
+    legacy_viewport = (
+        {
+            "available": True,
+            "store_path": str(old_path),
+            "cache_key": legacy_key,
+            "content_sha256": mesh_text_sha256("old visual"),
+        }
+        if legacy_kind == "available"
+        else {
+            "available": False,
+            "pending": True,
+            "lookup_key": legacy_key,
+        }
+    )
+    if legacy_kind == "pending":
+        _write_deferred_viewport_cas(
+            tmp_path, legacy_key, "old visual", geometry_hash
+        )
+    record = {
+        "ingest_id": ingest_id,
+        "manifest_sha256": "sha256:" + "1" * 64,
+        "artifact_sha256": "sha256:" + "2" * 64,
+        "transformed_geometry_hash": geometry_hash,
+        "viewport_mesh": legacy_viewport,
+    }
+    app = SimpleNamespace(
+        state=SimpleNamespace(cadlink_store=object(), data_dir=str(tmp_path))
+    )
+
+    async def fake_to_thread(function, *args, **kwargs):
+        if function.__name__ == "get_ingestion_record":
+            return record
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr("server.cadlink.api.asyncio.to_thread", fake_to_thread)
+    scheduled: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "server.cadlink.api._schedule_deferred_viewport",
+        lambda published, _data_dir, *_args: scheduled.append(dict(published)),
+    )
+
+    pending = asyncio.run(get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app)))
+    assert pending.status_code == 202
+    assert pending.body == b""
+    assert len(scheduled) == 1
+    upgraded = scheduled[0]
+    viewport = upgraded["viewport_mesh"]
+    assert isinstance(viewport, dict)
+    assert viewport["pending"] is True
+    assert viewport["pipeline_contract"] == IMPORT_VIEWPORT_PIPELINE_CONTRACT
+    assert viewport["lookup_key"] != legacy_key
+
+    _write_deferred_viewport_cas(
+        tmp_path,
+        str(viewport["lookup_key"]),
+        "v2 visual",
+        str(record["transformed_geometry_hash"]),
+    )
+    ready = asyncio.run(get_ingest_viewport_mesh(ingest_id, SimpleNamespace(app=app)))
+    assert ready.status_code == 200
+    assert ready.body == b"v2 visual"
 
 
 def _write_deferred_viewport_cas(
@@ -1254,7 +1330,12 @@ def test_deferred_viewport_resolves_only_a_self_consistent_artifact(tmp_path: Pa
     record = {
         "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
         "transformed_geometry_hash": geometry_hash,
-        "viewport_mesh": {"available": False, "pending": True, "lookup_key": lookup_key},
+        "viewport_mesh": {
+            "available": False,
+            "pending": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+            "lookup_key": lookup_key,
+        },
     }
     assert deferred_viewport_lookup_key(record) == lookup_key
     # Nothing published yet: pending is not the same as broken.
@@ -1285,7 +1366,12 @@ def test_viewport_endpoint_answers_202_while_a_deferred_tessellation_is_building
     record = {
         "ingest_id": ingest_id,
         "transformed_geometry_hash": geometry_hash,
-        "viewport_mesh": {"available": False, "pending": True, "lookup_key": lookup_key},
+        "viewport_mesh": {
+            "available": False,
+            "pending": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+            "lookup_key": lookup_key,
+        },
     }
     app = SimpleNamespace(
         state=SimpleNamespace(cadlink_store=object(), data_dir=str(tmp_path))
@@ -1321,7 +1407,12 @@ def test_deferred_viewport_publishes_a_ready_event(monkeypatch, tmp_path: Path) 
     lookup_key = "d" * 64
     record = {
         "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
-        "viewport_mesh": {"available": False, "pending": True, "lookup_key": lookup_key},
+        "viewport_mesh": {
+            "available": False,
+            "pending": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+            "lookup_key": lookup_key,
+        },
     }
     published: list[dict[str, object]] = []
     events = SimpleNamespace(publish=lambda message: published.append(message))
@@ -1339,6 +1430,53 @@ def test_deferred_viewport_publishes_a_ready_event(monkeypatch, tmp_path: Path) 
         "kind": "cadViewportReady",
         "ingestId": record["ingest_id"],
     }]
+
+
+def test_one_deferred_build_notifies_every_ingest_waiting_on_its_key(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from server.cadlink import api
+
+    lookup_key = "e" * 64
+    first = {
+        "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C",
+        "viewport_mesh": {
+            "available": False,
+            "pending": True,
+            "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+            "lookup_key": lookup_key,
+        },
+    }
+    second = {
+        **first,
+        "ingest_id": "wgi_01J5A8QK3M9T2XVBH0RD7NWE6D",
+    }
+    release = threading.Event()
+    builds: list[str] = []
+
+    def build(record, _data_dir):
+        builds.append(str(record["ingest_id"]))
+        assert release.wait(timeout=2)
+        return {"msh_text": "visual"}
+
+    published: list[dict[str, object]] = []
+    events = SimpleNamespace(publish=lambda message: published.append(message))
+    monkeypatch.setattr(api, "build_deferred_viewport", build)
+
+    async def run() -> None:
+        api._schedule_deferred_viewport(first, tmp_path, events)
+        api._schedule_deferred_viewport(second, tmp_path, events)
+        task = api._DEFERRED_VIEWPORTS[lookup_key]
+        release.set()
+        await task
+
+    asyncio.run(run())
+
+    assert builds == [first["ingest_id"]]
+    assert {message["ingestId"] for message in published} == {
+        first["ingest_id"],
+        second["ingest_id"],
+    }
 
 
 def test_canonical_json_coerces_numpy_values() -> None:

@@ -69,6 +69,7 @@ from .live.api import mount_live
 from .ingest import (
     IngestRefusal,
     build_deferred_viewport,
+    current_viewport_record,
     deferred_viewport_lookup_key,
     get_ingestion_record,
     ingest_bundle,
@@ -119,6 +120,10 @@ _RETURN_INVENTORY_CACHE_LOCK = threading.Lock()
 #: coming?" -- the artifact itself is content-addressed on disk, so a restart
 #: that empties this map costs one rebuild, never a wrong answer.
 _DEFERRED_VIEWPORTS: dict[str, asyncio.Task[Any]] = {}
+
+#: Every ingestion waiting for a shared content-addressed build.  The task is
+#: deduplicated by lookup key, but readiness belongs to each immutable record.
+_DEFERRED_VIEWPORT_WAITERS: dict[str, dict[str, Any]] = {}
 
 #: asyncio keeps only a weak reference to a running task, so a fire-and-forget
 #: task that nobody holds can be collected mid-flight. This is that holder.
@@ -215,20 +220,35 @@ def _schedule_deferred_viewport(
     """Start the display tessellation the ingestion response did not wait for."""
 
     lookup_key = deferred_viewport_lookup_key(record)
-    if lookup_key is None or lookup_key in _DEFERRED_VIEWPORTS:
+    if lookup_key is None:
+        return
+    ingest_id = str(record.get("ingest_id") or "")
+    if ingest_id and events is not None:
+        _DEFERRED_VIEWPORT_WAITERS.setdefault(lookup_key, {})[ingest_id] = events
+    if lookup_key in _DEFERRED_VIEWPORTS:
         return
 
     async def build() -> None:
         try:
             artifact = await asyncio.to_thread(build_deferred_viewport, record, data_dir)
-            if artifact is not None and events is not None:
-                events.publish(
-                    {
-                        "v": 1,
-                        "kind": "cadViewportReady",
-                        "ingestId": str(record.get("ingest_id")),
-                    }
-                )
+            if artifact is not None:
+                for waiting_ingest_id, waiting_events in list(
+                    _DEFERRED_VIEWPORT_WAITERS.get(lookup_key, {}).items()
+                ):
+                    try:
+                        waiting_events.publish(
+                            {
+                                "v": 1,
+                                "kind": "cadViewportReady",
+                                "ingestId": waiting_ingest_id,
+                            }
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.warning(
+                            "Could not publish CAD viewport readiness for %s",
+                            waiting_ingest_id,
+                            exc_info=True,
+                        )
         except Exception as exc:  # noqa: BLE001
             # Advisory by construction: the solve mesh is already on screen and
             # is what the solve uses. A failure here costs display fidelity.
@@ -239,6 +259,7 @@ def _schedule_deferred_viewport(
             )
         finally:
             _DEFERRED_VIEWPORTS.pop(lookup_key, None)
+            _DEFERRED_VIEWPORT_WAITERS.pop(lookup_key, None)
 
     _DEFERRED_VIEWPORTS[lookup_key] = asyncio.create_task(build())
 
@@ -1335,6 +1356,7 @@ async def get_ingest_viewport_mesh(
     record = await asyncio.to_thread(get_ingestion_record, store, ingest_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Unknown ingestion record {ingest_id}")
+    record = current_viewport_record(record)
     viewport = record.get("viewport_mesh")
     if isinstance(viewport, dict) and viewport.get("available") is True:
         try:

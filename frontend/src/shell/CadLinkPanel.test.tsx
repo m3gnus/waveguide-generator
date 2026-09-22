@@ -854,16 +854,48 @@ describe('CadLinkPanel', () => {
     expect(requests).toEqual([
       `/api/cadlink/ingest/${record.ingest_id}/viewport-mesh`,
       `/api/cadlink/ingest/${record.ingest_id}/mesh`,
+      `/api/cadlink/ingest/${record.ingest_id}/viewport-mesh`,
     ]);
 
     displayReady = true;
     viewportReady(record.ingest_id);
     await vi.waitFor(() => {
       expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe(`${record.ingest_id}:viewport`);
-    }, { timeout: 4_000 });
+    });
     // The upgrade replaced the scene in place rather than opening a second view.
     expect(importedMeshStore.getSnapshot().showing).toBe('cad');
     expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(record.ingest_id);
+  });
+
+  it('observes viewport completion that lands before its websocket subscription', async () => {
+    const requests: string[] = [];
+    let displayReady = false;
+    vi.spyOn(jobsSocket, 'subscribeCadViewportReady').mockImplementation(() => {
+      // Completion landed after the first 202 but before the listener existed.
+      displayReady = true;
+      return () => undefined;
+    });
+    const fetcher = (async (input: RequestInfo | URL) => {
+      const path = String(input);
+      requests.push(path);
+      if (!path.endsWith('/viewport-mesh')) return new Response(meshFixture, { status: 200 });
+      return displayReady
+        ? new Response(meshFixture, { status: 200 })
+        : new Response('', { status: 202 });
+    }) as typeof fetch;
+
+    workspaceModeStore.setMode('cad');
+    await showIngestedMeshInViewport(
+      { ...record, viewport_mesh: { available: false, pending: true, lookup_key: 'a'.repeat(64) } },
+      'Speaker',
+      undefined,
+      fetcher,
+    );
+
+    await vi.waitFor(() => {
+      expect(importedMeshStore.getSnapshot().cad?.artifactToken).toBe(`${record.ingest_id}:viewport`);
+    });
+    expect(requests.filter((path) => path.endsWith('/viewport-mesh'))).toHaveLength(2);
   });
 
   it('shares one artifact request between the two triggers that both want the CAD scene', async () => {

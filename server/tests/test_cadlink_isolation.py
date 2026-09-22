@@ -10,6 +10,7 @@ that is only unit-tested against a mock is not a gate.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -112,7 +113,13 @@ def test_staging_is_destroyed_when_the_invocation_ends(step_file: Path) -> None:
     assert not staged.parent.exists()
 
 
-def test_mesher_child_enables_parallel_occ(monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("platform", "enabled"),
+    [("linux", True), ("darwin", True), ("win32", False)],
+)
+def test_mesher_child_enables_parallel_occ_only_on_qualified_platforms(
+    monkeypatch, platform: str, enabled: bool
+) -> None:
     from server.cadlink import child_main
 
     calls: list[tuple[str, float]] = []
@@ -128,9 +135,59 @@ def test_mesher_child_enables_parallel_occ(monkeypatch) -> None:
         "initialize": staticmethod(lambda **_kwargs: None),
     })()
     monkeypatch.setitem(sys.modules, "gmsh", fake_gmsh)
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(
+        "server.mesh.gmsh_worker._preserve_native_windows_path", nullcontext
+    )
 
     assert child_main._open_gmsh_session() is fake_gmsh
-    assert ("Geometry.OCCParallel", 1) in calls
+    assert (("Geometry.OCCParallel", 1) in calls) is enabled
+
+
+def test_occ_parallel_preserves_small_fixture_mesh_arrays() -> None:
+    """Portable qualification evidence for enabling OCCParallel on Windows."""
+
+    gmsh = pytest.importorskip("gmsh")
+    import numpy as np
+
+    def mesh(parallel: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        gmsh.clear()
+        gmsh.option.setNumber("Geometry.OCCParallel", parallel)
+        gmsh.model.add("occ-parallel-determinism")
+        left = gmsh.model.occ.addBox(0, 0, 0, 2, 1, 1)
+        right = gmsh.model.occ.addBox(1, 0, 0, 2, 1, 1)
+        fused, _ = gmsh.model.occ.fuse([(3, left)], [(3, right)])
+        gmsh.model.occ.synchronize()
+        boundary = sorted(
+            tag for dim, tag in gmsh.model.getBoundary(fused, oriented=False)
+            if dim == 2
+        )
+        gmsh.model.addPhysicalGroup(2, boundary, 101)
+        gmsh.option.setNumber("Mesh.MeshSizeMin", 0.4)
+        gmsh.option.setNumber("Mesh.MeshSizeMax", 0.4)
+        gmsh.model.mesh.generate(2)
+        node_tags, coordinates, _ = gmsh.model.mesh.getNodes()
+        element_tags, triangle_nodes = gmsh.model.mesh.getElementsByType(2)
+        physical = np.full(len(element_tags), 101, dtype=np.int32)
+        order = np.argsort(np.asarray(element_tags, dtype=np.int64))
+        nodes = np.column_stack((node_tags, np.asarray(coordinates).reshape(-1, 3)))
+        triangles = np.column_stack(
+            (np.asarray(element_tags), np.asarray(triangle_nodes).reshape(-1, 3))
+        )[order]
+        return nodes[np.argsort(nodes[:, 0])], triangles, physical[order]
+
+    if not gmsh.isInitialized():
+        gmsh.initialize(interruptible=False)
+    gmsh.option.setNumber("General.Terminal", 0)
+    try:
+        serial = mesh(0)
+        parallel = mesh(1)
+    finally:
+        gmsh.clear()
+        gmsh.option.setNumber("Geometry.OCCParallel", 0)
+
+    for serial_array, parallel_array in zip(serial, parallel, strict=True):
+        np.testing.assert_array_equal(serial_array, parallel_array)
 
 
 def test_the_sandbox_is_made_in_the_servers_temporary_session_and_removed_whole(
