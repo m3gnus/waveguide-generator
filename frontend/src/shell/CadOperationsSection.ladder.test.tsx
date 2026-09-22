@@ -2,6 +2,11 @@
  * V5 / F6: every `needs_user_input` gate is visible and actionable, not only
  * the first. `reason` names one current gate; the rest of the ladder comes
  * from the preparation's blocking findings still to approve.
+ *
+ * M1b: the action for every gate but a finding's approval is the Solve card's
+ * one Solve (M1bSolveCard.test.tsx), which continues this very request. The
+ * request's card says what it needs and offers only what Solve never does:
+ * approving findings, and dismissing it.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -26,10 +31,6 @@ vi.mock('./CadLinkCoordinator', () => {
 });
 vi.mock('./CadSolveInputs', () => ({ CadSolveInputs: () => null }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
-// The frame gate's own control, stood in for: its preview has its own tests.
-vi.mock('./CadSolverFrameConfirm', () => ({
-  CadSolverFrameConfirm: ({ onConfirmed }: { onConfirmed: () => void }) => <button data-action="confirm-frame" onClick={onConfirmed}>Confirm frame and solve</button>,
-}));
 
 const { CadOperationsSection, solveGateLadder } = await import('./CadOperationsSection');
 
@@ -106,15 +107,11 @@ describe('the needs_user_input ladder', () => {
     const [frame, findings] = steps(ladder);
     expect(frame.current).toBe(true);
     expect(findings.current).toBe(false);
+    expect(frame.text).toBe('Now: check which way it radiates, above, and press Solve to confirm it.');
     expect(findings.text).toBe('Then: approve 1 finding.');
-    // The current gate's action is on the card.
-    const confirm = host.querySelector<HTMLButtonElement>('button[data-action="confirm-frame"]')!;
-    expect(confirm).not.toBeNull();
-    await act(async () => { confirm.click(); });
-    // A continuation: the operation keeps the settings it already holds. New
-    // settings from the controls would be a new preparation and lose approvals.
-    expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
-    expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
+    // The gate's action is the Solve card's Solve: no second chooser here.
+    expect(host.querySelector('[data-action="confirm-frame"]')).toBeNull();
+    expect(host.querySelector('input[type="radio"]')).toBeNull();
     // A manual solve is the user's own, never "Fusion asked for a solve".
     expect(host.textContent).toContain('Your solve is waiting');
   });
@@ -153,46 +150,44 @@ describe('the needs_user_input ladder', () => {
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
   });
 
-  it('at the last gate, offers Solve now', async () => {
+  it('at the last gate, points at Solve', async () => {
     stubBackend();
     const ladder = await show(operation('ready_to_solve'));
-    expect(steps(ladder).map((step) => [step.gate, step.current])).toEqual([['solve', true]]);
-    const solve = host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!;
-    await act(async () => { solve.click(); });
-    expect(coordinator.solveOperation).toHaveBeenCalledWith('manual-solve:op-1');
-    expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
+    expect(steps(ladder).map((step) => [step.gate, step.current, step.text])).toEqual([['solve', true, 'Now: press Solve to start it.']]);
   });
 
+  /** What each gate says, and that none of them carries a solving action of
+   * its own: Solve continues the request, one press for every gate. */
   it.each([
-    ['manual-solve:op-1', 'preparation_failed'], ['op-fusion', 'preparation_failed'],
-    ['manual-solve:op-1', 'interrupted'], ['op-fusion', 'interrupted'],
-  ])('retries %s after %s with the settings it holds', async (operationId, reason) => {
+    ['manual-solve:op-1', 'preparation_failed', 'Press Solve to try it again with the settings shown.', ['Dismiss']],
+    ['op-fusion', 'interrupted', 'Press Solve to try it again with the settings shown.', ['Dismiss']],
+    ['op-fusion', 'setup_required', 'check the settings above, then press Solve', ['Dismiss']],
+    ['op-fusion', 'submission_refused', 'pick one in the solver selector, in Simulation; then press Solve', ['Dismiss', 'Open Simulation']],
+    ['manual-solve:op-1', 'engine_unavailable', 'Pick one of the engines it names in the solver selector, in Simulation, then press Solve', ['Dismiss', 'Open Simulation']],
+    ['op-fusion', 'frame_confirmation_required', null, ['Dismiss']],
+    ['op-fusion', 'ready_to_solve', null, ['Dismiss']],
+  ])('leaves %s after %s to the Solve card', async (operationId, reason, words, buttons) => {
     stubBackend();
-    await show(operation(reason, { operationId }));
-    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
-    expect(coordinator.solveOperation).toHaveBeenCalledWith(operationId);
+    useCadOperationsStore.setState({ operations: { [operationId]: operation(reason, { operationId }) } });
+    await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const card = host.querySelector<HTMLElement>('.cad-operation')!;
+    if (words) expect(card.textContent).toContain(words);
+    expect([...card.querySelectorAll('button')].map((button) => button.textContent)).toEqual(buttons);
+    expect(coordinator.solveOperation).not.toHaveBeenCalled();
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
   });
 
-  it.each(['manual-solve:op-1', 'op-fusion'])('after submission_refused, solves %s with the settings now on screen', async (operationId) => {
-    stubBackend();
-    await show(operation('submission_refused', { operationId }));
-    // Its card, too, asks for another engine and then Solve now.
-    expect(host.textContent).toContain('pick one in the solver selector');
-    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
-    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith(operationId);
-    expect(coordinator.solveOperation).not.toHaveBeenCalled();
-  });
-
-  it.each(['manual-solve:op-1', 'op-fusion'])('after engine_unavailable, solves %s with the engine now selected on screen', async (operationId) => {
-    stubBackend();
-    await show(operation('engine_unavailable', { operationId }));
-    // The card asks for another engine to be picked, then Solve now: that
-    // press has to send the new pick, not retry the engine that was refused.
-    expect(host.textContent).toContain('Pick one of the engines');
-    await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Solve now: PartyMEH"]')!.click(); });
-    expect(coordinator.solveOperationWithSettings).toHaveBeenCalledWith(operationId);
-    expect(coordinator.solveOperation).not.toHaveBeenCalled();
+  it('keeps a waiting request of the model on screen off this section when the Solve card shows it', async () => {
+    useCadOperationsStore.setState({ operations: { 'op-fusion': operation('setup_required', { operationId: 'op-fusion' }) } });
+    await act(async () => root.render(<CadOperationsSection record={onScreen} solves={false}/>));
+    expect(host.querySelector('.cad-operation')).toBeNull();
+    // Not on screen: it stays a quiet line here (the control).
+    useCadOperationsStore.setState({ operations: { 'op-fusion': operation('setup_required', {
+      operationId: 'op-fusion', snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Other', projectLineageId: 'wgl_1' },
+    }) } });
+    await act(async () => root.render(<CadOperationsSection record={onScreen} solves={false}/>));
+    expect(host.querySelector('.cad-earlier-requests [data-operation-id="op-fusion"]')).not.toBeNull();
   });
 
   it('counts an approval only on the preparation it was given for, as the backend records them', async () => {

@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
-import { createCadOperation, createSetupRevision, getCadOperation, isPendingCadOperation, prepareCadOperation, type CadOperationSummary } from '../api/cadOperations';
+import { createCadOperation, createSetupRevision, getCadOperation, getSetupRevision, isPendingCadOperation, prepareCadOperation, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
 import { CadLinkApiError } from '../api/cadlink';
 import { planSolveDesign, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
@@ -25,11 +25,12 @@ import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadOperationsStore } from '../stores/cadOperations';
+import { confirmDisplayedFrame, frameSolveBlocker, useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
-import { waitingForFirstSettings } from './cadOnScreenSettings';
+import { onScreenRequestToContinue } from './cadOnScreenSettings';
 import { solveAttention, useOperationAttention } from './solveAttention';
 
 /**
@@ -47,6 +48,8 @@ export interface SolveNotice {
 
 interface SolveControl {
   solve(): void;
+  /** CAD Link mode: Solve solves the CAD model on screen. */
+  cadMode: boolean;
   disabled: boolean;
   submitting: boolean;
   label: string;
@@ -115,6 +118,41 @@ export function useSolveControl(): SolveControl {
   return value;
 }
 
+/** The Solve command where one exists: the CAD Link panel's Solve card is the
+ * same command as the top bar's, and is rendered on its own in some tests. */
+export function useOptionalSolveControl(): SolveControl | null {
+  return useContext(SolveContext);
+}
+
+/** What a setup revision binds for a solve, without the run's own name: the
+ * content two revisions must share for a continuation to keep the one bound.
+ * Defaults are filled as the server stores them, and keys sorted. */
+export function solveInputsKey(setup: CadSolveSetup): string {
+  const options: Record<string, unknown> = { ...(setup.options ?? {}) };
+  // Imported geometry is solved in full 3-D whatever a setup says.
+  delete options.solver_mode;
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.keys(value as Record<string, unknown>).sort()
+        .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+        .map((key) => [key, canonical((value as Record<string, unknown>)[key])]));
+    }
+    return value;
+  };
+  return JSON.stringify(canonical({
+    schema_version: setup.schema_version ?? 1,
+    geometry: setup.geometry ?? {},
+    options,
+    preparation: {
+      area_drift_overrides: [], symmetry_mode: 'auto', surface_deviation_mm: null,
+      ...(setup.preparation ?? {}),
+    },
+    driver_references: Object.fromEntries(Object.entries(setup.driver_references ?? {})
+      .map(([channel, reference]) => [channel, { source: null, ...reference }])),
+  }));
+}
+
 /** Read naming at submission time, including a commit from the same key event. */
 export function currentJobLabel(
   designName = currentRunNameSource().name,
@@ -148,7 +186,7 @@ export function cadSolveBlockerNow(): string | null {
     && (!cad.ingestId || cad.ingestId !== cadReturn.ingestRecord.ingest_id)) {
     return CAD_VIEWPORT_MISMATCH;
   }
-  return importedSubmissionBlocker(cadReturn);
+  return importedSubmissionBlocker(cadReturn) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id);
 }
 
 const jobsConnection = () => jobsSocket.getSnapshot().connection;
@@ -200,6 +238,9 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const [submitting, setSubmitting] = useState(false);
   const submissionInFlight = useRef(false);
   const cadOperations = useCadOperationsStore((state) => state.operations);
+  // The frame the Solve card shows for the model on screen: part of what Solve
+  // confirms, so part of whether it can.
+  useCadSolverFrameStore((state) => state.frames);
 
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
 
@@ -317,7 +358,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
-      ? importedSubmissionBlocker(cadReturn, solveOptions)
+      ? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
   const solveBlocker = cadSolveBlocker ?? directivityError;
@@ -430,26 +471,32 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     // A first-time CAD document has no project lineage yet. The manual solve
     // still binds the setup on screen; the lineage is only filing metadata in
     // buildCadProjectSetup and is not sent on the setup-revision route.
-    const built = buildCadProjectSetup(
-      cad, undefined, undefined,
-      cad.ingestRecord?.project?.lineage_id ?? cad.projectLineageId ?? 'manual-solve',
-    );
+    const project = cad.ingestRecord?.project?.lineage_id ?? cad.projectLineageId ?? null;
+    const built = buildCadProjectSetup(cad, undefined, undefined, project ?? 'manual-solve');
     if (!built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
     submissionInFlight.current = true;
     try {
       setSubmitting(true);
       setActionError(null);
+      // The frame on screen is part of the input (PLAN.md M1b/M1e): Solve
+      // confirms the axis the card shows before anything is prepared, and the
+      // server records whether that was its suggestion or the user's choice.
+      await confirmDisplayedFrame(ingestId);
+      // Solve remembers the settings it uses for this model's project, so a
+      // later solve -- Fusion's too -- starts from them. Never a global default,
+      // never the CAD document.
+      if (project) await putProjectSetup(built);
       // A new identity is a new run of the design. When a request for this
-      // very snapshot already waits for its first settings (Fusion's "Solve in
-      // WG", say), the identity names that operation instead: this press
-      // continues it with the settings a WG Solve binds. The same operation id
-      // is the explicit continuation -- one request, one card, nothing
-      // inferred from equal manifests on the backend -- and, held like any
-      // manual solve's, it survives a lost response and a reload.
+      // very snapshot is waiting on screen (Fusion's "Solve in WG", say), the
+      // identity names that operation instead: this press continues it with
+      // the settings and frame on screen. The same operation id is the
+      // explicit continuation -- one request, one card, nothing inferred from
+      // equal manifests on the backend -- and, held like any manual solve's,
+      // it survives a lost response and a reload.
       const newRun = (continuing = true) => {
         const designName = currentRunNameSource().name;
         const waiting = continuing
-          ? waitingForFirstSettings(useCadOperationsStore.getState().operations, cad.ingestRecord)
+          ? onScreenRequestToContinue(useCadOperationsStore.getState().operations, cad.ingestRecord)
           : null;
         return {
           designName,
@@ -459,6 +506,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       };
       let identity = manualCadSolveIdentity(ingestId, newRun);
       let operationId = identity.operationId;
+      // The operation as the backend holds it, when it is unfinished.
+      let pending: CadOperationSummary | null = null;
       // The storage entry survives a reload. Ask the authoritative store
       // whether it still names unfinished work: 404 means the first create
       // never committed, pending means recover it, terminal means this click
@@ -493,6 +542,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           forgetManualCadSolveOperationId(ingestId, operationId);
           identity = manualCadSolveIdentity(ingestId, newRun);
           operationId = identity.operationId;
+        } else {
+          pending = held;
         }
       } catch (reason) {
         if (!(reason instanceof CadLinkApiError && reason.status === 404)) throw reason;
@@ -511,13 +562,28 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         label: identity.label,
         options: { ...built.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
       };
-      const revision = await createSetupRevision(setup);
+      // A continued request already holds a setup: when the settings on screen
+      // are that setup, it is kept -- a continuation with unchanged inputs
+      // changes nothing, so its preparation, and any approval given on it,
+      // still apply. Different settings on screen are the user's correction,
+      // bound deliberately by this press.
+      const continued = !isManualCadSolveOperationId(operationId);
+      const bound = continued
+        ? (pending?.operationId === operationId ? pending : useCadOperationsStore.getState().operations[operationId])
+          ?.setupRevisionId ?? null
+        : null;
+      const keepBound = bound !== null
+        && solveInputsKey((await getSetupRevision(bound)).setup) === solveInputsKey(setup);
+      const revisionId = keepBound ? null : (await createSetupRevision(setup)).revisionId;
       // A continued request exists already; only a solve of its own is created.
-      if (isManualCadSolveOperationId(operationId)) {
+      if (!continued) {
         const created = await createCadOperation({ operationId, ingestId });
         useCadOperationsStore.getState().apply(created);
       }
-      const prepared = await prepareCadOperation(operationId, { setupRevisionId: revision.revisionId, submit: true });
+      const prepared = await prepareCadOperation(
+        operationId,
+        revisionId ? { setupRevisionId: revisionId, submit: true } : { submit: true },
+      );
       acknowledgeManualCadSolvePreparation(ingestId, operationId);
       useCadOperationsStore.getState().apply(prepared);
       return 'submitted' as const;
@@ -626,6 +692,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   );
   const control = useMemo<SolveControl>(() => ({
     solve,
+    cadMode: cadGeometryActive,
     disabled: !solveAvailable || submitting || Boolean(solveBlocker) || fileGeometryActive,
     notice,
     submitting,

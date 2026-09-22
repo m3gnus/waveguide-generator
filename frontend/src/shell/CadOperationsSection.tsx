@@ -7,7 +7,6 @@ import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
 import { fullTime, relativeTime } from './cadTime';
 import { workspaceNavigation } from './workspaceNavigation';
-import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
 
 /** The hash of a `sha256:` digest, cut to what a person can read and compare. */
 export function shortSha256(digest: string | null | undefined): string {
@@ -141,7 +140,7 @@ export function solveGateLadder(
       return [
         {
           gate: 'frame', current: true,
-          text: 'Now: confirm the solver frame — the axis this model radiates along — below.',
+          text: 'Now: check which way it radiates, above, and press Solve to confirm it.',
         },
         // Confirming the frame approves nothing: a finding still unapproved
         // is the next stop, and only then is it named.
@@ -156,7 +155,7 @@ export function solveGateLadder(
         text: `Now: review ${findingCount(unapproved.length || blocking.length)}, then Approve and solve.`,
       }];
     case 'ready_to_solve':
-      return [{ gate: 'solve', current: true, text: 'Now: press Solve now to start it.' }];
+      return [{ gate: 'solve', current: true, text: 'Now: press Solve to start it.' }];
     default:
       return [
         { gate: 'other', current: true, text: `Now: ${REASON_COPY[operation.reason ?? ''] ?? 'it needs your attention'} — see below.` },
@@ -164,7 +163,10 @@ export function solveGateLadder(
   }
 }
 
-type OperationAction = 'solve' | 'approve' | 'use-settings' | 'dismiss';
+/** What a waiting request's own card still offers. Solving it is the Solve
+ * card's one Solve (PLAN.md M1b): it continues this very request with the
+ * settings and frame on screen. Approving a finding stays explicit. */
+type OperationAction = 'approve' | 'dismiss';
 
 /** Reasons whose backend message the card on screen already says in its own
  * guidance and controls. */
@@ -177,8 +179,9 @@ const SAID_BY_THE_CARD: ReadonlySet<string> = new Set([
 interface Guidance {
   text: string | null;
   simulation: boolean;
-  /** The action the reason calls for, offered while the operation waits. */
-  action: Exclude<OperationAction, 'dismiss'> | 'confirm-frame' | null;
+  /** The action the reason calls for, offered on this card while it waits;
+   * null when Solve is the action. */
+  action: Exclude<OperationAction, 'dismiss'> | null;
 }
 
 /** What the user can do about the reason an operation waits. A card is only
@@ -187,21 +190,21 @@ function guidance(operation: CadOperationSummary): Guidance {
   switch (operation.reason) {
     case 'setup_required':
       return {
-        text: 'This model is on screen: check its solve settings in Simulation, then use them to solve it.',
-        simulation: true,
-        action: 'use-settings',
+        text: 'This model is on screen: check the settings above, then press Solve. WG remembers them for this project.',
+        simulation: false,
+        action: null,
       };
     case 'engine_unavailable':
       return {
-        text: 'Pick one of the engines it names in the solver selector, in Simulation, then press Solve now. WG never switches engines for you.',
+        text: 'Pick one of the engines it names in the solver selector, in Simulation, then press Solve. WG never switches engines for you.',
         simulation: true,
-        action: 'solve',
+        action: null,
       };
     case 'submission_refused':
       return {
-        text: 'If it names engines that can solve this model, pick one in the solver selector, in Simulation; then press Solve now. WG never switches engines for you.',
+        text: 'If it names engines that can solve this model, pick one in the solver selector, in Simulation; then press Solve. WG never switches engines for you.',
         simulation: true,
-        action: 'solve',
+        action: null,
       };
     case 'findings_need_review':
       return {
@@ -212,8 +215,8 @@ function guidance(operation: CadOperationSummary): Guidance {
     case 'frame_confirmation_required':
       // An unlinked model: the backend solves nothing until its project's
       // solver frame is confirmed, whichever way the solve was asked for.
-      // The frame chooser says why; nothing here repeats it.
-      return { text: null, simulation: false, action: 'confirm-frame' };
+      // The frame line above says which way; Solve confirms it.
+      return { text: null, simulation: false, action: null };
     case 'update_restart_pending':
       // The backend queues it again by itself; Solve now would only be refused until then.
       return {
@@ -221,8 +224,12 @@ function guidance(operation: CadOperationSummary): Guidance {
         simulation: false,
         action: null,
       };
+    case 'ready_to_solve':
+      return { text: null, simulation: false, action: null };
     default:
-      return { text: null, simulation: false, action: 'solve' };
+      // A failed or interrupted preparation: Solve tries it again, with the
+      // settings shown, as the same request.
+      return { text: 'Press Solve to try it again with the settings shown.', simulation: false, action: null };
   }
 }
 
@@ -251,29 +258,14 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
   const reviewedPreparation = review.findingIds.length > 0
     && review.preparationId === operation.preparationId ? review.preparationId : null;
   const manual = operation.operationId.startsWith('manual-solve:');
-  // A continuation -- a frame confirmation, an approval, a retry -- sends no
-  // settings: the backend reuses the setup revision the operation holds, so
-  // its preparation and the approvals given on it still apply. Only the
-  // recovery from engine_unavailable or submission_refused chooses settings:
-  // those cards ask for another engine, so their Solve now sends the settings
-  // on screen.
-  const chooseSettings = operation.reason === 'engine_unavailable' || operation.reason === 'submission_refused';
-  const solveRequest = () => (chooseSettings
-    ? coordinator.solveOperationWithSettings(operation.operationId)
-    : coordinator.solveOperation(operation.operationId));
+  // An approval is a continuation: it sends no settings, so the backend
+  // reuses the setup revision the operation holds and the approvals given on
+  // its preparation still apply. Everything else this request waits for is
+  // the Solve card's one Solve, which continues this very request.
   const ask = (action: OperationAction, request: () => Promise<void>) => {
     setAsked({ action, attemptGeneration: operation.attemptGeneration, state: operation.state });
     void request().catch(() => setAsked(null));
   };
-  const solveNow = <button
-    className="primary"
-    disabled={heldAction === 'solve'}
-    aria-label={`Solve now: ${label}`}
-    title={chooseSettings
-      ? 'Record the settings on screen, with the engine now selected, and solve this model with them.'
-      : 'Prepare this model with the solve settings it already has and start the solve.'}
-    onClick={() => ask('solve', solveRequest)}
-  >Solve now</button>;
   // The stage is the backend's bookkeeping ("validating"); the state and the
   // reason are what the user acts on.
   const status = [
@@ -307,13 +299,7 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
       {/* At the frame gate the read only forecasts the next gate; failing it
           must not read as a problem with this one. */}
       {review.error && operation.reason === 'findings_need_review' && <span>Could not read the findings to review: {review.error}</span>}
-      {help.text && <span>{help.text}</span>}
-      {waiting && help.action === 'confirm-frame' && heldAction !== 'solve' && <CadSolverFrameConfirm
-        key={`${operation.operationId}:${operation.attemptGeneration}:${operation.preparationId ?? ''}`}
-        snapshot={{ operationId: operation.operationId }}
-        label={label}
-        onConfirmed={() => ask('solve', () => coordinator.solveOperation(operation.operationId))}
-      />}
+      {waiting && help.text && <span>{help.text}</span>}
     </div>
     <div className="cad-confirm-actions">
       {operation.state !== 'cancel_requested' && <button
@@ -335,14 +321,6 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
           preparationId: reviewedPreparation, findingIds: review.findingIds,
         }))}
       >Approve and solve</button>}
-      {waiting && help.action === 'use-settings' && <button
-        className="primary"
-        disabled={heldAction === 'use-settings'}
-        aria-label={`Use these settings and solve: ${label}`}
-        title="Record the settings on screen as this model’s project setup, then prepare and solve it."
-        onClick={() => ask('use-settings', () => coordinator.solveOperationWithSettings(operation.operationId))}
-      >Use these settings and solve</button>}
-      {waiting && help.action === 'solve' && solveNow}
     </div>
   </div>;
 }
@@ -485,10 +463,23 @@ export function onScreenSolves(
     .filter((operation) => operation.kind === 'prepare_and_solve' && aboutWhatIsOnScreen(operation, record, null));
 }
 
+/** The waiting or running solves of the model on screen, as the Solve card
+ * shows them: what each still needs, in words, with only the actions Solve
+ * does not take -- approving a finding, dismissing the request. */
+export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord | null }) {
+  const operations = useCadOperationsStore((state) => state.operations);
+  const solves = onScreenSolves(operations, record);
+  if (!solves.length) return null;
+  return <div className="cad-operations cad-operations-on-screen">
+    {solves.map((operation) => <CadOperationCard key={operation.operationId} operation={operation}/>)}
+  </div>;
+}
+
 /** The CAD operations still waiting or running: the solves Fusion sent, which
  * the backend prepares from each project's own setup. Only those about the
- * model on screen get a card; the rest are one quiet line each. */
-export function CadOperationsSection({ record }: { record: CadReturnIngestRecord | null }) {
+ * model on screen get a card -- on the Solve card when there is one
+ * (`solves={false}` here) -- and the rest are one quiet line each. */
+export function CadOperationsSection({ record, solves = true }: { record: CadReturnIngestRecord | null; solves?: boolean }) {
   const operations = useCadOperationsStore((state) => state.operations);
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
@@ -499,8 +490,10 @@ export function CadOperationsSection({ record }: { record: CadReturnIngestRecord
         && (operation.kind === 'insert_link' || operation.kind === 'update_link')));
   if (!pending.length) return null;
   const reportedRecovery = coordinator.fusionStatus?.recoveryRequired?.operationId ?? null;
-  const current = pending.filter((operation) => aboutWhatIsOnScreen(operation, record, reportedRecovery));
+  const current = pending.filter((operation) => aboutWhatIsOnScreen(operation, record, reportedRecovery)
+    && (solves || operation.kind !== 'prepare_and_solve'));
   const earlier = pending.filter((operation) => !aboutWhatIsOnScreen(operation, record, reportedRecovery));
+  if (!current.length && !earlier.length) return null;
   return <div className="cad-operations">
     {current.map((operation) => operation.kind === 'prepare_and_solve'
       ? <CadOperationCard key={operation.operationId} operation={operation}/>

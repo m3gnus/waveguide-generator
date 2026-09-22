@@ -1,19 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import {
-  confirmSolverFrame,
-  getSolverFrame,
-  type SolverFrameAxisOption,
-  type SolverFramePreview,
-  type SolverFrameSnapshot,
-} from '../api/solverFrame';
+import { confirmSolverFrame, type SolverFrameState } from '../api/solverFrame';
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseMSH, type ParsedMSH } from '../viewport/mshParser';
 import {
   framePreviewProjection,
   type FramePreviewProjection,
   type SolverFrameAxis,
 } from '../viewport/solverFrame';
-
-type Loaded = { preview: Extract<SolverFramePreview, { linked: false }>; mesh: ParsedMSH };
 
 async function loadModel(ingestId: string, fetcher: typeof fetch): Promise<ParsedMSH> {
   // The display tessellation when it exists; the solve mesh is the same model.
@@ -102,132 +95,150 @@ function FrameView({ projection, index, label }: { projection: FramePreviewProje
   </figure>;
 }
 
-/** Confirm the solver frame of an unlinked (CAD-authored) model, once for its
- * project, after seeing the model in that frame -- or change the one confirmed.
- * The preview applies the exact matrix the backend meshes with; nothing here
- * computes a frame of its own. No axis is chosen for the user: until one has
- * been confirmed, nothing is preselected and nothing can be confirmed. */
-export function CadSolverFrameConfirm({ snapshot, label, onConfirmed, mode = 'confirm', fetcher = fetch }: {
-  snapshot: SolverFrameSnapshot;
-  label: string;
-  onConfirmed: (axis: SolverFrameAxis) => void;
-  /** 'confirm': an operation waits for it, and confirming solves. 'change': the
-   * project's frame, changed for later preparations only. */
-  mode?: 'confirm' | 'change';
-  fetcher?: typeof fetch;
-}) {
-  const [loaded, setLoaded] = useState<Loaded | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [confirmError, setConfirmError] = useState<string | null>(null);
-  const [axis, setAxis] = useState<SolverFrameAxis | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const snapshotKey = 'operationId' in snapshot ? `operation:${snapshot.operationId}` : `ingest:${snapshot.ingestId}`;
-
+/** The model's mesh for the frame preview, once per preparation. */
+function useFrameMesh(ingestId: string, fetcher: typeof fetch): { mesh: ParsedMSH | null; error: string | null } {
+  const [state, setState] = useState<{ ingestId: string; mesh: ParsedMSH | null; error: string | null } | null>(null);
   useEffect(() => {
     let current = true;
-    setLoaded(null);
-    setLoadError(null);
-    setConfirmError(null);
-    setAxis(null);
-    void (async () => {
-      const preview = await getSolverFrame(snapshot, fetcher);
-      if (preview.linked) throw new Error('this model is linked to a WG design and needs no frame');
-      const mesh = await loadModel(preview.ingestId, fetcher);
-      if (!current) return;
-      setLoaded({ preview, mesh });
-      // Only a confirmed axis the snapshot still allows is shown as chosen.
-      const confirmed = preview.confirmed?.axis ?? null;
-      setAxis(confirmed && preview.axes.some((item) => item.axis === confirmed && item.allowed) ? confirmed : null);
-    })().catch((reason: unknown) => {
-      if (current) setLoadError(reason instanceof Error ? reason.message : String(reason));
-    });
+    void loadModel(ingestId, fetcher)
+      .then((mesh) => { if (current) setState({ ingestId, mesh, error: null }); })
+      .catch((reason: unknown) => {
+        if (current) setState({ ingestId, mesh: null, error: reason instanceof Error ? reason.message : String(reason) });
+      });
     return () => { current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- snapshotKey identifies the snapshot
-  }, [fetcher, snapshotKey]);
+  }, [fetcher, ingestId]);
+  return state?.ingestId === ingestId ? state : { mesh: null, error: null };
+}
 
-  const option: SolverFrameAxisOption | null = loaded && axis
-    ? loaded.preview.axes.find((item) => item.axis === axis) ?? null
-    : null;
+/** The model in the solver frame an axis names: the exact matrix the backend
+ * meshes with (`previewFromRecord`), with the solver +Z arrow. */
+function FramePreview({ frame, axis, mesh, views }: {
+  frame: SolverFrameState;
+  axis: SolverFrameAxis;
+  mesh: ParsedMSH | null;
+  views: 'side' | 'both';
+}) {
+  const option = frame.axes.find((item) => item.axis === axis) ?? null;
   const projection = useMemo(
-    () => (loaded && option ? framePreviewProjection(loaded.mesh, option.previewFromRecord) : null),
-    [loaded, option],
+    () => (mesh && option ? framePreviewProjection(mesh, option.previewFromRecord) : null),
+    [mesh, option],
   );
+  if (!projection) return null;
+  return <div className="cad-frame-views" data-frame-preview-axis={axis}>
+    <FrameView projection={projection} index={0} label={`Side: model ${axis} → solver +Z, solver Y up`}/>
+    {views === 'both' && <FrameView projection={projection} index={1} label={`Top: model ${axis} → solver +Z, solver X up`}/>}
+  </div>;
+}
 
-  if (loadError) {
-    return <div className="cad-solver-frame" role="status">Cannot preview the solver frame of {label}: {loadError}</div>;
+const SOURCE_WORDS: Record<string, string> = {
+  confirmed: 'this project’s frame',
+  carried: 'this project’s frame',
+  suggested: 'worked out from the model',
+};
+
+/**
+ * Which way a model authored in CAD radiates, on its Solve card (PLAN.md
+ * M1b/M1e): "Radiates along +x · Change" when WG has an answer -- the
+ * project's frame, or the one it worked out from the model -- and the
+ * question, in CAD axes with its reason in words, only when it has none.
+ *
+ * Nothing here confirms a frame except the one-click switch a "differs"
+ * notice offers: Solve confirms the axis shown (`confirmDisplayedFrame`). The
+ * preview applies the server's matrices; nothing here computes a frame.
+ */
+export function CadSolverFrame({ ingestId, label, fetcher = fetch }: {
+  ingestId: string;
+  label: string;
+  fetcher?: typeof fetch;
+}) {
+  const view = useCadSolverFrameStore((state) => state.frames[ingestId]);
+  const load = useCadSolverFrameStore((state) => state.load);
+  const pick = useCadSolverFrameStore((state) => state.pick);
+  const apply = useCadSolverFrameStore((state) => state.apply);
+  const [changing, setChanging] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  useEffect(() => { void load(ingestId, fetcher); }, [fetcher, ingestId, load]);
+  useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
+  const frame = view?.frame ?? null;
+  const { mesh } = useFrameMesh(ingestId, fetcher);
+
+  if (!view || (view.status === 'loading' && !frame)) {
+    return <p className="cad-solver-frame cad-detail" data-frame-preview="loading" role="status">Reading which way {label} radiates…</p>;
   }
-  if (!loaded) {
-    return <div className="cad-solver-frame" data-frame-preview="loading" role="status">Loading the solver frame preview…</div>;
+  if (view.linked) return null;
+  if (!frame) {
+    return <p className="cad-solver-frame cad-detail" role="status">
+      WG could not read which way {label} radiates ({view.error}). Solve still stops to ask before it solves.
+    </p>;
   }
-  const confirmed = loaded.preview.confirmed?.axis ?? null;
-  const confirm = () => {
-    if (!axis) return;
-    setConfirming(true);
-    setConfirmError(null);
-    void confirmSolverFrame(snapshot, axis, fetcher)
-      .then((answer) => {
-        if (!answer.linked) setLoaded({ ...loaded, preview: answer });
-        onConfirmed(axis);
-      })
-      .catch((reason: unknown) => setConfirmError(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => setConfirming(false));
+  const axis = view.axis;
+  const suggestion = frame.suggestion ?? null;
+  const source = frame.preselected?.source ?? (frame.confirmed ? 'confirmed' : null);
+  const asking = axis === null || changing;
+  const differs = frame.differs ?? null;
+  const switchTo = (target: SolverFrameAxis) => {
+    setSwitching(true);
+    setSwitchError(null);
+    void confirmSolverFrame({ ingestId }, target, fetcher)
+      .then((answer) => apply(ingestId, answer))
+      .catch((reason: unknown) => setSwitchError(reason instanceof Error ? reason.message : String(reason)))
+      .finally(() => setSwitching(false));
   };
-  const unchanged = mode === 'change' && axis !== null && axis === confirmed;
-  return <div className="cad-solver-frame" data-frame-preview="ready">
-    {mode === 'confirm'
-      ? <span>
-        {label} was authored in CAD, so WG cannot know which way it radiates. Choose the model axis
-        that points out of the mouth. WG solves along the solver +Z (blue) from the model’s origin, and
-        remembers your choice for this project.
-      </span>
-      : confirmed === null
-        // Nothing to change yet: choosing one is a first choice, not a change.
-        ? <span>
-          Choose the model axis that points out of the mouth. WG remembers it for this project and
-          prepares the model in that frame from now on.
-        </span>
-        : <span>
-          Confirmed for this project: <b>{confirmed}</b>. Change it if the model was
-          reoriented in CAD. A change applies to later preparations of this project only: runs already
-          solved keep the frame they were solved in. Prepare the model again to solve it in the new frame.
-        </span>}
-    <fieldset>
-      <legend>Radiates along</legend>
-      {loaded.preview.axes.map((item) => <label key={item.axis} title={item.reason ?? undefined}>
-        <input
-          type="radio"
-          name={`solver-frame-${snapshotKey}`}
-          value={item.axis}
-          checked={item.axis === axis}
-          disabled={!item.allowed || confirming}
-          onChange={() => setAxis(item.axis)}
-        />
-        {item.axis}
-      </label>)}
-    </fieldset>
-    {loaded.preview.axes.some((item) => !item.allowed && item.reason)
-      && <span>{loaded.preview.axes.find((item) => !item.allowed)?.reason}</span>}
-    {axis && projection
-      ? <>
-        <div className="cad-frame-views" data-frame-preview-axis={axis}>
-          <FrameView projection={projection} index={0} label={`Side: model ${axis} → solver +Z, solver Y up`}/>
-          <FrameView projection={projection} index={1} label={`Top: model ${axis} → solver +Z, solver X up`}/>
-        </div>
-        <span>Solver frame: model {axis} → solver +Z. Drive sources are shown in orange.</span>
-      </>
-      : <span>Choose the axis the model radiates along to preview it in the solver frame.</span>}
-    {confirmError && <span className="cad-solver-frame-error" role="alert">Could not confirm the solver frame: {confirmError}</span>}
-    <button
-      className="primary"
-      data-action="confirm-frame"
-      disabled={confirming || axis === null || unchanged}
-      aria-label={axis
-        ? `${mode === 'confirm' ? 'Confirm solver frame' : 'Use solver frame'} ${axis}: ${label}`
-        : `Choose a solver frame axis: ${label}`}
-      onClick={confirm}
-    >{axis === null
-        // An instruction, not a dead button: the choice is the radios above.
-        ? 'Pick an axis above'
-        : mode === 'confirm' ? `Confirm ${axis} and solve` : `Use ${axis} for this project`}</button>
+  const unsupported = frame.axes.find((item) => !item.allowed && item.reason)?.reason ?? null;
+  return <div className="cad-solver-frame" data-frame-preview="ready" data-solver-frame={axis ?? 'unset'}>
+    {!asking && <div className="cad-solver-frame-summary">
+      <p className="cad-solver-frame-line">
+        <span>Radiates along <b>{axis}</b></span>
+        {' · '}<button
+          className="link-button"
+          data-action="change-solver-frame"
+          title="Choose another axis. Solve confirms the one shown; runs already solved keep their frame."
+          onClick={() => setChanging(true)}
+        >Change</button>
+      </p>
+      {(view.picked || source) && <small className="cad-detail cad-solver-frame-source">{view.picked ? 'your choice' : SOURCE_WORDS[source!]}</small>}
+      <FramePreview frame={frame} axis={axis!} mesh={mesh} views="side"/>
+    </div>}
+    {asking && <>
+      <p className="cad-solver-frame-question">Which way does the mouth face? (CAD axes)</p>
+      {/* Why WG asks, in words; never its code. */}
+      {!changing && suggestion && suggestion.status !== 'automatic' && <p className="cad-detail cad-solver-frame-reason">{suggestion.reason}</p>}
+      <fieldset>
+        <legend>Radiates along</legend>
+        {frame.axes.map((item) => <label key={item.axis} title={item.reason ?? undefined}>
+          <input
+            type="radio"
+            name={`solver-frame-${ingestId}`}
+            value={item.axis}
+            checked={item.axis === axis}
+            disabled={!item.allowed}
+            onChange={() => pick(ingestId, item.axis)}
+          />
+          {item.axis}
+        </label>)}
+      </fieldset>
+      {unsupported && <p className="cad-detail">{unsupported}</p>}
+      {axis
+        ? <>
+          <FramePreview frame={frame} axis={axis} mesh={mesh} views="both"/>
+          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. Solve confirms it for this project.</p>
+        </>
+        : <p className="cad-detail">Choose the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
+      {changing && <button className="link-button" data-action="done-solver-frame" onClick={() => setChanging(false)}>Done</button>}
+    </>}
+    {axis && frame.recordAxis !== axis && <p className="cad-detail">
+      Prepared along {frame.recordAxis}; Solve prepares it again along {axis}.
+    </p>}
+    {differs && <div className="cad-alert cad-alert-notice cad-solver-frame-differs" role="status">
+      <span>{differs.message}</span>{' '}
+      <button
+        className="link-button"
+        data-action="switch-solver-frame"
+        disabled={switching}
+        onClick={() => switchTo(differs.suggestedAxis)}
+      >Switch to {differs.suggestedAxis}</button>
+    </div>}
+    {switchError && <p className="cad-solver-frame-error" role="alert">Could not switch the solver frame: {switchError}</p>}
   </div>;
 }

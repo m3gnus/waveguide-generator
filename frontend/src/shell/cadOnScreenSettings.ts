@@ -50,20 +50,27 @@ export async function recordOnScreenSettings(operationId: string): Promise<strin
   return (await putProjectSetup(built)).revisionId;
 }
 
-/** The request for the model on screen that still waits for its first
- * settings (`setup_required`).
+/** Why a request can wait that a WG Solve does not continue: the backend
+ * queues it again by itself once the update restart is over. */
+const NOT_CONTINUED: ReadonlySet<string> = new Set(['update_restart_pending']);
+
+/** The request for the model on screen that WG's Solve continues: one Fusion
+ * sent ("Solve in WG") for this very snapshot, waiting for the user at any of
+ * its gates -- its first settings, its solver frame, an engine that cannot
+ * solve it, a failed or interrupted preparation.
  *
- * WG's own Solve continues that operation instead of creating a second one
- * for the same snapshot: the same operation id is the explicit continuation.
- * A request for another snapshot, or one waiting at any other gate, is not
- * this. */
-export function waitingForFirstSettings(
+ * Solve continues that operation, with the settings and frame on screen,
+ * instead of creating a second one for the same snapshot: the same operation
+ * id is the explicit continuation (PLAN.md M1b, "one card per intent"). A
+ * request for another snapshot is not this, and neither is one the backend is
+ * still preparing or will queue again by itself. */
+export function onScreenRequestToContinue(
   operations: Record<string, CadOperationSummary>,
   record: CadReturnIngestRecord | null,
 ): CadOperationSummary | null {
   if (!record) return null;
   return pendingCadOperations(operations).find((operation) => operation.kind === 'prepare_and_solve'
     && operation.state === 'needs_user_input'
-    && operation.reason === 'setup_required'
+    && !NOT_CONTINUED.has(operation.reason ?? '')
     && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;
 }
