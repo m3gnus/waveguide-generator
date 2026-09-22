@@ -20,6 +20,7 @@ from server.cadlink.solver_frame import (
     AS_MODELLED,
     AXES,
     CONTRACT,
+    CONTRACT_V1,
     FrameConfirmationError,
     allowed_axes,
     confirm_frame,
@@ -27,14 +28,17 @@ from server.cadlink.solver_frame import (
     frame_matrix,
     frame_preview,
     frame_requirement,
+    frame_spec,
     record_frame_refusal,
     record_is_unlinked,
+    spec_matrix,
 )
 from server.cadlink.store import STORE_FORMAT_VERSION, CadLinkStore
 
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = REPO / "frontend" / "src" / "viewport" / "solverFrame.fixture.json"
+FIXTURE_V2 = REPO / "frontend" / "src" / "viewport" / "solverFrame.v2.fixture.json"
 MANIFEST_SHA = "sha256:" + "a" * 64
 
 
@@ -58,18 +62,36 @@ def _unlinked_record(
     lineage_id: str | None = "wgl_project",
     export_frame: str = "root-component",
     allowed: tuple[str, ...] = AXES,
+    contract: str = CONTRACT,
+    document_up: str | None = None,
 ) -> dict:
+    if contract == CONTRACT_V1:
+        matrix = frame_matrix(axis or AS_MODELLED)
+        requirement: dict = {"contract": CONTRACT_V1, "export_frame": export_frame}
+        extra: dict = {}
+    else:
+        manifest = (
+            _manifest(document_up=document_up) if document_up else _manifest()
+        )
+        if document_up:
+            manifest["required_features"] = ["document-up-v1"]
+        spec = frame_spec(axis or AS_MODELLED, manifest)
+        matrix = spec_matrix(spec)
+        requirement = {"contract": CONTRACT, "export_frame": export_frame, "document_up": document_up}
+        extra = {key: spec[key] for key in ("up", "up_source", "document_up")}
     normalisation: dict = {
         "anchor_instance_id": None,
         "assembly_frame_is_solver_frame": axis in (None, AS_MODELLED),
-        "matrix": frame_matrix(axis or AS_MODELLED).tolist(),
+        "matrix": matrix.tolist(),
     }
     if axis is not None:
         normalisation["solver_frame"] = {
-            "contract": CONTRACT,
+            "contract": contract,
             "axis": axis,
-            "requirement": {"contract": CONTRACT, "export_frame": export_frame},
+            **extra,
+            "requirement": requirement,
             "allowed_axes": list(allowed),
+            "matrix": matrix.tolist(),
         }
     return {
         "ingest_id": "wgi_" + "1" * 26,
@@ -132,19 +154,43 @@ def test_the_frontend_fixture_is_exactly_this_contract() -> None:
     """The preview applies these numbers; the Python contract decides them."""
 
     fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert fixture["contract"] == CONTRACT
+    # The fixture pins contract v1, the matrices historical records keep; a v2
+    # preview hands the frontend its matrices, which it only applies.
+    assert fixture["contract"] == CONTRACT_V1
     assert fixture["matrixConvention"] == "row-major"
     assert sorted(fixture["axes"]) == sorted(AXES)
     for axis in AXES:
         assert fixture["axes"][axis] == frame_matrix(axis).tolist()
 
 
-def test_the_requirement_is_the_contract_and_the_export_frame() -> None:
-    assert frame_requirement(_manifest()) == {"contract": CONTRACT, "export_frame": "root-component"}
+def test_the_frontend_v2_fixture_is_exactly_the_current_contract() -> None:
+    """The frontend's v2 fixture: every axis's matrix and up, with no document up."""
+
+    fixture = json.loads(FIXTURE_V2.read_text(encoding="utf-8"))
+    assert fixture["contract"] == CONTRACT == "cad-solver-frame-v2"
+    assert fixture["matrixConvention"] == "row-major"
+    assert fixture["documentUp"] is None
+    assert sorted(fixture["axes"]) == sorted(AXES)
+    for axis in AXES:
+        spec = frame_spec(axis, _manifest())
+        assert fixture["axes"][axis] == spec_matrix(spec).tolist()
+        assert fixture["up"][axis] == spec["up"]
+
+
+def test_the_requirement_is_the_contract_the_export_frame_and_the_document_up() -> None:
+    assert frame_requirement(_manifest()) == {
+        "contract": CONTRACT, "export_frame": "root-component", "document_up": None,
+    }
     assert frame_requirement(_manifest(export_frame="selected-occurrence-component")) == {
         "contract": CONTRACT,
         "export_frame": "selected-occurrence-component",
+        "document_up": None,
     }
+    stated = _manifest(document_up="+y")
+    # Only under the feature: a stray field states nothing.
+    assert frame_requirement(stated)["document_up"] is None
+    stated["required_features"] = ["document-up-v1"]
+    assert frame_requirement(stated)["document_up"] == "+y"
 
 
 def test_a_declared_reduced_domain_allows_only_the_modelled_frame() -> None:
@@ -279,14 +325,19 @@ def test_the_preview_names_each_axis_matrix_relative_to_the_displayed_record(tmp
     assert preview["linked"] is False
     assert preview["recordAxis"] == "+y"
     assert preview["confirmed"] is None
-    assert preview["requirement"] == {"contract": CONTRACT, "export_frame": "root-component"}
+    assert preview["contract"] == CONTRACT
+    assert preview["requirement"] == {
+        "contract": CONTRACT, "export_frame": "root-component", "document_up": None,
+    }
     by_axis = {item["axis"]: item for item in preview["axes"]}
     assert list(by_axis) == list(AXES)
     for axis, item in by_axis.items():
-        assert item["solverFromAssembly"] == frame_matrix(axis).tolist()
-        expected = frame_matrix(axis) @ np.linalg.inv(frame_matrix("+y"))
+        matrix = spec_matrix(frame_spec(axis, _manifest()))
+        assert item["solverFromAssembly"] == matrix.tolist()
+        expected = matrix @ np.linalg.inv(spec_matrix(frame_spec("+y", _manifest())))
         assert np.allclose(item["previewFromRecord"], expected, atol=1e-12)
         assert item["allowed"] is True
+        assert item["up"] == ("+y" if axis[1] == "z" else "+z")
     confirm_frame(store, record, "-z")
     assert frame_preview(store, record)["confirmed"]["axis"] == "-z"
     assert frame_preview(store, _linked_record()) == {"linked": True}

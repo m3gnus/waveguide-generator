@@ -1,10 +1,10 @@
-import { useCallback, useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
 import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
+import { useCadOperationsStore } from '../stores/cadOperations';
 import { currentDocumentLoad, isCurrentDocumentLoad, recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
@@ -24,10 +24,8 @@ import { CadProjectHeader, CadProjectHistory } from './CadProjectPanel';
 import { CadOperationsSection, onScreenSolves, shortSha256 } from './CadOperationsSection';
 import { CadSolveInputs } from './CadSolveInputs';
 import { CadDeliveryHealth } from './CadDeliveryHealth';
-import { CadSolverFrameConfirm } from './CadSolverFrameConfirm';
-import { getSolverFrame, type SolverFramePreview } from '../api/solverFrame';
+import { CadSolveCard } from './CadSolveCard';
 import { requestSettings } from './settingsNavigation';
-import { workspaceNavigation } from './workspaceNavigation';
 import { cadCoordinationStore } from '../api/cadCoordination';
 import './cadLinkPanel.css';
 
@@ -44,7 +42,7 @@ const FRESHNESS_COPY: Record<string, string> = {
   design_changed: 'The linked Waveguide Generator design has changed since this geometry was exported.',
   generator_changed: 'The same saved design would export differently with the current generator.',
   unknown: 'Freshness could not be established from the available evidence.',
-  unlinked: 'Authored in CAD, not linked to a Waveguide Generator design. WG asks once, before its first solve, which way the model radiates, and solves it in that frame.',
+  unlinked: 'Authored in CAD, not linked to a Waveguide Generator design. WG works out which way the model radiates and shows it on the Solve card; Solve confirms it for the project.',
   mixed: 'The linked instances disagree about freshness; each instance carries its own verdict.',
 };
 
@@ -394,72 +392,6 @@ function FindingRows({ record }: { record: CadReturnIngestRecord }) {
   </div>;
 }
 
-/** The solver frame of a model authored in CAD: what its project confirmed, and
- * a way to change it -- say, after the model was reoriented in CAD. A change
- * applies to later preparations only; runs already solved keep their frame.
- *
- * One quiet line, never a warning: an unconfirmed frame is not a mistake. While
- * a waiting solve's card on screen already asks for the frame, nothing here
- * asks it a second time. */
-export function SolverFrameSection({ record, fetcher = fetch, onConfirmedAxis }: {
-  record: CadReturnIngestRecord;
-  fetcher?: typeof fetch;
-  /** The project's confirmed axis once read: null when none is confirmed. */
-  onConfirmedAxis?: (axis: string | null) => void;
-}) {
-  const unlinked = record.freshness?.verdict === 'unlinked';
-  const [preview, setPreview] = useState<SolverFramePreview | null>(null);
-  const [changing, setChanging] = useState(false);
-  const [refresh, setRefresh] = useState(0);
-  const operations = useCadOperationsStore((current) => current.operations);
-  useEffect(() => {
-    if (!unlinked) return undefined;
-    let current = true;
-    void getSolverFrame({ ingestId: record.ingest_id }, fetcher)
-      .then((answer) => { if (current) setPreview(answer); })
-      .catch(() => { if (current) setPreview(null); });
-    return () => { current = false; };
-  }, [fetcher, record.ingest_id, refresh, unlinked]);
-  useEffect(() => { setChanging(false); }, [record.ingest_id]);
-  const confirmedAxis = preview && !preview.linked ? preview.confirmed?.axis ?? null : undefined;
-  useEffect(() => {
-    if (confirmedAxis !== undefined) onConfirmedAxis?.(confirmedAxis);
-  }, [confirmedAxis, onConfirmedAxis]);
-  if (!unlinked) return null;
-  const state = preview && !preview.linked ? preview : null;
-  if (!state) return null;
-  const confirmed = state.confirmed?.axis ?? null;
-  const cardAsks = pendingCadOperations(operations).some((operation) => operation.kind === 'prepare_and_solve'
-    && operation.state === 'needs_user_input'
-    && operation.reason === 'frame_confirmation_required'
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256);
-  if (!confirmed && cardAsks) return null;
-  const name = record.project?.document_name ?? 'this model';
-  return <div className="cad-solver-frame-section" data-solver-frame={confirmed ?? 'unset'}>
-    <p className="cad-detail cad-solver-frame-line">
-      <span>{confirmed ? `Radiates along ${confirmed}` : 'Solver frame not chosen yet · WG asks before the first solve'}</span>
-      {!changing && <> · <button
-        className="link-button"
-        data-action="change-solver-frame"
-        title={confirmed
-          ? 'Choose another axis for this project. Runs already solved keep their frame.'
-          : 'Choose the axis this project radiates along now, before solving.'}
-        onClick={() => setChanging(true)}
-      >{confirmed ? 'Change' : 'Choose now'}</button></>}
-    </p>
-    {confirmed && state.recordAxis !== confirmed && <p className="cad-detail">
-      This preparation was meshed along {state.recordAxis}: prepare it again to solve along {confirmed}.
-    </p>}
-    {changing && <CadSolverFrameConfirm
-      snapshot={{ ingestId: record.ingest_id }}
-      label={name}
-      mode="change"
-      fetcher={fetcher}
-      onConfirmed={() => { setChanging(false); setRefresh((count) => count + 1); }}
-    />}
-  </div>;
-}
-
 /** What a finding that blocks nothing tells the user, in words. */
 const NOTE_TITLE: Record<string, string> = {
   'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
@@ -586,9 +518,6 @@ export function CadLinkPanel() {
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const [unlinkingOnshape, setUnlinkingOnshape] = useState(false);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
-  // The confirmed solver frame of the model on screen, by ingestion, as its
-  // frame line read it. Unknown until read.
-  const [frame, setFrame] = useState<{ ingestId: string; axis: string | null } | null>(null);
   const operations = useCadOperationsStore((current) => current.operations);
   const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
@@ -749,20 +678,9 @@ export function CadLinkPanel() {
     ? `WGLink add-in ${fusionStatus.adapterVersion}`
     : undefined;
   const solvesOnScreen = onScreenSolves(operations, record);
-  const frameIngest = record?.ingest_id ?? null;
-  const reportFrame = useCallback((axis: string | null) => {
-    if (frameIngest) setFrame({ ingestId: frameIngest, axis });
-  }, [frameIngest]);
-  // What still stands between the model and a solve; while anything does, the
-  // card that asks for it says the next step, and nothing claims "prepared".
-  const solveGated = Boolean(record) && (
-    solvesOnScreen.some((operation) => operation.state === 'needs_user_input')
-    || record!.findings.some((finding) => finding.blocking)
-    || (record!.freshness?.verdict === 'unlinked'
-      && !(frame?.ingestId === record!.ingest_id && frame.axis !== null))
-  );
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
   const staleModel = Boolean(record && state.needsIngest);
+  const solveCard = Boolean(record) && !staleModel && !ingesting;
   const onshapeActionLabel = workflow.action === 'update' ? 'Send WG changes to Onshape' : `Create ${shownName} in Onshape`;
   const unlinkButton = <button
     className="link-button cad-onshape-unlink"
@@ -927,21 +845,15 @@ export function CadLinkPanel() {
         title="Mesh the returned geometry, verify its evidence, and make it the solve truth."
         onClick={() => { void cadCoordinator.ingest(); }}
       >{ingesting ? 'Preparing…' : record ? 'Prepare again' : 'Prepare simulation'}</button>}
-      {record && !staleModel && !ingesting && !solveGated && <div className="cad-prepared-line">
-        <span className="cad-check-glyph ok" aria-hidden="true">✓</span>
-        <span>Prepared for simulation</span>
-        <button
-          className="link-button"
-          title="Drivers, crossover, sweep, directivity, solve options, and mesh detail live in the Simulation tab."
-          onClick={() => workspaceNavigation.navigate('simulation')}
-        >Open Simulation</button>
-      </div>}
       {record && <ChecksSection record={record}/>}
-      {record && <SolverFrameSection record={record} onConfirmedAxis={reportFrame}/>}
+      {/* The one Solve card: what Solve uses -- the model, which way it
+          radiates, the settings -- any request for this snapshot that waits,
+          and Solve itself (PLAN.md M1b). */}
+      {solveCard && <CadSolveCard record={record!} label={record!.project?.document_name ?? bundle?.documentName ?? 'this model'}/>}
       {/* Solves Fusion sent, which the backend prepares from each project's own
-          setup: shown here so the ones waiting on the user can be acted on. */}
+          setup; one for the model on screen is shown on its Solve card. */}
       <CadDeliveryHealth/>
-      <CadOperationsSection record={record}/>
+      <CadOperationsSection record={record} solves={!solveCard}/>
       {/* The bookkeeping behind the model and its solves, one disclosure away. */}
       {record && <details className="cad-model-details">
         <summary>Details</summary>

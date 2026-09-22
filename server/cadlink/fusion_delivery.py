@@ -56,6 +56,11 @@ SCHEMA_VERSION = DELIVERY_VERSION
 # add-in declares that feature only when WG advertises this; a WG that does not
 # would refuse the bundle as an unknown required feature.
 SOURCE_IDENTITY = 1
+# WG reads returns that require ``document-up-v1``: the CAD document's up axis
+# in ``coordinate_system.document_up`` (``wgreturn.py``), which sets the roll
+# of the solver frame (``solver_frame.py``). The add-in states it only when WG
+# advertises this; an older WG would refuse the unknown required feature.
+DOCUMENT_UP = 1
 # WG serves the live session protocol, version 1, at the address in
 # ``wg-endpoint.json`` (``server/cadlink/live``). The add-in goes live only when
 # WG advertises this; otherwise it keeps to the files above.
@@ -118,6 +123,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
         "sourceIdentity": SOURCE_IDENTITY,
         "liveProtocol": LIVE_PROTOCOL,
+        "documentUp": DOCUMENT_UP,
     }
     if not solve_delivery:
         del advertised["solveCommandDelivery"]
@@ -528,6 +534,7 @@ __all__ = [
     "SEQUENCE_FIELD",
     "SOLVE_COMMAND_DELIVERY",
     "SOURCE_IDENTITY",
+    "DOCUMENT_UP",
     "addin_delivery_version",
     "advertise_fusion_delivery",
     "capabilities",

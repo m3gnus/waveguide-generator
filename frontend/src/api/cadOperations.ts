@@ -90,6 +90,9 @@ export interface PrepareCadOperationRequest {
   setupRevisionId?: string;
   submit?: boolean;
   approvals?: CadOperationApprovals;
+  /** The solver frame axis shown when Solve was pressed (a model authored in
+   * CAD): solved only along it, or stopped at the frame gate. */
+  frameAxis?: string;
 }
 
 export interface SetupRevisionSummary {
@@ -215,6 +218,7 @@ export async function prepareCadOperation(
     ...(request.setupRevisionId ? { setupRevisionId: request.setupRevisionId } : {}),
     submit: request.submit ?? true,
     ...(request.approvals ? { approvals: request.approvals } : {}),
+    ...(request.frameAxis ? { frameAxis: request.frameAxis } : {}),
   };
   const response = await jsonRequest<{ operation: CadOperationSummary }>(
     `${operationPath(operationId)}/prepare`, jsonBody('POST', body), fetcher,

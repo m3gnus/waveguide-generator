@@ -26,9 +26,6 @@ vi.mock('./CadLinkCoordinator', () => ({
 }));
 vi.mock('./CadSolveInputs', () => ({ CadSolveInputs: () => null }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
-vi.mock('./CadSolverFrameConfirm', () => ({
-  CadSolverFrameConfirm: () => <button data-action="confirm-frame">Pick an axis above</button>,
-}));
 
 const { CadOperationsSection } = await import('./CadOperationsSection');
 
@@ -161,9 +158,10 @@ describe('operation cards for the model on screen', () => {
     expect(card.querySelector('[role="status"]')?.textContent).toBe('Waiting for you · needs its solve settings');
     expect(card.textContent).not.toContain('validating');
     expect(card.textContent).not.toContain('File → CAD-linked designs');
-    // Positive control: the card's own guidance and action remain.
-    expect(card.textContent).toContain('This model is on screen');
-    expect([...card.querySelectorAll('button')].some((button) => button.textContent === 'Use these settings and solve')).toBe(true);
+    // Positive control: the card's own guidance remains; its action is the
+    // Solve card's one Solve (M1b), never a second solving button here.
+    expect(card.textContent).toContain('This model is on screen: check the settings above, then press Solve.');
+    expect([...card.querySelectorAll('button')].map((button) => button.textContent)).toEqual(['Dismiss']);
   });
 
   it('keeps the backend message for a reason the card does not already explain', async () => {
@@ -177,7 +175,7 @@ describe('operation cards for the model on screen', () => {
     const [card] = cards();
     const ladder = () => [...card.querySelectorAll('.cad-operation-ladder li')].map((item) => item.textContent);
     await vi.waitFor(() => expect(ladder()).toEqual([
-      'Now: confirm the solver frame — the axis this model radiates along — below.',
+      'Now: check which way it radiates, above, and press Solve to confirm it.',
       'Then: approve 1 finding.',
     ]));
     expect(card.textContent).not.toContain(FINDING);

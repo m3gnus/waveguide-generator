@@ -282,6 +282,19 @@ _SCHEMA = (
       confirmed_at TEXT NOT NULL
     )
     """,
+    # The automatic solver-frame suggestion (server/cadlink/frame_infer.py),
+    # one per snapshot and algorithm version: a new algorithm recomputes, and
+    # nothing here ever confirms a frame. Additive, like the table above.
+    """
+    CREATE TABLE IF NOT EXISTS cad_frame_suggestions (
+      snapshot_sha256 TEXT NOT NULL,
+      algorithm TEXT NOT NULL,
+      suggestion_json TEXT NOT NULL,
+      ingest_id TEXT NOT NULL,
+      computed_at TEXT NOT NULL,
+      PRIMARY KEY (snapshot_sha256, algorithm)
+    )
+    """,
 )
 # Columns later stages added to cad_operations: nullable (or defaulted), so a
 # row written before them -- by an earlier build, or by an older release, which
@@ -301,6 +314,9 @@ _OPERATION_COLUMNS = (
     # request it took, so a lost claim answer replays after its file is gone
     # (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7). Never a token.
     ("claim_json", "TEXT"),
+    # The solver frame axis a user's Solve showed (an unlinked snapshot): every
+    # later attempt, automatic or not, is held to it until a press names another.
+    ("frame_axis", "TEXT"),
 )
 # The kinds WG asks Fusion to run (``fusion_outcomes.FUSION_KINDS``).
 _FUSION_KINDS = (INSERT_LINK, REQUEST_RETURN, UPDATE_LINK)
@@ -316,11 +332,15 @@ FUSION_ALREADY_RECORDED = "already_recorded"
 
 
 def _frame_confirmation(row: Mapping[str, Any]) -> dict[str, Any]:
+    frame = row["frame_json"] if "frame_json" in row.keys() else None
     return {
         "key": row["key"],
         "requirement": json.loads(row["requirement_json"]),
         "axis": row["axis"],
         "confirmed_at": row["confirmed_at"],
+        # The complete transform and its up provenance; None for a row
+        # confirmed before they were recorded.
+        "frame": json.loads(frame) if frame else None,
     }
 
 
@@ -674,6 +694,11 @@ class CadLinkStore:
             # open reruns both. The file is renamed only after the commit.
             # The table is additive, so the file keeps the format an older
             # release reads (STORE_FORMAT_VERSION).
+            confirmation_columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(cad_frame_confirmations)")
+            }
+            if "frame_json" not in confirmation_columns:
+                conn.execute("ALTER TABLE cad_frame_confirmations ADD COLUMN frame_json TEXT")
             operation_columns = {
                 row["name"] for row in conn.execute("PRAGMA table_info(cad_operations)")
             }
@@ -1037,6 +1062,7 @@ class CadLinkStore:
         snapshot: Mapping[str, Any] | None = None,
         preparation_id: str | None = None,
         setup_revision_id: str | None = None,
+        frame_axis: str | None = None,
     ) -> dict[str, Any] | None:
         """Move the attempt holding ``generation`` on, recording what it made.
 
@@ -1048,6 +1074,9 @@ class CadLinkStore:
         ``setup_revision_id`` is the setup the attempt selected, recorded
         before it meshes so a later revision-less retry still has it. A bound
         request is never rewritten: its revision stays the one it was bound with.
+
+        ``frame_axis`` is the solver frame axis the user's Solve showed; it
+        replaces the one held, and omitting it keeps that one.
         """
 
         attempt = _require_generation(generation)
@@ -1060,13 +1089,15 @@ class CadLinkStore:
                 "snapshot_json = COALESCE(?, snapshot_json), "
                 "preparation_id = COALESCE(?, preparation_id), "
                 "setup_revision_id = CASE WHEN request_json IS NULL "
-                "THEN COALESCE(?, setup_revision_id) ELSE setup_revision_id END, updated_at = ? "
+                "THEN COALESCE(?, setup_revision_id) ELSE setup_revision_id END, "
+                "frame_axis = COALESCE(?, frame_axis), updated_at = ? "
                 "WHERE operation_id = ? AND attempt_generation = ? AND state = ?",
                 (
                     stage,
                     canonical_json(dict(snapshot)) if snapshot is not None else None,
                     preparation_id,
                     setup_revision_id,
+                    frame_axis,
                     utc_now(),
                     operation_id,
                     attempt,
@@ -1080,6 +1111,32 @@ class CadLinkStore:
                 (operation_id,),
             ).fetchone()
         return self._row(row)
+
+    def admit_frame_axis(self, operation_id: str, frame_axis: str, generation: int) -> bool:
+        """Keep the solver frame axis a user's Solve named, as it is admitted.
+
+        Written before anything can return early -- a restart approved while
+        the press is reconciled leaves the operation ``received`` -- so every
+        later attempt, the delivery loop's included, is held to it.
+
+        Fenced by the attempt generation the press read when it was admitted
+        (compare-and-set): once a newer press has claimed an attempt, a
+        superseded press's write, however late it lands, changes nothing, and
+        the newer attempt's own first write holds its axis. ``updated_at`` is
+        left alone, so a client's ordering of the row's states does not move.
+        False when the operation moved on, is finished, or is unknown.
+        """
+
+        attempt = _require_generation(generation)
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            cursor = conn.execute(
+                "UPDATE cad_operations SET frame_axis = ? "
+                "WHERE operation_id = ? AND attempt_generation = ? "
+                f"AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
+                (frame_axis, operation_id, attempt, *sorted(TERMINAL_STATES)),
+            )
+            return cursor.rowcount == 1
 
     def attempt_is_current(
         self, conn: sqlite3.Connection, operation_id: str, generation: int
@@ -1451,9 +1508,18 @@ class CadLinkStore:
         return json.loads(row["value_json"]) if row is not None else None
 
     def record_frame_confirmation(
-        self, key: str, requirement: Mapping[str, Any], axis: str
+        self,
+        key: str,
+        requirement: Mapping[str, Any],
+        axis: str,
+        *,
+        frame: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Confirm an unlinked model's solver frame; the latest confirmation wins."""
+        """Confirm an unlinked model's solver frame; the latest confirmation wins.
+
+        ``frame`` records the complete transform the axis means and where its
+        up came from (``solver_frame.confirm_frame``).
+        """
 
         from .solver_frame import AXES
 
@@ -1462,11 +1528,18 @@ class CadLinkStore:
         self.initialize()
         with self._lock, self._transaction() as conn:
             conn.execute(
-                "INSERT INTO cad_frame_confirmations (key, requirement_json, axis, confirmed_at) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
+                "INSERT INTO cad_frame_confirmations "
+                "(key, requirement_json, axis, confirmed_at, frame_json) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (key) DO UPDATE SET "
                 "requirement_json = excluded.requirement_json, axis = excluded.axis, "
-                "confirmed_at = excluded.confirmed_at",
-                (key, canonical_json(dict(requirement)), axis, utc_now()),
+                "confirmed_at = excluded.confirmed_at, frame_json = excluded.frame_json",
+                (
+                    key,
+                    canonical_json(dict(requirement)),
+                    axis,
+                    utc_now(),
+                    canonical_json(dict(frame)) if frame is not None else None,
+                ),
             )
             row = conn.execute(
                 "SELECT * FROM cad_frame_confirmations WHERE key = ?", (key,)
@@ -1477,6 +1550,45 @@ class CadLinkStore:
         self.initialize()
         row = self._read_one("SELECT * FROM cad_frame_confirmations WHERE key = ?", (key,))
         return _frame_confirmation(row) if row is not None else None
+
+    def record_frame_suggestion(
+        self,
+        snapshot_sha256: str,
+        algorithm: str,
+        suggestion: Mapping[str, Any],
+        ingest_id: str,
+    ) -> dict[str, Any]:
+        """Cache a snapshot's automatic frame suggestion; the first one stays.
+
+        The survey is deterministic for a snapshot, so a second computation
+        (two commands racing) is the same answer and is not written.
+        """
+
+        if not snapshot_sha256 or not algorithm:
+            raise ValueError("a frame suggestion names its snapshot and algorithm")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO cad_frame_suggestions "
+                "(snapshot_sha256, algorithm, suggestion_json, ingest_id, computed_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (snapshot_sha256, algorithm, canonical_json(dict(suggestion)), ingest_id, utc_now()),
+            )
+            row = conn.execute(
+                "SELECT suggestion_json FROM cad_frame_suggestions "
+                "WHERE snapshot_sha256 = ? AND algorithm = ?",
+                (snapshot_sha256, algorithm),
+            ).fetchone()
+        return json.loads(row["suggestion_json"])
+
+    def get_frame_suggestion(self, snapshot_sha256: str, algorithm: str) -> dict[str, Any] | None:
+        self.initialize()
+        row = self._read_one(
+            "SELECT suggestion_json FROM cad_frame_suggestions "
+            "WHERE snapshot_sha256 = ? AND algorithm = ?",
+            (snapshot_sha256, algorithm),
+        )
+        return json.loads(row["suggestion_json"]) if row is not None else None
 
     def record_preparation(
         self,

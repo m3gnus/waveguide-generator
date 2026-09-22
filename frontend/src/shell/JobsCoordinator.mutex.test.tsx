@@ -794,9 +794,12 @@ describe('solve invocation mutex', () => {
 
     // The same operation id: no second request, no second card.
     expect(mocks.createCadOperation).not.toHaveBeenCalled();
-    // The settings of an ordinary WG Solve, bound to that operation.
+    // The settings of an ordinary WG Solve, bound to that operation, and
+    // remembered for the model's project (M1b), without the run's name.
     expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
-    expect(mocks.putProjectSetup).not.toHaveBeenCalled();
+    expect(mocks.putProjectSetup).toHaveBeenCalledOnce();
+    expect(mocks.putProjectSetup.mock.calls[0][0]).toMatchObject({ lineageId: 'wgl_test' });
+    expect((mocks.putProjectSetup.mock.calls[0][0] as { setup: CadSolveSetup }).setup.label).toBeUndefined();
     expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
     expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-fusion', { setupRevisionId: 'wgs_manual', submit: true });
   });
@@ -997,7 +1000,8 @@ describe('solve invocation mutex', () => {
 
   it.each([
     ['another snapshot', { reason: 'setup_required', snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
-    ['another gate', { reason: 'frame_confirmation_required', snapshot: { manifestSha256: `sha256:${'1'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
+    // The backend queues it again by itself once the restart is over.
+    ['the update restart', { reason: 'update_restart_pending', snapshot: { manifestSha256: `sha256:${'1'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
   ] as const)('still starts a new solve beside a request waiting for %s', async (_case, waiting) => {
     filedCad('wgi_other');
     mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
@@ -1013,8 +1017,24 @@ describe('solve invocation mutex', () => {
     const created = mocks.createCadOperation.mock.calls[0][0].operationId as string;
     expect(created).not.toBe('op-fusion');
     expect(mocks.prepareCadOperation).toHaveBeenCalledWith(created, { setupRevisionId: 'wgs_manual', submit: true });
-    expect(mocks.putProjectSetup).not.toHaveBeenCalled();
   });
+
+  it.each(['frame_confirmation_required', 'engine_unavailable', 'preparation_failed', 'findings_need_review'])(
+    'continues a request for the model on screen waiting at %s, instead of adding a second',
+    async (reason) => {
+      const record = filedCad('wgi_gate');
+      act(() => {
+        useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', {
+          reason, snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
+        }));
+      });
+      await act(async () => {
+        await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+      });
+      expect(mocks.createCadOperation).not.toHaveBeenCalled();
+      expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-fusion', { setupRevisionId: 'wgs_manual', submit: true });
+    },
+  );
 
   it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
     // Automatic callers (Pull & Solve, a Fusion solve command) use this action,

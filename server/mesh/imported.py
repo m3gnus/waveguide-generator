@@ -2601,22 +2601,24 @@ def build_imported_mesh(
     # A return with no WG instance has no throat frame of its own: it is meshed
     # in the solver frame its project confirmed (server/cadlink/solver_frame.py),
     # the assembly frame as modelled (+z) until then. The one matrix producer is
-    # ``frame_matrix``, which the preview reads as well.
-    from server.cadlink.solver_frame import AS_MODELLED, frame_matrix
+    # ``spec_matrix``, which the preview reads as well.
+    from server.cadlink.solver_frame import AS_MODELLED, spec_axis, spec_matrix
 
-    solver_frame_axis = options.get("solver_frame")
-    if solver_frame_axis is not None and anchor_id is not None:
+    solver_frame = options.get("solver_frame")
+    if solver_frame is not None and anchor_id is not None:
         raise ImportedMeshError(
             "normalisation: a solver frame applies only to a return with no WG instance"
         )
-    if solver_frame_axis is not None and declared_cut_planes:
+    if solver_frame is not None and declared_cut_planes:
         raise ImportedMeshError(
             "symmetry: a return declared as a half or quarter model is solved only in "
             "the frame it was modelled in"
         )
-    solver_frame_axis = AS_MODELLED if solver_frame_axis is None else str(solver_frame_axis)
     try:
-        frame = frame_matrix(solver_frame_axis)
+        # An axis (contract v1, as earlier releases named it) or a complete
+        # frame (v2, which also fixes the roll); ``spec_matrix`` reads both.
+        solver_frame_axis = AS_MODELLED if solver_frame is None else spec_axis(solver_frame)
+        frame = spec_matrix(AS_MODELLED if solver_frame is None else solver_frame)
     except ValueError as exc:
         raise ImportedMeshError(f"normalisation: {exc}") from exc
     normalization = (

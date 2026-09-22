@@ -15,13 +15,14 @@ import dataclasses
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 from server.cadlink import ingest as ingest_module
 from server.cadlink import preparation, solve_command
-from server.cadlink.preparation import PreparationInput, prepare_operation, run_delivery_pass
+from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation, run_delivery_pass
 from server.cadlink.solver_frame import CONTRACT, confirm_frame
 
 from test_cad_preparation import Harness, _accept, _manifest, _revision, _setup
@@ -183,6 +184,36 @@ def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(rea
     assert len(harness.submitted) == 1 and len(harness.jobs) == 1
 
 
+def test_preparation_surveys_the_frame_inside_its_command(real, monkeypatch) -> None:
+    """M1e: the suggestion is computed by the preparation, for the record it made."""
+
+    harness, _mesher = real
+    surveyed: list[str] = []
+
+    def survey(store, record):
+        surveyed.append(str(record["ingest_id"]))
+        return None
+
+    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    summary = _prepare(harness)
+    assert _waiting_for_frame(summary), summary
+    assert surveyed == [summary["preparationId"]]
+
+
+def test_a_failing_survey_never_fails_the_preparation(real, monkeypatch) -> None:
+    harness, _mesher = real
+
+    def survey(store, record):
+        raise RuntimeError("survey exploded")
+
+    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    assert _waiting_for_frame(_prepare(harness))
+
+
 def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
     harness, mesher = real
     step = b"STEP authored"
@@ -194,9 +225,405 @@ def test_confirming_another_axis_prepares_again_in_that_frame(real) -> None:
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert solved["preparationId"] != waiting["preparationId"]
-    assert mesher.calls[-1]["options"]["solver_frame"] == "+y"
+    # The complete frame reaches the mesher (contract v2: the roll too).
+    assert mesher.calls[-1]["options"]["solver_frame"] == {
+        "contract": CONTRACT, "axis": "+y", "up": "+z", "up_source": "default", "document_up": None,
+    }
     assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+y"
     assert harness.submitted[0].geometry.ingest_id == solved["preparationId"]
+
+
+def test_a_frame_changed_elsewhere_stops_the_solve_instead_of_changing_its_axis(real) -> None:
+    """The axis shown is the axis solved: Solve names the axis it showed."""
+
+    harness, mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness)
+    # The card showed +z and was about to solve along it; another window
+    # confirmed +y for the project in the meantime.
+    confirm_frame(harness.store, _record(harness, waiting), "+y")
+
+    stopped = _prepare(harness, expected_frame_axis="+z")
+
+    assert _waiting_for_frame(stopped), stopped
+    assert "+y now, not the +z WG showed" in stopped["message"]
+    assert harness.submitted == []
+    # Named as the axis it now is, it solves (the control).
+    solved = _prepare(harness, expected_frame_axis="+y")
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+y"
+
+
+def test_an_automatic_continuation_after_the_update_restart_keeps_the_axis_shown(real) -> None:
+    """The reviewer's reproduction: Solve asks for +z, the update restart parks
+    it, another window confirms +x, and the continuation the delivery loop
+    starts after the restart names no axis. It must not solve along +x."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+z")
+    harness.blocked = "An update restart is pending."
+
+    parked = _prepare(harness, expected_frame_axis="+z")
+    assert (parked["state"], parked["reason"]) == ("needs_user_input", "update_restart_pending")
+    assert harness.submitted == []
+
+    confirm_frame(harness.store, _record(harness, parked), "+x")
+    harness.blocked = None
+    assert preparation.requeue_restart_parked(_context(harness)) == ["cmd-1"]
+    # The loop's continuation: an empty request, as run_delivery_pass sends.
+    continued = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+
+    assert _waiting_for_frame(continued), continued
+    assert "+x now, not the +z WG showed" in continued["message"]
+    assert harness.submitted == []
+
+
+def test_a_press_admitted_then_overtaken_by_the_update_restart_keeps_its_axis(real, monkeypatch) -> None:
+    """The reviewer's round-3 reproduction, through the HTTP handler: a +z press
+    passes the route's restart check, the restart is approved while the press
+    is reconciled with the jobs (so the operation stays received), +x is
+    confirmed elsewhere, and after a reopen the loop's empty continuation must
+    not solve along +x."""
+
+    from server.cadlink import api
+    from server.cadlink.store import CadLinkStore
+    from server.updates.restart import RestartApproval
+
+    from test_cad_preparation import _latched_state
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    approval = RestartApproval()
+    started: list[asyncio.Task[Any]] = []
+
+    def reconcile_then_approve(_ctx: Any, _operation_id: str) -> None:
+        approval.approve("0.3.4")
+        return None
+
+    real_reconcile = preparation.reconcile_with_jobs
+    monkeypatch.setattr(preparation, "reconcile_with_jobs", reconcile_then_approve)
+    monkeypatch.setattr(api, "_track", lambda _state, task: started.append(task))
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, approval)))
+
+    async def press() -> Any:
+        response = await api.post_prepare_cad_operation(
+            "cmd-1", api.PrepareOperationRequest(frameAxis="+z"), request
+        )
+        await asyncio.gather(*started)
+        return response
+
+    answered = asyncio.run(press())
+    assert answered["operation"]["state"] == "received"
+    assert harness.store.get_operation("cmd-1")["state"] == "received"
+    assert harness.submitted == []
+    monkeypatch.setattr(preparation, "reconcile_with_jobs", real_reconcile)
+
+    # Another window confirms +x for the project (through another export).
+    other = b"STEP authored, again"
+    _received(harness, "authored-2", _authored(other), other, command="cmd-2")
+    confirm_frame(harness.store, _record(harness, _prepare(harness, "cmd-2")), "+x")
+
+    # WG restarts: the axis the press showed is still the operation's.
+    reopened = CadLinkStore(harness.store.db_path)
+    assert reopened.get_operation("cmd-1")["frame_axis"] == "+z"
+    approval.release("the launcher discarded the request")
+    continued = asyncio.run(prepare_operation(
+        _context(harness), "cmd-1", PreparationInput(setup_revision_id=_revision(harness.store, _setup())),
+        expected_generation=0,
+    ))
+    assert _waiting_for_frame(continued), continued
+    assert "+x now, not the +z WG showed" in continued["message"]
+    assert harness.submitted == []
+
+
+def test_the_route_keeps_an_admitted_press_axis_before_anything_starts(real, monkeypatch) -> None:
+    """Kept at admission, by the handler itself: even an attempt that never
+    runs (WG stopped right after answering) leaves the axis on the operation."""
+
+    from server.cadlink import api
+    from server.updates.restart import RestartApproval
+
+    from test_cad_preparation import _latched_state
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+
+    async def never_runs(_ctx: Any, operation_id: str, _request: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("not started in this test")
+
+    tasks: list[asyncio.Task[Any]] = []
+
+    def track(_state: Any, task: asyncio.Task[Any]) -> None:
+        task.cancel()
+        tasks.append(task)
+
+    monkeypatch.setattr(api, "prepare_operation", never_runs)
+    monkeypatch.setattr(api, "_track", track)
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, RestartApproval())))
+    asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(frameAxis="-y"), request))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
+    # A press naming none leaves it as it is (the control).
+    asyncio.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(), request))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
+
+
+def test_a_press_the_restart_overtakes_before_its_claim_keeps_its_axis(real) -> None:
+    """The same, for any caller of prepare_operation: kept before the early return."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+
+    summary = asyncio.run(prepare_operation(
+        _context(harness), "cmd-1", PreparationInput(expected_frame_axis="+z"), expected_generation=0,
+    ))
+
+    assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
+
+
+def _stale_press_interleaving(harness: Harness, monkeypatch, stale_write_from: str) -> None:
+    """An older +z press, through the handler, one of whose admission writes
+    is delayed until a newer +x press has been admitted and prepared, then
+    lands. ``stale_write_from`` names the delayed write: the route's (the
+    older press's first write), or prepare_operation's (its second).
+
+    With the route's write delayed the older press's attempt is not run
+    afterwards: that stands for WG stopping before it starts, since an
+    attempt that does start afterwards is simply the latest press."""
+
+    from server.cadlink import api
+    from server.updates.restart import RestartApproval
+
+    from test_cad_preparation import _latched_state
+
+    real_admit = harness.store.admit_frame_axis
+    delayed_call = 1 if stale_write_from == "route" else 2
+    calls = {"+z": 0, "delayed": False}
+
+    def admit(operation_id: str, frame_axis: str, generation: int) -> bool:
+        if frame_axis == "+z":
+            calls["+z"] += 1
+            if calls["+z"] == delayed_call:
+                calls["delayed"] = True
+                # Meanwhile the newer press, +x, is admitted and prepared.
+                newer = asyncio.run(prepare_operation(
+                    _context(harness), "cmd-1",
+                    PreparationInput(expected_frame_axis="+x", setup_revision_id=_revision(harness.store, _setup())),
+                ))
+                assert newer["attemptGeneration"] > generation
+        return real_admit(operation_id, frame_axis, generation)
+
+    monkeypatch.setattr(harness.store, "admit_frame_axis", admit)
+    tasks: list[asyncio.Task[Any]] = []
+
+    def track(_state: Any, task: asyncio.Task[Any]) -> None:
+        if stale_write_from == "route":
+            task.cancel()
+        tasks.append(task)
+
+    monkeypatch.setattr(api, "_track", track)
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, RestartApproval())))
+
+    async def older_press() -> None:
+        await api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(frameAxis="+z"), request)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(older_press())
+    assert calls["delayed"]
+
+
+@pytest.mark.parametrize("stale_write_from", ["route", "prepare"])
+def test_a_superseded_press_never_replaces_the_newer_axis(real, monkeypatch, stale_write_from: str) -> None:
+    """The reviewer's round-4 interleaving, through the handler: the older
+    press's write lands after the newer press prepared along +x."""
+
+    from server.cadlink.store import CadLinkStore
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    _stale_press_interleaving(harness, monkeypatch, stale_write_from)
+
+    # The newer press's axis stands.
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    waiting = harness.store.get_operation("cmd-1")
+    # The project is then confirmed +z elsewhere; WG reopens; the loop
+    # continues the request with no axis. It must not solve along +z.
+    confirm_frame(harness.store, _record(harness, operation_summary(waiting)), "+z")
+    assert CadLinkStore(harness.store.db_path).get_operation("cmd-1")["frame_axis"] == "+x"
+    continued = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+    assert _waiting_for_frame(continued), continued
+    assert "+z now, not the +x WG showed" in continued["message"]
+    assert harness.submitted == []
+
+
+def test_a_genuinely_newer_press_replaces_the_axis(real) -> None:
+    """The control: presses in order, the later one wins -- also when the
+    first was only admitted (held by the update restart, still received)."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+    asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(expected_frame_axis="+z")))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
+    asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(expected_frame_axis="-y")))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
+    harness.blocked = None
+    _prepare(harness, expected_frame_axis="+x")
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    _prepare(harness, expected_frame_axis="-x")
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-x"
+
+
+def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_another(real) -> None:
+    from server.cadlink.store import CadLinkStore
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness, expected_frame_axis="+z")
+    assert _waiting_for_frame(waiting)
+    # Kept by the store: a restarted WG reads it back.
+    assert CadLinkStore(harness.store.db_path).get_operation("cmd-1")["frame_axis"] == "+z"
+
+    # Another window confirms +x; a retry that names no axis is held to +z.
+    confirm_frame(harness.store, _record(harness, waiting), "+x")
+    retried = _prepare(harness)
+    assert _waiting_for_frame(retried) and "not the +z WG showed" in retried["message"]
+    assert harness.submitted == []
+
+    # A press naming the axis now shown replaces it, and solves along it.
+    solved = _prepare(harness, expected_frame_axis="+x")
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+x"
+
+
+def test_a_request_no_one_named_an_axis_for_is_held_to_none(real) -> None:
+    """Fusion's own request, never pressed in WG: the confirmed frame decides (the control)."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    confirm_frame(harness.store, _record(harness, _prepare(harness)), "+y")
+    solved = _prepare(harness)
+    assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
+    assert harness.store.get_operation("cmd-1")["frame_axis"] is None
+
+
+def _stated(document_up: str | None) -> dict[str, Any]:
+    manifest: dict[str, Any] = {
+        "instances": [], "assembly": {}, "coordinate_system": {"export_frame": "root-component"},
+        "required_features": [],
+    }
+    if document_up is not None:
+        manifest["required_features"].append("document-up-v1")
+        manifest["coordinate_system"]["document_up"] = document_up
+    return manifest
+
+
+class _PreparedStore:
+    """The two reads ``_resumable`` makes, answering one prepared record."""
+
+    def __init__(self, record: dict[str, Any]) -> None:
+        self.record = record
+
+    def get_preparation(self, _preparation_id: str) -> dict[str, Any]:
+        return {
+            "setup_revision_id": "wgs_1", "snapshot_sha256": "sha256:s",
+            "meshing_semantics": "semantics", "ingest_id": "wgi_1",
+        }
+
+    def get_ingest(self, _ingest_id: str) -> dict[str, Any]:
+        return {"record_json": json.dumps(self.record)}
+
+
+def test_a_preparation_resumes_only_in_the_same_complete_frame_not_the_same_axis() -> None:
+    """Two preparations along +x with a different resolved up are different
+    frames (contract v2 fixes the roll): neither resumes the other."""
+
+    from server.cadlink.solver_frame import FrameResolution, record_solver_frame, frame_spec
+
+    def resolution(document_up: str | None) -> FrameResolution:
+        return FrameResolution(
+            key="lineage:wgl",
+            requirement={"contract": CONTRACT, "export_frame": "root-component", "document_up": document_up},
+            allowed_axes=("+z", "-z", "+x", "-x", "+y", "-y"), confirmed_axis="+x", document_up=document_up,
+        )
+
+    def record(document_up: str | None) -> dict[str, Any]:
+        manifest = _stated(document_up)
+        frame = record_solver_frame(manifest, frame_spec("+x", manifest))
+        return {
+            "anchor": {"instance_id": None},
+            "normalisation": {"anchor_instance_id": None, "matrix": frame["matrix"], "solver_frame": frame},
+        }
+
+    row = {"preparation_id": "wgp_1"}
+    z_up, y_up = record(None), record("+y")
+    assert z_up["normalisation"]["solver_frame"]["up"] == "+z"
+    assert y_up["normalisation"]["solver_frame"]["up"] == "+y"
+    same = preparation.resolution_identity(resolution(None))
+    other = preparation.resolution_identity(resolution("+y"))
+    assert same["axis"] == other["axis"] == "+x" and same != other
+    resume = preparation._resumable
+    # The same complete frame resumes (the control)...
+    assert resume(_PreparedStore(z_up), row, "wgs_1", "sha256:s", "semantics", same) == z_up
+    assert resume(_PreparedStore(y_up), row, "wgs_1", "sha256:s", "semantics", other) == y_up
+    # ...the same forward axis with another up does not, either way round.
+    assert resume(_PreparedStore(z_up), row, "wgs_1", "sha256:s", "semantics", other) is None
+    assert resume(_PreparedStore(y_up), row, "wgs_1", "sha256:s", "semantics", same) is None
+    # Nor does a record whose stated transform is not its frame's.
+    tampered = copy.deepcopy(z_up)
+    tampered["normalisation"]["solver_frame"]["matrix"][0][0] = 0.5
+    assert resume(_PreparedStore(tampered), row, "wgs_1", "sha256:s", "semantics", same) is None
+
+
+def test_the_mesh_cache_key_holds_the_complete_frame_transform() -> None:
+    """Same snapshot, same forward axis, another up: another mesh."""
+
+    from types import SimpleNamespace
+
+    from server.cadlink.solver_frame import frame_spec
+
+    bundle = SimpleNamespace(artifact_sha256="sha256:a", manifest_sha256="sha256:m")
+    manifest = {"instances": [], "coordinate_system": {}, "sources": []}
+
+    def key(document_up: str | None) -> str:
+        spec = frame_spec("+x", _stated(document_up))
+        return ingest_module._cache_key(bundle, manifest, {}, [], {"solver_frame": spec}, "sha256:g")
+
+    assert key(None) == key(None)
+    assert key(None) != key("+y")
+    # The transform itself is in the key, not only the options that name it:
+    # the same options with the matrix they mean changed is another key.
+    spec = frame_spec("+x", _stated(None))
+    real = ingest_module.spec_matrix
+    try:
+        ingest_module.spec_matrix = lambda value: real(frame_spec("+x", _stated("+y")))
+        swapped = ingest_module._cache_key(bundle, manifest, {}, [], {"solver_frame": spec}, "sha256:g")
+    finally:
+        ingest_module.spec_matrix = real
+    assert swapped != key(None)
+
+
+def test_the_prepare_route_takes_only_a_known_frame_axis() -> None:
+    from pydantic import ValidationError
+
+    from server.cadlink.api import PrepareOperationRequest
+
+    assert PrepareOperationRequest.model_validate({"frameAxis": "-y"}).frame_axis == "-y"
+    assert PrepareOperationRequest.model_validate({}).frame_axis is None
+    with pytest.raises(ValidationError):
+        PrepareOperationRequest.model_validate({"frameAxis": "y"})
 
 
 def test_a_later_export_of_the_same_project_reuses_the_confirmed_frame(real) -> None:
@@ -210,7 +637,7 @@ def test_a_later_export_of_the_same_project_reuses_the_confirmed_frame(real) -> 
     solved = _prepare(harness, "cmd-2")
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
-    assert mesher.calls[-1]["options"]["solver_frame"] == "-x"
+    assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "-x"
 
 
 def test_an_export_in_another_components_coordinates_asks_again(real) -> None:
@@ -227,7 +654,7 @@ def test_an_export_in_another_components_coordinates_asks_again(real) -> None:
     assert _waiting_for_frame(summary), summary
     assert "solver_frame" not in mesher.calls[-1]["options"]
     assert _record(harness, summary)["normalisation"]["solver_frame"]["requirement"] == {
-        "contract": CONTRACT, "export_frame": "selected-occurrence-component",
+        "contract": CONTRACT, "export_frame": "selected-occurrence-component", "document_up": None,
     }
 
 
@@ -355,6 +782,7 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     harness, mesher = real
     monkeypatch.setattr("server.cadlink.api._schedule_deferred_viewport", lambda *_args: None)
     monkeypatch.setattr("server.cadlink.api._schedule_cad_document_capture", lambda *_args: None)
+    monkeypatch.setattr("server.cadlink.api._schedule_frame_suggestion", lambda *_args: None)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     waiting = _prepare(harness)
@@ -371,7 +799,7 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     record = asyncio.run(post_ingest(payload, SimpleNamespace(app=app)))
 
     assert record["normalisation"]["solver_frame"]["axis"] == "+y"
-    assert mesher.calls[-1]["options"]["solver_frame"] == "+y"
+    assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+y"
     with pytest.raises(Exception):
         CadReturnIngestRequest.model_validate({**copy.deepcopy(payload.model_dump(by_alias=True)), "solverFrame": "+x"})
 

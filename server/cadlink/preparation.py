@@ -79,8 +79,13 @@ from .project_setup import (
 from .setup import CadSolveSetup, solve_request_for, validate_setup
 from .solver_frame import (
     AS_MODELLED,
+    CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
+    ensure_frame_suggestion,
+    record_frame_identity,
     record_frame_refusal,
+    record_is_unlinked,
+    resolution_identity,
     resolve_for_manifest as resolve_solver_frame,
 )
 from .solve_command import (
@@ -116,6 +121,10 @@ class PreparationInput:
     submit: bool = True
     approve_preparation_id: str | None = None
     approve_finding_ids: tuple[str, ...] = ()
+    #: The solver frame axis the user saw when they pressed Solve. An unlinked
+    #: snapshot is solved only along it: a confirmation changed elsewhere in
+    #: the meantime stops at the frame gate instead of changing the axis.
+    expected_frame_axis: str | None = None
 
 
 @dataclass
@@ -764,13 +773,15 @@ def _resumable(
     revision_id: str,
     manifest_sha256: str,
     semantics: str,
-    frame_axis: str | None = None,
+    frame: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """The operation's last preparation, when this attempt would make the same one.
 
     The same snapshot, setup revision and meshing semantics: the attempt
     resumes it instead of preparing anew, so the approvals given on it apply.
-    For an unlinked snapshot (``frame_axis`` given) also the same solver frame:
+    For an unlinked snapshot (``frame`` given, ``resolution_identity``) also the
+    same complete solver frame -- contract, forward axis, resolved up and its
+    provenance, export frame and transform, not the forward axis alone:
     a preparation meshed in another frame, or one that states none, is made
     again rather than solved in a frame nobody confirmed.
     """
@@ -790,12 +801,23 @@ def _resumable(
     if ingest is None:
         return None
     record = json.loads(ingest["record_json"])
-    if frame_axis is not None:
-        normalisation = record.get("normalisation")
-        frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
-        if not isinstance(frame, Mapping) or frame.get("axis") != frame_axis:
+    if frame is not None:
+        # A record prepared under an earlier frame contract, or with another
+        # roll, keeps its own meaning; a new attempt meshes in this frame.
+        if frame.get("contract") != FRAME_CONTRACT or record_frame_identity(record) != dict(frame):
             return None
     return record
+
+
+def _record_frame_axis(record: Mapping[str, Any]) -> str | None:
+    """The solver frame axis an unlinked record was meshed in; None when linked."""
+
+    if not record_is_unlinked(record):
+        return None
+    normalisation = record.get("normalisation")
+    frame = normalisation.get("solver_frame") if isinstance(normalisation, Mapping) else None
+    axis = frame.get("axis") if isinstance(frame, Mapping) else None
+    return str(axis) if axis else None
 
 
 def _project_gate(retained: Mapping[str, Any]) -> dict[str, str]:
@@ -840,7 +862,14 @@ def _prepare_sync(
         return "submit", (SolveRequest.model_validate_json(row["request_json"]), row.get("setup_revision_id"))
 
     # validating: the retained copy, made now if the operation predates it.
-    _advance(ctx, operation_id, generation, stage=STAGE_VALIDATING)
+    # The frame axis a user's Solve showed is the operation's from now on: an
+    # automatic continuation (after the update restart, say) and a retry that
+    # names none are held to it, and only a press naming another replaces it.
+    validating = _advance(
+        ctx, operation_id, generation, stage=STAGE_VALIDATING,
+        frame_axis=request.expected_frame_axis,
+    )
+    expected_frame_axis = request.expected_frame_axis or validating.get("frame_axis")
     retained = _retained(ctx.data_dir, row)
     if retained is not None and not _copy_is_whole(retained):
         # WG's own copy is no longer the bundle its digest names. It is
@@ -944,8 +973,9 @@ def _prepare_sync(
         )
     solver_frame = resolve_solver_frame(store, retained_manifest, manifest_sha256)
     frame_axis = solver_frame.axis if solver_frame is not None else None
+    frame_identity = resolution_identity(solver_frame) if solver_frame is not None else None
 
-    record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_axis)
+    record = _resumable(store, row, revision_id, manifest_sha256, semantics, frame_identity)
     if record is None:
         # preparing-mesh: from the retained copy, under the attempt's fence.
         _advance(ctx, operation_id, generation, stage=STAGE_PREPARING_MESH)
@@ -1025,6 +1055,14 @@ def _prepare_sync(
     )
     _publish(ctx, prepared)
 
+    # The automatic frame suggestion (M1e), inside this explicit command and
+    # cached per snapshot: the frame card preselects it. It never confirms,
+    # and a survey that fails only leaves the card asking.
+    try:
+        ensure_frame_suggestion(store, record)
+    except Exception as exc:  # noqa: BLE001 - advisory by construction
+        logger.warning("Solver frame suggestion failed for %s: %s", preparation_id, exc)
+
     # Before findings and approvals: a frame confirmed differently is a new
     # preparation, and approvals never carry to it. Read from the record, for
     # every preparation: it says what was prepared, linked or not, and which
@@ -1034,6 +1072,21 @@ def _prepare_sync(
         return "done", _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT,
             reason=FRAME_CONFIRMATION_REQUIRED, message=frame_refusal,
+        )
+    prepared_axis = _record_frame_axis(record)
+    if (
+        expected_frame_axis is not None
+        and prepared_axis is not None
+        and prepared_axis != expected_frame_axis
+    ):
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason=FRAME_CONFIRMATION_REQUIRED,
+            message=(
+                f"This project's solver frame is {prepared_axis} now, not the "
+                f"{expected_frame_axis} WG showed when you pressed Solve: it was "
+                "changed elsewhere. Check it, then press Solve again."
+            ),
         )
 
     reviewed = (
@@ -1206,7 +1259,11 @@ def requeue_restart_parked(ctx: PreparationContext) -> list[str]:
 
 
 def _hold_for_restart(
-    ctx: PreparationContext, operation_id: str, listed_generation: int, refusal: str
+    ctx: PreparationContext,
+    operation_id: str,
+    listed_generation: int,
+    refusal: str,
+    frame_axis: str | None = None,
 ) -> dict[str, Any]:
     """Park an operation the user asked for while an update restart is approved.
 
@@ -1215,7 +1272,9 @@ def _hold_for_restart(
     like any solve the latch held. The request itself is not kept: the queued
     attempt prepares and submits from the project's setup, as the delivery
     loop does, and approvals sent with this request are asked for again. Ones
-    already recorded on the preparation still apply.
+    already recorded on the preparation still apply. The frame axis the
+    request named is kept, like one given to any attempt: the queued attempt is
+    held to it.
     """
 
     generation = ctx.store.claim(operation_id, listed_generation)
@@ -1223,6 +1282,8 @@ def _hold_for_restart(
         return ctx.store.get_operation(operation_id) or {}
     logger.info("CAD operation %s: attempt %d holds it for the update restart.", operation_id, generation)
     try:
+        if frame_axis is not None:
+            _advance(ctx, operation_id, generation, frame_axis=frame_axis)
         return _finish(
             ctx, operation_id, generation, NEEDS_USER_INPUT,
             reason=REASON_UPDATE_RESTART_PENDING, message=refusal,
@@ -1288,6 +1349,15 @@ async def prepare_operation(
         row["state"] != RECEIVED or int(row["attempt_generation"]) != expected_generation
     ):
         return operation_summary(row)
+    if request.expected_frame_axis is not None:
+        # The axis a user's Solve showed belongs to the operation from the
+        # moment the press is admitted, before any return below: an update
+        # restart approved meanwhile leaves it received, and the loop's later
+        # continuation names no axis.
+        await asyncio.to_thread(
+            store.admit_frame_axis, operation_id, request.expected_frame_axis,
+            int(row["attempt_generation"]),
+        )
     try:
         reconciled = await asyncio.to_thread(reconcile_with_jobs, ctx, operation_id)
     except Exception:  # noqa: BLE001 - the jobs system dedupes by key on submission
@@ -1309,7 +1379,8 @@ async def prepare_operation(
         if row["state"] == RECEIVED:
             return operation_summary(row)
         return operation_summary(await asyncio.to_thread(
-            _hold_for_restart, ctx, operation_id, int(row["attempt_generation"]), refusal
+            _hold_for_restart, ctx, operation_id, int(row["attempt_generation"]), refusal,
+            request.expected_frame_axis,
         ))
     generation = await asyncio.to_thread(
         store.claim, operation_id, int(row["attempt_generation"])

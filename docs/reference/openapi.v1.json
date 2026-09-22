@@ -6807,6 +6807,17 @@
               }
             ]
           },
+          "frameAxis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frameaxis"
+          },
           "setupRevisionId": {
             "anyOf": [
               {
