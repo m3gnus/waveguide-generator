@@ -1375,16 +1375,9 @@ async def get_ingest_viewport_mesh(
             return PlainTextResponse(
                 str(artifact["msh_text"]), media_type="text/plain; charset=utf-8"
             )
-        if lookup_key in _DEFERRED_VIEWPORTS:
-            # Still being tessellated. The caller already has the solve mesh on
-            # screen, so this is "ask again", not a failure.
-            return PlainTextResponse(
-                "", status_code=202, media_type="text/plain; charset=utf-8"
-            )
-        # Nothing in flight and nothing on disk: the build failed, or this
-        # process was restarted since the record was published. Either way the
-        # inputs are all still there, so start it again rather than answering
-        # with a permanent 404 for an artifact that is merely absent.
+        # Join this ingest to an existing build before answering, or start one
+        # when the process was restarted or an earlier attempt failed. Every
+        # caller receiving 202 then receives its own readiness notification.
         runtime = getattr(request.app.state, "jobs_runtime", None)
         _schedule_deferred_viewport(record, data_dir, getattr(runtime, "events", None))
         return PlainTextResponse(

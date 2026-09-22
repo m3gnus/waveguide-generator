@@ -1479,6 +1479,82 @@ def test_one_deferred_build_notifies_every_ingest_waiting_on_its_key(
     }
 
 
+@pytest.mark.parametrize("recovered_by_endpoint", [False, True])
+def test_every_ingest_requesting_a_shared_build_gets_its_ready_event(
+    monkeypatch, tmp_path: Path, recovered_by_endpoint: bool
+) -> None:
+    """A 202 joins its ingest to either a current or recovered build."""
+
+    from server.cadlink import api
+
+    lookup_key = "f" * 64
+    first_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6C"
+    second_id = "wgi_01J5A8QK3M9T2XVBH0RD7NWE6D"
+    records = {
+        ingest_id: {
+            "ingest_id": ingest_id,
+            "transformed_geometry_hash": "sha256:" + "b" * 64,
+            "viewport_mesh": {
+                "available": False,
+                "pending": True,
+                "pipeline_contract": IMPORT_VIEWPORT_PIPELINE_CONTRACT,
+                "lookup_key": lookup_key,
+            },
+        }
+        for ingest_id in (first_id, second_id)
+    }
+    build_started = threading.Event()
+    release = threading.Event()
+    builds: list[str] = []
+
+    def build(record, _data_dir):
+        builds.append(str(record["ingest_id"]))
+        build_started.set()
+        assert release.wait(timeout=2)
+        return {"msh_text": "visual"}
+
+    published: list[dict[str, object]] = []
+    events = SimpleNamespace(publish=lambda message: published.append(message))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            cadlink_store=object(),
+            data_dir=str(tmp_path),
+            jobs_runtime=SimpleNamespace(events=events),
+        )
+    )
+    real_to_thread = asyncio.to_thread
+
+    async def fake_to_thread(function, *args, **kwargs):
+        if function.__name__ == "get_ingestion_record":
+            return records[str(args[-1])]
+        return await real_to_thread(function, *args, **kwargs)
+
+    monkeypatch.setattr(api.asyncio, "to_thread", fake_to_thread)
+    monkeypatch.setattr(api, "build_deferred_viewport", build)
+
+    async def run() -> list[int]:
+        statuses = []
+        if recovered_by_endpoint:
+            response = await get_ingest_viewport_mesh(
+                first_id, SimpleNamespace(app=app)
+            )
+            statuses.append(response.status_code)
+        else:
+            api._schedule_deferred_viewport(records[first_id], tmp_path, events)
+        assert await real_to_thread(build_started.wait, 2)
+        response = await get_ingest_viewport_mesh(second_id, SimpleNamespace(app=app))
+        statuses.append(response.status_code)
+        release.set()
+        await api._DEFERRED_VIEWPORTS[lookup_key]
+        return statuses
+
+    statuses = asyncio.run(run())
+
+    assert statuses == ([202, 202] if recovered_by_endpoint else [202])
+    assert builds == [first_id]
+    assert {message["ingestId"] for message in published} == {first_id, second_id}
+
+
 def test_canonical_json_coerces_numpy_values() -> None:
     assert json.loads(_canonical({"scalar": np.int64(3), "array": np.array([1.5])})) == {
         "array": [1.5],
