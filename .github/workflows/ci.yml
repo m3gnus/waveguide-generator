@@ -227,6 +227,10 @@ jobs:
       WG_REQUIRE_RELEASE_TAGS: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The domain compatibility test loads a pre-M1c reader with git show.
+          # A shallow checkout contains only this candidate and cannot read it.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
