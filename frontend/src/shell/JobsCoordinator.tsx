@@ -13,7 +13,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, manualCadSolveIdentity, manualCadSolveIngestFor, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
+import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, isManualCadSolveOperationId, manualCadSolveIdentity, manualCadSolveIngestFor, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -29,7 +29,7 @@ import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '.
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
-import { recordOnScreenSettings, waitingForFirstSettings } from './cadOnScreenSettings';
+import { waitingForFirstSettings } from './cadOnScreenSettings';
 import { solveAttention, useOperationAttention } from './solveAttention';
 
 /**
@@ -239,6 +239,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   useEffect(() => {
     for (const operation of Object.values(cadOperations)) {
       if (operation.kind !== 'prepare_and_solve' || operation.operationId.startsWith('manual-solve:')) continue;
+      // A request a WG Solve continued completes as that solve, above.
+      if (manualCadSolveIngestFor(operation.operationId) !== null) continue;
       if (isPendingCadOperation(operation)) {
         watchedOperations.current.add(operation.operationId);
         continue;
@@ -431,23 +433,25 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
-      // A request for this very snapshot already waits for its first settings
-      // (Fusion's "Solve in WG", say): this press gives it the settings on
-      // screen and continues that operation. The same operation id is the
-      // explicit continuation, so there is one request and one card, and
-      // nothing is inferred from equal manifests on the backend.
-      const waiting = waitingForFirstSettings(useCadOperationsStore.getState().operations, cad.ingestRecord);
-      if (waiting) {
-        solveAttention.bindOperation(waiting.operationId);
-        const setupRevisionId = await recordOnScreenSettings(waiting.operationId);
-        const continued = await prepareCadOperation(waiting.operationId, { setupRevisionId, submit: true });
-        useCadOperationsStore.getState().apply(continued);
-        return 'submitted' as const;
-      }
-      let identity = manualCadSolveIdentity(ingestId, () => {
+      // A new identity is a new run of the design. When a request for this
+      // very snapshot already waits for its first settings (Fusion's "Solve in
+      // WG", say), the identity names that operation instead: this press
+      // continues it with the settings a WG Solve binds. The same operation id
+      // is the explicit continuation -- one request, one card, nothing
+      // inferred from equal manifests on the backend -- and, held like any
+      // manual solve's, it survives a lost response and a reload.
+      const newRun = (continuing = true) => {
         const designName = currentRunNameSource().name;
-        return { designName, label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()) };
-      });
+        const waiting = continuing
+          ? waitingForFirstSettings(useCadOperationsStore.getState().operations, cad.ingestRecord)
+          : null;
+        return {
+          designName,
+          label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()),
+          ...(waiting ? { operationId: waiting.operationId } : {}),
+        };
+      };
+      let identity = manualCadSolveIdentity(ingestId, newRun);
       let operationId = identity.operationId;
       // The storage entry survives a reload. Ask the authoritative store
       // whether it still names unfinished work: 404 means the first create
@@ -472,14 +476,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           useCadOperationsStore.getState().apply(held);
           completeManualCadSolve(ingestId, held);
           forgetManualCadSolveOperationId(ingestId, operationId);
-          identity = manualCadSolveIdentity(ingestId, () => {
-            const designName = currentRunNameSource().name;
-            return { designName, label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()) };
-          });
+          identity = manualCadSolveIdentity(ingestId, newRun);
           operationId = identity.operationId;
         }
       } catch (reason) {
         if (!(reason instanceof CadLinkApiError && reason.status === 404)) throw reason;
+        if (!isManualCadSolveOperationId(operationId)) {
+          // The request it continued no longer exists: a solve of its own.
+          forgetManualCadSolveOperationId(ingestId, operationId);
+          identity = manualCadSolveIdentity(ingestId, () => newRun(false));
+          operationId = identity.operationId;
+        }
       }
       // The operation this press creates or recovers carries its arm, so the
       // run it ends in -- or the gate it stops at -- may follow the user.
@@ -490,8 +497,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         options: { ...built.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
       };
       const revision = await createSetupRevision(setup);
-      const created = await createCadOperation({ operationId, ingestId });
-      useCadOperationsStore.getState().apply(created);
+      // A continued request exists already; only a solve of its own is created.
+      if (isManualCadSolveOperationId(operationId)) {
+        const created = await createCadOperation({ operationId, ingestId });
+        useCadOperationsStore.getState().apply(created);
+      }
       const prepared = await prepareCadOperation(operationId, { setupRevisionId: revision.revisionId, submit: true });
       acknowledgeManualCadSolvePreparation(ingestId, operationId);
       useCadOperationsStore.getState().apply(prepared);

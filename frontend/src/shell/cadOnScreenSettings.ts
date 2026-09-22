@@ -51,27 +51,19 @@ export async function recordOnScreenSettings(operationId: string): Promise<strin
 }
 
 /** The request for the model on screen that still waits for its first
- * settings (`setup_required`), when the settings on screen may be used for it.
+ * settings (`setup_required`).
  *
  * WG's own Solve continues that operation instead of creating a second one
  * for the same snapshot: the same operation id is the explicit continuation.
  * A request for another snapshot, or one waiting at any other gate, is not
- * this; neither is one whose settings could not be filed under its project. */
+ * this. */
 export function waitingForFirstSettings(
   operations: Record<string, CadOperationSummary>,
   record: CadReturnIngestRecord | null,
-  state: ReturnType<typeof useCadReturnStore.getState> = useCadReturnStore.getState(),
 ): CadOperationSummary | null {
   if (!record) return null;
-  const waiting = pendingCadOperations(operations).find((operation) => operation.kind === 'prepare_and_solve'
+  return pendingCadOperations(operations).find((operation) => operation.kind === 'prepare_and_solve'
     && operation.state === 'needs_user_input'
     && operation.reason === 'setup_required'
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256);
-  if (!waiting) return null;
-  try {
-    settingsProjectFor(waiting, state);
-  } catch {
-    return null;
-  }
-  return waiting;
+    && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;
 }

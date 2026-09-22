@@ -74,9 +74,21 @@ export function manualCadSolveIngestFor(
   return null;
 }
 
+/** Whether an operation id is a solve WG created itself, rather than a waiting
+ * request a WG Solve continued. */
+export function isManualCadSolveOperationId(operationId: string): boolean {
+  return operationId.startsWith('manual-solve:');
+}
+
+/**
+ * The identity a WG Solve of this ingestion uses, held across retries and
+ * reloads. ``createRun`` names a new run; when it also names an
+ * ``operationId`` -- a waiting request for this snapshot -- a new identity
+ * continues that operation instead of creating one.
+ */
 export function manualCadSolveIdentity(
   ingestId: string,
-  createRun: () => { designName: string; label: string },
+  createRun: () => { designName: string; label: string; operationId?: string },
   storage: Pick<Storage, 'getItem' | 'setItem'> | null = typeof sessionStorage === 'undefined' ? null : sessionStorage,
 ): ManualSolveIdentity {
   const key = `${MANUAL_SOLVE_OPERATION_PREFIX}${ingestId}`;
@@ -84,11 +96,12 @@ export function manualCadSolveIdentity(
   if (held?.designName && held.label) return held;
   const random = globalThis.crypto?.randomUUID?.()
     ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const { operationId: continued, ...run } = createRun();
   const created = {
-    operationId: held?.operationId ?? `manual-solve:${random}`,
+    operationId: held?.operationId ?? continued ?? `manual-solve:${random}`,
     prepareAcknowledged: held?.prepareAcknowledged ?? false,
     completionAcknowledged: held?.completionAcknowledged ?? false,
-    ...createRun(),
+    ...run,
   };
   storage?.setItem(key, JSON.stringify(created));
   return created;
