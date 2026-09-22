@@ -719,6 +719,7 @@ def test_opening_a_base_schema_database_does_not_change_its_schema(tmp_path: Pat
         "approvals_json",
         "snapshot_unreadable_since",
         "claim_json",
+        "frame_axis",
     )
 
     def schema(conn: sqlite3.Connection) -> tuple[list[tuple], tuple[str, ...]]:
