@@ -2132,7 +2132,9 @@ async def post_prepare_cad_operation(
         # Admitted: the axis this press showed is the operation's before
         # anything is started, so no early return and no later continuation
         # of the attempt can lose it.
-        await asyncio.to_thread(store.admit_frame_axis, operation_id, payload.frame_axis)
+        await asyncio.to_thread(
+            store.admit_frame_axis, operation_id, payload.frame_axis, int(row["attempt_generation"])
+        )
     task = asyncio.create_task(
         prepare_operation(
             context,

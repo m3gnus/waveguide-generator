@@ -411,7 +411,9 @@ preselects it, so confirming it is normally one press of Solve.
   in the meantime stops at `frame_confirmation_required`, saying so, instead of changing
   the axis solved. The operation keeps that axis (`cad_operations.frame_axis`), written
   when the press is admitted -- by the route, and again by `prepare_operation` before any
-  early return -- so a press the update restart overtakes still carries it: every
+  early return -- so a press the update restart overtakes still carries it. Each such
+  write is fenced by the attempt generation the press read (compare-and-set), so a
+  superseded press's late write never replaces the axis of a newer attempt: every
   later attempt -- an automatic continuation after the update restart, a retry that
   names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.

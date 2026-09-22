@@ -1353,7 +1353,10 @@ async def prepare_operation(
         # moment the press is admitted, before any return below: an update
         # restart approved meanwhile leaves it received, and the loop's later
         # continuation names no axis.
-        await asyncio.to_thread(store.admit_frame_axis, operation_id, request.expected_frame_axis)
+        await asyncio.to_thread(
+            store.admit_frame_axis, operation_id, request.expected_frame_axis,
+            int(row["attempt_generation"]),
+        )
     try:
         reconciled = await asyncio.to_thread(reconcile_with_jobs, ctx, operation_id)
     except Exception:  # noqa: BLE001 - the jobs system dedupes by key on submission

@@ -22,7 +22,7 @@ import pytest
 
 from server.cadlink import ingest as ingest_module
 from server.cadlink import preparation, solve_command
-from server.cadlink.preparation import PreparationInput, prepare_operation, run_delivery_pass
+from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation, run_delivery_pass
 from server.cadlink.solver_frame import CONTRACT, confirm_frame
 
 from test_cad_preparation import Harness, _accept, _manifest, _revision, _setup
@@ -386,6 +386,101 @@ def test_a_press_the_restart_overtakes_before_its_claim_keeps_its_axis(real) -> 
 
     assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
     assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
+
+
+def _stale_press_interleaving(harness: Harness, monkeypatch, stale_write_from: str) -> None:
+    """An older +z press, through the handler, one of whose admission writes
+    is delayed until a newer +x press has been admitted and prepared, then
+    lands. ``stale_write_from`` names the delayed write: the route's (the
+    older press's first write), or prepare_operation's (its second).
+
+    With the route's write delayed the older press's attempt is not run
+    afterwards: that stands for WG stopping before it starts, since an
+    attempt that does start afterwards is simply the latest press."""
+
+    from server.cadlink import api
+    from server.updates.restart import RestartApproval
+
+    from test_cad_preparation import _latched_state
+
+    real_admit = harness.store.admit_frame_axis
+    delayed_call = 1 if stale_write_from == "route" else 2
+    calls = {"+z": 0, "delayed": False}
+
+    def admit(operation_id: str, frame_axis: str, generation: int) -> bool:
+        if frame_axis == "+z":
+            calls["+z"] += 1
+            if calls["+z"] == delayed_call:
+                calls["delayed"] = True
+                # Meanwhile the newer press, +x, is admitted and prepared.
+                newer = asyncio.run(prepare_operation(
+                    _context(harness), "cmd-1",
+                    PreparationInput(expected_frame_axis="+x", setup_revision_id=_revision(harness.store, _setup())),
+                ))
+                assert newer["attemptGeneration"] > generation
+        return real_admit(operation_id, frame_axis, generation)
+
+    monkeypatch.setattr(harness.store, "admit_frame_axis", admit)
+    tasks: list[asyncio.Task[Any]] = []
+
+    def track(_state: Any, task: asyncio.Task[Any]) -> None:
+        if stale_write_from == "route":
+            task.cancel()
+        tasks.append(task)
+
+    monkeypatch.setattr(api, "_track", track)
+    request = SimpleNamespace(app=SimpleNamespace(state=_latched_state(harness, RestartApproval())))
+
+    async def older_press() -> None:
+        await api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(frameAxis="+z"), request)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    asyncio.run(older_press())
+    assert calls["delayed"]
+
+
+@pytest.mark.parametrize("stale_write_from", ["route", "prepare"])
+def test_a_superseded_press_never_replaces_the_newer_axis(real, monkeypatch, stale_write_from: str) -> None:
+    """The reviewer's round-4 interleaving, through the handler: the older
+    press's write lands after the newer press prepared along +x."""
+
+    from server.cadlink.store import CadLinkStore
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    _stale_press_interleaving(harness, monkeypatch, stale_write_from)
+
+    # The newer press's axis stands.
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    waiting = harness.store.get_operation("cmd-1")
+    # The project is then confirmed +z elsewhere; WG reopens; the loop
+    # continues the request with no axis. It must not solve along +z.
+    confirm_frame(harness.store, _record(harness, operation_summary(waiting)), "+z")
+    assert CadLinkStore(harness.store.db_path).get_operation("cmd-1")["frame_axis"] == "+x"
+    continued = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+    assert _waiting_for_frame(continued), continued
+    assert "+z now, not the +x WG showed" in continued["message"]
+    assert harness.submitted == []
+
+
+def test_a_genuinely_newer_press_replaces_the_axis(real) -> None:
+    """The control: presses in order, the later one wins -- also when the
+    first was only admitted (held by the update restart, still received)."""
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
+    asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(expected_frame_axis="+z")))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+z"
+    asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(expected_frame_axis="-y")))
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
+    harness.blocked = None
+    _prepare(harness, expected_frame_axis="+x")
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    _prepare(harness, expected_frame_axis="-x")
+    assert harness.store.get_operation("cmd-1")["frame_axis"] == "-x"
 
 
 def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_another(real) -> None:

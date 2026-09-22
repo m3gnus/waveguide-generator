@@ -1112,23 +1112,29 @@ class CadLinkStore:
             ).fetchone()
         return self._row(row)
 
-    def admit_frame_axis(self, operation_id: str, frame_axis: str) -> bool:
+    def admit_frame_axis(self, operation_id: str, frame_axis: str, generation: int) -> bool:
         """Keep the solver frame axis a user's Solve named, as it is admitted.
 
         Written before anything can return early -- a restart approved while
         the press is reconciled leaves the operation ``received`` -- so every
-        later attempt, the delivery loop's included, is held to it. Not an
-        attempt's write: no generation fence, only an unfinished operation.
-        ``updated_at`` is left alone, so a client's ordering of the row's
-        states does not move. False when the operation is finished or unknown.
+        later attempt, the delivery loop's included, is held to it.
+
+        Fenced by the attempt generation the press read when it was admitted
+        (compare-and-set): once a newer press has claimed an attempt, a
+        superseded press's write, however late it lands, changes nothing, and
+        the newer attempt's own first write holds its axis. ``updated_at`` is
+        left alone, so a client's ordering of the row's states does not move.
+        False when the operation moved on, is finished, or is unknown.
         """
 
+        attempt = _require_generation(generation)
         self.initialize()
         with self._lock, self._transaction() as conn:
             cursor = conn.execute(
                 "UPDATE cad_operations SET frame_axis = ? "
-                f"WHERE operation_id = ? AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
-                (frame_axis, operation_id, *sorted(TERMINAL_STATES)),
+                "WHERE operation_id = ? AND attempt_generation = ? "
+                f"AND state NOT IN ({', '.join('?' for _ in TERMINAL_STATES)})",
+                (frame_axis, operation_id, attempt, *sorted(TERMINAL_STATES)),
             )
             return cursor.rowcount == 1
 
