@@ -396,12 +396,19 @@ function FindingRows({ record }: { record: CadReturnIngestRecord }) {
 const NOTE_TITLE: Record<string, string> = {
   'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
   'declared-reduced-domain': 'Solved as the reduced model the CAD author declared',
+  'interpreted-reduced-domain': 'Solved mirrored, as a model already cut in CAD (from recorded evidence)',
+  'domain-solved-as-shown': 'Solved as shown, unmirrored',
 };
 
 /** Non-blocking findings that only record what was done, as asked. Any other
  * non-blocking finding limits confidence in the result, so the checks open
  * on it rather than leave it one click away. */
-const RECORD_ONLY: ReadonlySet<string> = new Set(['declared-reduced-domain']);
+const RECORD_ONLY: ReadonlySet<string> = new Set([
+  'declared-reduced-domain',
+  // The model card states the domain reading and offers Change (M1c-auto).
+  'interpreted-reduced-domain',
+  'domain-solved-as-shown',
+]);
 
 /** Whether a finding that blocks nothing is still worth a line: every one is,
  * because it can limit confidence in the result (WG cannot say whether the

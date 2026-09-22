@@ -8,7 +8,9 @@ import { useCadReturnStore } from '../stores/cadReturn';
 import { parseFrequencyList } from '../stores/frequencyList';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { OnScreenSolveStatus } from './CadOperationsSection';
+import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
+import type { DomainInterpretation } from '../api/domainInterpretation';
 import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -24,7 +26,15 @@ function planePhrase(plane: string): string {
   return plane === 'x0' ? 'x = 0' : plane === 'y0' ? 'y = 0' : plane;
 }
 
-/** The model in one line: its body, its sources, and which domain is solved. */
+/** The domain reading a record states (M1c-auto), or null before it existed. */
+export function recordInterpretation(record: CadReturnIngestRecord): DomainInterpretation | null {
+  const value = record.domain_interpretation as DomainInterpretation | undefined;
+  return value && typeof value === 'object' && typeof value.reading === 'string' ? value : null;
+}
+
+/** The model in one line: its body, its sources, and -- for a record prepared
+ * before WG interpreted the domain -- which domain is solved. A newer record
+ * states its domain on its own line (`CadDomainInterpretation`). */
 export function modelSummary(record: CadReturnIngestRecord): string {
   const bodies = (record.scope?.included ?? []).map((item) => String(item.name ?? item.object_id ?? '')).filter(Boolean);
   const roles = [...new Set((record.sources ?? []).map((source) => String(source.role ?? '').toUpperCase()).filter(Boolean))]
@@ -44,7 +54,7 @@ export function modelSummary(record: CadReturnIngestRecord): string {
   return [
     bodies.length === 1 ? bodies[0] : bodies.length > 1 ? pluralized(bodies.length, 'body', 'bodies') : null,
     `${pluralized(sourceCount, 'source')}${roles.length ? ` (${roles.join(', ')})` : ''}`,
-    domain,
+    recordInterpretation(record) ? null : domain,
   ].filter(Boolean).join(' · ');
 }
 
@@ -157,8 +167,10 @@ export function CadSolveCard({ record, label, fetcher }: {
   // Only the CAD command: this card exists only in CAD Link mode.
   const available = Boolean(solve?.cadMode);
   const disabled = !available || solve!.disabled;
+  const interpretation = recordInterpretation(record);
   return <section className="cad-solve-card" aria-label={`Solve ${label}`}>
     <p className="cad-solve-summary">{modelSummary(record)}</p>
+    {interpretation && <CadDomainInterpretation ingestId={record.ingest_id} interpretation={interpretation} fetcher={fetcher}/>}
     {unlinked && <CadSolverFrame ingestId={record.ingest_id} manifestSha256={record.manifest_sha256} label={label} fetcher={fetcher}/>}
     <SettingsLine record={record}/>
     <OnScreenSolveStatus record={record}/>

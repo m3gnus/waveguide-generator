@@ -225,5 +225,9 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-earlier-requests li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .cad-earlier-requests time { color: var(--fg4); }
 .cad-solver-frame-line { margin: 0; }
+.cad-domain-line { margin: 0; }
+.cad-domain-choices { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 2px 0 0 12px; }
+.cad-domain-choices button[aria-pressed="true"] { font-weight: 600; }
+.cad-domain-error { margin: 2px 0 0; color: var(--red); }
 .cad-model-details { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
 .cad-model-details summary { cursor: pointer; }
