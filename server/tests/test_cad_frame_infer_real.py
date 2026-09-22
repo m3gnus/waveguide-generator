@@ -152,6 +152,31 @@ def test_the_suggestion_from_wgs_own_cut_matches_the_full_model(tmp_path: Path) 
     assert suggestion["status"] == "automatic" and suggestion["axis"] == "+z"
 
 
+def test_a_two_face_source_split_by_wgs_own_cut_keeps_only_its_kept_face(tmp_path: Path) -> None:
+    """The MF pair sits at x = +/-24 mm; the x0 cut keeps one face whole.
+
+    The removed face is the model's last-numbered surface, and the LF cone
+    wall's seam lies on +x, so the cut splits that wall into two new faces.
+    Gmsh gives the first of them the removed face's freed tag and reports the
+    removed face as kept under it; the source's retained area was then the
+    wrong surfaces and ingestion refused the model outright.
+    """
+
+    bundle, manifest = _bundle(tmp_path, "party", _party, "+z")
+    data_dir = tmp_path / "data"
+    cut = _ingest(bundle, manifest, data_dir)
+    whole = _ingest(bundle, manifest, data_dir, symmetry_mode="full")
+    assert "x0" in cut["symmetry"]["cut_planes"]
+    assert not whole["symmetry"].get("cut_planes")
+
+    mirrored_area, mirrored_sources = _areas(survey_mesh_from_record(cut, read_verified_import_mesh(cut)))
+    full_area, full_sources = _areas(survey_mesh_from_record(whole, read_verified_import_mesh(whole)))
+    assert mirrored_area == pytest.approx(full_area, rel=0.01)
+    assert set(mirrored_sources) == set(full_sources) == {"hf", "mf", "lf"}
+    for source_id, area in full_sources.items():
+        assert mirrored_sources[source_id] == pytest.approx(area, rel=0.02), source_id
+
+
 def test_a_model_facing_x_is_found_and_confirming_it_meshes_the_v2_frame(tmp_path: Path) -> None:
     bundle, manifest = _bundle(tmp_path, "party-facing-x", _party, "+x")
     data_dir = tmp_path / "data"
