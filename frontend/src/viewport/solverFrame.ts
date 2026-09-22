@@ -1,9 +1,13 @@
 import type { ParsedMSH } from './mshParser';
 
 /** The solver frame of an unlinked (CAD-authored) model: the assembly axis it
- * radiates along. The matrices are the server's (`server/cadlink/solver_frame.py`,
- * pinned equal to `solverFrame.fixture.json` on both sides); this module only
- * applies the ones the server hands out, never makes its own. */
+ * radiates along, taken to solver +Z. Under contract v2 (every new
+ * preparation) the frame also fixes the roll: solver +Y is the model's up, so
+ * the horizontal polar plane holds the forward axis. The matrices are the
+ * server's (`server/cadlink/solver_frame.py`); `solverFrame.v2.fixture.json`
+ * pins v2 with no stated document up, and `solverFrame.fixture.json` the v1
+ * matrices historical records keep, on both sides. This module only applies
+ * the matrices the server hands out, never makes its own. */
 export const SOLVER_FRAME_AXES = ['+z', '-z', '+x', '-x', '+y', '-y'] as const;
 export type SolverFrameAxis = typeof SOLVER_FRAME_AXES[number];
 

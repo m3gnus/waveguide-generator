@@ -38,6 +38,7 @@ from server.cadlink.store import STORE_FORMAT_VERSION, CadLinkStore
 
 REPO = Path(__file__).resolve().parents[2]
 FIXTURE = REPO / "frontend" / "src" / "viewport" / "solverFrame.fixture.json"
+FIXTURE_V2 = REPO / "frontend" / "src" / "viewport" / "solverFrame.v2.fixture.json"
 MANIFEST_SHA = "sha256:" + "a" * 64
 
 
@@ -160,6 +161,20 @@ def test_the_frontend_fixture_is_exactly_this_contract() -> None:
     assert sorted(fixture["axes"]) == sorted(AXES)
     for axis in AXES:
         assert fixture["axes"][axis] == frame_matrix(axis).tolist()
+
+
+def test_the_frontend_v2_fixture_is_exactly_the_current_contract() -> None:
+    """The frontend's v2 fixture: every axis's matrix and up, with no document up."""
+
+    fixture = json.loads(FIXTURE_V2.read_text(encoding="utf-8"))
+    assert fixture["contract"] == CONTRACT == "cad-solver-frame-v2"
+    assert fixture["matrixConvention"] == "row-major"
+    assert fixture["documentUp"] is None
+    assert sorted(fixture["axes"]) == sorted(AXES)
+    for axis in AXES:
+        spec = frame_spec(axis, _manifest())
+        assert fixture["axes"][axis] == spec_matrix(spec).tolist()
+        assert fixture["up"][axis] == spec["up"]
 
 
 def test_the_requirement_is_the_contract_the_export_frame_and_the_document_up() -> None:

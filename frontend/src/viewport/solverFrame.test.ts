@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fixture from './solverFrame.fixture.json';
+import fixtureV2 from './solverFrame.v2.fixture.json';
 import { parseMSH } from './mshParser';
 import {
   SOLVER_FRAME_AXES,
@@ -31,6 +32,21 @@ describe('solver frame contract', () => {
     expect(fixture.contract).toBe('cad-solver-frame-v1');
     expect(fixture.matrixConvention).toBe('row-major');
     expect(Object.keys(fixture.axes).sort()).toEqual([...SOLVER_FRAME_AXES].sort());
+  });
+
+  it('pins contract v2 too: each axis to solver +Z, and its up to solver +Y', () => {
+    expect(fixtureV2.contract).toBe('cad-solver-frame-v2');
+    expect(fixtureV2.documentUp).toBeNull();
+    const unit: Record<string, [number, number, number]> = {
+      '+x': [1, 0, 0], '-x': [-1, 0, 0], '+y': [0, 1, 0], '-y': [0, -1, 0], '+z': [0, 0, 1], '-z': [0, 0, -1],
+    };
+    const round = (values: number[]) => values.map((value) => Math.round(value * 1e9) / 1e9 + 0);
+    for (const axis of SOLVER_FRAME_AXES) {
+      const matrix = fixtureV2.axes[axis] as RowMajorMatrix;
+      expect(round(applyRowMajor(matrix, ...unit[axis]))).toEqual([0, 0, 1]);
+      const up = fixtureV2.up[axis] as keyof typeof unit;
+      expect(round(applyRowMajor(matrix, ...unit[up]))).toEqual([0, 1, 0]);
+    }
   });
 
   it('takes each axis to solver +Z when applied row-major', () => {
