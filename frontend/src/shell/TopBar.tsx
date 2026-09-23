@@ -228,6 +228,11 @@ export function SolveActions() {
       disabled={solve.disabled}
       title={solve.title}
       aria-busy={solve.submitting}
+      // Keep the frequency editor focused until onClick can commit its draft.
+      // A normal mouse-down blurs it first and disables this button mid-click.
+      onMouseDown={(event) => {
+        if (document.activeElement?.matches('[data-crossover-frequency]')) event.preventDefault();
+      }}
       onClick={solve.solve}
     ><Icon name="play"/>{solve.label}<kbd>{commandShortcutLabel('↵')}</kbd></button>
     {solve.notice && <span

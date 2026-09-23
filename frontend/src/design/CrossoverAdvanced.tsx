@@ -80,6 +80,7 @@ function SectionEditor({ label, section, onChange }: {
         step="any"
         value={frequencyDraft}
         aria-label={`${label} frequency in hertz`}
+        data-crossover-frequency=""
         onChange={(event) => setFrequencyDraft(event.target.value)}
         onBlur={commitFrequency}
         onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}

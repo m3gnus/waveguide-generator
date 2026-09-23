@@ -1,4 +1,5 @@
 import { act } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
@@ -25,12 +26,16 @@ import {
   useSolveControl,
 } from './JobsCoordinator';
 import { SolveActions } from './TopBar';
+import { CrossoverAdvanced } from '../design/CrossoverAdvanced';
+import { expandLegacy } from '../results/crossoverSpec';
 import { JobsPanel } from './JobsPanel';
 
 const mocks = vi.hoisted(() => ({
   planSolveDesign: vi.fn(),
   submitDesign: vi.fn(),
   submitImported: vi.fn(),
+  postImportedSolvePlan: vi.fn(),
+  useRealImportedPlan: false,
   createSetupRevision: vi.fn(),
   createCadOperation: vi.fn(),
   prepareCadOperation: vi.fn(),
@@ -80,6 +85,7 @@ vi.mock('../jobs/actions', async (importOriginal) => {
     planSolveDesign: mocks.planSolveDesign,
     submitDesign: mocks.submitDesign,
     submitImported: mocks.submitImported,
+    postImportedSolvePlan: mocks.postImportedSolvePlan,
   };
 });
 vi.mock('../jobs/useCapabilities', () => ({
@@ -99,11 +105,15 @@ vi.mock('../jobs/useSolvePlan', () => ({
     isPending: mocks.solvePlanPending,
   }),
 }));
-vi.mock('../jobs/useImportedSolvePlan', () => ({
+vi.mock('../jobs/useImportedSolvePlan', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../jobs/useImportedSolvePlan')>();
+  return {
   useImportedSolvePlan: (enabled: boolean) => (
-    enabled ? mocks.importedPlan : { plan: null, error: null, isPending: false }
+    mocks.useRealImportedPlan ? actual.useImportedSolvePlan(enabled)
+      : enabled ? mocks.importedPlan : { plan: null, error: null, isPending: false }
   ),
-}));
+  };
+});
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -207,6 +217,7 @@ describe('solve invocation mutex', () => {
 
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    mocks.useRealImportedPlan = false;
     preferencesStore.resetForTests();
     resetDocumentStore();
     useDocumentStore.getState().setDesignName('horn');
@@ -692,6 +703,76 @@ describe('solve invocation mutex', () => {
     );
     expect(mocks.submitImported).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
+  });
+
+  it('commits an Advanced frequency on one Solve click and plans only the complete draft', async () => {
+    // Remount with the production planning hook. The other mutex tests use a
+    // fixed plan, but this click regression needs the query's invalidation.
+    act(() => root.unmount());
+    root = createRoot(host);
+    mocks.useRealImportedPlan = true;
+    const plan = mocks.importedPlan.plan;
+    mocks.postImportedSolvePlan.mockResolvedValue(plan);
+    readyCad('wgi_frequency');
+    useCadReturnStore.setState({
+      driveChannels: [
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+      ],
+      combineEnabled: true,
+      combineSpec: expandLegacy(['drive-hf', 'drive-lf'], [1_000]),
+    });
+    act(() => workspaceModeStore.setMode('cad'));
+    function Editor() {
+      const cad = useCadReturnStore();
+      return <CrossoverAdvanced
+        spec={cad.combineSpec!}
+        memberLabel={(member) => member}
+        onChange={(spec) => cad.setCombineSpec(spec)}
+      />;
+    }
+    const client = new QueryClient();
+    await act(async () => {
+      root.render(<QueryClientProvider client={client}><JobsCoordinator><Editor/><SolveActions/></JobsCoordinator></QueryClientProvider>);
+      await Promise.resolve();
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+    const solve = host.querySelector<HTMLButtonElement>('.solve-button')!;
+    expect(solve.disabled, solve.title).toBe(false);
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
+    const plannedFrequencies = () => mocks.postImportedSolvePlan.mock.calls.map(([body]) => {
+      const submission = JSON.parse(body as string) as ImportedSolveSubmission;
+      return submission.geometry.combine?.channels?.['drive-hf'].lp?.fc_hz;
+    });
+    act(() => input.focus());
+    for (const draft of ['8', '80', '800']) {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, draft);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(useCadReturnStore.getState().combineSpec!.channels['drive-hf'].lp!.fcHz).toBe(1_000);
+      if (draft !== '800') {
+        await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+        expect(plannedFrequencies()).not.toContain(Number(draft));
+      }
+    }
+    await act(async () => {
+      const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+      solve.dispatchEvent(down);
+      if (!down.defaultPrevented) input.blur();
+      solve.click();
+      await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+    });
+    expect(useCadReturnStore.getState().combineSpec!.channels['drive-hf'].lp!.fcHz).toBe(800);
+    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
+    const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
+    expect(JSON.stringify(setup)).toContain('"fc_hz":800');
+    expect(plannedFrequencies()).toContain(800);
+    expect(plannedFrequencies()).not.toContain(8);
+    expect(plannedFrequencies()).not.toContain(80);
+    expect(mocks.postImportedSolvePlan.mock.invocationCallOrder.at(-1)!)
+      .toBeLessThan(mocks.createSetupRevision.mock.invocationCallOrder[0]);
+    client.clear();
   });
 
   it('labels the durable setup from the CAD document, not the open parametric design', async () => {

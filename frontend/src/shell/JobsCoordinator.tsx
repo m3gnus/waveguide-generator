@@ -3,7 +3,7 @@ import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
 import { createCadOperation, createSetupRevision, getCadOperation, getSetupRevision, isPendingCadOperation, prepareCadOperation, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
-import { planSolveDesign, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
+import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
   useCapabilities,
   useCapabilityRefreshOnReconnect,
@@ -13,7 +13,7 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, forgetManualCadSolveOperationId, importedSubmissionBlocker, isManualCadSolveOperationId, manualCadSolveIdentity, manualCadSolveIngestFor, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
+import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, buildImportedSubmission, forgetManualCadSolveOperationId, importedSubmissionBlocker, isManualCadSolveOperationId, manualCadSolveIdentity, manualCadSolveIngestFor, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -707,6 +707,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         throw new Error('A standalone imported mesh is for viewport inspection only. Show Parametric to solve the WG design.');
       }
       if (cadGeometryActive) {
+        const focused = document.activeElement;
+        if (focused instanceof HTMLInputElement && focused.matches('[data-crossover-frequency]')) {
+          // Blur commits the whole draft once. The query hook will debounce its
+          // next plan, but this explicit Solve must check that exact input now.
+          focused.blur();
+          const body = importedSolvePlanRequestBody(buildImportedSubmission(useCadReturnStore.getState()));
+          const freshPlan = await postImportedSolvePlan(body);
+          if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these CAD settings.');
+        }
         await solveCurrentCadImport();
         return;
       }
