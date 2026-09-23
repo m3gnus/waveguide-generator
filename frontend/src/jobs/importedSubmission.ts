@@ -15,6 +15,7 @@ import {
 } from '../stores/cadReturn';
 import type { CadDriveChannel } from '../stores/cadReturn';
 import { parseFrequencyList, polarValidationError, useSolveOptionsStore } from '../stores/solveOptions';
+import { frequencyText } from '../results/crossoverSpec';
 
 const POLAR_AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
 /** The only diagonal inclination Phase 2 imported solves accept. */
@@ -265,6 +266,33 @@ export function importedSubmissionBlocker(
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';
+  // Match SolveRequest.validate_combine_band for the exact spec sent on the
+  // wire, including independently edited HP and LP corners.
+  const combine = combineWire(state);
+  if (combine) {
+    const frequencies = solveStore.frequencyMode === 'list'
+      ? parseFrequencyList(solveStore.frequencyListText).frequencies
+      : null;
+    const start = frequencies?.[0] ?? state.frequencyStartHz;
+    const end = frequencies?.[frequencies.length - 1] ?? state.frequencyEndHz;
+    for (const channel of Object.values(combine.channels)) {
+      for (const corner of [channel.hp?.fc_hz, channel.lp?.fc_hz]) {
+        if (corner === undefined || corner === null) continue;
+        if (corner < start) {
+          return `The ${frequencyText(corner)} crossover is below the ${frequencyText(start)} sweep start. `
+            + (solveStore.frequencyMode === 'list'
+              ? `Add ${frequencyText(corner)} or a lower frequency at the start of the frequency list, or raise the crossover.`
+              : `In Frequency Sweep, set Sweep start to ${frequencyText(corner)} or lower, or raise the crossover.`);
+        }
+        if (corner > end) {
+          return `The ${frequencyText(corner)} crossover is above the ${frequencyText(end)} sweep end. `
+            + (solveStore.frequencyMode === 'list'
+              ? `Add ${frequencyText(corner)} or a higher frequency at the end of the frequency list, or lower the crossover.`
+              : `In Frequency Sweep, set Sweep end to ${frequencyText(corner)} or higher, or lower the crossover.`);
+        }
+      }
+    }
+  }
   // Same rule as the cardioid form below, for the same reason: a driver the
   // user asked for and did not finish is refused here rather than dropped on
   // the way to the wire. Dropping it solved the channel unit-driven under a

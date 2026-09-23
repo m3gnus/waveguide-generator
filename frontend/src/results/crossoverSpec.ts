@@ -122,7 +122,10 @@ export function nearestOrder(family: FilterFamily, order: number): number {
 
 /** A slope in the unit a crossover is spoken in: 6 dB per octave per order. */
 export function slopeLabel(order: number): string {
-  return `${order * 6} dB/oct`;
+  const suffix = order % 10 === 1 && order % 100 !== 11 ? 'st'
+    : order % 10 === 2 && order % 100 !== 12 ? 'nd'
+      : order % 10 === 3 && order % 100 !== 13 ? 'rd' : 'th';
+  return `${order * 6} dB/oct (${order}${suffix} order)`;
 }
 
 /** "LR4", the short form that fits beside a frequency. */

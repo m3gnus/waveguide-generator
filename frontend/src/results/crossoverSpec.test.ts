@@ -38,8 +38,11 @@ describe('the family and order table', () => {
   });
 
   it('states a slope as 6 dB per octave per order', () => {
-    expect(slopeLabel(4)).toBe('24 dB/oct');
-    expect(slopeLabel(1)).toBe('6 dB/oct');
+    expect(slopeLabel(4)).toBe('24 dB/oct (4th order)');
+    expect(slopeLabel(1)).toBe('6 dB/oct (1st order)');
+    for (const orders of Object.values(FILTER_FAMILY_ORDERS)) {
+      for (const order of orders) expect(slopeLabel(order)).toContain(`${order * 6} dB/oct`);
+    }
   });
 
   it('moves an order to the nearest one the new family offers', () => {

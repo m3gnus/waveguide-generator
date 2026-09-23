@@ -159,7 +159,12 @@ export function formatApiDetail(value: unknown): string | null {
 
 async function detail(response: Response): Promise<string> {
   try {
-    const body = await response.json() as { detail?: unknown };
+    const body = await response.json() as {
+      detail?: unknown;
+      error?: { details?: { validation_errors?: unknown } };
+    };
+    const validation = formatApiDetail(body.error?.details?.validation_errors);
+    if (validation) return validation;
     const formatted = formatApiDetail(body.detail);
     if (formatted) return formatted;
   } catch { /* fall through */ }

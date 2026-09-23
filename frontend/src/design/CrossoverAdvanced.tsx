@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useState } from 'react';
 import {
   driverXoMinNote,
   familyOrders,
@@ -52,6 +52,16 @@ function SectionEditor({ label, section, onChange }: {
   onChange: (section: FilterSection | null) => void;
 }) {
   const id = useId();
+  const [frequencyDraft, setFrequencyDraft] = useState(String(section?.fcHz ?? ''));
+  useEffect(() => setFrequencyDraft(String(section?.fcHz ?? '')), [section?.fcHz]);
+  const commitFrequency = () => {
+    const fcHz = Number(frequencyDraft);
+    if (section && frequencyDraft.trim() && Number.isFinite(fcHz) && fcHz > 0) {
+      onChange({ ...section, fcHz });
+    } else {
+      setFrequencyDraft(String(section?.fcHz ?? ''));
+    }
+  };
   const orders = section ? familyOrders(section.family) : [];
   return <div className="crossover-band">
     <label className="crossover-band-name" htmlFor={`${id}-hz`}>{label}</label>
@@ -68,12 +78,11 @@ function SectionEditor({ label, section, onChange }: {
         type="number"
         min={1}
         step="any"
-        value={section.fcHz}
+        value={frequencyDraft}
         aria-label={`${label} frequency in hertz`}
-        onChange={(event) => {
-          const fcHz = Number(event.target.value);
-          if (Number.isFinite(fcHz) && fcHz > 0) onChange({ ...section, fcHz });
-        }}
+        onChange={(event) => setFrequencyDraft(event.target.value)}
+        onBlur={commitFrequency}
+        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
       />
       <span className="crossover-unit">Hz</span>
       <select

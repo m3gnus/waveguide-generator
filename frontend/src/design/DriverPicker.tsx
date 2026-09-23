@@ -201,6 +201,7 @@ export function DriverInstallationFields({ channel, form, onField }: {
       key={driverKey}
       className="cad-driver-field"
       data-control-reveal-id={reveal.id}
+      title={driverKey === 'rear_volume_l' ? 'One sealed rear chamber shared by all drivers in this channel; do not multiply by Count.' : undefined}
     >
       <span>{label}{unit ? ` (${unit})` : ''}</span>
       <input
@@ -211,6 +212,7 @@ export function DriverInstallationFields({ channel, form, onField }: {
         aria-label={`${label} for ${channel.id}`}
         onChange={(event) => onField(driverKey, event.target.value === '' ? null : Number(event.target.value))}
       />
+      {driverKey === 'rear_volume_l' && <small className="cad-driver-hint">One sealed rear chamber shared by all drivers in this channel; do not multiply by Count.</small>}
     </label>)}
   </div>;
 }

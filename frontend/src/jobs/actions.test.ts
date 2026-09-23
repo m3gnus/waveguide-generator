@@ -5,6 +5,15 @@ import type { SolveOptions } from '../stores/solveOptions';
 import { fetchSymmetry, formatApiDetail, getCapabilities, plannedEngineNames, planSolveDesign, postSymmetry, resolveEngine, SolveSubmissionRefused, submitDesign, submitImported, toSolveDesign } from './actions';
 
 describe('API validation errors', () => {
+  it('surfaces nested solve request validation instead of the generic envelope', async () => {
+    const fetcher = async () => new Response(JSON.stringify({
+      detail: 'Solve request body is invalid',
+      error: { details: { validation_errors: [{
+        loc: ['body'], msg: 'Value error, combine crossovers_hz [199.0] lie outside the solved band [200, 20000] Hz',
+      }] } },
+    }), { status: 422, headers: { 'Content-Type': 'application/json' } });
+    await expect(getCapabilities(fetcher as typeof fetch)).rejects.toThrow('combine crossovers_hz [199.0] lie outside the solved band');
+  });
   it('formats structured FastAPI detail arrays with locations', async () => {
     const detail = [{ loc: ['body', 'design', 'simulation', 'f1'], msg: 'must be finite', type: 'value_error' }];
     expect(formatApiDetail(detail)).toBe('body.design.simulation.f1: must be finite');

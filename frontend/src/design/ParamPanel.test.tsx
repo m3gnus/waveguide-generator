@@ -571,7 +571,7 @@ describe('ParamPanel inventory UX', () => {
     expect(family.value).toBe('lr');
     expect(slope.value).toBe('4');
     expect([...slope.options].map((option) => option.textContent))
-      .toEqual(['12 dB/oct', '24 dB/oct', '36 dB/oct', '48 dB/oct']);
+      .toEqual(['12 dB/oct (2nd order)', '24 dB/oct (4th order)', '36 dB/oct (6th order)', '48 dB/oct (8th order)']);
 
     act(() => {
       family.value = 'butterworth';
@@ -601,12 +601,22 @@ describe('ParamPanel inventory UX', () => {
     crossoverView(host, 'Advanced');
     const panel = host.querySelector('.crossover-advanced-inline')!;
     expect(panel).not.toBeNull();
+    expect([...panel.querySelector<HTMLSelectElement>('[aria-label="Low-pass slope"]')!.options]
+      .map((option) => option.textContent)).toEqual([
+      '12 dB/oct (2nd order)', '24 dB/oct (4th order)', '36 dB/oct (6th order)', '48 dB/oct (8th order)',
+    ]);
 
     const lowPass = panel.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(lowPass, '900');
-      lowPass.dispatchEvent(new Event('input', { bubbles: true }));
-    });
+    act(() => lowPass.focus());
+    for (const draft of ['8', '80', '900']) {
+      act(() => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(lowPass, draft);
+        lowPass.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      expect(useCadReturnStore.getState().combineSpec).toBeNull();
+    }
+    expect(useCadReturnStore.getState().combineSpec?.channels['drive-mf'].lp?.fcHz).not.toBe(900);
+    act(() => lowPass.blur());
     const spec = useCadReturnStore.getState().combineSpec!;
     expect(spec.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 4, fcHz: 900 });
 
@@ -1372,9 +1382,10 @@ describe('driver picker', () => {
     expect(labels).toContain('Mms (g)');
     expect(labels).toContain('Fs (Hz)');
     expect(labels).not.toContain('Count');
-    expect(labels).not.toContain('Rear vol (L)');
+    expect(labels).not.toContain('Rear volume, total for all drivers (L)');
     expect([...card.querySelectorAll<HTMLElement>('.driver-installation .cad-driver-field > span')]
-      .map((span) => span.textContent)).toEqual(['Count', 'Rear vol (L)']);
+      .map((span) => span.textContent)).toEqual(['Count', 'Rear volume, total for all drivers (L)']);
+    expect(card.textContent).toContain('One sealed rear chamber shared by all drivers in this channel; do not multiply by Count.');
   });
 
   it('keeps count and rear volume on the card, out of the T/S grid', async () => {
@@ -1382,9 +1393,9 @@ describe('driver picker', () => {
     const card = channelCard();
     expect(card.querySelector('input[role="combobox"]')).not.toBeNull();
     expect([...card.querySelectorAll<HTMLElement>('.driver-installation .cad-driver-field > span')]
-      .map((span) => span.textContent)).toEqual(['Count', 'Rear vol (L)']);
+      .map((span) => span.textContent)).toEqual(['Count', 'Rear volume, total for all drivers (L)']);
 
-    await type(installationField('Rear vol (L)'), '3.5');
+    await type(installationField('Rear volume, total for all drivers (L)'), '3.5');
     await settle();
     expect(useCadReturnStore.getState().channelDrivers['drive-hf'].fields).toEqual({ rear_volume_l: 3.5 });
     expect(driverEditedKeys(useCadReturnStore.getState().channelDrivers['drive-hf'])).toEqual([]);

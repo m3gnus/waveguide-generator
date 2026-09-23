@@ -26,6 +26,7 @@ import { resetCadSolverFrameStore, useCadSolverFrameStore } from '../stores/cadS
 import { resetDesignStore } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
+import { expandLegacy, withPair } from '../results/crossoverSpec';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import type { ImportedMeshScene } from '../viewport/importedMesh';
@@ -375,6 +376,41 @@ describe('M1b: one Solve card, to the revealed result', () => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     workspaceModeStore.setMode('parametric');
+  });
+
+  it('shows the sweep blocker on the CAD Solve card and keeps catalog advice nonblocking', async () => {
+    const state = useCadReturnStore.getState();
+    useCadReturnStore.setState({
+      selectedBundle: { ...state.selectedBundle!, sources: [
+        { id: 'source-mf', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-mf' },
+        ...state.selectedBundle!.sources,
+      ] },
+      driveChannels: [
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        ...state.driveChannels,
+      ],
+      channelDrivers: { 'drive-hf': {
+        fields: {}, preset: {
+          id: 'Acme::HF::8', label: 'Acme HF', source: 'database', kind: 'cd',
+          z_ohm: 8, xo_min_hz: 1000,
+          base: { sd_cm2: 26, bl_t_m: 12.4, re_ohm: 6.2, mms_g: 2.4, fs_hz: 620 },
+        },
+      } },
+      combineEnabled: true,
+      combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [800]),
+    });
+    await mount();
+    await vi.waitFor(() => expect(solveButton().disabled).toBe(false));
+    for (const hz of [8, 80, 199]) {
+      await act(async () => useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, 'drive-mf→drive-hf', { hz })));
+      expect(solveButton().disabled).toBe(true);
+      expect(host.querySelector('.cad-solve-blocker')?.textContent).toContain(`The ${hz} Hz crossover is below the 200 Hz sweep start`);
+    }
+    for (const hz of [200, 800]) {
+      await act(async () => useCadReturnStore.getState().updateCombineSpec((spec) => withPair(spec, 'drive-mf→drive-hf', { hz })));
+      expect(solveButton().disabled).toBe(false);
+      expect(host.querySelector('.cad-solve-blocker')).toBeNull();
+    }
   });
 
   it('shows the automatic frame as one line, and one press solves: one operation, the frame confirmed, the settings remembered', async () => {

@@ -1349,7 +1349,7 @@ export const DRIVER_FIELD_LABELS: Record<DriverFieldKey, string> = {
   power_w: 'Power',
   z_nom_ohm: 'Z nom',
   count: 'Count',
-  rear_volume_l: 'Rear vol',
+  rear_volume_l: 'Rear volume, total for all drivers',
 };
 
 /**
