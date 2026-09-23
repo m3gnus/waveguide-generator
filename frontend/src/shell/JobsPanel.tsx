@@ -23,6 +23,7 @@ import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
 import { CadSolveInputs } from './CadSolveInputs';
+import { SolveProgressView } from './solveProgress';
 
 /**
  * The output folder, stated where runs are read rather than buried in settings.
@@ -303,8 +304,14 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     />}
     {running ? <>
       <p>{metrics(job, now)}</p>
-      <div className="job-stage"><span>{job.stage_message ?? job.stage ?? 'waiting…'}</span><b>{Math.round(job.progress * 100)}%</b></div>
-      <div className="progress" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)} aria-valuetext={`${Math.round(job.progress * 100)}% -- ${job.stage_message ?? job.stage ?? 'waiting'}`}><i style={{ width: `${Math.max(0, Math.min(100, job.progress * 100))}%` }}/></div>
+      {/* Immediate, real orientation: the stage word first (never a silent
+          gap between pressing Solve and this appearing), then whatever the
+          engine itself says, then the percentage -- or, once a frequency
+          count can be read from that message, "frequency i of N" and an ETA
+          instead of a bare number that says nothing about how much is left.
+          Shared with the CAD Solve card's compact status: one progress
+          component, fed only by `job`, for both modes. */}
+      <SolveProgressView job={job} now={now}/>
       {/* The stage message names the campaign; this says why the run has
           stopped on it. Without that, a passive-cardioid solve looks like a
           20-second stall in the middle of an otherwise familiar progress bar. */}

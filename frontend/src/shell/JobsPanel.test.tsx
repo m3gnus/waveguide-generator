@@ -453,6 +453,80 @@ describe('jobs panel run list', () => {
     expect(host.textContent).not.toContain('own radiation-impedance matrix');
   });
 
+  it('walks a run through every stage word, and shows Received the instant a job is only queued', async () => {
+    const base = { ...job(10, 'Stages'), status: 'queued' as const, completed_at: null, progress: 0 };
+    publishJobs([{ ...base, stage: null, stage_message: null }]);
+    await act(async () => root.render(<JobsPanel/>));
+    // A job accepted but not yet running shows an active status right away,
+    // not a silent gap between pressing Solve and something appearing.
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Received');
+
+    const running = { ...base, status: 'running' as const };
+    act(() => publishJobs([{ ...running, stage: 'mesh', stage_message: 'Building the surface mesh', progress: 0.1 }]));
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Preparing mesh');
+
+    act(() => publishJobs([{ ...running, stage: 'solve', stage_message: 'Solving frequency 1/8 with Metal BEM', progress: 0.4 }]));
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 1 of 8');
+
+    act(() => publishJobs([{ ...running, stage: 'postprocess', stage_message: 'Packaging BEMPP BEM solver results', progress: 0.9 }]));
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Combining');
+  });
+
+  it('shows an ETA only once two frequencies are done, from the average time per frequency', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T00:00:20Z'));
+    try {
+      const running: JobItem = {
+        ...job(11, 'ETA'), status: 'running', completed_at: null,
+        started_at: '2026-08-08T00:00:00Z', queued_at: '2026-08-08T00:00:00Z',
+        stage: 'solve', stage_message: 'Solving frequency 2/10 with BEAT Engine', progress: 0.1,
+      };
+      publishJobs([running]);
+      await act(async () => root.render(<JobsPanel/>));
+      // Only one frequency done (index 2 in flight, index 1 completed): no rate to average yet.
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 2 of 10');
+      expect(host.querySelector('.job-frequency')?.textContent).not.toContain('ETA');
+
+      // Two done in the 20 s elapsed so far -> 10 s/freq -> 8 remaining -> 80 s -> 1:20.
+      act(() => publishJobs([{ ...running, stage_message: 'Solving frequency 3/10 with BEAT Engine', progress: 0.2 }]));
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 3 of 10 · ETA 1:20');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shows an indeterminate bar with no ETA when the solve stage reports no per-frequency count', async () => {
+    const running: JobItem = {
+      ...job(12, 'Batched'), status: 'running', completed_at: null,
+      stage: 'solve', stage_message: 'Solving the sweep', progress: 0.3,
+    };
+    publishJobs([running]);
+    await act(async () => root.render(<JobsPanel/>));
+    const bar = host.querySelector('.progress');
+    expect(bar?.className).toContain('indeterminate');
+    expect(bar?.getAttribute('aria-valuenow')).toBeNull();
+    expect(host.querySelector('.job-frequency')).toBeNull();
+    // Elapsed time keeps counting even with no per-frequency progress: the
+    // header clock, driven by started_at, is unaffected by indeterminate mode.
+    expect(host.querySelector('.job-card.running time')?.textContent).not.toBe('');
+  });
+
+  it('recovers the right stage purely from job state on a fresh mount, as after a page reload', async () => {
+    // No local memory feeds this: a brand-new JobsPanel, mounted against a
+    // job that was already mid-solve, must show the same stage a page that
+    // had been open the whole time would.
+    const running: JobItem = {
+      ...job(13, 'Reloaded'), status: 'running', completed_at: null,
+      stage: 'solve', stage_message: 'Solving frequency 5/9 with Metal BEM', progress: 0.5,
+    };
+    publishJobs([running]);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.job-frequency')?.textContent).toContain('frequency 5 of 9');
+    expect(host.querySelector('.progress[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50');
+  });
+
   it('filters by title, numbered handle, bare number, and formula with distinct empty states', async () => {
     publishJobs([job(123, 'Tritonia', 'OSSE'), job(456, 'Other', 'Le Cleac’h')]);
     await act(async () => root.render(<JobsPanel/>));

@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react';
+import { useSyncExternalStore, type ReactNode } from 'react';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
@@ -13,6 +13,7 @@ import { CadSolverFrame } from './CadSolverFrameConfirm';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
+import { SolveProgressView } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
 
 const ROLE_ORDER = ['LF', 'MF', 'HF', 'PORT_EXIT', 'PASSIVE_CARDIOID'];
@@ -124,25 +125,36 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
     && operation.snapshot?.manifestSha256 === record.manifest_sha256
     && ['accepted', 'rejected', 'cancelled'].includes(operation.state)));
   if (!latest) return null;
-  let text: string;
   let tone: 'ok' | 'info' | 'warn' = 'info';
+  let body: ReactNode;
   if (latest.state === 'rejected') {
-    text = `Refused: ${latest.message ?? latest.reason ?? 'no reason given'}`;
+    body = `Refused: ${latest.message ?? latest.reason ?? 'no reason given'}`;
     tone = 'warn';
   } else if (latest.state === 'cancelled') {
-    text = 'Dismissed before it was solved.';
+    body = 'Dismissed before it was solved.';
   } else {
     const job: JobItem | undefined = jobs.find((item) => item.id === latest.jobId);
     switch (job?.status) {
-      case 'queued': text = 'Solve queued.'; break;
-      case 'running': text = `Solving · ${Math.round((job.progress ?? 0) * 100)}%`; break;
-      case 'complete': text = 'Solved · its results are in Results.'; tone = 'ok'; break;
-      case 'error': text = `Solve failed: ${job.error_message ?? 'no reason given'}`; tone = 'warn'; break;
-      case 'cancelled': text = `Solve cancelled${job.error_message ? `: ${job.error_message}` : '.'}`; tone = 'warn'; break;
-      default: text = 'Solve submitted.';
+      case 'queued':
+        // Its own words rather than the shared component: "Received" alone,
+        // with no stage message yet, reads as a solve stage; "solve queued"
+        // is what a waiting job actually is.
+        body = 'Received: solve queued.';
+        break;
+      case 'running':
+        // The same progress component JobsPanel's run cards use, in its
+        // compact form -- one design for both CAD Link and parametric mode,
+        // fed by nothing but this job's own state (works the same whether
+        // this browser pressed Solve or a waiting Fusion request advanced).
+        body = <SolveProgressView job={job} variant="compact"/>;
+        break;
+      case 'complete': body = 'Solved · its results are in Results.'; tone = 'ok'; break;
+      case 'error': body = `Solve failed: ${job.error_message ?? 'no reason given'}`; tone = 'warn'; break;
+      case 'cancelled': body = `Solve cancelled${job.error_message ? `: ${job.error_message}` : '.'}`; tone = 'warn'; break;
+      default: body = 'Solve submitted.';
     }
   }
-  return <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{text}</p>;
+  return <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>;
 }
 
 /**
