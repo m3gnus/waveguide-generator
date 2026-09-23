@@ -13,8 +13,17 @@ import { CadSolverFrame } from './CadSolverFrameConfirm';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
-import { SolveProgressView } from './solveProgress';
+import { resolveEngineLabel, SolveProgressView } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
+
+/** How long an accepted operation may have no matching job yet before the
+ * status line stops assuming "it just hasn't arrived" and says so plainly.
+ * A few seconds covers the ordinary gap between the jobs system accepting a
+ * submission and its first `JobItem` reaching this browser; past that -- in
+ * particular after a page reload finds an operation whose job is not, or is
+ * no longer, in the list -- staying on "Solve submitted." forever would be
+ * a silent lie. */
+const JOB_APPEAR_GRACE_MS = 5_000;
 
 const ROLE_ORDER = ['LF', 'MF', 'HF', 'PORT_EXIT', 'PASSIVE_CARDIOID'];
 
@@ -89,7 +98,11 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
     ? listed ? `${pluralized(listed.length, 'listed frequency', 'listed frequencies')}` : 'frequency list to fix'
     : `${hertz(start)}–${hertz(end)} · ${count} freq`;
   // The engine chosen in the solver selector; AUTO names what it resolves to.
-  const labelOf = (name: string) => plan?.engines.find((verdict) => verdict.name === name)?.label || name.toUpperCase();
+  // A capability verdict's own `label` is preferred when a solve plan is on
+  // hand; `resolveEngineLabel` (./solveProgress, shared with the run
+  // progress line) is the same fallback either way -- never a bare
+  // `.toUpperCase()` of the slug.
+  const labelOf = (name: string) => plan?.engines.find((verdict) => verdict.name === name)?.label || resolveEngineLabel(name) || name;
   const requested = engine.trim().toLowerCase();
   const engineWords = requested === 'auto'
     ? `AUTO${plan?.engine ? ` (${labelOf(plan.engine)})` : ''}`
@@ -116,14 +129,28 @@ function newest(operations: CadOperationSummary[]): CadOperationSummary | null {
   ), null);
 }
 
-/** How the latest finished request for this snapshot ended: its job's progress,
- * failure or cancellation. Acceptance is not success: the job decides. */
+/**
+ * The latest `prepare_and_solve` request for this snapshot, at whatever
+ * stage it is at -- before its job exists, while it waits on the user, or
+ * after it has one. Every state is a candidate, not just the terminal ones:
+ * filtering to `accepted`/`rejected`/`cancelled` used to mean a *new*
+ * request for the same snapshot, still `received` or `processing`, was
+ * invisible to `newest()`, so the previous request's own outcome (often
+ * "Solved · its results are in Results.") kept showing under the new one
+ * until it too reached one of those three states. Reading every state keeps
+ * `newest()` honest about which request is actually the latest one.
+ *
+ * The one line this renders is one monotonic sequence end to end: the CAD
+ * operation's own stage (`operationStageWord`, ./solveProgress) up to
+ * `ready`/`submitted`, then the job's own stage (`solveStageWord`, the same
+ * module) from the moment it exists -- never a step backward, and never a
+ * previous run's outcome shown under a new request.
+ */
 function RunLine({ record }: { record: CadReturnIngestRecord }) {
   const operations = useCadOperationsStore((state) => state.operations);
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const latest = newest(Object.values(operations).filter((operation) => operation.kind === 'prepare_and_solve'
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256
-    && ['accepted', 'rejected', 'cancelled'].includes(operation.state)));
+    && operation.snapshot?.manifestSha256 === record.manifest_sha256));
   if (!latest) return null;
   let tone: 'ok' | 'info' | 'warn' = 'info';
   let body: ReactNode;
@@ -132,26 +159,44 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
     tone = 'warn';
   } else if (latest.state === 'cancelled') {
     body = 'Dismissed before it was solved.';
+  } else if (latest.state !== 'accepted') {
+    // received, processing, needs_user_input, recovery_required or
+    // cancel_requested: no job exists yet (or ever will). The shared
+    // component reads the operation's own stage/state, the same vocabulary
+    // its job will use once it has one.
+    if (latest.state === 'needs_user_input') tone = 'warn';
+    body = <SolveProgressView operation={latest} variant="compact"/>;
   } else {
     const job: JobItem | undefined = jobs.find((item) => item.id === latest.jobId);
     switch (job?.status) {
       case 'queued':
-        // Its own words rather than the shared component: "Received" alone,
-        // with no stage message yet, reads as a solve stage; "solve queued"
-        // is what a waiting job actually is.
-        body = 'Received: solve queued.';
+        // The jobs system's own brief "queued" window, between this
+        // operation's "ready"/"submitted" and the job actually starting, is
+        // a continuation of the same "Solving" this card already showed --
+        // not a second "Received", which would step the sequence backward.
+        body = <SolveProgressView operation={{ state: 'processing', stage: 'submitted', reason: null }} variant="compact"/>;
         break;
       case 'running':
         // The same progress component JobsPanel's run cards use, in its
         // compact form -- one design for both CAD Link and parametric mode,
         // fed by nothing but this job's own state (works the same whether
         // this browser pressed Solve or a waiting Fusion request advanced).
-        body = <SolveProgressView job={job} variant="compact"/>;
+        body = <SolveProgressView job={job} now={Date.now()} variant="compact"/>;
         break;
       case 'complete': body = 'Solved · its results are in Results.'; tone = 'ok'; break;
       case 'error': body = `Solve failed: ${job.error_message ?? 'no reason given'}`; tone = 'warn'; break;
       case 'cancelled': body = `Solve cancelled${job.error_message ? `: ${job.error_message}` : '.'}`; tone = 'warn'; break;
-      default: body = 'Solve submitted.';
+      default: {
+        // Accepted, but no matching job in the list -- ordinarily because it
+        // has not arrived yet. Past a short grace window (in particular
+        // after a reload that finds no such job at all) that assumption
+        // stops being honest, so the line says so instead of sitting on
+        // "Solve submitted." forever.
+        const updatedMs = Date.parse(latest.updatedAt ?? '');
+        const stale = Number.isFinite(updatedMs) && Date.now() - updatedMs > JOB_APPEAR_GRACE_MS;
+        body = stale ? "Accepted, but its run isn't showing in the jobs list." : 'Solve submitted.';
+        if (stale) tone = 'warn';
+      }
     }
   }
   return <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>;

@@ -1,12 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import {
   etaSeconds,
   formatClock,
   isIndeterminate,
+  operationStageWord,
+  operationWaitingReason,
   parseFrequencyProgress,
+  resetSolveStageClocksForTests,
+  resolveEngineLabel,
   solveDetailLine,
   solveStageWord,
+  SolveProgressView,
+  type OperationProgressLike,
 } from './solveProgress';
 
 function partial(overrides: Partial<JobItem>): Pick<JobItem, 'status' | 'stage'> {
@@ -17,24 +23,60 @@ describe('solveStageWord', () => {
   it('names every stage transition the requirement lists', () => {
     expect(solveStageWord(partial({ status: 'queued', stage: null }))).toBe('Received');
     expect(solveStageWord(partial({ status: 'running', stage: null }))).toBe('Solving');
+    expect(solveStageWord(partial({ status: 'running', stage: 'initializing' }))).toBe('Starting…');
     expect(solveStageWord(partial({ status: 'running', stage: 'mesh' }))).toBe('Preparing mesh');
     expect(solveStageWord(partial({ status: 'running', stage: 'assemble' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'solve' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'radiation_impedance' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'postprocess' }))).toBe('Combining');
+    expect(solveStageWord(partial({ status: 'running', stage: 'cancelling' }))).toBe('Cancelling…');
     expect(solveStageWord(partial({ status: 'complete', stage: 'postprocess' }))).toBe('Done');
     expect(solveStageWord(partial({ status: 'error', stage: 'solve' }))).toBe('Failed');
     expect(solveStageWord(partial({ status: 'cancelled', stage: 'solve' }))).toBe('Cancelled');
   });
 });
 
-describe('parseFrequencyProgress', () => {
-  it('reads "Solving frequency i/N" as i-1 completed (Metal/BEAT wording)', () => {
-    expect(parseFrequencyProgress('Solving frequency 3/12 with Metal BEM')).toEqual({ completed: 2, total: 12 });
-    expect(parseFrequencyProgress('Solving frequency 1/12 with BEAT Engine')).toEqual({ completed: 0, total: 12 });
+function op(overrides: Partial<OperationProgressLike> = {}): OperationProgressLike {
+  return { state: 'received', stage: null, reason: null, ...overrides };
+}
+
+describe('operationStageWord', () => {
+  it('reads server/cadlink/preparation.py stages onto the same words a job uses, monotonically', () => {
+    expect(operationStageWord(op({ state: 'received', stage: null }))).toBe('Received');
+    expect(operationStageWord(op({ state: 'received', stage: 'validating' }))).toBe('Received');
+    expect(operationStageWord(op({ state: 'processing', stage: 'preparing-mesh' }))).toBe('Preparing mesh');
+    expect(operationStageWord(op({ state: 'processing', stage: 'ready' }))).toBe('Solving');
+    expect(operationStageWord(op({ state: 'processing', stage: 'submitted' }))).toBe('Solving');
   });
 
-  it('reads "Solved frequency i/N" as i completed (official BEAT wording)', () => {
+  it('shows a clear waiting-for-you state, distinct from the pipeline stages', () => {
+    expect(operationStageWord(op({ state: 'needs_user_input', reason: 'setup_required' }))).toBe('Waiting for you');
+    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'setup_required' })))
+      .toBe('needs its solve settings');
+    expect(operationWaitingReason(op({ state: 'received' }))).toBeNull();
+  });
+
+  it('names cancellation and terminal outcomes', () => {
+    expect(operationStageWord(op({ state: 'cancel_requested' }))).toBe('Cancelling…');
+    expect(operationStageWord(op({ state: 'rejected' }))).toBe('Failed');
+    expect(operationStageWord(op({ state: 'cancelled' }))).toBe('Cancelled');
+    expect(operationStageWord(op({ state: 'recovery_required' }))).toBe('Failed');
+  });
+});
+
+describe('parseFrequencyProgress', () => {
+  it('reads the printed number as the completed count -- every engine\'s callback fires after that frequency finishes', () => {
+    // hornlab_metal_bem/sweep.py, hornlab_beat_bem/sweep.py and
+    // hornlab_bempp_bem/sweep.py all invoke progress_callback(i, total, freq)
+    // only after appending that frequency's result, and the WG adapters
+    // (server/solver/metal.py, beat.py, bempp.py) print index+1 -- so
+    // "Solving frequency 3/12" means 3 are already done, not 2.
+    expect(parseFrequencyProgress('Solving frequency 3/12 with Metal BEM')).toEqual({ completed: 3, total: 12 });
+    expect(parseFrequencyProgress('Solving frequency 1/12 with BEAT Engine')).toEqual({ completed: 1, total: 12 });
+    expect(parseFrequencyProgress('Solving frequency 12/12 with BEMPP BEM')).toEqual({ completed: 12, total: 12 });
+  });
+
+  it('reads official BEAT\'s own "Solved i/N" wording the same way', () => {
     expect(parseFrequencyProgress('Solved frequency 3/12')).toEqual({ completed: 3, total: 12 });
   });
 
@@ -48,7 +90,20 @@ describe('parseFrequencyProgress', () => {
     // its message; callers gate this on job.stage === 'solve' themselves, but
     // the parser itself is honest about whatever i/N it is handed.
     expect(parseFrequencyProgress('Solving passive-cardioid radiation impedance 32/160 at 400 Hz'))
-      .toEqual({ completed: 31, total: 160 });
+      .toEqual({ completed: 32, total: 160 });
+  });
+
+  it('reads an imported multi-channel message as overall progress across every channel', () => {
+    // server/solver/beat_imported.py and bempp_imported.py: "Solving
+    // frequency i/N of drive channel c/C (id) with …". Overall completed is
+    // every earlier channel's N frequencies plus this channel's own count;
+    // overall total is C*N.
+    expect(parseFrequencyProgress('Solving frequency 2/8 of drive channel 1/3 (hf) with BEAT Engine'))
+      .toEqual({ completed: 2, total: 24, channel: { index: 1, count: 3 } });
+    expect(parseFrequencyProgress('Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM'))
+      .toEqual({ completed: 11, total: 24, channel: { index: 2, count: 3 } });
+    expect(parseFrequencyProgress('Solving frequency 8/8 of drive channel 3/3 (lf) with BEAT Engine'))
+      .toEqual({ completed: 24, total: 24, channel: { index: 3, count: 3 } });
   });
 });
 
@@ -76,6 +131,16 @@ describe('etaSeconds', () => {
   it('is zero once every frequency is accounted for', () => {
     expect(etaSeconds(100, { completed: 10, total: 10 })).toBe(0);
   });
+
+  it('matches a worked example: 20 s of meshing/warm-up, then 1 s/frequency x 100', () => {
+    // At frequency 3, only the 3 s spent in the solve stage counts -- not the
+    // 23 s since the job itself started. 3 done in 3 s -> 1 s/freq -> 97
+    // remaining -> 97 s = 1:37, not the ~18:47 that job-started_at gave when
+    // meshing/warm-up was folded into the rate.
+    const seconds = etaSeconds(3, { completed: 3, total: 100 });
+    expect(seconds).not.toBeNull();
+    expect(formatClock(seconds!)).toBe('1:37');
+  });
 });
 
 describe('formatClock', () => {
@@ -87,20 +152,55 @@ describe('formatClock', () => {
   });
 });
 
+describe('resolveEngineLabel', () => {
+  it('names the known engines, not a bare uppercase of the slug', () => {
+    expect(resolveEngineLabel('metal')).toBe('Metal');
+    expect(resolveEngineLabel('beat')).toBe('BEAT Engine');
+    expect(resolveEngineLabel('official_beat')).toBe('Official BEAT');
+    expect(resolveEngineLabel('bempp')).toBe('BEMPP');
+    expect(resolveEngineLabel('auto')).toBe('AUTO');
+  });
+
+  it('title-cases an unrecognized slug rather than shouting it', () => {
+    expect(resolveEngineLabel('some_future_engine')).toBe('Some Future Engine');
+  });
+
+  it('is null for nothing to show', () => {
+    expect(resolveEngineLabel(null)).toBeNull();
+    expect(resolveEngineLabel('')).toBeNull();
+  });
+});
+
 describe('solveDetailLine', () => {
-  it('reads engine, source count and domain for a CAD import', () => {
+  it('reads the resolved domain, not the requested one, and the labelled engine', () => {
     const line = solveDetailLine({
-      config_summary: { drive_channel_ids: ['a', 'b', 'c'] },
-      solve_options: { engine: 'metal', symmetry: 'half' } as JobItem['solve_options'],
+      config_summary: { drive_channel_ids: ['a', 'b', 'c'], symmetry: { resolved: 'half', requested: 'auto' } },
+      solve_options: { engine: 'metal', symmetry: 'auto' } as JobItem['solve_options'],
     });
-    expect(line).toBe('METAL · 3 sources · half');
+    expect(line).toBe('Metal · 3 sources · half');
   });
 
   it('falls back to a frequency count for a parametric design with no drive channels', () => {
     const line = solveDetailLine({
-      config_summary: {},
+      config_summary: { symmetry: { resolved: 'full' } },
       solve_options: { engine: 'bempp', symmetry: 'full', num_frequencies: 24 } as JobItem['solve_options'],
     });
     expect(line).toBe('BEMPP · 24 freq · full');
+  });
+
+  it('omits the domain when config_summary carries no resolved symmetry', () => {
+    const line = solveDetailLine({
+      config_summary: {},
+      solve_options: { engine: 'metal', symmetry: 'auto', num_frequencies: 10 } as JobItem['solve_options'],
+    });
+    expect(line).toBe('Metal · 10 freq');
+  });
+});
+
+describe('SolveProgressView (component)', () => {
+  beforeEach(() => { resetSolveStageClocksForTests(); });
+
+  it('renders nothing for neither a job nor an operation', () => {
+    expect(SolveProgressView({ variant: 'compact' })).toBeNull();
   });
 });

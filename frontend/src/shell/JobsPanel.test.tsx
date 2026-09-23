@@ -14,6 +14,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { jobCardPropsEqual, JobsPanel, selectJob, type JobCardProps } from './JobsPanel';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { currentJobLabel } from './JobsCoordinator';
+import { resetSolveStageClocksForTests } from './solveProgress';
 
 const designMocks = vi.hoisted(() => ({ replaceWithJobDesign: vi.fn() }));
 vi.mock('../jobs/jobDesign', () => ({
@@ -75,6 +76,7 @@ describe('jobs panel run list', () => {
     resetDesignStore();
     resetDocumentStore();
     resetSolveOptionsStore();
+    resetSolveStageClocksForTests();
     importedMeshStore.clear();
     compareSelection.setPrimary(null);
     workspaceModeStore.setMode('parametric');
@@ -473,24 +475,30 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.job-stage-word')?.textContent).toBe('Combining');
   });
 
-  it('shows an ETA only once two frequencies are done, from the average time per frequency', async () => {
+  it('shows an ETA only once two frequencies are done, measured from when the solve stage began', async () => {
+    resetSolveStageClocksForTests();
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-08-08T00:00:20Z'));
+    vi.setSystemTime(new Date('2026-08-08T00:00:00Z'));
     try {
       const running: JobItem = {
         ...job(11, 'ETA'), status: 'running', completed_at: null,
         started_at: '2026-08-08T00:00:00Z', queued_at: '2026-08-08T00:00:00Z',
-        stage: 'solve', stage_message: 'Solving frequency 2/10 with BEAT Engine', progress: 0.1,
+        stage: 'solve', stage_message: 'Solving frequency 1/10 with BEAT Engine', progress: 0.1,
       };
       publishJobs([running]);
       await act(async () => root.render(<JobsPanel/>));
-      // Only one frequency done (index 2 in flight, index 1 completed): no rate to average yet.
-      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 2 of 10');
+      // One frequency done: no rate to average yet.
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 1 of 10');
       expect(host.querySelector('.job-frequency')?.textContent).not.toContain('ETA');
 
-      // Two done in the 20 s elapsed so far -> 10 s/freq -> 8 remaining -> 80 s -> 1:20.
-      act(() => publishJobs([{ ...running, stage_message: 'Solving frequency 3/10 with BEAT Engine', progress: 0.2 }]));
-      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 3 of 10 · ETA 1:20');
+      // 20 s pass with the job still in its solve stage the whole time, then
+      // a second frequency finishes: 2 done in 20 s -> 10 s/freq -> 8
+      // remaining -> 80 s -> 1:20. The clock is measured from when this job
+      // entered the solve stage, not from its overall started_at, so a
+      // meshing/warm-up interval before this stage began never inflates it.
+      await act(async () => { vi.advanceTimersByTime(20_000); });
+      act(() => publishJobs([{ ...running, stage_message: 'Solving frequency 2/10 with BEAT Engine', progress: 0.2 }]));
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 2 of 10 · ETA 1:20');
     } finally {
       vi.useRealTimers();
     }
@@ -510,6 +518,37 @@ describe('jobs panel run list', () => {
     // Elapsed time keeps counting even with no per-frequency progress: the
     // header clock, driven by started_at, is unaffected by indeterminate mode.
     expect(host.querySelector('.job-card.running time')?.textContent).not.toBe('');
+  });
+
+  it('shows overall progress and ETA across every drive channel for an imported multi-channel solve', async () => {
+    // server/solver/beat_imported.py and bempp_imported.py solve one drive
+    // channel's frequencies at a time and name both counts in their own
+    // stage message; the run card reads overall progress across the whole
+    // solve, not just the channel in flight, plus which channel that is.
+    resetSolveStageClocksForTests();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T00:00:00Z'));
+    try {
+      const base: JobItem = {
+        ...job(14, 'Imported multi-channel'), status: 'running', completed_at: null,
+        started_at: '2026-08-08T00:00:00Z', queued_at: '2026-08-08T00:00:00Z',
+        stage: 'solve', stage_message: 'Solving frequency 1/8 of drive channel 1/3 (hf) with BEAT Engine', progress: 0.05,
+      };
+      publishJobs([base]);
+      await act(async () => root.render(<JobsPanel/>));
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 1 of 24 · channel 1 of 3');
+
+      // First channel (8 frequencies) finishes, second channel is under way:
+      // overall completed = 8 + 3 = 11 of 24.
+      await act(async () => { vi.advanceTimersByTime(16_000); });
+      act(() => publishJobs([{
+        ...base, stage_message: 'Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM', progress: 0.45,
+      }]));
+      // 11 done in 16 s -> ~1.45 s/freq -> 13 remaining -> ~19 s -> 0:19.
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 11 of 24 · channel 2 of 3 · ETA 0:19');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('recovers the right stage purely from job state on a fresh mount, as after a page reload', async () => {

@@ -450,7 +450,11 @@ describe('M1b: one Solve card, to the revealed result', () => {
     // It follows the job to the result, and reveals it once.
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', stage: 'submitted', updatedAt: '2026-09-22T10:00:05Z' }));
     await jobs([cadJob('job-1', 'running')]);
-    expect(host.querySelector('.cad-solve-run')!.textContent).toBe('Solving · 40%');
+    // The run status line now also carries elapsed time and, when available,
+    // an engine/sources/domain detail line (./solveProgress); this fixture's
+    // job has neither an engine nor drive channels set, so only the stage
+    // word, percentage and elapsed clock appear.
+    expect(host.querySelector('.cad-solve-run')!.textContent).toContain('Solving · 40%');
     expect(activations).not.toContain('results');
     await jobs([cadJob('job-1')]);
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', awaiting: null });

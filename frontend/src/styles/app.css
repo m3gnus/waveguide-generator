@@ -669,11 +669,29 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .job-card header em { color: var(--fg3); font-style: normal; font-weight: 400; }
 .job-card time { color: var(--fg3); font: var(--text-micro) var(--mono); }
 .job-card p { margin: 4px 0 0; overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
-.job-stage { display: flex; margin-top: 7px; color: var(--fg1); font-size: var(--text-micro); }.job-stage b { margin-left: auto; color: var(--acc); font: 500 var(--text-micro) var(--mono); }
+.job-stage { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; margin-top: 7px; color: var(--fg1); font-size: var(--text-micro); }.job-stage b { margin-left: auto; color: var(--acc); font: 500 var(--text-micro) var(--mono); }
 /* Runs truncate their one-line status lines; this one is an explanation and
    has to be readable, so it opts out of the ellipsis the siblings want. */
 .job-card p.job-stage-note { color: var(--fg2); font: var(--text-micro) var(--ui); white-space: normal; }
-.progress { height: 3px; margin-top: 5px; overflow: hidden; border-radius: var(--r3); background: var(--track); }.progress i { display: block; width: 62%; height: 100%; background: linear-gradient(90deg, var(--acc-2), var(--acc)); }
+.progress { height: 3px; margin-top: 5px; overflow: hidden; border-radius: var(--r3); background: var(--track); }.progress i { display: block; width: 62%; height: 100%; background: linear-gradient(90deg, var(--acc-2), var(--acc)); transition: width 180ms ease-out; }
+/* No numeric progress to draw honestly (a batched engine's solve stage, or
+   the CAD preparation pipeline before its job exists): a sweeping bar reads
+   as "still working" without claiming a percentage the backend never sent.
+   Shared by the update dialog's own progress bar and every `.progress` this
+   module renders -- one indeterminate treatment, not two. */
+.progress.indeterminate i { width: 34%; animation: progress-sweep 1.3s ease-in-out infinite; }
+@keyframes progress-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(294%); } }
+/* The stage word ("Solving", "Preparing mesh", …) is a short, fixed label in
+   front of whatever the engine's own message says; `gap` on `.job-stage` and
+   `.solve-progress` keeps the two from running together into one word. */
+.job-stage-word { flex: none; font-weight: 600; color: var(--acc); }
+.job-frequency,
+.job-detail { margin: 4px 0 0; overflow: hidden; color: var(--fg3); font: var(--text-micro) var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+/* The CAD Solve card's one-line status (`CadSolveCard.tsx`'s `RunLine`) --
+   the same stage word, wrapping onto its own line rather than clipping when
+   the card is narrow. */
+.solve-progress-compact { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.solve-progress-meta { color: var(--fg3); }
 .job-card footer { display: flex; gap: 4px; margin-top: 7px; }.job-card footer button, .job-card footer > a { padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg2); font-size: var(--text-micro); text-decoration: none; }.job-card footer .primary { border-color: rgba(var(--acc-rgb), .3); color: var(--acc); }
 .job-card footer .run-export-control { margin-inline: 0 auto; }
 .job-card footer .action-menu-split { height: 23px; border-radius: var(--r3); }
@@ -850,9 +868,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .update-progress-line { display: flex; align-items: baseline; gap: var(--space-8); color: var(--fg1); font-size: var(--text-micro); }
 .update-progress-line b { margin-left: auto; color: var(--fg1); font: 500 var(--text-micro) var(--mono); }
 .update-progress .progress { margin-top: 0; }
-.update-progress .progress i { transition: width 180ms ease-out; }
-.update-progress .progress.indeterminate i { width: 34%; animation: update-sweep 1.3s ease-in-out infinite; }
-@keyframes update-sweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(294%); } }
 .update-progress-note.ready { color: var(--green); font-size: var(--text-micro); }
 .update-feedback { color: var(--fg1); font-size: var(--text-micro); }
 
@@ -879,8 +894,8 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 
 @media (prefers-reduced-motion: reduce) {
   .update-state.checking .update-dot,
-  .update-progress .progress.indeterminate i { animation: none; }
-  .update-progress .progress i { transition: none; }
+  .progress.indeterminate i { animation: none; }
+  .progress i { transition: none; }
 }
 /* The channel selector, in the dialog rather than in Settings. It borrows the
    settings idiom for the two buttons so one control does not read as two. */
