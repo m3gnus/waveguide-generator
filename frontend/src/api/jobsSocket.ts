@@ -165,6 +165,7 @@ export interface CadSource {
   archive_stem: string | null;
   manifest_sha256: string | null;
   transformed_geometry_hash?: string | null;
+  solve_model_sha256?: string | null;
   document_name: string | null;
   return_state_hash: string | null;
   identity?: CadIdentityProvenance | null;
@@ -291,7 +292,7 @@ function isNullableTimestamp(value: unknown): value is string | null {
 
 function isCadSource(value: unknown): value is CadSource {
   return isRecord(value)
-    && (['ingest_id', 'design_id', 'lineage_id', 'archive_stem', 'manifest_sha256', 'transformed_geometry_hash', 'document_name', 'return_state_hash'] as const)
+    && (['ingest_id', 'design_id', 'lineage_id', 'archive_stem', 'manifest_sha256', 'transformed_geometry_hash', 'solve_model_sha256', 'document_name', 'return_state_hash'] as const)
       .every((key) => !hasOwn(value, key) || isNullableString(value[key]))
     && (!hasOwn(value, 'identity') || value.identity === null || (
       isRecord(value.identity)

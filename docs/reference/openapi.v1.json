@@ -585,6 +585,17 @@
             ],
             "title": "Return State Hash"
           },
+          "solve_model_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Model Sha256"
+          },
           "transformed_geometry_hash": {
             "anyOf": [
               {

@@ -161,11 +161,11 @@ describe('results run coherence', () => {
 
   it('empties charts on a new unsolved CAD model and restores matching results when its mesh returns', async () => {
     const first = job('first', 1, null, true);
-    first.cad_source!.transformed_geometry_hash = 'shape-a';
+    first.cad_source!.solve_model_sha256 = 'shape-a';
     publishJobs([first]);
     workspaceModeStore.setMode('cad');
     act(() => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_first', transformed_geometry_hash: 'shape-a' } as never });
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_first', solve_model_sha256: 'shape-a' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_first' } as never);
     });
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
@@ -173,7 +173,7 @@ describe('results run coherence', () => {
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe('first');
 
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_second', transformed_geometry_hash: 'shape-b' } as never });
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_second', solve_model_sha256: 'shape-b' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_second' } as never);
       await Promise.resolve();
     });
@@ -182,11 +182,11 @@ describe('results run coherence', () => {
     expect(toolbarButton(host, 'Solve')).toBeDefined();
 
     await act(async () => {
-      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_resent', transformed_geometry_hash: 'shape-a' } as never });
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_resent', solve_model_sha256: 'shape-a' } as never });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_resent' } as never);
       await Promise.resolve();
     });
-    // A new ingestion of identical transformed geometry can use the old solve.
+    // A new ingestion of identical prepared solver model can use the old solve.
     expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe('first');
   });
 

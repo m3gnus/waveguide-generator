@@ -162,6 +162,23 @@ def _canonical(value: Any) -> bytes:
     ).encode("utf-8")
 
 
+def solve_model_sha256(record: Mapping[str, Any]) -> str:
+    """Identity of prepared geometry and its effective solver interpretation."""
+    normalisation = record["normalisation"]
+    solve_model = {
+        "version": 1,
+        "mesh_content_sha256": record["mesh_content_sha256"],
+        "solver_frame_matrix": normalisation.get("matrix"),
+        "solver_frame": normalisation.get("solver_frame"),
+        "symmetry": record["symmetry"],
+        "domain_interpretation": record["domain_interpretation"],
+        "source_tags": record["source_tags"],
+        "tag_map": record["tag_map"],
+        "identity": record["identity"],
+    }
+    return "sha256:" + hashlib.sha256(_canonical(solve_model)).hexdigest()
+
+
 def _finding_id(kind: str, identity: Any) -> str:
     digest = hashlib.sha256(_canonical({"kind": kind, "identity": identity})).hexdigest()[:16]
     return f"finding-{kind}-{digest}"
@@ -1889,6 +1906,10 @@ def ingest_bundle(
             "findings": findings,
             "finding_ids": [item["id"] for item in findings],
         }
+        # Cross-ingestion run matching must cover the prepared solver input,
+        # including the domain and source interpretation. The viewport's
+        # centre/area fingerprint is deliberately insufficient for this.
+        record["solve_model_sha256"] = solve_model_sha256(record)
         record["report_sha256"] = "sha256:" + hashlib.sha256(_canonical(record)).hexdigest()
         return _canonical(record).decode("utf-8")
 

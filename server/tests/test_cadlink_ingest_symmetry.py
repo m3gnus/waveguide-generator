@@ -19,7 +19,7 @@ from typing import Any
 import numpy as np
 import pytest
 
-from server.cadlink.ingest import build_deferred_viewport, ingest_bundle
+from server.cadlink.ingest import build_deferred_viewport, ingest_bundle, solve_model_sha256
 from server.cadlink.isolated import _inject_mesh_child_fault
 from server.cadlink.store import CadLinkStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
@@ -1041,6 +1041,57 @@ def test_the_same_half_returned_undeclared_is_solved_as_shown_and_says_so(
     )
     assert finding["blocking"] is False
     assert finding["looks_cut"] == ["y0"]
+
+
+def test_solve_model_identity_separates_domain_collision_and_unchanged_resend(tmp_path: Path) -> None:
+    pytest.importorskip("gmsh")
+    bundle = _reduced_bundle(tmp_path, "half", unlinked=True)
+    declared = _ingest(tmp_path / "declared", bundle)
+    resent = _ingest(tmp_path / "resent", bundle)
+    assert declared["solve_model_sha256"] == resent["solve_model_sha256"]
+
+    manifest_path = bundle / "wgreturn.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["assembly"].pop("domain")
+    manifest["required_features"].remove("reduced-domain-v1")
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    open_shell = _ingest(tmp_path / "open-shell", bundle)
+    assert declared["transformed_geometry_hash"] == open_shell["transformed_geometry_hash"]
+    assert declared["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert open_shell["symmetry"]["domain_planes"] == []
+    assert declared["solve_model_sha256"] != open_shell["solve_model_sha256"]
+
+    # The old fingerprint records only the centre and area: these distinct
+    # 2x2 and 4x1 triangulated faces both have (12, 12, 0) and area 4.
+    from copy import deepcopy
+    from server.mesh.artifact import mesh_text_sha256
+    from server.mesh.imported import _geometry_fingerprint
+
+    def rectangle_mesh(width: float, height: float) -> str:
+        x0, x1 = 12 - width / 2, 12 + width / 2
+        y0, y1 = 12 - height / 2, 12 + height / 2
+        return (f"$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$Nodes\n4\n"
+                f"1 {x0} {y0} 0\n2 {x1} {y0} 0\n3 {x1} {y1} 0\n4 {x0} {y1} 0\n"
+                "$EndNodes\n$Elements\n2\n1 2 2 101 1 1 2 3\n"
+                "2 2 2 101 1 1 3 4\n$EndElements\n")
+
+    assert _geometry_fingerprint([((12, 12, 0), 2 * 2)]) == _geometry_fingerprint([((12, 12, 0), 4 * 1)])
+    square = deepcopy(declared)
+    square["mesh_content_sha256"] = mesh_text_sha256(rectangle_mesh(2, 2))
+    wide = deepcopy(declared)
+    wide["mesh_content_sha256"] = mesh_text_sha256(rectangle_mesh(4, 1))
+    assert square["transformed_geometry_hash"] == wide["transformed_geometry_hash"]
+    assert solve_model_sha256(square) != solve_model_sha256(wide)
+
+    changed = deepcopy(declared)
+    changed["normalisation"]["matrix"][0][3] += 1.0
+    assert solve_model_sha256(changed) != declared["solve_model_sha256"]
+    changed = deepcopy(declared)
+    changed["symmetry"]["domain_planes"] = []
+    assert solve_model_sha256(changed) != declared["solve_model_sha256"]
+    changed = deepcopy(declared)
+    changed["source_tags"]["source-hf"] = 102
+    assert solve_model_sha256(changed) != declared["solve_model_sha256"]
 
 
 def test_forcing_the_full_domain_on_a_declared_half_is_refused(tmp_path: Path) -> None:

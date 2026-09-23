@@ -982,6 +982,7 @@ def test_legacy_imported_job_recovers_project_provenance_from_ingest(
                 "archive_stem": "Tritonia-V-project",
                 "manifest_sha256": MANIFEST_SHA,
                 "transformed_geometry_hash": record.get("transformed_geometry_hash"),
+                "solve_model_sha256": record.get("solve_model_sha256"),
                 "document_name": "Tritonia V",
                 "return_state_hash": "sha256:return-state",
                 "identity": None,
@@ -1047,6 +1048,7 @@ def test_imported_run_retains_versioned_instance_body_transform_source_and_drive
             ]
             assert runtime._serialize_job(row)["cad_source"]["identity"] == identity
             assert runtime._serialize_job(row)["cad_source"]["transformed_geometry_hash"] == record.get("transformed_geometry_hash")
+            assert runtime._serialize_job(row)["cad_source"]["solve_model_sha256"] == record.get("solve_model_sha256")
             results = await runtime.get_results(job_id)
             assert results["provenance"]["cad_identity"] == identity
             assert results["channels"]["left"]["metadata"]["cad_identity"] == identity

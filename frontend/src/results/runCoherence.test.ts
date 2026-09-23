@@ -103,15 +103,29 @@ describe('run coherence', () => {
     expect(runMatchesContext(parametric(design), cadContext)).toBe('other-model');
   });
 
-  it('matches a re-sent CAD model by transformed geometry and rejects changed geometry', () => {
+  it('matches unchanged re-sends and rejects both old geometry-hash collisions', () => {
     const design = designForFamily('OSSE');
-    const current = contextFor(design, { mode: 'cad', ingestId: 'wgi_new', displayedIngestId: 'wgi_new', displayedGeometryHash: 'geometry-a' });
-    const same = cad('wgi_old');
-    same.cad_source!.transformed_geometry_hash = 'geometry-a';
-    expect(runDisplayVerdict(same, current)).toBe('current');
-    same.cad_source!.transformed_geometry_hash = 'geometry-b';
-    expect(runDisplayVerdict(same, current)).toBe('other-model');
-    expect(runDisplayVerdict(same, { ...current, displayedIngestId: null })).not.toBe('current');
+    const current = contextFor(design, {
+      mode: 'cad', ingestId: 'wgi_new', displayedIngestId: 'wgi_new',
+      displayedSolveModelSha256: 'prepared-a',
+    });
+    const run = cad('wgi_old');
+    run.cad_source!.transformed_geometry_hash = 'same-centre-area';
+    run.cad_source!.solve_model_sha256 = 'prepared-a';
+    expect(runDisplayVerdict(run, current)).toBe('current');
+
+    // Declared mirrored half versus undeclared open shell: identical STEP and
+    // viewport fingerprint, but the effective solve domain differs.
+    run.cad_source!.solve_model_sha256 = 'mirrored-half';
+    expect(runDisplayVerdict(run, current)).toBe('other-model');
+    // 2x2 versus 4x1 faces: equal centres and areas, different prepared mesh.
+    run.cad_source!.solve_model_sha256 = 'four-by-one';
+    expect(runDisplayVerdict(run, current)).toBe('other-model');
+    // Legacy hashes cannot prove cross-ingestion equality.
+    run.cad_source!.solve_model_sha256 = null;
+    expect(runDisplayVerdict(run, current)).toBe('other-model');
+    run.cad_source!.solve_model_sha256 = 'prepared-a';
+    expect(runDisplayVerdict(run, { ...current, displayedIngestId: null })).not.toBe('current');
   });
 
   it('keeps the marker through a restore until the mesh is visible, including failure', () => {
@@ -166,7 +180,7 @@ describe('run coherence', () => {
       designFingerprint: designFingerprint(useDesignStore.getState().design),
       ingestId: 'wgi_store',
       displayedIngestId: null,
-      displayedGeometryHash: null,
+      displayedSolveModelSha256: null,
       designId: 'wgd_store',
     });
   });

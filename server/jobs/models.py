@@ -1256,6 +1256,7 @@ class CadSource(JobModel):
     archive_stem: str | None = None
     manifest_sha256: str | None = None
     transformed_geometry_hash: str | None = None
+    solve_model_sha256: str | None = None
     document_name: str | None = None
     return_state_hash: str | None = None
     identity: CadIdentityProvenance | None = None
