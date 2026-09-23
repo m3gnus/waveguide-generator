@@ -3091,9 +3091,9 @@ def build_imported_mesh(
         )
         if any(dim == 2 for dim, _tag in imported) and not precut_open_shell:
             # A standalone source sheet is an intentionally open acoustic
-            # surface. Cutting every surface body independently can weld its
-            # cut edges into the solid shell and create nonmanifold topology,
-            # so mixed-dimensional returns preserve the full domain.
+            # surface. Cutting surface roots independently can weld their
+            # edges into another shell and create nonmanifold topology, so
+            # these returns preserve the full domain even without volume roots.
             cut = OccAutoCutResult(
                 (),
                 tuple(groups),
@@ -3101,7 +3101,7 @@ def build_imported_mesh(
                 {
                     "mode": "auto-cut",
                     "cut_planes": [],
-                    "note": "mixed-dimensional root bodies preserve the full domain",
+                    "note": "surface root bodies preserve the full domain",
                 },
             )
         else:

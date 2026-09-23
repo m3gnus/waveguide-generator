@@ -1008,17 +1008,17 @@ def test_a_declared_half_is_mirrored_rather_than_cut_again(tmp_path: Path) -> No
     assert finding["declared_cut_planes"] == ["y0"]
 
 
-def test_the_same_half_returned_undeclared_is_solved_as_shown_and_says_so(
+def test_the_same_half_returned_undeclared_is_prepared_as_shown_but_refused_at_solve(
     tmp_path: Path,
 ) -> None:
-    """One recorded cut apart, on a Fusion-first return nothing else can catch.
+    """An unlinked open half prepares unmirrored but cannot be solved whole.
 
     A linked return whose throat was halved fails role resolution, so it is
-    already refused. An unlinked one has no design to contradict. Geometry
-    alone shows only that it *can* be read as a half, so without recorded
-    evidence it is solved as shown -- never mirrored, never blocked -- and the
-    record says it looks cut (PLAN.md M1c-auto).
+    already refused. An unlinked one has no design to contradict. Without
+    recorded evidence it stays unmirrored, and the solve boundary refuses it.
     """
+
+    from server.jobs.runtime import _imported_open_half_refusal
 
     pytest.importorskip("gmsh")
     record = _ingest(
@@ -1041,6 +1041,7 @@ def test_the_same_half_returned_undeclared_is_solved_as_shown_and_says_so(
     )
     assert finding["blocking"] is False
     assert finding["looks_cut"] == ["y0"]
+    assert _imported_open_half_refusal(record) is not None
 
 
 def test_solve_model_identity_separates_domain_collision_and_unchanged_resend(tmp_path: Path) -> None:

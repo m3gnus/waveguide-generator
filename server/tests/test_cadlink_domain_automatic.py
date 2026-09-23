@@ -4,7 +4,8 @@ PLAN.md, "M1c-auto. Automatic domain; the Model dropdown is removed" (as
 narrowed on 2026-09-22). A model that is already cut is mirrored only with
 recorded evidence of the cut -- a declaration, an earlier explicit or
 provenance-backed interpretation of the same lineage, or cut provenance the
-add-in recorded -- and otherwise solved exactly as shown. Nothing here asks.
+add-in recorded. An open half without evidence is refused at solve. Nothing
+here asks.
 
 Every fixture is built with gmsh, written as STEP, and put through the
 production ``ingest_bundle`` (bundle reader, gates, the isolated mesher child,
@@ -387,6 +388,19 @@ def _off_centre(path: Path) -> None:
     _transform(path, dx=120.0)
 
 
+def _standalone_sheet(path: Path) -> None:
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        gmsh.model.occ.addBox(-50.0, -50.0, -80.0, 100.0, 100.0, 70.0)
+        gmsh.model.occ.addDisk(30.0, 0.0, 0.0, 10.0, 10.0)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
 def _split_open_backed_shell(path: Path) -> None:
     # A box split on the YZ plane, +x side kept open where the split was: an
     # open-backed shell. The driver sits clear of the plane.
@@ -472,7 +486,9 @@ def test_open_half_with_provenance_is_mirrored_and_its_second_plane_cut(tmp_path
     _no_blocking_domain_finding(record)
 
 
-def test_the_same_open_half_without_provenance_is_solved_as_shown(tmp_path: Path) -> None:
+def test_the_same_open_half_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
     bundle = _bundle(tmp_path, "half-bare", _open_half, HORN_THROAT)
     record = _ingest(bundle, tmp_path / "data")
 
@@ -485,9 +501,27 @@ def test_the_same_open_half_without_provenance_is_solved_as_shown(tmp_path: Path
     assert _multiplier(record) == 1.0
     # The Change control offers the reading that can validate.
     assert {"reading": "reduced", "planes": ["x0"]} in interpretation["choices"]
-    # Frame: a model solved as shown is not restricted by a cut it may not have.
+    # Frame: a model prepared as shown is not restricted by a cut it may not have.
     assert len(record["normalisation"]["solver_frame"]["allowed_axes"]) == 6
     _no_blocking_domain_finding(record)
+    refusal = _imported_open_half_refusal(record)
+    assert refusal is not None
+    assert refusal[0] == "imported_open_half_shell"
+    rim = interpretation["observations"]["planes"]["x0"]["rim_edges"]
+    assert f"x = 0 ({rim} rim edges)" in refusal[1]
+    finding = next(item for item in record["findings"] if item["kind"] == "domain-solved-as-shown")
+    assert finding["detail"] == refusal[1]
+
+
+def test_undeclared_negative_side_half_is_refused_at_solve(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(_bundle(tmp_path, "negative-bare", _negative_half, HORN_THROAT), tmp_path / "data")
+    assert record["symmetry"]["domain_planes"] == []
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    assert observed["negative_vertices"] > 0
+    assert observed["positive_vertices"] == 0
+    assert _imported_open_half_refusal(record) is not None
 
 
 def test_change_to_half_is_checked_mirrored_and_remembered_for_the_lineage(tmp_path: Path) -> None:
@@ -534,13 +568,16 @@ def test_open_quarter_with_provenance_on_both_planes_is_a_quarter(tmp_path: Path
     assert _multiplier(record) == 4.0
 
 
-def test_open_quarter_without_provenance_is_solved_as_shown(tmp_path: Path) -> None:
+def test_open_quarter_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
     record = _ingest(_bundle(tmp_path, "quarter-bare", _open_quarter, HORN_THROAT), tmp_path / "data")
 
     assert _interpretation(record)["reading"] == "as-shown"
     assert _interpretation(record)["looks_cut"] == ["x0", "y0"]
     assert _multiplier(record) == 1.0
     _no_blocking_domain_finding(record)
+    assert _imported_open_half_refusal(record) is not None
 
 
 def test_an_off_centre_complete_model_is_a_full_model(tmp_path: Path) -> None:
@@ -552,8 +589,18 @@ def test_an_off_centre_complete_model_is_a_full_model(tmp_path: Path) -> None:
     assert "x0" not in record["symmetry"]["domain_planes"]
 
 
+def test_standalone_source_sheet_without_cut_shaped_rim_remains_eligible(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(_bundle(tmp_path, "source-sheet", _standalone_sheet, HORN_THROAT), tmp_path / "data")
+    assert record["symmetry"]["domain_planes"] == []
+    assert _imported_open_half_refusal(record) is None
+
+
 def test_a_port_through_the_plane_is_solved_as_shown(tmp_path: Path) -> None:
     """A real opening on x = 0 with the driver clear of it: not a cut, not asked."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "slot", _slot_on_plane, SLOT_DRIVER), tmp_path / "data")
 
@@ -563,9 +610,12 @@ def test_a_port_through_the_plane_is_solved_as_shown(tmp_path: Path) -> None:
     assert interpretation["ambiguous"] == ["x0"]
     assert _multiplier(record) == 1.0
     _no_blocking_domain_finding(record)
+    assert _imported_open_half_refusal(record) is None
 
 
 def test_an_open_backed_shell_without_provenance_is_solved_as_shown(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
     record = _ingest(
         _bundle(tmp_path, "open-backed", _split_open_backed_shell, BOX_DRIVER), tmp_path / "data"
     )
@@ -573,6 +623,7 @@ def test_an_open_backed_shell_without_provenance_is_solved_as_shown(tmp_path: Pa
     assert _interpretation(record)["reading"] == "as-shown"
     assert _multiplier(record) == 1.0
     _no_blocking_domain_finding(record)
+    assert _imported_open_half_refusal(record) is None
 
 
 def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirrors_it(
@@ -676,7 +727,9 @@ def test_mirrored_distinct_sources_are_not_mirrored_onto_each_other(tmp_path: Pa
 
 
 def test_an_old_add_in_manifest_keeps_its_meaning(tmp_path: Path) -> None:
-    """Absent domain: a full model with WG's auto-cut, as before; a pre-cut is shown as is."""
+    """Absent domain still prepares both shapes; an open pre-cut is refused at solve."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
 
     data_dir = tmp_path / "data"
     full = _ingest(_bundle(tmp_path, "old-full", _horn, HORN_THROAT, domain=None), data_dir)
@@ -686,19 +739,25 @@ def test_an_old_add_in_manifest_keeps_its_meaning(tmp_path: Path) -> None:
     assert _interpretation(half)["reading"] == "as-shown"
     assert _interpretation(half)["looks_cut"] == ["x0"]
     _no_blocking_domain_finding(half)
+    assert _imported_open_half_refusal(half) is not None
 
 
 def test_a_new_add_in_manifest_of_a_full_model_is_cut_as_before(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
     record = _ingest(_bundle(tmp_path, "new-full", _horn, HORN_THROAT), tmp_path / "data")
 
     assert _interpretation(record)["manifest_domain"] == "automatic"
     assert _interpretation(record)["reading"] == "full"
     assert record["symmetry"]["cut_planes"] == ["x0", "y0"]
+    assert _imported_open_half_refusal(record) is None
     # 'automatic' is not a declared domain: every axis stays available.
     assert len(record["normalisation"]["solver_frame"]["allowed_axes"]) == 6
 
 
 def test_acceptance_evidence_backed_precut_equals_the_same_cut_declared_by_hand(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
     data_dir = tmp_path / "data"
     automatic = _ingest(
         _bundle(tmp_path, "accept-auto", _open_half, HORN_THROAT, cut=[provenance("body-0")]), data_dir
@@ -712,6 +771,7 @@ def test_acceptance_evidence_backed_precut_equals_the_same_cut_declared_by_hand(
     assert automatic["source_tags"] == declared["source_tags"]
     assert automatic["post_cut_source_areas"] == declared["post_cut_source_areas"]
     assert _interpretation(declared)["evidence"]["source"] == "declaration"
+    assert _imported_open_half_refusal(declared) is None
 
 
 def test_an_explicit_reading_enters_the_mesh_cache_key_even_when_the_mesh_is_the_same(

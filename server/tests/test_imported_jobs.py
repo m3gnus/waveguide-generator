@@ -3274,6 +3274,82 @@ def _verdicts(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {entry["name"]: entry for entry in plan["engines"]}
 
 
+def _open_half_observations(*, negative: bool, bisected: bool = True, wg_cut: bool = False) -> dict[str, Any]:
+    return {
+        "domain_interpretation": {
+            "reading": "as-shown",
+            "observations": {
+                "planes": {
+                    "x0": {
+                        "negative_vertices": 4965 if negative else 0,
+                        "positive_vertices": 0 if negative else 4965,
+                        "rim_edges": 149,
+                        "cap_triangles": 0,
+                        "sources_bisected": ["source-a"] if bisected else [],
+                        "wg_cut": wg_cut,
+                    },
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize("negative", [True, False], ids=["negative-side", "positive-side"])
+@pytest.mark.parametrize("engine", ["auto", "metal", "beat-cpu", "bempp"])
+def test_open_half_refused_in_plan_and_submission_before_engine_selection(
+    tmp_path: Path, negative: bool, engine: str
+) -> None:
+    changes = {**_domain_changes([]), **_open_half_observations(negative=negative)}
+    registry = _DeclaredRegistry(
+        _metal(), _bempp(sources=("parametric", "imported")), _beat_cpu()
+    )
+    message = (
+        "The model is open along x = 0 (149 rim edges), so WG would solve half a "
+        "speaker in free space. Send the uncut model — WG finds the symmetry "
+        "and reduces it automatically."
+    )
+
+    plan = asyncio.run(_plan(tmp_path / "plan", registry, engine, changes))
+    assert plan["engine"] is None
+    assert plan["code"] == "imported_open_half_shell"
+    assert plan["reason"] == f"imported_open_half_shell: {message}"
+    assert all(
+        verdict["stage"] == "request" and verdict["code"] == "imported_open_half_shell"
+        and verdict["reason"] == message
+        for verdict in plan["engines"]
+    )
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(_submit_record(tmp_path / "submit", registry, engine, changes))
+    assert caught.value.reason_code == "imported_open_half_shell"
+    assert str(caught.value) == plan["reason"]
+
+
+def test_standalone_source_sheet_with_no_cut_evidence_remains_eligible(tmp_path: Path) -> None:
+    # A sheet can have a free edge and lie to one side. A rim alone is not a
+    # bisected throat, so it must not be mistaken for half a loudspeaker.
+    changes = {**_domain_changes([]), **_open_half_observations(negative=False, bisected=False)}
+    row = asyncio.run(_submit_record(tmp_path, _DeclaredRegistry(_metal()), "metal", changes))
+    assert row["config_json"]["options"]["engine"] == "metal"
+
+
+@pytest.mark.parametrize("kind", ["declared-half", "wg-cut-full"])
+def test_validated_reduction_remains_eligible_despite_an_open_rim(
+    tmp_path: Path, kind: str
+) -> None:
+    planes = ["x0"] if kind == "declared-half" else ["x0", "y0"]
+    changes = {
+        **_domain_changes(planes),
+        **_open_half_observations(negative=False, wg_cut=kind == "wg-cut-full"),
+    }
+    row = asyncio.run(
+        _submit_record(
+            tmp_path, _DeclaredRegistry(_metal()), "metal", changes,
+            mesh_text=_quarter_box_mesh(inverted=False),
+        )
+    )
+    assert row["config_json"]["options"]["engine"] == "metal"
+
+
 def test_the_imported_plan_names_every_engines_verdict_and_the_resolved_engine(
     tmp_path: Path,
 ) -> None:

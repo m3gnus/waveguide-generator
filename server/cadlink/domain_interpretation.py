@@ -13,8 +13,9 @@ only with recorded evidence of the cut:
   explicit export (``assembly.cut_provenance`` under ``domain-automatic-v1``);
 - an earlier provenance-backed reading of the same lineage.
 
-Without evidence a model that looks cut is **solved as shown**, unmirrored, and
-the card says so. A previous "solved as shown" is never evidence.
+Without evidence a model that looks cut is prepared as shown, unmirrored. An
+open half with a bisected source is refused at solve rather than submitted as a
+full domain. A previous as-shown reading is never evidence.
 
 One detector, observations apart from conclusions:
 
@@ -785,6 +786,43 @@ def record_plan_identity(record: Mapping[str, Any]) -> dict[str, Any] | None:
     return dict(plan) if isinstance(plan, Mapping) else None
 
 
+def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | None:
+    """A one-sided, uncapped source-bisecting rim in saved mesh observations.
+
+    Three free edges is the detector's minimum rim, shared with ``conclude``;
+    a standalone sheet's ordinary free boundary does not suffice.
+    """
+
+    observations = interpretation.get("observations")
+    planes = observations.get("planes") if isinstance(observations, Mapping) else None
+    if not isinstance(planes, Mapping):
+        return None
+    for plane in PLANES:
+        item = planes.get(plane)
+        if not isinstance(item, Mapping) or item.get("wg_cut"):
+            continue
+        rim = item.get("rim_edges")
+        negative = item.get("negative_vertices")
+        positive = item.get("positive_vertices")
+        if (
+            isinstance(rim, int) and rim >= MIN_RIM_EDGES
+            and isinstance(negative, int) and isinstance(positive, int)
+            and ((negative > 0) != (positive > 0))
+            and item.get("cap_triangles") == 0
+            and item.get("sources_bisected")
+        ):
+            return plane, rim
+    return None
+
+
+def open_half_refusal_message(plane: str, rim_edges: int) -> str:
+    return (
+        f"The model is open along {plane_words(plane)} ({rim_edges} rim edges), "
+        "so WG would solve half a speaker in free space. Send the uncut "
+        "model — WG finds the symmetry and reduces it automatically."
+    )
+
+
 def interpretation_finding(interpretation: Mapping[str, Any]) -> dict[str, Any] | None:
     """The non-blocking finding that says which reading was solved, or None for a plain full model."""
 
@@ -801,16 +839,20 @@ def interpretation_finding(interpretation: Mapping[str, Any]) -> dict[str, Any] 
         }
     if reading == READING_AS_SHOWN:
         looks = list(interpretation.get("looks_cut") or [])
+        open_rim = cut_shaped_open_rim(interpretation)
+        detail = (
+            open_half_refusal_message(*open_rim)
+            if open_rim is not None
+            else "solved as shown, unmirrored"
+            + (f"; it looks cut at {' and '.join(plane_words(plane) for plane in looks)}" if looks else "")
+            + ". Change on the model card solves it mirrored when the cut validates."
+        )
         return {
             "kind": "domain-solved-as-shown",
             "blocking": False,
             "looks_cut": looks,
             "ambiguous": list(interpretation.get("ambiguous") or []),
-            "detail": (
-                "solved as shown, unmirrored"
-                + (f"; it looks cut at {' and '.join(plane_words(plane) for plane in looks)}" if looks else "")
-                + ". Change on the model card solves it mirrored when the cut validates."
-            ),
+            "detail": detail,
         }
     return None
 
