@@ -401,6 +401,20 @@ def _standalone_sheet(path: Path) -> None:
     _run_in_gmsh_session(build)
 
 
+def _edge_aligned_source_sheet(path: Path) -> None:
+    # The rigid box is complete. Only the separate source sheet reaches x = 0.
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        gmsh.model.occ.addBox(20.0, -50.0, -80.0, 60.0, 100.0, 70.0)
+        gmsh.model.occ.addRectangle(0.0, -50.0, 10.0, 60.0, 100.0)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
 def _split_open_backed_shell(path: Path) -> None:
     # A box split on the YZ plane, +x side kept open where the split was: an
     # open-backed shell. The driver sits clear of the plane.
@@ -412,6 +426,37 @@ def _slot_on_plane(path: Path) -> None:
     _box(path, x=(0.0, 80.0), discs=[(40.0, 0.0, 10.0)], slot_in_x0_face=True)
 
 
+def _port_exit_on_plane(path: Path) -> None:
+    # A closed box clear of x = 0 whose small square port duct runs out to the
+    # plane and ends open there: an opening on the plane, not a cut.
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        box = occ.addBox(20.0, -40.0, -80.0, 60.0, 80.0, 80.0)
+        duct = occ.addBox(0.0, -5.0, -45.0, 20.0, 10.0, 10.0)
+        fused, _ = occ.fuse([(3, box)], [(3, duct)])
+        disc = occ.addDisk(50.0, 0.0, 0.0, 10.0, 10.0)
+        occ.fragment(fused, [(2, disc)])
+        occ.synchronize()
+        occ.remove(gmsh.model.getEntities(3), recursive=False)
+        occ.synchronize()
+        exit_face = [
+            (2, tag) for _dim, tag in gmsh.model.getEntities(2)
+            if abs(gmsh.model.getBoundingBox(2, tag)[0]) < 1e-6
+            and abs(gmsh.model.getBoundingBox(2, tag)[3]) < 1e-6
+        ]
+        assert len(exit_face) == 1, exit_face
+        occ.remove(exit_face, recursive=False)
+        occ.synchronize()
+        occ.healShapes(sewFaces=True, makeSolids=False)
+        occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
 def _mirrored_pair(path: Path) -> None:
     # A whole solid box, two drivers mirrored about x = 0.
     _box(path, x=(-60.0, 60.0), discs=[(-25.0, 0.0, 10.0), (25.0, 0.0, 10.0)], solid=True)
@@ -420,6 +465,7 @@ def _mirrored_pair(path: Path) -> None:
 HORN_THROAT = _horn_throat
 BOX_DRIVER = _faces_near((30.0, 0.0, 0.0))
 SLOT_DRIVER = _faces_near((40.0, 0.0, 0.0))
+PORT_DRIVER = _faces_near((50.0, 0.0, 0.0))
 PAIR_DRIVERS = _faces_near((-25.0, 0.0, 0.0), (25.0, 0.0, 0.0))
 
 
@@ -457,6 +503,81 @@ def _multiplier(record: dict[str, Any]) -> float:
 def _no_blocking_domain_finding(record: dict[str, Any]) -> None:
     kinds = {finding["kind"] for finding in record["findings"] if finding.get("blocking")}
     assert "undeclared-reduced-domain" not in kinds, record["findings"]
+
+
+def _legacy(record: dict[str, Any]) -> dict[str, Any]:
+    """The record as an earlier build saved it: no domain observations at all."""
+
+    return {key: value for key, value in record.items() if key != "domain_interpretation"}
+
+
+_SOLVE_ENGINES = ("auto", "metal", "beat", "beat-cpu", "bempp")
+
+
+def _solve_verdicts(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+    """The Solve card's plan and each engine's submission outcome for ``record``.
+
+    An outcome is the resolved engine's name, or the refusal's reason code.
+    """
+
+    import asyncio
+    from types import SimpleNamespace
+
+    from server.jobs.runtime import plan_imported_submission, resolve_imported_submission
+    from test_imported_jobs import _beat_cpu, _bempp, _metal, _request
+
+    engines = (_metal(), _beat_cpu(), _bempp(sources=("parametric", "imported")))
+
+    class Registry:
+        async def capabilities(self) -> tuple[Any, ...]:
+            return engines
+
+        async def get_engine(self, name: str) -> Any:
+            return SimpleNamespace(name=name)
+
+        async def unavailable_reason(self, _name: str) -> str | None:
+            return None
+
+    registry = Registry()
+    mesh = Path(record["mesh_store_path"]).read_text(encoding="utf-8")
+    symmetry = {"resolved_quadrants": 1234}
+
+    async def run() -> tuple[dict[str, Any], dict[str, str]]:
+        request = _request(record["ingest_id"])
+        request.options.engine = "auto"
+        plan = await plan_imported_submission(
+            request, registry, imported_record=record, imported_msh_text=mesh,
+            symmetry_metadata=symmetry,
+        )
+        outcomes: dict[str, str] = {}
+        for engine in _SOLVE_ENGINES:
+            request.options.engine = engine
+            try:
+                resolved = await resolve_imported_submission(
+                    request, registry, imported_record=record, imported_msh_text=mesh,
+                    symmetry_metadata=symmetry,
+                )
+                outcomes[engine] = str(resolved.engine_name)
+            except Exception as exc:  # noqa: BLE001 - the refusal's code is the verdict
+                outcomes[engine] = str(getattr(exc, "reason_code", type(exc).__name__))
+        return plan, outcomes
+
+    return asyncio.run(run())
+
+
+def _assert_refused_everywhere(record: dict[str, Any], message: str | None = None) -> None:
+    plan, outcomes = _solve_verdicts(record)
+    assert plan["engine"] is None and plan["code"] == "imported_open_half_shell", plan
+    assert outcomes == {engine: "imported_open_half_shell" for engine in _SOLVE_ENGINES}
+    if message is not None:
+        assert plan["reason"] == f"imported_open_half_shell: {message}"
+
+
+def _assert_solves_on_metal_and_beat(record: dict[str, Any]) -> None:
+    plan, outcomes = _solve_verdicts(record)
+    assert plan["code"] is None and plan["engine"] == "metal", plan
+    assert outcomes["auto"] == outcomes["metal"] == "metal", outcomes
+    assert outcomes["beat"] == outcomes["beat-cpu"] == "beat-cpu", outcomes
 
 
 # ------------------------------------------------------------------ fixtures
@@ -511,6 +632,25 @@ def test_the_same_open_half_without_provenance_is_refused_at_solve(tmp_path: Pat
     assert f"x = 0 ({rim} rim edges)" in refusal[1]
     finding = next(item for item in record["findings"] if item["kind"] == "domain-solved-as-shown")
     assert finding["detail"] == refusal[1]
+
+
+def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_path: Path) -> None:
+    """A record from an earlier build has no observations; its verified mesh is observed."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(_bundle(tmp_path, "half-legacy", _open_half, HORN_THROAT), tmp_path / "data")
+    rim = _interpretation(record)["observations"]["planes"]["x0"]["rim_edges"]
+    legacy = _legacy(record)
+    refusal = _imported_open_half_refusal(legacy)
+    assert refusal is not None and refusal[0] == "imported_open_half_shell"
+    assert f"x = 0 ({rim} rim edges)" in refusal[1]
+    _assert_refused_everywhere(legacy, refusal[1])
+    # Observations saved before the rigid-shell rim existed are observed again too.
+    earlier = json.loads(json.dumps(record))
+    for plane in earlier["domain_interpretation"]["observations"]["planes"].values():
+        plane.pop("rigid_cut_rim_edges")
+    assert _imported_open_half_refusal(earlier) == refusal
 
 
 def test_undeclared_negative_side_half_is_refused_at_solve(tmp_path: Path) -> None:
@@ -595,6 +735,26 @@ def test_standalone_source_sheet_without_cut_shaped_rim_remains_eligible(tmp_pat
     record = _ingest(_bundle(tmp_path, "source-sheet", _standalone_sheet, HORN_THROAT), tmp_path / "data")
     assert record["symmetry"]["domain_planes"] == []
     assert _imported_open_half_refusal(record) is None
+    assert _imported_open_half_refusal(_legacy(record)) is None
+    _assert_solves_on_metal_and_beat(record)
+
+
+def test_edge_aligned_standalone_source_sheet_is_not_a_shell_cut(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(
+        _bundle(tmp_path, "edge-sheet", _edge_aligned_source_sheet, HORN_THROAT),
+        tmp_path / "data",
+    )
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    assert observed["rim_edges"] == 12
+    assert observed["sources_bisected"]
+    assert observed["rigid_cut_rim_edges"] == 0
+    assert _imported_open_half_refusal(record) is None
+    _assert_solves_on_metal_and_beat(record)
+    # The same return saved by an earlier build is judged from its mesh alike.
+    assert _imported_open_half_refusal(_legacy(record)) is None
+    _assert_solves_on_metal_and_beat(_legacy(record))
 
 
 def test_a_port_through_the_plane_is_solved_as_shown(tmp_path: Path) -> None:
@@ -611,9 +771,27 @@ def test_a_port_through_the_plane_is_solved_as_shown(tmp_path: Path) -> None:
     assert _multiplier(record) == 1.0
     _no_blocking_domain_finding(record)
     assert _imported_open_half_refusal(record) is None
+    assert _imported_open_half_refusal(_legacy(record)) is None
+    _assert_solves_on_metal_and_beat(record)
 
 
-def test_an_open_backed_shell_without_provenance_is_solved_as_shown(tmp_path: Path) -> None:
+def test_a_port_ending_open_on_the_plane_is_not_a_cut(tmp_path: Path) -> None:
+    """An uncapped opening on x = 0 that does not span the model stays solvable."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(_bundle(tmp_path, "port-exit", _port_exit_on_plane, PORT_DRIVER), tmp_path / "data")
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    assert observed["rim_edges"] >= 3
+    assert observed["cap_triangles"] == 0
+    assert observed["negative_vertices"] == 0 and observed["positive_vertices"] > 0
+    assert observed["rigid_cut_rim_edges"] == 0
+    assert _imported_open_half_refusal(record) is None
+    assert _imported_open_half_refusal(_legacy(record)) is None
+    _assert_solves_on_metal_and_beat(record)
+
+
+def test_an_open_backed_shell_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:
     from server.jobs.runtime import _imported_open_half_refusal
 
     record = _ingest(
@@ -623,7 +801,19 @@ def test_an_open_backed_shell_without_provenance_is_solved_as_shown(tmp_path: Pa
     assert _interpretation(record)["reading"] == "as-shown"
     assert _multiplier(record) == 1.0
     _no_blocking_domain_finding(record)
-    assert _imported_open_half_refusal(record) is None
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    assert observed["rim_edges"] == 15
+    assert observed["sources_bisected"] == []
+    assert observed["rigid_cut_rim_edges"] == 15
+    message = (
+        "The model is open along x = 0 (15 rim edges), so WG would solve half a "
+        "speaker in free space. Send the uncut model — WG finds the symmetry "
+        "and reduces it automatically."
+    )
+    assert _imported_open_half_refusal(record) == ("imported_open_half_shell", message)
+    # The driver is clear of the cut, yet AUTO, Metal, BEAT and BEMPP all refuse.
+    _assert_refused_everywhere(record, message)
+    _assert_refused_everywhere(_legacy(record), message)
 
 
 def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirrors_it(
@@ -653,6 +843,12 @@ def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirr
     assert shown["symmetry"]["domain_planes"] == []
     assert _multiplier(shown) == 1.0
     assert shown["mesh_cache_key"] != mirrored["mesh_cache_key"]
+    # Shown unmirrored, the shell is still open across x = 0: a free-space
+    # solve of it is refused like any other undeclared cut.
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    refusal = _imported_open_half_refusal(shown)
+    assert refusal is not None and refusal[0] == "imported_open_half_shell"
 
 
 def test_provenance_whose_rim_is_off_the_plane_is_refused(tmp_path: Path) -> None:

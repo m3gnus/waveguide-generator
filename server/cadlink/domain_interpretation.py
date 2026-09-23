@@ -14,8 +14,8 @@ only with recorded evidence of the cut:
 - an earlier provenance-backed reading of the same lineage.
 
 Without evidence a model that looks cut is prepared as shown, unmirrored. An
-open half with a bisected source is refused at solve rather than submitted as a
-full domain. A previous as-shown reading is never evidence.
+open half with a spanning rigid-shell cut rim is refused at solve rather than
+submitted as a full domain. A previous as-shown reading is never evidence.
 
 One detector, observations apart from conclusions:
 
@@ -73,6 +73,12 @@ TOLERANCE_MM = 1.0e-4
 #: A rim is at least this many free edges on one plane, as the mesher's
 #: ``detect_symmetry_planes`` counts it, so a stray leak vertex is not a cut.
 MIN_RIM_EDGES = 3
+#: A cut removes a whole side, so its rigid-shell rim is the model's section on
+#: the cut plane and reaches (nearly) the full rigid extent along both in-plane
+#: axes. A vent or slot that happens to lie on the plane covers a small part of
+#: it. Three quarters leaves room for a tapered or chamfered section while
+#: keeping any local opening out.
+SPANNING_RIM_FRACTION = 0.75
 
 DECLARATION = "declaration"
 USER = "user"
@@ -369,6 +375,8 @@ class PlaneObservation:
     rim_edges: int
     cap_triangles: int
     cap_area_mm2: float
+    #: Free rigid-shell edges on this plane when their rim spans the exterior.
+    rigid_cut_rim_edges: int = 0
     sources_on_plane: list[str] = field(default_factory=list)
     #: Sources the plane passes through (a source face meets it without lying
     #: in it): the throat a cut bisects, as opposed to a driver on a baffle.
@@ -383,6 +391,7 @@ class PlaneObservation:
             "rim_edges": self.rim_edges,
             "cap_triangles": self.cap_triangles,
             "cap_area_mm2": round(self.cap_area_mm2, 6),
+            "rigid_cut_rim_edges": self.rigid_cut_rim_edges,
             "sources_on_plane": list(self.sources_on_plane),
             "sources_bisected": list(self.sources_bisected),
             "wg_cut": self.wg_cut,
@@ -429,10 +438,18 @@ def observe(
     rotation = np.asarray(solver_from_assembly, dtype=float)[:3, :3]
     cut = {str(plane) for plane in wg_cut_planes}
     edges = np.sort(faces[:, [[0, 1], [1, 2], [2, 0]]].reshape(-1, 2), axis=1)
-    unique, counts = np.unique(edges, axis=0, return_counts=True) if len(edges) else (edges, np.zeros(0))
-    free = unique[counts == 1] if len(unique) else np.zeros((0, 2), dtype=np.int64)
+    unique, inverse, counts = (
+        np.unique(edges, axis=0, return_inverse=True, return_counts=True)
+        if len(edges) else (edges, np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
+    )
+    free_indices = np.flatnonzero(counts[inverse] == 1)
+    free = edges[free_indices]
     on = np.abs(points) <= tolerance_mm
     source_mask = np.isin(tags, np.asarray(list(source_tags), dtype=np.int64)) if len(tags) else np.zeros(0, bool)
+    # Each free edge has exactly one incident face. A standalone source sheet
+    # can have a long edge on an origin plane without opening the rigid shell.
+    rigid_free = ~source_mask[free_indices // 3]
+    rigid_points = points[faces[~source_mask].ravel()] if len(faces) else np.zeros((0, 3))
     observed: dict[str, PlaneObservation] = {}
     rim_axes: set[int] = set()
     for solver_axis, solver_plane in enumerate(PLANES):
@@ -449,17 +466,23 @@ def observe(
         # other coordinate plane, so a rim along another plane's edge (WG's own
         # cut crossing a baffle, say) is not read as a rim here.
         others = [axis for axis in range(3) if axis != solver_axis]
-        rim = (
-            int(
-                np.count_nonzero(
-                    on_plane[free[:, 0]]
-                    & on_plane[free[:, 1]]
-                    & ~(on[free[:, 0]][:, others] & on[free[:, 1]][:, others]).any(axis=1)
-                )
-            )
-            if len(free)
-            else 0
-        )
+        rim_mask = (
+            on_plane[free[:, 0]] & on_plane[free[:, 1]]
+            & ~(on[free[:, 0]][:, others] & on[free[:, 1]][:, others]).any(axis=1)
+        ) if len(free) else np.zeros(0, dtype=bool)
+        rim = int(np.count_nonzero(rim_mask))
+        rigid_rim = free[rim_mask & rigid_free]
+        # Free edges of source faces are a sheet's own boundary, not a cut in
+        # the rigid shell. A vent can leave several rigid edges on the plane; a
+        # missing half reaches across the rigid exterior in both directions.
+        spanning = bool(len(rigid_rim) >= MIN_RIM_EDGES and len(rigid_points))
+        if spanning:
+            for axis in others:
+                extent = float(np.ptp(rigid_points[:, axis]))
+                rim_extent = float(np.ptp(points[rigid_rim][:, :, axis]))
+                if extent <= tolerance_mm or rim_extent < SPANNING_RIM_FRACTION * extent:
+                    spanning = False
+                    break
         cap = on_plane[faces].all(axis=1) if len(faces) else np.zeros(0, bool)
         corners = points[faces[cap]] if np.any(cap) else np.zeros((0, 3, 3))
         cap_area = float(
@@ -488,6 +511,7 @@ def observe(
             rim_edges=rim,
             cap_triangles=int(np.count_nonzero(cap)),
             cap_area_mm2=cap_area,
+            rigid_cut_rim_edges=len(rigid_rim) if spanning else 0,
             sources_on_plane=touching,
             sources_bisected=bisected,
             wg_cut=wg_cut,
@@ -505,13 +529,15 @@ def observe(
     )
 
 
-def observe_record_mesh(built: Mapping[str, Any]) -> Observations | None:
+def observe_record_mesh(built: Mapping[str, Any], msh_text: str | None = None) -> Observations | None:
     """:func:`observe` over a fresh or cached build; None when its mesh cannot be read."""
 
     from .frame_infer import parse_tagged_msh
 
     try:
-        points_m, triangles, tags, _names = parse_tagged_msh(str(built.get("msh_text") or ""))
+        points_m, triangles, tags, _names = parse_tagged_msh(
+            msh_text if msh_text is not None else str(built.get("msh_text") or "")
+        )
     except Exception:  # noqa: BLE001 - an unreadable mesh has no observations
         return None
     if not len(triangles):
@@ -527,7 +553,7 @@ def observe_record_mesh(built: Mapping[str, Any]) -> Observations | None:
     allocation = built.get("tag_allocation") or {}
     source_tags = {
         int(tag): str(source_id)
-        for source_id, tag in (allocation.get("source_tags") or {}).items()
+        for source_id, tag in (allocation.get("source_tags") or built.get("source_tags") or {}).items()
     }
     symmetry = built.get("symmetry") or {}
     return observe(
@@ -786,11 +812,32 @@ def record_plan_identity(record: Mapping[str, Any]) -> dict[str, Any] | None:
     return dict(plan) if isinstance(plan, Mapping) else None
 
 
-def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | None:
-    """A one-sided, uncapped source-bisecting rim in saved mesh observations.
+def has_rigid_rim_observations(interpretation: Any) -> bool:
+    """Whether saved observations carry the rigid-shell rim this build judges cuts by.
 
-    Three free edges is the detector's minimum rim, shared with ``conclude``;
-    a standalone sheet's ordinary free boundary does not suffice.
+    Records prepared by an earlier build lack it (or lack observations at all);
+    their verified mesh is observed again before any solve.
+    """
+
+    observations = interpretation.get("observations") if isinstance(interpretation, Mapping) else None
+    planes = observations.get("planes") if isinstance(observations, Mapping) else None
+    return isinstance(planes, Mapping) and all(
+        isinstance(planes.get(plane), Mapping)
+        and isinstance(planes[plane].get("rigid_cut_rim_edges"), int)
+        for plane in PLANES
+    )
+
+
+def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | None:
+    """A one-sided, uncapped rigid-shell cut rim in saved mesh observations.
+
+    Three free edges is the detector's minimum rim, shared with ``conclude``.
+    Only free edges of rigid (non-source) faces count, and only when they span
+    the rigid exterior on that plane (``rigid_cut_rim_edges``), so a standalone
+    source sheet's boundary and a small vent do not qualify, while a cut through
+    the enclosure alone does, wherever the driver sits. On ``z0``, which WG
+    never mirrors, an open end (a horn mouth on the plane, say) is ordinary, so
+    a cut there also needs a source the plane passes through.
     """
 
     observations = interpretation.get("observations")
@@ -809,7 +856,9 @@ def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | 
             and isinstance(negative, int) and isinstance(positive, int)
             and ((negative > 0) != (positive > 0))
             and item.get("cap_triangles") == 0
-            and item.get("sources_bisected")
+            and isinstance(item.get("rigid_cut_rim_edges"), int)
+            and item["rigid_cut_rim_edges"] >= MIN_RIM_EDGES
+            and (plane in SUPPORTED_PLANES or bool(item.get("sources_bisected")))
         ):
             return plane, rim
     return None

@@ -27,7 +27,12 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
-from server.cadlink.domain_interpretation import cut_shaped_open_rim, open_half_refusal_message
+from server.cadlink.domain_interpretation import (
+    cut_shaped_open_rim,
+    has_rigid_rim_observations,
+    observe_record_mesh,
+    open_half_refusal_message,
+)
 from server.cadlink.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED, record_frame_refusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig, Expr
@@ -594,13 +599,15 @@ def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> N
         )
 
 
-def _imported_open_half_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
+def _imported_open_half_refusal(
+    record: Mapping[str, Any] | None, msh_text: str | None = None
+) -> tuple[str, str] | None:
     """Reject an observed CAD cut that would otherwise become a full free-space solve.
 
     The ingestion detector counts a rim from at least three free mesh edges on
-    one origin plane. A bisected source and one-sided, uncapped geometry make
-    that rim evidence of a missing half rather than an ordinary source sheet.
-    Older records without observations remain subject to their existing checks.
+    one origin plane. A spanning rigid-shell rim and one-sided, uncapped geometry
+    identify a missing half independently of the source position. Older records
+    are judged from their verified prepared mesh before they can run.
     """
 
     if record is None or imported_domain_planes(record):
@@ -613,7 +620,25 @@ def _imported_open_half_refusal(record: Mapping[str, Any] | None) -> tuple[str, 
     }:
         return None
     interpretation = record.get("domain_interpretation")
-    open_rim = cut_shaped_open_rim(interpretation) if isinstance(interpretation, Mapping) else None
+    if not has_rigid_rim_observations(interpretation):
+        # Callers pass the mesh text they already verified against the record.
+        try:
+            verified = msh_text if msh_text is not None else read_verified_import_mesh(record)
+        except ImportedMeshArtifactError:
+            return (
+                "ingest_domain_observations_unavailable",
+                "This CAD return was prepared by an earlier WG and its prepared mesh "
+                "is unavailable for the open-shell check. Send the model again before solving.",
+            )
+        derived = observe_record_mesh(record, verified)
+        if derived is None:
+            return (
+                "ingest_domain_observations_unavailable",
+                "This CAD return was prepared by an earlier WG and its prepared mesh "
+                "cannot be read for the open-shell check. Send the model again before solving.",
+            )
+        interpretation = {"observations": derived.to_json()}
+    open_rim = cut_shaped_open_rim(interpretation)
     if open_rim is None:
         return None
     return "imported_open_half_shell", open_half_refusal_message(*open_rim)
@@ -1100,11 +1125,12 @@ async def _engines_able_to_take(
 
 
 def _imported_request_refusal(
-    request: SolveRequest, record: Mapping[str, Any] | None = None
+    request: SolveRequest, record: Mapping[str, Any] | None = None,
+    msh_text: str | None = None,
 ) -> tuple[str, str] | None:
     """A refusal no engine can lift: the request asks what imported geometry never does."""
 
-    open_half = _imported_open_half_refusal(record)
+    open_half = _imported_open_half_refusal(record, msh_text)
     if open_half is not None:
         return open_half
     if (
@@ -1270,7 +1296,7 @@ async def resolve_imported_submission(
             "parametric submissions resolve through resolve_submission"
         )
     requested = request.options.engine
-    request_refusal = _imported_request_refusal(request, imported_record)
+    request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     if request_refusal is not None:
         raise ImportedSolveRefusal(*request_refusal)
     if requested not in SELECTABLE_ENGINE_NAMES:
@@ -1436,7 +1462,7 @@ async def plan_imported_submission(
     declared = {info.name: info for info in await engine_registry.capabilities()}
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
     needed_features = _imported_features_needed(request.geometry)
-    request_refusal = _imported_request_refusal(request, imported_record)
+    request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     verdicts: list[ImportedEngineVerdict] = []
     for name in full3d_engine_order():
         info = declared.get(name)
@@ -3366,7 +3392,7 @@ class JobRuntime:
                 await asyncio.to_thread(
                     _refuse_inverted_reduced_mesh, imported_record, job_msh_text
                 )
-                open_half = _imported_open_half_refusal(imported_record)
+                open_half = _imported_open_half_refusal(imported_record, job_msh_text)
                 if open_half is not None:
                     raise ImportedSolveRefusal(*open_half)
                 imported_record = {

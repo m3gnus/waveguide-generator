@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from io import BytesIO
 import json
@@ -608,6 +609,18 @@ def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) ->
             {"id": "source-c", "required": False},
         ],
         "source_tags": {"source-a": 101, "source-b": 102, "source-c": 103},
+        "domain_interpretation": {
+            "observations": {
+                "planes": {
+                    plane: {
+                        "negative_vertices": 0, "positive_vertices": 1,
+                        "rim_edges": 0, "rigid_cut_rim_edges": 0,
+                        "cap_triangles": 0, "wg_cut": False,
+                    }
+                    for plane in ("x0", "y0", "z0")
+                }
+            }
+        },
         "tag_namespace": "wg-import-v1",
         "tag_map": {
             "1": {"source_id": None, "instance_id": None, "role": "rigid"},
@@ -1840,7 +1853,7 @@ def test_execution_uses_job_mesh_after_import_cache_is_deleted(tmp_path: Path) -
     asyncio.run(scenario())
 
 
-def _quarter_box_mesh(*, inverted: bool) -> str:
+def _quarter_box_mesh(*, inverted: bool, offset_yz: bool = False) -> str:
     """A closed box's quarter, open on x = 0 and y = 0, as an ASCII Gmsh 2.2 artifact.
 
     Wound outward, as the whole box it mirrors is, or with every triangle
@@ -1859,7 +1872,8 @@ def _quarter_box_mesh(*, inverted: bool) -> str:
         (0, 2, 3), (0, 3, 1), (4, 5, 7), (4, 7, 6),
     ]
     nodes = [
-        f"{index + 1} {0.1 * x:g} {0.1 * y:g} {0.1 * z:g}"
+        f"{index + 1} {0.1 * x:g} {0.1 * y - (0.05 if offset_yz else 0):g} "
+        f"{0.1 * z - (0.05 if offset_yz else 0):g}"
         for index, (x, y, z) in enumerate(corners)
     ]
     elements = []
@@ -3274,7 +3288,7 @@ def _verdicts(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {entry["name"]: entry for entry in plan["engines"]}
 
 
-def _open_half_observations(*, negative: bool, bisected: bool = True, wg_cut: bool = False) -> dict[str, Any]:
+def _open_half_observations(*, negative: bool, rigid_cut: bool = True, wg_cut: bool = False) -> dict[str, Any]:
     return {
         "domain_interpretation": {
             "reading": "as-shown",
@@ -3284,10 +3298,13 @@ def _open_half_observations(*, negative: bool, bisected: bool = True, wg_cut: bo
                         "negative_vertices": 4965 if negative else 0,
                         "positive_vertices": 0 if negative else 4965,
                         "rim_edges": 149,
+                        "rigid_cut_rim_edges": 149 if rigid_cut else 0,
                         "cap_triangles": 0,
-                        "sources_bisected": ["source-a"] if bisected else [],
+                        "sources_bisected": ["source-a"],
                         "wg_cut": wg_cut,
                     },
+                    "y0": {"rim_edges": 0, "rigid_cut_rim_edges": 0, "wg_cut": False},
+                    "z0": {"rim_edges": 0, "rigid_cut_rim_edges": 0, "wg_cut": False},
                 },
             },
         },
@@ -3325,11 +3342,97 @@ def test_open_half_refused_in_plan_and_submission_before_engine_selection(
 
 
 def test_standalone_source_sheet_with_no_cut_evidence_remains_eligible(tmp_path: Path) -> None:
-    # A sheet can have a free edge and lie to one side. A rim alone is not a
-    # bisected throat, so it must not be mistaken for half a loudspeaker.
-    changes = {**_domain_changes([]), **_open_half_observations(negative=False, bisected=False)}
+    # A source sheet can have a free edge on the plane, the plane can pass
+    # through it, and it can lie to one side. Its own boundary is not a cut in
+    # the rigid shell, so it must not be mistaken for half a loudspeaker.
+    changes = {**_domain_changes([]), **_open_half_observations(negative=False, rigid_cut=False)}
     row = asyncio.run(_submit_record(tmp_path, _DeclaredRegistry(_metal()), "metal", changes))
     assert row["config_json"]["options"]["engine"] == "metal"
+
+
+def test_legacy_record_without_observations_is_checked_at_every_entry(tmp_path: Path) -> None:
+    """An earlier record's verified mesh exposes an enclosure-only cut."""
+
+    calls: list[str] = []
+
+    class RecordingEngine:
+        name = "metal"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> EngineRunResult:
+            calls.append("run")
+            raise AssertionError("legacy cut reached the engine")
+
+    async def scenario() -> None:
+        runtime, ingest_id, record = await _runtime_fixture(
+            tmp_path,
+            {**_domain_changes([]), "domain_interpretation": None},
+            mesh_text=_quarter_box_mesh(inverted=False, offset_yz=True),
+        )
+        assert record["domain_interpretation"] is None
+        runtime.engine_registry = _AlwaysRegistry(RecordingEngine())  # type: ignore[assignment]
+        request = _request(ingest_id)
+        try:
+            plan = await runtime.plan_imported(request)
+            assert plan["code"] == "imported_open_half_shell"
+            assert all(item["code"] == "imported_open_half_shell" for item in plan["engines"])
+            with pytest.raises(ImportedSolveRefusal) as submitted:
+                await runtime.submit(request)
+            assert submitted.value.reason_code == "imported_open_half_shell"
+
+            # Simulate a queued row persisted by an earlier build, then restart.
+            await runtime.shutdown()
+            recovered = JobRuntime(
+                JobStore(tmp_path / "jobs.db"),
+                engine_registry=_AlwaysRegistry(RecordingEngine()),  # type: ignore[arg-type]
+                cadlink_store=CadLinkStore(tmp_path / "cadlink.db"),
+            )
+            queued_id = "legacy-queued"
+            now = datetime.now(timezone.utc).isoformat()
+            recovered.store.initialize()
+            recovered.store.create_job(
+                {
+                    "id": queued_id, "status": "queued", "created_at": now,
+                    "updated_at": now, "queued_at": now,
+                    "config_json": request.model_dump(mode="json"),
+                    "config_summary_json": {},
+                    "task_metadata": {"symmetry": {"resolved_quadrants": 1234}},
+                    "progress": 0, "has_results": False,
+                    "has_mesh_artifact": False, "stage": "queued",
+                    "stage_message": "Queued",
+                },
+                initial_event=("queued", {"status": "queued"}),
+            )
+            await recovered.start()
+            await recovered.wait_idle()
+            row = recovered.store.get_job_row(queued_id)
+            assert row["status"] == "error"
+            assert "imported_open_half_shell" in row["error_message"]
+            with pytest.raises(ImportedSolveRefusal) as retried:
+                await recovered.retry(queued_id)
+            assert retried.value.reason_code == "imported_open_half_shell"
+            assert calls == []
+            await recovered.shutdown()
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_legacy_record_whose_mesh_cannot_be_observed_asks_for_a_fresh_send(tmp_path: Path) -> None:
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    empty = tmp_path / "empty.msh"
+    empty.write_text("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", encoding="utf-8")
+    record = {**_record(empty), **_domain_changes([]), "domain_interpretation": None}
+    unreadable = _imported_open_half_refusal(record, empty.read_text(encoding="utf-8"))
+    assert unreadable is not None
+    assert unreadable[0] == "ingest_domain_observations_unavailable"
+    assert "Send the model again" in unreadable[1]
+
+    missing = {**record, "mesh_store_path": str(tmp_path / "gone.msh")}
+    unavailable = _imported_open_half_refusal(missing)
+    assert unavailable is not None
+    assert unavailable[0] == "ingest_domain_observations_unavailable"
 
 
 @pytest.mark.parametrize("kind", ["declared-half", "wg-cut-full"])
