@@ -1255,6 +1255,7 @@ class CadSource(JobModel):
     #: ``.wglink`` bundle already owns, so a rename does not start a second one.
     archive_stem: str | None = None
     manifest_sha256: str | None = None
+    transformed_geometry_hash: str | None = None
     document_name: str | None = None
     return_state_hash: str | None = None
     identity: CadIdentityProvenance | None = None

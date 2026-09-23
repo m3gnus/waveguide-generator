@@ -981,6 +981,7 @@ def test_legacy_imported_job_recovers_project_provenance_from_ingest(
                 "lineage_id": identity.lineage_id,
                 "archive_stem": "Tritonia-V-project",
                 "manifest_sha256": MANIFEST_SHA,
+                "transformed_geometry_hash": record.get("transformed_geometry_hash"),
                 "document_name": "Tritonia V",
                 "return_state_hash": "sha256:return-state",
                 "identity": None,
@@ -1018,7 +1019,7 @@ def test_imported_run_retains_versioned_instance_body_transform_source_and_drive
             )
 
     async def scenario() -> None:
-        runtime, ingest_id, _ = await _runtime_fixture(
+        runtime, ingest_id, record = await _runtime_fixture(
             tmp_path, _identity_record_changes()
         )
         runtime.engine_registry = _AlwaysRegistry(IdentityEngine())  # type: ignore[assignment]
@@ -1045,6 +1046,7 @@ def test_imported_run_retains_versioned_instance_body_transform_source_and_drive
                 },
             ]
             assert runtime._serialize_job(row)["cad_source"]["identity"] == identity
+            assert runtime._serialize_job(row)["cad_source"]["transformed_geometry_hash"] == record.get("transformed_geometry_hash")
             results = await runtime.get_results(job_id)
             assert results["provenance"]["cad_identity"] == identity
             assert results["channels"]["left"]["metadata"]["cad_identity"] == identity

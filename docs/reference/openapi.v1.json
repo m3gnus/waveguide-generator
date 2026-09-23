@@ -584,6 +584,17 @@
               }
             ],
             "title": "Return State Hash"
+          },
+          "transformed_geometry_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transformed Geometry Hash"
           }
         },
         "title": "CadSource",

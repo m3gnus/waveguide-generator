@@ -12,6 +12,7 @@ import { resetDocumentStore } from '../stores/document';
 import { resultViewStore } from '../stores/resultView';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ResultsPanel } from './ResultsPanel';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 
 /** Every option an EChart was handed, so a card can be read by its series
  * rather than through a canvas jsdom does not implement. */
@@ -199,6 +200,7 @@ describe('results dock view switch', () => {
     resetDocumentStore();
     resultViewStore.resetForTests();
     workspaceModeStore.setMode('cad');
+    importedMeshStore.clear();
     useCadReturnStore.setState({
       ingestRecord: { ingest_id: 'wgi_return' } as never,
       driveChannels: [
@@ -206,6 +208,7 @@ describe('results dock view switch', () => {
         { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       ] as never,
     });
+    importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_return' } as never);
     compareSelection.clear();
     provisionalResults.clear();
     resultsCache.clear();

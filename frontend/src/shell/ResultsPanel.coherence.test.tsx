@@ -10,6 +10,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { preferencesStore } from '../prefs/preferences';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { ResultsPanel } from './ResultsPanel';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 
 const modelMocks = vi.hoisted(() => ({ showJobModel: vi.fn() }));
 vi.mock('../jobs/showJobModel', () => ({ showJobModel: modelMocks.showJobModel }));
@@ -110,6 +111,7 @@ describe('results run coherence', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
     resetCadReturnStore();
+    importedMeshStore.clear();
     resetDocumentStore();
     workspaceModeStore.setMode('parametric');
     compareSelection.clear();
@@ -150,10 +152,42 @@ describe('results run coherence', () => {
 
     await act(async () => {
       useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_cad' } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_cad' } as never);
       workspaceModeStore.setMode('cad');
       await Promise.resolve();
     });
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: true });
+  });
+
+  it('empties charts on a new unsolved CAD model and restores matching results when its mesh returns', async () => {
+    const first = job('first', 1, null, true);
+    first.cad_source!.transformed_geometry_hash = 'shape-a';
+    publishJobs([first]);
+    workspaceModeStore.setMode('cad');
+    act(() => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_first', transformed_geometry_hash: 'shape-a' } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_first' } as never);
+    });
+    await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
+    expect(compareSelection.getSnapshot().primary).toBe('first');
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe('first');
+
+    await act(async () => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_second', transformed_geometry_hash: 'shape-b' } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_second' } as never);
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain('Not solved yet');
+    expect(host.querySelector('[data-result-primary]')).toBeNull();
+    expect(toolbarButton(host, 'Solve')).toBeDefined();
+
+    await act(async () => {
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_resent', transformed_geometry_hash: 'shape-a' } as never });
+      importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_resent' } as never);
+      await Promise.resolve();
+    });
+    // A new ingestion of identical transformed geometry can use the old solve.
+    expect(host.querySelector('[data-result-primary]')?.getAttribute('data-result-primary')).toBe('first');
   });
 
   it('opens on the newest drawable run when no model is loaded yet', async () => {

@@ -2271,6 +2271,7 @@ class JobRuntime:
                 "anchor_lineage_id": imported.anchor_lineage_id,
                 "archive_stem": imported.archive_stem,
                 "manifest_sha256": request.geometry.manifest_sha256,
+                "transformed_geometry_hash": imported.record.get("transformed_geometry_hash"),
                 "document": imported.document,
                 "identity": imported.identity,
             }
@@ -4419,6 +4420,7 @@ class JobRuntime:
                 stored_document if isinstance(stored_document, Mapping) else {}
             )
             recovered_document: Mapping[str, Any] = {}
+            transformed_geometry_hash = imported_metadata.get("transformed_geometry_hash")
 
             # Jobs created before CAD project history retained only the ingest
             # id (and, in the newest legacy slice, the anchor design id). The
@@ -4428,11 +4430,8 @@ class JobRuntime:
             needs_registry_recovery = any(
                 key not in imported_metadata
                 for key in (
-                    "anchor_design_id",
-                    "anchor_lineage_id",
-                    "archive_stem",
-                    "manifest_sha256",
-                    "document",
+                    "anchor_design_id", "anchor_lineage_id", "archive_stem",
+                    "manifest_sha256", "document", "transformed_geometry_hash",
                 )
             )
             if cadlink_store is not None and needs_registry_recovery:
@@ -4443,6 +4442,7 @@ class JobRuntime:
                         else None
                     )
                     if isinstance(record, Mapping):
+                        transformed_geometry_hash = transformed_geometry_hash or record.get("transformed_geometry_hash")
                         anchor = record.get("anchor")
                         anchor = anchor if isinstance(anchor, Mapping) else {}
                         design_id = design_id or anchor.get("design_id")
@@ -4484,6 +4484,7 @@ class JobRuntime:
                 "lineage_id": lineage_id,
                 "archive_stem": archive_stem,
                 "manifest_sha256": manifest_sha256,
+                "transformed_geometry_hash": transformed_geometry_hash,
                 "document_name": (
                     stored_document.get("name")
                     or recovered_document.get("name")

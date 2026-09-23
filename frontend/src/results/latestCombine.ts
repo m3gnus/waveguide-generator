@@ -21,6 +21,7 @@ export interface ShownCombine {
   jobId: string;
   channelId: string;
   combine: CombineMetadata;
+  solvedBandHz?: readonly [number, number];
   /** Whether the shown run accepts a live recombine: complete, and not a
    * provisional live view that a running solve is still revising. */
   canApply: boolean;

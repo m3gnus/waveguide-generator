@@ -305,6 +305,7 @@ export interface CadReturnIngestRecord {
   artifact_sha256: string;
   report_sha256: string;
   mesh_content_sha256?: string;
+  transformed_geometry_hash?: string;
   acoustic_domain: string;
   scope: {
     status: string;

@@ -10,6 +10,7 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { SETTINGS_NAMESPACES } from '../stores/durableSettings';
 import { CadCrossover } from './CrossoverSection';
+import { jobsCoordinatorBridge } from '../shell/JobsCoordinator';
 
 const recombineMocks = vi.hoisted(() => ({ recombine: vi.fn() }));
 vi.mock('../api/results', async (importOriginal) => ({
@@ -110,6 +111,28 @@ describe('live recombine from the rail', () => {
     expect(wire.id).toBe('combined');
     expect(wire.channels['drive-mf'].lp).toEqual({ family: 'lr', order: 2, fc_hz: 1_000 });
     expect(onApplied).toHaveBeenCalledWith('job-1', updated);
+  });
+
+  it('recombines 900 and 300 Hz within a 200 Hz band, then offers a 100 Hz sweep', async () => {
+    recombineMocks.recombine.mockResolvedValue({ channels: {} } as JobResults);
+    const run = vi.fn().mockResolvedValue(undefined);
+    (jobsCoordinatorBridge.getSnapshot() as unknown as { run: typeof run }).run = run;
+    render();
+    publishShown({ solvedBandHz: [200, 20_000] });
+    for (const hz of [900, 300]) {
+      act(() => useCadReturnStore.getState().setCombineSpec(expandLegacy(['drive-mf', 'drive-hf'], [hz])));
+      await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    }
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(2);
+    expect((recombineMocks.recombine.mock.calls[1][1] as { channels: Record<string, { lp: { fc_hz: number } }> }).channels['drive-mf'].lp.fc_hz).toBe(300);
+    act(() => useCadReturnStore.getState().setCombineSpec(expandLegacy(['drive-mf', 'drive-hf'], [100])));
+    await act(async () => { vi.advanceTimersByTime(450); await Promise.resolve(); });
+    expect(recombineMocks.recombine).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain('100 Hz crossover is outside the solved band [200, 20000] Hz');
+    const offer = [...host.querySelectorAll<HTMLButtonElement>('button')].find((button) => button.textContent === 'Re-solve with sweep from 100 Hz')!;
+    act(() => offer.click());
+    expect(useCadReturnStore.getState().frequencyStartHz).toBe(100);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('restores a crossover reverted while its own request is still outstanding', async () => {

@@ -14,6 +14,7 @@ export interface RunContext {
   designFingerprint: string;
   ingestId: string | null;
   displayedIngestId?: string | null;
+  displayedGeometryHash?: string | null;
   designId: string | null;
 }
 
@@ -115,6 +116,7 @@ export function runContext(): RunContext {
     designFingerprint: designFingerprint(design.design),
     ingestId: useCadReturnStore.getState().ingestRecord?.ingest_id ?? null,
     displayedIngestId: displayedCadIngestId(useCadReturnStore.getState().ingestRecord?.ingest_id ?? null),
+    displayedGeometryHash: useCadReturnStore.getState().ingestRecord?.transformed_geometry_hash ?? null,
     designId: useDocumentStore.getState().identity?.designId ?? null,
   };
 }
@@ -129,9 +131,10 @@ export function useRunContext(): RunContext {
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const ingestId = useCadReturnStore((state) => state.ingestRecord?.ingest_id ?? null);
+  const displayedGeometryHash = useCadReturnStore((state) => state.ingestRecord?.transformed_geometry_hash ?? null);
   const designId = useDocumentStore((state) => state.identity?.designId ?? null);
   useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
-  return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, displayedIngestId: displayedCadIngestId(ingestId), designId };
+  return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, displayedIngestId: displayedCadIngestId(ingestId), displayedGeometryHash, designId };
 }
 
 /**
@@ -160,7 +163,10 @@ export function runMatchesContext(job: JobItem, context: RunContext): RunContext
 export function runDisplayVerdict(job: JobItem, context: RunContext): RunContextVerdict {
   if (job.config_summary?.geometry_type !== 'imported' || context.mode !== 'cad') return runMatchesContext(job, context);
   const runIngestId = job.cad_source?.ingest_id;
-  if (runIngestId && runIngestId === context.displayedIngestId) return 'current';
+  if (context.displayedIngestId && (
+    (runIngestId && runIngestId === context.displayedIngestId)
+    || (context.displayedGeometryHash && job.cad_source?.transformed_geometry_hash === context.displayedGeometryHash)
+  )) return 'current';
   return runIngestId && runIngestId === context.ingestId ? 'run-model-not-loaded' : 'other-model';
 }
 

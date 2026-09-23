@@ -103,6 +103,17 @@ describe('run coherence', () => {
     expect(runMatchesContext(parametric(design), cadContext)).toBe('other-model');
   });
 
+  it('matches a re-sent CAD model by transformed geometry and rejects changed geometry', () => {
+    const design = designForFamily('OSSE');
+    const current = contextFor(design, { mode: 'cad', ingestId: 'wgi_new', displayedIngestId: 'wgi_new', displayedGeometryHash: 'geometry-a' });
+    const same = cad('wgi_old');
+    same.cad_source!.transformed_geometry_hash = 'geometry-a';
+    expect(runDisplayVerdict(same, current)).toBe('current');
+    same.cad_source!.transformed_geometry_hash = 'geometry-b';
+    expect(runDisplayVerdict(same, current)).toBe('other-model');
+    expect(runDisplayVerdict(same, { ...current, displayedIngestId: null })).not.toBe('current');
+  });
+
   it('keeps the marker through a restore until the mesh is visible, including failure', () => {
     const design = designForFamily('OSSE');
     const run = cad('wgi_archive');
@@ -155,6 +166,7 @@ describe('run coherence', () => {
       designFingerprint: designFingerprint(useDesignStore.getState().design),
       ingestId: 'wgi_store',
       displayedIngestId: null,
+      displayedGeometryHash: null,
       designId: 'wgd_store',
     });
   });

@@ -2185,8 +2185,8 @@ export function ResultsPanel() {
     || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id]))
   ), [provisional]);
   const latest = useMemo(() => jobs.find((job) => (
-    runMatchesContext(job, coherenceContext) !== 'other-model' && displayable(job)
-  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.mode, displayable, jobs]);
+    runDisplayVerdict(job, coherenceContext) === 'current' && displayable(job)
+  )) ?? null, [coherenceContext.designFingerprint, coherenceContext.designId, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedGeometryHash, coherenceContext.mode, displayable, jobs]);
   // The newest run that can be drawn at all, whatever model it belongs to.
   // Only the opening selection falls back to this; see the effect below.
   const newestDrawable = useMemo(
@@ -2230,7 +2230,9 @@ export function ResultsPanel() {
     if (
       held
       && (held.has_results || Boolean(provisional.entries[held.id]))
-      && (!selection.following || runMatchesContext(held, coherenceContext) !== 'other-model')
+      && (!selection.following || (coherenceContext.mode === 'cad'
+        ? runDisplayVerdict(held, coherenceContext) === 'current'
+        : runMatchesContext(held, coherenceContext) !== 'other-model'))
     ) return;
     // Opening the app is the one time an out-of-context run is better than an
     // empty dock. A restored CAD project selects its return but does not
@@ -2259,7 +2261,7 @@ export function ResultsPanel() {
     }
     if (selection.primary !== null) compareSelection.followLatest(null);
   }, [
-    coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.mode,
+    coherenceContext.designFingerprint, coherenceContext.ingestId, coherenceContext.displayedIngestId, coherenceContext.displayedGeometryHash, coherenceContext.mode,
     jobs, latest, newestDrawable, provisional, selection.awaiting, selection.following, selection.primary,
   ]);
 
@@ -2373,9 +2375,6 @@ export function ResultsPanel() {
   // rather than making the viewport fetch a result of its own -- the same
   // arrangement the pre-solve rail uses just above.
   const shownLabel = display?.primaryId ? labelFor(display.primaryId, jobs) : null;
-  useEffect(() => {
-    useObservationStore.getState().adopt(shownRaw, shownLabel);
-  }, [shownLabel, shownRaw]);
   const applyRecombined = useCallback((jobId: string, updated: JobResults) => {
     setDisplay((current) => current && current.results[jobId]
       ? { ...current, results: { ...current.results, [jobId]: updated as ResultPayload } }
@@ -2384,6 +2383,8 @@ export function ResultsPanel() {
   const displayLabels = display?.ids.map((id) => labelFor(id, jobs)).join('\u0000') ?? '';
   const named = useMemo(
     () => display?.ids.flatMap((id, index) => {
+      const job = jobs.find((item) => item.id === id);
+      if (coherenceContext.mode === 'cad' && (!job || runDisplayVerdict(job, coherenceContext) !== 'current')) return [];
       // `ids` is [primary, ...overlays], so index 0 is the run the panel is
       // built around. Flagging its entries here is what lets every chart find
       // the primary without trusting its own, possibly filtered, ordering.
@@ -2395,7 +2396,7 @@ export function ResultsPanel() {
       );
       return index === 0 ? channels.map((entry) => ({ ...entry, primary: true })) : channels;
     }) ?? NO_NAMED_RESULTS,
-    [display, displayLabels, view],
+    [display, displayLabels, view, jobs, coherenceContext],
   );
   const error = fetchError?.key === selectionKey ? fetchError.message : null;
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
@@ -2416,6 +2417,11 @@ export function ResultsPanel() {
     return newer ? latest : null;
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
+  const cadResultMatchesViewport = coherenceContext.mode !== 'cad'
+    || Boolean(selectedJob && runDisplayVerdict(selectedJob, coherenceContext) === 'current');
+  useEffect(() => {
+    useObservationStore.getState().adopt(cadResultMatchesViewport ? shownRaw : undefined, cadResultMatchesViewport ? shownLabel : null);
+  }, [cadResultMatchesViewport, shownLabel, shownRaw]);
   const activeIngestId = useCadReturnStore((store) => store.ingestRecord?.ingest_id ?? null);
   const recombineIngestId = selectedJob && runMatchesContext(selectedJob, coherenceContext) === 'current'
     ? selectedJob.cad_source?.ingest_id ?? null
@@ -2425,8 +2431,10 @@ export function ResultsPanel() {
   // returns can name their drive channels identically, so matching channel ids
   // are not lineage; the run has to carry the active return's immutable ingest
   // id, the same identity the dock's own strip checked before it was replaced.
-  const shownIsActiveReturn = recombineIngestId !== null
-    && recombineIngestId === activeIngestId;
+  const shownIsActiveReturn = cadResultMatchesViewport && Boolean(selectedJob && activeIngestId
+    && (recombineIngestId === activeIngestId
+      || (coherenceContext.displayedGeometryHash
+        && selectedJob.cad_source?.transformed_geometry_hash === coherenceContext.displayedGeometryHash)));
   const shownCanApply = selectedJob?.status === 'complete'
     && !primaryIsProvisional
     && shownIsActiveReturn;
@@ -2458,6 +2466,9 @@ export function ResultsPanel() {
       jobId: display.primaryId,
       channelId: shownCombinedChannel,
       combine: shownCombine,
+      solvedBandHz: shownRaw?.frequencies?.length
+        ? [shownRaw.frequencies[0], shownRaw.frequencies[shownRaw.frequencies.length - 1]]
+        : undefined,
       canApply: shownCanApply,
       blockedReason: shownBlock?.reason ?? null,
       recall: shownBlock?.recall ?? null,
@@ -2544,7 +2555,7 @@ export function ResultsPanel() {
   // handed the same element keeps its whole chart subtree, so no ECharts option
   // is rebuilt and no canvas is touched until the tab is in front again, and
   // then exactly once from the newest snapshot.
-  const charts = useVisibleRedraw(shown
+  const charts = useVisibleRedraw(shown && cadResultMatchesViewport
     ? <ResultsChartGrid chartTypes={preferences.chartTypes} result={shown} named={named} tokens={tokens} live={primaryIsProvisional} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifactView} wrapper={shownRaw} job={selectedJob} channelId={shownActiveChannel}/>
     : null);
   /** Every file is attempted; the ones that fail are named rather than
@@ -2612,15 +2623,15 @@ export function ResultsPanel() {
     finally { setExporting(false); }
   };
 
-  if (!selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
+  if (coherenceContext.mode !== 'cad' && !selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
     <ResultsHeader identity={null} controls={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>}/>
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}<div className="empty-state" role="status"><b>No results yet</b><span>Solve the current design, or select a finished run in the Jobs rail, to fill these charts.</span></div>
   </div>;
 
   return <div
     className="results-panel panel-scroll"
-    data-result-primary={shown ? display?.primaryId : undefined}
-    data-result-set={shown ? display?.key : undefined}
+    data-result-primary={shown && cadResultMatchesViewport ? display?.primaryId : undefined}
+    data-result-set={shown && cadResultMatchesViewport ? display?.key : undefined}
   >
     <ResultsHeader identity={<>
       {ids.map((id, index) => {
@@ -2652,7 +2663,7 @@ export function ResultsPanel() {
           ><i/>{RUN_VERDICT_MARKER[primaryVerdict]}</button>
         </span>;
       })}
-      {primaryRaw && <ResultViewSwitch result={primaryRaw} view={view} onSelect={(next) => resultViewStore.setView(next)}/>}
+      {primaryRaw && cadResultMatchesViewport && <ResultViewSwitch result={primaryRaw} view={view} onSelect={(next) => resultViewStore.setView(next)}/>}
       {/* How much of the dock is actually comparing. Five of the six default
           charts describe one run by nature, so a comparison that silently
           applies to one card looked identical to one that applied to all six.
@@ -2699,10 +2710,10 @@ export function ResultsPanel() {
           : 'Draw a measured response (FRD, or a REW text export) on the on-axis SPL chart'}
         onClick={() => measuredInput.current?.click()}
       >Overlay measured…</button>
-      <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
+      <button disabled={exporting || !primary || !cadResultMatchesViewport || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </>}/>
-    {powerHealth && <div className="result-diagnostics">
+    {powerHealth && cadResultMatchesViewport && <div className="result-diagnostics">
       <button type="button" className="pill result-power-check" aria-expanded={powerOpen} onClick={() => setPowerOpen((value) => !value)}>Power check ⚠</button>
       {powerOpen && <div role="status" className="result-power-details"><b>{shownActiveChannel ?? 'Result'} · {powerCheckMessage(powerHealth).label}</b><p>{powerCheckMessage(powerHealth).title}</p></div>}
     </div>}
@@ -2729,7 +2740,9 @@ export function ResultsPanel() {
     {/* Three different empty docks, said apart: a failed fetch, a fetch still
         in flight, and nothing selected at all. The last used to claim it was
         loading, which is how a dock with no selection looked like a hang. */}
-    {charts ?? <div className="empty-state" role="status">
+    {coherenceContext.mode === 'cad' && !cadResultMatchesViewport
+      ? <div className="empty-state" role="status"><b>Not solved yet</b><span>The model in the viewport has no selected solved result.</span><button type="button" className="solve-button" onClick={solveCurrentDesign}>Solve</button></div>
+      : charts ?? <div className="empty-state" role="status">
       <b>{error ? 'Results unavailable' : selection.primary ? 'Loading results' : 'No run selected'}</b>
       <span>{error
         ? 'Retry above, or select another run in the Jobs rail.'

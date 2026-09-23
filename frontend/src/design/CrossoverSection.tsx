@@ -6,6 +6,9 @@ import { NumberField } from './NumberField';
 import { ToggleRow } from './SolveOptionsSections';
 import { latestCombine } from '../results/latestCombine';
 import { recombineJobResults } from '../api/results';
+import { useDesignStore } from '../stores/design';
+import { useSolveOptionsStore } from '../stores/solveOptions';
+import { jobsCoordinatorBridge } from '../shell/JobsCoordinator';
 import {
   driverXoMinNote,
   familyOrders,
@@ -136,7 +139,7 @@ function PairRow({ pair, spec, preset, onChange }: {
 }
 
 /** How long an edit may settle before it is applied to the shown run. */
-const LIVE_RECOMBINE_DEBOUNCE_MS = 400;
+const LIVE_RECOMBINE_DEBOUNCE_MS = 100;
 
 /**
  * Which face of the section is shown, remembered across restarts. One string
@@ -168,6 +171,13 @@ function sameMembers(spec: CrossoverSpec, shown: ReturnType<typeof latestCombine
   const members = shown?.combine.members ?? [];
   return spec.members.length === members.length
     && spec.members.every((member, index) => member === members[index]);
+}
+
+function outsideSolvedBand(spec: CrossoverSpec | null, shown: ReturnType<typeof latestCombine.getSnapshot>): number | null {
+  if (!spec || !shown?.solvedBandHz) return null;
+  const [start, end] = shown.solvedBandHz;
+  return spec.members.flatMap((member) => [spec.channels[member]?.hp?.fcHz, spec.channels[member]?.lp?.fcHz])
+    .find((corner) => corner !== undefined && (corner < start || corner > end)) ?? null;
 }
 
 /**
@@ -208,7 +218,7 @@ function useLiveRecombine(
   useEffect(() => {
     /** Nothing outstanding and nothing to do: the loop rests here. */
     const rest = () => { if (pending.current === 0) { setBusy(false); setError(null); } };
-    if (!enabled || !spec || !shown?.canApply) { rest(); return; }
+    if (!enabled || !spec || !shown?.canApply || outsideSolvedBand(spec, shown) !== null) { rest(); return; }
     const applied = fromResult(shown.combine);
     if (!applied) return;
     if (!sameMembers(spec, shown)) return;
@@ -252,12 +262,13 @@ function useLiveRecombine(
  * When it does not, the reason is stated with the dock's own way out of it
  * rather than left as an edit that appears to have been swallowed.
  */
-function LiveNote({ shown, live, busy, error, members }: {
+function LiveNote({ shown, live, busy, error, members, outside }: {
   shown: NonNullable<ReturnType<typeof latestCombine.getSnapshot>>;
   live: boolean;
   busy: boolean;
   error: string | null;
   members: boolean;
+  outside?: number | null;
 }) {
   if (!live) {
     return <p className="section-note warning" role="status" aria-live="polite">
@@ -268,6 +279,19 @@ function LiveNote({ shown, live, busy, error, members }: {
   if (!members) {
     return <p className="section-note warning" role="status" aria-live="polite">
       The shown run combines {(shown.combine.members ?? []).join(' + ') || 'other channels'}, not the channels above, so these settings are not its crossover. Solve this return to combine it this way.
+    </p>;
+  }
+  if (outside !== null && outside !== undefined && shown.solvedBandHz) {
+    const [start, end] = shown.solvedBandHz;
+    return <p className="section-note warning" role="status" aria-live="polite">
+      The {outside} Hz crossover is outside the solved band [{start}, {end}] Hz. The combined response cannot update until that frequency is solved.{' '}
+      <button type="button" className="crossover-recall" onClick={() => {
+        const cad = useCadReturnStore.getState();
+        cad.setSweep(outside < start ? { frequencyStartHz: outside } : { frequencyEndHz: outside });
+        useSolveOptionsStore.getState().setFrequencyMode('range');
+        const design = useDesignStore.getState();
+        void jobsCoordinatorBridge.getSnapshot().run(design.design, design.designRevision);
+      }}>Re-solve with sweep {outside < start ? 'from' : 'to'} {outside} Hz</button>
     </p>;
   }
   return <p className={error ? 'section-note warning' : 'section-note'} role="status" aria-live="polite">
@@ -393,7 +417,7 @@ export function CadCrossover() {
         usageFor={(member) => maxOutput?.members?.[member] ?? null}
         onChange={apply}
       />}
-      {shown && <LiveNote shown={shown} live={live} busy={busy} error={liveError} members={sameMembers(spec, shown)}/>}
+      {shown && <LiveNote shown={shown} live={live} busy={busy} error={liveError} members={sameMembers(spec, shown)} outside={outsideSolvedBand(spec, shown)}/>}
     </>}
   </>;
 }
