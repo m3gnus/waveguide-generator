@@ -30,6 +30,7 @@ import { polarValidationError, useSolveOptionsStore, type SolveOptions } from '.
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
+import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { inFlightWords, onScreenRequestInFlight, onScreenRequestToContinue } from './cadOnScreenSettings';
 import { solveAttention, useOperationAttention } from './solveAttention';
 
@@ -371,6 +372,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // guard only; an empty slot must still route to the imported blocker so CAD
   // mode can truthfully say that an ingest is required.
   const cadGeometryActive = workspaceMode === 'cad';
+  const crossoverDraftError = useCrossoverDraftError();
   const fileGeometryActive = !cadGeometryActive && visibleImported?.source === 'file';
   const cadViewportGeometry = viewportGeometry.cad;
   const cadGeometryMismatch = cadGeometryActive && cadReturn.ingestRecord !== null && cadViewportGeometry !== null && (
@@ -385,7 +387,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         ?? importedSubmissionBlocker(cadReturn, solveOptions) ?? frameSolveBlocker(cadReturn.ingestRecord?.ingest_id)
       : null;
   const directivityError = polarValidationError(solveOptions.polar);
-  const solveBlocker = cadSolveBlocker ?? directivityError;
+  const solveBlocker = (cadGeometryActive ? crossoverDraftError : null) ?? cadSolveBlocker ?? directivityError;
+  useEffect(() => {
+    if (crossoverDraftError) setActionError(crossoverDraftError);
+    else setActionError((current) => current?.includes('frequency must be greater than 0 Hz') ? null : current);
+  }, [crossoverDraftError]);
   // Imported geometry takes the same engine choice as a parametric design. The
   // server says, per engine, which can take this return and where the user's
   // choice resolves; Solve follows that one answer.
@@ -485,13 +491,15 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   // The manual CAD solve is a durable backend operation. Its id is retained
   // before the first request, so retrying after any lost response recovers the
   // same row and cannot create a second job.
-  const solveCurrentCadImport = useCallback(async () => {
+  const solveCurrentCadImport = useCallback(async (
+    clicked?: { cad: ReturnType<typeof useCadReturnStore.getState>; checkPlan: () => Promise<void> },
+  ) => {
     if (submissionInFlight.current) return 'busy' as const;
     // The input is what is on screen at the press: the snapshot and the
     // settings are captured here, before anything is awaited, and everything
     // below uses these -- never whatever is selected by the time an answer
     // arrives (PLAN.md M1b, "captures the displayed snapshot").
-    const cad = useCadReturnStore.getState();
+    const cad = clicked?.cad ?? useCadReturnStore.getState();
     const heldAtPress = heldOnRequest(cad.ingestRecord);
     if (heldAtPress) return holdOnRequest(heldAtPress);
     const blocker = cadInputBlockerNow();
@@ -508,6 +516,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     try {
       setSubmitting(true);
       setActionError(null);
+      if (clicked) await clicked.checkPlan();
       // A Solve given right after a preparation (Bring in & solve) waits for
       // the frame read the card has under way for this snapshot.
       const reading = frameReadInFlight(ingestId);
@@ -707,14 +716,20 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         throw new Error('A standalone imported mesh is for viewport inspection only. Show Parametric to solve the WG design.');
       }
       if (cadGeometryActive) {
+        const draftError = getCrossoverDraftError();
+        if (draftError) throw new Error(draftError);
         const focused = document.activeElement;
         if (focused instanceof HTMLInputElement && focused.matches('[data-crossover-frequency]')) {
-          // Blur commits the whole draft once. The query hook will debounce its
-          // next plan, but this explicit Solve must check that exact input now.
+          // Commit the complete draft before capturing the click's settings.
           focused.blur();
-          const body = importedSolvePlanRequestBody(buildImportedSubmission(useCadReturnStore.getState()));
-          const freshPlan = await postImportedSolvePlan(body);
-          if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these CAD settings.');
+          if (getCrossoverDraftError()) throw new Error(getCrossoverDraftError()!);
+          const cad = useCadReturnStore.getState();
+          const body = importedSolvePlanRequestBody(buildImportedSubmission(cad));
+          await solveCurrentCadImport({ cad, checkPlan: async () => {
+            const freshPlan = await postImportedSolvePlan(body);
+            if (!freshPlan.engine) throw new Error(freshPlan.reason || 'No engine can solve these CAD settings.');
+          } });
+          return;
         }
         await solveCurrentCadImport();
         return;
@@ -735,14 +750,16 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [fileGeometryActive, solve, solveAvailable, solveBlocker, submitting]);
 
   const notice = useMemo<SolveNotice | null>(
-    () => solveNotice({
+    () => cadGeometryActive && crossoverDraftError
+      ? { tone: 'blocked', text: crossoverDraftError }
+      : solveNotice({
       cadGeometryActive,
       plan: solvePlan,
       pending: solvePlanPending,
       optionsError: solveOptionsError,
       planError: solvePlanError,
     }),
-    [cadGeometryActive, solveOptionsError, solvePlan, solvePlanError, solvePlanPending],
+    [cadGeometryActive, crossoverDraftError, solveOptionsError, solvePlan, solvePlanError, solvePlanPending],
   );
   const control = useMemo<SolveControl>(() => ({
     solve,

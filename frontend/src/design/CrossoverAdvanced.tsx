@@ -24,6 +24,7 @@ import {
 } from '../results/crossoverSpec';
 import type { MaxOutputMemberTrace } from '../results/types';
 import type { DriverPreset } from '../stores/cadReturn';
+import { setCrossoverDraftError } from './crossoverDrafts';
 
 /**
  * The per-channel crossover editor, rendered inline as the Crossover section's
@@ -53,14 +54,24 @@ function SectionEditor({ label, section, onChange }: {
 }) {
   const id = useId();
   const [frequencyDraft, setFrequencyDraft] = useState(String(section?.fcHz ?? ''));
-  useEffect(() => setFrequencyDraft(String(section?.fcHz ?? '')), [section?.fcHz]);
+  useEffect(() => {
+    setFrequencyDraft(String(section?.fcHz ?? ''));
+    setCrossoverDraftError(id, null);
+  }, [id, section?.fcHz]);
+  useEffect(() => () => setCrossoverDraftError(id, null), [id]);
+  const draftError = (draft: string) => {
+    const value = Number(draft);
+    return !draft.trim() || !Number.isFinite(value) || value <= 0
+      ? `${label} frequency must be greater than 0 Hz.` : null;
+  };
+  const editFrequency = (draft: string) => {
+    setFrequencyDraft(draft);
+    setCrossoverDraftError(id, draftError(draft));
+  };
   const commitFrequency = () => {
-    const fcHz = Number(frequencyDraft);
-    if (section && frequencyDraft.trim() && Number.isFinite(fcHz) && fcHz > 0) {
-      onChange({ ...section, fcHz });
-    } else {
-      setFrequencyDraft(String(section?.fcHz ?? ''));
-    }
+    const error = draftError(frequencyDraft);
+    setCrossoverDraftError(id, error);
+    if (!error && section) onChange({ ...section, fcHz: Number(frequencyDraft) });
   };
   const orders = section ? familyOrders(section.family) : [];
   return <div className="crossover-band">
@@ -80,12 +91,21 @@ function SectionEditor({ label, section, onChange }: {
         step="any"
         value={frequencyDraft}
         aria-label={`${label} frequency in hertz`}
+        aria-invalid={Boolean(draftError(frequencyDraft))}
+        aria-describedby={draftError(frequencyDraft) ? `${id}-error` : undefined}
         data-crossover-frequency=""
-        onChange={(event) => setFrequencyDraft(event.target.value)}
+        onChange={(event) => editFrequency(event.target.value)}
         onBlur={commitFrequency}
-        onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.blur(); }}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') {
+            editFrequency(String(section.fcHz));
+            setCrossoverDraftError(id, null);
+            event.preventDefault();
+          } else if (event.key === 'Enter') event.currentTarget.blur();
+        }}
       />
       <span className="crossover-unit">Hz</span>
+      {draftError(frequencyDraft) && <span id={`${id}-error`} className="crossover-frequency-error" role="status">{draftError(frequencyDraft)}</span>}
       <select
         aria-label={`${label} family`}
         value={section.family}

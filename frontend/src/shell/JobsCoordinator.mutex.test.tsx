@@ -775,6 +775,103 @@ describe('solve invocation mutex', () => {
     client.clear();
   });
 
+  // Review-2 probes: a rejected draft must stay on screen and block the
+  // request, including when the browser blurs the field before the click.
+  it.each(['0', '-5', ''])('blocks an invalid Advanced frequency draft (%s)', async (draft) => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    mocks.useRealImportedPlan = true;
+    mocks.postImportedSolvePlan.mockResolvedValue(mocks.importedPlan.plan);
+    readyCad('wgi_invalid_frequency');
+    useCadReturnStore.setState({
+      driveChannels: [
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+      ],
+      combineEnabled: true,
+      combineSpec: expandLegacy(['drive-hf', 'drive-lf'], [1_000]),
+    });
+    act(() => workspaceModeStore.setMode('cad'));
+    function Editor() {
+      const cad = useCadReturnStore();
+      return <CrossoverAdvanced spec={cad.combineSpec!} memberLabel={(member) => member}
+        onChange={(spec) => cad.setCombineSpec(spec)}/>;
+    }
+    const client = new QueryClient();
+    await act(async () => {
+      root.render(<QueryClientProvider client={client}><JobsCoordinator><Editor/><SolveActions/></JobsCoordinator></QueryClientProvider>);
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
+    const solve = host.querySelector<HTMLButtonElement>('.solve-button')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, draft);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await act(async () => { input.blur(); solve.click(); await Promise.resolve(); });
+    expect(input.value).toBe(draft);
+    expect(input.getAttribute('aria-invalid')).toBe('true');
+    expect(host.querySelector('.crossover-frequency-error')?.textContent).toMatch(/greater than 0 Hz/);
+    expect(host.querySelector('.solve-notice-blocked')?.textContent).toMatch(/greater than 0 Hz/);
+    expect(solve.disabled).toBe(true);
+    expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    act(() => {
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    });
+    expect(input.value).toBe('1000');
+    expect(host.querySelector('.crossover-frequency-error')).toBeNull();
+    expect(host.querySelector('.solve-notice-blocked')).toBeNull();
+    client.clear();
+  });
+
+  it('uses the clicked settings while the fresh Advanced plan is pending', async () => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    mocks.useRealImportedPlan = true;
+    mocks.postImportedSolvePlan.mockResolvedValue(mocks.importedPlan.plan);
+    readyCad('wgi_plan_snapshot');
+    useCadReturnStore.setState({
+      driveChannels: [
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+      ],
+      combineEnabled: true,
+      combineSpec: expandLegacy(['drive-hf', 'drive-lf'], [1_000]),
+      frequencyCount: 24,
+    });
+    act(() => workspaceModeStore.setMode('cad'));
+    function Editor() {
+      const cad = useCadReturnStore();
+      return <CrossoverAdvanced spec={cad.combineSpec!} memberLabel={(member) => member}
+        onChange={(spec) => cad.setCombineSpec(spec)}/>;
+    }
+    const client = new QueryClient();
+    await act(async () => {
+      root.render(<QueryClientProvider client={client}><JobsCoordinator><Editor/><SolveActions/></JobsCoordinator></QueryClientProvider>);
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 200)); });
+    const input = host.querySelector<HTMLInputElement>('[aria-label="Low-pass frequency in hertz"]')!;
+    const solve = host.querySelector<HTMLButtonElement>('.solve-button')!;
+    act(() => {
+      input.focus();
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '800');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const pending = deferred<typeof mocks.importedPlan.plan>();
+    mocks.postImportedSolvePlan.mockReturnValueOnce(pending.promise);
+    await act(async () => { solve.click(); await Promise.resolve(); });
+    act(() => useCadReturnStore.setState({ frequencyCount: 71 }));
+    await act(async () => { pending.resolve(mocks.importedPlan.plan); await pending.promise; });
+    const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
+    expect(setup.options.num_frequencies).toBe(24);
+    expect(JSON.stringify(setup)).toContain('"fc_hz":800');
+    expect(useCadReturnStore.getState().frequencyCount).toBe(71);
+    client.clear();
+  });
+
   it('labels the durable setup from the CAD document, not the open parametric design', async () => {
     readyCad('wgi_label');
     act(() => workspaceModeStore.setMode('cad'));
