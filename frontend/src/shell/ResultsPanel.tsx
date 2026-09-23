@@ -38,6 +38,7 @@ import { parseMeasuredTrace } from '../results/measuredTrace';
 import { electricalDrive, excursionSeries, hasElectricalImpedance } from '../results/drivePower';
 import { deEmbeddedPhaseRadians, hasOnAxisPhase, phaseSpatialSign, phaseUnwrapIsResolved, propagationReference } from '../results/phaseAnalysis';
 import { Icon } from './icons';
+import { ResultsHeader } from './ResultsHeader';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { useVisibleRedraw } from './panelVisibility';
 import { trapDialogFocus } from './dialogFocus';
@@ -45,7 +46,7 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
 import { useObservationStore } from '../viewport/observationStore';
 import { MAX_MEASURED_OVERLAYS, useMeasuredOverlayStore, type MeasuredOverlay } from '../stores/measuredOverlays';
 import { useDesignStore } from '../stores/design';
-import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runMatchesContext, useRunContext } from '../results/runCoherence';
+import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runDisplayVerdict, runMatchesContext, useRunContext } from '../results/runCoherence';
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
@@ -2168,6 +2169,8 @@ export function ResultsPanel() {
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
   const [beamRerunSubmitting, setBeamRerunSubmitting] = useState(false);
   const [coherenceOpen, setCoherenceOpen] = useState(false);
+  const [powerOpen, setPowerOpen] = useState(false);
+  const [modelLoad, setModelLoad] = useState<'idle' | 'loading' | 'failed'>('idle');
   const coherenceAnchor = useRef<HTMLButtonElement | null>(null);
   const [dismissedNewRun, setDismissedNewRun] = useState<string | null>(null);
   const view = useResultView();
@@ -2398,10 +2401,11 @@ export function ResultsPanel() {
   const showingPrevious = Boolean(selection.primary && display && display.key !== selectionKey && !error);
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const primaryJob = useMemo(() => jobs.find((job) => job.id === selection.primary) ?? null, [jobs, selection.primary]);
-  const primaryVerdict = primaryJob ? runMatchesContext(primaryJob, coherenceContext) : 'current';
+  const primaryVerdict = primaryJob ? runDisplayVerdict(primaryJob, coherenceContext) : 'current';
   // The menu belongs to one run under one verdict; solving, restoring or
   // switching runs answers it, so it must not stay open over its own answer.
   useEffect(() => { setCoherenceOpen(false); }, [primaryVerdict, selection.primary]);
+  useEffect(() => { setModelLoad('idle'); }, [selection.primary]);
   // A finished run nobody here asked for is offered, not imposed. Both orders
   // are checked because run numbers restart with a fresh jobs database, and
   // both are needed because two runs can share a timestamp to the second.
@@ -2427,7 +2431,11 @@ export function ResultsPanel() {
     && !primaryIsProvisional
     && shownIsActiveReturn;
   const showPrimaryModel = useCallback(() => {
-    if (primaryJob) void showJobModel(primaryJob, coordinator.reportError);
+    if (!primaryJob) return;
+    setModelLoad('loading');
+    void showJobModel(primaryJob, coordinator.reportError)
+      .then((ok) => setModelLoad(ok ? 'idle' : 'failed'))
+      .catch((reason) => { coordinator.reportError(String(reason)); setModelLoad('failed'); });
   }, [coordinator.reportError, primaryJob]);
   // Why the rail may not repaint this run. Stated from the dock because the
   // facts are the dock's -- run status, live preview, whose ingestion it is --
@@ -2605,7 +2613,7 @@ export function ResultsPanel() {
   };
 
   if (!selection.primary && !jobs.some((job) => job.has_results)) return <div className="results-panel panel-scroll">
-    <div className="results-toolbar"><span className="spacer"/><button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button></div>
+    <ResultsHeader identity={null} controls={<button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>}/>
     {preferencesOpen && <ResultsPreferencesSurface popover anchorRef={preferencesAnchor} onClose={() => setPreferencesOpen(false)}/>}<div className="empty-state" role="status"><b>No results yet</b><span>Solve the current design, or select a finished run in the Jobs rail, to fill these charts.</span></div>
   </div>;
 
@@ -2614,7 +2622,7 @@ export function ResultsPanel() {
     data-result-primary={shown ? display?.primaryId : undefined}
     data-result-set={shown ? display?.key : undefined}
   >
-    <div className="results-toolbar">
+    <ResultsHeader identity={<>
       {ids.map((id, index) => {
         const job = jobs.find((item) => item.id === id);
         // The shown run is the only one whose coherence is actionable, and its
@@ -2655,10 +2663,6 @@ export function ResultsPanel() {
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
-      {powerHealth && (() => {
-        const message = powerCheckMessage(powerHealth);
-        return <span className="pill result-power-check" role="status" title={message.title}>{message.label}</span>;
-      })()}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);
         return <option key={job.id} value={job.id}>{labelFor(job.id, jobs)}{marker ? ` · ${marker}` : ''}</option>;
@@ -2671,7 +2675,7 @@ export function ResultsPanel() {
       ><i/>New · #{newRun.run_number} → Show</button>}
       {/* Left of the spacer on purpose: this chip comes and goes on its own,
           and the controls on the right must not move under the cursor. */}
-      <span className="spacer"/>
+    </>} controls={<>
       <label className="result-count-control" title="Number of chart panels">Charts<select aria-label="Results panel count" value={RESULT_PANEL_COUNTS.includes(preferences.chartTypes.length as never) ? preferences.chartTypes.length : ''} onChange={(event) => preferencesStore.setChartCount(Number(event.target.value))}><option value="" disabled>{preferences.chartTypes.length}</option>{RESULT_PANEL_COUNTS.map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
       <button className="toolbar-icon" disabled={preferences.chartTypes.length >= MAX_RESULT_PANELS} aria-label="Add chart" title="Add chart panel" onClick={() => preferencesStore.addChart()}><Icon name="plus"/></button>
       <input
@@ -2697,7 +2701,12 @@ export function ResultsPanel() {
       >Overlay measured…</button>
       <button disabled={exporting || !primary || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
-    </div>
+    </>}/>
+    {powerHealth && <div className="result-diagnostics">
+      <button type="button" className="pill result-power-check" aria-expanded={powerOpen} onClick={() => setPowerOpen((value) => !value)}>Power check ⚠</button>
+      {powerOpen && <div role="status" className="result-power-details"><b>{shownActiveChannel ?? 'Result'} · {powerCheckMessage(powerHealth).label}</b><p>{powerCheckMessage(powerHealth).title}</p></div>}
+    </div>}
+    {modelLoad !== 'idle' && <div className="result-model-load" role="status">{modelLoad === 'loading' ? 'Loading run model…' : 'Could not load run model. Try Show this model again.'}</div>}
     {coherenceOpen && primaryJob && primaryVerdict !== 'current' && <AnchoredPanel
       anchorRef={coherenceAnchor}
       onClose={() => setCoherenceOpen(false)}
@@ -2707,7 +2716,7 @@ export function ResultsPanel() {
       <p>{RUN_VERDICT_SENTENCE[primaryVerdict]}</p>
       {primaryVerdict === 'older-revision'
         ? <><button type="button" onClick={() => { setCoherenceOpen(false); restorePrimaryDesign(); }}>Restore this run&apos;s design</button><button type="button" onClick={() => { setCoherenceOpen(false); solveCurrentDesign(); }}>Solve current design</button></>
-        : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }}>Show this model</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
+        : <><button type="button" onClick={() => { setCoherenceOpen(false); showPrimaryModel(); }} disabled={modelLoad === 'loading'}>{modelLoad === 'loading' ? 'Loading…' : 'Show this model'}</button><button type="button" onClick={() => { setCoherenceOpen(false); compareSelection.followLatest(latest?.id ?? null); }}>Show newest run</button></>}
     </AnchoredPanel>}
     {(measuredOverlays.length > 0 || measuredError) && <div className="results-toolbar result-measured">
       <span className="result-measured-caption">Measured</span>

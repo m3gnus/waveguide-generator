@@ -17,8 +17,8 @@ import { SurfaceMesh } from './SurfaceMesh';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 
 export type CameraRequest =
-  | { preset: CameraPreset; direction?: never; nonce: number }
-  | { preset?: never; direction: CameraDirection; nonce: number };
+  | { preset: CameraPreset; direction?: never; up?: never; nonce: number }
+  | { preset?: never; direction: CameraDirection; up?: CameraDirection; nonce: number };
 
 export interface ZoomRequest {
   direction: 'in' | 'out';
@@ -374,7 +374,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
   const viewTarget = useRef<Vector3 | null>(null);
   if (viewTarget.current === null) viewTarget.current = center.clone();
   const fitKey = cameraFitKey(bounds, request.nonce, projection, aspect);
-  const viewKey = `${request.nonce}:${direction.toArray().join(',')}`;
+  const viewKey = `${request.nonce}:${direction.toArray().join(',')}:${request.up?.join(',') ?? 'auto'}`;
   const fitRequestKey = `${fitKey}:${direction.toArray().join(',')}`;
   const fit = useMemo(
     () => calculateCameraFit(bounds, direction, projection, aspect),
@@ -412,7 +412,7 @@ function CameraRig({ bounds, request, zoomRequest, projection, preferences, sche
     appliedView.current = viewKey;
     appliedBounds.current = bounds.clone();
     camera.position.copy(fit.position);
-    camera.up.copy(cameraUp(direction));
+    camera.up.copy(request.up ? new Vector3(...request.up).normalize() : cameraUp(direction));
     camera.lookAt(fit.center);
     if (camera instanceof PerspectiveCamera) {
       camera.aspect = aspect;

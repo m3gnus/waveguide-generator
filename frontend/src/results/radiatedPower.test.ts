@@ -72,9 +72,9 @@ describe('radiated power cross-check', () => {
 
     const message = powerCheckMessage(health);
     expect(message.label).toBe('Power check: +1.35 dB at 16.3 kHz');
-    expect(message.title).toContain('remaining checked frequencies agree within 0.22 dB');
-    expect(message.title).toContain('re-solve a denser sweep');
-    expect(message.title).toContain('if the mismatch persists');
+    expect(message.title).toContain('may be unreliable');
+    expect(message.title).toContain('Re-solve and qualify solver stability');
+    expect(message.title).not.toContain('sphere sampling');
   });
 
   it('reports the affected span when only a few sweep points disagree', () => {
@@ -105,7 +105,7 @@ describe('radiated power cross-check', () => {
     const message = powerCheckMessage(health);
     expect(message.label).toBe('Power check: −2.60 dB at 3.20 kHz');
     expect(message.title).toContain('6 of 6 checked frequencies');
-    expect(message.title).toContain('mesh resolution');
+    expect(message.title).toContain('solver stability');
     expect(message.title).not.toContain('remaining checked frequencies');
   });
 });

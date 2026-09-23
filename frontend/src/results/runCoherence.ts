@@ -4,6 +4,7 @@ import { hydrateJobDesign } from '../jobs/jobDesign';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import { workspaceModeStore, type WorkspaceMode } from '../stores/workspaceMode';
 
 export interface RunContext {
@@ -12,19 +13,22 @@ export interface RunContext {
   /** Content identity of the live design; see `designFingerprint`. */
   designFingerprint: string;
   ingestId: string | null;
+  displayedIngestId?: string | null;
   designId: string | null;
 }
 
-export type RunContextVerdict = 'current' | 'older-revision' | 'other-model';
+export type RunContextVerdict = 'current' | 'older-revision' | 'other-model' | 'run-model-not-loaded';
 
 /** What a mismatched run's marker says, and what its tooltip spells out. */
 export const RUN_VERDICT_MARKER: Record<Exclude<RunContextVerdict, 'current'>, string> = {
   'older-revision': 'edited since',
-  'other-model': 'other model',
+  'other-model': 'Different CAD return',
+  'run-model-not-loaded': 'Run model not loaded',
 };
 export const RUN_VERDICT_SENTENCE: Record<Exclude<RunContextVerdict, 'current'>, string> = {
   'older-revision': 'The design has been edited since this run was solved.',
-  'other-model': "This run's model is not the one in the viewport.",
+  'other-model': "This run's CAD return differs from the one in the viewport.",
+  'run-model-not-loaded': "This run's CAD mesh is not loaded in the viewport.",
 };
 
 /**
@@ -93,6 +97,13 @@ export function jobDesignFingerprint(job: Pick<JobItem, 'id' | 'script_snapshot'
   return fingerprint;
 }
 
+/** Only an artifact matching the selected record can occupy the CAD viewport. */
+export function displayedCadIngestId(selectedIngestId: string | null): string | null {
+  const state = importedMeshStore.getSnapshot();
+  const scene = state.showing === 'cadSolver' ? state.cadSolver ?? state.cad : state.cad;
+  return scene?.ingestId === selectedIngestId ? scene.ingestId : null;
+}
+
 /** The model identity represented by the workspace and viewport right now. */
 export function runContext(): RunContext {
   const design = useDesignStore.getState();
@@ -101,6 +112,7 @@ export function runContext(): RunContext {
     designRevision: design.designRevision,
     designFingerprint: designFingerprint(design.design),
     ingestId: useCadReturnStore.getState().ingestRecord?.ingest_id ?? null,
+    displayedIngestId: displayedCadIngestId(useCadReturnStore.getState().ingestRecord?.ingest_id ?? null),
     designId: useDocumentStore.getState().identity?.designId ?? null,
   };
 }
@@ -116,7 +128,8 @@ export function useRunContext(): RunContext {
   const designRevision = useDesignStore((state) => state.designRevision);
   const ingestId = useCadReturnStore((state) => state.ingestRecord?.ingest_id ?? null);
   const designId = useDocumentStore((state) => state.identity?.designId ?? null);
-  return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, designId };
+  useSyncExternalStore(importedMeshStore.subscribe, importedMeshStore.getSnapshot, importedMeshStore.getSnapshot);
+  return { mode, designRevision, designFingerprint: useMemo(() => designFingerprint(design), [design]), ingestId, displayedIngestId: displayedCadIngestId(ingestId), designId };
 }
 
 /**
@@ -141,6 +154,14 @@ export function runMatchesContext(job: JobItem, context: RunContext): RunContext
   return 'other-model';
 }
 
+/** Display verdict; selection identity remains separate for solve and edits. */
+export function runDisplayVerdict(job: JobItem, context: RunContext): RunContextVerdict {
+  if (job.config_summary?.geometry_type !== 'imported' || context.mode !== 'cad') return runMatchesContext(job, context);
+  const runIngestId = job.cad_source?.ingest_id;
+  if (runIngestId && runIngestId === context.displayedIngestId) return 'current';
+  return runIngestId && runIngestId === context.ingestId ? 'run-model-not-loaded' : 'other-model';
+}
+
 /**
  * Where a run came from, stated only when it differs from where the workspace
  * is: in CAD mode every run in the dock is a CAD run, so a `CAD` pill on each
@@ -155,6 +176,6 @@ export function runProvenanceMarker(job: Pick<JobItem, 'config_summary'>, mode: 
 export function runContextMarker(job: JobItem, context: RunContext): string | null {
   const provenance = runProvenanceMarker(job, context.mode);
   if (provenance) return provenance;
-  const verdict = runMatchesContext(job, context);
+  const verdict = runDisplayVerdict(job, context);
   return verdict === 'current' ? null : RUN_VERDICT_MARKER[verdict];
 }

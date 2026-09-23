@@ -5,7 +5,7 @@ import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, typ
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import {
-  designFingerprint, runContext, runContextMarker, runMatchesContext, runProvenanceMarker, type RunContext,
+  designFingerprint, runContext, runContextMarker, runDisplayVerdict, runMatchesContext, runProvenanceMarker, type RunContext,
 } from './runCoherence';
 
 let nextJob = 0;
@@ -93,7 +93,7 @@ describe('run coherence', () => {
 
   it('classifies imported runs by the ingestion in the viewport', () => {
     const design = designForFamily('OSSE');
-    const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live' });
+    const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live', displayedIngestId: 'wgi_live' });
     expect(runMatchesContext(cad('wgi_live'), cadContext)).toBe('current');
     expect(runMatchesContext(cad('wgi_other'), cadContext)).toBe('other-model');
     expect(runMatchesContext(cad(null), { ...cadContext, ingestId: null })).toBe('other-model');
@@ -101,13 +101,24 @@ describe('run coherence', () => {
     expect(runMatchesContext(parametric(design), cadContext)).toBe('other-model');
   });
 
+  it('keeps the marker through a restore until the mesh is visible, including failure', () => {
+    const design = designForFamily('OSSE');
+    const run = cad('wgi_archive');
+    const before = contextFor(design, { mode: 'cad', ingestId: 'wgi_live', displayedIngestId: 'wgi_live' });
+    expect(runDisplayVerdict(run, before)).toBe('other-model');
+    const loading = { ...before, ingestId: 'wgi_archive', displayedIngestId: null };
+    expect(runContextMarker(run, loading)).toBe('Run model not loaded');
+    expect(runContextMarker(run, loading)).toBe('Run model not loaded'); // failed load retains the marker
+    expect(runContextMarker(run, { ...loading, displayedIngestId: 'wgi_archive' })).toBeNull();
+  });
+
   it('marks only the provenance that differs from the workspace mode', () => {
     const design = designForFamily('OSSE');
     const parametricContext = contextFor(design);
-    const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live' });
+    const cadContext = contextFor(design, { mode: 'cad', ingestId: 'wgi_live', displayedIngestId: 'wgi_live' });
     expect(runContextMarker(cad('wgi_live'), parametricContext)).toBe('CAD');
     expect(runContextMarker(cad('wgi_live'), cadContext)).toBeNull();
-    expect(runContextMarker(cad('wgi_other'), cadContext)).toBe('other model');
+    expect(runContextMarker(cad('wgi_other'), cadContext)).toBe('Different CAD return');
     expect(runContextMarker(parametric(design), cadContext)).toBe('Parametric');
     expect(runProvenanceMarker(cad('wgi_live'), 'cad')).toBeNull();
     expect(runProvenanceMarker(cad('wgi_live'), 'parametric')).toBe('CAD');
@@ -132,6 +143,7 @@ describe('run coherence', () => {
       designRevision: 14,
       designFingerprint: designFingerprint(useDesignStore.getState().design),
       ingestId: 'wgi_store',
+      displayedIngestId: null,
       designId: 'wgd_store',
     });
   });

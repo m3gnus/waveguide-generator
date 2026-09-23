@@ -1406,3 +1406,16 @@ textarea:disabled { opacity: .48; }
 .report-dialog-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .report-dialog-actions :is(button, a) { display: inline-flex; align-items: center; min-height: 32px; padding: 6px 12px; border: 1px solid var(--hair); border-radius: var(--r3); background: var(--ctl-grad); color: var(--fg1); text-decoration: none; }
 .report-dialog-actions a.primary { border-color: rgba(var(--acc-rgb), .45); background: rgba(var(--acc-rgb), .12); color: var(--acc-text); }
+
+/* The shared header lets identity and an arbitrary number of bands use the
+   available left space, while chart actions retain their intrinsic widths. */
+.results-header { flex-wrap: wrap; overflow-x: visible; gap: 4px 8px; padding-block: 3px; }
+.results-header-identity { display: flex; flex: 1 1 110px; align-items: center; gap: 4px; min-width: 0; max-width: 100%; overflow-x: auto; scrollbar-width: thin; }
+.results-header-controls { display: flex; flex: none; align-items: center; gap: 4px; min-width: max-content; margin-left: auto; }
+.results-header-identity > *, .results-header-controls > * { flex-shrink: 0; }
+.results-header-identity .result-chip-group { min-width: 104px; }
+.result-diagnostics { padding: 3px 8px; border-bottom: 1px solid var(--hair-soft); }
+.result-diagnostics .result-power-check { cursor: pointer; }
+.result-power-details { max-width: 720px; padding: 7px 0; color: var(--fg2); font-size: var(--text-micro); line-height: 1.4; }
+.result-power-details p { margin: 4px 0 0; }
+.result-model-load { padding: 3px 8px; color: var(--amber); font-size: var(--text-micro); }

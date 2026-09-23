@@ -172,7 +172,7 @@ describe('results run coherence', () => {
     // would be released again on the very next pass.
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'cad', following: false });
     // Shown, but never passed off as the model in the viewport.
-    expect(host.querySelector('button.result-context-marker')?.textContent).toBe('other model');
+    expect(host.querySelector('button.result-context-marker')?.textContent).toBe('Different CAD return');
 
     // And it stays: re-rendering must not hand the slot back to nothing.
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
@@ -235,8 +235,8 @@ describe('results run coherence', () => {
 
     await act(async () => { root.render(<ResultsPanel/>); });
     const marker = host.querySelector<HTMLButtonElement>('button.result-context-marker.stale')!;
-    expect(marker.textContent).toBe('other model');
-    expect(marker.getAttribute('title')).toContain("This run's model is not the one in the viewport.");
+    expect(marker.textContent).toBe('Different CAD return');
+    expect(marker.getAttribute('title')).toContain("This run's CAD return differs from the one in the viewport.");
 
     await act(async () => { marker.click(); });
     await act(async () => { toolbarButton(document.body, 'Show this model')!.click(); });
@@ -274,7 +274,7 @@ describe('results run coherence', () => {
       await Promise.resolve();
     });
     const cadOptions = [...host.querySelectorAll<HTMLOptionElement>('.result-compare-add option')].map((option) => option.textContent);
-    expect(cadOptions).toContain('#11 · imported-option · other model');
+    expect(cadOptions).toContain('#11 · imported-option · Different CAD return');
     expect(cadOptions).toContain('#7 · current · Parametric');
   });
 
@@ -318,14 +318,17 @@ describe('results run coherence', () => {
     })), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
-    const hint = host.querySelector<HTMLElement>('.result-power-check')!;
-    expect(hint.textContent).toBe('Power check: −0.60 dB at 1.00 kHz');
-    expect(hint.title).toContain('driven-surface flux reads higher');
-    expect(hint.title).toContain('Treat results at 1.00 kHz cautiously');
+    const hint = host.querySelector<HTMLButtonElement>('.result-power-check')!;
+    expect(hint.textContent).toBe('Power check ⚠');
+    await act(async () => { hint.click(); });
+    const detail = host.querySelector<HTMLElement>('.result-power-details')!;
+    expect(detail.textContent).toContain('Power check: −0.60 dB at 1.00 kHz');
+    expect(detail.textContent).toContain('driven-surface flux reads higher');
+    expect(detail.textContent).toContain('may be unreliable');
     // The 2.4 dB point is above the joined validity ceiling, so it is neither
     // reported nor counted among the checked frequencies.
-    expect(hint.textContent).not.toContain('2.4');
-    expect(hint.title).toContain('One of 2 checked frequencies');
+    expect(detail.textContent).not.toContain('2.4');
+    expect(detail.textContent).toContain('1 of 2 checked frequencies');
   });
 
   it('shows no radiated-power health hint when the optional block is absent', async () => {

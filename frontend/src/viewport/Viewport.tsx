@@ -9,6 +9,8 @@ import { planAdjustmentNotice } from '../jobs/planAdjustments';
 import { postSolverMesh, solverMeshArtifactToken, solverMeshScene } from '../api/solverMesh';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { cadCameraAxes } from './cadCamera';
 import { subscribeRevision, useDesignStore } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useSolveOptionsStore } from '../stores/solveOptions';
@@ -492,6 +494,21 @@ export function Viewport() {
   // screen already *is* the solve mesh, so there is nothing to switch between.
   const cadHasSeparateViewportMesh = cadRecord?.viewport_mesh?.available === true;
   const cadIngestId = cadRecord?.ingest_id ?? null;
+  const cadFrame = useCadSolverFrameStore((state) => cadIngestId ? state.frames[cadIngestId] : undefined);
+  const cadFrameOption = cadFrame && !cadFrame.linked && cadFrame.axis
+    ? cadFrame.frame?.axes.find((option) => option.axis === cadFrame.axis) : undefined;
+  const cadFrameMatrix = cadFrameOption?.previewFromRecord;
+  const cadFrameKey = cadFrameMatrix ? JSON.stringify(cadFrameMatrix) : null;
+  useEffect(() => {
+    if (workspaceMode !== 'cad' || !importedMesh) return;
+    if (cadFrame?.linked) {
+      setCameraRequest((previous) => ({ preset: 'front', nonce: previous.nonce + 1 }));
+      return;
+    }
+    if (!cadFrameMatrix) return;
+    const axes = cadCameraAxes({ previewFromRecord: cadFrameMatrix });
+    setCameraRequest((previous) => ({ ...axes, nonce: previous.nonce + 1 }));
+  }, [workspaceMode, importedMesh?.ingestId, cadFrame?.linked, cadFrameKey]);
   const [solverMeshState, setSolverMeshState] = useState<SolverMeshRefreshState>({
     building: false, stale: false, staleReason: null, error: null,
   });

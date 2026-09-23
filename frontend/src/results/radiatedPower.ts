@@ -110,27 +110,10 @@ export function powerCheckMessage(
   const opening = `At ${worstFrequency}, the two radiated-power estimates differ by ${worst}: ${direction}.`;
   const where = 'Per-frequency surface and sphere power are available in the Derived acoustics export and the static run report.';
 
-  if (health.spread === 'broad') {
-    return {
-      label: `Power check: ${worst} at ${worstFrequency}`,
-      title: `${opening} ${health.affectedCount} of ${health.checkedCount} checked frequencies exceed ${POWER_AGREEMENT_WARNING_DB} dB. A broadly distributed mismatch can indicate poor numerical conditioning, insufficient mesh resolution or spherical sampling, or an invalid symmetry assumption. Investigate those causes before trusting the flagged results. ${where}`,
-    };
-  }
-
-  const remainder = health.baselineDb === null
-    ? ''
-    : ` The remaining checked frequencies agree within ${health.baselineDb.toFixed(2)} dB on this power cross-check.`;
-  if (health.spread === 'single') {
-    return {
-      label: `Power check: ${worst} at ${worstFrequency}`,
-      title: `${opening}${remainder} One of ${health.checkedCount} checked frequencies exceeds ${POWER_AGREEMENT_WARNING_DB} dB. Treat results at ${worstFrequency} cautiously and re-solve a denser sweep around it; if the mismatch persists, refine the mesh and spherical sampling. ${where}`,
-    };
-  }
-
   const [low, high] = health.affectedSpanHz;
   const span = `${formatValidityFrequency(low)}–${formatValidityFrequency(high)}`;
   return {
     label: `Power check: ${worst} at ${worstFrequency}`,
-    title: `${opening}${remainder} ${health.affectedCount} of ${health.checkedCount} checked frequencies exceed ${POWER_AGREEMENT_WARNING_DB} dB, spanning ${span}. Treat that range cautiously and re-solve it more densely; if the mismatch persists, refine the mesh and spherical sampling. ${where}`,
+    title: `${opening} ${health.affectedCount} of ${health.checkedCount} checked frequencies exceed ${POWER_AGREEMENT_WARNING_DB} dB${health.affectedCount > 1 ? `, spanning ${span}` : ''}. The channel response near ${worstFrequency} may be unreliable. Re-solve and qualify solver stability before trusting it. ${where}`,
   };
 }
