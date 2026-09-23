@@ -4,8 +4,9 @@ import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { designForFamily, resetDesignStore, serializeDesign, useDesignStore, type DesignDocument } from '../stores/design';
 import { resetDocumentStore, useDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
+import { importedMeshStore } from '../viewport/importedMeshStore';
 import {
-  designFingerprint, runContext, runContextMarker, runDisplayVerdict, runMatchesContext, runProvenanceMarker, type RunContext,
+  designFingerprint, displayedCadIngestId, runContext, runContextMarker, runDisplayVerdict, runMatchesContext, runProvenanceMarker, type RunContext,
 } from './runCoherence';
 
 let nextJob = 0;
@@ -49,6 +50,7 @@ describe('run coherence', () => {
     resetCadReturnStore();
     resetDocumentStore();
     workspaceModeStore.setMode('parametric');
+    importedMeshStore.clear();
   });
 
   it('classifies a parametric run by the design it was solved from', () => {
@@ -110,6 +112,15 @@ describe('run coherence', () => {
     expect(runContextMarker(run, loading)).toBe('Run model not loaded');
     expect(runContextMarker(run, loading)).toBe('Run model not loaded'); // failed load retains the marker
     expect(runContextMarker(run, { ...loading, displayedIngestId: 'wgi_archive' })).toBeNull();
+  });
+
+  it('recognizes the selected CAD fallback while a prior solve mesh is cached', () => {
+    importedMeshStore.setCadSolver({ source: 'cad', ingestId: 'old' } as never);
+    importedMeshStore.setCad({ source: 'cad', ingestId: 'new' } as never);
+    importedMeshStore.showCadSolver();
+    expect(displayedCadIngestId('new')).toBe('new');
+    expect(displayedCadIngestId('old')).toBe('old');
+    expect(displayedCadIngestId('missing')).toBeNull();
   });
 
   it('marks only the provenance that differs from the workspace mode', () => {

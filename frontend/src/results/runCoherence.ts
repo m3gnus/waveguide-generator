@@ -100,8 +100,10 @@ export function jobDesignFingerprint(job: Pick<JobItem, 'id' | 'script_snapshot'
 /** Only an artifact matching the selected record can occupy the CAD viewport. */
 export function displayedCadIngestId(selectedIngestId: string | null): string | null {
   const state = importedMeshStore.getSnapshot();
-  const scene = state.showing === 'cadSolver' ? state.cadSolver ?? state.cad : state.cad;
-  return scene?.ingestId === selectedIngestId ? scene.ingestId : null;
+  const cad = state.cad?.ingestId === selectedIngestId ? state.cad : null;
+  const cadSolver = state.cadSolver?.ingestId === selectedIngestId ? state.cadSolver : null;
+  const scene = state.showing === 'cadSolver' ? cadSolver ?? cad : cad;
+  return scene?.ingestId ?? null;
 }
 
 /** The model identity represented by the workspace and viewport right now. */

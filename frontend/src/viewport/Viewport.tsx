@@ -499,8 +499,17 @@ export function Viewport() {
     ? cadFrame.frame?.axes.find((option) => option.axis === cadFrame.axis) : undefined;
   const cadFrameMatrix = cadFrameOption?.previewFromRecord;
   const cadFrameKey = cadFrameMatrix ? JSON.stringify(cadFrameMatrix) : null;
+  const lastCameraWorkspaceMode = useRef(workspaceMode);
   useEffect(() => {
-    if (workspaceMode !== 'cad' || !importedMesh) return;
+    const previousMode = lastCameraWorkspaceMode.current;
+    lastCameraWorkspaceMode.current = workspaceMode;
+    if (workspaceMode === 'parametric') {
+      if (previousMode === 'cad') {
+        setCameraRequest((previous) => ({ preset: 'front', nonce: previous.nonce + 1 }));
+      }
+      return;
+    }
+    if (!importedMesh) return;
     if (cadFrame?.linked) {
       setCameraRequest((previous) => ({ preset: 'front', nonce: previous.nonce + 1 }));
       return;

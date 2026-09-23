@@ -4,8 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DecodedFrame } from '../api/frame';
 import type { PreviewSnapshot } from '../api/previewSocket';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
+import { workspaceModeStore } from '../stores/workspaceMode';
+import { importedMeshStore } from './importedMeshStore';
+import { frameToScene } from './frameScene';
+import frameFixture from './solverFrame.v2.fixture.json';
 
-const canvasMock = vi.hoisted(() => ({ cameraNonces: [] as number[] }));
+const canvasMock = vi.hoisted(() => ({ cameraRequests: [] as Array<{ nonce: number; preset?: string; direction?: number[]; up?: number[] }> }));
 
 const frame: DecodedFrame = {
   header: {
@@ -58,7 +64,7 @@ vi.mock('../api/previewSocket', () => ({
 vi.mock('./ViewportCanvas', () => ({
   canRenderWebGL: () => true,
   ViewportCanvas: ({ cameraRequest }: { cameraRequest: { nonce: number } }) => {
-    canvasMock.cameraNonces.push(cameraRequest.nonce);
+    canvasMock.cameraRequests.push(cameraRequest);
     return null;
   },
 }));
@@ -69,12 +75,16 @@ describe('Viewport camera revision policy', () => {
   let host: HTMLDivElement;
   let root: Root;
 
-  const latestNonce = () => canvasMock.cameraNonces.at(-1);
+  const latestRequest = () => canvasMock.cameraRequests.at(-1)!;
+  const latestNonce = () => latestRequest().nonce;
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetDesignStore();
-    canvasMock.cameraNonces.length = 0;
+    resetCadReturnStore();
+    importedMeshStore.clear();
+    workspaceModeStore.setMode('parametric');
+    canvasMock.cameraRequests.length = 0;
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -84,6 +94,9 @@ describe('Viewport camera revision policy', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    workspaceModeStore.setMode('parametric');
+    resetCadReturnStore();
+    importedMeshStore.clear();
   });
 
   it('keeps the requested view across ordinary edits, undo, redo, and document changes', () => {
@@ -103,5 +116,40 @@ describe('Viewport camera revision policy', () => {
 
     act(() => useDesignStore.getState().loadDesign(designForFamily('R-OSSE')));
     expect(latestNonce()).toBe(0);
+  });
+
+  it('restores the parametric front after a CAD aim and re-aims on return to CAD', () => {
+    const ingestId = 'camera-transition';
+    const matrix = frameFixture.axes['-y'];
+    act(() => {
+      useCadSolverFrameStore.setState({ frames: {
+        [ingestId]: {
+          ingestId, status: 'ready', linked: false, axis: '-y', picked: true,
+          changedFrom: null, error: null,
+          frame: { axes: [{ axis: '-y', previewFromRecord: matrix, allowed: true }] },
+        },
+      } as never });
+      useCadReturnStore.setState({ ingestRecord: { ingest_id: ingestId } as never });
+      importedMeshStore.setCad({
+        source: 'cad', ingestId, name: 'CAD', artifactToken: ingestId,
+        scene: frameToScene(frame), triangleCount: 1, solvedTriangleCount: 1, physicalGroupCount: 1,
+      } as never);
+      workspaceModeStore.setMode('cad');
+    });
+    expect(latestRequest()).toMatchObject({ direction: [0, -1, 0], up: [0, 0, 1] });
+    const cadNonce = latestNonce();
+
+    act(() => workspaceModeStore.setMode('parametric'));
+    expect(latestRequest()).toMatchObject({ preset: 'front' });
+    expect(latestRequest().direction).toBeUndefined();
+    expect(latestNonce()).toBeGreaterThan(cadNonce);
+    const parametricNonce = latestNonce();
+
+    act(() => root.render(<Viewport />));
+    expect(latestNonce()).toBe(parametricNonce);
+
+    act(() => workspaceModeStore.setMode('cad'));
+    expect(latestRequest()).toMatchObject({ direction: [0, -1, 0], up: [0, 0, 1] });
+    expect(latestNonce()).toBeGreaterThan(parametricNonce);
   });
 });
