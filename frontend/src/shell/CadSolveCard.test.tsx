@@ -221,6 +221,63 @@ describe('CAD Solve card run status', () => {
     expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 1:40');
   });
 
+  it.each([
+    {
+      name: 'plain BEAT sweep',
+      firstMessage: 'Solving frequency 1/4 with BEAT Engine',
+      nextMessage: 'Solving frequency 2/4 with BEAT Engine',
+      firstProgress: 0.4,
+      setupProgress: [0.42, 0.44],
+      nextProgress: 0.48,
+      lastFrequency: 'frequency 1 of 4',
+      nextFrequency: 'frequency 2 of 4 · ETA 0:40',
+    },
+    {
+      name: 'imported multi-channel BEAT sweep',
+      firstMessage: 'Solving frequency 4/8 of drive channel 1/3 (hf) with BEAT Engine',
+      nextMessage: 'Solving frequency 2/8 of drive channel 2/3 (mf) with BEAT Engine',
+      firstProgress: 0.35 + 0.5 * 7 / 24,
+      setupProgress: [0.35 + 0.5 * 8 / 24, 0.35 + 0.5 * 9 / 24],
+      nextProgress: 0.35 + 0.5 * 10 / 24,
+      lastFrequency: 'frequency 4 of 8 · channel 1 of 3 · work 38%',
+      nextFrequency: 'frequency 2 of 8 · channel 2 of 3 · work 42% · ETA 1:33',
+    },
+  ])('keeps $name progress through interleaved setup logs in the CAD solve card', async ({
+    firstMessage, nextMessage, firstProgress, setupProgress, nextProgress, lastFrequency, nextFrequency,
+  }) => {
+    publishOperation(operation());
+    const running = job({
+      stage: 'solve', stage_message: firstMessage, progress: firstProgress,
+      solve_options: { engine: 'beat', num_frequencies: 4 } as JobItem['solve_options'],
+    });
+    publishJobs([running]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+
+    await act(async () => { vi.advanceTimersByTime(4_000); });
+    act(() => publishJobs([{
+      ...running, stage: 'setup', stage_message: 'Setting up BEAT solver context', progress: setupProgress[0],
+    }]));
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain(lastFrequency.split(' · work ')[0]);
+
+    await act(async () => { vi.advanceTimersByTime(6_000); });
+    act(() => publishJobs([{
+      ...running, stage: 'setup', stage_message: 'Initializing BEAT sweep worker', progress: setupProgress[1],
+    }]));
+    const duringSetup = host.querySelector('.cad-solve-run')?.textContent ?? '';
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    expect(duringSetup).toContain(lastFrequency.split(' · work ')[0]);
+    if (lastFrequency.includes('work')) expect(duringSetup).toContain(lastFrequency);
+
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    act(() => publishJobs([{
+      ...running, stage: 'solve', stage_message: nextMessage, progress: nextProgress,
+    }]));
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain(nextFrequency);
+  });
+
   it('drops a finished job clock before a later solve sample with the same id', async () => {
     publishOperation(operation());
     publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 3/10', progress: 0.5 })]);

@@ -219,20 +219,75 @@ export function isIndeterminate(job: Pick<JobItem, 'status' | 'stage' | 'stage_m
  * An ETA needs a later frequency checkpoint to establish a rate.
  */
 const stageClocks = new Map<string, { startedAt: number; completedAtStart: number }>();
+interface ObservedJobProgress {
+  stageWord: SolveStageWord;
+  /** Most recent parseable sweep checkpoint, held across BEAT setup chatter. */
+  frequency: FrequencyProgress | null;
+}
+const observedJobProgress = new Map<string, ObservedJobProgress>();
+
+const STAGE_WORD_RANK: Partial<Record<SolveStageWord, number>> = {
+  'Received': -1,
+  'Preparing mesh': 0,
+  'Starting…': 1,
+  'Solving': 2,
+  'Combining': 3,
+  'Cancelling…': 4,
+};
+
+/**
+ * Worker logs can report `setup` between BEAT sweep checkpoints. Keep the
+ * highest user-facing stage and the last parsed frequency for this job so a
+ * transient setup line cannot rewind the shared CAD/parametric display.
+ * Imported runs still derive overall work from `job.progress` at render time;
+ * the retained frequency is only the last channel-local checkpoint.
+ */
+function progressObservedForJob(job: JobProgressLike): ObservedJobProgress {
+  const stageWord = solveStageWord(job);
+  if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
+    stageClocks.delete(job.id);
+    observedJobProgress.delete(job.id);
+    return { stageWord, frequency: null };
+  }
+
+  const previous = observedJobProgress.get(job.id);
+  const previousRank = previous ? STAGE_WORD_RANK[previous.stageWord] ?? -Infinity : -Infinity;
+  const currentRank = STAGE_WORD_RANK[stageWord] ?? -Infinity;
+  const forwardStageWord = currentRank < previousRank ? previous!.stageWord : stageWord;
+  const parsedFrequency = job.status === 'running' && job.stage === 'solve'
+    ? parseFrequencyProgress(job.stage_message)
+    : null;
+  const progress = {
+    stageWord: forwardStageWord,
+    frequency: parsedFrequency ?? previous?.frequency ?? null,
+  };
+  observedJobProgress.set(job.id, progress);
+  return progress;
+}
 
 export function resetSolveStageClocksForTests(): void {
   stageClocks.clear();
+  observedJobProgress.clear();
   clockNow = Date.now();
 }
 
 export function clearSolveStageClock(jobId: string): void {
   stageClocks.delete(jobId);
+  observedJobProgress.delete(jobId);
 }
 
-function stageSample(job: JobProgressLike, frequency: FrequencyProgress | null, now: number): { elapsed: number; gained: number } {
-  if (job.status !== 'running' || job.stage !== 'solve' || !frequency) {
+function stageSample(job: JobProgressLike, stageWord: SolveStageWord, frequency: FrequencyProgress | null, now: number): { elapsed: number; gained: number } {
+  if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
     stageClocks.delete(job.id);
     return { elapsed: 0, gained: 0 };
+  }
+  const existing = stageClocks.get(job.id);
+  // A non-solve message after the sweep began is transient (BEAT emits setup
+  // callbacks between groups). Keep the original clock and its baseline.
+  if (stageWord !== 'Solving' || !frequency) {
+    return existing
+      ? { elapsed: Math.max(0, (now - existing.startedAt) / 1000), gained: 0 }
+      : { elapsed: 0, gained: 0 };
   }
   const jobId = job.id;
   // The runtime reserves 35–85% for the frequency sweep. Its normalized
@@ -240,12 +295,12 @@ function stageSample(job: JobProgressLike, frequency: FrequencyProgress | null, 
   const completed = frequency.channel && Number.isFinite(job.progress)
     ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5))
     : frequency.completed;
-  const existing = stageClocks.get(jobId);
-  if (!existing) {
+  const clock = stageClocks.get(jobId);
+  if (!clock) {
     stageClocks.set(jobId, { startedAt: now, completedAtStart: completed });
     return { elapsed: 0, gained: 0 };
   }
-  return { elapsed: Math.max(0, (now - existing.startedAt) / 1000), gained: Math.max(0, completed - existing.completedAtStart) };
+  return { elapsed: Math.max(0, (now - clock.startedAt) / 1000), gained: Math.max(0, completed - clock.completedAtStart) };
 }
 
 /**
@@ -367,10 +422,9 @@ function frequencyLine(frequency: FrequencyProgress, eta: number | null, overall
  * progress renders, never a CAD copy and a parametric copy of the same bar:
  * `JobsPanel`'s run card uses `variant="full"`, and the CAD Solve card's
  * one-line status uses `variant="compact"`, before and after its operation's
- * job exists alike. Neither keeps its own memory of what stage a run is on
- * -- both re-derive it from `job`/`operation` every render, which is what
- * makes a page reload show the right stage without asking the server
- * anything new before the socket resends its snapshot.
+ * job exists alike. Both job views share the same per-job stage/frequency
+ * observer, so a noisy worker callback cannot rewind one surface or reset its
+ * ETA. A page reload starts from the job snapshot the socket resends.
  */
 export function SolveProgressView({
   job,
@@ -397,14 +451,15 @@ export function SolveProgressView({
     </span>;
   }
 
-  const frequency = isFrequencyStage(job) ? parseFrequencyProgress(job.stage_message) : null;
-  const indeterminate = isIndeterminate(job);
+  const observed = progressObservedForJob(job);
+  const stageWord = observed.stageWord;
+  const frequency = stageWord === 'Solving' ? observed.frequency : null;
+  const indeterminate = job.status === 'running' && stageWord === 'Solving' && frequency === null;
   const elapsedSeconds = Math.max(0, (time - Date.parse(job.started_at ?? job.queued_at ?? '')) / 1000);
-  const sample = stageSample(job, frequency, time);
+  const sample = stageSample(job, stageWord, frequency, time);
   const normalized = frequency?.channel && Number.isFinite(job.progress)
     ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5)) : null;
   const eta = frequency ? etaSeconds(sample.elapsed, normalized === null ? frequency : { completed: normalized, total: 1 }, sample.gained) : null;
-  const stageWord = solveStageWord(job);
   const percent = Math.round((job.progress ?? 0) * 100);
 
   if (variant === 'compact') {

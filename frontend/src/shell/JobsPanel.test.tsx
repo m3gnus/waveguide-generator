@@ -507,6 +507,76 @@ describe('jobs panel run list', () => {
     }
   });
 
+  it.each([
+    {
+      name: 'plain BEAT sweep',
+      firstMessage: 'Solving frequency 1/4 with BEAT Engine',
+      nextMessage: 'Solving frequency 2/4 with BEAT Engine',
+      firstProgress: 0.4,
+      setupProgress: [0.42, 0.44],
+      nextProgress: 0.48,
+      setupLine: 'frequency 1 of 4',
+      nextLine: 'frequency 2 of 4 · ETA 0:40',
+    },
+    {
+      name: 'imported multi-channel BEAT sweep',
+      firstMessage: 'Solving frequency 4/8 of drive channel 1/3 (hf) with BEAT Engine',
+      nextMessage: 'Solving frequency 2/8 of drive channel 2/3 (mf) with BEAT Engine',
+      firstProgress: 0.35 + 0.5 * 7 / 24,
+      setupProgress: [0.35 + 0.5 * 8 / 24, 0.35 + 0.5 * 9 / 24],
+      nextProgress: 0.35 + 0.5 * 10 / 24,
+      setupLine: 'frequency 4 of 8 · channel 1 of 3 · work 38%',
+      nextLine: 'frequency 2 of 8 · channel 2 of 3 · work 42% · ETA 1:33',
+    },
+  ])('keeps $name progress through interleaved setup logs in the parametric run list', async ({
+    firstMessage, nextMessage, firstProgress, setupProgress, nextProgress, setupLine, nextLine,
+  }) => {
+    resetSolveStageClocksForTests();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-08T00:00:00Z'));
+    try {
+      const start = '2026-08-08T00:00:00Z';
+      const running: JobItem = {
+        ...job(24, 'BEAT setup chatter'), status: 'running', completed_at: null,
+        started_at: start, queued_at: start, progress: firstProgress,
+        stage: 'solve', stage_message: firstMessage,
+        config_summary: { drive_channel_ids: ['hf', 'mf', 'lf'] },
+        solve_options: { engine: 'beat', num_frequencies: 4 } as JobItem['solve_options'],
+      };
+      publishJobs([running]);
+      await act(async () => root.render(<JobsPanel/>));
+      expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
+
+      await act(async () => { vi.advanceTimersByTime(4_000); });
+      act(() => publishJobs([{
+        ...running, stage: 'setup', stage_message: 'Setting up BEAT solver context', progress: setupProgress[0],
+      }]));
+      expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
+      expect(host.querySelector('.job-frequency')?.textContent).toContain(
+        setupLine.split(' · work ')[0],
+      );
+
+      await act(async () => { vi.advanceTimersByTime(6_000); });
+      act(() => publishJobs([{
+        ...running, stage: 'setup', stage_message: 'Initializing BEAT sweep worker', progress: setupProgress[1],
+      }]));
+      expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
+      expect(host.querySelector('.job-frequency')?.textContent).toContain(
+        setupLine.split(' · work ')[0],
+      );
+      if (setupLine.includes('work')) expect(host.querySelector('.job-frequency')?.textContent).toContain(setupLine);
+
+      await act(async () => { vi.advanceTimersByTime(10_000); });
+      act(() => publishJobs([{
+        ...running, stage: 'solve', stage_message: nextMessage, progress: nextProgress,
+      }]));
+      expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
+      expect(host.querySelector('.job-frequency')?.textContent).toContain(nextLine);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('shows an indeterminate bar with no ETA when the solve stage reports no per-frequency count', async () => {
     const running: JobItem = {
       ...job(12, 'Batched'), status: 'running', completed_at: null,
