@@ -457,6 +457,159 @@ def _port_exit_on_plane(path: Path) -> None:
     _run_in_gmsh_session(build)
 
 
+def _surfaces_only() -> None:
+    gmsh.model.occ.synchronize()
+    gmsh.model.occ.remove(gmsh.model.getEntities(3), recursive=False)
+    gmsh.model.occ.synchronize()
+
+
+def _drop_faces(predicate: Callable[[tuple[float, ...], int], bool]) -> None:
+    doomed = [
+        (2, tag) for _dim, tag in gmsh.model.getEntities(2)
+        if predicate(gmsh.model.getBoundingBox(2, tag), tag)
+    ]
+    assert doomed
+    gmsh.model.occ.remove(doomed, recursive=False)
+    gmsh.model.occ.synchronize()
+
+
+def _open_x0_box_shell() -> None:
+    """The open-backed box shell (x 0..60, open at x = 0, driver on top), not yet written."""
+
+    occ = gmsh.model.occ
+    box = occ.addBox(0.0, -40.0, -80.0, 60.0, 80.0, 80.0)
+    occ.fragment([(3, box)], [(2, occ.addDisk(30.0, 0.0, 0.0, 10.0, 10.0))])
+    _surfaces_only()
+    _drop_faces(lambda box, _tag: abs(box[0]) < 1e-6 and abs(box[3]) < 1e-6)
+    occ.healShapes(sewFaces=True, makeSolids=False)
+    occ.synchronize()
+
+
+def _open_half_with_block(path: Path, *, block_x: float) -> None:
+    # The open-backed shell with a separate solid block inside it: at x = 0 the
+    # block is cut too (a capped face on the plane); at x = -10 it is whole and
+    # straddles the plane.
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        _open_x0_box_shell()
+        gmsh.model.occ.addBox(block_x, -10.0, -40.0, 20.0, 20.0, 20.0)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
+def _winged_open_half(path: Path) -> None:
+    # The open-backed shell with a rigid side wing: the rim on x = 0 spans
+    # about 70% of the shell's y extent.
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        box = occ.addBox(0.0, -40.0, -80.0, 60.0, 80.0, 80.0)
+        wing = occ.addBox(30.0, 40.0, -80.0, 30.0, 35.0, 80.0)
+        fused, _ = occ.fuse([(3, box)], [(3, wing)])
+        occ.fragment(fused, [(2, occ.addDisk(30.0, 0.0, 0.0, 10.0, 10.0))])
+        _surfaces_only()
+        _drop_faces(lambda box, _tag: abs(box[0]) < 1e-6 and abs(box[3]) < 1e-6)
+        occ.healShapes(sewFaces=True, makeSolids=False)
+        occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
+def _curved_source_sheet(path: Path) -> None:
+    # A complete closed box plus a separate half-cylinder source sheet whose
+    # two straight edges lie on x = 0 and span the box in y and z.
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        occ.addBox(20.0, -50.0, -80.0, 60.0, 100.0, 70.0)
+        cylinder = occ.addCylinder(0.0, -50.0, -45.0, 0.0, 100.0, 0.0, 35.0)
+        occ.intersect([(3, cylinder)], [(3, occ.addBox(0.0, -60.0, -100.0, 100.0, 120.0, 100.0))])
+        occ.synchronize()
+        occ.remove(
+            [dim_tag for dim_tag in gmsh.model.getEntities(3) if gmsh.model.getBoundingBox(*dim_tag)[0] < 1e-6],
+            recursive=False,
+        )
+        occ.synchronize()
+        _drop_faces(lambda box, tag: box[0] < 19.0 and str(gmsh.model.getType(2, tag)).casefold() == "plane")
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
+def _curved_face(surfaces: list[int]) -> list[int]:
+    chosen = [tag for tag in surfaces if str(gmsh.model.getType(2, tag)).casefold() != "plane"]
+    assert len(chosen) == 1
+    return chosen
+
+
+def _z_up_top_half(path: Path) -> None:
+    # A Z-up speaker facing -Y (front at y = -80), its top half kept and left
+    # open along z = 0, the driver on the front clear of the cut. Under the -y
+    # solver frame CAD z = 0 is the solver's y0, a plane WG mirrors.
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        box = occ.addBox(-40.0, -80.0, 0.0, 80.0, 80.0, 60.0)
+        disc = occ.addDisk(0.0, -80.0, 30.0, 10.0, 10.0)
+        occ.rotate([(2, disc)], 0.0, -80.0, 30.0, 1.0, 0.0, 0.0, math.pi / 2)
+        occ.fragment([(3, box)], [(2, disc)])
+        _surfaces_only()
+        _drop_faces(lambda box, _tag: abs(box[2]) < 1e-6 and abs(box[5]) < 1e-6)
+        occ.healShapes(sewFaces=True, makeSolids=False)
+        occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
+def _open_mouth_horn_facing_minus_y(path: Path) -> None:
+    # A single-sheet surface horn (inner wall and throat only, nothing cut)
+    # radiating -Y, its open mouth on CAD y = 0: the solver's z0 under -y.
+    _horn(path)
+
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        gmsh.model.occ.importShapes(str(path), highestDimOnly=True)
+        _surfaces_only()
+
+        def keep(box: tuple[float, ...]) -> bool:
+            inner = abs(box[2]) < 1e-3 and abs(box[5] - 60.0) < 1e-3
+            throat = abs(box[2]) < 1e-6 and abs(box[5]) < 1e-6
+            return inner or throat
+
+        _drop_faces(lambda box, _tag: not keep(box))
+        shapes = gmsh.model.getEntities(2)
+        gmsh.model.occ.translate(shapes, 0.0, 0.0, -60.0)
+        gmsh.model.occ.rotate(shapes, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, math.pi / 2)
+        gmsh.model.occ.healShapes(sewFaces=True, makeSolids=False)
+        gmsh.model.occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
+def _throat_farthest_along_y(surfaces: list[int]) -> list[int]:
+    flat = [
+        tag for tag in _plane_faces(surfaces)
+        if abs(gmsh.model.getBoundingBox(2, tag)[4] - gmsh.model.getBoundingBox(2, tag)[1]) < 1e-6
+    ]
+    assert flat
+    return [max(flat, key=lambda tag: abs(float(gmsh.model.occ.getCenterOfMass(2, tag)[1])))]
+
+
 def _mirrored_pair(path: Path) -> None:
     # A whole solid box, two drivers mirrored about x = 0.
     _box(path, x=(-60.0, 60.0), discs=[(-25.0, 0.0, 10.0), (25.0, 0.0, 10.0)], solid=True)
@@ -651,6 +804,10 @@ def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_pa
     for plane in earlier["domain_interpretation"]["observations"]["planes"].values():
         plane.pop("rigid_cut_rim_edges")
     assert _imported_open_half_refusal(earlier) == refusal
+    unnamed = json.loads(json.dumps(record))
+    for plane in unnamed["domain_interpretation"]["observations"]["planes"].values():
+        plane.pop("solver_plane")
+    assert _imported_open_half_refusal(unnamed) == refusal
 
 
 def test_undeclared_negative_side_half_is_refused_at_solve(tmp_path: Path) -> None:
@@ -789,6 +946,104 @@ def test_a_port_ending_open_on_the_plane_is_not_a_cut(tmp_path: Path) -> None:
     assert _imported_open_half_refusal(record) is None
     assert _imported_open_half_refusal(_legacy(record)) is None
     _assert_solves_on_metal_and_beat(record)
+
+
+def test_a_cut_on_the_solver_y0_plane_is_refused_whatever_its_cad_name(tmp_path: Path) -> None:
+    """Z-up, facing -Y: the top half kept, open along CAD z = 0, driver clear of it."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(
+        _bundle(tmp_path, "z-up-top-half", _z_up_top_half, _faces_near((0.0, -80.0, 30.0))),
+        tmp_path / "data", solver_frame="-y",
+    )
+    observed = _interpretation(record)["observations"]["planes"]["z0"]
+    assert observed["solver_plane"] == "y0"
+    assert observed["rigid_cut_rim_edges"] >= 3 and observed["sources_bisected"] == []
+    refusal = _imported_open_half_refusal(record)
+    assert refusal is not None and "along z = 0" in refusal[1]
+    _assert_refused_everywhere(record, refusal[1])
+    assert _imported_open_half_refusal(_legacy(record)) == refusal
+
+
+def test_a_horn_mouth_on_the_solver_z0_plane_stays_solvable_under_any_frame(tmp_path: Path) -> None:
+    """A single-sheet horn facing -Y: its open mouth lies on CAD y = 0, the solver's z0."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(
+        _bundle(tmp_path, "horn-minus-y", _open_mouth_horn_facing_minus_y, _throat_farthest_along_y),
+        tmp_path / "data", solver_frame="-y",
+    )
+    observed = _interpretation(record)["observations"]["planes"]["y0"]
+    assert observed["solver_plane"] == "z0"
+    assert observed["rigid_cut_rim_edges"] >= 3 and observed["sources_bisected"] == []
+    assert _imported_open_half_refusal(record) is None
+    assert _imported_open_half_refusal(_legacy(record)) is None
+    plan, outcomes = _solve_verdicts(record)
+    assert plan["code"] != "imported_open_half_shell", plan
+    assert "imported_open_half_shell" not in outcomes.values(), outcomes
+
+
+@pytest.mark.parametrize("block_x", [0.0, -10.0], ids=["cut-capped-block", "whole-straddling-block"])
+def test_an_open_half_with_another_body_on_the_plane_is_still_refused(
+    tmp_path: Path, block_x: float
+) -> None:
+    """A capped or straddling separate body does not make the cut shell whole."""
+
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(
+        _bundle(tmp_path, "half-with-block", lambda path: _open_half_with_block(path, block_x=block_x), BOX_DRIVER),
+        tmp_path / "data",
+    )
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    if block_x == 0.0:
+        assert observed["cap_triangles"] > 0
+    else:
+        assert observed["negative_vertices"] > 0 and observed["positive_vertices"] > 0
+    assert observed["rigid_cut_rim_edges"] == observed["rim_edges"] >= 3
+    refusal = _imported_open_half_refusal(record)
+    assert refusal is not None and refusal[0] == "imported_open_half_shell"
+    _assert_refused_everywhere(record, refusal[1])
+    assert _imported_open_half_refusal(_legacy(record)) == refusal
+
+
+def test_a_cut_through_a_winged_shell_is_refused(tmp_path: Path) -> None:
+    """A side wing leaves the cut section at about 70% of the shell's width."""
+
+    from server.cadlink.domain_interpretation import SPANNING_RIM_FRACTION
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    # The x=0 rim is 80 mm wide; the attached shell plus wing is 115 mm.
+    # This would be missed by the former three-quarter threshold.
+    assert 0.65 < 80.0 / 115.0 < 0.75
+    assert SPANNING_RIM_FRACTION <= 80.0 / 115.0
+    record = _ingest(_bundle(tmp_path, "winged-half", _winged_open_half, BOX_DRIVER), tmp_path / "data")
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    assert observed["rigid_cut_rim_edges"] == observed["rim_edges"] >= 3
+    refusal = _imported_open_half_refusal(record)
+    assert refusal is not None and refusal[0] == "imported_open_half_shell"
+    _assert_refused_everywhere(record, refusal[1])
+
+
+def test_a_curved_source_sheet_edged_on_the_plane_is_not_a_shell_cut(tmp_path: Path) -> None:
+    """Its straight edges span the box on x = 0; only rigid edges can be a cut."""
+
+    from server.cadlink.domain_interpretation import observe_record_mesh
+    from server.jobs.runtime import _imported_open_half_refusal
+
+    record = _ingest(_bundle(tmp_path, "curved-sheet", _curved_source_sheet, _curved_face), tmp_path / "data")
+    observed = _interpretation(record)["observations"]["planes"]["x0"]
+    assert observed["rim_edges"] >= 3
+    assert observed["rigid_cut_rim_edges"] == 0
+    assert _imported_open_half_refusal(record) is None
+    _assert_solves_on_metal_and_beat(record)
+    # Were the sheet's edges counted as rigid, the same mesh would read as a cut.
+    mesh = Path(record["mesh_store_path"]).read_text(encoding="utf-8")
+    untagged = observe_record_mesh({**record, "source_tags": {}}, mesh)
+    assert untagged is not None
+    assert untagged.planes["x0"].rigid_cut_rim_edges == observed["rim_edges"]
 
 
 def test_an_open_backed_shell_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:

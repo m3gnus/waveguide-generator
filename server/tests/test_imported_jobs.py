@@ -614,7 +614,7 @@ def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) ->
                 "planes": {
                     plane: {
                         "negative_vertices": 0, "positive_vertices": 1,
-                        "rim_edges": 0, "rigid_cut_rim_edges": 0,
+                        "rim_edges": 0, "rigid_cut_rim_edges": 0, "solver_plane": plane,
                         "cap_triangles": 0, "wg_cut": False,
                     }
                     for plane in ("x0", "y0", "z0")
@@ -3299,12 +3299,13 @@ def _open_half_observations(*, negative: bool, rigid_cut: bool = True, wg_cut: b
                         "positive_vertices": 0 if negative else 4965,
                         "rim_edges": 149,
                         "rigid_cut_rim_edges": 149 if rigid_cut else 0,
+                        "solver_plane": "x0",
                         "cap_triangles": 0,
                         "sources_bisected": ["source-a"],
                         "wg_cut": wg_cut,
                     },
-                    "y0": {"rim_edges": 0, "rigid_cut_rim_edges": 0, "wg_cut": False},
-                    "z0": {"rim_edges": 0, "rigid_cut_rim_edges": 0, "wg_cut": False},
+                    "y0": {"rim_edges": 0, "rigid_cut_rim_edges": 0, "solver_plane": "y0", "wg_cut": False},
+                    "z0": {"rim_edges": 0, "rigid_cut_rim_edges": 0, "solver_plane": "z0", "wg_cut": False},
                 },
             },
         },

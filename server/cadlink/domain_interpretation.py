@@ -73,12 +73,14 @@ TOLERANCE_MM = 1.0e-4
 #: A rim is at least this many free edges on one plane, as the mesher's
 #: ``detect_symmetry_planes`` counts it, so a stray leak vertex is not a cut.
 MIN_RIM_EDGES = 3
-#: A cut removes a whole side, so its rigid-shell rim is the model's section on
-#: the cut plane and reaches (nearly) the full rigid extent along both in-plane
-#: axes. A vent or slot that happens to lie on the plane covers a small part of
-#: it. Three quarters leaves room for a tapered or chamfered section while
-#: keeping any local opening out.
-SPANNING_RIM_FRACTION = 0.75
+#: A cut removes a whole side, so its rigid-shell rim is the cut shell's section
+#: on the plane. That section need not be the shell's widest: side wings,
+#: flanges, a tapered or chamfered cabinet or a horn flaring past the cut all
+#: make the shell wider elsewhere than where it was cut. A port or vent that
+#: happens to end on the plane is a small fraction of the cabinet in at least
+#: one in-plane direction. Half the shell's extent, in both in-plane
+#: directions, sits between the two with margin on each side.
+SPANNING_RIM_FRACTION = 0.5
 
 DECLARATION = "declaration"
 USER = "user"
@@ -375,8 +377,12 @@ class PlaneObservation:
     rim_edges: int
     cap_triangles: int
     cap_area_mm2: float
-    #: Free rigid-shell edges on this plane when their rim spans the exterior.
+    #: Free rigid-shell edges on this plane when they spread across the shell
+    #: they bound and that shell lies to one side of the plane: a cut rim.
     rigid_cut_rim_edges: int = 0
+    #: The solver-frame plane this CAD plane is (the observation is keyed by
+    #: the CAD plane). Only the solver's z0 is never mirrored.
+    solver_plane: str = ""
     sources_on_plane: list[str] = field(default_factory=list)
     #: Sources the plane passes through (a source face meets it without lying
     #: in it): the throat a cut bisects, as opposed to a driver on a baffle.
@@ -392,6 +398,7 @@ class PlaneObservation:
             "cap_triangles": self.cap_triangles,
             "cap_area_mm2": round(self.cap_area_mm2, 6),
             "rigid_cut_rim_edges": self.rigid_cut_rim_edges,
+            "solver_plane": self.solver_plane,
             "sources_on_plane": list(self.sources_on_plane),
             "sources_bisected": list(self.sources_bisected),
             "wg_cut": self.wg_cut,
@@ -412,6 +419,61 @@ class Observations:
             "free_edges": self.free_edges,
             "tolerance_mm": TOLERANCE_MM,
         }
+
+
+def _vertex_components(count: int, faces: np.ndarray) -> np.ndarray:
+    """A connected-component label per vertex, triangles joining their corners."""
+
+    if not count or not len(faces):
+        return np.arange(count)
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    rows = np.concatenate([faces[:, 0], faces[:, 1]])
+    cols = np.concatenate([faces[:, 1], faces[:, 2]])
+    graph = coo_matrix((np.ones(len(rows), dtype=np.int8), (rows, cols)), shape=(count, count))
+    return connected_components(graph, directed=False)[1]
+
+
+def _cut_rim_edges(
+    points: np.ndarray,
+    components: np.ndarray,
+    rigid_rim: np.ndarray,
+    axis: int,
+    others: list[int],
+    tolerance_mm: float,
+) -> int:
+    """How many rigid free edges on this plane form a cut rim, or 0.
+
+    Free edges of source faces are a sheet's own boundary, not a cut, so only
+    rigid edges are passed in. They are judged against the connected rigid
+    shell they bound. That shell must lie to one side
+    of the plane (another body the plane passes through is not the cut one)
+    and the rim must spread across it in both in-plane directions (a vent or a
+    port ending on the plane does not). A face of another body lying in the
+    plane (a solid block cut there too, say) caps nothing on this rim.
+    """
+
+    if len(rigid_rim) < MIN_RIM_EDGES:
+        return 0
+    count = 0
+    for component in np.unique(components[rigid_rim[:, 0]]):
+        component_rim = rigid_rim[components[rigid_rim[:, 0]] == component]
+        if len(component_rim) < MIN_RIM_EDGES:
+            continue
+        shell_points = points[components == component]
+        coordinate = shell_points[:, axis]
+        if np.any(coordinate < -tolerance_mm) == np.any(coordinate > tolerance_mm):
+            continue
+        rim_points = points[component_rim.ravel()]
+        if all(
+            float(np.ptp(shell_points[:, other])) > tolerance_mm
+            and float(np.ptp(rim_points[:, other]))
+            >= SPANNING_RIM_FRACTION * float(np.ptp(shell_points[:, other]))
+            for other in others
+        ):
+            count += len(component_rim)
+    return count
 
 
 def observe(
@@ -449,7 +511,8 @@ def observe(
     # Each free edge has exactly one incident face. A standalone source sheet
     # can have a long edge on an origin plane without opening the rigid shell.
     rigid_free = ~source_mask[free_indices // 3]
-    rigid_points = points[faces[~source_mask].ravel()] if len(faces) else np.zeros((0, 3))
+    # Source sheets can touch or cross a cut shell without becoming part of it.
+    components = _vertex_components(len(points), faces[~source_mask])
     observed: dict[str, PlaneObservation] = {}
     rim_axes: set[int] = set()
     for solver_axis, solver_plane in enumerate(PLANES):
@@ -472,17 +535,7 @@ def observe(
         ) if len(free) else np.zeros(0, dtype=bool)
         rim = int(np.count_nonzero(rim_mask))
         rigid_rim = free[rim_mask & rigid_free]
-        # Free edges of source faces are a sheet's own boundary, not a cut in
-        # the rigid shell. A vent can leave several rigid edges on the plane; a
-        # missing half reaches across the rigid exterior in both directions.
-        spanning = bool(len(rigid_rim) >= MIN_RIM_EDGES and len(rigid_points))
-        if spanning:
-            for axis in others:
-                extent = float(np.ptp(rigid_points[:, axis]))
-                rim_extent = float(np.ptp(points[rigid_rim][:, :, axis]))
-                if extent <= tolerance_mm or rim_extent < SPANNING_RIM_FRACTION * extent:
-                    spanning = False
-                    break
+        cut_rim = _cut_rim_edges(points, components, rigid_rim, solver_axis, others, tolerance_mm)
         cap = on_plane[faces].all(axis=1) if len(faces) else np.zeros(0, bool)
         corners = points[faces[cap]] if np.any(cap) else np.zeros((0, 3, 3))
         cap_area = float(
@@ -511,7 +564,8 @@ def observe(
             rim_edges=rim,
             cap_triangles=int(np.count_nonzero(cap)),
             cap_area_mm2=cap_area,
-            rigid_cut_rim_edges=len(rigid_rim) if spanning else 0,
+            rigid_cut_rim_edges=cut_rim,
+            solver_plane=solver_plane,
             sources_on_plane=touching,
             sources_bisected=bisected,
             wg_cut=wg_cut,
@@ -824,20 +878,22 @@ def has_rigid_rim_observations(interpretation: Any) -> bool:
     return isinstance(planes, Mapping) and all(
         isinstance(planes.get(plane), Mapping)
         and isinstance(planes[plane].get("rigid_cut_rim_edges"), int)
+        and planes[plane].get("solver_plane") in PLANES
         for plane in PLANES
     )
 
 
 def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | None:
-    """A one-sided, uncapped rigid-shell cut rim in saved mesh observations.
+    """A rigid-shell cut rim WG did not make, in saved mesh observations.
 
     Three free edges is the detector's minimum rim, shared with ``conclude``.
-    Only free edges of rigid (non-source) faces count, and only when they span
-    the rigid exterior on that plane (``rigid_cut_rim_edges``), so a standalone
-    source sheet's boundary and a small vent do not qualify, while a cut through
-    the enclosure alone does, wherever the driver sits. On ``z0``, which WG
-    never mirrors, an open end (a horn mouth on the plane, say) is ordinary, so
-    a cut there also needs a source the plane passes through.
+    ``rigid_cut_rim_edges`` counts only free rigid (non-source) edges that
+    spread across the one-sided shell they bound (see ``_cut_rim_edges``), so
+    a standalone source sheet's boundary and a small vent do not qualify,
+    while a cut through the enclosure alone does, wherever the driver sits.
+    On the solver's z0, which WG never mirrors, an open end (a horn mouth on
+    the plane, say) is ordinary, so a cut there also needs a source the plane
+    passes through.
     """
 
     observations = interpretation.get("observations")
@@ -848,19 +904,13 @@ def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | 
         item = planes.get(plane)
         if not isinstance(item, Mapping) or item.get("wg_cut"):
             continue
+        cut_rim = item.get("rigid_cut_rim_edges")
+        if not isinstance(cut_rim, int) or cut_rim < MIN_RIM_EDGES:
+            continue
+        if item.get("solver_plane") == "z0" and not item.get("sources_bisected"):
+            continue
         rim = item.get("rim_edges")
-        negative = item.get("negative_vertices")
-        positive = item.get("positive_vertices")
-        if (
-            isinstance(rim, int) and rim >= MIN_RIM_EDGES
-            and isinstance(negative, int) and isinstance(positive, int)
-            and ((negative > 0) != (positive > 0))
-            and item.get("cap_triangles") == 0
-            and isinstance(item.get("rigid_cut_rim_edges"), int)
-            and item["rigid_cut_rim_edges"] >= MIN_RIM_EDGES
-            and (plane in SUPPORTED_PLANES or bool(item.get("sources_bisected")))
-        ):
-            return plane, rim
+        return plane, rim if isinstance(rim, int) else cut_rim
     return None
 
 
