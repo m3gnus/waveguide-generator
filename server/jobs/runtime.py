@@ -27,6 +27,13 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
+from server.cadlink.domain_decision import (
+    MISMATCH_CODE as DOMAIN_DECISION_MISMATCH,
+    decision_mismatch_message,
+    decision_problem,
+    decision_refusal,
+    decision_summary,
+)
 from server.cadlink.domain_interpretation import (
     cut_shaped_open_rim,
     has_rigid_rim_observations,
@@ -599,6 +606,23 @@ def _refuse_inverted_reduced_mesh(record: Mapping[str, Any], msh_text: str) -> N
         )
 
 
+def _imported_decision_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
+    """Refuse a record whose sealed domain decision does not describe it.
+
+    Ingest decides a snapshot's domain once (``server/cadlink/domain_decision.py``)
+    and every submission solves exactly that decision: the planes it mirrors,
+    the mesh and observations it was made on, its frame. A record from an
+    earlier build carries none and is judged as before.
+    """
+
+    if record is None:
+        return None
+    problem = decision_problem(record)
+    if problem is None:
+        return None
+    return DOMAIN_DECISION_MISMATCH, decision_mismatch_message(problem)
+
+
 def _imported_open_half_refusal(
     record: Mapping[str, Any] | None, msh_text: str | None = None
 ) -> tuple[str, str] | None:
@@ -606,8 +630,10 @@ def _imported_open_half_refusal(
 
     The ingestion detector counts a rim from at least three free mesh edges on
     one origin plane. A spanning rigid-shell rim and one-sided, uncapped geometry
-    identify a missing half independently of the source position. Older records
-    are judged from their verified prepared mesh before they can run.
+    identify a missing half independently of the source position. A record's
+    domain decision states this refusal; the saved observations are judged
+    again as well, so no decision can make the check weaker. Older records are
+    judged from their verified prepared mesh before they can run.
     """
 
     if record is None or imported_domain_planes(record):
@@ -619,6 +645,9 @@ def _imported_open_half_refusal(
         "free-space", "free_space", "freestanding",
     }:
         return None
+    decided = decision_refusal(record)
+    if decided is not None:
+        return decided
     interpretation = record.get("domain_interpretation")
     if not has_rigid_rim_observations(interpretation):
         # Callers pass the mesh text they already verified against the record.
@@ -1130,6 +1159,9 @@ def _imported_request_refusal(
 ) -> tuple[str, str] | None:
     """A refusal no engine can lift: the request asks what imported geometry never does."""
 
+    mismatch = _imported_decision_refusal(record)
+    if mismatch is not None:
+        return mismatch
     open_half = _imported_open_half_refusal(record, msh_text)
     if open_half is not None:
         return open_half
@@ -1510,6 +1542,9 @@ async def plan_imported_submission(
         "code": code,
         "reason": reason,
         "domain": (symmetry_metadata or {}).get("resolved"),
+        "domain_decision": (
+            decision_summary(imported_record) if imported_record is not None else None
+        ),
         "engines": [asdict(verdict) for verdict in verdicts],
     }
 
@@ -2330,6 +2365,10 @@ class JobRuntime:
                 "manifest_sha256": request.geometry.manifest_sha256,
                 "transformed_geometry_hash": imported.record.get("transformed_geometry_hash"),
                 "solve_model_sha256": imported.record.get("solve_model_sha256"),
+                # The domain decision this job solves, as ingest sealed it and
+                # the submission checked it: planes, kept sides, fraction,
+                # frame and source mapping (None for an earlier build's record).
+                "domain_decision": decision_summary(imported.record),
                 "document": imported.document,
                 "identity": imported.identity,
             }
@@ -3392,7 +3431,9 @@ class JobRuntime:
                 await asyncio.to_thread(
                     _refuse_inverted_reduced_mesh, imported_record, job_msh_text
                 )
-                open_half = _imported_open_half_refusal(imported_record, job_msh_text)
+                open_half = _imported_decision_refusal(
+                    imported_record
+                ) or _imported_open_half_refusal(imported_record, job_msh_text)
                 if open_half is not None:
                     raise ImportedSolveRefusal(*open_half)
                 imported_record = {

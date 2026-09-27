@@ -208,6 +208,9 @@ class ImportedSolvePlanResponse(BaseModel):
     code: str | None = None
     reason: str
     domain: str | None = None
+    #: The record's sealed domain decision, summarised as the job records it
+    #: (``server/cadlink/domain_decision.py``); null for an earlier build's record.
+    domain_decision: dict[str, Any] | None = None
     engines: list[ImportedEngineVerdictResponse]
 
 

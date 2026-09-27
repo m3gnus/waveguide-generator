@@ -659,9 +659,12 @@ def _no_blocking_domain_finding(record: dict[str, Any]) -> None:
 
 
 def _legacy(record: dict[str, Any]) -> dict[str, Any]:
-    """The record as an earlier build saved it: no domain observations at all."""
+    """The record as an earlier build saved it: no domain observations, no decision."""
 
-    return {key: value for key, value in record.items() if key != "domain_interpretation"}
+    return {
+        key: value for key, value in record.items()
+        if key not in {"domain_interpretation", "domain_decision"}
+    }
 
 
 _SOLVE_ENGINES = ("auto", "metal", "beat", "beat-cpu", "bempp")
@@ -800,11 +803,14 @@ def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_pa
     assert f"x = 0 ({rim} rim edges)" in refusal[1]
     _assert_refused_everywhere(legacy, refusal[1])
     # Observations saved before the rigid-shell rim existed are observed again too.
+    # (Those builds wrote no domain decision either.)
     earlier = json.loads(json.dumps(record))
+    earlier.pop("domain_decision")
     for plane in earlier["domain_interpretation"]["observations"]["planes"].values():
         plane.pop("rigid_cut_rim_edges")
     assert _imported_open_half_refusal(earlier) == refusal
     unnamed = json.loads(json.dumps(record))
+    unnamed.pop("domain_decision")
     for plane in unnamed["domain_interpretation"]["observations"]["planes"].values():
         plane.pop("solver_plane")
     assert _imported_open_half_refusal(unnamed) == refusal

@@ -35,12 +35,12 @@ from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
 
+from .domain_decision import decide_domain_and_frame
 from .domain_interpretation import (
     EvidenceOutcome,
     apply_evidence,
     evidence_refusal_message,
     interpretation_finding,
-    interpretation_record,
     observe_record_mesh,
     remember_provenance_reading,
     resolve_domain_plan,
@@ -1551,16 +1551,39 @@ def ingest_bundle(
         viewport_artifact,
     ) = viewport_for(options)
     viewport_cache_hit = viewport_artifact is not None
-    domain_interpretation = interpretation_record(
+    # What the record states about the frame this mesh was meshed in (None
+    # for a linked return, which carries the design's own normalisation).
+    record_normalisation = (
+        {
+            **built["normalisation"],
+            "solver_frame": record_solver_frame(
+                manifest, solver_frame, domain_planes=applied_planes
+            ),
+        }
+        if is_unlinked_manifest(manifest)
+        else built["normalisation"]
+    )
+    mesh_content_sha256 = mesh_text_sha256(str(built["msh_text"]))
+    # The one domain decision (``domain_decision.py``): made here, once, on the
+    # mesh this snapshot is solved with; the model card, the Solve card's plan,
+    # the preparation, every submission and the job all read it.
+    domain_interpretation, domain_decision = decide_domain_and_frame(
         plan,
         observations,
-        {
-            **dict(built.get("symmetry") or {}),
-            "declared_cut_planes": list(declared_domain_planes(manifest)),
-        },
+        built,
+        manifest_sha256=bundle.manifest_sha256,
+        declared_planes=list(declared_domain_planes(manifest)),
         applied=applied_planes,
         outcome=evidence_outcome,
         cache_identity=options.get("domain_interpretation"),
+        normalisation=record_normalisation,
+        skipped_source_ids=set(skipped_source_ids)
+        | {
+            str(source_id)
+            for source_id, resolution in built.get("role_resolution", {}).items()
+            if resolution.get("skipped")
+        },
+        mesh_content_sha256=mesh_content_sha256,
     )
 
     viewport_failure_reason: str | None = None
@@ -1663,7 +1686,7 @@ def ingest_bundle(
     # M1c-auto replaced the blocking "set Model domain" finding: a model that
     # looks cut is solved as shown, or mirrored on recorded evidence, and the
     # model card states which. The finding only records it, blocking nothing.
-    interpreted = interpretation_finding(domain_interpretation)
+    interpreted = interpretation_finding(domain_interpretation, decision=domain_decision)
     if interpreted is not None:
         findings.append(
             {
@@ -1782,7 +1805,7 @@ def ingest_bundle(
             "bundle_store_path": str(bundle_destination),
             "mesh_store_path": str(mesh_path),
             "mesh_cache_key": cache_key,
-            "mesh_content_sha256": mesh_text_sha256(str(built["msh_text"])),
+            "mesh_content_sha256": mesh_content_sha256,
             "mesh_cache_hit": cache_hit,
             "viewport_mesh": (
                 {
@@ -1841,16 +1864,7 @@ def ingest_bundle(
                 manifest, selected_instance_id=resolved_instance_id
             ),
             "consistency": {"status": "accepted", "checked_instances": len(manifest["instances"])},
-            "normalisation": (
-                {
-                    **built["normalisation"],
-                    "solver_frame": record_solver_frame(
-                        manifest, solver_frame, domain_planes=applied_planes
-                    ),
-                }
-                if is_unlinked_manifest(manifest)
-                else built["normalisation"]
-            ),
+            "normalisation": record_normalisation,
             "anchor": (
                 {
                     "instance_id": anchor_instance["instance_id"],
@@ -1890,6 +1904,7 @@ def ingest_bundle(
             "symmetry": built["symmetry"],
             "symmetry_verification": built.get("symmetry_verification"),
             "domain_interpretation": domain_interpretation,
+            "domain_decision": domain_decision,
             # What each source actually kept through the cut, measured rather
             # than assumed. It was computed and dropped before, which left the
             # reduction with no observable evidence at all outside the mesher.

@@ -77,6 +77,7 @@ from .project_setup import (
     widen_polar_to_derivation,
 )
 from .setup import CadSolveSetup, solve_request_for, validate_setup
+from .domain_decision import decision_problem
 from .domain_interpretation import (
     excitation_problem,
     record_plan_identity,
@@ -819,6 +820,10 @@ def _resumable(
             return None
     held = record_plan_identity(record)
     if held != (dict(domain) if domain is not None else None):
+        return None
+    # The record's sealed domain decision is what a submission will solve; a
+    # record whose decision no longer describes it is prepared again.
+    if decision_problem(record) is not None:
         return None
     return record
 

@@ -4366,6 +4366,18 @@
             ],
             "title": "Domain"
           },
+          "domain_decision": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Decision"
+          },
           "engine": {
             "anyOf": [
               {

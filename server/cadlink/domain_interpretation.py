@@ -922,8 +922,14 @@ def open_half_refusal_message(plane: str, rim_edges: int) -> str:
     )
 
 
-def interpretation_finding(interpretation: Mapping[str, Any]) -> dict[str, Any] | None:
-    """The non-blocking finding that says which reading was solved, or None for a plain full model."""
+def interpretation_finding(
+    interpretation: Mapping[str, Any], *, decision: Mapping[str, Any] | None = None
+) -> dict[str, Any] | None:
+    """The non-blocking finding that says which reading was solved, or None for a plain full model.
+
+    With the snapshot's domain decision (``domain_decision.py``) its refusal is
+    the one the finding states: the same words every submission refuses with.
+    """
 
     reading = interpretation.get("reading")
     evidence = interpretation.get("evidence") or {}
@@ -938,10 +944,17 @@ def interpretation_finding(interpretation: Mapping[str, Any]) -> dict[str, Any] 
         }
     if reading == READING_AS_SHOWN:
         looks = list(interpretation.get("looks_cut") or [])
-        open_rim = cut_shaped_open_rim(interpretation)
+        refusal = decision.get("refusal") if isinstance(decision, Mapping) else None
+        if isinstance(refusal, Mapping):
+            refused: str | None = str(refusal.get("message"))
+        elif decision is None:
+            open_rim = cut_shaped_open_rim(interpretation)
+            refused = open_half_refusal_message(*open_rim) if open_rim is not None else None
+        else:
+            refused = None
         detail = (
-            open_half_refusal_message(*open_rim)
-            if open_rim is not None
+            refused
+            if refused is not None
             else "solved as shown, unmirrored"
             + (f"; it looks cut at {' and '.join(plane_words(plane) for plane in looks)}" if looks else "")
             + ". Change on the model card solves it mirrored when the cut validates."
@@ -1131,10 +1144,14 @@ def interpretation_view(store: CadLinkStore, record: Mapping[str, Any]) -> dict[
         # will apply a reading this geometry no longer offers.
         if differs and wanted in offered:
             pending = wanted
+    decision = record.get("domain_decision")
     return {
         "ingestId": record.get("ingest_id"),
         "available": True,
         "interpretation": dict(interpretation),
+        # The snapshot's one domain decision (``domain_decision.py``), exactly
+        # as the ingestion record seals it and every submission checks it.
+        "decision": dict(decision) if isinstance(decision, Mapping) else None,
         "remembered": remembered,
         "pending": pending,
     }
