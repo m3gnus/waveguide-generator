@@ -455,17 +455,17 @@ describe('jobs panel run list', () => {
     expect(host.textContent).not.toContain('own radiation-impedance matrix');
   });
 
-  it('walks a run through every stage word, and shows Received the instant a job is only queued', async () => {
+  it('walks a run through every stage word, and shows Starting the instant a job is only queued', async () => {
     const base = { ...job(10, 'Stages'), status: 'queued' as const, completed_at: null, progress: 0 };
     publishJobs([{ ...base, stage: null, stage_message: null }]);
     await act(async () => root.render(<JobsPanel/>));
     // A job accepted but not yet running shows an active status right away,
     // not a silent gap between pressing Solve and something appearing.
-    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Received');
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Starting…');
 
     const running = { ...base, status: 'running' as const };
     act(() => publishJobs([{ ...running, stage: 'mesh', stage_message: 'Building the surface mesh', progress: 0.1 }]));
-    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.job-stage-word')?.textContent).toBe('Starting…');
 
     act(() => publishJobs([{ ...running, stage: 'solve', stage_message: 'Solving frequency 1/8 with Metal BEM', progress: 0.4 }]));
     expect(host.querySelector('.job-stage-word')?.textContent).toBe('Solving');
@@ -475,7 +475,7 @@ describe('jobs panel run list', () => {
     expect(host.querySelector('.job-stage-word')?.textContent).toBe('Combining');
   });
 
-  it('shows an ETA only once two frequencies are done, measured from when the solve stage began', async () => {
+  it('shows an ETA after a later frequency checkpoint, measured from when the solve stage began', async () => {
     resetSolveStageClocksForTests();
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-08T00:00:00Z'));
@@ -492,13 +492,13 @@ describe('jobs panel run list', () => {
       expect(host.querySelector('.job-frequency')?.textContent).not.toContain('ETA');
 
       // 20 s pass with the job still in its solve stage the whole time, then
-      // a second frequency finishes: 2 done in 20 s -> 10 s/freq -> 8
-      // remaining -> 80 s -> 1:20. The clock is measured from when this job
+      // a second frequency finishes: 1 new frequency in 20 s -> 20 s/freq -> 8
+      // remaining -> 160 s -> 2:40. The clock is measured from when this job
       // entered the solve stage, not from its overall started_at, so a
       // meshing/warm-up interval before this stage began never inflates it.
       await act(async () => { vi.advanceTimersByTime(20_000); });
       act(() => publishJobs([{ ...running, stage_message: 'Solving frequency 2/10 with BEAT Engine', progress: 0.2 }]));
-      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 2 of 10 · ETA 1:20');
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 2 of 10 · ETA 2:40');
     } finally {
       vi.useRealTimers();
     }
@@ -532,20 +532,20 @@ describe('jobs panel run list', () => {
       const base: JobItem = {
         ...job(14, 'Imported multi-channel'), status: 'running', completed_at: null,
         started_at: '2026-08-08T00:00:00Z', queued_at: '2026-08-08T00:00:00Z',
-        stage: 'solve', stage_message: 'Solving frequency 1/8 of drive channel 1/3 (hf) with BEAT Engine', progress: 0.05,
+        stage: 'solve', stage_message: 'Solving frequency 1/8 of drive channel 1/3 (hf) with BEAT Engine', progress: 0.35 + 0.5 / 24,
       };
       publishJobs([base]);
       await act(async () => root.render(<JobsPanel/>));
-      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 1 of 24 · channel 1 of 3');
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('work 4% · channel 1 of 3');
 
       // First channel (8 frequencies) finishes, second channel is under way:
       // overall completed = 8 + 3 = 11 of 24.
       await act(async () => { vi.advanceTimersByTime(16_000); });
       act(() => publishJobs([{
-        ...base, stage_message: 'Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM', progress: 0.45,
+        ...base, stage_message: 'Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM', progress: 0.35 + 0.5 * 11 / 24,
       }]));
-      // 11 done in 16 s -> ~1.45 s/freq -> 13 remaining -> ~19 s -> 0:19.
-      expect(host.querySelector('.job-frequency')?.textContent).toBe('frequency 11 of 24 · channel 2 of 3 · ETA 0:19');
+      // 10 new units in 16 s -> 13 remaining -> ~21 s -> 0:21.
+      expect(host.querySelector('.job-frequency')?.textContent).toBe('work 46% · channel 2 of 3 · ETA 0:21');
     } finally {
       vi.useRealTimers();
     }

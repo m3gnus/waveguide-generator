@@ -80,9 +80,9 @@ describe('CAD Solve card run status', () => {
     resetCadOperationsStore();
     resetCadReturnStore();
     resetSolveOptionsStore();
-    resetSolveStageClocksForTests();
     vi.useFakeTimers();
     vi.setSystemTime(new Date(NOW));
+    resetSolveStageClocksForTests();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -107,24 +107,25 @@ describe('CAD Solve card run status', () => {
     act(() => publishOperation(operation({ state: 'processing', stage: 'preparing-mesh', jobId: null })));
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
 
-    // ready to submit, still no job: "Solving".
+    // ready to submit, still no job: preparation has not stepped back.
     act(() => publishOperation(operation({ state: 'processing', stage: 'ready', jobId: null })));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
 
     // Accepted, job not in the list yet yet (within the grace window): says
     // so plainly, not a made-up stage.
     act(() => publishOperation(operation({ state: 'accepted', stage: 'submitted' })));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Solve submitted.');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
 
-    // The job's own brief "queued" window continues "Solving" -- not a
-    // second "Received", which would step the sequence backward.
+    // The queued window continues Starting.
     act(() => publishJobs([job({ status: 'queued', stage: null, stage_message: null })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
 
-    // The job is running and has its own stage now: "Preparing mesh" (its
-    // own mesh step), reached through the job, not the operation.
+    act(() => publishJobs([job({ status: 'running', stage: 'initializing', stage_message: 'Initializing solver', progress: 0.05 })]));
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+
+    // The runtime emits mesh after initializing; both stay at Starting.
     act(() => publishJobs([job({ status: 'running', stage: 'mesh', stage_message: 'Building the surface mesh', progress: 0.1 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
 
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 2/8 with Metal BEM', progress: 0.3 })]));
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Solving');
@@ -147,7 +148,7 @@ describe('CAD Solve card run status', () => {
     publishOperation(operation({ operationId: 'op-old', state: 'accepted', jobId: 'job-old', updatedAt: '2026-09-22T23:00:00Z' }));
     publishJobs([job({ id: 'job-old', status: 'complete', progress: 1, completed_at: '2026-09-22T23:01:00Z' })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Solved · its results are in Results.');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
 
     // A second, newer request for the same snapshot starts -- still being
     // validated, no job of its own yet. Only op-old's operation store entry
@@ -193,28 +194,58 @@ describe('CAD Solve card run status', () => {
     })]));
     const text = host.querySelector('.cad-solve-run')?.textContent ?? '';
     expect(text).toContain('frequency 2 of 10');
-    expect(text).toContain('ETA 1:20');
+    expect(text).toContain('ETA 2:40');
+  });
+
+  it('ticks elapsed time without a jobs update and measures ETA from a late first frequency', async () => {
+    publishOperation(operation());
+    publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 5/10', progress: 0.6 })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('ETA');
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('0:10');
+    act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 6/10', progress: 0.65 })]));
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 0:40');
+  });
+
+  it('uses overall work for a rear-facing imported axial drive whose printed count restarts', async () => {
+    publishOperation(operation());
+    publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 1/4 of drive channel 2/2 (rear) with BEAT Engine', progress: 0.35 + 0.5 * 5 / 16 })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 2/4 of drive channel 2/2 (rear) with BEAT Engine', progress: 0.35 + 0.5 * 6 / 16 })]));
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 1:40');
+  });
+
+  it('drops a finished job clock before a later solve sample with the same id', async () => {
+    publishOperation(operation());
+    publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 3/10', progress: 0.5 })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    await act(async () => { vi.advanceTimersByTime(10_000); });
+    act(() => publishJobs([job({ status: 'complete', stage: 'postprocess', progress: 1 })]));
+    act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 5/10', progress: 0.6 })]));
+    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('ETA');
   });
 
   it('says a run is done once its job completes', async () => {
     publishOperation(operation());
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Solved · its results are in Results.');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
   });
 
   it('stops assuming a missing job is about to appear once the accepted operation is stale', async () => {
     // Just accepted: the ordinary gap before the job arrives.
     publishOperation(operation({ updatedAt: NOW }));
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Solve submitted.');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
 
     // The same operation, accepted well over the grace window ago, and still
     // no matching job -- as a reload might find. No job is ever published in
     // this test.
     act(() => publishOperation(operation({ updatedAt: '2026-09-22T23:59:00Z' })));
     const text = host.querySelector('.cad-solve-run')?.textContent ?? '';
-    expect(text).not.toBe('Solve submitted.');
+    expect(text).not.toBe('Preparing mesh');
     expect(text.toLowerCase()).toContain("isn't showing in the jobs list");
   });
 });

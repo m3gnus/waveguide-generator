@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { renderToStaticMarkup } from 'react-dom/server';
 import type { JobItem } from '../api/jobsSocket';
 import {
   etaSeconds,
@@ -21,10 +22,10 @@ function partial(overrides: Partial<JobItem>): Pick<JobItem, 'status' | 'stage'>
 
 describe('solveStageWord', () => {
   it('names every stage transition the requirement lists', () => {
-    expect(solveStageWord(partial({ status: 'queued', stage: null }))).toBe('Received');
-    expect(solveStageWord(partial({ status: 'running', stage: null }))).toBe('Solving');
+    expect(solveStageWord(partial({ status: 'queued', stage: null }))).toBe('Starting…');
+    expect(solveStageWord(partial({ status: 'running', stage: null }))).toBe('Starting…');
     expect(solveStageWord(partial({ status: 'running', stage: 'initializing' }))).toBe('Starting…');
-    expect(solveStageWord(partial({ status: 'running', stage: 'mesh' }))).toBe('Preparing mesh');
+    expect(solveStageWord(partial({ status: 'running', stage: 'mesh' }))).toBe('Starting…');
     expect(solveStageWord(partial({ status: 'running', stage: 'assemble' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'solve' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'radiation_impedance' }))).toBe('Solving');
@@ -45,8 +46,8 @@ describe('operationStageWord', () => {
     expect(operationStageWord(op({ state: 'received', stage: null }))).toBe('Received');
     expect(operationStageWord(op({ state: 'received', stage: 'validating' }))).toBe('Received');
     expect(operationStageWord(op({ state: 'processing', stage: 'preparing-mesh' }))).toBe('Preparing mesh');
-    expect(operationStageWord(op({ state: 'processing', stage: 'ready' }))).toBe('Solving');
-    expect(operationStageWord(op({ state: 'processing', stage: 'submitted' }))).toBe('Solving');
+    expect(operationStageWord(op({ state: 'processing', stage: 'ready' }))).toBe('Starting…');
+    expect(operationStageWord(op({ state: 'processing', stage: 'submitted' }))).toBe('Starting…');
   });
 
   it('shows a clear waiting-for-you state, distinct from the pipeline stages', () => {
@@ -60,7 +61,7 @@ describe('operationStageWord', () => {
     expect(operationStageWord(op({ state: 'cancel_requested' }))).toBe('Cancelling…');
     expect(operationStageWord(op({ state: 'rejected' }))).toBe('Failed');
     expect(operationStageWord(op({ state: 'cancelled' }))).toBe('Cancelled');
-    expect(operationStageWord(op({ state: 'recovery_required' }))).toBe('Failed');
+    expect(operationStageWord(op({ state: 'recovery_required' }))).toBe('Needs recovery');
   });
 });
 
@@ -93,17 +94,15 @@ describe('parseFrequencyProgress', () => {
       .toEqual({ completed: 32, total: 160 });
   });
 
-  it('reads an imported multi-channel message as overall progress across every channel', () => {
-    // server/solver/beat_imported.py and bempp_imported.py: "Solving
-    // frequency i/N of drive channel c/C (id) with …". Overall completed is
-    // every earlier channel's N frequencies plus this channel's own count;
-    // overall total is C*N.
+  it('keeps an imported message as a channel count, never a false overall count', () => {
+    // A rear-facing axial channel can solve two tag groups, each restarting
+    // i/N. Overall work comes from the job progress field.
     expect(parseFrequencyProgress('Solving frequency 2/8 of drive channel 1/3 (hf) with BEAT Engine'))
-      .toEqual({ completed: 2, total: 24, channel: { index: 1, count: 3 } });
+      .toEqual({ completed: 2, total: 8, channel: { index: 1, count: 3 } });
     expect(parseFrequencyProgress('Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM'))
-      .toEqual({ completed: 11, total: 24, channel: { index: 2, count: 3 } });
+      .toEqual({ completed: 3, total: 8, channel: { index: 2, count: 3 } });
     expect(parseFrequencyProgress('Solving frequency 8/8 of drive channel 3/3 (lf) with BEAT Engine'))
-      .toEqual({ completed: 24, total: 24, channel: { index: 3, count: 3 } });
+      .toEqual({ completed: 8, total: 8, channel: { index: 3, count: 3 } });
   });
 });
 
@@ -117,15 +116,21 @@ describe('isIndeterminate', () => {
 });
 
 describe('etaSeconds', () => {
-  it('is hidden before two frequencies have completed', () => {
+  it('is hidden until frequency work advances after the clock starts', () => {
     expect(etaSeconds(30, null)).toBeNull();
     expect(etaSeconds(30, { completed: 0, total: 10 })).toBeNull();
-    expect(etaSeconds(30, { completed: 1, total: 10 })).toBeNull();
+    expect(etaSeconds(30, { completed: 1, total: 10 }, 0)).toBeNull();
   });
 
   it('projects the remaining time from the average time per frequency so far', () => {
     // 2 done in 20 s -> 10 s/freq -> 8 remaining -> 80 s.
     expect(etaSeconds(20, { completed: 2, total: 10 })).toBeCloseTo(80);
+  });
+
+  it('uses only work completed after a late mount as its rate', () => {
+    expect(etaSeconds(20, { completed: 7, total: 10 }, 2)).toBe(30);
+    expect(etaSeconds(20, { completed: 7, total: 10 }, 0)).toBeNull();
+    expect(etaSeconds(10, { completed: 2, total: 10 }, 1)).toBe(80);
   });
 
   it('is zero once every frequency is accounted for', () => {
@@ -159,6 +164,8 @@ describe('resolveEngineLabel', () => {
     expect(resolveEngineLabel('official_beat')).toBe('Official BEAT');
     expect(resolveEngineLabel('bempp')).toBe('BEMPP');
     expect(resolveEngineLabel('auto')).toBe('AUTO');
+    expect(resolveEngineLabel('beat-metal')).toBe('BEAT · Metal — Apple GPU');
+    expect(resolveEngineLabel('axisym')).toBe('Axisymmetric meridian');
   });
 
   it('title-cases an unrecognized slug rather than shouting it', () => {
@@ -182,10 +189,17 @@ describe('solveDetailLine', () => {
 
   it('falls back to a frequency count for a parametric design with no drive channels', () => {
     const line = solveDetailLine({
-      config_summary: { symmetry: { resolved: 'full' } },
+      config_summary: { symmetry: { resolved_quadrants: 1234 } },
       solve_options: { engine: 'bempp', symmetry: 'full', num_frequencies: 24 } as JobItem['solve_options'],
     });
     expect(line).toBe('BEMPP · 24 freq · full');
+  });
+
+  it('maps both half domains and quarter from the backend quadrants', () => {
+    for (const [quadrants, domain] of [[12, 'half'], [14, 'half'], [1, 'quarter']] as const) {
+      expect(solveDetailLine({ config_summary: { symmetry: { resolved_quadrants: quadrants } }, solve_options: { engine: 'axisym' } as JobItem['solve_options'] }))
+        .toContain(domain);
+    }
   });
 
   it('omits the domain when config_summary carries no resolved symmetry', () => {
@@ -201,6 +215,6 @@ describe('SolveProgressView (component)', () => {
   beforeEach(() => { resetSolveStageClocksForTests(); });
 
   it('renders nothing for neither a job nor an operation', () => {
-    expect(SolveProgressView({ variant: 'compact' })).toBeNull();
+    expect(renderToStaticMarkup(<SolveProgressView variant="compact"/>)).toBe('');
   });
 });

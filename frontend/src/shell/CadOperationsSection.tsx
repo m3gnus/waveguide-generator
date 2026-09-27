@@ -234,7 +234,7 @@ function guidance(operation: CadOperationSummary): Guidance {
   }
 }
 
-function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
+function CadOperationCard({ operation, showStatus = true }: { operation: CadOperationSummary; showStatus?: boolean }) {
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
@@ -275,12 +275,12 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
   ].filter(Boolean).join(' · ');
   // For the model on screen the card's own guidance and controls say what the
   // backend's message says, which named menus for a model not on screen.
-  const message = SAID_BY_THE_CARD.has(operation.reason ?? '') ? null : operation.message;
+  const message = SAID_BY_THE_CARD.has(operation.reason ?? '') || (!showStatus && !waiting) ? null : operation.message;
   const ladder = solveGateLadder(operation, review.error ? null : review);
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId}>
     <div>
       <b>{solve ? (manual ? 'Your solve is waiting' : 'Fusion asked for a solve') : `CAD operation · ${operation.kind}`}{documentName ? ` · ${documentName}` : ''}</b>
-      <span role="status">{status}</span>
+      {showStatus && <span role="status">{status}</span>}
       {message && <span>{message}</span>}
       {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">
         {ladder.map((step) => <li
@@ -301,7 +301,7 @@ function CadOperationCard({ operation }: { operation: CadOperationSummary }) {
           must not read as a problem with this one. */}
       {review.error && operation.reason === 'findings_need_review' && <span>Could not read the findings to review: {review.error}</span>}
       {waiting && help.text && <span>{help.text}</span>}
-      {solve && (operation.state === 'received' || operation.state === 'processing')
+      {showStatus && solve && (operation.state === 'received' || operation.state === 'processing')
         && <span className="cad-operation-in-flight">{inFlightWords(operation)}</span>}
     </div>
     <div className="cad-confirm-actions">
@@ -474,7 +474,7 @@ export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord 
   const solves = onScreenSolves(operations, record);
   if (!solves.length) return null;
   return <div className="cad-operations cad-operations-on-screen">
-    {solves.map((operation) => <CadOperationCard key={operation.operationId} operation={operation}/>)}
+    {solves.map((operation) => <CadOperationCard key={operation.operationId} operation={operation} showStatus={false}/>)}
   </div>;
 }
 

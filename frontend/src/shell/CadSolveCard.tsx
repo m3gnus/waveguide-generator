@@ -13,7 +13,7 @@ import { CadSolverFrame } from './CadSolverFrameConfirm';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
-import { resolveEngineLabel, SolveProgressView } from './solveProgress';
+import { clearSolveStageClock, resolveEngineLabel, SolveProgressView } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
 
 /** How long an accepted operation may have no matching job yet before the
@@ -170,22 +170,18 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
     const job: JobItem | undefined = jobs.find((item) => item.id === latest.jobId);
     switch (job?.status) {
       case 'queued':
-        // The jobs system's own brief "queued" window, between this
-        // operation's "ready"/"submitted" and the job actually starting, is
-        // a continuation of the same "Solving" this card already showed --
-        // not a second "Received", which would step the sequence backward.
-        body = <SolveProgressView operation={{ state: 'processing', stage: 'submitted', reason: null }} variant="compact"/>;
+        body = <SolveProgressView job={job} variant="compact"/>;
         break;
       case 'running':
         // The same progress component JobsPanel's run cards use, in its
         // compact form -- one design for both CAD Link and parametric mode,
         // fed by nothing but this job's own state (works the same whether
         // this browser pressed Solve or a waiting Fusion request advanced).
-        body = <SolveProgressView job={job} now={Date.now()} variant="compact"/>;
+        body = <SolveProgressView job={job} variant="compact"/>;
         break;
-      case 'complete': body = 'Solved · its results are in Results.'; tone = 'ok'; break;
-      case 'error': body = `Solve failed: ${job.error_message ?? 'no reason given'}`; tone = 'warn'; break;
-      case 'cancelled': body = `Solve cancelled${job.error_message ? `: ${job.error_message}` : '.'}`; tone = 'warn'; break;
+      case 'complete': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'ok'; break;
+      case 'error': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
+      case 'cancelled': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
       default: {
         // Accepted, but no matching job in the list -- ordinarily because it
         // has not arrived yet. Past a short grace window (in particular
@@ -194,7 +190,8 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
         // "Solve submitted." forever.
         const updatedMs = Date.parse(latest.updatedAt ?? '');
         const stale = Number.isFinite(updatedMs) && Date.now() - updatedMs > JOB_APPEAR_GRACE_MS;
-        body = stale ? "Accepted, but its run isn't showing in the jobs list." : 'Solve submitted.';
+        body = stale ? "Accepted, but its run isn't showing in the jobs list."
+          : <SolveProgressView operation={latest} variant="compact"/>;
         if (stale) tone = 'warn';
       }
     }

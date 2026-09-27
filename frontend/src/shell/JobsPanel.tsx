@@ -23,7 +23,7 @@ import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
 import { CadSolveInputs } from './CadSolveInputs';
-import { SolveProgressView } from './solveProgress';
+import { SolveProgressView, useSolveClock } from './solveProgress';
 
 /**
  * The output folder, stated where runs are read rather than buried in settings.
@@ -390,7 +390,6 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const coordinator = useSyncExternalStore(jobsCoordinatorBridge.subscribe, jobsCoordinatorBridge.getSnapshot, jobsCoordinatorBridge.getSnapshot);
   const preferences = usePreferences();
-  const [now, setNow] = useState(Date.now());
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   const [exportPreferencesOpen, setExportPreferencesOpen] = useState(false);
   const preferencesAnchor = useRef<HTMLButtonElement | null>(null);
@@ -418,28 +417,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';
 
-  // `now` exists for one job: advancing the elapsed clock on cards that are
-  // still counting. With nothing running or queued every time on screen comes
-  // from a stored timestamp, so a tick re-renders the whole list to paint the
-  // pixels it already has -- once a second, forever, on a window nobody is
-  // looking at. So the ticker runs only while there is something to count.
-  //
-  // A stopped ticker leaves `now` wherever it was, which would be wrong for up
-  // to a second either side of the gap, so both ends read the clock once: on
-  // the way in, because `now` may have been sitting still since the panel
-  // mounted, and on the way out, so the last reading a finishing run freezes at
-  // is the one it actually stopped on. (Finished cards read `completed_at` and
-  // ignore `now`; the teardown reading is for the run that leaves `running`
-  // without one.) `activeCount` rather than a boolean keeps that pair honest.
-  useEffect(() => {
-    if (activeCount === 0) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => {
-      clearInterval(timer);
-      setNow(Date.now());
-    };
-  }, [activeCount]);
+  const now = useSolveClock(activeCount > 0);
 
   const remove = useCallback((job: JobItem) => {
     if (!window.confirm(`Remove “${runDisplayName(job)}” and its saved results?`)) return;

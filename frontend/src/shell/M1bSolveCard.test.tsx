@@ -454,7 +454,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     // an engine/sources/domain detail line (./solveProgress); this fixture's
     // job has neither an engine nor drive channels set, so only the stage
     // word, percentage and elapsed clock appear.
-    expect(host.querySelector('.cad-solve-run')!.textContent).toContain('Solving · 40%');
+    expect(host.querySelector('.cad-solve-run')!.textContent).toContain('Starting… · 40%');
     expect(activations).not.toContain('results');
     await jobs([cadJob('job-1')]);
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', awaiting: null });
@@ -639,7 +639,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
     // One card, with the request's progress; Solve held with that status,
     // the top bar's too.
     const card = host.querySelector('.cad-solve-card .cad-operation')!;
-    expect(card.textContent).toContain('Preparing the request from Fusion…');
+    expect(card.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Preparing mesh');
     expect(solveButton().disabled).toBe(true);
     expect(host.querySelector('.cad-solve-blocker')!.textContent).toBe('Preparing the request from Fusion…');
     const topBar = host.querySelector<HTMLButtonElement>('.topbar .solve-button')!;
@@ -706,7 +707,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
     // Its own request, created and not yet prepared as far as this page knows.
     expect(useCadOperationsStore.getState().operations[operationId].state).toBe('received');
-    expect(host.querySelector('.cad-solve-card .cad-operation')!.textContent).toContain('Preparing your solve…');
+    expect(host.querySelector('.cad-solve-card .cad-operation [role="status"]')).toBeNull();
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Received');
     await pressSolve();
     expect(mocks.createCadOperation.mock.calls.map((call) => call[0].operationId)).toEqual([operationId, operationId]);
     expect(mocks.prepareCadOperation.mock.calls.map((call) => call[0])).toEqual([operationId, operationId]);
@@ -892,10 +894,10 @@ describe('M1b: one Solve card, to the revealed result', () => {
     const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
     await deliver(operation(operationId, 'accepted', { jobId: 'job-1', updatedAt: '2026-09-22T10:00:05Z' }));
     await jobs([cadJob('job-1', 'error', { has_results: false, error_message: 'Out of memory at 12 kHz' })]);
-    expect(host.querySelector('.cad-solve-run')!.textContent).toBe('Solve failed: Out of memory at 12 kHz');
+    expect(host.querySelector('.cad-solve-run')!.textContent).toBe('Failed · Out of memory at 12 kHz');
     expect(activations).not.toContain('results');
     await jobs([cadJob('job-1', 'cancelled', { has_results: false, error_message: 'Cancelled by user' })]);
-    expect(host.querySelector('.cad-solve-run')!.textContent).toBe('Solve cancelled: Cancelled by user');
+    expect(host.querySelector('.cad-solve-run')!.textContent).toBe('Cancelled · Cancelled by user');
     expect(activations).not.toContain('results');
   });
 

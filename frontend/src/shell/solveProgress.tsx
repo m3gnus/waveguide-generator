@@ -1,4 +1,27 @@
+import { useCallback, useSyncExternalStore } from 'react';
 import type { JobItem } from '../api/jobsSocket';
+
+let clockNow = Date.now();
+let clockTimer: ReturnType<typeof setInterval> | null = null;
+const clockListeners = new Set<() => void>();
+function subscribeClock(listener: () => void): () => void {
+  clockListeners.add(listener);
+  clockNow = Date.now();
+  listener();
+  if (!clockTimer) clockTimer = setInterval(() => {
+    clockNow = Date.now();
+    clockListeners.forEach((notify) => notify());
+  }, 1_000);
+  return () => {
+    clockListeners.delete(listener);
+    if (!clockListeners.size && clockTimer) { clearInterval(clockTimer); clockTimer = null; }
+  };
+}
+export function useSolveClock(active = true): number {
+  const subscribe = useCallback((listener: () => void) => active ? subscribeClock(listener) : () => undefined, [active]);
+  useSyncExternalStore(subscribe, () => clockNow, () => clockNow);
+  return Date.now();
+}
 
 /**
  * One place that names a solve's stage for the user, shared by every surface
@@ -24,13 +47,14 @@ export type SolveStageWord =
   | 'Combining'
   | 'Cancelling…'
   | 'Waiting for you'
+  | 'Needs recovery'
   | 'Done'
   | 'Failed'
   | 'Cancelled';
 
 const RUNNING_STAGE_WORDS: Record<string, SolveStageWord> = {
   initializing: 'Starting…',
-  mesh: 'Preparing mesh',
+  mesh: 'Starting…',
   assemble: 'Solving',
   solve: 'Solving',
   radiation_impedance: 'Solving',
@@ -38,18 +62,15 @@ const RUNNING_STAGE_WORDS: Record<string, SolveStageWord> = {
   cancelling: 'Cancelling…',
 };
 
-/** The stage a job is in, in the user's words. `queued` is the word the
- * first ~100 ms after Solve needs -- accepted, not yet started. Once the
- * runtime marks a job `running` it is actively working even before its
- * first stage checkpoint lands, so a running job with no stage yet still
- * reads as "Solving", not as a second "Received". */
+/** The stage a job is in, in the user's words. A queued job has passed
+ * preparation and is starting; its first runtime checkpoint may be pending. */
 export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
   switch (job.status) {
     case 'complete': return 'Done';
     case 'error': return 'Failed';
     case 'cancelled': return 'Cancelled';
-    case 'queued': return 'Received';
-    default: return (job.stage && RUNNING_STAGE_WORDS[job.stage]) || 'Solving';
+    case 'queued': return 'Starting…';
+    default: return (job.stage && RUNNING_STAGE_WORDS[job.stage]) || 'Starting…';
   }
 }
 
@@ -66,12 +87,12 @@ export interface OperationProgressLike {
  * snapshot is validated, then meshed, then ready to submit. Mapped onto the
  * same words a job uses once it exists, so `operationStageWord` and
  * `solveStageWord` are one monotonic sequence read end to end: Received
- * (received/validating) -> Preparing mesh (preparing-mesh) -> Solving
- * (ready/submitted, and every job stage after that) -> Combining -> Done. */
+ * (received/validating) -> Preparing mesh (preparing-mesh) -> Starting
+ * (ready/submitted, queued, initializing, mesh) -> Solving -> Combining -> Done. */
 const OPERATION_STAGE_WORDS: Record<string, SolveStageWord> = {
   'preparing-mesh': 'Preparing mesh',
-  ready: 'Solving',
-  submitted: 'Solving',
+  ready: 'Starting…',
+  submitted: 'Starting…',
 };
 
 /** Reasons `needs_user_input` names, in the same short phrases
@@ -81,20 +102,22 @@ const OPERATION_REASON_WORDS: Record<string, string> = {
   setup_required: 'needs its solve settings',
   findings_need_review: 'blocking findings to review',
   frame_confirmation_required: 'needs its solver frame confirmed',
+  update_restart_pending: 'held for the update restart',
+  ready_to_solve: 'ready to solve',
+  engine_unavailable: 'the selected engine cannot solve it',
+  submission_refused: 'the jobs system refused it',
 };
 
 /** The stage word for a CAD operation that has no job yet (or never will --
- * `rejected`/`cancelled` are terminal outcomes a caller usually renders with
- * its own richer text instead of calling this). `accepted` is deliberately
- * absent: once an operation is accepted its status is its job's, read
- * through `solveStageWord`, not this function. */
+ * `rejected`/`cancelled` are terminal outcomes). An accepted operation uses
+ * its submitted stage only until its job appears. */
 export function operationStageWord(operation: OperationProgressLike): SolveStageWord {
   switch (operation.state) {
     case 'rejected': return 'Failed';
     case 'cancelled': return 'Cancelled';
     case 'cancel_requested': return 'Cancelling…';
     case 'needs_user_input': return 'Waiting for you';
-    case 'recovery_required': return 'Failed';
+    case 'recovery_required': return 'Needs recovery';
     default: return (operation.stage && OPERATION_STAGE_WORDS[operation.stage]) || 'Received';
   }
 }
@@ -113,7 +136,8 @@ export interface FrequencyChannel {
 }
 
 export interface FrequencyProgress {
-  /** How many of `total` frequencies are already solved. */
+  /** How many of `total` frequencies are solved in the printed sweep.
+   * Imported axial tag groups can restart this count. */
   completed: number;
   total: number;
   /** Present only for an imported multi-channel solve (BEAT/BEMPP imported
@@ -158,9 +182,10 @@ export function parseFrequencyProgress(stageMessage: string | null): FrequencyPr
       ![freqDone, freqTotal, channelIndex, channelCount].every(Number.isFinite)
       || freqTotal <= 0 || channelCount <= 0
     ) return null;
-    const total = channelCount * freqTotal;
-    const completed = Math.max(0, Math.min(total, (channelIndex - 1) * freqTotal + freqDone));
-    return { completed, total, channel: { index: channelIndex, count: channelCount } };
+    return {
+      completed: Math.max(0, Math.min(freqTotal, freqDone)), total: freqTotal,
+      channel: { index: channelIndex, count: channelCount },
+    };
   }
   const match = PLAIN_PATTERN.exec(stageMessage);
   if (!match) return null;
@@ -189,41 +214,48 @@ export function isIndeterminate(job: Pick<JobItem, 'status' | 'stage' | 'stage_m
  * When each job's solve stage began, so an ETA's rate is measured against
  * the frequency loop alone -- never against meshing or a solver's warm-up,
  * which `job.started_at` includes and a frequency count says nothing about.
- * A page reload starts a fresh clock (the first render after reload reads
- * elapsed as 0 for whatever stage the job is already in), which only delays
- * the first ETA by up to two frequencies' worth of time; it never shows a
- * wrong one, which a clock seeded from `started_at` did.
+ * A page reload starts a fresh clock and remembers the completed count then.
+ * An ETA needs a later frequency checkpoint to establish a rate.
  */
-const stageClocks = new Map<string, { stage: string; startedAt: number }>();
+const stageClocks = new Map<string, { startedAt: number; completedAtStart: number }>();
 
 export function resetSolveStageClocksForTests(): void {
   stageClocks.clear();
+  clockNow = Date.now();
 }
 
-function elapsedInStageSeconds(jobId: string, stage: string | null, now: number): number {
-  if (!stage) {
-    stageClocks.delete(jobId);
-    return 0;
+export function clearSolveStageClock(jobId: string): void {
+  stageClocks.delete(jobId);
+}
+
+function stageSample(job: JobProgressLike, frequency: FrequencyProgress | null, now: number): { elapsed: number; gained: number } {
+  if (job.status !== 'running' || job.stage !== 'solve' || !frequency) {
+    stageClocks.delete(job.id);
+    return { elapsed: 0, gained: 0 };
   }
+  const jobId = job.id;
+  // The runtime reserves 35–85% for the frequency sweep. Its normalized
+  // value counts every axial tag group, even when the printed i/N restarts.
+  const completed = frequency.channel && Number.isFinite(job.progress)
+    ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5))
+    : frequency.completed;
   const existing = stageClocks.get(jobId);
-  if (!existing || existing.stage !== stage) {
-    stageClocks.set(jobId, { stage, startedAt: now });
-    return 0;
+  if (!existing) {
+    stageClocks.set(jobId, { startedAt: now, completedAtStart: completed });
+    return { elapsed: 0, gained: 0 };
   }
-  return Math.max(0, (now - existing.startedAt) / 1000);
+  return { elapsed: Math.max(0, (now - existing.startedAt) / 1000), gained: Math.max(0, completed - existing.completedAtStart) };
 }
 
 /**
- * Estimated remaining time, from the average time per frequency solved
- * since the solve stage began. Requires at least two completed frequencies:
- * one gives no rate to average, and would swing wildly on the very next
- * update.
+ * Estimated remaining time from work completed since this browser first saw
+ * the solve stage. One later checkpoint establishes an initial rate.
  */
-export function etaSeconds(elapsedSinceStageStarted: number, frequency: FrequencyProgress | null): number | null {
-  if (!frequency || frequency.completed < 2) return null;
+export function etaSeconds(elapsedSinceStageStarted: number, frequency: FrequencyProgress | null, gained = frequency?.completed ?? 0): number | null {
+  if (!frequency || gained <= 0) return null;
   const remaining = frequency.total - frequency.completed;
   if (remaining <= 0) return 0;
-  const perFrequency = elapsedSinceStageStarted / frequency.completed;
+  const perFrequency = elapsedSinceStageStarted / gained;
   return perFrequency * remaining;
 }
 
@@ -246,9 +278,14 @@ const ENGINE_LABELS: Record<string, string> = {
   auto: 'AUTO',
   metal: 'Metal',
   beat: 'BEAT Engine',
+  'beat-cpu': 'BEAT · CPU — no GPU needed',
+  'beat-metal': 'BEAT · Metal — Apple GPU',
+  'beat-cuda': 'BEAT · CUDA — NVIDIA GPU',
+  'beat-rocm': 'BEAT · ROCm — AMD GPU',
   official_beat: 'Official BEAT',
   bempp: 'BEMPP',
   circsym: 'CircSym',
+  axisym: 'Axisymmetric meridian',
   dryrun: 'Dry run',
 };
 
@@ -270,8 +307,13 @@ export function resolveEngineLabel(engine: string | null | undefined): string | 
 function resolvedDomain(job: Pick<JobItem, 'config_summary'>): string | null {
   const symmetry = job.config_summary?.symmetry;
   if (symmetry && typeof symmetry === 'object' && !Array.isArray(symmetry)) {
-    const resolved = (symmetry as Record<string, unknown>).resolved;
+    const value = symmetry as Record<string, unknown>;
+    const resolved = value.resolved;
     if (typeof resolved === 'string' && resolved) return resolved;
+    const quadrants = value.resolved_quadrants;
+    if (quadrants === 1234) return 'full';
+    if (quadrants === 12 || quadrants === 14) return 'half';
+    if (quadrants === 1) return 'quarter';
   }
   return null;
 }
@@ -296,14 +338,16 @@ export function solveDetailLine(job: Pick<JobItem, 'config_summary' | 'solve_opt
 
 type JobProgressLike = Pick<
   JobItem,
-  'id' | 'status' | 'stage' | 'stage_message' | 'progress' | 'started_at' | 'queued_at' | 'config_summary' | 'solve_options'
+  'id' | 'status' | 'stage' | 'stage_message' | 'progress' | 'started_at' | 'queued_at' | 'config_summary' | 'solve_options' | 'error_message'
 >;
 
 /** One "frequency i of N[, channel c of C][, ETA m:ss]" line, built from the
  * same parsed `FrequencyProgress` and elapsed-in-stage clock both variants
  * of `SolveProgressView` use, so the wording never drifts between them. */
-function frequencyLine(frequency: FrequencyProgress, eta: number | null): string {
-  const parts = [`frequency ${frequency.completed} of ${frequency.total}`];
+function frequencyLine(frequency: FrequencyProgress, eta: number | null, overall: number | null): string {
+  const parts = overall === null
+    ? [`frequency ${frequency.completed} of ${frequency.total}`]
+    : [`work ${Math.round(overall * 100)}%`];
   if (frequency.channel) parts.push(`channel ${frequency.channel.index} of ${frequency.channel.count}`);
   if (eta !== null) parts.push(`ETA ${formatClock(eta)}`);
   return parts.join(' · ');
@@ -336,6 +380,8 @@ export function SolveProgressView({
   now?: number;
   variant?: 'full' | 'compact';
 }) {
+  const tick = useSolveClock(Boolean(job && (job.status === 'running' || job.status === 'queued')));
+  const time = now ?? tick;
   if (!job) {
     if (!operation) return null;
     const stageWord = operationStageWord(operation);
@@ -348,17 +394,25 @@ export function SolveProgressView({
 
   const frequency = isFrequencyStage(job) ? parseFrequencyProgress(job.stage_message) : null;
   const indeterminate = isIndeterminate(job);
-  const elapsedSeconds = now !== undefined
-    ? Math.max(0, (now - Date.parse(job.started_at ?? job.queued_at ?? '')) / 1000)
-    : null;
-  const elapsedInStage = now !== undefined ? elapsedInStageSeconds(job.id, job.stage, now) : 0;
-  const eta = frequency ? etaSeconds(elapsedInStage, frequency) : null;
+  const elapsedSeconds = Math.max(0, (time - Date.parse(job.started_at ?? job.queued_at ?? '')) / 1000);
+  const sample = stageSample(job, frequency, time);
+  const normalized = frequency?.channel && Number.isFinite(job.progress)
+    ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5)) : null;
+  const eta = frequency ? etaSeconds(sample.elapsed, normalized === null ? frequency : { completed: normalized, total: 1 }, sample.gained) : null;
   const stageWord = solveStageWord(job);
   const percent = Math.round((job.progress ?? 0) * 100);
 
   if (variant === 'compact') {
+    if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
+      const outcome = job.status === 'complete' ? 'results are in Results'
+        : job.error_message ?? (job.status === 'error' ? 'no reason given' : 'cancelled by user');
+      return <span className="solve-progress solve-progress-compact">
+        <span className="job-stage-word">{stageWord}</span>
+        <span className="solve-progress-meta"> · {outcome}</span>
+      </span>;
+    }
     const meta = [
-      frequency ? frequencyLine(frequency, eta) : indeterminate ? null : `${percent}%`,
+      frequency ? frequencyLine(frequency, eta, normalized) : indeterminate ? null : `${percent}%`,
       elapsedSeconds !== null ? formatClock(elapsedSeconds) : null,
       solveDetailLine(job) || null,
     ].filter(Boolean).join(' · ');
@@ -375,7 +429,7 @@ export function SolveProgressView({
       <span>{job.stage_message ?? job.stage ?? 'waiting…'}</span>
       {!indeterminate && <b>{percent}%</b>}
     </div>
-    {frequency && <p className="job-frequency">{frequencyLine(frequency, eta)}</p>}
+    {frequency && <p className="job-frequency">{frequencyLine(frequency, eta, normalized)}</p>}
     <div
       className={`progress${indeterminate ? ' indeterminate' : ''}`}
       role="progressbar"

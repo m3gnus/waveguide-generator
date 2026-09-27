@@ -27,7 +27,7 @@ vi.mock('./CadLinkCoordinator', () => ({
 vi.mock('./CadSolveInputs', () => ({ CadSolveInputs: () => null }));
 vi.mock('./CadProjectPanel', () => ({ openCadProject: vi.fn() }));
 
-const { CadOperationsSection } = await import('./CadOperationsSection');
+const { CadOperationsSection, OnScreenSolveStatus } = await import('./CadOperationsSection');
 
 const ON_SCREEN = `sha256:${'a'.repeat(64)}`;
 const ELSEWHERE = `sha256:${'b'.repeat(64)}`;
@@ -100,6 +100,16 @@ describe('operation cards for the model on screen', () => {
 
   const cards = () => [...host.querySelectorAll<HTMLElement>('.cad-operation')];
   const earlier = () => host.querySelector<HTMLDetailsElement>('.cad-earlier-requests');
+
+  it('keeps waiting guidance and actions without a second solve status', async () => {
+    stubReview();
+    useCadOperationsStore.setState({ operations: { 'op-screen': solve() } });
+    await act(async () => root.render(<OnScreenSolveStatus record={record}/>));
+    expect(host.querySelector('.cad-operation [role="status"]')).toBeNull();
+    expect(host.querySelector('.cad-operation')?.textContent).not.toContain('Waiting for you');
+    expect(host.querySelector('.cad-operation')?.textContent).toContain('check the settings above');
+    expect(host.querySelector('.cad-operation button[aria-label^="Dismiss"]')).not.toBeNull();
+  });
 
   it('gives a card only to the solve of the model on screen, and one quiet line to each other request', async () => {
     await show([

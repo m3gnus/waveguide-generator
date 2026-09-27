@@ -254,7 +254,8 @@ describe('CadLinkPanel', () => {
     });
 
     const card = host.querySelector<HTMLElement>('.cad-operation[data-operation-id="op-restart"]')!;
-    expect(card.querySelector('[role="status"]')?.textContent).toContain('held for the update restart');
+    expect(card.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('held for the update restart');
     expect(card.textContent).toContain('again by itself');
     // Solve now would only be refused until the restart; nothing is needed from the user.
     expect(buttonTexts(card)).toEqual(['Dismiss']);
@@ -412,9 +413,10 @@ describe('CadLinkPanel', () => {
     const cards = [...host.querySelectorAll<HTMLElement>('.cad-operation')];
     expect(cards.map((card) => card.dataset.operationId)).toEqual(['op-ready', 'op-engine', 'op-setup']);
     const [ready, engine, setup] = cards;
-    // A status line inside the card, not a live region wrapped around its buttons.
+    // The shared run line is the sole status, outside the action card.
     expect(ready.getAttribute('role')).toBeNull();
-    expect(ready.querySelector('[role="status"]')?.textContent).toContain('Waiting for you');
+    expect(ready.querySelector('[role="status"]')).toBeNull();
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Waiting for you');
     expect(ready.querySelector('[role="status"] button')).toBeNull();
     expect(ready.textContent).toContain('Fusion asked for a solve');
     expect(ready.textContent).toContain('Prepared, and waiting for you to start the solve.');
