@@ -120,7 +120,8 @@ function evaluateChannel(result: ResultPayload, wrapper: ResultPayload): PowerQu
   const surface = pick('surface_w');
   const sphere = pick('sphere_w');
   const agreement = pick('agreement_db');
-  if (!surface.some((value) => value !== null) || !sphere.some((value) => value !== null)) return null;
+  // A present series with invalid values is a failure, not a missing check.
+  if (!Array.isArray(power.surface_w) && !Array.isArray(power.sphere_w)) return null;
   const validityMaxHz = resultFrequencyValidity(result, wrapper)?.governingMaxFrequencyHz ?? null;
   const status: FrequencyQualification[] = [];
   const reasons: Array<string | null> = [];

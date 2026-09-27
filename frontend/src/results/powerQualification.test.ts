@@ -93,6 +93,16 @@ describe('power qualification', () => {
     expect(bounded.status).toBe('qualified');
   });
 
+  it('treats an entirely invalid computed power series as unqualified, not as a missing check', () => {
+    const payload = (surface: Array<number | null>, sphere: Array<number | null>) => ({
+      frequencies: [100],
+      metadata: { radiated_power: { surface_w: surface, sphere_w: sphere, agreement_db: [null] } },
+    }) as unknown as ResultPayload;
+    expect(powerQualificationOf(payload([null], [1]))!.frequencyReasons).toEqual(['nonfinite_face_power']);
+    expect(powerQualificationOf(payload([-1e-6], [null]))!.frequencyReasons).toEqual(['nonpositive_face_power']);
+    expect(powerQualificationOf(payload([null], [null]))!.status).toBe('unqualified');
+  });
+
   it('says nothing for a payload that carries no power check and no server flags', () => {
     expect(powerQualificationOf({ frequencies: [100], metadata: {} } as ResultPayload)).toBeNull();
   });

@@ -261,10 +261,12 @@ def qualify_channel(
         surface = _series(power, "surface_w", count)
         sphere = _series(power, "sphere_w", count)
         agreement = _series(power, "agreement_db", count)
-        # An all-empty estimate means the check was never computed, which is
-        # "unknown", not a failure at every frequency.
-        available = any(value is not None for value in surface) and any(
-            value is not None for value in sphere
+        # The block is written only when the solver returned a power series,
+        # so its presence means the check ran. A null inside it is an invalid
+        # computed value -- a visible failure -- never a check that did not run;
+        # only a block with neither series is "unknown".
+        available = isinstance(power.get("surface_w"), list) or isinstance(
+            power.get("sphere_w"), list
         )
         for index, frequency in enumerate(frequencies if available else ()):
             if frequency is None:

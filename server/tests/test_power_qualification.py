@@ -174,7 +174,10 @@ def test_frequency_exactly_at_the_validity_limit_is_checked() -> None:
 
 def test_missing_power_check_is_unknown_not_qualified() -> None:
     absent = {"frequencies": [100.0], "metadata": {"metal": {"formulation": "complex_k"}}}
-    never_computed = _channel([None], surface=[None], sphere=[None])
+    never_computed = {
+        "frequencies": [100.0],
+        "metadata": {"radiated_power": {"definition": "no series returned"}},
+    }
 
     for payload in (absent, never_computed):
         flags = qualify_channel(payload)
@@ -182,6 +185,30 @@ def test_missing_power_check_is_unknown_not_qualified() -> None:
         assert flags["unknown_reason"] == "power_check_unavailable"
         assert _statuses(flags) == ["unchecked"]
         assert flags["message"] is None
+
+
+@pytest.mark.parametrize(
+    ("surface", "sphere", "reason"),
+    [
+        # Review reproducers: an entirely invalid computed series is a
+        # failure in band, not an unavailable check.
+        ([None], [1.0], "nonfinite_face_power"),
+        ([-1.0e-6], [None], "nonpositive_face_power"),
+        ([None], [None], "nonfinite_face_power"),
+        ([1.0e-6], [None], "invalid_sphere_power"),
+    ],
+)
+def test_an_all_invalid_computed_series_is_unqualified_not_unknown(
+    surface: list[float | None], sphere: list[float | None], reason: str
+) -> None:
+    flags = qualify_channel(
+        _channel([None], surface=surface, sphere=sphere, validity_hz=1000.0)
+    )
+
+    assert flags["status"] == "unqualified"
+    assert _statuses(flags) == ["unqualified"]
+    assert flags["frequency_reasons"] == [reason]
+    assert flags["message"] == UNQUALIFIED_MESSAGE
 
 
 def test_missing_formulation_provenance_is_unknown_unless_a_check_failed() -> None:
