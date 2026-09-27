@@ -368,6 +368,7 @@
       "complex_k_shift": 0.005,
       "package_version": "0.1.0",
       "solver_pin": "e7e32d0530d41ae8482ea156f2d9aca8f10b8623",
+      "missing": [],
       "recorded": true
      },
      "message": "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver."
@@ -646,6 +647,7 @@
       "complex_k_shift": 0.005,
       "package_version": "0.1.0",
       "solver_pin": "e7e32d0530d41ae8482ea156f2d9aca8f10b8623",
+      "missing": [],
       "recorded": true
      },
      "message": null
@@ -878,6 +880,7 @@
       "complex_k_shift": 0.005,
       "package_version": "0.1.0",
       "solver_pin": "e7e32d0530d41ae8482ea156f2d9aca8f10b8623",
+      "missing": [],
       "recorded": true
      },
      "members": {

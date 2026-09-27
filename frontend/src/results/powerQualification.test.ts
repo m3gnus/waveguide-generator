@@ -36,8 +36,11 @@ function flat(agreement: Array<number | null>, surface?: Array<number | null>, v
   const faces = surface ?? agreement.map(() => 1e-5);
   return {
     frequencies,
+    provenance: { dependency_shas: { 'hornlab-metal-bem': 'e7e32d0530d41ae8482ea156f2d9aca8f10b8623' } },
     metadata: {
       source_ids: ['src'],
+      solver_backend: 'metal',
+      metal: { formulation: 'complex_k', complex_k_shift: 0.005 },
       ...(validityHz ? { per_source_frequency_validity: { src: { effective_max_valid_frequency_hz: validityHz } } } : {}),
       radiated_power: {
         surface_w: faces,
@@ -191,6 +194,27 @@ describe('power qualification', () => {
     expect(combined.frequencyStatus).toEqual(['qualified', 'qualified', 'outside_validity']);
     expect(combined.unqualifiedChannels).toEqual([]);
     expect(combined.status).not.toBe('unqualified');
+  });
+
+  it('leaves a clean unflagged channel unknown when its solver pin or complex-k shift is missing', () => {
+    const complete = archived();
+    expect(powerQualificationOf(channel(complete, 'drive-hf'), complete)!.status).toBe('qualified');
+
+    const noPin = archived() as ResultPayload & { provenance?: unknown };
+    delete noPin.provenance;
+    const pinless = powerQualificationOf(channel(noPin, 'drive-hf'), noPin)!;
+    expect(pinless.status).toBe('unknown');
+    expect(pinless.unknownReason).toBe('provenance_missing');
+
+    const noShift = archived();
+    for (const payload of [noShift, ...Object.values(noShift.channels!)] as ResultPayload[]) {
+      for (const block of Object.values(payload.metadata ?? {})) {
+        if (block && typeof block === 'object' && !Array.isArray(block)) delete (block as Record<string, unknown>).complex_k_shift;
+      }
+    }
+    expect(powerQualificationOf(channel(noShift, 'drive-hf'), noShift)!.status).toBe('unknown');
+    // A failure still shows whatever is missing.
+    expect(powerQualificationOf(channel(noPin, 'drive-lf'), noPin)!.status).toBe('unqualified');
   });
 
   it('summarises every channel of a multi-channel run, and nothing for a single channel', () => {

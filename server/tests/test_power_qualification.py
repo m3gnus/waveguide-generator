@@ -58,11 +58,18 @@ def _channel(
     }
     if formulation is not None:
         metadata["metal"] = {"formulation": formulation, "complex_k_shift": 0.005}
+        metadata["solver_backend"] = "metal"
     if validity_hz is not None:
         metadata["per_source_frequency_validity"] = {
             "src": {"effective_max_valid_frequency_hz": validity_hz}
         }
-    return {"frequencies": frequencies, "metadata": metadata}
+    payload: dict = {"frequencies": frequencies, "metadata": metadata}
+    if formulation is not None:
+        payload["provenance"] = {"dependency_shas": {"hornlab-metal-bem": PIN}}
+    return payload
+
+
+PIN = "e7e32d0530d41ae8482ea156f2d9aca8f10b8623"
 
 
 def _statuses(flags: dict) -> list[str]:
@@ -222,6 +229,51 @@ def test_missing_formulation_provenance_is_unknown_unless_a_check_failed() -> No
     assert failed["status"] == "unqualified"
 
 
+def _speaker2_hf_alone(mutate) -> dict:
+    fixture = json.loads(SPEAKER2.read_text())
+    mutate(fixture)
+    return annotate_results(fixture, evaluated="read_time")["channels"]["drive-hf"][
+        "metadata"
+    ]["power_qualification"]
+
+
+@pytest.mark.parametrize(
+    ("mutate", "missing"),
+    [
+        # Review reproducers on the otherwise complete, clean Speaker2 HF.
+        (lambda f: f.pop("provenance"), ["solver_pin"]),
+        (
+            lambda f: [f["provenance"][key].pop("hornlab-metal-bem") for key in (
+                "dependency_shas", "installed_dependency_shas"
+            )],
+            ["solver_pin"],
+        ),
+        (
+            lambda f: [
+                block.pop("complex_k_shift", None)
+                for payload in (f, *f["channels"].values())
+                for block in payload["metadata"].values()
+                if isinstance(block, dict)
+            ],
+            ["complex_k_shift"],
+        ),
+    ],
+    ids=["no-provenance", "no-solver-pin", "no-complex-k-shift"],
+)
+def test_missing_solver_pin_or_shift_leaves_a_clean_channel_unknown(
+    mutate, missing: list[str]
+) -> None:
+    complete = _speaker2_hf_alone(lambda f: None)
+    assert complete["status"] == "qualified"
+
+    flags = _speaker2_hf_alone(mutate)
+
+    assert flags["status"] == "unknown"
+    assert flags["unknown_reason"] == "provenance_missing"
+    assert flags["provenance"]["missing"] == missing
+    assert flags["unqualified_ranges"] == []
+
+
 def test_ranges_follow_ascending_frequency_not_storage_order() -> None:
     channel = _channel(
         [-1.0, 0.1, -2.0, -3.0],
@@ -245,9 +297,11 @@ def _multi(channels: dict, *, validity: dict | None = None) -> dict:
         "channel_order": list(channels),
         "channels": channels,
         "metadata": {
+            "solver_backend": "metal",
             "solver_engine": {"formulation": "complex_k", "complex_k_shift": 0.005},
             **({"per_source_frequency_validity": validity} if validity else {}),
         },
+        "provenance": {"dependency_shas": {"hornlab-metal-bem": PIN}},
         "frequencies": [100.0, 200.0, 300.0],
     }
 
@@ -424,6 +478,7 @@ def test_archived_speaker2_lf_is_flagged_from_200_hz_and_hf_is_clean() -> None:
         "complex_k_shift": 0.005,
         "package_version": "0.1.0",
         "solver_pin": "e7e32d0530d41ae8482ea156f2d9aca8f10b8623",
+        "missing": [],
         "recorded": True,
     }
 

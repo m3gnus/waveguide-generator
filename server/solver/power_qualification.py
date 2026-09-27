@@ -34,8 +34,10 @@ envelope itself, or each channel of a multi-channel envelope::
     unknown_reason     why a status is "unknown", else null
     worst              {frequency_hz, agreement_db} of the largest in-band
                        mismatch, or null
-    provenance         {engine, formulation, complex_k_shift,
-                       package_version, solver_pin, recorded}
+    provenance         {engine, package, formulation, complex_k_shift,
+                       package_version, solver_pin, missing, recorded};
+                       ``recorded`` is false when the formulation, a
+                       complex-k shift, or the solver pin is absent
     members            combined channel only: member id -> status
     unqualified_channels  combined channel only: members that made it so
     message            the user-facing sentence when unqualified, else null
@@ -186,14 +188,26 @@ def _provenance(
         provenance_block.get("dependency_shas")
     )
     solver_pin = pins.get(package) if package else None
+    solver_pin = solver_pin if isinstance(solver_pin, str) and solver_pin else None
+    # A clean check qualifies a result only when it is known what produced it:
+    # the formulation, its stabilisation shift when it uses one, and the exact
+    # solver commit. Any gap leaves the result "unknown", never "qualified".
+    missing = []
+    if not isinstance(formulation, str):
+        missing.append("formulation")
+    elif formulation.startswith("complex_k") and shift is None:
+        missing.append("complex_k_shift")
+    if solver_pin is None:
+        missing.append("solver_pin")
     return {
         "engine": backend if isinstance(backend, str) else None,
         "package": package,
         "formulation": formulation,
         "complex_k_shift": shift,
         "package_version": package_version if isinstance(package_version, str) else None,
-        "solver_pin": solver_pin if isinstance(solver_pin, str) else None,
-        "recorded": isinstance(formulation, str),
+        "solver_pin": solver_pin,
+        "missing": missing,
+        "recorded": not missing,
     }
 
 

@@ -108,6 +108,49 @@ function rangesOf(frequencies: number[], status: FrequencyQualification[], reaso
   return ranges;
 }
 
+const ENGINE_PACKAGES: Record<string, string> = {
+  metal: 'hornlab-metal-bem',
+  circsym: 'hornlab-metal-bem',
+  bempp: 'hornlab-bempp-bem',
+  beat: 'hornlab-beat-bem',
+  'beat-cpu': 'hornlab-beat-bem',
+};
+const FORMULATION_BLOCKS = ['solver_engine', 'metal', 'axisym', 'bempp', 'beat'];
+
+/**
+ * What produced this payload, by the server's rule: a clean check qualifies
+ * only when the formulation, its complex-k shift when it has one, and the
+ * solver pin are all recorded. Anything missing leaves it unknown.
+ */
+function clientProvenance(result: ResultPayload, wrapper: ResultPayload): { formulation: string | null; complexKShift: number | null; missing: string[] } {
+  const metadata = record(result.metadata) ?? {};
+  const wrapperMetadata = record(wrapper.metadata) ?? {};
+  let formulation: string | null = null;
+  let complexKShift: number | null = null;
+  for (const source of [metadata, wrapperMetadata]) {
+    for (const name of FORMULATION_BLOCKS) {
+      const block = record(source[name]) ?? {};
+      if (formulation === null && typeof block.formulation === 'string') formulation = block.formulation;
+      if (complexKShift === null && finite(block.complex_k_shift)) complexKShift = block.complex_k_shift;
+    }
+  }
+  const engineBlock = record(metadata.solver_engine) ?? record(wrapperMetadata.solver_engine) ?? {};
+  const backend = metadata.solver_backend ?? wrapperMetadata.solver_backend;
+  const engine = typeof metadata.engine === 'string' ? metadata.engine : null;
+  const pkg = typeof engineBlock.package === 'string'
+    ? engineBlock.package
+    : engine?.startsWith('hornlab-') ? engine
+      : typeof backend === 'string' ? ENGINE_PACKAGES[backend] ?? null : null;
+  const provenance = record((wrapper as { provenance?: unknown }).provenance) ?? record((result as { provenance?: unknown }).provenance) ?? {};
+  const pins = record(provenance.installed_dependency_shas) ?? record(provenance.dependency_shas) ?? {};
+  const pin = pkg ? pins[pkg] : null;
+  const missing: string[] = [];
+  if (formulation === null) missing.push('formulation');
+  else if (formulation.startsWith('complex_k') && complexKShift === null) missing.push('complex_k_shift');
+  if (typeof pin !== 'string' || !pin) missing.push('solver_pin');
+  return { formulation, complexKShift, missing };
+}
+
 /** The same rules as `server/solver/power_qualification.py`, for payloads the server never flagged. */
 function evaluateChannel(result: ResultPayload, wrapper: ResultPayload): PowerQualification | null {
   const power = record(result.metadata?.radiated_power);
@@ -142,17 +185,19 @@ function evaluateChannel(result: ResultPayload, wrapper: ResultPayload): PowerQu
     reasons.push(reason);
   });
   const ranges = rangesOf(frequencies, status, reasons);
+  const provenance = clientProvenance(result, wrapper);
+  const unknown = !ranges.length && provenance.missing.length > 0;
   return {
-    status: ranges.length ? 'unqualified' : 'qualified',
+    status: ranges.length ? 'unqualified' : unknown ? 'unknown' : 'qualified',
     evaluated: 'client',
     validityMaxHz,
     frequencyStatus: status,
     frequencyReasons: reasons,
     ranges,
     reasons: [...new Set(reasons.filter((reason): reason is string => Boolean(reason)))].sort(),
-    unknownReason: null,
-    formulation: null,
-    complexKShift: null,
+    unknownReason: unknown ? 'provenance_missing' : null,
+    formulation: provenance.formulation,
+    complexKShift: provenance.complexKShift,
     unqualifiedChannels: [],
   };
 }
