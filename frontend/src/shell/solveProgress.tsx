@@ -53,24 +53,24 @@ export type SolveStageWord =
   | 'Cancelled';
 
 const RUNNING_STAGE_WORDS: Record<string, SolveStageWord> = {
-  initializing: 'Starting…',
-  mesh: 'Starting…',
-  assemble: 'Solving',
+  initializing: 'Preparing mesh',
+  mesh: 'Preparing mesh',
+  assemble: 'Starting…',
   solve: 'Solving',
   radiation_impedance: 'Solving',
   postprocess: 'Combining',
   cancelling: 'Cancelling…',
 };
 
-/** The stage a job is in, in the user's words. A queued job has passed
- * preparation and is starting; its first runtime checkpoint may be pending. */
+/** The stage a job is in, in the user's words. Real adapters emit
+ * initializing -> mesh -> setup -> solve; dry run starts at mesh. */
 export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveStageWord {
   switch (job.status) {
     case 'complete': return 'Done';
     case 'error': return 'Failed';
     case 'cancelled': return 'Cancelled';
-    case 'queued': return 'Starting…';
-    default: return (job.stage && RUNNING_STAGE_WORDS[job.stage]) || 'Starting…';
+    case 'queued': return 'Preparing mesh';
+    default: return (job.stage && RUNNING_STAGE_WORDS[job.stage]) || 'Preparing mesh';
   }
 }
 
@@ -87,12 +87,13 @@ export interface OperationProgressLike {
  * snapshot is validated, then meshed, then ready to submit. Mapped onto the
  * same words a job uses once it exists, so `operationStageWord` and
  * `solveStageWord` are one monotonic sequence read end to end: Received
- * (received/validating) -> Preparing mesh (preparing-mesh) -> Starting
- * (ready/submitted, queued, initializing, mesh) -> Solving -> Combining -> Done. */
+ * (received/validating) -> Preparing mesh (preparing-mesh, ready/submitted,
+ * queued, initializing, mesh) -> Starting (setup/assemble) -> Solving ->
+ * Combining -> Done. */
 const OPERATION_STAGE_WORDS: Record<string, SolveStageWord> = {
   'preparing-mesh': 'Preparing mesh',
-  ready: 'Starting…',
-  submitted: 'Starting…',
+  ready: 'Preparing mesh',
+  submitted: 'Preparing mesh',
 };
 
 /** Reasons `needs_user_input` names, in the same short phrases
@@ -278,14 +279,14 @@ const ENGINE_LABELS: Record<string, string> = {
   auto: 'AUTO',
   metal: 'Metal',
   beat: 'BEAT Engine',
-  'beat-cpu': 'BEAT · CPU — no GPU needed',
-  'beat-metal': 'BEAT · Metal — Apple GPU',
-  'beat-cuda': 'BEAT · CUDA — NVIDIA GPU',
-  'beat-rocm': 'BEAT · ROCm — AMD GPU',
+  'beat-cpu': 'BEAT CPU',
+  'beat-metal': 'BEAT Metal',
+  'beat-cuda': 'BEAT CUDA',
+  'beat-rocm': 'BEAT ROCm',
   official_beat: 'Official BEAT',
   bempp: 'BEMPP',
   circsym: 'CircSym',
-  axisym: 'Axisymmetric meridian',
+  axisym: 'CircSym',
   dryrun: 'Dry run',
 };
 
@@ -308,8 +309,13 @@ function resolvedDomain(job: Pick<JobItem, 'config_summary'>): string | null {
   const symmetry = job.config_summary?.symmetry;
   if (symmetry && typeof symmetry === 'object' && !Array.isArray(symmetry)) {
     const value = symmetry as Record<string, unknown>;
+    if (value.domain === 'continuous-axisymmetric') return 'axisymmetric';
     const resolved = value.resolved;
-    if (typeof resolved === 'string' && resolved) return resolved;
+    if (typeof resolved === 'string') {
+      if (resolved === 'full' || resolved === 'full_3d') return 'full';
+      if (resolved === 'quarter') return 'quarter';
+      if (resolved === 'half' || resolved === 'half_xz' || resolved === 'half_yz') return 'half';
+    }
     const quadrants = value.resolved_quadrants;
     if (quadrants === 1234) return 'full';
     if (quadrants === 12 || quadrants === 14) return 'half';
@@ -345,10 +351,9 @@ type JobProgressLike = Pick<
  * same parsed `FrequencyProgress` and elapsed-in-stage clock both variants
  * of `SolveProgressView` use, so the wording never drifts between them. */
 function frequencyLine(frequency: FrequencyProgress, eta: number | null, overall: number | null): string {
-  const parts = overall === null
-    ? [`frequency ${frequency.completed} of ${frequency.total}`]
-    : [`work ${Math.round(overall * 100)}%`];
+  const parts = [`frequency ${frequency.completed} of ${frequency.total}`];
   if (frequency.channel) parts.push(`channel ${frequency.channel.index} of ${frequency.channel.count}`);
+  if (overall !== null) parts.push(`work ${Math.round(overall * 100)}%`);
   if (eta !== null) parts.push(`ETA ${formatClock(eta)}`);
   return parts.join(' · ');
 }
@@ -405,10 +410,10 @@ export function SolveProgressView({
   if (variant === 'compact') {
     if (job.status === 'complete' || job.status === 'error' || job.status === 'cancelled') {
       const outcome = job.status === 'complete' ? 'results are in Results'
-        : job.error_message ?? (job.status === 'error' ? 'no reason given' : 'cancelled by user');
+        : job.error_message ?? (job.status === 'error' ? 'no reason given' : null);
       return <span className="solve-progress solve-progress-compact">
         <span className="job-stage-word">{stageWord}</span>
-        <span className="solve-progress-meta"> · {outcome}</span>
+        {outcome && <span className="solve-progress-meta"> · {outcome}</span>}
       </span>;
     }
     const meta = [

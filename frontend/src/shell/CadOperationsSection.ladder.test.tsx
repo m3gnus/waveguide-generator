@@ -116,6 +116,16 @@ describe('the needs_user_input ladder', () => {
     expect(host.textContent).toContain('Your solve is waiting');
   });
 
+  it('uses an active header while a manual solve is being prepared', async () => {
+    useCadOperationsStore.setState({ operations: { 'manual-solve:op-1': operation('', {
+      state: 'processing', stage: 'preparing-mesh', reason: null,
+    }) } });
+    await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
+    expect(host.querySelector('.cad-operation b')?.textContent).toContain('Your solve is in progress');
+    expect(host.querySelector('.cad-operation b')?.textContent).not.toContain('waiting');
+    expect(host.querySelector('.cad-operation-in-flight')?.textContent).toContain('Preparing your solve');
+  });
+
   it('at the frame gate with no blocking findings, lists only the frame', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       if (String(input).startsWith('/api/cadlink/operations/')) {

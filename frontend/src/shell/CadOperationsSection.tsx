@@ -277,9 +277,12 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // backend's message says, which named menus for a model not on screen.
   const message = SAID_BY_THE_CARD.has(operation.reason ?? '') || (!showStatus && !waiting) ? null : operation.message;
   const ladder = solveGateLadder(operation, review.error ? null : review);
+  const header = solve
+    ? manual ? waiting ? 'Your solve is waiting' : 'Your solve is in progress' : 'Fusion asked for a solve'
+    : `CAD operation · ${operation.kind}`;
   return <div className="cad-direction-alert cad-operation" data-operation-id={operation.operationId}>
     <div>
-      <b>{solve ? (manual ? 'Your solve is waiting' : 'Fusion asked for a solve') : `CAD operation · ${operation.kind}`}{documentName ? ` · ${documentName}` : ''}</b>
+      <b>{header}{documentName ? ` · ${documentName}` : ''}</b>
       {showStatus && <span role="status">{status}</span>}
       {message && <span>{message}</span>}
       {ladder.length > 0 && <ol className="cad-operation-ladder" aria-label="What this solve still needs">

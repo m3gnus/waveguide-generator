@@ -454,7 +454,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     // an engine/sources/domain detail line (./solveProgress); this fixture's
     // job has neither an engine nor drive channels set, so only the stage
     // word, percentage and elapsed clock appear.
-    expect(host.querySelector('.cad-solve-run')!.textContent).toContain('Starting… · 40%');
+    expect(host.querySelector('.cad-solve-run')!.textContent).toContain('Preparing mesh · 40%');
     expect(activations).not.toContain('results');
     await jobs([cadJob('job-1')]);
     expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', awaiting: null });

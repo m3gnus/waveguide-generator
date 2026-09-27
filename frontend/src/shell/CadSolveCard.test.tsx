@@ -109,22 +109,25 @@ describe('CAD Solve card run status', () => {
 
     // ready to submit, still no job: preparation has not stepped back.
     act(() => publishOperation(operation({ state: 'processing', stage: 'ready', jobId: null })));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     // Accepted, job not in the list yet yet (within the grace window): says
     // so plainly, not a made-up stage.
     act(() => publishOperation(operation({ state: 'accepted', stage: 'submitted' })));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
 
-    // The queued window continues Starting.
+    // The queued window continues mesh preparation.
     act(() => publishJobs([job({ status: 'queued', stage: null, stage_message: null })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     act(() => publishJobs([job({ status: 'running', stage: 'initializing', stage_message: 'Initializing solver', progress: 0.05 })]));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
 
-    // The runtime emits mesh after initializing; both stay at Starting.
+    // The runtime emits mesh after initializing; both stay in mesh preparation.
     act(() => publishJobs([job({ status: 'running', stage: 'mesh', stage_message: 'Building the surface mesh', progress: 0.1 })]));
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
+
+    act(() => publishJobs([job({ stage: 'assemble', stage_message: 'Configuring Metal BEM solve', progress: 0.3 })]));
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
 
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 2/8 with Metal BEM', progress: 0.3 })]));
@@ -214,6 +217,7 @@ describe('CAD Solve card run status', () => {
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
     await act(async () => { vi.advanceTimersByTime(10_000); });
     act(() => publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 2/4 of drive channel 2/2 (rear) with BEAT Engine', progress: 0.35 + 0.5 * 6 / 16 })]));
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('frequency 2 of 4 · channel 2 of 2 · work 38%');
     expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 1:40');
   });
 
@@ -234,11 +238,20 @@ describe('CAD Solve card run status', () => {
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
   });
 
+  it('does not invent a reason for a cancelled job', async () => {
+    publishOperation(operation());
+    publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: null })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-run')?.textContent).toBe('Cancelled');
+    act(() => publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: 'Simulation cancelled by user' })]));
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Cancelled · Simulation cancelled by user');
+  });
+
   it('stops assuming a missing job is about to appear once the accepted operation is stale', async () => {
     // Just accepted: the ordinary gap before the job arrives.
     publishOperation(operation({ updatedAt: NOW }));
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Starting…');
+    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
 
     // The same operation, accepted well over the grace window ago, and still
     // no matching job -- as a reload might find. No job is ever published in

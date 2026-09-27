@@ -22,11 +22,11 @@ function partial(overrides: Partial<JobItem>): Pick<JobItem, 'status' | 'stage'>
 
 describe('solveStageWord', () => {
   it('names every stage transition the requirement lists', () => {
-    expect(solveStageWord(partial({ status: 'queued', stage: null }))).toBe('Starting…');
-    expect(solveStageWord(partial({ status: 'running', stage: null }))).toBe('Starting…');
-    expect(solveStageWord(partial({ status: 'running', stage: 'initializing' }))).toBe('Starting…');
-    expect(solveStageWord(partial({ status: 'running', stage: 'mesh' }))).toBe('Starting…');
-    expect(solveStageWord(partial({ status: 'running', stage: 'assemble' }))).toBe('Solving');
+    expect(solveStageWord(partial({ status: 'queued', stage: null }))).toBe('Preparing mesh');
+    expect(solveStageWord(partial({ status: 'running', stage: null }))).toBe('Preparing mesh');
+    expect(solveStageWord(partial({ status: 'running', stage: 'initializing' }))).toBe('Preparing mesh');
+    expect(solveStageWord(partial({ status: 'running', stage: 'mesh' }))).toBe('Preparing mesh');
+    expect(solveStageWord(partial({ status: 'running', stage: 'assemble' }))).toBe('Starting…');
     expect(solveStageWord(partial({ status: 'running', stage: 'solve' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'radiation_impedance' }))).toBe('Solving');
     expect(solveStageWord(partial({ status: 'running', stage: 'postprocess' }))).toBe('Combining');
@@ -34,6 +34,25 @@ describe('solveStageWord', () => {
     expect(solveStageWord(partial({ status: 'complete', stage: 'postprocess' }))).toBe('Done');
     expect(solveStageWord(partial({ status: 'error', stage: 'solve' }))).toBe('Failed');
     expect(solveStageWord(partial({ status: 'cancelled', stage: 'solve' }))).toBe('Cancelled');
+  });
+
+  it('moves forward through the stage sequences emitted by every adapter', () => {
+    const rank = { 'Preparing mesh': 0, 'Starting…': 1, Solving: 2, Combining: 3, Done: 4 } as const;
+    const sequences = [
+      // runtime.py starts real jobs at initializing; full-3D adapters mesh
+      // before their setup callback. CircSym emits mesh_prepare itself.
+      ['queued', 'initializing', 'mesh', 'assemble', 'solve', 'postprocess', 'complete'],
+      // Imported BEAT/BEMPP use the already prepared CAD mesh, then setup.
+      ['queued', 'initializing', 'assemble', 'solve', 'postprocess', 'complete'],
+      // Dry run starts at mesh and assembles before its synthetic solve.
+      ['queued', 'mesh', 'assemble', 'solve', 'postprocess', 'complete'],
+    ];
+    for (const sequence of sequences) {
+      const words = sequence.map((stage) => solveStageWord(partial(stage === 'queued'
+        ? { status: 'queued', stage: null }
+        : stage === 'complete' ? { status: 'complete', stage: null } : { stage })));
+      expect(words).toEqual([...words].sort((a, b) => rank[a as keyof typeof rank] - rank[b as keyof typeof rank]));
+    }
   });
 });
 
@@ -46,8 +65,8 @@ describe('operationStageWord', () => {
     expect(operationStageWord(op({ state: 'received', stage: null }))).toBe('Received');
     expect(operationStageWord(op({ state: 'received', stage: 'validating' }))).toBe('Received');
     expect(operationStageWord(op({ state: 'processing', stage: 'preparing-mesh' }))).toBe('Preparing mesh');
-    expect(operationStageWord(op({ state: 'processing', stage: 'ready' }))).toBe('Starting…');
-    expect(operationStageWord(op({ state: 'processing', stage: 'submitted' }))).toBe('Starting…');
+    expect(operationStageWord(op({ state: 'processing', stage: 'ready' }))).toBe('Preparing mesh');
+    expect(operationStageWord(op({ state: 'processing', stage: 'submitted' }))).toBe('Preparing mesh');
   });
 
   it('shows a clear waiting-for-you state, distinct from the pipeline stages', () => {
@@ -164,8 +183,11 @@ describe('resolveEngineLabel', () => {
     expect(resolveEngineLabel('official_beat')).toBe('Official BEAT');
     expect(resolveEngineLabel('bempp')).toBe('BEMPP');
     expect(resolveEngineLabel('auto')).toBe('AUTO');
-    expect(resolveEngineLabel('beat-metal')).toBe('BEAT · Metal — Apple GPU');
-    expect(resolveEngineLabel('axisym')).toBe('Axisymmetric meridian');
+    expect(resolveEngineLabel('beat-metal')).toBe('BEAT Metal');
+    for (const engine of ['beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm']) {
+      expect(resolveEngineLabel(engine)).not.toMatch(/[·—]/);
+    }
+    expect(resolveEngineLabel('axisym')).toBe('CircSym');
   });
 
   it('title-cases an unrecognized slug rather than shouting it', () => {
@@ -199,6 +221,22 @@ describe('solveDetailLine', () => {
     for (const [quadrants, domain] of [[12, 'half'], [14, 'half'], [1, 'quarter']] as const) {
       expect(solveDetailLine({ config_summary: { symmetry: { resolved_quadrants: quadrants } }, solve_options: { engine: 'axisym' } as JobItem['solve_options'] }))
         .toContain(domain);
+    }
+  });
+
+  it('names the continuous CircSym domain before its quadrant metadata', () => {
+    expect(solveDetailLine({
+      config_summary: { symmetry: { domain: 'continuous-axisymmetric', resolved_quadrants: 1 } },
+      solve_options: { engine: 'axisym' } as JobItem['solve_options'],
+    })).toBe('CircSym · axisymmetric');
+  });
+
+  it('normalizes CAD half plane names to the same domain words as parametric solves', () => {
+    for (const resolved of ['half_xz', 'half_yz']) {
+      expect(solveDetailLine({
+        config_summary: { symmetry: { resolved } },
+        solve_options: { engine: 'metal' } as JobItem['solve_options'],
+      })).toBe('Metal · half');
     }
   });
 
