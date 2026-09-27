@@ -2561,6 +2561,11 @@ def test_recombine_from_stored_bases_updates_and_adds_channels(
     ]
     assert updated["channels"]["right"]["metadata"]["role"] == "LF"
     assert "impedance" not in updated["channels"]["combined"]
+    # The reply carries the flags the store persists, so the new sum is
+    # judged from its members the moment it is drawn.
+    combined_flags = updated["channels"]["combined"]["metadata"]["power_qualification"]
+    assert set(combined_flags["members"]) == {"left", "right"}
+    assert updated["metadata"]["power_qualification_version"] == 1
     # The original envelope is not mutated in place.
     assert outcome.results["channel_order"] == ["left", "right"]
 

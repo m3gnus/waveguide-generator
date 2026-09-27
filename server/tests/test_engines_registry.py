@@ -1307,6 +1307,9 @@ $EndElements
         )
         store.store_results("legacy", {"frequencies": [500.0], "metadata": {}})
         legacy = await runtime.get_results("legacy")
+        legacy_flags = legacy["metadata"].pop("power_qualification")
+        assert legacy_flags["status"] == "unknown"
+        legacy["metadata"].pop("power_qualification_version")
         assert legacy["metadata"] == {
             "field_plane_available": False,
             "field_trace_bytes": None,

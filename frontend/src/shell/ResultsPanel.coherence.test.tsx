@@ -330,7 +330,7 @@ describe('results run coherence', () => {
     expect(toolbarButton(host, 'New · #13 → Show')).toBeUndefined();
   });
 
-  it('shows the radiated-power health hint only for an in-band difference above the threshold', async () => {
+  it('marks the run unqualified only for an in-band difference above the threshold', async () => {
     const solved = job('power-check', 14, liveDesign());
     publishJobs([solved]);
     compareSelection.setPrimary(solved.id);
@@ -353,7 +353,7 @@ describe('results run coherence', () => {
 
     await act(async () => { root.render(<ResultsPanel/>); await Promise.resolve(); });
     const hint = host.querySelector<HTMLButtonElement>('.result-power-check')!;
-    expect(hint.textContent).toBe('Power check ⚠');
+    expect(hint.textContent).toBe('Power check: unqualified ⚠');
     await act(async () => { hint.click(); });
     const detail = host.querySelector<HTMLElement>('.result-power-details')!;
     expect(detail.textContent).toContain('Power check: −0.60 dB at 1.00 kHz');
@@ -363,6 +363,7 @@ describe('results run coherence', () => {
     // reported nor counted among the checked frequencies.
     expect(detail.textContent).not.toContain('2.4');
     expect(detail.textContent).toContain('1 of 2 checked frequencies');
+    expect(detail.textContent).toContain('Affected: 1.00 kHz, inside the 2.00 kHz validity limit.');
   });
 
   it('shows no radiated-power health hint when the optional block is absent', async () => {

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from server.jobs.result_contracts import MultiChannelResultEnvelope
 from server.jobs.store import JobStore, SubmissionConflictError
+from server.solver.power_qualification import annotate_results
 
 
 def _job(job_id: str, status: str = "queued", *, created_at: str | None = None) -> dict:
@@ -222,7 +223,8 @@ def test_complete_job_accepts_supported_result_envelopes(
 
     _complete(store, kind, result)
 
-    assert store.get_results(kind) == result
+    # Stored as given, plus the additive power-qualification flags.
+    assert store.get_results(kind) == annotate_results(result)
 
     if kind == "multi_channel":
         # ``frequencies`` is a declared optional field: typed when present, and
@@ -233,7 +235,7 @@ def test_complete_job_accepts_supported_result_envelopes(
         assert MultiChannelResultEnvelope.model_validate(legacy).frequencies is None
         store.create_job(_job("legacy", "running"))
         _complete(store, "legacy", legacy)
-        assert store.get_results("legacy") == legacy
+        assert store.get_results("legacy") == annotate_results(legacy)
 
 
 def test_radiation_impedance_artifact_round_trip(tmp_path: Path) -> None:
@@ -379,7 +381,7 @@ def test_archive_snapshot_holds_retention_until_every_payload_is_copied(
         assert prune_future.result(timeout=5) == 1
 
     assert snapshot is not None
-    assert json.loads(snapshot["results_text"]) == results
+    assert json.loads(snapshot["results_text"]) == annotate_results(results)
     assert snapshot["mesh_text"] == "exact solve mesh"
     assert snapshot["channel_bases"] == b"pressure bases"
     assert snapshot["radiation_impedance"] == b"radiation matrix"
@@ -704,18 +706,25 @@ def test_existing_result_rows_backfill_their_exact_digest_once(tmp_path: Path) -
     store.initialize()
     try:
         text, digest = store.get_results_payload("legacy") or ("", "")
-        assert json.loads(text)["metadata"] == {
+        served = json.loads(text)["metadata"]
+        # Power-qualification flags are derived in memory for the archived
+        # row, never written back; only the trace backfill is persisted.
+        flags = served.pop("power_qualification")
+        assert flags["evaluated"] == "read_time"
+        assert served == {
             "field_plane_available": False,
             "field_trace_bytes": None,
             "unavailable_reason": "solve_predates_traces",
         }
         assert digest == hashlib.sha256(text.encode("utf-8")).hexdigest()
         with sqlite3.connect(database) as conn:
-            stored = conn.execute(
+            stored_text, stored_digest = conn.execute(
                 "SELECT results_json, results_sha256 FROM simulation_results WHERE job_id = ?",
                 ("legacy",),
             ).fetchone()
-        assert stored == (text, digest)
+        assert "power_qualification" not in stored_text
+        assert json.loads(stored_text)["metadata"] == served
+        assert stored_digest == hashlib.sha256(stored_text.encode("utf-8")).hexdigest()
     finally:
         store.close()
 

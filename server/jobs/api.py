@@ -576,11 +576,15 @@ def create_jobs_router(
                 "description": "Versioned solver result",
                 "headers": {
                     "ETag": {
-                        "description": "SHA-256 identity of the exact stored bytes",
+                        "description": (
+                            "SHA-256 identity of the served bytes: the stored "
+                            "bytes, or an archived record with read-time "
+                            "power-qualification flags added"
+                        ),
                         "schema": {"type": "string"},
                     },
                     "X-WG-Results-SHA256": {
-                        "description": "Hex SHA-256 of the exact stored bytes",
+                        "description": "Hex SHA-256 of the served bytes",
                         "schema": {
                             "type": "string",
                             "pattern": "^[0-9a-f]{64}$",

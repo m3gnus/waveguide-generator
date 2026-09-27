@@ -50,6 +50,8 @@ import { RUN_VERDICT_MARKER, RUN_VERDICT_SENTENCE, runContextMarker, runDisplayV
 import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
+import { channelLabel } from '../results/channelLabel';
+import { UNQUALIFIED_MESSAGE, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
 import { solveAttention } from './solveAttention';
 
 /**
@@ -1772,14 +1774,21 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : NO_REVERSE_NULL),
     [chartType, preferences.showReverseNull, result, wrapper],
   );
+  // Frequencies whose power check failed are hatched on every frequency-axis
+  // chart of the runs drawn; the curves themselves are never altered.
+  const unqualified = useMemo<UnqualifiedBand[]>(
+    () => chartUnqualifiedBands(overlays.length ? overlays : [{ id: 'primary', label: 'Primary', result, wrapper }]),
+    [overlays, result, wrapper],
+  );
   // Progress and log events replace the selected JobItem many times during a
   // solve. Keep those summary-only props outside the plot memo, otherwise a
   // new progress percentage rebuilds and repaints every EChart even when its
   // result snapshot has not changed.
   const plot = useMemo(() => {
+    const mark = (option: EChartsOption) => withUnqualifiedBands(option, unqualified, tokens);
     if (chartType === 'frequency_response') return result.spl_on_axis?.spl?.length
       ? <div className="frequency-canvas">
-        <EChart option={splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull)} label="Interactive HornLab sound pressure frequency response" live={live}/>
+        <EChart option={mark(splOption(angled, tokens, preferences.smoothing, density, measured, preferences.splPhase, reverseNull))} label="Interactive HornLab sound pressure frequency response" live={live}/>
         <MeasurementAngleControls selection={measurementSelection} onChange={(next) => preferencesStore.update({
           ...(next.plane === undefined ? {} : { measurementPlane: next.plane }),
           ...(next.angles === undefined ? {} : { measurementAngles: next.angles }),
@@ -1788,22 +1797,22 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
       : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
     if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
-      const option = directivityIndexOption(overlays, tokens, preferences.smoothing, density);
+      const option = mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density));
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
     }
     if (chartType === 'power_response') {
-      const option = powerResponseOption(overlays, tokens, preferences.smoothing, density);
+      const option = mark(powerResponseOption(overlays, tokens, preferences.smoothing, density));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab spatially averaged power response from the solved spherical balloon" live={live}/>
         : <ChartStub reason="Power Response needs on-axis SPL and directivity index from a complete spherical field."/>;
     }
     if (chartType === 'beam_shape') {
-      if (result.beam_shape?.frequencies?.length) return <EChart option={lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density)} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
+      if (result.beam_shape?.frequencies?.length) return <EChart option={mark(lineOption(beamShapeSeries(result), tokens, 'Beam width [°]', density))} label="Interactive HornLab horizontal and vertical forward beam width" live={live}/>;
       const missing = beamShapeMissingReason(result);
       return <ChartStub reason={missing.reason} action={missing.canEnable ? beamShapeAction : undefined}/>;
     }
     if (chartType === 'beam_fit') {
-      const series = beamFitOption(result, tokens, density);
+      const series = mark(beamFitOption(result, tokens, density));
       return Array.isArray(series.series) && series.series.length
         ? <EChart option={series} label="Interactive HornLab beam shape fit by frequency" live={live}/>
         : <ChartStub reason={beamShapeMissingReason(result).reason}/>;
@@ -1811,7 +1820,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (chartType === 'beam_map') return <ForwardBeamRenderer result={result}/>;
     if (chartType === 'polar_response') return <PolarResponseCard items={overlays} tokens={tokens} density={density} live={live}/>;
     if (chartType === 'phase_response') {
-      const option = phaseOption(angled, tokens, density);
+      const option = mark(phaseOption(angled, tokens, density));
       return Array.isArray(option.series) && option.series.length
         ? <div className="frequency-canvas">
           <EChart option={option} label="Interactive HornLab pressure phase by frequency" live={live}/>
@@ -1823,7 +1832,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="Phase needs the directivity phase samples from a completed solve."/>;
     }
     if (chartType === 'group_delay') {
-      const option = groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit);
+      const option = mark(groupDelayOption(overlays, tokens, density, preferences.groupDelayUnit));
       // The unit rail only rides along with a curve: on the stub there is no
       // axis to rename, and offering the switch there would suggest the empty
       // card is the wrong projection rather than a result with no phase.
@@ -1837,30 +1846,30 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
     if (chartType === 'drive_power') {
       // One member left standing is drawn as itself, so a two-way whose sum is
       // shown does not gain a legend entry it does not need.
-      const option = overlays.length > 1
+      const option = mark(overlays.length > 1
         ? drivePowerOverlayOption(overlays, tokens, density)
-        : drivePowerOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density);
+        : drivePowerOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab electrical power and current draw by frequency" live={live}/>
         : <ChartStub reason={driverChartMissingReason(result, 'Power & Current Draw')}/>;
     }
     if (chartType === 'excursion') {
-      const option = overlays.length > 1
+      const option = mark(overlays.length > 1
         ? excursionOverlayOption(overlays, tokens, density)
-        : excursionOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density);
+        : excursionOption((overlays[0]?.result ?? result) as ResultPayload, tokens, density));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab cone excursion by frequency" live={live}/>
         : <ChartStub reason={excursionSeries(result) ? 'Cone Excursion could not be read from this result.' : driverChartMissingReason(result, 'Cone Excursion')}/>;
     }
     if (chartType === 'max_output') {
-      const option = maxOutputOption(result, tokens, density, memberLabelOf(result));
+      const option = mark(maxOutputOption(result, tokens, density, memberLabelOf(result)));
       return Array.isArray(option.series) && option.series.length
         ? <EChart option={option} label="Interactive HornLab maximum on-axis SPL by frequency" live={live}/>
         : <ChartStub reason={maxOutputMissingReason(result)}/>;
     }
     if (chartType === 'balloon') return <BalloonRenderer result={result}/>;
     if (chartType === 'impedance') {
-      const option = impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay);
+      const option = mark(impedanceOption(overlays, tokens, preferences.smoothing, density, preferences.impedanceDisplay));
       // The spoken label follows the units for the same reason the axis does:
       // a driver-coupled run's ohms announced as "acoustic impedance" is the
       // screen-reader version of the mislabelled axis. The stub cannot follow
@@ -1883,7 +1892,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [angled, beamShapeAction, chartType, density, live, measured, measurementSelection, normAngle, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, wrapper]);
+  }, [angled, beamShapeAction, chartType, density, live, measured, measurementSelection, normAngle, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, unqualified, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 
@@ -1998,6 +2007,12 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     : chartType === 'max_output' ? limitingSummary(maxOutputOf(result), memberLabelOf(result))
     : null;
   const unit = chartUnit(chartType, result, impedanceItems, preferencesStore.getSnapshot().groupDelayUnit);
+  // Every card, not only the curves that can carry a hatched band: a map, a
+  // polar cut or a balloon of an unqualified channel is just as unreliable.
+  const unqualifiedNote = useMemo(
+    () => unqualifiedCaption(named.length ? named : [{ id: 'primary', label: 'Primary', result, wrapper }]),
+    [named, result, wrapper],
+  );
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
   // The detail dialog owns the rendered chart while it is open, so capture from
   // there rather than from the card behind it -- otherwise the large view would
@@ -2046,6 +2061,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
+        {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${UNQUALIFIED_MESSAGE}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
         {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
         <span className="result-chrome-spacer"/>
         {imageReady && <>
@@ -2540,6 +2556,8 @@ export function ResultsPanel() {
   const powerHealth = shown
     ? powerAgreementHealth(shown, shownRaw ?? shown)
     : null;
+  const powerFlags = shown ? powerQualificationOf(shown, shownRaw ?? shown) : null;
+  const powerChannelName = useCallback((id: string) => shownRaw ? channelLabel(shownRaw, id) : id, [shownRaw]);
   const restorePrimaryDesign = useCallback(() => {
     if (!primaryJob || replaceWithJobDesign(primaryJob, { keepHistory: true })) return;
     coordinator.reportError('This result has no readable design snapshot, so its design cannot be restored.');
@@ -2713,9 +2731,13 @@ export function ResultsPanel() {
       <button disabled={exporting || !primary || !cadResultMatchesViewport || primaryIsProvisional || !preferences.exportFormats.length} title={primaryIsProvisional ? 'Export is available when the solve finishes' : 'Export the current result using the formats enabled in Results preferences'} onClick={() => void exportSelected()}>{exporting ? 'Exporting…' : `Export (${preferences.exportFormats.length})`}</button>
       <button ref={preferencesAnchor} className={`panel-preferences-trigger${preferencesOpen ? ' on' : ''}`} aria-label="Results preferences" aria-expanded={preferencesOpen} title="Results & export preferences" onClick={() => setPreferencesOpen((value) => !value)}><Icon name="settings"/></button>
     </>}/>
-    {powerHealth && cadResultMatchesViewport && <div className="result-diagnostics">
-      <button type="button" className="pill result-power-check" aria-expanded={powerOpen} onClick={() => setPowerOpen((value) => !value)}>Power check ⚠</button>
-      {powerOpen && <div role="status" className="result-power-details"><b>{shownActiveChannel ?? 'Result'} · {powerCheckMessage(powerHealth).label}</b><p>{powerCheckMessage(powerHealth).title}</p></div>}
+    {powerFlags && cadResultMatchesViewport && <div className="result-diagnostics">
+      <button type="button" className="pill result-power-check" data-status={powerFlags.status} aria-expanded={powerOpen} onClick={() => setPowerOpen((value) => !value)}>{powerChipLabel(powerFlags)}</button>
+      {powerOpen && <div role="status" className="result-power-details">
+        <b>{shownActiveChannel ?? 'Result'} · {powerHealth ? powerCheckMessage(powerHealth).label : powerChipLabel(powerFlags)}</b>
+        {[...powerQualificationDetail(powerFlags, powerChannelName), channelQualificationSummary(shownRaw ?? undefined, powerChannelName)].filter((line): line is string => Boolean(line)).map((line) => <p key={line}>{line}</p>)}
+        {powerHealth && <p>{powerCheckMessage(powerHealth).title}</p>}
+      </div>}
     </div>}
     {modelLoad !== 'idle' && <div className="result-model-load" role="status">{modelLoad === 'loading' ? 'Loading run model…' : 'Could not load run model. Try Show this model again.'}</div>}
     {coherenceOpen && primaryJob && primaryVerdict !== 'current' && <AnchoredPanel

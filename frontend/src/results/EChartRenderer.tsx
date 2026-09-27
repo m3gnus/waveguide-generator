@@ -3,6 +3,7 @@ import {
   DataZoomComponent,
   GridComponent,
   LegendComponent,
+  MarkAreaComponent,
   PolarComponent,
   TooltipComponent,
   VisualMapComponent,
@@ -20,6 +21,8 @@ echarts.use([
   GridComponent,
   TooltipComponent,
   LegendComponent,
+  // Hatches the frequency bands whose radiated-power check failed.
+  MarkAreaComponent,
   DataZoomComponent,
   VisualMapComponent,
   // The polar response chart is the only user; without it a polar option

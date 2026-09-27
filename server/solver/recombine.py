@@ -23,6 +23,7 @@ from .combine import combine_drive_channels, deserialize_channel_bases
 from .driver_limits import MemberLimits, member_limits_from_channel
 from .context import SolverContext
 from .errors import RecombineError
+from .power_qualification import annotate_results
 from .result_mapping import build_solver_response
 
 
@@ -188,4 +189,6 @@ def recombine_stored_results(
     if spec.id not in order:
         order.append(spec.id)
     updated["channel_order"] = order
-    return updated
+    # The reply is drawn at once, so it carries the same power-qualification
+    # flags the store persists: the new sum inherits its members' failures.
+    return annotate_results(updated)

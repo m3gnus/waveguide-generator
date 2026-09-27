@@ -33,6 +33,10 @@ from server.solver.field_traces_store import (
     remove_field_trace_artifact,
     write_field_traces,
 )
+from server.solver.power_qualification import (
+    annotate_results,
+    annotate_stored_text,
+)
 
 
 ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
@@ -233,6 +237,41 @@ _SCHEMA_STATEMENTS = (
       schema_version INTEGER NOT NULL
     )""",
 )
+
+
+# Read-time flags for the few archived records most recently opened, keyed by
+# the stored digest, so reopening a multi-megabyte run does not re-parse it.
+_READ_TIME_CACHE_SIZE = 4
+_read_time_cache: dict[str, tuple[str, str]] = {}
+_read_time_cache_lock = threading.Lock()
+
+
+def _with_power_qualification(text: str, digest: str) -> tuple[str, str]:
+    """Serve an archived record with read-time power-qualification flags.
+
+    Records persisted with solve-time flags come back byte-for-byte. An older
+    record is flagged in memory from its own stored power, validity and
+    formulation evidence; the stored row is never rewritten, and the digest
+    names the bytes actually served.
+    """
+
+    with _read_time_cache_lock:
+        cached = _read_time_cache.get(digest)
+    if cached is not None:
+        return cached
+    annotated = annotate_stored_text(text)
+    served = (
+        (text, digest)
+        if annotated is None
+        else (annotated, sha256(annotated.encode("utf-8")).hexdigest())
+    )
+    if annotated is not None:
+        with _read_time_cache_lock:
+            _read_time_cache.pop(digest, None)
+            _read_time_cache[digest] = served
+            while len(_read_time_cache) > _READ_TIME_CACHE_SIZE:
+                _read_time_cache.pop(next(iter(_read_time_cache)))
+    return served
 
 
 def _now_iso() -> str:
@@ -1148,6 +1187,19 @@ class JobStore:
         return payload[0] if payload is not None else None
 
     def get_results_payload(self, job_id: str) -> tuple[str, str] | None:
+        """The results as served: stored bytes, plus read-time power flags.
+
+        A record persisted with solve-time power qualification is the stored
+        bytes exactly. An archived one gains its flags in memory, outside the
+        store lock, and is never rewritten for them.
+        """
+
+        payload = self._stored_results_payload(job_id)
+        if payload is None:
+            return None
+        return _with_power_qualification(*payload)
+
+    def _stored_results_payload(self, job_id: str) -> tuple[str, str] | None:
         """The stored results exactly as they were written, without parsing.
 
         A finished sweep's results run to megabytes, and the HTTP route only
@@ -2213,7 +2265,9 @@ class JobStore:
     ) -> None:
         # The HTTP response serves this exact text. Persist its digest alongside
         # it so repeated downloads of a multi-megabyte result stay O(1) in CPU.
-        results_text = json.dumps(results, allow_nan=False)
+        # Solve-time power qualification travels with the result, so a
+        # recombined crossover sum is re-flagged from the members it now sums.
+        results_text = json.dumps(annotate_results(results), allow_nan=False)
         results_sha256 = sha256(results_text.encode("utf-8")).hexdigest()
         conn.execute(
             """
