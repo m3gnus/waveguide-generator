@@ -458,6 +458,11 @@ def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Pa
         ),
         pytest.param(lambda r: r["normalisation"]["matrix"][0].__setitem__(3, 5.0), id="frame"),
         pytest.param(lambda r: r.update(domain_decision={"contract": "other"}), id="contract"),
+        pytest.param(
+            lambda r: r["post_cut_source_areas"]["throat"].update(retained_fraction=0.5), id="source-area"
+        ),
+        pytest.param(lambda r: r["source_tags"].update(throat=999), id="source-tag"),
+        pytest.param(lambda r: r.update(skipped_source_ids=["throat"]), id="source-skip"),
     ],
 )
 def test_a_decision_that_does_not_describe_its_record_is_refused_everywhere(
@@ -599,3 +604,224 @@ def test_source_edges_on_a_rigid_shells_rim_are_not_a_cut_after_component_separa
     rigid_vertices = set(triangles[tags != 101].ravel().tolist())
     rim = {i for i, point in enumerate(points) if abs(point[0]) < 1e-9}
     assert len(rim) == 32 and len(rim - rigid_vertices) <= 4
+
+
+# ------------------------------------------------------------------ review findings (S3-1 deep review)
+
+
+def _swap_sources(record: dict[str, Any]) -> None:
+    tags = record["source_tags"]
+    tags["left"], tags["right"] = tags["right"], tags["left"]
+
+
+class _TrapRegistry:
+    """Metal is declared. Once armed, fetching an engine for a run is the solve
+    boundary: recorded and refused. Unarmed, submission's own checks get one."""
+
+    def __init__(self, *, armed: bool = False) -> None:
+        from test_imported_jobs import _METAL_IMPORTED
+
+        self.info = _METAL_IMPORTED
+        self.calls: list[str] = []
+        self.armed = armed
+
+    async def capabilities(self) -> tuple[Any, ...]:
+        return (self.info,)
+
+    async def get_engine(self, name: str) -> Any:
+        from types import SimpleNamespace
+
+        if not self.armed:
+            return SimpleNamespace(name=name)
+        self.calls.append(name)
+        raise RuntimeError("engine boundary reached")
+
+    async def unavailable_reason(self, _name: str) -> str | None:
+        return None
+
+
+def _put_record(data_dir: Path, record: dict[str, Any]) -> None:
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "cadlink.db") as connection:
+        connection.execute(
+            "UPDATE ingests SET record_json=? WHERE ingest_id=?",
+            (json.dumps(record), record["ingest_id"]),
+        )
+
+
+def _lifecycle(
+    tmp_path: Path, data_dir: Path, record: dict[str, Any], change: Any
+) -> dict[str, Any]:
+    """Submit on ``record``, apply ``change`` (to the stored ingest or the job), then
+    execute, restart and retry. Returns each stage's outcome and the engine calls."""
+
+    from server.jobs.runtime import JobRuntime
+    from server.jobs.store import JobStore
+
+    outcomes: dict[str, Any] = {}
+
+    async def scenario() -> None:
+        path = tmp_path / "jobs.db"
+        registry = _TrapRegistry()
+        runtime = JobRuntime(JobStore(path), engine_registry=registry, cadlink_store=_store(data_dir))
+        runtime._ensure_scheduler = lambda: None  # type: ignore[method-assign]
+        try:
+            job_id = await runtime.submit(_job_request(record))
+            change(runtime, job_id)
+            registry.armed = True
+            await runtime._run_job(job_id, runtime.store.get_job_row(job_id))
+            outcomes["execute"] = (list(registry.calls), runtime.store.get_job_row(job_id)["error_message"])
+            registry.armed = False
+            try:
+                await runtime.retry(job_id)
+                outcomes["retry"] = "accepted"
+            except Exception as exc:  # noqa: BLE001 - the refusal code is the outcome
+                outcomes["retry"] = str(getattr(exc, "reason_code", type(exc).__name__))
+        finally:
+            await runtime.shutdown()
+        # A restart reads the job afresh and executes it again.
+        registry = _TrapRegistry(armed=True)
+        restarted = JobRuntime(JobStore(path), engine_registry=registry, cadlink_store=_store(data_dir))
+        restarted._ensure_scheduler = lambda: None  # type: ignore[method-assign]
+        try:
+            await restarted.start()
+            await restarted._run_job(job_id, restarted.store.get_job_row(job_id))
+            outcomes["restart"] = (list(registry.calls), restarted.store.get_job_row(job_id)["error_message"])
+        finally:
+            await restarted.shutdown()
+
+    asyncio.run(scenario())
+    return outcomes
+
+
+def _pair(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    from server.cadlink.solver_frame import confirm_frame
+
+    data_dir = tmp_path / "data"
+    record = _ingest(
+        _bundle(tmp_path, "pair-review", _mirrored_pair, PAIR_DRIVERS, sources=["left", "right"]), data_dir
+    )
+    confirm_frame(_store(data_dir), record, "+z")
+    return data_dir, record
+
+
+def test_swapped_left_and_right_source_tags_are_refused_at_every_entry_point(tmp_path: Path) -> None:
+    """Review finding 1: the decision binds which tag is which source identity."""
+
+    from server.cadlink import preparation
+    from server.jobs.runtime import JobRuntime, _imported_request_refusal
+    from server.jobs.store import JobStore
+    from test_cad_preparation_solver_frame import _PreparedStore
+
+    data_dir, record = _pair(tmp_path)
+    decision = _decision(record)
+    assert decision["sources"]["by_id"]["left"]["tag"] != decision["sources"]["by_id"]["right"]["tag"]
+    swapped = json.loads(json.dumps(record))
+    _swap_sources(swapped)
+    problem = dd.decision_problem(swapped)
+    assert problem is not None and "source" in problem
+    # The decision itself is untouched and intact: only the record's mapping moved.
+    assert swapped["domain_decision"] == record["domain_decision"]
+
+    # Plan and every engine selection.
+    assert _solve_verdicts_quiet(swapped) == dd.MISMATCH_CODE
+    assert _imported_request_refusal(_job_request(record), swapped)[0] == dd.MISMATCH_CODE
+    # Preparation reuse.
+    assert preparation._resumable(
+        _PreparedStore(swapped), {"preparation_id": "wgp_1"}, "wgs_1", "sha256:s", "semantics",
+        None, record_plan_identity(record),
+    ) is None
+    # A real submission of the stored, swapped record.
+    _put_record(data_dir, swapped)
+
+    async def submit() -> str:
+        runtime = JobRuntime(JobStore(tmp_path / "submit.db"), engine_registry=_TrapRegistry(), cadlink_store=_store(data_dir))
+        runtime._ensure_scheduler = lambda: None  # type: ignore[method-assign]
+        try:
+            await runtime.submit(_job_request(record))
+            return "accepted"
+        except Exception as exc:  # noqa: BLE001 - the refusal code is the outcome
+            return str(getattr(exc, "reason_code", type(exc).__name__))
+        finally:
+            await runtime.shutdown()
+
+    assert asyncio.run(submit()) == dd.MISMATCH_CODE
+    _put_record(data_dir, record)
+
+    # Queued on the true mapping, swapped before it runs: execute, restart and retry refuse.
+    outcomes = _lifecycle(tmp_path, data_dir, record, lambda _runtime, _job: _put_record(data_dir, swapped))
+    for stage in ("execute", "restart"):
+        calls, error = outcomes[stage]
+        assert calls == [], (stage, outcomes)
+        assert error is not None and error.startswith(dd.MISMATCH_CODE), (stage, error)
+    assert outcomes["retry"] == dd.MISMATCH_CODE
+
+
+def test_a_job_saved_under_another_decision_is_refused_at_execute_restart_and_retry(tmp_path: Path) -> None:
+    """Review finding 2: the job-bound decision must be the ingest's."""
+
+    data_dir, record = _pair(tmp_path)
+
+    def rehash(runtime: Any, job_id: str) -> None:
+        metadata = runtime.store.get_job_row(job_id)["task_metadata"]["imported_geometry"]
+        metadata["domain_decision"]["decision_sha256"] = "sha256:" + "0" * 64
+        runtime.store.mutate_job_metadata(job_id, {"imported_geometry": metadata})
+
+    outcomes = _lifecycle(tmp_path, data_dir, record, rehash)
+    for stage in ("execute", "restart"):
+        calls, error = outcomes[stage]
+        assert calls == [], (stage, outcomes)
+        assert error is not None and error.startswith(dd.MISMATCH_CODE), (stage, error)
+    assert outcomes["retry"] == dd.MISMATCH_CODE
+
+    # Control: the untouched job reaches the engine boundary, and retries.
+    control = _lifecycle(tmp_path / "control", data_dir, record, lambda _runtime, _job: None)
+    assert control["execute"][0] == ["metal"], control
+    assert control["retry"] == "accepted"
+    # A job saved before decisions existed is judged by its record alone.
+    assert dd.job_decision_problem({"imported_geometry": {"ingest_id": record["ingest_id"]}}, record) is None
+
+
+def _open_on_x0_and_z0(path: Path) -> None:
+    # A box on the negative side of x = 0, open on x = 0 and on z = 0, with a
+    # driver on its y = -40 wall: reflecting x alone leaves the z opening.
+    def build() -> None:
+        from test_cadlink_domain_automatic import _drop_faces, _surfaces_only
+
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        box = occ.addBox(-60.0, -40.0, -80.0, 60.0, 80.0, 80.0)
+        disc = occ.addDisk(-30.0, -40.0, -40.0, 10.0, 10.0)
+        occ.rotate([(2, disc)], -30.0, -40.0, -40.0, 1.0, 0.0, 0.0, np.pi / 2)
+        occ.fragment([(3, box)], [(2, disc)])
+        _surfaces_only()
+        _drop_faces(
+            lambda b, _tag: (abs(b[0]) < 1e-5 and abs(b[3]) < 1e-5) or (abs(b[2]) < 1e-5 and abs(b[5]) < 1e-5)
+        )
+        occ.healShapes(sewFaces=True, makeSolids=False)
+        occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+
+
+def _smallest_face(surfaces: list[int]) -> list[int]:
+    return [min(surfaces, key=lambda tag: gmsh.model.occ.getMass(2, tag))]
+
+
+def test_a_second_open_plane_blocks_the_reflection_of_a_negative_cut(tmp_path: Path) -> None:
+    """Review finding 3: every failed flip condition is listed, other plane rims included."""
+
+    record = _ingest(_bundle(tmp_path, "two-openings", _open_on_x0_and_z0, _smallest_face), tmp_path / "data")
+    decision = _decision(record)
+    observed = record["domain_interpretation"]["observations"]
+    assert observed["other_open_edges"] == 0
+    assert observed["planes"]["z0"]["rim_edges"] >= 3
+    cut = _cut(decision, "x0")
+    assert cut["kept_side"] == "negative"
+    assert cut["recovery"]["by_reflection"] == dd.REFLECTION_PENDING
+    assert "open-rim-on-z0" in cut["recovery"]["blockers"]
+    assert decision["refusal"]["code"] == "imported_open_half_shell"

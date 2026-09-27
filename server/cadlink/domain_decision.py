@@ -136,7 +136,9 @@ def _reflection_blockers(plane: str, observation: Mapping[str, Any], other_open_
     Overseer conditions 1, 2 and 4 as far as the observations can tell: the
     cut plane must contain the radiation axis (never the solver's z0), must be
     one the solver mirrors, must be open (no cap) and must be the model's only
-    opening. Source identity (condition 3) is judged by the reflection itself.
+    opening. Openings on the other coordinate planes are added by the caller
+    (:func:`_other_plane_blockers`), which knows the model's other cuts. Source
+    identity (condition 3) is judged by the reflection itself.
     """
 
     blockers: list[str] = []
@@ -150,6 +152,40 @@ def _reflection_blockers(plane: str, observation: Mapping[str, Any], other_open_
         blockers.append("other-openings")
     if plane not in PLANES:
         blockers.append("unknown-plane")
+    return blockers
+
+
+def _other_plane_blockers(
+    cut: Mapping[str, Any],
+    observed_planes: Mapping[str, Mapping[str, Any]],
+    geometry_cuts: Mapping[str, Mapping[str, Any]],
+    other_open_edges: int,
+) -> list[str]:
+    """An open rim on another coordinate plane that one reflection would not close.
+
+    ``other_open_edges`` counts only free edges on no rim plane, so a second
+    rim on another coordinate plane (a shell open on x = 0 *and* z = 0) is
+    invisible to it. Such a rim is a blocker unless it is itself a cut that
+    passes its own flip conditions (the second plane of a quarter).
+    """
+
+    blockers: list[str] = []
+    for other in PLANES:
+        if other == cut.get("plane"):
+            continue
+        observation = observed_planes.get(other)
+        if not isinstance(observation, Mapping) or observation.get("wg_cut"):
+            continue
+        if int(observation.get("rim_edges") or 0) < MIN_RIM_EDGES:
+            continue
+        partner = geometry_cuts.get(other)
+        if (
+            partner is not None
+            and partner.get("kept_side") in ("positive", "negative")
+            and not _reflection_blockers(other, observation, other_open_edges)
+        ):
+            continue
+        blockers.append(f"open-rim-on-{other}")
     return blockers
 
 
@@ -247,6 +283,7 @@ def decide_domain_and_frame(
     normalisation = normalisation if normalisation is not None else dict(built.get("normalisation") or {})
     allocation = built.get("tag_allocation") or {}
     source_tags = dict(allocation.get("source_tags") or built.get("source_tags") or {})
+    tag_map = dict(allocation.get("tag_map") or built.get("tag_map") or {})
     decision = _decide(
         plan,
         interpretation,
@@ -255,6 +292,7 @@ def decide_domain_and_frame(
         manifest_sha256=manifest_sha256,
         normalisation=normalisation,
         source_tags=source_tags,
+        tag_map=tag_map,
         post_cut_source_areas=dict(built.get("post_cut_source_areas") or {}),
         skipped_source_ids=skipped_source_ids,
         mesh_content_sha256=mesh_content_sha256,
@@ -271,6 +309,7 @@ def _decide(
     manifest_sha256: str,
     normalisation: Mapping[str, Any],
     source_tags: Mapping[str, Any],
+    tag_map: Mapping[str, Any],
     post_cut_source_areas: Mapping[str, Any],
     skipped_source_ids: Iterable[str],
     mesh_content_sha256: str | None,
@@ -342,6 +381,13 @@ def _decide(
                 ),
             }
         cad_cuts.append(entry)
+    geometry_cuts = {cut["plane"]: cut for cut in cad_cuts if cut["found_by"] == "geometry"}
+    for cut in geometry_cuts.values():
+        recovery = cut.get("recovery")
+        if isinstance(recovery, dict) and "blockers" in recovery:
+            recovery["blockers"] = recovery["blockers"] + _other_plane_blockers(
+                cut, observed_planes, geometry_cuts, other_open
+            )
 
     # -- evidence: supporting, contradicted, ignored
     supporting: list[dict[str, Any]] = []
@@ -449,11 +495,54 @@ def _decide(
             "observations_sha256": _sha256(observed_json),
             "choice_sha256": _sha256(plan.identity()),
             "mesh_content_sha256": mesh_content_sha256,
+            "source_map_sha256": source_map_sha256(source_tags, tag_map),
         },
     }
     decision = json.loads(_canonical(decision))
     decision["identity"]["decision_sha256"] = decision_sha256(decision)
     return decision
+
+
+def source_map_sha256(source_tags: Mapping[str, Any], tag_map: Mapping[str, Any]) -> str:
+    """Which mesh tag is which source identity: what the solver drives, as a hash."""
+
+    return str(_sha256({"source_tags": dict(source_tags), "tag_map": dict(tag_map)}))
+
+
+def _source_problem(decision: Mapping[str, Any], record: Mapping[str, Any]) -> str | None:
+    """Why the record's source identities are not the ones the decision was made on."""
+
+    identity = decision.get("identity") or {}
+    record_tags = record.get("source_tags")
+    record_tags = record_tags if isinstance(record_tags, Mapping) else {}
+    record_map = record.get("tag_map")
+    record_map = record_map if isinstance(record_map, Mapping) else {}
+    if identity.get("source_map_sha256") != source_map_sha256(record_tags, record_map):
+        return "its domain decision was made on another source-to-tag mapping"
+    sources = decision.get("sources")
+    by_id = sources.get("by_id") if isinstance(sources, Mapping) else None
+    if not isinstance(by_id, Mapping):
+        return "its domain decision names no sources"
+    held = {str(key): (item or {}).get("tag") for key, item in by_id.items()}
+    try:
+        current = {str(key): int(value) for key, value in record_tags.items()}
+    except (TypeError, ValueError):
+        return "its source tags are unreadable"
+    if held != current:
+        return "its domain decision maps the sources to other tags than the record"
+    areas = record.get("post_cut_source_areas")
+    areas = areas if isinstance(areas, Mapping) else {}
+    for source_id, item in by_id.items():
+        kept = areas.get(source_id)
+        kept = kept.get("retained_fraction") if isinstance(kept, Mapping) else None
+        if (item or {}).get("retained_fraction") != kept:
+            return f"its domain decision keeps another part of source {source_id} than the record"
+    skipped = sources.get("skipped") if isinstance(sources, Mapping) else None
+    if sorted(str(item) for item in skipped or []) != sorted(
+        str(item) for item in record.get("skipped_source_ids") or []
+    ):
+        return "its domain decision skips other sources than the record"
+    return None
 
 
 def decision_sha256(decision: Mapping[str, Any]) -> str:
@@ -510,6 +599,35 @@ def decision_problem(record: Mapping[str, Any]) -> str | None:
     held = frame.get("solver_from_cad") if isinstance(frame, Mapping) else None
     if matrix is not None and (held is None or not np.array_equal(np.asarray(held, float), np.asarray(matrix, float))):
         return "its domain decision was made in another solver frame"
+    return _source_problem(decision, record)
+
+
+def job_decision_problem(
+    task_metadata: Mapping[str, Any] | None, record: Mapping[str, Any]
+) -> str | None:
+    """Why a saved job's decision is not the ingestion record's, or None.
+
+    A job records the decision it was submitted under (:func:`decision_summary`).
+    Execution, a restart and a retry solve the record again, so they solve
+    only that very decision. A job saved before decisions existed has no such
+    entry and is judged by the record alone, as before.
+    """
+
+    imported = (task_metadata or {}).get("imported_geometry")
+    if not isinstance(imported, Mapping) or "domain_decision" not in imported:
+        return None
+    saved = imported.get("domain_decision")
+    decision = record.get("domain_decision")
+    saved_sha = saved.get("decision_sha256") if isinstance(saved, Mapping) else None
+    current_sha = (
+        (decision.get("identity") or {}).get("decision_sha256")
+        if isinstance(decision, Mapping)
+        else None
+    )
+    if saved_sha != current_sha:
+        return "the job was submitted under another domain decision than its ingestion record's"
+    if saved is not None and dict(saved) != decision_summary(record):
+        return "the job's recorded domain decision differs from its ingestion record's"
     return None
 
 
@@ -577,4 +695,6 @@ __all__ = [
     "decision_refusal",
     "decision_sha256",
     "decision_summary",
+    "job_decision_problem",
+    "source_map_sha256",
 ]

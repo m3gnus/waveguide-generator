@@ -33,6 +33,7 @@ from server.cadlink.domain_decision import (
     decision_problem,
     decision_refusal,
     decision_summary,
+    job_decision_problem,
 )
 from server.cadlink.domain_interpretation import (
     cut_shaped_open_rim,
@@ -618,6 +619,24 @@ def _imported_decision_refusal(record: Mapping[str, Any] | None) -> tuple[str, s
     if record is None:
         return None
     problem = decision_problem(record)
+    if problem is None:
+        return None
+    return DOMAIN_DECISION_MISMATCH, decision_mismatch_message(problem)
+
+
+def _imported_job_decision_refusal(
+    task_metadata: Mapping[str, Any] | None, record: Mapping[str, Any] | None
+) -> tuple[str, str] | None:
+    """Refuse a saved job whose decision is not its ingestion record's.
+
+    Execution, a restart and a retry solve the job's record again; the record
+    must still carry the very decision the job was submitted and recorded
+    under. A job saved before decisions existed is judged by its record alone.
+    """
+
+    if record is None:
+        return None
+    problem = job_decision_problem(task_metadata, record)
     if problem is None:
         return None
     return DOMAIN_DECISION_MISMATCH, decision_mismatch_message(problem)
@@ -2801,6 +2820,18 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         request = _replay_request(row)
+        if isinstance(request.geometry, ImportedGeometrySource) and self.cadlink_store is not None:
+            # A retry solves the parent's record again: only under the domain
+            # decision the parent was submitted with.
+            record = await asyncio.to_thread(
+                get_ingestion_record, self.cadlink_store, request.geometry.ingest_id
+            )
+            metadata = row.get("task_metadata")
+            refusal = _imported_job_decision_refusal(
+                metadata if isinstance(metadata, Mapping) else None, record
+            )
+            if refusal is not None:
+                raise ImportedSolveRefusal(*refusal)
         request.parent_job_id = job_id
         # Retry is explicitly a new run, not a transport replay of the source
         # submission. Reusing its key would either recover the source job or
@@ -3431,9 +3462,11 @@ class JobRuntime:
                 await asyncio.to_thread(
                     _refuse_inverted_reduced_mesh, imported_record, job_msh_text
                 )
-                open_half = _imported_decision_refusal(
-                    imported_record
-                ) or _imported_open_half_refusal(imported_record, job_msh_text)
+                open_half = (
+                    _imported_decision_refusal(imported_record)
+                    or _imported_job_decision_refusal(task_metadata, imported_record)
+                    or _imported_open_half_refusal(imported_record, job_msh_text)
+                )
                 if open_half is not None:
                     raise ImportedSolveRefusal(*open_half)
                 imported_record = {
