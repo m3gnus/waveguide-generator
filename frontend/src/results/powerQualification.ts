@@ -212,12 +212,16 @@ function evaluateCombined(result: ResultPayload, wrapper: ResultPayload, members
     : validityMaxHz !== null && frequency > validityMaxHz ? 'outside_validity' : 'qualified');
   const reasons: Array<string | null> = frequencies.map(() => null);
   const culprits: string[][] = frequencies.map(() => []);
-  let evaluatedAny = false;
+  // A member with no check, or one that cannot be qualified, leaves the sum
+  // unknown at best: a clean LF must never vouch for an unchecked HF.
+  let unknownMember = false;
   for (const member of members) {
     const payload = wrapper.channels?.[member] as ResultPayload | undefined;
     const flags = payload ? powerQualificationOf(payload, wrapper) : null;
-    if (!payload || !flags) continue;
-    evaluatedAny = true;
+    if (!payload || !flags || flags.status === 'unknown') {
+      unknownMember = true;
+      if (!payload || !flags) continue;
+    }
     const flagged = (payload.frequencies ?? []).filter((_, index) => flags.frequencyStatus[index] === 'unqualified');
     frequencies.forEach((frequency, index) => {
       if (status[index] === 'unchecked' || status[index] === 'outside_validity') return;
@@ -228,18 +232,18 @@ function evaluateCombined(result: ResultPayload, wrapper: ResultPayload, members
       }
     });
   }
-  if (!evaluatedAny) return null;
   const ranges = rangesOf(frequencies, status, reasons, culprits);
   const unqualifiedChannels = [...new Set(culprits.flat())].sort();
+  const unknown = !unqualifiedChannels.length && (unknownMember || !members.length);
   return {
-    status: unqualifiedChannels.length ? 'unqualified' : 'qualified',
+    status: unqualifiedChannels.length ? 'unqualified' : unknown ? 'unknown' : 'qualified',
     evaluated: 'client',
     validityMaxHz,
     frequencyStatus: status,
     frequencyReasons: reasons,
     ranges,
     reasons: unqualifiedChannels.length ? ['member_unqualified'] : [],
-    unknownReason: null,
+    unknownReason: unknown ? 'member_unknown' : null,
     formulation: null,
     complexKShift: null,
     unqualifiedChannels,

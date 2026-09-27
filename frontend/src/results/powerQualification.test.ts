@@ -193,7 +193,8 @@ describe('power qualification', () => {
     expect(combined.validityMaxHz).toBe(250);
     expect(combined.frequencyStatus).toEqual(['qualified', 'qualified', 'outside_validity']);
     expect(combined.unqualifiedChannels).toEqual([]);
-    expect(combined.status).not.toBe('unqualified');
+    // Neither member records a solver pin here, so the sum is unknown, not ✓.
+    expect(combined.status).toBe('unknown');
   });
 
   it('leaves a clean unflagged channel unknown when its solver pin or complex-k shift is missing', () => {
@@ -215,6 +216,24 @@ describe('power qualification', () => {
     expect(powerQualificationOf(channel(noShift, 'drive-hf'), noShift)!.status).toBe('unknown');
     // A failure still shows whatever is missing.
     expect(powerQualificationOf(channel(noPin, 'drive-lf'), noPin)!.status).toBe('unqualified');
+  });
+
+  it('never shows a combined sum as qualified when a member carries no check', () => {
+    // Review reproducer: unflagged stored bytes (as an archive snapshot serves
+    // them) with a clean LF and an HF that has no power check at all.
+    const wrapper = archived();
+    delete (channel(wrapper, 'drive-hf').metadata as Record<string, unknown>).radiated_power;
+    for (const id of ['drive-lf']) {
+      const power = channel(wrapper, id).metadata!.radiated_power as unknown as Record<string, number[]>;
+      power.sphere_w = power.surface_w.slice();
+      power.agreement_db = power.surface_w.map(() => 0);
+    }
+    expect(powerQualificationOf(channel(wrapper, 'drive-lf'), wrapper)!.status).toBe('qualified');
+    expect(powerQualificationOf(channel(wrapper, 'drive-hf'), wrapper)).toBeNull();
+    const combined = powerQualificationOf(channel(wrapper, 'combined'), wrapper)!;
+    expect(combined.status).toBe('unknown');
+    expect(combined.unknownReason).toBe('member_unknown');
+    expect(powerChipLabel(combined)).toBe('Power check: unknown');
   });
 
   it('summarises every channel of a multi-channel run, and nothing for a single channel', () => {
