@@ -27,15 +27,20 @@ The result states, in the CAD (exported) frame unless named otherwise:
     that may cap a cut or be a wall, or a clean rim that does not span its
     shell: geometry alone cannot say; solved as shown).
 ``cad_cuts``
-    Each CAD cut: plane, solver plane, kept side, what says so, and whether it
-    is mirrored, refused, or (a negative-side cut) recoverable by reflection
-    once that exists.
+    Each CAD cut: plane, solver plane, kept side, what says so, whether its
+    mesh was reflected, and whether it is mirrored (on evidence), recovered
+    (from its geometry, ``cut_recovery.py``) or refused -- with the flip
+    conditions it failed. ``off_centre_cuts`` are cuts off the origin planes,
+    which are refused in this version.
 ``wg_cut_planes`` / ``solver_domain``
     The planes WG cut, and the planes the solver mirrors with the fraction
     (full, half, quarter) of the model the mesh is.
-``reflected_axes``
-    The CAD axes the solve mesh was reflected across. Always empty until mesh
-    reflection is implemented; a negative-side cut is refused meanwhile.
+``reflected_axes`` / ``reflection``
+    The CAD axes the solve mesh was reflected across (a cut that kept the
+    negative side), and how: the planes, the parity of the reflections (the
+    triangle winding is reversed once per reflection) and what did it. The
+    reflection is recorded apart from the frame, which stays a proper
+    rotation.
 ``frame``
     The proper rigid transform from CAD to solver coordinates.
 ``sources``
@@ -62,7 +67,6 @@ from .domain_interpretation import (
     MIN_RIM_EDGES,
     PLANES,
     PROVENANCE,
-    SUPPORTED_PLANES,
     USER,
     USER_LINEAGE,
     LINEAGE,
@@ -73,6 +77,7 @@ from .domain_interpretation import (
     READING_REDUCED,
     cut_shaped_open_rim,
     interpretation_record,
+    off_centre_cut_refusal_message,
     open_half_refusal_message,
 )
 
@@ -95,7 +100,8 @@ CONFIDENCE_REFUSED = "refused"
 
 OPEN_HALF_CODE = "imported_open_half_shell"
 MISMATCH_CODE = "imported_domain_decision_mismatch"
-#: The state a negative-side cut's recovery is in until mesh reflection exists.
+#: Retired with S3-2: a negative-side cut is recovered by mesh reflection or
+#: refused with the condition it failed. Kept for records an earlier build wrote.
 REFLECTION_PENDING = "pending-s3-2"
 
 _FRACTION = {0: "full", 1: "half", 2: "quarter"}
@@ -130,65 +136,6 @@ def _kept_side(observation: Mapping[str, Any] | None) -> str | None:
     return None
 
 
-def _reflection_blockers(plane: str, observation: Mapping[str, Any], other_open_edges: int) -> list[str]:
-    """The flip conditions this geometry already fails, before reflection exists.
-
-    Overseer conditions 1, 2 and 4 as far as the observations can tell: the
-    cut plane must contain the radiation axis (never the solver's z0), must be
-    one the solver mirrors, must be open (no cap) and must be the model's only
-    opening. Openings on the other coordinate planes are added by the caller
-    (:func:`_other_plane_blockers`), which knows the model's other cuts. Source
-    identity (condition 3) is judged by the reflection itself.
-    """
-
-    blockers: list[str] = []
-    if observation.get("solver_plane") == "z0":
-        blockers.append("front-back-cut")
-    if observation.get("solver_plane") not in SUPPORTED_PLANES:
-        blockers.append("unsupported-solver-plane")
-    if int(observation.get("cap_triangles") or 0):
-        blockers.append("capped")
-    if other_open_edges:
-        blockers.append("other-openings")
-    if plane not in PLANES:
-        blockers.append("unknown-plane")
-    return blockers
-
-
-def _other_plane_blockers(
-    cut: Mapping[str, Any],
-    observed_planes: Mapping[str, Mapping[str, Any]],
-    geometry_cuts: Mapping[str, Mapping[str, Any]],
-    other_open_edges: int,
-) -> list[str]:
-    """An open rim on another coordinate plane that one reflection would not close.
-
-    ``other_open_edges`` counts only free edges on no rim plane, so a second
-    rim on another coordinate plane (a shell open on x = 0 *and* z = 0) is
-    invisible to it. Such a rim is a blocker unless it is itself a cut that
-    passes its own flip conditions (the second plane of a quarter).
-    """
-
-    blockers: list[str] = []
-    for other in PLANES:
-        if other == cut.get("plane"):
-            continue
-        observation = observed_planes.get(other)
-        if not isinstance(observation, Mapping) or observation.get("wg_cut"):
-            continue
-        if int(observation.get("rim_edges") or 0) < MIN_RIM_EDGES:
-            continue
-        partner = geometry_cuts.get(other)
-        if (
-            partner is not None
-            and partner.get("kept_side") in ("positive", "negative")
-            and not _reflection_blockers(other, observation, other_open_edges)
-        ):
-            continue
-        blockers.append(f"open-rim-on-{other}")
-    return blockers
-
-
 def _proper_frame(normalisation: Mapping[str, Any]) -> dict[str, Any]:
     matrix = normalisation.get("matrix")
     try:
@@ -220,15 +167,34 @@ def _source_mapping(
     post_cut_source_areas: Mapping[str, Any],
     skipped_source_ids: Iterable[str],
     observed_planes: Mapping[str, Mapping[str, Any]],
+    *,
+    reflection: Mapping[str, Any] | None = None,
+    channels: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Each source identity, its mesh tag, and what of it the solve mesh keeps."""
+    """Each source identity, its mesh tag, and what of it the solve mesh keeps.
 
+    With a reflected mesh, each source's meshed area before and after the
+    reflection (``reflect_triangle_mesh``): the same identity, tag and area.
+    """
+
+    tag_areas = (reflection or {}).get("tag_areas") or {}
+    final_areas = (reflection or {}).get("final_tag_areas") or {}
     mapping: dict[str, Any] = {}
     for source_id, tag in sorted(source_tags.items()):
         areas = post_cut_source_areas.get(source_id)
         areas = areas if isinstance(areas, Mapping) else {}
+        reflected: dict[str, Any] | None = None
+        if reflection and reflection.get("axes"):
+            held = tag_areas.get(str(int(tag))) or {}
+            reflected = {
+                "axes": list(reflection.get("axes") or []),
+                "meshed_area_before_mm2": held.get("before"),
+                "meshed_area_after_mm2": final_areas.get(str(int(tag))),
+            }
         mapping[str(source_id)] = {
             "tag": int(tag),
+            "channel": (channels or {}).get(str(source_id)),
+            "reflected": reflected,
             "retained_fraction": areas.get("retained_fraction"),
             "retained_area_mm2": areas.get("retained_child_area_mm2"),
             "parent_area_mm2": areas.get("parent_area_mm2"),
@@ -260,15 +226,20 @@ def decide_domain_and_frame(
     normalisation: Mapping[str, Any] | None = None,
     skipped_source_ids: Iterable[str] = (),
     mesh_content_sha256: str | None = None,
+    recovery: Mapping[str, Any] | None = None,
+    reflected: Sequence[str] = (),
+    manifest_sources: Sequence[Mapping[str, Any]] = (),
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """The interpretation record and the decision, for the mesh the snapshot is solved with.
 
     ``plan`` is the evidence before meshing, ``observations`` the detector's
     reading of the solve mesh as it arrived, ``built`` the chosen mesher
     result, ``applied`` the evidenced planes that revalidated and were
-    mirrored. Returns ``(domain_interpretation, domain_decision)``: the first
-    is the M1c-auto record, unchanged; the second the decision every later
-    reader consumes.
+    mirrored, ``recovery`` the verdict on the cuts the geometry shows
+    (``cut_recovery.CutRecovery.to_json``) and ``reflected`` the mirrored
+    planes whose mesh was reflected. Returns ``(domain_interpretation,
+    domain_decision)``: the first is the M1c-auto record; the second the
+    decision every later reader consumes.
     """
 
     symmetry = dict(built.get("symmetry") or {})
@@ -279,6 +250,8 @@ def decide_domain_and_frame(
         applied=applied,
         outcome=outcome,
         cache_identity=cache_identity,
+        recovery=recovery,
+        reflected=reflected,
     )
     normalisation = normalisation if normalisation is not None else dict(built.get("normalisation") or {})
     allocation = built.get("tag_allocation") or {}
@@ -296,6 +269,13 @@ def decide_domain_and_frame(
         post_cut_source_areas=dict(built.get("post_cut_source_areas") or {}),
         skipped_source_ids=skipped_source_ids,
         mesh_content_sha256=mesh_content_sha256,
+        recovery=recovery,
+        reflection=built.get("reflection") if isinstance(built.get("reflection"), Mapping) else None,
+        channels={
+            str(source.get("id")): source.get("default_drive_channel_id")
+            for source in manifest_sources
+            if isinstance(source, Mapping)
+        },
     )
     return interpretation, decision
 
@@ -313,6 +293,9 @@ def _decide(
     post_cut_source_areas: Mapping[str, Any],
     skipped_source_ids: Iterable[str],
     mesh_content_sha256: str | None,
+    recovery: Mapping[str, Any] | None = None,
+    reflection: Mapping[str, Any] | None = None,
+    channels: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     observed_json = observations.to_json() if observations is not None else None
     observed_planes: Mapping[str, Mapping[str, Any]] = (observed_json or {}).get("planes") or {}
@@ -322,6 +305,11 @@ def _decide(
     reading = interpretation.get("reading")
     mirrored = list(interpretation.get("planes") or []) if reading == READING_REDUCED else []
     evidence_source = plan.source
+    recovered = bool((interpretation.get("evidence") or {}).get("recovered"))
+    recovery = recovery if isinstance(recovery, Mapping) else {}
+    failures = recovery.get("failures") if isinstance(recovery.get("failures"), Mapping) else {}
+    reflected_planes = [str(plane) for plane in interpretation.get("reflected_planes") or []]
+    reflection_axes = [str(axis) for axis in (reflection or {}).get("axes") or []]
 
     # -- the CAD cuts: what evidence mirrored, and what geometry shows unmirrored
     cad_cuts: list[dict[str, Any]] = []
@@ -333,11 +321,13 @@ def _decide(
         cad_cuts.append(
             {
                 "plane": plane,
-                "solver_plane": (observation or {}).get("solver_plane") or plane,
+                # A recovered cut is solved in the frame it was modelled in.
+                "solver_plane": plane if recovered else (observation or {}).get("solver_plane") or plane,
                 "kept_side": _kept_side(observation) or "positive",
-                "found_by": evidence_source,
+                "found_by": "geometry" if recovered else evidence_source,
                 "features": features_by_plane.get(plane, []),
-                "status": "mirrored",
+                "reflected": plane in reflected_planes,
+                "status": "recovered" if recovered else "mirrored",
             }
         )
     open_rim = (
@@ -366,28 +356,24 @@ def _decide(
             "features": features_by_plane.get(plane, []),
             "rim_edges": int(observation.get("rim_edges") or 0),
             "rigid_cut_rim_edges": rigid_rim,
+            "reflected": False,
             "status": "refused" if open_rim is not None else "unmirrored",
-        }
-        if kept == "negative":
-            entry["recovery"] = {
-                "by_reflection": REFLECTION_PENDING,
-                "blockers": _reflection_blockers(plane, observation, other_open),
-            }
-        elif kept == "positive":
-            entry["recovery"] = {
+            # The flip conditions this cut failed (``cut_recovery.py``); none
+            # listed when WG did not judge it (a declaration, the user's own
+            # reading, a linked return).
+            "recovery": {
+                "judged": bool(recovery),
+                "failed": [dict(item) for item in failures.get(plane) or []],
                 "by_change": any(
                     choice.get("reading") == READING_REDUCED and plane in (choice.get("planes") or [])
                     for choice in interpretation.get("choices") or []
                 ),
-            }
+            },
+        }
         cad_cuts.append(entry)
-    geometry_cuts = {cut["plane"]: cut for cut in cad_cuts if cut["found_by"] == "geometry"}
-    for cut in geometry_cuts.values():
-        recovery = cut.get("recovery")
-        if isinstance(recovery, dict) and "blockers" in recovery:
-            recovery["blockers"] = recovery["blockers"] + _other_plane_blockers(
-                cut, observed_planes, geometry_cuts, other_open
-            )
+    off_centre = [
+        dict(item) for item in (observed_json or {}).get("off_origin_rims") or []
+    ] if not domain_planes else []
 
     # -- evidence: supporting, contradicted, ignored
     supporting: list[dict[str, Any]] = []
@@ -399,7 +385,7 @@ def _decide(
             "planes": list(plane for plane in plan.planes),
             "features": [dict(item) for item in plan.features],
         }
-        if evidence_source == DECLARATION or mirrored:
+        if evidence_source == DECLARATION or (mirrored and not recovered):
             supporting.append(record)
         elif evidence_source in (USER, USER_LINEAGE) and plan.reading == READING_AS_SHOWN:
             supporting.append(record)
@@ -431,7 +417,21 @@ def _decide(
     frame = _proper_frame(normalisation)
     refusal: dict[str, Any] | None = None
     if open_rim is not None:
-        refusal = {"code": OPEN_HALF_CODE, "message": open_half_refusal_message(*open_rim)}
+        reason = "; ".join(
+            str(item.get("message")) for item in failures.get(open_rim[0]) or [] if item.get("message")
+        )
+        refusal = {
+            "code": OPEN_HALF_CODE,
+            "message": open_half_refusal_message(*open_rim, reason=reason or None),
+        }
+    elif off_centre:
+        first = off_centre[0]
+        refusal = {
+            "code": OPEN_HALF_CODE,
+            "message": off_centre_cut_refusal_message(
+                str(first["plane_axis"]), float(first["offset_mm"]), int(first["rim_edges"])
+            ),
+        }
     elif not frame["proper"]:
         refusal = {
             "code": "imported_frame_improper",
@@ -443,7 +443,7 @@ def _decide(
     judged = interpretation.get("conclusions") or {}
     possible_cap = any("possible-cap" in (item.get("reasons") or []) for item in judged.values())
     candidate = any(item.get("status") == "candidate" for item in judged.values())
-    if evidence_source == DECLARATION or mirrored or open_rim is not None:
+    if evidence_source == DECLARATION or mirrored or open_rim is not None or off_centre:
         input_reading = INPUT_CUT
     elif observed_json is None or possible_cap or candidate:
         # A face that may cap a cut or be a wall, or a clean positive-side rim
@@ -459,6 +459,9 @@ def _decide(
 
     if refusal is not None:
         confidence = CONFIDENCE_REFUSED
+    elif recovered:
+        # Geometry alone establishes the cut once every flip condition holds.
+        confidence = CONFIDENCE_ESTABLISHED
     elif mirrored or evidence_source == DECLARATION:
         confidence = CONFIDENCE_EVIDENCED
     elif input_reading in (INPUT_FULL, INPUT_OPEN_SHEET):
@@ -472,16 +475,31 @@ def _decide(
         "input_reading": input_reading,
         "resolved_reading": reading,
         "cad_cuts": cad_cuts,
+        "off_centre_cuts": off_centre,
         "wg_cut_planes": wg_cut_planes,
         "solver_domain": {
             "planes": domain_planes,
             "fraction": fraction,
             "multiplier": 2 ** len(domain_planes),
         },
-        "reflected_axes": [],
-        "reflection": {"implemented": False, "pending": REFLECTION_PENDING},
+        "reflected_axes": reflection_axes,
+        "reflection": {
+            "implemented": True,
+            "planes": [str(plane) for plane in (reflection or {}).get("planes") or []],
+            "axes": reflection_axes,
+            "parity": int((reflection or {}).get("parity") or 0),
+            "winding_reversed": bool((reflection or {}).get("winding_reversed")),
+            "by": (reflection or {}).get("by"),
+        },
         "frame": frame,
-        "sources": _source_mapping(source_tags, post_cut_source_areas, skipped_source_ids, observed_planes),
+        "sources": _source_mapping(
+            source_tags,
+            post_cut_source_areas,
+            skipped_source_ids,
+            observed_planes,
+            reflection=reflection,
+            channels=channels,
+        ),
         "confidence": confidence,
         "evidence": {
             "supporting": supporting,
@@ -661,12 +679,19 @@ def decision_summary(record: Mapping[str, Any]) -> dict[str, Any] | None:
         "input_reading": decision.get("input_reading"),
         "resolved_reading": decision.get("resolved_reading"),
         "cad_cuts": [
-            {key: cut.get(key) for key in ("plane", "solver_plane", "kept_side", "found_by", "status")}
+            {
+                key: cut.get(key)
+                for key in ("plane", "solver_plane", "kept_side", "found_by", "status", "reflected")
+            }
             for cut in decision.get("cad_cuts") or []
         ],
         "wg_cut_planes": list(decision.get("wg_cut_planes") or []),
         "solver_domain": dict(decision.get("solver_domain") or {}),
         "reflected_axes": list(decision.get("reflected_axes") or []),
+        "reflection": {
+            key: (decision.get("reflection") or {}).get(key)
+            for key in ("axes", "parity", "winding_reversed")
+        },
         "frame": {
             key: (decision.get("frame") or {}).get(key)
             for key in ("solver_from_cad", "determinant", "proper", "axis", "up")

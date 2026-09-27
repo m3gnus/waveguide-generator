@@ -20,6 +20,12 @@ function evidenceWords(interpretation: DomainInterpretation): string | null {
   const names = (evidence.features ?? [])
     .filter((feature) => interpretation.planes.includes(feature.plane))
     .map((feature) => feature.name);
+  if (evidence.recovered) {
+    const reflected = interpretation.reflected_planes ?? [];
+    return reflected.length
+      ? `recognised from its geometry; the ${reflected.map((plane) => `${plane.charAt(0)} ≤ 0`).join(' and ')} side reflected`
+      : 'recognised from its geometry';
+  }
   switch (evidence.source) {
     case 'cad-provenance': return names.length ? names.join(', ') : 'recorded in Fusion';
     case 'lineage': return names.length ? `${names.join(', ')}, as before` : 'as before';

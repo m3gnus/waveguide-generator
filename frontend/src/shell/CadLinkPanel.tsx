@@ -397,6 +397,7 @@ const NOTE_TITLE: Record<string, string> = {
   'stale-detection-unavailable': 'WG cannot tell whether this model is out of date',
   'declared-reduced-domain': 'Solved as the reduced model the CAD author declared',
   'interpreted-reduced-domain': 'Solved mirrored, as a model already cut in CAD (from recorded evidence)',
+  'recovered-reduced-domain': 'Solved mirrored, as a model already cut in CAD (recognised from its geometry)',
   'domain-solved-as-shown': 'Solved as shown, unmirrored',
 };
 
@@ -407,6 +408,7 @@ const RECORD_ONLY: ReadonlySet<string> = new Set([
   'declared-reduced-domain',
   // The model card states the domain reading and offers Change (M1c-auto).
   'interpreted-reduced-domain',
+  'recovered-reduced-domain',
   'domain-solved-as-shown',
 ]);
 

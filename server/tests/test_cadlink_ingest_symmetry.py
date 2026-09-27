@@ -1008,14 +1008,15 @@ def test_a_declared_half_is_mirrored_rather_than_cut_again(tmp_path: Path) -> No
     assert finding["declared_cut_planes"] == ["y0"]
 
 
-def test_the_same_half_returned_undeclared_is_prepared_as_shown_but_refused_at_solve(
+def test_the_same_half_returned_undeclared_is_recovered_from_its_geometry(
     tmp_path: Path,
 ) -> None:
-    """An unlinked open half prepares unmirrored but cannot be solved whole.
+    """An unlinked open half is solved as the reduced domain of the whole.
 
     A linked return whose throat was halved fails role resolution, so it is
-    already refused. An unlinked one has no design to contradict. Without
-    recorded evidence it stays unmirrored, and the solve boundary refuses it.
+    already refused. An unlinked one has no design to contradict: its clean
+    cut through the throat is recovered from its geometry (stage 3), exactly
+    the domain the same half declared by hand is solved with.
     """
 
     from server.jobs.runtime import _imported_open_half_refusal
@@ -1025,23 +1026,29 @@ def test_the_same_half_returned_undeclared_is_prepared_as_shown_but_refused_at_s
         tmp_path,
         _reduced_bundle(tmp_path, "half-undeclared", declare=False, unlinked=True),
     )
+    declared = _ingest(
+        tmp_path / "declared",
+        _reduced_bundle(tmp_path / "declared", "half", unlinked=True),
+    )
 
-    assert record["symmetry"]["domain_planes"] == []
-    assert record["mesh"]["stats"]["domain_multiplier"] == 1.0
-    assert record["symmetry_verification"]["undeclared_open_planes"] == ["y0"]
+    assert record["symmetry"]["domain_planes"] == declared["symmetry"]["domain_planes"]
+    assert "y0" in record["symmetry"]["domain_planes"]
+    assert record["mesh"]["stats"]["domain_multiplier"] == declared["mesh"]["stats"]["domain_multiplier"]
+    assert record["mesh_content_sha256"] == declared["mesh_content_sha256"]
     interpretation = record["domain_interpretation"]
-    assert interpretation["reading"] == "as-shown"
-    assert interpretation["looks_cut"] == ["y0"]
+    assert interpretation["reading"] == "reduced"
+    assert interpretation["planes"] == ["y0"]
+    assert interpretation["evidence"]["recovered"] is True
 
     assert not any(item["blocking"] for item in record["findings"] if "domain" in item["kind"])
     finding = next(
         item
         for item in record["findings"]
-        if item["kind"] == "domain-solved-as-shown"
+        if item["kind"] == "recovered-reduced-domain"
     )
     assert finding["blocking"] is False
-    assert finding["looks_cut"] == ["y0"]
-    assert _imported_open_half_refusal(record) is not None
+    assert finding["planes"] == ["y0"]
+    assert _imported_open_half_refusal(record) is None
 
 
 def test_solve_model_identity_separates_domain_collision_and_unchanged_resend(tmp_path: Path) -> None:
@@ -1059,7 +1066,10 @@ def test_solve_model_identity_separates_domain_collision_and_unchanged_resend(tm
     open_shell = _ingest(tmp_path / "open-shell", bundle)
     assert declared["transformed_geometry_hash"] == open_shell["transformed_geometry_hash"]
     assert declared["symmetry"]["domain_planes"] == ["x0", "y0"]
-    assert open_shell["symmetry"]["domain_planes"] == []
+    # Undeclared, the same half is recovered from its geometry (stage 3): the
+    # same domain, read another way, is another solve model.
+    assert open_shell["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert open_shell["domain_interpretation"]["evidence"]["recovered"] is True
     assert declared["solve_model_sha256"] != open_shell["solve_model_sha256"]
 
     # The old fingerprint records only the centre and area: these distinct
@@ -1261,8 +1271,8 @@ def test_a_declared_quarter_is_cut_on_both_planes_and_solved_as_a_quarter(
     assert finding["declared_cut_planes"] == ["x0", "y0"]
 
 
-def test_an_undeclared_quarter_is_recognised_on_both_planes(tmp_path: Path) -> None:
-    """Two planes that look cut, and neither is mirrored without evidence."""
+def test_an_undeclared_quarter_is_recovered_on_both_planes(tmp_path: Path) -> None:
+    """Two clean cuts through the throat: recovered from the geometry as a quarter."""
 
     pytest.importorskip("gmsh")
     record = _ingest(
@@ -1276,20 +1286,18 @@ def test_an_undeclared_quarter_is_recognised_on_both_planes(tmp_path: Path) -> N
         ),
     )
 
-    assert record["symmetry"]["domain_planes"] == []
-    assert record["mesh"]["stats"]["domain_multiplier"] == 1.0
-    assert sorted(record["symmetry_verification"]["undeclared_open_planes"]) == [
-        "x0",
-        "y0",
-    ]
+    assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert record["symmetry"]["cut_planes"] == []
+    assert record["mesh"]["stats"]["domain_multiplier"] == 4.0
+    assert record["symmetry_verification"]["verified"] is True
 
     finding = next(
         item
         for item in record["findings"]
-        if item["kind"] == "domain-solved-as-shown"
+        if item["kind"] == "recovered-reduced-domain"
     )
     assert finding["blocking"] is False
-    assert sorted(finding["looks_cut"]) == ["x0", "y0"]
+    assert finding["planes"] == ["x0", "y0"]
 
 
 # ----------------------------------- a reduced domain vs the full model it mirrors

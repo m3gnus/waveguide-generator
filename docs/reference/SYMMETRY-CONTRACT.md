@@ -210,9 +210,35 @@ conclusions:
 | Geometry | With no evidence | With evidence that revalidates |
 |---|---|---|
 | Whole model across a plane | today's mirror test and auto-cut, unchanged | not applicable there (the evidence is set aside) |
-| Positive-side open rim on x0/y0, a source on the plane, nothing else open or capped (`candidate`) | **solved as shown**, "looks cut at x = 0" | mirrored, exactly as the same planes declared by hand; the other plane is still cut where it validates |
-| A rim that is not a clean candidate, or a face on the plane that bisects a source (`ambiguous`) | solved as shown | mirrored when the plane is open, positive-side, uncapped and the only opening; otherwise refused |
-| Negative side, capped cut, rim off the plane, z0 | solved as shown | refused, with the remedy in words (e.g. "keep the x ≥ 0 side and leave the cut open") |
+| A cut: a rigid-shell rim spanning its one-sided shell on x0/y0, a source meeting the plane, nothing crossing it, no cap, nothing else open, no side-identified or missing source (every flip condition holds) | **recovered from its geometry**: mirrored as the whole speaker's reduced domain, a negative-side cut reflected at mesh level; the other plane is still cut where it validates | mirrored the same way |
+| A cut that fails a flip condition (front/back, capped, crossed, another opening, no source on the plane, a left/right source, self-intersecting) | **refused at solve**, naming the condition | mirrored when the plane is open and uncapped with no other opening and the sources are validated identities; otherwise refused |
+| A cut rim off the origin planes (x = c or y = c, c ≠ 0) | refused at solve: off-centre cuts are not mirrored in this version | refused |
+| An opening that is not a cut (a port, a standalone sheet, a horn mouth on the solver's z0) | solved as shown | refused where evidence names it a cut |
+
+A cut is never solved as an open shell in free space. The flip conditions
+(`server/cadlink/cut_recovery.py`) are judged on the observations of the model
+as it arrived: the plane contains the radiation axis (x0/y0 of the frame the
+model was modelled in, and not the confirmed axis's own plane); the cut is
+clean (a spanning rim, one side only, no cap, no other open edge, and a source
+the plane meets -- the plane passes through the speaker's own drivers); nothing
+says the halves differ (every declared source found by its own faces, none
+named as a left or right one, no self-intersection); and the plane is an
+origin plane. Recovery is all or nothing across the cuts the geometry shows.
+
+A cut that kept the **negative** side is recovered by reflecting its *mesh*:
+the retained geometry is meshed as it arrived, then every vertex is reflected
+across each such plane and the triangle winding reversed once per reflection
+(two reflections, a negative quadrant, are a rotation and keep it), so each
+normal `n` becomes `R n` (`server.mesh.imported.reflect_triangle_mesh`). It
+happens before post-processing, so the welding, winding, cut, leak,
+reduced-orientation, source-area and integrity checks all read the final
+solver mesh, and the mesher must find nothing left to reflect. The OCC
+geometry is never reflected (`occ.affineTransform` rewrites planes as
+B-splines) and the solver frame stays a proper rotation: the record states the
+reflection apart from it (`reflection`, `symmetry.reflected_planes`,
+`domain_decision.reflected_axes` / `reflection`). Every source keeps its id,
+tag, channel and area. Provenance may now record either kept side; a recorded
+side the geometry contradicts is refused.
 
 Evidence, in precedence order: a declaration (the declared path above); the
 user's own reading ("Change" on the model card,
@@ -223,7 +249,7 @@ snapshot (its provenance, a Change made on it) that does not revalidate refuses
 the preparation; evidence reused from the project that does not revalidate is
 set aside and the model is solved as shown. Before any mirror WG revalidates:
 the provenance belongs to an exported body and this frame; each plane is
-open over its whole section on the positive side with no cap and no other
+open over its whole section on one side with no cap and no other
 opening; the mesher's declared-domain verification (open section, leaks,
 winding) passes; the sources resolved by their own faces; and, at every
 submission, the excitation is invariant under the reflection
@@ -234,5 +260,6 @@ The reading is recorded on the ingestion record (`domain_interpretation`),
 enters the mesh cache key whenever it changes what is solved, and is part of a
 preparation's identity, so a changed reading is a new preparation and no
 approval carries to it. It replaced the blocking `undeclared-reduced-domain`
-finding: the non-blocking `domain-solved-as-shown` and
-`interpreted-reduced-domain` findings record which reading was solved.
+finding: the non-blocking `domain-solved-as-shown`,
+`interpreted-reduced-domain` and `recovered-reduced-domain` findings record
+which reading was solved.

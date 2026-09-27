@@ -35,8 +35,19 @@ from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
 
+from .cut_recovery import (
+    MESH_DENIED,
+    CutRecovery,
+    Failure,
+    assess_cut_recovery,
+    recovery_options,
+    side_of_source,
+)
 from .domain_decision import decide_domain_and_frame
 from .domain_interpretation import (
+    READING_AS_SHOWN,
+    USER,
+    USER_LINEAGE,
     EvidenceOutcome,
     apply_evidence,
     evidence_refusal_message,
@@ -1203,6 +1214,24 @@ def _reconstruction_integrity_problem(built: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _side_identity_problem(manifest: Mapping[str, Any]) -> str | None:
+    """Why a mirror would make one side's source stand in for the other's, or None.
+
+    Overseer condition 3 (stage 3): a source identified as the left or right
+    one has its own counterpart on the other side, which the mirror image
+    would impersonate.
+    """
+
+    for source in manifest.get("sources") or ():
+        side = side_of_source(source) if isinstance(source, Mapping) else None
+        if side is not None:
+            return (
+                f"source {source.get('id')} is identified as the {side} one, so its mirror "
+                "image would stand in for the other side's own source"
+            )
+    return None
+
+
 def _mesher_denial(message: str) -> str:
     """The mesher's reason a mirrored reading failed, without its stage prefix."""
 
@@ -1489,6 +1518,8 @@ def ingest_bundle(
     # only mesh, as before.
     evidence_outcome: EvidenceOutcome | None = None
     applied_planes: tuple[str, ...] = ()
+    reflected_planes: tuple[str, ...] = ()
+    recovery: CutRecovery | None = None
     if plan.evidenced_planes:
         shown = mesh_for(options, include_viewport=False)
         observations = observe_record_mesh(shown[0])
@@ -1497,6 +1528,7 @@ def ingest_bundle(
             observations,
             identity_problem=(
                 _source_identity_problem(shown[0], skipped_source_ids)
+                or _side_identity_problem(manifest)
                 or _reconstruction_integrity_problem(shown[0])
             ),
         )
@@ -1513,8 +1545,15 @@ def ingest_bundle(
                     for plane in DOMAIN_PLANES
                     if plane in set(options["declared_cut_planes"]) | set(evidence_outcome.applied)
                 ],
+                # A cut that kept the negative side is reflected onto the
+                # positive side the solver mirrors (stage 3).
+                "reflect_planes": list(evidence_outcome.reflect),
                 "domain_interpretation": {**(plan.identity() or {}), "applied": list(evidence_outcome.applied)},
             }
+            if not evidence_outcome.reflect:
+                # Exactly the options (and so the mesh key) a positive-side
+                # cut was prepared under before reflection existed.
+                mirrored_options.pop("reflect_planes")
             try:
                 chosen = mesh_for(mirrored_options, include_viewport=True)
             except IngestRefusal as exc:
@@ -1531,6 +1570,7 @@ def ingest_bundle(
             else:
                 options = mirrored_options
                 applied_planes = evidence_outcome.applied
+                reflected_planes = evidence_outcome.reflect
                 if solver_frame is not None:
                     solver_frame = frame_spec(AS_MODELLED, manifest)
         built, cache_key, cache_hit, mesh_path = chosen
@@ -1542,6 +1582,44 @@ def ingest_bundle(
         )
         observations = observe_record_mesh(built)
         built_inline_viewport = True
+    # Stage 3: a model already cut in CAD that no evidence mirrored. Solved as
+    # shown it would be part of a speaker in free space, so it is recovered as
+    # the reduced domain of the whole speaker when every flip condition holds
+    # (``cut_recovery.py``) -- reflected when the cut kept the negative side --
+    # and otherwise refused at solve, naming the condition that failed. A
+    # declaration, a linked return and the user's own "as shown" are theirs.
+    if (
+        not applied_planes
+        and plan.manifest_domain != "declared"
+        and is_unlinked_manifest(manifest)
+        and not (plan.source in (USER, USER_LINEAGE) and plan.reading == READING_AS_SHOWN)
+    ):
+        recovery = assess_cut_recovery(
+            observations,
+            sources=list(manifest["sources"]),
+            radiation_axis=solver_frame_axis,
+            identity_problem=_source_identity_problem(built, skipped_source_ids),
+            integrity_problem=_reconstruction_integrity_problem(built),
+        )
+        if recovery.recoverable:
+            recovered_options = recovery_options(options, recovery, plan_identity=plan.identity())
+            try:
+                recovered = mesh_for(recovered_options, include_viewport=not defer_viewport)
+            except IngestRefusal as exc:
+                recovery = recovery.with_failure(
+                    Failure(
+                        MESH_DENIED,
+                        f"its reduced mesh does not verify ({_mesher_denial(str(exc))})",
+                    )
+                )
+            else:
+                options = recovered_options
+                built, cache_key, cache_hit, mesh_path = recovered
+                applied_planes = tuple(recovered_options["domain_interpretation"]["applied"])
+                reflected_planes = recovery.reflect
+                built_inline_viewport = not defer_viewport
+                if solver_frame is not None:
+                    solver_frame = frame_spec(AS_MODELLED, manifest)
     (
         viewport_lookup_key,
         _viewport_index,
@@ -1577,6 +1655,9 @@ def ingest_bundle(
         outcome=evidence_outcome,
         cache_identity=options.get("domain_interpretation"),
         normalisation=record_normalisation,
+        recovery=recovery.to_json() if recovery is not None and recovery.planes else None,
+        reflected=reflected_planes,
+        manifest_sources=list(manifest["sources"]),
         skipped_source_ids=set(skipped_source_ids)
         | {
             str(source_id)
@@ -1903,6 +1984,10 @@ def ingest_bundle(
             "role_findings": built.get("role_findings", []),
             "symmetry": built["symmetry"],
             "symmetry_verification": built.get("symmetry_verification"),
+            # A cut kept on the negative side, reflected at mesh level onto
+            # the side the solver mirrors (``reflect_triangle_mesh``); None
+            # when the mesh was not reflected.
+            "reflection": built.get("reflection"),
             "domain_interpretation": domain_interpretation,
             "domain_decision": domain_decision,
             # What each source actually kept through the cut, measured rather

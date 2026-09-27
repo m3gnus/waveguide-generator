@@ -554,6 +554,130 @@ def apply_rigid_normalisation(gmsh: Any, dim_tags: Any, matrix: Any) -> np.ndarr
     return applied
 
 
+#: The solver planes a mesh may be reflected across: the planes WG mirrors.
+REFLECTION_AXIS = {"x0": 0, "y0": 1}
+#: How far a reflected triangle's normal may differ from the reflected normal
+#: (unit normals, so an absolute bound); anything more is a wrong winding.
+REFLECTION_NORMAL_TOLERANCE = 1.0e-9
+
+
+def reflect_triangle_mesh(
+    points: Any, triangles: Any, planes: Iterable[str], *, tags: Any = None
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+    """Reflect a triangle mesh across coordinate planes through the origin.
+
+    Stage 3's reflection contract: a model already cut in CAD that kept the
+    negative side of a mirror plane is the mirror image of the model WG's
+    solver expects (the positive side), so its *mesh* is reflected -- never
+    its OCC geometry (``occ.affineTransform`` rewrites planes as B-splines)
+    and never as a ``det = -1`` solver frame (:func:`rigid_inverse` refuses
+    one). Each reflection negates one coordinate; the triangle winding is
+    reversed once per reflection, so an odd number reverses it and two (a
+    quarter kept in the negative quadrant, a rotation by 180 degrees) leave it
+    as it was. The winding is what gives every normal the solver reads,
+    sources included, so a normal ``n`` becomes ``R n``: that is checked here,
+    per triangle, together with every triangle's area and each tag's total.
+
+    Returns the reflected points and triangles (new arrays; tags are
+    untouched, each triangle keeps its row) and the record of what was done.
+    """
+
+    requested = [str(plane) for plane in planes]
+    unknown = [plane for plane in requested if plane not in REFLECTION_AXIS]
+    if unknown:
+        raise ImportedMeshError(
+            f"symmetry: a mesh is reflected only across {', '.join(REFLECTION_AXIS)}, got {unknown}"
+        )
+    if len(set(requested)) != len(requested):
+        raise ImportedMeshError("symmetry: reflection planes must not repeat")
+    ordered = [plane for plane in REFLECTION_AXIS if plane in set(requested)]
+    source_points = np.asarray(points, dtype=float).reshape(-1, 3)
+    source_triangles = np.asarray(triangles, dtype=np.int64).reshape(-1, 3)
+    reflection = np.eye(3)
+    for plane in ordered:
+        reflection[REFLECTION_AXIS[plane], REFLECTION_AXIS[plane]] = -1.0
+    parity = len(ordered) % 2
+    reflected_points = source_points @ reflection.T
+    reflected_triangles = (
+        source_triangles[:, [0, 2, 1]].copy() if parity else source_triangles.copy()
+    )
+
+    def normals(pts: np.ndarray, tris: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        if not len(tris):
+            return np.zeros((0, 3)), np.zeros(0)
+        cross = np.cross(pts[tris[:, 1]] - pts[tris[:, 0]], pts[tris[:, 2]] - pts[tris[:, 0]])
+        doubled = np.linalg.norm(cross, axis=1)
+        unit = np.divide(cross, doubled[:, None], out=np.zeros_like(cross), where=doubled[:, None] > 0.0)
+        return unit, 0.5 * doubled
+
+    before_normals, before_areas = normals(source_points, source_triangles)
+    after_normals, after_areas = normals(reflected_points, reflected_triangles)
+    normal_error = (
+        float(np.max(np.linalg.norm(after_normals - before_normals @ reflection.T, axis=1)))
+        if len(before_normals)
+        else 0.0
+    )
+    area_error = float(np.max(np.abs(after_areas - before_areas))) if len(before_areas) else 0.0
+    if normal_error > REFLECTION_NORMAL_TOLERANCE or area_error > 1.0e-9 * max(
+        1.0, float(np.max(before_areas)) if len(before_areas) else 1.0
+    ):
+        raise ImportedMeshError(
+            "symmetry: the reflected mesh does not carry its normals and areas "
+            f"(normal error {normal_error:.3g}, area error {area_error:.3g})"
+        )
+    tag_areas: dict[str, dict[str, float]] = {}
+    if tags is not None:
+        tag_array = np.asarray(tags).reshape(-1)
+        for tag in np.unique(tag_array):
+            mask = tag_array == tag
+            tag_areas[str(int(tag))] = {
+                "before": float(before_areas[mask].sum()),
+                "after": float(after_areas[mask].sum()),
+            }
+    record = {
+        "implemented": True,
+        "planes": ordered,
+        "axes": ["xyz"[REFLECTION_AXIS[plane]] for plane in ordered],
+        "parity": parity,
+        "winding_reversed": bool(parity),
+        "determinant": float(np.linalg.det(reflection)),
+        "triangle_count": int(len(source_triangles)),
+        "max_normal_error": normal_error,
+        "max_area_error": area_error,
+        "tag_areas": tag_areas,
+    }
+    return reflected_points, reflected_triangles, record
+
+
+def _reflect_raw_mesh(raw_mesh: Any, planes: Sequence[str]) -> dict[str, Any]:
+    """Reflect gmsh's raw meshio mesh in place, before post-processing reads it."""
+
+    points = np.asarray(raw_mesh.points, dtype=float)
+    blocks = [index for index, block in enumerate(raw_mesh.cells) if block.type == "triangle"]
+    if not blocks:
+        raise ImportedMeshError("meshing: the mesh to reflect holds no triangles")
+    physical = (raw_mesh.cell_data or {}).get("gmsh:physical")
+    record: dict[str, Any] | None = None
+    reflected_points = points
+    tag_areas: dict[str, dict[str, float]] = {}
+    for index in blocks:
+        block = raw_mesh.cells[index]
+        tags = physical[index] if physical is not None else None
+        reflected_points, triangles, record = reflect_triangle_mesh(
+            points, block.data, planes, tags=tags
+        )
+        block.data = triangles
+        for tag, areas in record["tag_areas"].items():
+            held = tag_areas.setdefault(tag, {"before": 0.0, "after": 0.0})
+            held["before"] += areas["before"]
+            held["after"] += areas["after"]
+    assert record is not None
+    raw_mesh.points = reflected_points
+    return {**record, "tag_areas": tag_areas, "triangle_count": int(
+        sum(len(raw_mesh.cells[index].data) for index in blocks)
+    )}
+
+
 def _translation_matrix(dx: float, dy: float, dz: float) -> np.ndarray:
     matrix = np.eye(4)
     matrix[:3, 3] = (float(dx), float(dy), float(dz))
@@ -1531,6 +1655,21 @@ def _mesh_arrays(mesh: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     except KeyError as exc:
         raise ImportedMeshError("meshing: imported mesh has no physical tags") from exc
     return np.asarray(mesh.points, dtype=float), triangles, tags
+
+
+def _tag_areas(points: np.ndarray, triangles: np.ndarray, tags: np.ndarray) -> dict[int, float]:
+    """Each physical tag's total triangle area, in the points' units squared."""
+
+    if not len(triangles):
+        return {}
+    p0, p1, p2 = points[triangles[:, 0]], points[triangles[:, 1]], points[triangles[:, 2]]
+    areas = 0.5 * np.linalg.norm(np.cross(p1 - p0, p2 - p0), axis=1)
+    return {int(tag): float(areas[tags == tag].sum()) for tag in np.unique(tags)}
+
+
+#: How far a source's meshed area may move between the reflected raw mesh and
+#: the post-processed solver mesh (welding and degenerate-sliver removal only).
+REFLECTED_SOURCE_AREA_REL_TOLERANCE = 1.0e-6
 
 
 def _geometry_fingerprint(geometries: Iterable[Any]) -> str:
@@ -2581,6 +2720,30 @@ def build_imported_mesh(
         isinstance(interpretation, Mapping)
         and bool(interpretation.get("applied"))
     )
+    recovered = interpreted and isinstance(
+        (interpretation or {}).get("recovered"), Mapping
+    )
+    # Stage 3: the planes of a CAD cut that kept the NEGATIVE side, whose mesh
+    # is reflected onto the positive side the solver mirrors
+    # (:func:`reflect_triangle_mesh`). Only a plane this preparation mirrors
+    # as already cut can be one: a reflection is how that cut is solved.
+    reflect_planes = tuple(
+        str(plane) for plane in (options.get("reflect_planes") or ())
+    )
+    if reflect_planes:
+        if not interpreted:
+            raise ImportedMeshError(
+                "symmetry: a mesh is reflected only for a cut WG read from the model"
+            )
+        stray = [plane for plane in reflect_planes if plane not in declared_cut_planes]
+        if stray or len(set(reflect_planes)) != len(reflect_planes):
+            raise ImportedMeshError(
+                "symmetry: reflection planes must be distinct cut planes, got "
+                f"{list(reflect_planes)} for cut planes {list(declared_cut_planes)}"
+            )
+        reflect_planes = tuple(
+            plane for plane in SUPPORTED_CUT_PLANES if plane in set(reflect_planes)
+        )
     if declared_cut_planes and symmetry_mode == "full":
         # Forcing the full domain disables WG's cutter; it cannot restore a half
         # the author already removed, so accepting the pair would solve a half
@@ -2621,6 +2784,12 @@ def build_imported_mesh(
         raise ImportedMeshError(
             "symmetry: a return declared as a half or quarter model is solved only in "
             "the frame it was modelled in"
+        )
+    if reflect_planes and anchor_id is not None:
+        # A linked throat is matched against its design's contract in the
+        # design's frame; a reflected copy of it is not that throat.
+        raise ImportedMeshError(
+            "symmetry: only a model authored in CAD is reflected onto its mirrored side"
         )
     try:
         # An axis (contract v1, as earlier releases named it) or a complete
@@ -3148,10 +3317,13 @@ def build_imported_mesh(
                     "plane": plane,
                     "accepted": True,
                     "source": (
-                        "interpreted-from-evidence"
+                        "recovered-from-geometry"
+                        if recovered and plane in (interpretation or {}).get("applied", ())
+                        else "interpreted-from-evidence"
                         if interpreted and plane in (interpretation or {}).get("applied", ())
                         else "declared-by-cad-author"
                     ),
+                    "reflected": plane in reflect_planes,
                     "reason": (
                         "the return declares this plane was cut in CAD; the "
                         "meshed boundary is verified below"
@@ -3329,6 +3501,13 @@ def build_imported_mesh(
             raw_path = Path(temporary) / "raw.msh"
             gmsh.write(str(raw_path))
             raw_mesh = meshio.read(raw_path)
+            # The kept negative side becomes the positive side the solver
+            # mirrors, before anything judges the mesh: every check below --
+            # welding, winding, the cut, leaks, orientation, source areas,
+            # integrity -- then reads the final solver mesh itself.
+            reflection = (
+                _reflect_raw_mesh(raw_mesh, reflect_planes) if reflect_planes else None
+            )
             processed, repair, topology = postprocess_mesh(
                 raw_mesh,
                 step_specs,
@@ -3338,6 +3517,35 @@ def build_imported_mesh(
                 **_reduced_orientation_kwargs(),
             )
             points_mm, triangles, tags = _mesh_arrays(processed)
+            # The mesher moves any reduced domain it finds on a negative side
+            # onto the positive one itself. After WG's own reflection there is
+            # none left, so a reflection by the mesher here would be a second,
+            # unrecorded one: that is refused rather than solved.
+            mesher_reflected = [
+                str(axis)
+                for axis in (topology.get("axis_normalization") or {}).get("reflected_axes") or []
+            ]
+            if reflect_planes and mesher_reflected:
+                raise ImportedMeshError(
+                    "symmetry: the reflected mesh was reflected again across "
+                    f"{', '.join(mesher_reflected)} while it was post-processed"
+                )
+            if reflection is not None:
+                reflection["final_tag_areas"] = {
+                    str(int(tag)): float(value)
+                    for tag, value in _tag_areas(points_mm, triangles, tags).items()
+                }
+            elif mesher_reflected:
+                # A hand-declared negative-side cut the mesher normalised: the
+                # same reflection, recorded so the record says it happened.
+                reflection = {
+                    "implemented": True,
+                    "planes": [f"{axis}0" for axis in mesher_reflected],
+                    "axes": mesher_reflected,
+                    "parity": len(mesher_reflected) % 2,
+                    "winding_reversed": bool(len(mesher_reflected) % 2),
+                    "by": "mesher-normalisation",
+                }
             frequency = mesh_frequency_validation(
                 points_mm,
                 triangles,
@@ -3466,6 +3674,32 @@ def build_imported_mesh(
         integrity["element_quality"] = mesh_element_quality_report(
             points_mm * 1.0e-3, triangles
         )
+        if reflection is not None and reflection.get("tag_areas"):
+            # Every source keeps its area through the reflection and the
+            # post-processing of the reflected mesh: the solve drives exactly
+            # the source surface the model had.
+            drifted = {
+                tag: (areas["before"], reflection["final_tag_areas"].get(tag, 0.0))
+                for tag, areas in reflection["tag_areas"].items()
+                if int(tag) != RIGID_TAG
+                and abs(reflection["final_tag_areas"].get(tag, 0.0) - areas["before"])
+                > REFLECTED_SOURCE_AREA_REL_TOLERANCE * max(areas["before"], 1.0e-12)
+            }
+            reflection["source_areas_preserved"] = not drifted
+            if drifted and verification["verified"]:
+                verification.update(
+                    {
+                        "verified": False,
+                        "reason": "a reflected source did not keep its area: "
+                        + ", ".join(
+                            f"tag {tag} {before:.6g} -> {after:.6g} mm2"
+                            for tag, (before, after) in sorted(drifted.items())
+                        ),
+                    }
+                )
+        if reflection is not None:
+            reflection.setdefault("by", "wg-mesh-reflection")
+        state["reflection"] = reflection
         state["symmetry_verification"] = verification
         bounds_min = np.min(points_mm, axis=0) * 1.0e-3
         bounds_max = np.max(points_mm, axis=0) * 1.0e-3
@@ -3653,6 +3887,10 @@ def build_imported_mesh(
         )
     result["symmetry"]["requested_mode"] = symmetry_mode
     result["symmetry"]["declared_cut_planes"] = list(declared_cut_planes)
+    result["symmetry"]["reflected_planes"] = list(
+        (result.get("reflection") or {}).get("planes") or []
+    )
+    result.setdefault("reflection", None)
     result.pop("mesh_generation_error", None)
     result.pop("surface_order_reference", None)
     result.pop("surface_order", None)

@@ -61,6 +61,10 @@ describe('the domain line', () => {
     expect(domainLine(interpretation({ reading: 'as-shown', evidence: { source: 'user' }, choices: [{ reading: 'reduced', planes: ['x0'] }] })).text)
       .toBe('Solved as shown (your choice)');
     expect(domainLine(interpretation({ wg_cut_planes: ['x0', 'y0'] }))).toEqual({ text: 'Full model · WG mirrors it at x = 0 and y = 0', change: false });
+    expect(domainLine(interpretation({ reading: 'reduced', planes: ['x0'], domain_planes: ['x0'], evidence: { source: null, recovered: true }, reflected_planes: ['x0'] })))
+      .toEqual({ text: 'Half model · cut at x = 0 (recognised from its geometry; the x ≤ 0 side reflected)', change: false });
+    expect(domainLine(interpretation({ reading: 'reduced', planes: ['x0', 'y0'], domain_planes: ['x0', 'y0'], evidence: { source: null, recovered: true } })).text)
+      .toBe('Quarter model · cut at x = 0 and y = 0 (recognised from its geometry)');
     expect(domainLine(interpretation())).toEqual({ text: 'Full model', change: false });
     // A declaration is changed in Fusion, not here.
     expect(domainLine(interpretation({ reading: 'reduced', planes: ['y0'], domain_planes: ['y0'], evidence: { source: 'declaration' } })))

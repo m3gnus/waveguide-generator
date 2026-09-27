@@ -111,6 +111,12 @@ def _positive_side(plane: str) -> str:
     return f"{_LETTER[plane]} ≥ 0"
 
 
+def side_words(plane: str, side: str | None) -> str:
+    """``x ≥ 0`` / ``x ≤ 0``: the side of a plane a cut kept."""
+
+    return f"{_LETTER[plane]} {'≤' if side == 'negative' else '≥'} 0"
+
+
 # -- the plan: which evidence exists before anything is meshed ---------------------------
 
 
@@ -134,6 +140,9 @@ class DomainPlan:
     refusal: str | None = None
     refusals: tuple[tuple[str, str], ...] = ()
     unlinked: bool = True
+    #: The side of each plane recorded provenance says the cut kept. Checked
+    #: against the geometry; not part of the identity (the planes are).
+    kept_sides: tuple[tuple[str, str], ...] = ()
     #: Identity that permits a reading to carry to a later snapshot.
     body_object_ids: tuple[str, ...] = ()
     export_frame: str = "root-component"
@@ -288,6 +297,11 @@ def resolve_domain_plan(
             ignored=tuple(ignored),
             refusal=refusals[0][1] if refusals else None,
             refusals=tuple(refusals),
+            kept_sides=tuple(
+                (str(entry["plane"]), str(entry.get("kept_side") or "positive"))
+                for entry in entries
+                if entry.get("kept_side") in ("positive", "negative")
+            ),
             body_object_ids=body_ids,
             export_frame=export_frame,
         )
@@ -353,13 +367,12 @@ def _provenance_refusals(
                     "the YZ or XZ origin plane instead, or send the whole model.",
                 )
             )
-        elif entry.get("kept_side") != "positive":
+        elif entry.get("kept_side") not in ("positive", "negative"):
             refusals.append(
                 (
                     plane,
-                    f"{name} keeps the negative side of {plane_words(plane)}, which WG cannot "
-                    f"mirror yet: keep the {_positive_side(plane)} side and leave the cut open, "
-                    "or send the whole model.",
+                    f"{name} does not say which side of {plane_words(plane)} it kept; "
+                    "send the model again, or send the whole model.",
                 )
             )
     return refusals
@@ -411,12 +424,17 @@ class Observations:
     #: Free edges on no rim plane and no plane WG cut: an opening elsewhere.
     other_open_edges: int
     free_edges: int
+    #: Cut rims on a plane parallel to x = 0 or y = 0 of the solver frame but
+    #: off the origin (``{"plane_axis", "offset_mm", "solver_axis",
+    #: "rim_edges"}``, the axis and offset in CAD terms): a cut WG cannot mirror.
+    off_origin_rims: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
             "planes": {plane: item.to_json() for plane, item in self.planes.items()},
             "other_open_edges": self.other_open_edges,
             "free_edges": self.free_edges,
+            "off_origin_rims": [dict(item) for item in self.off_origin_rims],
             "tolerance_mm": TOLERANCE_MM,
         }
 
@@ -474,6 +492,65 @@ def _cut_rim_edges(
         ):
             count += len(component_rim)
     return count
+
+
+def _off_origin_cut_rims(
+    points: np.ndarray,
+    components: np.ndarray,
+    rigid_free: np.ndarray,
+    rotation: np.ndarray,
+    tolerance_mm: float,
+) -> list[dict[str, Any]]:
+    """Cut rims on planes parallel to the solver's x0/y0 but off the origin.
+
+    The same reading as an origin-plane cut rim (:func:`_cut_rim_edges`): free
+    rigid edges lying in one plane at the edge of the shell they bound and
+    spreading across it. A cut leaves its shell on one side, so the plane is
+    one of the shell's own extreme planes. Planes square to the solver's z
+    (the radiation axis) are a horn mouth or an open back, not a cut, and are
+    not read here.
+    """
+
+    found: list[dict[str, Any]] = []
+    if len(rigid_free) < MIN_RIM_EDGES:
+        return found
+    owners = components[rigid_free[:, 0]]
+    for solver_axis in (0, 1):
+        row = rotation[solver_axis]
+        cad_axis = int(np.argmax(np.abs(row)))
+        sign = 1.0 if row[cad_axis] > 0 else -1.0
+        others = [axis for axis in range(3) if axis != solver_axis]
+        for component in np.unique(owners):
+            edges = rigid_free[owners == component]
+            if len(edges) < MIN_RIM_EDGES:
+                continue
+            shell = points[components == component]
+            for level in (float(shell[:, solver_axis].min()), float(shell[:, solver_axis].max())):
+                if abs(level) <= tolerance_mm:
+                    continue
+                tolerance = max(tolerance_mm, 1.0e-9 * abs(level))
+                on_level = (np.abs(points[edges[:, 0], solver_axis] - level) <= tolerance) & (
+                    np.abs(points[edges[:, 1], solver_axis] - level) <= tolerance
+                )
+                rim = edges[on_level]
+                if len(rim) < MIN_RIM_EDGES:
+                    continue
+                rim_points = points[rim.ravel()]
+                if all(
+                    float(np.ptp(shell[:, other])) > tolerance
+                    and float(np.ptp(rim_points[:, other]))
+                    >= SPANNING_RIM_FRACTION * float(np.ptp(shell[:, other]))
+                    for other in others
+                ):
+                    found.append(
+                        {
+                            "plane_axis": "xyz"[cad_axis],
+                            "offset_mm": round(sign * level, 6),
+                            "solver_axis": "xyz"[solver_axis],
+                            "rim_edges": int(len(rim)),
+                        }
+                    )
+    return sorted(found, key=lambda item: (item["plane_axis"], item["offset_mm"]))
 
 
 def observe(
@@ -580,6 +657,9 @@ def observe(
         planes={plane: observed[plane] for plane in PLANES},
         other_open_edges=elsewhere,
         free_edges=int(len(free)),
+        off_origin_rims=_off_origin_cut_rims(
+            points, components, free[rigid_free] if len(free) else free, rotation, tolerance_mm
+        ),
     )
 
 
@@ -634,8 +714,6 @@ def conclude(observation: PlaneObservation, *, other_open_edges: int) -> tuple[s
         reasons = []
         if observation.plane not in SUPPORTED_PLANES:
             reasons.append("unsupported-plane")
-        if observation.negative:
-            reasons.append("negative-side")
         if observation.cap_triangles:
             reasons.append("capped")
         if other_open_edges:
@@ -667,20 +745,16 @@ def _mirrorable(observation: PlaneObservation, other_open_edges: int) -> str | N
     """Why a reduced reading of this plane does not revalidate here, or None when it does.
 
     The revalidation list, per plane: the complete open cross-section on the
-    plane, on the supported positive side, with no cap and no other opening.
-    (Whether a driver meets the plane is not required: a mirrored pair of
-    drivers leaves one of them clear of it.)
+    plane, on one side of it, with no cap and no other opening. (Whether a
+    driver meets the plane is not required: a mirrored pair of drivers leaves
+    one of them clear of it.) A cut that kept the negative side is solved by
+    reflecting its mesh onto the positive side the solver mirrors (stage 3).
     """
 
     plane = observation.plane
     words = plane_words(plane)
     if plane not in SUPPORTED_PLANES:
         return f"WG cannot mirror a cut on {words} yet; cut it on the YZ or XZ origin plane instead"
-    if observation.negative and not observation.positive:
-        return (
-            f"the model is on the negative side of {words}; keep the {_positive_side(plane)} "
-            "side and leave the cut open"
-        )
     if observation.cap_triangles:
         return (
             f"the cut on {words} is capped: a face closes it, which would solve as a wall. "
@@ -724,6 +798,9 @@ class EvidenceOutcome:
     applied: tuple[str, ...]
     not_applicable: dict[str, str]
     refusal: str | None
+    #: The applied planes whose cut kept the negative side: their mesh is
+    #: reflected onto the positive side (``reflect_triangle_mesh``).
+    reflect: tuple[str, ...] = ()
 
 
 def apply_evidence(plan: DomainPlan, observations: Observations | None, *, identity_problem: str | None = None) -> EvidenceOutcome:
@@ -751,6 +828,19 @@ def apply_evidence(plan: DomainPlan, observations: Observations | None, *, ident
         problem = dict(plan.refusals).get(plane) or _mirrorable(
             observation, observations.other_open_edges
         )
+        recorded_side = dict(plan.kept_sides).get(plane)
+        observed_side = (
+            "negative" if observation.negative and not observation.positive
+            else "positive" if observation.positive and not observation.negative
+            else None
+        )
+        if problem is None and recorded_side is not None and observed_side is not None and (
+            recorded_side != observed_side
+        ):
+            problem = (
+                f"the cut is recorded as keeping {side_words(plane, recorded_side)}, but the "
+                f"model lies on {side_words(plane, observed_side)}"
+            )
         if problem is None and identity_problem:
             problem = identity_problem
         if problem is None:
@@ -763,7 +853,12 @@ def apply_evidence(plan: DomainPlan, observations: Observations | None, *, ident
     if refusals:
         # Lineage evidence that no longer fits: solved as shown, never partly.
         return EvidenceOutcome((), skipped, None)
-    return EvidenceOutcome(tuple(applied), skipped, None)
+    reflect = tuple(
+        plane
+        for plane in applied
+        if observations.planes[plane].negative and not observations.planes[plane].positive
+    )
+    return EvidenceOutcome(tuple(applied), skipped, None, reflect)
 
 
 def evidence_refusal_message(plan: DomainPlan, problem: str) -> str:
@@ -792,8 +887,15 @@ def interpretation_record(
     applied: Sequence[str] = (),
     outcome: EvidenceOutcome | None = None,
     cache_identity: Mapping[str, Any] | None = None,
+    recovery: Mapping[str, Any] | None = None,
+    reflected: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """What the ingestion record states about the domain it solved, and why."""
+    """What the ingestion record states about the domain it solved, and why.
+
+    ``recovery`` is the verdict on the cuts the geometry shows
+    (``cut_recovery.CutRecovery.to_json``) when WG judged them; ``applied``
+    then names the planes it recovered, if it did.
+    """
 
     judged = conclusions(observations)
     looks_cut = [plane for plane, item in judged.items() if item["status"] == "candidate"]
@@ -808,7 +910,15 @@ def interpretation_record(
         reading, planes = READING_AS_SHOWN, []
     else:
         reading, planes = READING_FULL, []
-    if plan.source == DECLARATION or not plan.unlinked:
+    recovered = (
+        isinstance(recovery, Mapping)
+        and bool(recovery.get("recoverable"))
+        and bool(applied)
+        and set(applied) == set(recovery.get("planes") or ())
+    )
+    if plan.source == DECLARATION or not plan.unlinked or recovered:
+        # A cut recovered from its geometry offers nothing: solved as shown it
+        # would be part of a speaker in free space, which is always refused.
         choices: list[dict[str, Any]] = []
     else:
         choices = []
@@ -829,6 +939,7 @@ def interpretation_record(
         or (plan.source in (USER, USER_LINEAGE) and plan.reading == READING_AS_SHOWN),
         "not_applicable": dict(outcome.not_applicable) if outcome else {},
         "ignored": [dict(item) for item in plan.ignored],
+        "recovered": bool(recovered),
     }
     return {
         "contract": CONTRACT,
@@ -844,6 +955,8 @@ def interpretation_record(
         "observations": observations.to_json() if observations is not None else None,
         "evidence": evidence,
         "choices": choices,
+        "cut_recovery": dict(recovery) if isinstance(recovery, Mapping) else None,
+        "reflected_planes": [plane for plane in PLANES if plane in set(reflected)],
         "plan": plan.identity(),
         "cache_identity": dict(cache_identity) if cache_identity is not None else None,
         "lineage_context": {
@@ -914,11 +1027,30 @@ def cut_shaped_open_rim(interpretation: Mapping[str, Any]) -> tuple[str, int] | 
     return None
 
 
-def open_half_refusal_message(plane: str, rim_edges: int) -> str:
+def open_half_refusal_message(plane: str, rim_edges: int, reason: str | None = None) -> str:
+    """The refusal of an open cut; ``reason`` names the flip condition it failed."""
+
+    if reason:
+        return (
+            f"The model is open along {plane_words(plane)} ({rim_edges} rim edges), "
+            "so WG would solve half a speaker in free space, and it cannot mirror it as "
+            f"the whole speaker's reduced domain: {reason}. Send the uncut "
+            "model — WG finds the symmetry and reduces it automatically."
+        )
     return (
         f"The model is open along {plane_words(plane)} ({rim_edges} rim edges), "
         "so WG would solve half a speaker in free space. Send the uncut "
         "model — WG finds the symmetry and reduces it automatically."
+    )
+
+
+def off_centre_cut_refusal_message(axis: str, offset_mm: float, rim_edges: int) -> str:
+    return (
+        f"The model is open along {axis} = {offset_mm:.6g} mm ({rim_edges} rim edges): it "
+        "looks cut off the origin planes, which WG cannot mirror in this version, and "
+        "solved as shown it would be part of a speaker in free space. Cut it on the YZ "
+        "or XZ origin plane, or send the uncut model — WG finds the symmetry and "
+        "reduces it automatically."
     )
 
 
@@ -933,6 +1065,29 @@ def interpretation_finding(
 
     reading = interpretation.get("reading")
     evidence = interpretation.get("evidence") or {}
+    if reading == READING_REDUCED and evidence.get("recovered"):
+        planes_list = list(interpretation.get("planes") or [])
+        recovery = interpretation.get("cut_recovery") or {}
+        kept = recovery.get("kept_sides") or {}
+        reflected = [plane for plane in planes_list if kept.get(plane) == "negative"]
+        planes = " and ".join(plane_words(plane) for plane in planes_list)
+        detail = (
+            f"recognised from its geometry as a model already cut on {planes} and solved "
+            "as the reduced domain of the whole speaker"
+        )
+        if reflected:
+            detail += (
+                "; the kept "
+                + " and ".join(side_words(plane, "negative") for plane in reflected)
+                + " side was reflected onto the side WG mirrors"
+            )
+        return {
+            "kind": "recovered-reduced-domain",
+            "blocking": False,
+            "planes": planes_list,
+            "reflected_planes": reflected,
+            "detail": detail + ".",
+        }
     if reading == READING_REDUCED and evidence.get("source") not in (None, DECLARATION):
         planes = " and ".join(plane_words(plane) for plane in interpretation.get("planes") or [])
         return {

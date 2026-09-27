@@ -8,8 +8,10 @@ offered Changes and the refusal. The model card, the Solve card's plan, the
 preparation, every submission and the job all read that one record.
 
 Fixtures are real gmsh geometry through the production ingest, shared with
-``test_cadlink_domain_automatic.py``. Nothing here reflects a mesh: a
-negative-side cut is described (and stays refused) until mesh reflection.
+``test_cadlink_domain_automatic.py``. Stage 3, branch 2 recovers a cut the
+geometry shows when every flip condition holds (``cut_recovery.py``),
+reflecting a negative-side one at mesh level; its own tests are in
+``test_cadlink_cut_reflection.py``.
 """
 
 from __future__ import annotations
@@ -70,8 +72,12 @@ def _decision(record: dict[str, Any]) -> dict[str, Any]:
     assert decision["identity"]["decision_sha256"] == dd.decision_sha256(decision)
     assert decision["identity"]["snapshot_sha256"] == record["manifest_sha256"]
     assert decision["identity"]["mesh_content_sha256"] == record["mesh_content_sha256"]
-    # Nothing is reflected in this branch, and every frame is proper.
-    assert decision["reflected_axes"] == []
+    # A reflection is recorded apart from the frame, which is always proper.
+    assert decision["reflected_axes"] == decision["reflection"]["axes"]
+    assert decision["reflection"]["parity"] == len(decision["reflected_axes"]) % 2
+    assert sorted(
+        cut["plane"][0] for cut in decision["cad_cuts"] if cut.get("reflected")
+    ) == sorted(decision["reflected_axes"])
     assert decision["frame"]["proper"] is True
     assert decision["frame"]["determinant"] == pytest.approx(1.0)
     assert decision["frame"]["solver_from_cad"] == record["normalisation"]["matrix"]
@@ -172,44 +178,49 @@ def test_an_evidenced_quarter_is_two_mirrored_cuts(tmp_path: Path) -> None:
     assert decision["solver_domain"]["fraction"] == "quarter"
 
 
-def test_a_bare_positive_half_is_a_refused_cut_with_the_change_that_mirrors_it(tmp_path: Path) -> None:
+def test_a_bare_positive_half_is_a_cut_recovered_from_its_geometry(tmp_path: Path) -> None:
     record = _ingest(_bundle(tmp_path, "half-bare", _open_half, HORN_THROAT), tmp_path / "data")
     decision = _decision(record)
 
     assert decision["input_reading"] == dd.INPUT_CUT
     cut = _cut(decision, "x0")
-    assert (cut["kept_side"], cut["found_by"], cut["status"]) == ("positive", "geometry", "refused")
-    assert cut["recovery"] == {"by_change": True}
-    assert {"reading": "reduced", "planes": ["x0"]} in decision["offered_changes"]
-    assert decision["solver_domain"]["fraction"] == "full"
-    assert decision["confidence"] == dd.CONFIDENCE_REFUSED
-    assert decision["refusal"]["code"] == "imported_open_half_shell"
-    # The finding, the plan and every engine state this very refusal.
-    finding = next(item for item in record["findings"] if item["kind"] == "domain-solved-as-shown")
-    assert finding["detail"] == decision["refusal"]["message"]
+    assert (cut["kept_side"], cut["found_by"], cut["status"], cut["reflected"]) == (
+        "positive", "geometry", "recovered", False,
+    )
+    # Recovered as the whole speaker's reduced domain, then quartered by WG.
+    assert decision["wg_cut_planes"] == ["y0"]
+    assert decision["solver_domain"] == {"planes": ["x0", "y0"], "fraction": "quarter", "multiplier": 4}
+    assert decision["reflected_axes"] == []
+    assert decision["confidence"] == dd.CONFIDENCE_ESTABLISHED
+    assert decision["refusal"] is None
+    # Solved as shown it would be half a speaker in free space: nothing to offer.
+    assert decision["offered_changes"] == []
+    finding = next(item for item in record["findings"] if item["kind"] == "recovered-reduced-domain")
+    assert finding["planes"] == ["x0"] and finding["blocking"] is False
     plan, outcomes = _solve_verdicts(record)
-    assert plan["code"] == "imported_open_half_shell"
-    assert plan["reason"] == "imported_open_half_shell: " + decision["refusal"]["message"]
+    assert plan["code"] is None and plan["engine"] == "metal", plan
     assert plan["domain_decision"] == dd.decision_summary(record)
-    assert outcomes == {engine: "imported_open_half_shell" for engine in _SOLVE_ENGINES}
+    assert "imported_open_half_shell" not in outcomes.values()
 
 
-def test_a_negative_side_cut_is_described_and_stays_refused_until_reflection(tmp_path: Path) -> None:
+def test_a_negative_side_cut_is_recovered_by_reflecting_its_mesh(tmp_path: Path) -> None:
     record = _ingest(_bundle(tmp_path, "negative", _negative_half, HORN_THROAT), tmp_path / "data")
     decision = _decision(record)
 
     assert decision["input_reading"] == dd.INPUT_CUT
     cut = _cut(decision, "x0")
-    assert cut["kept_side"] == "negative"
-    assert cut["status"] == "refused"
-    # Every flip condition geometry can judge already holds; only the
-    # reflection itself is missing.
-    assert cut["recovery"] == {"by_reflection": dd.REFLECTION_PENDING, "blockers": []}
-    assert decision["reflection"] == {"implemented": False, "pending": dd.REFLECTION_PENDING}
-    assert decision["refusal"]["code"] == "imported_open_half_shell"
+    assert (cut["kept_side"], cut["status"], cut["reflected"]) == ("negative", "recovered", True)
+    assert decision["reflected_axes"] == ["x"]
+    assert decision["reflection"] == {
+        "implemented": True, "planes": ["x0"], "axes": ["x"], "parity": 1,
+        "winding_reversed": True, "by": "wg-mesh-reflection",
+    }
+    assert decision["solver_domain"]["fraction"] == "quarter"
+    assert decision["refusal"] is None
     assert decision["offered_changes"] == []
+    assert dd.decision_summary(record)["reflection"] == {"axes": ["x"], "parity": 1, "winding_reversed": True}
     _, outcomes = _solve_verdicts(record)
-    assert set(outcomes.values()) == {"imported_open_half_shell"}
+    assert "imported_open_half_shell" not in outcomes.values()
 
 
 def test_an_open_backed_box_split_on_the_plane_is_a_refused_cut(tmp_path: Path) -> None:
@@ -236,16 +247,25 @@ def test_a_capped_half_is_not_a_cut_the_solver_mirrors(tmp_path: Path) -> None:
     assert observed["cap_triangles"] > 0
 
 
-def test_an_opening_off_the_origin_plane_is_not_read_as_a_cut_there(tmp_path: Path) -> None:
+def test_a_cut_off_the_origin_plane_is_not_a_cut_there_and_is_refused(tmp_path: Path) -> None:
+    """Overseer condition 4: an off-centre cut plane is refused in this version."""
+
     record = _ingest(_bundle(tmp_path, "off-plane", _rim_off_plane, HORN_THROAT), tmp_path / "data")
     decision = _decision(record)
 
     assert all(cut["plane"] != "x0" for cut in decision["cad_cuts"])
-    assert decision["input_reading"] in (dd.INPUT_OPEN_SHEET, dd.INPUT_UNRESOLVED)
     assert record["domain_interpretation"]["observations"]["other_open_edges"] > 0
-    assert decision["refusal"] == (
-        None if cut_shaped_open_rim(record["domain_interpretation"]) is None else decision["refusal"]
+    assert cut_shaped_open_rim(record["domain_interpretation"]) is None
+    [off] = decision["off_centre_cuts"]
+    assert (off["plane_axis"], off["offset_mm"], off["solver_axis"]) == ("x", 5.0, "x")
+    assert decision["input_reading"] == dd.INPUT_CUT
+    assert decision["solver_domain"]["planes"] == []
+    assert decision["refusal"]["code"] == "imported_open_half_shell"
+    assert decision["refusal"]["message"].startswith(
+        f"The model is open along x = 5 mm ({off['rim_edges']} rim edges): it looks cut off the origin planes"
     )
+    _, outcomes = _solve_verdicts(record)
+    assert set(outcomes.values()) == {"imported_open_half_shell"}
 
 
 def test_open_sheets_are_open_sheets_and_stay_solvable(tmp_path: Path) -> None:
@@ -292,17 +312,18 @@ def test_an_x_cut_recorded_as_z0_is_shown_as_a_conflict_never_obeyed(tmp_path: P
 
     assert decision["input_reading"] == dd.INPUT_CUT
     cut = _cut(decision, "x0")
-    assert (cut["found_by"], cut["kept_side"], cut["status"]) == ("geometry", "positive", "refused")
+    assert (cut["found_by"], cut["kept_side"], cut["status"]) == ("geometry", "positive", "recovered")
     conflicts = decision["evidence"]["conflicts"]
     assert {"source": "cad-provenance", "kind": "plane-mismatch", "recorded_planes": ["z0"],
             "observed_cut_planes": ["x0"]} in conflicts
     assert any(item.get("plane") == "z0" and "spans both sides" in item["observed"] for item in conflicts)
     assert decision["evidence"]["supporting"] == []
-    assert decision["solver_domain"]["planes"] == []
-    assert decision["refusal"]["code"] == "imported_open_half_shell"
+    # The geometry decides: the x cut is recovered, the z0 record only shown.
+    assert "x0" in decision["solver_domain"]["planes"]
+    assert decision["refusal"] is None
 
 
-def test_a_negative_x_cut_recorded_as_z0_is_described_like_partymeh(tmp_path: Path) -> None:
+def test_a_negative_x_cut_recorded_as_z0_is_recovered_like_partymeh(tmp_path: Path) -> None:
     record = _ingest(
         _bundle(
             tmp_path, "mislabelled-negative", _negative_half_centred, HORN_THROAT,
@@ -313,13 +334,13 @@ def test_a_negative_x_cut_recorded_as_z0_is_described_like_partymeh(tmp_path: Pa
     decision = _decision(record)
 
     cut = _cut(decision, "x0")
-    assert cut["kept_side"] == "negative"
-    assert cut["recovery"]["by_reflection"] == dd.REFLECTION_PENDING
+    assert (cut["kept_side"], cut["status"], cut["reflected"]) == ("negative", "recovered", True)
+    assert decision["reflected_axes"] == ["x"]
     assert any(item.get("kind") == "plane-mismatch" for item in decision["evidence"]["conflicts"])
-    assert decision["refusal"]["code"] == "imported_open_half_shell"
+    assert decision["refusal"] is None
 
 
-def test_stale_provenance_from_another_frame_is_ignored_and_the_half_refused(tmp_path: Path) -> None:
+def test_stale_provenance_from_another_frame_is_ignored_and_the_half_recovered(tmp_path: Path) -> None:
     record = _ingest(
         _bundle(
             tmp_path, "stale", _open_half, HORN_THROAT,
@@ -332,8 +353,8 @@ def test_stale_provenance_from_another_frame_is_ignored_and_the_half_refused(tmp
     assert decision["evidence"]["ignored"]
     assert "frame" in decision["evidence"]["ignored"][0]["reason"]
     assert decision["evidence"]["supporting"] == []
-    assert _cut(decision, "x0")["status"] == "refused"
-    assert decision["refusal"]["code"] == "imported_open_half_shell"
+    assert _cut(decision, "x0")["status"] == "recovered"
+    assert decision["refusal"] is None
 
 
 def test_separate_left_and_right_sources_keep_their_identities_and_the_full_model(tmp_path: Path) -> None:
@@ -495,12 +516,16 @@ def _solve_verdicts_quiet(record: dict[str, Any]) -> str | None:
 def test_a_record_from_an_earlier_build_has_no_decision_and_is_judged_as_before(tmp_path: Path) -> None:
     from server.jobs.runtime import _imported_open_half_refusal
 
-    record = _ingest(_bundle(tmp_path, "earlier", _open_half, HORN_THROAT), tmp_path / "data")
+    record = _ingest(_bundle(tmp_path, "earlier", _split_open_backed_shell, BOX_DRIVER), tmp_path / "data")
     decided = _imported_open_half_refusal(record)
+    assert decided is not None
     earlier = {key: value for key, value in record.items() if key != "domain_decision"}
     assert dd.decision_problem(earlier) is None
     assert dd.decision_summary(earlier) is None
-    assert _imported_open_half_refusal(earlier) == decided
+    judged = _imported_open_half_refusal(earlier)
+    # The same refusal; only the decision can name the flip condition it failed.
+    assert judged is not None and judged[0] == decided[0]
+    assert decided[1].startswith(judged[1].split(". Send")[0])
 
 
 def test_the_decision_refusal_can_never_weaken_the_open_shell_check(tmp_path: Path) -> None:
@@ -508,7 +533,7 @@ def test_the_decision_refusal_can_never_weaken_the_open_shell_check(tmp_path: Pa
 
     from server.jobs.runtime import _imported_open_half_refusal
 
-    record = _ingest(_bundle(tmp_path, "belt", _open_half, HORN_THROAT), tmp_path / "data")
+    record = _ingest(_bundle(tmp_path, "belt", _split_open_backed_shell, BOX_DRIVER), tmp_path / "data")
     silent = json.loads(json.dumps(record))
     silent["domain_decision"]["refusal"] = None
     assert _imported_open_half_refusal(silent) is not None
@@ -821,7 +846,10 @@ def test_a_second_open_plane_blocks_the_reflection_of_a_negative_cut(tmp_path: P
     assert observed["other_open_edges"] == 0
     assert observed["planes"]["z0"]["rim_edges"] >= 3
     cut = _cut(decision, "x0")
-    assert cut["kept_side"] == "negative"
-    assert cut["recovery"]["by_reflection"] == dd.REFLECTION_PENDING
-    assert "open-rim-on-z0" in cut["recovery"]["blockers"]
+    assert (cut["kept_side"], cut["status"], cut["reflected"]) == ("negative", "refused", False)
+    failed = [item["code"] for item in cut["recovery"]["failed"]]
+    # One accurate list: this cut's own condition and the other plane's rim.
+    assert failed == ["no-source-on-plane", "open-rim-on-z0"]
     assert decision["refusal"]["code"] == "imported_open_half_shell"
+    assert "also open along z = 0" in decision["refusal"]["message"]
+    assert decision["solver_domain"]["planes"] == [] and decision["reflected_axes"] == []

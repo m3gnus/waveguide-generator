@@ -30,8 +30,12 @@ export interface DomainInterpretation {
     source: 'declaration' | 'user' | 'user-lineage' | 'cad-provenance' | 'lineage' | null;
     features?: Array<{ plane: DomainPlane; kind: string; name: string }>;
     applied?: boolean;
+    /** Recognised as a model already cut from its geometry alone (stage 3). */
+    recovered?: boolean;
     [key: string]: unknown;
   };
+  /** Mirrored planes whose cut kept the negative side: the mesh was reflected. */
+  reflected_planes?: DomainPlane[];
   choices: DomainReading[];
   [key: string]: unknown;
 }

@@ -178,9 +178,12 @@ def test_validated_precut_planes_restrict_the_axes_and_reduced_stays_plus_z() ->
 # -- the plan --------------------------------------------------------------------------------
 
 
-def test_provenance_on_the_negative_side_or_z0_is_refused_before_meshing() -> None:
+def test_provenance_on_z0_is_refused_before_meshing_and_a_negative_side_is_read() -> None:
+    # Stage 3: a cut that kept the negative side is mirrored by reflecting its
+    # mesh; the geometry then checks the recorded side (``apply_evidence``).
     negative = di.resolve_domain_plan(None, validate_manifest(_new_add_in(cut=[_cut(kept_side="negative")])), "s")
-    assert negative.refusal is not None and "keep the x ≥ 0 side and leave the cut open" in negative.refusal
+    assert negative.refusal is None and negative.planes == ("x0",)
+    assert negative.kept_sides == (("x0", "negative"),)
     top = di.resolve_domain_plan(
         None,
         validate_manifest(_new_add_in(cut=[_cut(plane="z0", tool={"kind": "origin-plane", "origin_plane": "XY"})])),

@@ -1,11 +1,13 @@
 """M1c-auto: the automatic domain, on real generated geometry.
 
 PLAN.md, "M1c-auto. Automatic domain; the Model dropdown is removed" (as
-narrowed on 2026-09-22). A model that is already cut is mirrored only with
+narrowed on 2026-09-22). A model that is already cut is mirrored with
 recorded evidence of the cut -- a declaration, an earlier explicit or
 provenance-backed interpretation of the same lineage, or cut provenance the
-add-in recorded. An open half without evidence is refused at solve. Nothing
-here asks.
+add-in recorded -- and, since stage 3 branch 2, recovered from its geometry
+alone when every flip condition holds (``server/cadlink/cut_recovery.py``;
+a negative-side cut by reflecting its mesh). Any other open cut is refused at
+solve, naming the condition it failed. Nothing here asks.
 
 Every fixture is built with gmsh, written as STEP, and put through the
 production ``ingest_bundle`` (bundle reader, gates, the isolated mesher child,
@@ -729,6 +731,18 @@ def _assert_refused_everywhere(record: dict[str, Any], message: str | None = Non
         assert plan["reason"] == f"imported_open_half_shell: {message}"
 
 
+def _same_open_cut_refusal(decided: tuple[str, str] | None, judged: tuple[str, str] | None) -> None:
+    """The decision's refusal and the saved-observation check's are the same refusal.
+
+    Only the decision names the flip condition the cut failed; the check that
+    reads observations alone (an earlier build's record) states the rest.
+    """
+
+    assert decided is not None and judged is not None
+    assert decided[0] == judged[0] == "imported_open_half_shell"
+    assert decided[1].startswith(judged[1].split(". Send")[0])
+
+
 def _assert_solves_on_metal_and_beat(record: dict[str, Any]) -> None:
     plan, outcomes = _solve_verdicts(record)
     assert plan["code"] is None and plan["engine"] == "metal", plan
@@ -763,44 +777,55 @@ def test_open_half_with_provenance_is_mirrored_and_its_second_plane_cut(tmp_path
     _no_blocking_domain_finding(record)
 
 
-def test_the_same_open_half_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:
+def test_the_same_open_half_without_provenance_is_recovered_from_its_geometry(tmp_path: Path) -> None:
+    """Every flip condition holds: the cut half is solved as the whole speaker's reduced domain."""
+
     from server.jobs.runtime import _imported_open_half_refusal
 
     bundle = _bundle(tmp_path, "half-bare", _open_half, HORN_THROAT)
     record = _ingest(bundle, tmp_path / "data")
 
     interpretation = _interpretation(record)
-    assert interpretation["reading"] == "as-shown"
-    assert interpretation["planes"] == []
-    assert interpretation["looks_cut"] == ["x0"]
+    assert interpretation["reading"] == "reduced"
+    assert interpretation["planes"] == ["x0"]
     assert interpretation["evidence"]["source"] is None
-    assert record["symmetry"]["domain_planes"] == []
-    assert _multiplier(record) == 1.0
-    # The Change control offers the reading that can validate.
-    assert {"reading": "reduced", "planes": ["x0"]} in interpretation["choices"]
-    # Frame: a model prepared as shown is not restricted by a cut it may not have.
-    assert len(record["normalisation"]["solver_frame"]["allowed_axes"]) == 6
+    assert interpretation["evidence"]["recovered"] is True
+    assert interpretation["cut_recovery"]["recoverable"] is True
+    assert interpretation["reflected_planes"] == []
+    assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert record["symmetry"]["planes"]["x0"]["source"] == "recovered-from-geometry"
+    assert record["symmetry_verification"]["verified"] is True
+    assert record["reflection"] is None
+    assert _multiplier(record) == 4.0
+    # Solved as shown it would be half a speaker in free space: no Change.
+    assert interpretation["choices"] == []
+    # A reduced domain is solved as it was modelled (+z) until M1d.
+    assert record["normalisation"]["solver_frame"]["allowed_axes"] == ["+z"]
     _no_blocking_domain_finding(record)
-    refusal = _imported_open_half_refusal(record)
-    assert refusal is not None
-    assert refusal[0] == "imported_open_half_shell"
-    rim = interpretation["observations"]["planes"]["x0"]["rim_edges"]
-    assert f"x = 0 ({rim} rim edges)" in refusal[1]
-    finding = next(item for item in record["findings"] if item["kind"] == "domain-solved-as-shown")
-    assert finding["detail"] == refusal[1]
+    assert _imported_open_half_refusal(record) is None
+    _assert_solves_on_metal_and_beat(record)
 
 
 def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_path: Path) -> None:
-    """A record from an earlier build has no observations; its verified mesh is observed."""
+    """A record from an earlier build has no observations; its verified mesh is observed.
+
+    The half's source is identified as the left one, so it is not recovered.
+    """
 
     from server.jobs.runtime import _imported_open_half_refusal
 
-    record = _ingest(_bundle(tmp_path, "half-legacy", _open_half, HORN_THROAT), tmp_path / "data")
+    record = _ingest(
+        _bundle(tmp_path, "half-legacy", _open_half, HORN_THROAT, sources=["woofer-left"]),
+        tmp_path / "data",
+    )
     rim = _interpretation(record)["observations"]["planes"]["x0"]["rim_edges"]
+    decided = _imported_open_half_refusal(record)
+    assert decided is not None and "identified as the left one" in decided[1]
     legacy = _legacy(record)
     refusal = _imported_open_half_refusal(legacy)
     assert refusal is not None and refusal[0] == "imported_open_half_shell"
     assert f"x = 0 ({rim} rim edges)" in refusal[1]
+    _same_open_cut_refusal(decided, refusal)
     _assert_refused_everywhere(legacy, refusal[1])
     # Observations saved before the rigid-shell rim existed are observed again too.
     # (Those builds wrote no domain decision either.)
@@ -816,22 +841,26 @@ def test_an_open_half_saved_without_observations_is_refused_from_its_mesh(tmp_pa
     assert _imported_open_half_refusal(unnamed) == refusal
 
 
-def test_undeclared_negative_side_half_is_refused_at_solve(tmp_path: Path) -> None:
+def test_undeclared_negative_side_half_is_recovered_by_reflection(tmp_path: Path) -> None:
     from server.jobs.runtime import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "negative-bare", _negative_half, HORN_THROAT), tmp_path / "data")
-    assert record["symmetry"]["domain_planes"] == []
     observed = _interpretation(record)["observations"]["planes"]["x0"]
     assert observed["negative_vertices"] > 0
     assert observed["positive_vertices"] == 0
-    assert _imported_open_half_refusal(record) is not None
+    assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert record["symmetry"]["reflected_planes"] == ["x0"]
+    assert record["reflection"]["axes"] == ["x"]
+    assert _imported_open_half_refusal(record) is None
 
 
 def test_change_to_half_is_checked_mirrored_and_remembered_for_the_lineage(tmp_path: Path) -> None:
+    """A cut WG does not recover by itself (no driver meets it) is mirrored on the user's Change."""
+
     from server.cadlink.domain_interpretation import interpretation_view, record_reading
 
     data_dir = tmp_path / "data"
-    first = _ingest(_bundle(tmp_path, "half-change", _open_half, HORN_THROAT), data_dir)
+    first = _ingest(_bundle(tmp_path, "half-change", _split_open_backed_shell, BOX_DRIVER), data_dir)
     assert _interpretation(first)["reading"] == "as-shown"
 
     record_reading(_store(data_dir), first, {"reading": "reduced", "planes": ["x0"]})
@@ -843,7 +872,7 @@ def test_change_to_half_is_checked_mirrored_and_remembered_for_the_lineage(tmp_p
 
     # A new version of the same document: the lineage's reading is reused
     # because it still revalidates on the new geometry.
-    later = _ingest(_bundle(tmp_path, "half-change-v2", _open_half, HORN_THROAT), data_dir)
+    later = _ingest(_bundle(tmp_path, "half-change-v2", _split_open_backed_shell, BOX_DRIVER), data_dir)
     assert _interpretation(later)["reading"] == "reduced"
     assert _interpretation(later)["evidence"]["source"] == "user-lineage"
     assert later["symmetry"]["domain_planes"] == ["x0", "y0"]
@@ -871,16 +900,17 @@ def test_open_quarter_with_provenance_on_both_planes_is_a_quarter(tmp_path: Path
     assert _multiplier(record) == 4.0
 
 
-def test_open_quarter_without_provenance_is_refused_at_solve(tmp_path: Path) -> None:
+def test_open_quarter_without_provenance_is_recovered_as_a_quarter(tmp_path: Path) -> None:
     from server.jobs.runtime import _imported_open_half_refusal
 
     record = _ingest(_bundle(tmp_path, "quarter-bare", _open_quarter, HORN_THROAT), tmp_path / "data")
 
-    assert _interpretation(record)["reading"] == "as-shown"
-    assert _interpretation(record)["looks_cut"] == ["x0", "y0"]
-    assert _multiplier(record) == 1.0
+    assert _interpretation(record)["reading"] == "reduced"
+    assert _interpretation(record)["planes"] == ["x0", "y0"]
+    assert record["symmetry"]["cut_planes"] == []
+    assert _multiplier(record) == 4.0
     _no_blocking_domain_finding(record)
-    assert _imported_open_half_refusal(record) is not None
+    assert _imported_open_half_refusal(record) is None
 
 
 def test_an_off_centre_complete_model_is_a_full_model(tmp_path: Path) -> None:
@@ -968,8 +998,10 @@ def test_a_cut_on_the_solver_y0_plane_is_refused_whatever_its_cad_name(tmp_path:
     assert observed["rigid_cut_rim_edges"] >= 3 and observed["sources_bisected"] == []
     refusal = _imported_open_half_refusal(record)
     assert refusal is not None and "along z = 0" in refusal[1]
+    # The failed flip condition, named: WG mirrors a cut only as modelled.
+    assert "only in the frame it was modelled in" in refusal[1]
     _assert_refused_everywhere(record, refusal[1])
-    assert _imported_open_half_refusal(_legacy(record)) == refusal
+    _same_open_cut_refusal(refusal, _imported_open_half_refusal(_legacy(record)))
 
 
 def test_a_horn_mouth_on_the_solver_z0_plane_stays_solvable_under_any_frame(tmp_path: Path) -> None:
@@ -1011,8 +1043,12 @@ def test_an_open_half_with_another_body_on_the_plane_is_still_refused(
     assert observed["rigid_cut_rim_edges"] == observed["rim_edges"] >= 3
     refusal = _imported_open_half_refusal(record)
     assert refusal is not None and refusal[0] == "imported_open_half_shell"
+    # Each failed flip condition is named.
+    assert (
+        "would solve as a wall across the cut" if block_x == 0.0 else "geometry crosses x = 0"
+    ) in refusal[1]
     _assert_refused_everywhere(record, refusal[1])
-    assert _imported_open_half_refusal(_legacy(record)) == refusal
+    _same_open_cut_refusal(refusal, _imported_open_half_refusal(_legacy(record)))
 
 
 def test_a_cut_through_a_winged_shell_is_refused(tmp_path: Path) -> None:
@@ -1030,6 +1066,7 @@ def test_a_cut_through_a_winged_shell_is_refused(tmp_path: Path) -> None:
     assert observed["rigid_cut_rim_edges"] == observed["rim_edges"] >= 3
     refusal = _imported_open_half_refusal(record)
     assert refusal is not None and refusal[0] == "imported_open_half_shell"
+    assert "no source meets x = 0" in refusal[1]
     _assert_refused_everywhere(record, refusal[1])
 
 
@@ -1068,13 +1105,18 @@ def test_an_open_backed_shell_without_provenance_is_refused_at_solve(tmp_path: P
     assert observed["rigid_cut_rim_edges"] == 15
     message = (
         "The model is open along x = 0 (15 rim edges), so WG would solve half a "
-        "speaker in free space. Send the uncut model — WG finds the symmetry "
-        "and reduces it automatically."
+        "speaker in free space, and it cannot mirror it as the whole speaker's "
+        "reduced domain: no source meets x = 0, so nothing shows it is the "
+        "speaker's symmetry plane rather than an open side. Send the uncut "
+        "model — WG finds the symmetry and reduces it automatically."
     )
     assert _imported_open_half_refusal(record) == ("imported_open_half_shell", message)
     # The driver is clear of the cut, yet AUTO, Metal, BEAT and BEMPP all refuse.
     _assert_refused_everywhere(record, message)
-    _assert_refused_everywhere(_legacy(record), message)
+    legacy = _imported_open_half_refusal(_legacy(record))
+    _same_open_cut_refusal((("imported_open_half_shell", message)), legacy)
+    assert legacy is not None
+    _assert_refused_everywhere(_legacy(record), legacy[1])
 
 
 def test_a_split_open_backed_shell_with_provenance_is_mirrored_and_change_unmirrors_it(
@@ -1119,13 +1161,31 @@ def test_provenance_whose_rim_is_off_the_plane_is_refused(tmp_path: Path) -> Non
         _ingest(bundle, tmp_path / "data")
 
 
-def test_provenance_naming_the_negative_side_is_refused_with_its_remedy(tmp_path: Path) -> None:
+def test_provenance_naming_the_negative_side_is_mirrored_by_reflection(tmp_path: Path) -> None:
     bundle = _bundle(
         tmp_path, "negative", _negative_half, HORN_THROAT,
         cut=[provenance("body-0", kept_side="negative")],
     )
 
-    with pytest.raises(IngestRefusal, match=r"keep the x ≥ 0 side"):
+    record = _ingest(bundle, tmp_path / "data")
+    interpretation = _interpretation(record)
+    assert interpretation["reading"] == "reduced"
+    assert interpretation["evidence"]["source"] == "cad-provenance"
+    assert interpretation["evidence"]["recovered"] is False
+    assert interpretation["reflected_planes"] == ["x0"]
+    assert record["symmetry"]["domain_planes"] == ["x0", "y0"]
+    assert record["symmetry"]["planes"]["x0"]["source"] == "interpreted-from-evidence"
+    assert record["reflection"]["axes"] == ["x"]
+    assert record["symmetry_verification"]["verified"] is True
+
+
+def test_provenance_whose_kept_side_the_geometry_contradicts_is_refused(tmp_path: Path) -> None:
+    bundle = _bundle(
+        tmp_path, "negative-claims-positive", _negative_half, HORN_THROAT,
+        cut=[provenance("body-0", kept_side="positive")],
+    )
+
+    with pytest.raises(IngestRefusal, match=r"recorded as keeping x ≥ 0, but the model lies on x ≤ 0"):
         _ingest(bundle, tmp_path / "data")
 
 
@@ -1158,9 +1218,10 @@ def test_repeated_imports_without_evidence_stay_unmirrored(tmp_path: Path) -> No
     from server.cadlink.domain_interpretation import lineage_reading
 
     data_dir = tmp_path / "data"
-    first = _ingest(_bundle(tmp_path, "repeat-1", _open_half, HORN_THROAT), data_dir)
+    # A cut WG cannot recover from its geometry (no driver meets it).
+    first = _ingest(_bundle(tmp_path, "repeat-1", _split_open_backed_shell, BOX_DRIVER), data_dir)
     again = _ingest(Path(first["bundle_store_path"]), data_dir)
-    later = _ingest(_bundle(tmp_path, "repeat-2", _open_half, HORN_THROAT), data_dir)
+    later = _ingest(_bundle(tmp_path, "repeat-2", _split_open_backed_shell, BOX_DRIVER), data_dir)
 
     for record in (first, again, later):
         assert _interpretation(record)["reading"] == "as-shown"
@@ -1184,7 +1245,7 @@ def test_mirrored_distinct_sources_are_not_mirrored_onto_each_other(tmp_path: Pa
 
 
 def test_an_old_add_in_manifest_keeps_its_meaning(tmp_path: Path) -> None:
-    """Absent domain still prepares both shapes; an open pre-cut is refused at solve."""
+    """Absent domain still prepares both shapes; an open pre-cut is recovered or refused alike."""
 
     from server.jobs.runtime import _imported_open_half_refusal
 
@@ -1193,10 +1254,13 @@ def test_an_old_add_in_manifest_keeps_its_meaning(tmp_path: Path) -> None:
     assert full["symmetry"]["cut_planes"] == ["x0", "y0"]
     assert _interpretation(full)["manifest_domain"] == "absent"
     half = _ingest(_bundle(tmp_path, "old-half", _open_half, HORN_THROAT, domain=None), data_dir)
-    assert _interpretation(half)["reading"] == "as-shown"
-    assert _interpretation(half)["looks_cut"] == ["x0"]
+    assert _interpretation(half)["reading"] == "reduced"
+    assert _interpretation(half)["evidence"]["recovered"] is True
     _no_blocking_domain_finding(half)
-    assert _imported_open_half_refusal(half) is not None
+    assert _imported_open_half_refusal(half) is None
+    box = _ingest(_bundle(tmp_path, "old-box", _split_open_backed_shell, BOX_DRIVER, domain=None), data_dir)
+    assert _interpretation(box)["reading"] == "as-shown"
+    assert _imported_open_half_refusal(box) is not None
 
 
 def test_a_new_add_in_manifest_of_a_full_model_is_cut_as_before(tmp_path: Path) -> None:
@@ -1239,7 +1303,7 @@ def test_an_explicit_reading_enters_the_mesh_cache_key_even_when_the_mesh_is_the
     from server.cadlink.domain_interpretation import record_reading
 
     data_dir = tmp_path / "data"
-    default = _ingest(_bundle(tmp_path, "cache-key", _open_half, HORN_THROAT), data_dir)
+    default = _ingest(_bundle(tmp_path, "cache-key", _split_open_backed_shell, BOX_DRIVER), data_dir)
     record_reading(_store(data_dir), default, {"reading": "as-shown"})
     chosen = _ingest(Path(default["bundle_store_path"]), data_dir)
 
