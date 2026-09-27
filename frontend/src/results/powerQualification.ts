@@ -159,7 +159,12 @@ function evaluateChannel(result: ResultPayload, wrapper: ResultPayload): PowerQu
 
 function evaluateCombined(result: ResultPayload, wrapper: ResultPayload, members: string[]): PowerQualification | null {
   const frequencies = result.frequencies ?? [];
-  const status: FrequencyQualification[] = frequencies.map(() => 'qualified');
+  // Members are judged only inside the sum's own band: above its lowest
+  // source ceiling the sum makes no claim, so nothing propagates there.
+  const validityMaxHz = resultFrequencyValidity(result, wrapper)?.governingMaxFrequencyHz ?? null;
+  const status: FrequencyQualification[] = frequencies.map((frequency) => !finite(frequency)
+    ? 'unchecked'
+    : validityMaxHz !== null && frequency > validityMaxHz ? 'outside_validity' : 'qualified');
   const reasons: Array<string | null> = frequencies.map(() => null);
   const culprits: string[][] = frequencies.map(() => []);
   let evaluatedAny = false;
@@ -170,6 +175,7 @@ function evaluateCombined(result: ResultPayload, wrapper: ResultPayload, members
     evaluatedAny = true;
     const flagged = (payload.frequencies ?? []).filter((_, index) => flags.frequencyStatus[index] === 'unqualified');
     frequencies.forEach((frequency, index) => {
+      if (status[index] === 'unchecked' || status[index] === 'outside_validity') return;
       if (flagged.some((value) => Math.abs(value - frequency) <= 1e-9 * Math.max(1, Math.abs(frequency)))) {
         status[index] = 'unqualified';
         reasons[index] = 'member_unqualified';
@@ -183,7 +189,7 @@ function evaluateCombined(result: ResultPayload, wrapper: ResultPayload, members
   return {
     status: unqualifiedChannels.length ? 'unqualified' : 'qualified',
     evaluated: 'client',
-    validityMaxHz: null,
+    validityMaxHz,
     frequencyStatus: status,
     frequencyReasons: reasons,
     ranges,

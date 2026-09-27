@@ -344,24 +344,31 @@ def qualify_combined(
     """A crossover sum inherits every contributing member's unqualified samples.
 
     The sum has no driven face of its own, so its only evidence is its members'.
-    A member unqualified anywhere on the combined frequency axis makes the sum
-    unqualified there, naming the member; its own validity limit already
-    bounded where the member was checked.
+    Inside the sum's own validity band (the lowest ceiling among the sources it
+    sums), a member unqualified at a frequency makes the sum unqualified there,
+    naming the member. Above that band nothing propagates: the sum is not a
+    claim there. ``members`` records each member's standing inside the band.
     """
 
     frequencies = _frequencies(payload)
     count = len(frequencies)
     members = list(members)
+    validity = channel_validity_max_hz(payload, wrapper)
     status = ["qualified"] * count
     reasons: list[str | None] = [None] * count
     culprits: list[list[str]] = [[] for _ in range(count)]
+    for index, frequency in enumerate(frequencies):
+        if frequency is None:
+            status[index] = "unchecked"
+        elif validity is not None and frequency > validity:
+            status[index] = "outside_validity"
     member_status: dict[str, str] = {}
     for member in members:
         flags = member_flags.get(member)
-        if not flags:
+        if not flags or flags.get("status") not in {"qualified", "unqualified"}:
             member_status[member] = "unknown"
             continue
-        member_status[member] = str(flags.get("status"))
+        member_status[member] = "qualified"
         member_frequencies = _frequencies(member_payloads.get(member, {}))
         member_state = flags.get("frequency_status") or []
         flagged = [
@@ -370,8 +377,7 @@ def qualify_combined(
             if state == "unqualified" and frequency is not None
         ]
         for index, frequency in enumerate(frequencies):
-            if frequency is None:
-                status[index] = "unchecked"
+            if status[index] in {"unchecked", "outside_validity"}:
                 continue
             if any(
                 math.isclose(frequency, value, rel_tol=1e-9, abs_tol=1e-9)
@@ -380,6 +386,7 @@ def qualify_combined(
                 status[index] = "unqualified"
                 reasons[index] = REASON_MEMBER_UNQUALIFIED
                 culprits[index].append(member)
+                member_status[member] = "unqualified"
     unqualified_channels = sorted(
         {member for items in culprits for member in items}
     )
@@ -395,7 +402,7 @@ def qualify_combined(
         "status": overall,
         "evaluated": evaluated,
         "threshold_db": POWER_AGREEMENT_THRESHOLD_DB,
-        "validity_max_hz": channel_validity_max_hz(payload, wrapper),
+        "validity_max_hz": validity,
         "frequency_status": status,
         "frequency_reasons": reasons,
         "unqualified_ranges": _ranges(frequencies, status, reasons, culprits),

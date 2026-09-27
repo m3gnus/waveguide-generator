@@ -318,6 +318,33 @@ def test_combined_member_flags_outside_its_validity_do_not_propagate() -> None:
     assert combined["status"] == "qualified"
 
 
+def test_combined_judges_members_only_inside_its_own_validity_band() -> None:
+    # Review reproducer: the sum's ceiling is LF's 250 Hz, and HF's only
+    # failure, at 300 Hz, lies above it.
+    results = _multi(
+        {
+            "drive-lf": _member("lf", [0.1, 0.1, 0.1]),
+            "drive-hf": _member("hf", [0.1, 0.1, -3.0]),
+            "combined": _combined(["drive-lf", "drive-hf"]),
+        },
+        validity={
+            "lf": {"effective_max_valid_frequency_hz": 250.0},
+            "hf": {"effective_max_valid_frequency_hz": 1000.0},
+        },
+    )
+
+    annotated = annotate_results(results)
+
+    hf = annotated["channels"]["drive-hf"]["metadata"]["power_qualification"]
+    combined = annotated["channels"]["combined"]["metadata"]["power_qualification"]
+    assert hf["status"] == "unqualified"
+    assert combined["validity_max_hz"] == 250.0
+    assert _statuses(combined) == ["qualified", "qualified", "outside_validity"]
+    assert combined["unqualified_channels"] == []
+    assert combined["members"] == {"drive-lf": "qualified", "drive-hf": "qualified"}
+    assert combined["status"] == "qualified"
+
+
 def test_combined_is_unknown_when_a_member_carries_no_power_check() -> None:
     hf = {"frequencies": [100.0, 200.0, 300.0], "metadata": {"source_ids": ["hf"]}}
     results = _multi(

@@ -169,6 +169,30 @@ describe('power qualification', () => {
     expect(powerChipLabel(unknown)).toBe('Power check: unknown');
     expect(powerQualificationDetail(unknown)[0]).toContain('carries no radiated-power check');
   });
+  it('judges combined members only inside the sum\'s own validity band', () => {
+    // Review reproducer: LF ceiling 250 Hz, HF ceiling 1 kHz, HF fails only at 300 Hz.
+    const member = (source: string, agreement: number[]) => ({
+      frequencies: [100, 200, 300],
+      metadata: { source_ids: [source], radiated_power: { surface_w: [1e-5, 1e-5, 1e-5], sphere_w: agreement.map((value) => 1e-5 * 10 ** (value / 10)), agreement_db: agreement } },
+    });
+    const wrapper = {
+      frequencies: [100, 200, 300],
+      metadata: { per_source_frequency_validity: { lf: { effective_max_valid_frequency_hz: 250 }, hf: { effective_max_valid_frequency_hz: 1000 } } },
+      channel_order: ['lf', 'hf', 'combined'],
+      channels: {
+        lf: member('lf', [0.1, 0.1, 0.1]),
+        hf: member('hf', [0.1, 0.1, -3]),
+        combined: { frequencies: [100, 200, 300], metadata: { source_ids: ['lf', 'hf'], combine: { members: ['lf', 'hf'], crossovers_hz: [150] } } },
+      },
+    } as unknown as ResultPayload;
+    expect(powerQualificationOf(channel(wrapper, 'hf'), wrapper)!.status).toBe('unqualified');
+    const combined = powerQualificationOf(channel(wrapper, 'combined'), wrapper)!;
+    expect(combined.validityMaxHz).toBe(250);
+    expect(combined.frequencyStatus).toEqual(['qualified', 'qualified', 'outside_validity']);
+    expect(combined.unqualifiedChannels).toEqual([]);
+    expect(combined.status).not.toBe('unqualified');
+  });
+
   it('summarises every channel of a multi-channel run, and nothing for a single channel', () => {
     const wrapper = served();
     expect(channelQualificationSummary(wrapper)).toBe('Channels: drive-lf unqualified · drive-hf qualified · combined unqualified.');
