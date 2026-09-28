@@ -4,8 +4,8 @@
     ".gitattributes": "68d608afba2742c934f399ada0c36621f11dd2f19d78dd3a0f569a41348a67c3",
     "BARE.json": "181b52b6c01b788b3d2d217d9511ccf1fd74b422b2ff3bec2c25b623fb7329b8",
     "DISK_SETUP.json": "aa9e40664499da8084364a4bc41c1b5dc804dba1fd5882505e9985d7587811cd",
-    "GEOMETRY.json": "63aca98fcda9b85f579e6a0d83096d254567351a64bb74e1c918e505b583cd9e",
-    "ORACLE.json": "b5b991071959a53d7bb8d90e5d6ad3b59c83ad70833ec380cdf84bade6056712",
+    "GEOMETRY.json": "99f6a1221bf3eb404c88a1e9276819a05234170b8935666e3ee072b21785255c",
+    "ORACLE.json": "93adb914c0b51b1bd3fb60b7b1b8bf0691cfc739e46e262efc1ec963c6e2ff59",
     "automatic-capped-half.wgreturn/assembly.step": "de2d68d7381315eb61bfb3cba350e444b7505e0af26aa73c0c62f8279026ab5f",
     "automatic-capped-half.wgreturn/wgreturn.json": "36580c9130ef488eb4cd2a8e75f8b6c5ed567901742bf30ad0c958a106d90352",
     "automatic-empty-cut-planes.wgreturn/assembly.step": "78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
@@ -67,8 +67,8 @@
     "non-utf8-json.wgreturn/wgreturn.json": "a8100ae6aa1940d0b663bb31cd466142ebbdbd5187131b92d93818987832eb89",
     "nonfinite-json.wgreturn/assembly.step": "78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
     "nonfinite-json.wgreturn/wgreturn.json": "159f99e03ec6dfb7edcad87bac613ac97a235493ad8b79b33cfa4002fb4477f8",
-    "onshape-linked.wgreturn/assembly.step": "e9de92b40b1f4544e5e484be9f6cab924acc56373bbb78b9e6a9add3d6797051",
-    "onshape-linked.wgreturn/wgreturn.json": "bca8e3d492fe3bc07c5cee1ceb5fd8f62dd96ced5c93c151c345b95664cc351f",
+    "onshape-linked.wgreturn/assembly.step": "78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
+    "onshape-linked.wgreturn/wgreturn.json": "8b9d616b801926ca739e0de549685264d4f628540213d56d1df90f49fa6c75be",
     "oversized-json.wgreturn/assembly.step": "78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
     "oversized-json.wgreturn/wgreturn.json": "9d78de4e5b12fc166bed811cd230621ea1e1e353553fe31b92a73bfbf45d68ee",
     "source-id-space.wgreturn/assembly.step": "78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
@@ -87,7 +87,7 @@
     "zero-source-area.wgreturn/assembly.step": "78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
     "zero-source-area.wgreturn/wgreturn.json": "0ac632fb70a5be997eb05455fea131e3d646db2a51bd48268aa6d36780ab9caa"
   },
-  "generator": "scripts/generate_cadlink_endpoint_oracle.py",
+  "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
   "schema": 1,
-  "wg_commit": "12db5a557a6a86d969a120a95b7de37eb5260980"
+  "wg_commit": "30b8104704a0f556391901804344facd73a31932"
 }

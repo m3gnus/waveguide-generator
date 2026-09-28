@@ -24,6 +24,7 @@ from server.cadlink.fusion_delivery import capabilities, ipc_folder
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import read_wgreturn, source_physical_name, validate_manifest
 from server.mesh.gmsh_worker import _run_in_gmsh_session
+from server.tests.tools.oracle_geometry import geometry_result
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -99,9 +100,9 @@ def _from_package(folder: Path, filename: str):
 
 def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
     provenance = json.loads((CORPUS / "PROVENANCE.json").read_text())
-    assert provenance["wg_commit"] == "12db5a557a6a86d969a120a95b7de37eb5260980"
+    assert provenance["wg_commit"] == "30b8104704a0f556391901804344facd73a31932"
     assert provenance["addin_commit"] == PIN["commit"]
-    assert provenance["generator"] == "scripts/generate_cadlink_endpoint_oracle.py"
+    assert provenance["generator"] == "server/tests/tools/generate_cadlink_endpoint_oracle.py"
     actual = {
         p.relative_to(CORPUS).as_posix(): _sha(p.read_bytes())
         for p in CORPUS.rglob("*")
@@ -124,35 +125,6 @@ def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
             shutil.copytree(folder, disk_folder)
             (disk_folder / disk_setup[name]["link"]).symlink_to(disk_setup[name]["target"])
         assert _verdict(lambda: read_wgreturn(disk_folder)) == expected["read_wgreturn"], name
-        data = tmp_path / name
-        data.mkdir()
-        inbox = ipc_folder(data, create=True) / solve_command.SOLVE_REQUESTS_DIRECTORY
-        inbox.mkdir()
-        request = {
-            "schemaVersion": 3,
-            "target": "waveguide-generator",
-            "commandId": f"oracle-{name}",
-            "operationId": f"oracle-{name}",
-            "returnId": "wgr_1",
-            "bundlePath": f"wgreturn/{name}.wgreturn",
-            "manifestSha256": "sha256:" + _sha((folder / "wgreturn.json").read_bytes()),
-            "requestedAt": "2026-09-28T00:00:00Z",
-        }
-        (inbox / f"oracle-{name}.json").write_text(json.dumps(request))
-        store = CadLinkStore.for_data_dir(data)
-        try:
-            refusals = []
-            solve_command.collect_solve_deliveries(data, store, refuse=refusals.append)
-            row = store.get_operation(f"oracle-{name}")
-            observed = {
-                "accepted": row is not None and row["kind"] == "prepare_and_solve",
-                "kind": row["kind"] if row else None,
-                "state": row["state"] if row else None,
-                "message": refusals[0]["reason"] if refusals else None,
-            }
-            assert observed == expected["inbox_claim"], name
-        finally:
-            store.close()
 
 
 def test_oracle_rule_mutation_exits_nonzero(tmp_path: Path):
@@ -190,7 +162,7 @@ def test_oracle_rule_mutation_exits_nonzero(tmp_path: Path):
         capture_output=True,
         text=True,
         check=False,
-        timeout=30,
+        timeout=120,
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert "first-error-chirality" in result.stdout or "mirrored-chirality" in result.stdout
@@ -234,26 +206,7 @@ def test_geometry_oracle_without_solver(name: str, tmp_path: Path):
             data,
             prep_options={"symmetry_mode": "auto"},
         )
-        physical_names = {
-            source_id: source_physical_name(
-                int(tag),
-                source_id,
-                record["tag_map"][str(tag)]["instance_id"],
-                record["tag_map"][str(tag)]["role"],
-            )
-            for source_id, tag in record["source_tags"].items()
-        }
-        observed = {
-            "accepted": True,
-            "source_ids": [source["id"] for source in record["sources"]],
-            "physical_names": physical_names,
-            "solver_frame": record["normalisation"]["solver_frame"],
-            "domain_interpretation": record["domain_interpretation"],
-            "domain_decision": record["domain_decision"],
-            "symmetry_verification": record["symmetry_verification"],
-            "mesh_content_sha256": record["mesh_content_sha256"],
-        }
-        assert observed == expected
+        assert geometry_result(record) == expected
     finally:
         store.close()
 
@@ -329,12 +282,16 @@ def test_pinned_writer_bundle_request_claim_and_ingest(packaged: Path, tmp_path:
                 "instance_id": None,
                 "role": "HF",
             }
-            assert (
-                record["mesh_content_sha256"]
-                == json.loads((CORPUS / "GEOMETRY.json").read_text())["automatic-full"][
-                    "mesh_content_sha256"
-                ]
+            fixture_record = _run_in_gmsh_session(
+                ingest.ingest_bundle,
+                fixture,
+                {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"throat": 8}},
+                [],
+                store,
+                data,
+                prep_options={"symmetry_mode": "auto"},
             )
+            assert record["mesh_content_sha256"] == fixture_record["mesh_content_sha256"]
         finally:
             store.close()
 

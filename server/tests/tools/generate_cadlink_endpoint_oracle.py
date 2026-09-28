@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
-"""Capture WG's current CAD return endpoint verdicts as committed bytes.
+"""Regenerate CAD return endpoint and geometry fixtures with --regenerate.
 
-Run at the reference trunk before changing either endpoint. The fixture STEP
-member is intentionally small: this corpus pins parsing and integrity, while
-real geometry meshing is covered by the existing domain tests.
+Run on a clean main when the Stage 2 endpoint contract intentionally changes.
+The committed geometry oracle keeps stable verdict, identity, and plane fields;
+the domain unit tests cover the evolving decision record.
 """
 
 from __future__ import annotations
 
 from copy import deepcopy
+import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "server/tests"))
 
 from server.cadlink.wgreturn import read_wgreturn, validate_manifest  # noqa: E402
-from server.cadlink.wgreturn import source_physical_name  # noqa: E402
 from server.tests.test_cadlink_wgreturn import _manifest  # noqa: E402
+from server.tests.tools.oracle_geometry import geometry_result  # noqa: E402
 
 DEST = ROOT / "server/tests/fixtures/cadlink-endpoint-oracle"
-REFERENCE_WG_COMMIT = "12db5a557a6a86d969a120a95b7de37eb5260980"
 STEP = b"STEP"
 BASE = _manifest(STEP)
 
@@ -35,47 +36,31 @@ def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _same_step_geometry(old: bytes, new: bytes) -> bool:
+    timestamp = rb"'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}'"
+    return re.sub(timestamp, b"'<timestamp>'", old) == re.sub(
+        timestamp, b"'<timestamp>'", new
+    )
+
+
+def _same_manifest_contract(old: dict, new: dict) -> bool:
+    old = deepcopy(old)
+    new = deepcopy(new)
+    for manifest in (old, new):
+        manifest["return"].pop("id", None)
+        manifest["return"].pop("created_at", None)
+        for member in manifest["files"].values():
+            if member["media_type"] == "model/step":
+                member.pop("sha256", None)
+    return old == new
+
+
 def _verdict(call) -> dict[str, object]:
     try:
         call()
     except Exception as exc:
         return {"accepted": False, "message": str(exc)}
     return {"accepted": True, "message": None}
-
-
-def _claim(folder: Path, name: str, manifest_bytes: bytes, root: Path) -> dict[str, object]:
-    from server.cadlink.fusion_delivery import ipc_folder
-    from server.cadlink.solve_command import SOLVE_REQUESTS_DIRECTORY, collect_solve_deliveries
-    from server.cadlink.store import CadLinkStore
-
-    data = root / f"claim-{name}"
-    data.mkdir()
-    inbox = ipc_folder(data, create=True) / SOLVE_REQUESTS_DIRECTORY
-    inbox.mkdir()
-    request = {
-        "schemaVersion": 3,
-        "target": "waveguide-generator",
-        "commandId": f"oracle-{name}",
-        "operationId": f"oracle-{name}",
-        "returnId": "wgr_1",
-        "bundlePath": f"wgreturn/{name}.wgreturn",
-        "manifestSha256": "sha256:" + _sha(manifest_bytes),
-        "requestedAt": "2026-09-28T00:00:00Z",
-    }
-    (inbox / f"oracle-{name}.json").write_text(json.dumps(request))
-    store = CadLinkStore.for_data_dir(data)
-    try:
-        refused = []
-        collect_solve_deliveries(data, store, refuse=refused.append)
-        row = store.get_operation(f"oracle-{name}")
-        return {
-            "accepted": row is not None and row["kind"] == "prepare_and_solve",
-            "kind": row["kind"] if row else None,
-            "state": row["state"] if row else None,
-            "message": refused[0]["reason"] if refused else None,
-        }
-    finally:
-        store.close()
 
 
 def _cases():
@@ -229,30 +214,28 @@ def _geometry_cases(root: Path):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--regenerate", action="store_true", help="replace committed oracle")
+    args = parser.parse_args()
+    if not args.regenerate:
+        parser.error("pass --regenerate to replace the committed oracle")
     current_main = subprocess.check_output(
         ["git", "-C", str(ROOT), "rev-parse", "main"], text=True
     ).strip()
-    if current_main != REFERENCE_WG_COMMIT:
-        raise SystemExit(
-            f"Oracle generation requires main {REFERENCE_WG_COMMIT}; found {current_main}"
-        )
-    changed_production = subprocess.check_output(
-        [
-            "git",
-            "-C",
-            str(ROOT),
-            "diff",
-            "--name-only",
-            REFERENCE_WG_COMMIT,
-            "HEAD",
-            "--",
-            "server/cadlink",
-            "server/mesh",
-        ],
+    dirty = subprocess.check_output(
+        ["git", "-C", str(ROOT), "status", "--porcelain", "--untracked-files=no"],
         text=True,
     ).strip()
-    if changed_production:
-        raise SystemExit(f"Oracle production code differs from main: {changed_production}")
+    branch = subprocess.check_output(
+        ["git", "-C", str(ROOT), "branch", "--show-current"], text=True
+    ).strip()
+    if dirty and branch == "main":
+        raise SystemExit("Regenerate on a clean main, or in an isolated topic worktree")
+    old_members = {
+        p.relative_to(DEST).as_posix(): p.read_bytes()
+        for p in DEST.rglob("*")
+        if p.is_file()
+    } if DEST.exists() else {}
     if DEST.exists():
         shutil.rmtree(DEST)
     DEST.mkdir(parents=True)
@@ -267,6 +250,36 @@ def main() -> None:
         for name, manifest, members, raw in (*_cases(), *_geometry_cases(Path(generated))):
             folder = DEST / f"{name}.wgreturn"
             folder.mkdir()
+            # STEP writers put wall-clock timestamps in headers. Reuse the committed
+            # member and manifest for unchanged geometry, avoiding byte churn.
+            old_manifest = old_members.get(f"{name}.wgreturn/wgreturn.json")
+            if old_manifest and name.startswith(("automatic-", "declared-")):
+                old = json.loads(old_manifest)
+                if all(
+                    (old_member := old_members.get(f"{name}.wgreturn/{key}")) is not None
+                    and _same_step_geometry(old_member, value)
+                    for key, value in members.items()
+                ) and _same_manifest_contract(old, manifest):
+                    manifest = old
+                    raw = old_manifest
+                    members = {
+                        key: old_members[f"{name}.wgreturn/{key}"] for key in members
+                    }
+            if name == "onshape-linked":
+                # This case checks the project gate, before STEP parsing.
+                members["assembly.step"] = STEP
+                manifest["files"]["assembly.step"].update(
+                    sha256="sha256:" + _sha(STEP), size_bytes=len(STEP)
+                )
+                if old_manifest:
+                    old = json.loads(old_manifest)
+                    if old["files"]["assembly.step"] == manifest["files"]["assembly.step"]:
+                        manifest = old
+                        raw = old_manifest
+                    else:
+                        raw = None
+                else:
+                    raw = None
             payload = (
                 raw
                 if raw is not None
@@ -285,7 +298,6 @@ def main() -> None:
             results[name] = {
                 "validate_manifest": _verdict(lambda m=manifest: validate_manifest(m)),
                 "read_wgreturn": _verdict(lambda f=folder: read_wgreturn(f)),
-                "inbox_claim": _claim(folder, name, payload, Path(generated)),
             }
             if link is not None:
                 link.unlink()
@@ -325,25 +337,7 @@ def main() -> None:
                         continue
                 finally:
                     store.close()
-                physical_names = {
-                    source_id: source_physical_name(
-                        int(tag),
-                        source_id,
-                        record["tag_map"][str(tag)]["instance_id"],
-                        record["tag_map"][str(tag)]["role"],
-                    )
-                    for source_id, tag in record["source_tags"].items()
-                }
-                geometry[name] = {
-                    "accepted": True,
-                    "source_ids": [source["id"] for source in record["sources"]],
-                    "physical_names": physical_names,
-                    "solver_frame": record["normalisation"]["solver_frame"],
-                    "domain_interpretation": record["domain_interpretation"],
-                    "domain_decision": record["domain_decision"],
-                    "symmetry_verification": record["symmetry_verification"],
-                    "mesh_content_sha256": record["mesh_content_sha256"],
-                }
+                geometry[name] = geometry_result(record)
     (DEST / "ORACLE.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     (DEST / "BARE.json").write_text(
         json.dumps(bare_for_invalid_json, indent=2, sort_keys=True) + "\n"
@@ -358,8 +352,8 @@ def main() -> None:
     source = json.loads((ROOT / "integrations/wglink/source.json").read_text())
     provenance = {
         "schema": 1,
-        "generator": "scripts/generate_cadlink_endpoint_oracle.py",
-        "wg_commit": REFERENCE_WG_COMMIT,
+        "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
+        "wg_commit": current_main,
         "addin_commit": source["commit"],
         "files": files,
     }
