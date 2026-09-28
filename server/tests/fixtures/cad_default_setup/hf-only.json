@@ -1,5 +1,5 @@
 {
-  "about": "WG's default CAD setup for these sources and solver selection, as the frontend records it. The backend's default_setup.py and the frontend's first-time settings (buildCadProjectSetup on untouched stores) must both produce exactly this.",
+  "about": "WG's default CAD setup for these sources and solver selection, as the frontend records it. The backend's default_setup.py and the frontend's first-time settings (buildCadProjectSetup on untouched stores) must both produce exactly this. Regenerate with scripts/gen_cad_default_setup_fixtures.py --write.",
   "sources": [
     {
       "id": "source-hf",
@@ -43,7 +43,7 @@
       ],
       "frequency_spacing": "log",
       "mesh_validation_mode": "warn",
-      "num_frequencies": 24,
+      "num_frequencies": 32,
       "polar_config": {
         "angle_range": [
           0,

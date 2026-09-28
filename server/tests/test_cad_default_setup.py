@@ -35,7 +35,67 @@ def test_the_defaults_are_read_from_the_shared_file() -> None:
 
 
 def test_there_are_parity_fixtures() -> None:
-    assert len(FIXTURES) == 3
+    assert [path.stem for path in FIXTURES] == [
+        "hf-only", "three-way-lf-mf-hf", "three-way-shared-channel", "two-way-accurate",
+    ]
+
+
+def test_the_fixtures_are_what_the_generator_writes() -> None:
+    """A changed default is followed by `gen_cad_default_setup_fixtures.py --write`."""
+
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "gen_cad_default_setup_fixtures.py"), "--check"],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_the_lf_mf_hf_chain_crosses_at_the_role_defaults() -> None:
+    case = json.loads((FIXTURES[1]).read_text(encoding="utf-8"))
+    channels = default_setup({"sources": case["sources"]}, case["selection"]).geometry[
+        "combine"
+    ]["channels"]
+    assert channels["drive-lf"]["lp"]["fc_hz"] == 100
+    assert channels["drive-mf"]["hp"]["fc_hz"] == 100
+    assert channels["drive-mf"]["lp"]["fc_hz"] == 1000
+    assert channels["drive-hf"]["hp"]["fc_hz"] == 1000
+
+
+def test_the_shipped_defaults_file_passes_the_shape_check() -> None:
+    from server.cadlink.default_setup import _check_shape
+
+    _check_shape(json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8")))
+
+
+@pytest.mark.parametrize(
+    ("content", "problem"),
+    [
+        ("{ not json", "solve-defaults.json"),
+        ('{"sweep": {}}', "sweep.start_hz is missing"),
+        (None, "sweep.points has the wrong type"),
+    ],
+)
+def test_a_damaged_defaults_file_is_reported_as_damaged(
+    monkeypatch, tmp_path: Path, content: str | None, problem: str
+) -> None:
+    from server.cadlink import default_setup as module
+
+    if content is None:
+        data = json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8"))
+        data["sweep"]["points"] = "32"
+        content = json.dumps(data)
+    damaged = tmp_path / "solve-defaults.json"
+    damaged.write_text(content, encoding="utf-8")
+    monkeypatch.setattr(module, "SOLVE_DEFAULTS_PATH", damaged)
+    module.solve_defaults.cache_clear()
+    try:
+        with pytest.raises(module.SolveDefaultsDamaged, match=problem):
+            module.solve_defaults()
+    finally:
+        module.solve_defaults.cache_clear()
 
 
 @pytest.mark.parametrize("fixture", FIXTURES, ids=lambda path: path.stem)

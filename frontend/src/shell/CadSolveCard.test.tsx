@@ -304,6 +304,18 @@ describe('CAD Solve card run status', () => {
     expect(host.querySelector('.cad-solve-defaults')?.textContent).toBe(note);
   });
 
+  it('says "Using" WG\'s default settings while the run is going, or after it failed', async () => {
+    const note = "Solved with WG's default settings \u2014 change them in WG.";
+    publishOperation(operation({ message: note, setupDefaults: true }));
+    publishJobs([job()]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-defaults')?.textContent)
+      .toBe("Using WG's default settings \u2014 change them in WG.");
+    act(() => publishJobs([job({ status: 'error', error_message: 'solver crashed' })]));
+    expect(host.querySelector('.cad-solve-defaults')?.textContent)
+      .toBe("Using WG's default settings \u2014 change them in WG.");
+  });
+
   it('says nothing about defaults for a run solved with settings someone chose', async () => {
     publishOperation(operation({ setupDefaults: false }));
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);

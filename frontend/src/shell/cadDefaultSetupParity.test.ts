@@ -6,6 +6,7 @@ import { resetDocumentStore } from '../stores/document';
 import { DEFAULT_SOLVE_OPTIONS, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import sharedDefaults from '../../../shared/solve-defaults.json';
 import hfOnly from '../../../server/tests/fixtures/cad_default_setup/hf-only.json';
+import lfMfHf from '../../../server/tests/fixtures/cad_default_setup/three-way-lf-mf-hf.json';
 import threeWay from '../../../server/tests/fixtures/cad_default_setup/three-way-shared-channel.json';
 import twoWay from '../../../server/tests/fixtures/cad_default_setup/two-way-accurate.json';
 import { buildCadProjectSetup } from './cadSetupPublisher';
@@ -63,6 +64,7 @@ describe('WG default CAD setup parity', () => {
   it.each([
     ['hf-only', hfOnly],
     ['two-way-accurate', twoWay],
+    ['three-way-lf-mf-hf', lfMfHf],
     ['three-way-shared-channel', threeWay],
   ])('an untouched rail records the backend default setup: %s', (_name, raw) => {
     const fixture = raw as unknown as Fixture;

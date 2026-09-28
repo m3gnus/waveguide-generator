@@ -2,36 +2,29 @@
   "about": "WG's default CAD setup for these sources and solver selection, as the frontend records it. The backend's default_setup.py and the frontend's first-time settings (buildCadProjectSetup on untouched stores) must both produce exactly this. Regenerate with scripts/gen_cad_default_setup_fixtures.py --write.",
   "sources": [
     {
-      "id": "source-lf-a",
-      "role": "LF",
-      "required": true,
-      "suggested_resolution_mm": 15,
-      "default_drive_channel_id": "drive-lf"
-    },
-    {
-      "id": "source-lf-b",
-      "role": "LF",
-      "required": true,
-      "suggested_resolution_mm": 15,
-      "default_drive_channel_id": "drive-lf"
-    },
-    {
-      "id": "source-x",
-      "role": "source",
-      "required": false,
-      "suggested_resolution_mm": 6,
-      "default_drive_channel_id": "drive-x"
-    },
-    {
       "id": "source-hf",
       "role": "HF",
       "required": true,
-      "suggested_resolution_mm": 2.5,
+      "suggested_resolution_mm": 2,
       "default_drive_channel_id": "drive-hf"
+    },
+    {
+      "id": "source-mf",
+      "role": "MF",
+      "required": true,
+      "suggested_resolution_mm": 6,
+      "default_drive_channel_id": "drive-mf"
+    },
+    {
+      "id": "source-lf",
+      "role": "LF",
+      "required": true,
+      "suggested_resolution_mm": 14,
+      "default_drive_channel_id": "drive-lf"
     }
   ],
   "selection": {
-    "engine": "bempp",
+    "engine": "auto",
     "accuracy": "fast"
   },
   "setup": {
@@ -52,11 +45,7 @@
               "order": 4
             },
             "invert": null,
-            "lp": {
-              "family": "lr",
-              "fc_hz": 2714,
-              "order": 4
-            }
+            "lp": null
           },
           "drive-lf": {
             "delay": {
@@ -69,11 +58,11 @@
             "invert": null,
             "lp": {
               "family": "lr",
-              "fc_hz": 1000,
+              "fc_hz": 100,
               "order": 4
             }
           },
-          "drive-x": {
+          "drive-mf": {
             "delay": {
               "mode": "auto"
             },
@@ -82,59 +71,61 @@
             },
             "hp": {
               "family": "lr",
-              "fc_hz": 2714,
+              "fc_hz": 100,
               "order": 4
             },
             "invert": null,
-            "lp": null
+            "lp": {
+              "family": "lr",
+              "fc_hz": 1000,
+              "order": 4
+            }
           }
         },
         "members": [
           "drive-lf",
-          "drive-hf",
-          "drive-x"
+          "drive-mf",
+          "drive-hf"
         ],
-        "reference": "drive-x"
+        "reference": "drive-hf"
       },
       "drive_channels": [
-        {
-          "id": "drive-lf",
-          "motion": "normal",
-          "source_ids": [
-            "source-lf-a",
-            "source-lf-b"
-          ]
-        },
-        {
-          "id": "drive-x",
-          "motion": "normal",
-          "source_ids": [
-            "source-x"
-          ]
-        },
         {
           "id": "drive-hf",
           "motion": "normal",
           "source_ids": [
             "source-hf"
           ]
+        },
+        {
+          "id": "drive-mf",
+          "motion": "normal",
+          "source_ids": [
+            "source-mf"
+          ]
+        },
+        {
+          "id": "drive-lf",
+          "motion": "normal",
+          "source_ids": [
+            "source-lf"
+          ]
         }
       ],
       "exterior_only": false,
       "mesh": {
-        "rigid_size_mm": 15,
+        "rigid_size_mm": 14,
         "source_size_mm": {
-          "source-hf": 2.5,
-          "source-lf-a": 15,
-          "source-lf-b": 15,
-          "source-x": 6
+          "source-hf": 2,
+          "source-lf": 14,
+          "source-mf": 6
         },
-        "transition_mm": 15
+        "transition_mm": 14
       },
       "skipped_source_ids": []
     },
     "options": {
-      "engine": "bempp",
+      "engine": "auto",
       "frequency_range": [
         50,
         20000

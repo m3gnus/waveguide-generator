@@ -301,6 +301,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       operationId={cadOperationId}
       engineSource="job"
       resolvedEngine={job.solve_options.engine}
+      jobStatus={job.status}
     />}
     {running ? <>
       <p>{metrics(job, now)}</p>

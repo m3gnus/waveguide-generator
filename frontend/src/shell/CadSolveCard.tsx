@@ -10,6 +10,7 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
 import { OnScreenSolveStatus } from './CadOperationsSection';
 import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
+import { defaultSettingsNote } from './CadSolveInputs';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { recordDomainDecision } from '../api/domainDecision';
 import { pluralized } from './cadTime';
@@ -153,6 +154,7 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
   const latest = newest(Object.values(operations).filter((operation) => operation.kind === 'prepare_and_solve'
     && operation.snapshot?.manifestSha256 === record.manifest_sha256));
   if (!latest) return null;
+  const latestJob = latest.jobId ? jobs.find((item) => item.id === latest.jobId) : undefined;
   let tone: 'ok' | 'info' | 'warn' = 'info';
   let body: ReactNode;
   if (latest.state === 'rejected') {
@@ -201,8 +203,10 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
     <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>
     {/* No settings were recorded for this model, so WG solved it with its
         defaults; the backend's own words say so and where to change them. */}
-    {latest.state === 'accepted' && latest.setupDefaults && latest.message
-      && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">{latest.message}</p>}
+    {latest.state === 'accepted' && latest.setupDefaults
+      && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">
+        {defaultSettingsNote(latest.message, latestJob?.status === 'complete')}
+      </p>}
   </>;
 }
 

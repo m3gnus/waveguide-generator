@@ -19,6 +19,15 @@ function message(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
+/** What a run made with WG's default settings says about them: the
+ * backend's words once it has solved, "Using ..." before that or after a
+ * failure, so nothing claims a solve that has not happened. */
+export function defaultSettingsNote(message: string | null, solved: boolean): string {
+  return solved && message ? message : USING_DEFAULT_SETTINGS;
+}
+
+export const USING_DEFAULT_SETTINGS = "Using WG's default settings \u2014 change them in WG.";
+
 function setupEngine(detail: SetupRevisionDetail | null): string | null {
   const setup = detail?.setup as { options?: { engine?: unknown } } | undefined;
   const engine = setup?.options?.engine;
@@ -33,6 +42,9 @@ export interface CadSolveInputsProps {
   resolvedEngine?: string | null;
   /** Pending operations bind the setup request; historical jobs name what ran. */
   engineSource: 'setup-revision' | 'job';
+  /** The run's own status, when this is a run's detail: "Solved with WG's
+   * default settings" is said only of a run that completed. */
+  jobStatus?: string;
   className?: string;
 }
 
@@ -42,6 +54,7 @@ export function CadSolveInputs({
   operation: suppliedOperation,
   resolvedEngine,
   engineSource,
+  jobStatus,
   className,
 }: CadSolveInputsProps) {
   const [operationLoad, setOperationLoad] = useState<LoadState<CadOperationDetail>>(EMPTY_LOAD);
@@ -110,8 +123,10 @@ export function CadSolveInputs({
       <div><dt>Last moved</dt><dd>{operation?.updatedAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
     </dl>
     {/* Solved with WG's default settings: said plainly, not as a report. */}
-    {operation?.setupDefaults && operation.message
-      && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">{operation.message}</p>}
+    {operation?.setupDefaults
+      && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">
+        {defaultSettingsNote(operation.message, jobStatus === 'complete')}
+      </p>}
     {/* Verbatim, because it is evidence: whatever the adapter or the
         preparation reported is what a second report has to be compared with. */}
     {operation?.message && !operation.setupDefaults

@@ -1493,6 +1493,31 @@ class CadLinkStore:
             ).fetchone()
         return dict(row)
 
+    def record_project_setup_if_absent(
+        self, lineage_id: str, inventory_sha256: str, revision_id: str
+    ) -> dict[str, Any]:
+        """Make a revision a project's setup only if it has none; return the one that stands.
+
+        One transaction, so a person's setup recorded at any moment is never
+        replaced: WG's default settings are only ever a first-time fallback.
+        """
+
+        if not lineage_id or not inventory_sha256 or not revision_id:
+            raise ValueError("a project setup names a lineage, an inventory and a revision")
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            conn.execute(
+                "INSERT INTO cad_project_setups (lineage_id, inventory_sha256, revision_id, "
+                "updated_at) VALUES (?, ?, ?, ?) ON CONFLICT (lineage_id, inventory_sha256) "
+                "DO NOTHING",
+                (lineage_id, inventory_sha256, revision_id, utc_now()),
+            )
+            row = conn.execute(
+                "SELECT * FROM cad_project_setups WHERE lineage_id = ? AND inventory_sha256 = ?",
+                (lineage_id, inventory_sha256),
+            ).fetchone()
+        return dict(row)
+
     def get_project_setup(
         self, lineage_id: str, inventory_sha256: str
     ) -> dict[str, Any] | None:

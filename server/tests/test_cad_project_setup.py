@@ -356,7 +356,7 @@ def test_a_model_with_no_recorded_setup_is_solved_with_wg_defaults_and_remembers
     assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 9.0
 
 
-def test_defaults_never_replace_settings_recorded_while_they_were_prepared(
+def test_settings_recorded_while_defaults_were_prepared_win_for_this_solve_too(
     harness: Harness,
 ) -> None:
     b_design, b_lineage = _project(harness, 60.0)
@@ -367,10 +367,69 @@ def test_defaults_never_replace_settings_recorded_while_they_were_prepared(
 
     summary = harness.prepare("cmd-b")
 
-    assert (summary["state"], summary["setupDefaults"]) == ("accepted", True)
+    assert (summary["state"], summary["setupDefaults"]) == ("accepted", False)
+    assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 9.0
     sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
     recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
-    assert recorded["revision_id"] != summary["setupRevisionId"]
+    assert recorded["revision_id"] == summary["setupRevisionId"]
+
+
+def test_a_user_setup_recorded_at_the_last_moment_is_never_overwritten(
+    harness: Harness, monkeypatch
+) -> None:
+    """The defaults' write is one conditional insert: no check-then-write window."""
+
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+    real = harness.store.record_project_setup_if_absent
+    raced: list[str] = []
+
+    def user_put_first(lineage_id: str, inventory: str, revision_id: str):
+        # The user's PUT lands between everything WG checked and its write.
+        raced.append(_record_setup(harness, b_lineage, _setup(rigid=9.0))["revisionId"])
+        return real(lineage_id, inventory, revision_id)
+
+    monkeypatch.setattr(harness.store, "record_project_setup_if_absent", user_put_first)
+
+    summary = harness.prepare("cmd-b")
+
+    sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
+    recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
+    assert recorded["revision_id"] == raced[0]
+    # And this solve used theirs, not WG's defaults.
+    assert (summary["state"], summary["setupDefaults"]) == ("accepted", False)
+    assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 9.0
+
+
+def test_a_damaged_defaults_file_is_wgs_fault_not_the_users(
+    harness: Harness, monkeypatch, tmp_path: Path, caplog
+) -> None:
+    import logging
+
+    from server.cadlink import default_setup as defaults_module
+
+    damaged = tmp_path / "solve-defaults.json"
+    damaged.write_text("{ not json", encoding="utf-8")
+    monkeypatch.setattr(defaults_module, "SOLVE_DEFAULTS_PATH", damaged)
+    defaults_module.solve_defaults.cache_clear()
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+
+    try:
+        with caplog.at_level(logging.ERROR, logger="server.cadlink.preparation"):
+            summary = harness.prepare("cmd-b")
+    finally:
+        defaults_module.solve_defaults.cache_clear()
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
+    assert summary["message"] == (
+        "WG's default settings file is damaged \u2014 reinstall WG or choose settings in WG."
+    )
+    assert "Expecting" not in summary["message"]
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+    assert harness.submitted == [] and harness.ingest.calls == []
 
 
 def test_a_model_the_defaults_cannot_mesh_waits_naming_what_is_missing(harness: Harness) -> None:

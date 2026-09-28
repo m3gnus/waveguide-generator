@@ -192,10 +192,25 @@ describe('CAD solve input identities', () => {
       })}
       resolvedEngine="metal"
       engineSource="job"
+      jobStatus="complete"
     />));
 
     expect(host.querySelector('[data-setup-defaults="true"]')?.textContent).toBe(note);
     // Said once, as a statement, not again as a verbatim report.
     expect(host.querySelector('.cad-solve-inputs-reported')).toBeNull();
+
+    // A run that has not completed never claims to have solved.
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({
+        setupRevisionId: null, state: 'accepted', stage: 'submitted', reason: null,
+        jobId: 'job-1', message: note, setupDefaults: true,
+      })}
+      resolvedEngine="metal"
+      engineSource="job"
+      jobStatus="error"
+    />));
+    expect(host.querySelector('[data-setup-defaults="true"]')?.textContent)
+      .toBe("Using WG's default settings \u2014 change them in WG.");
   });
 });

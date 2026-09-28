@@ -329,7 +329,7 @@ def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: 
     request = harness.submitted[0]
     options = request.model_dump(mode="json")["options"]
     assert options["frequency_range"] == [50.0, 20000.0]
-    assert options["num_frequencies"] == 24
+    assert options["num_frequencies"] == 32
     assert options["frequency_spacing"] == "log"
     assert options["engine"] == "auto" and options["accuracy"] == "fast"
     assert options["polar_config"]["angle_range"] == [0.0, 180.0, 37]

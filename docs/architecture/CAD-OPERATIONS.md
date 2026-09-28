@@ -328,9 +328,13 @@ whatever project is open. Nothing on the backend reads the live UI:
   drive (no driver is invented), and the default crossover chain for two or more
   channels. The setup is a revision marked `origin: "wg_defaults"`; it is bound to the
   operation and, once the ingest has filed the snapshot under a project, recorded as that
-  project's setup for its sources unless the user recorded one meanwhile, so the next
-  solve reuses it. The accepted outcome says so (`setup_defaults`, and a message the solve
-  card and run details show). What the defaults cannot supply -- a source whose return
+  project's setup for its sources, so the next solve reuses it. The write is one
+  conditional insert (`record_project_setup_if_absent`): a setup the user recorded at any
+  moment is never replaced, and when one stands the operation is prepared again with it.
+  The accepted outcome says so (`setup_defaults`); the solve card and run details say
+  "Using WG's default settings" until the run completes and "Solved with ..." after. A
+  damaged `shared/solve-defaults.json` is logged as an error and the model waits with a
+  message saying so. What the defaults cannot supply -- a source whose return
   suggests no mesh size -- is still `setup_required`, with a message naming it. A named
   revision that is gone waits too; it is never replaced by the defaults.
 - **The polar grid** of the request is widened to what the ingestion derived for the

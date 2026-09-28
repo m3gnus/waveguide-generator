@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -70,7 +70,12 @@ from .operations import (
     TERMINAL_STATES,
     canonical_json,
 )
-from .default_setup import DEFAULT_SETTINGS_NOTE, default_setup
+from .default_setup import (
+    DAMAGED_DEFAULTS_MESSAGE,
+    DEFAULT_SETTINGS_NOTE,
+    SolveDefaultsDamaged,
+    default_setup,
+)
 from .project_setup import (
     inventory_sha256,
     project_setup,
@@ -962,6 +967,14 @@ def _prepare_sync(
             # A first-time model -- no settings recorded for its project and
             # these sources: WG's default settings, never another project's.
             loaded = _default_setup(ctx, retained)
+    except SolveDefaultsDamaged as exc:
+        # WG's own packaging, not the user's model: logged as the fault it
+        # is, and the user is told what to do rather than shown a parse error.
+        logger.error("WG's default solve settings cannot be used: %s", exc)
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="setup_required",
+            message=DAMAGED_DEFAULTS_MESSAGE,
+        )
     except _DefaultsUnavailable as exc:
         snapshot = _snapshot_record(store, retained)
         _advance(ctx, operation_id, generation, snapshot=snapshot)
@@ -1086,7 +1099,19 @@ def _prepare_sync(
             )
 
     if setup.origin == DEFAULTS_ORIGIN:
-        _remember_default_setup(store, retained_manifest, record, revision_id)
+        standing = _remember_default_setup(store, retained_manifest, record, revision_id)
+        if standing is not None:
+            # The user recorded settings for this model while WG prepared it
+            # with the defaults: theirs win, for this solve too.
+            logger.info(
+                "CAD operation %s, attempt %d: settings were recorded for this model "
+                "meanwhile; preparing with them instead of WG's defaults.",
+                operation_id, generation,
+            )
+            _advance(ctx, operation_id, generation, setup_revision_id=standing)
+            return _prepare_sync(
+                ctx, operation_id, generation, replace(request, setup_revision_id=standing)
+            )
 
     blocking = [
         str(finding.get("id"))
@@ -1219,6 +1244,8 @@ def _default_setup(
     manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
     try:
         setup = default_setup(manifest, solver_selection(ctx.store))
+    except SolveDefaultsDamaged:
+        raise
     except ValueError as exc:
         raise _DefaultsUnavailable(str(exc)) from exc
     revision = ctx.store.create_setup_revision(setup_content(setup), setup_digest(setup))
@@ -1230,13 +1257,17 @@ def _remember_default_setup(
     manifest: Mapping[str, Any],
     record: Mapping[str, Any],
     revision_id: str,
-) -> None:
+) -> str | None:
     """Make the defaults a first-time model was solved with its project's setup.
 
     Once the ingest has filed the snapshot under a project, so the next solve
     of the same sources reuses them and the user changes them in WG like any
     other settings. Never over settings the project has meanwhile: a person's
-    own choice always wins over WG's defaults.
+    own choice always wins over WG's defaults. The write is one conditional
+    insert, so a setup the user records at any moment is never replaced.
+
+    Returns the revision to prepare with instead when the project already has
+    its own settings (with the engine selected in WG), else None.
     """
 
     project = record.get("project")
@@ -1244,13 +1275,21 @@ def _remember_default_setup(
         str(project.get("lineage_id") or "").strip() if isinstance(project, Mapping) else ""
     )
     if not lineage_id:
-        return
-    inventory = inventory_sha256(
-        [source for source in manifest.get("sources") or [] if isinstance(source, Mapping)]
-    )
-    if store.get_project_setup(lineage_id, inventory) is not None:
-        return
-    store.record_project_setup(lineage_id, inventory, revision_id)
+        return None
+    sources = [source for source in manifest.get("sources") or [] if isinstance(source, Mapping)]
+    inventory = inventory_sha256(sources)
+    standing = store.record_project_setup_if_absent(lineage_id, inventory, revision_id)
+    if standing["revision_id"] == revision_id or _is_default_setup(store, standing["revision_id"]):
+        # Ours, or WG's defaults recorded before (with another engine, say):
+        # nothing a person chose, so this solve goes on as it is.
+        return None
+    try:
+        theirs = project_setup(store, lineage_id, sources)
+    except ValueError:
+        # Their settings cannot be used; this solve keeps the defaults, and
+        # their next one waits with the reason (the ValueError branch).
+        return None
+    return theirs[1] if theirs is not None and theirs[1] != revision_id else None
 
 
 async def _submit(

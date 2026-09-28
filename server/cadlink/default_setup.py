@@ -27,16 +27,86 @@ from .roles import canonical_source_role
 from .setup import DEFAULTS_ORIGIN, CadSolveSetup, validate_setup
 
 
+# Beside the code in the same app layer, bundled or checked out, so
+# ``__file__`` finds it wherever the server itself was loaded from.
 SOLVE_DEFAULTS_PATH = Path(__file__).resolve().parents[2] / "shared" / "solve-defaults.json"
-#: What the solve card and the run details say about a solve made with them.
+#: What the run details say about a completed solve made with them. The
+#: solve card says "Solved with" only once the run has completed, and
+#: "Using WG's default settings" until then (CadSolveCard.tsx).
 DEFAULT_SETTINGS_NOTE = "Solved with WG's default settings — change them in WG."
+#: What a first-time model waits with when the shipped file cannot be read:
+#: WG's packaging is at fault, not anything the user did.
+DAMAGED_DEFAULTS_MESSAGE = (
+    "WG's default settings file is damaged — reinstall WG or choose settings in WG."
+)
+
+
+class SolveDefaultsDamaged(RuntimeError):
+    """``shared/solve-defaults.json`` is missing, unreadable or not the expected shape."""
+
+
+_NUMBER = (int, float)
+# Every value default_setup reads, with the type it must have.
+_SHAPE: dict[tuple[str, ...], type | tuple[type, ...]] = {
+    ("sweep", "start_hz"): _NUMBER,
+    ("sweep", "end_hz"): _NUMBER,
+    ("sweep", "points"): int,
+    ("sweep", "spacing"): str,
+    ("directivity", "angle_start_deg"): _NUMBER,
+    ("directivity", "angle_end_deg"): _NUMBER,
+    ("directivity", "angle_step_deg"): _NUMBER,
+    ("directivity", "distance_m"): _NUMBER,
+    ("directivity", "norm_angle_deg"): _NUMBER,
+    ("directivity", "diagonal_inclination_deg"): _NUMBER,
+    ("directivity", "enabled_axes"): list,
+    ("directivity", "observation_origin"): str,
+    ("directivity", "spherical_sampling"): bool,
+    ("directivity", "field_plane"): bool,
+    ("solver", "engine"): str,
+    ("solver", "accuracy"): str,
+    ("solver", "solver_mode"): str,
+    ("solver", "symmetry"): str,
+    ("solver", "mesh_validation_mode"): str,
+    ("solver", "verbose"): bool,
+    ("ground_plane", "enabled"): bool,
+    ("ground_plane", "axis"): str,
+    ("ground_plane", "height_m"): _NUMBER,
+    ("cad", "preparation_symmetry_mode"): str,
+    ("cad", "exterior_only"): bool,
+    ("cad", "crossover", "family"): str,
+    ("cad", "crossover", "order"): int,
+    ("cad", "crossover", "band_roles"): list,
+    ("cad", "crossover", "role_crossovers_hz"): list,
+}
+
+
+def _check_shape(data: Any) -> None:
+    for path, kind in _SHAPE.items():
+        value = data
+        for key in path:
+            if not isinstance(value, dict) or key not in value:
+                raise SolveDefaultsDamaged(f"{'.'.join(path)} is missing")
+            value = value[key]
+        if not isinstance(value, kind) or (kind is not bool and isinstance(value, bool)):
+            raise SolveDefaultsDamaged(f"{'.'.join(path)} has the wrong type")
+    for item in data["cad"]["crossover"]["role_crossovers_hz"]:
+        if not isinstance(item, dict) or not {"lower", "upper", "hz"} <= set(item):
+            raise SolveDefaultsDamaged("cad.crossover.role_crossovers_hz has a malformed entry")
 
 
 @lru_cache(maxsize=1)
 def solve_defaults() -> dict[str, Any]:
-    """The shared default solve settings (``shared/solve-defaults.json``)."""
+    """The shared default solve settings (``shared/solve-defaults.json``), shape-checked.
 
-    return json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    Raises ``SolveDefaultsDamaged`` when the shipped file cannot be used.
+    """
+
+    try:
+        data = json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise SolveDefaultsDamaged(f"{SOLVE_DEFAULTS_PATH.name}: {exc}") from exc
+    _check_shape(data)
+    return data
 
 
 def _polar_config(directivity: Mapping[str, Any]) -> dict[str, Any]:
@@ -166,7 +236,8 @@ def default_setup(
 ) -> CadSolveSetup:
     """WG's default setup for a snapshot, with the engine and accuracy selected in WG.
 
-    Raises ``ValueError`` naming what the defaults cannot supply.
+    Raises ``ValueError`` naming what the defaults cannot supply for this
+    model, and ``SolveDefaultsDamaged`` when the shipped file cannot be used.
     """
 
     defaults = solve_defaults()
@@ -231,7 +302,9 @@ def default_setup(
 
 
 __all__ = [
+    "DAMAGED_DEFAULTS_MESSAGE",
     "DEFAULT_SETTINGS_NOTE",
+    "SolveDefaultsDamaged",
     "SOLVE_DEFAULTS_PATH",
     "default_setup",
     "solve_defaults",
