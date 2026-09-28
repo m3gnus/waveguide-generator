@@ -97,16 +97,56 @@ _SIDE_WORDS = {
     "left": "left",
     "l": "left",
     "lh": "left",
+    "lt": "left",
+    "lft": "left",
     "right": "right",
     "r": "right",
     "rh": "right",
+    "rt": "right",
+    "rgt": "right",
 }
+#: Driver words a glued "left"/"right" may follow or precede ("mfleft",
+#: "wooferright", "leftwoofer"): only these, so "upright", "bright" and
+#: "leftover" are not sides.
+_DRIVER_WORDS = frozenset(
+    {
+        "lf", "mf", "hf", "bass", "mid", "midrange", "sub", "subwoofer", "woofer",
+        "tweeter", "driver", "horn", "port", "cone", "dome", "cd", "top", "speaker",
+        "spk", "ch", "channel", "src", "source",
+    }
+)
 _WORD = re.compile(r"[a-z0-9]+")
-#: Word boundaries inside one name: "wooferLeft" (lower to upper), "MFLeft"
-#: (an acronym before a capitalised word), "woofer2Left"/"Left2" (a digit
-#: against a word). An all-capital run is one word ("MFL", a generated id such
-#: as "wgs-L4908B04CKKRTSFQV4KC"), so a stray capital L or R in it is not a side.
-_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z0-9])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[0-9])(?=[A-Za-z])")
+#: Word boundaries inside one name: lower to upper ("wooferLeft"), an acronym
+#: before a capitalised word ("MFLeft", "LEDRing"), and letters against digits
+#: ("woofer_L1", "Left2").
+_BOUNDARY = re.compile(
+    r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])"
+)
+#: Source ids WG's add-in mints (``wglink_send._base32_identity``: "wgs-" and
+#: 20 Crockford base32 characters, random or hashed from the throat's
+#: instance). Their letters carry no meaning, so they are never read as names.
+_MINTED_SOURCE_ID = re.compile(r"^wgs-[0-9A-HJKMNP-TV-Z]{20}$")
+
+
+def _word_side(word: str) -> str | None:
+    if word in _SIDE_WORDS:
+        return _SIDE_WORDS[word]
+    for side in ("left", "right"):
+        if word.endswith(side) and word[: -len(side)] in _DRIVER_WORDS:
+            return side
+        if word.startswith(side) and word[len(side):] in _DRIVER_WORDS:
+            return side
+    return None
+
+
+def side_of_name(name: str) -> str | None:
+    """``left`` or ``right`` when a user-given name identifies one side, else None."""
+
+    for word in _WORD.findall(_BOUNDARY.sub(" ", str(name)).casefold()):
+        side = _word_side(word)
+        if side is not None:
+            return side
+    return None
 
 
 def geometry_cut_planes(observations: Observations | None) -> list[str]:
@@ -134,23 +174,25 @@ def geometry_cut_planes(observations: Observations | None) -> list[str]:
 
 
 def side_of_source(source: Mapping[str, Any]) -> str | None:
-    """``left`` or ``right`` when a source's own names identify it with one side."""
+    """``left`` or ``right`` when a source's user-given names identify it with one side.
+
+    Read: the source's id unless WG's add-in minted it, its name, and the
+    paint labels and shell names that select it. Not read: the role (WG's own
+    vocabulary) and a minted id (random letters).
+    """
 
     selectors = source.get("selectors") if isinstance(source.get("selectors"), Mapping) else {}
+    source_id = str(source.get("id") or "")
     names = [
-        str(source.get("id") or ""),
-        str(source.get("role") or ""),
+        "" if _MINTED_SOURCE_ID.match(source_id) else source_id,
         str(source.get("name") or ""),
         *(str(item) for item in selectors.get("appearance_labels") or ()),
         *(str(item) for item in selectors.get("shell_names") or ()),
     ]
     for name in names:
-        # "Woofer_L", "HF-right", "LeftWoofer", "MFLeft", "TweeterR": words,
-        # split at separators and at case and digit boundaries.
-        spaced = _BOUNDARY.sub(" ", name).casefold()
-        for word in _WORD.findall(spaced):
-            if word in _SIDE_WORDS:
-                return _SIDE_WORDS[word]
+        side = side_of_name(name)
+        if side is not None:
+            return side
     return None
 
 
@@ -416,5 +458,6 @@ __all__ = [
     "assess_cut_recovery",
     "geometry_cut_planes",
     "recovery_options",
+    "side_of_name",
     "side_of_source",
 ]

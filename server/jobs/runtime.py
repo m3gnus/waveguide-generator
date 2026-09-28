@@ -642,6 +642,42 @@ def _imported_job_decision_refusal(
     return DOMAIN_DECISION_MISMATCH, decision_mismatch_message(problem)
 
 
+SIDE_IDENTIFIED_SOURCE_CODE = "imported_side_identified_source"
+
+
+def _imported_side_identity_refusal(record: Mapping[str, Any] | None) -> tuple[str, str] | None:
+    """Refuse mirroring a model already cut in CAD that has a left/right-named source.
+
+    Ingest refuses it (``cut_recovery.side_of_source``); this re-reads the
+    stored record at every plan, submission and execution, so a record
+    prepared before that check -- or under a looser reading of the names --
+    cannot bypass it. Planes WG cut itself are not judged: its mirror test is
+    per source identity, so no source is mirrored onto another there.
+    """
+
+    if record is None:
+        return None
+    planes = set(imported_domain_planes(record))
+    symmetry = record.get("symmetry")
+    wg_cut = set((symmetry or {}).get("cut_planes") or []) if isinstance(symmetry, Mapping) else set()
+    precut = sorted(planes - wg_cut)
+    if not precut:
+        return None
+    from server.cadlink.cut_recovery import side_of_source
+
+    for source in record.get("sources") or ():
+        side = side_of_source(source) if isinstance(source, Mapping) else None
+        if side is not None:
+            return (
+                SIDE_IDENTIFIED_SOURCE_CODE,
+                f"WG will not solve this CAD return mirrored on {', '.join(precut)}: source "
+                f"{source.get('id')} is identified as the {side} one, so its mirror image would "
+                "stand in for the other side's own source. Send the whole model, or rename the "
+                "source if it is not one side's own driver, and send it again.",
+            )
+    return None
+
+
 def _imported_open_half_refusal(
     record: Mapping[str, Any] | None, msh_text: str | None = None
 ) -> tuple[str, str] | None:
@@ -1246,6 +1282,9 @@ def _imported_request_refusal(
     mismatch = _imported_decision_refusal(record)
     if mismatch is not None:
         return mismatch
+    sided = _imported_side_identity_refusal(record)
+    if sided is not None:
+        return sided
     open_half = _imported_open_half_refusal(record, msh_text)
     if open_half is not None:
         return open_half
@@ -3560,6 +3599,7 @@ class JobRuntime:
                 open_half = (
                     _imported_decision_refusal(imported_record)
                     or _imported_job_decision_refusal(task_metadata, imported_record)
+                    or _imported_side_identity_refusal(imported_record)
                     or _imported_open_half_refusal(imported_record, job_msh_text)
                 )
                 if open_half is not None:

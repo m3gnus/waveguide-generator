@@ -959,6 +959,34 @@ def _reduced_bundle(
     return bundle
 
 
+def test_a_declared_linked_half_with_a_minted_source_id_ending_in_r_is_mirrored(
+    tmp_path: Path,
+) -> None:
+    """Re-review S3-2c, finding 1: a WG-minted id's letters are never read as a side.
+
+    ``wglink_send._throat_source_identity`` mints a linked throat's id from its
+    instance, so an id whose last character happens to be R after a digit
+    would refuse that instance every time if it were read as "right".
+    """
+
+    pytest.importorskip("gmsh")
+    minted = "wgs-QBQ26C6122140K1H055R"
+    bundle = _reduced_bundle(tmp_path, "half")
+    manifest_path = bundle / "wgreturn.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["sources"][0]["id"] = minted
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    data_dir = tmp_path / "data"
+    record = _run_in_gmsh_session(
+        ingest_bundle, bundle, {**_SIZES, "source_size_mm": {minted: 8}}, [],
+        CadLinkStore(data_dir / "cadlink.db"), data_dir,
+        prep_options={"symmetry_mode": "auto"},
+        expected_design_id="wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+    )
+    assert "y0" in record["symmetry"]["domain_planes"]
+    assert list(record["source_tags"]) == [minted]
+
+
 def test_a_declared_half_is_mirrored_rather_than_cut_again(tmp_path: Path) -> None:
     """The half the author cut is the domain, and WG says so rather than guessing.
 

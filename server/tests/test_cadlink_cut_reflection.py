@@ -538,7 +538,7 @@ def test_a_clean_negative_cut_is_recoverable_by_reflection() -> None:
         ({"id": "LeftWoofer"}, "left"),
         ({"id": "s1", "selectors": {"appearance_labels": ["HF_R"]}}, "right"),
         ({"id": "s2", "selectors": {"shell_names": ["Right tweeter"]}}, "right"),
-        ({"id": "wgs-L4908B04CKKRTSFQV4KC", "role": "LF"}, None),
+        ({"id": "wgs-M4908B04CKKRTSFQV4KC", "role": "LF"}, None),
         ({"id": "throat", "role": "HF", "selectors": {"appearance_labels": ["LF", "MF"]}}, None),
         # Acronym and digit boundaries (review S3-2b, finding 1).
         ({"id": "MFLeft"}, "left"),
@@ -562,6 +562,35 @@ def test_a_clean_negative_cut_is_recoverable_by_reflection() -> None:
         ({"id": "HFr"}, None),
         ({"id": "wgs-R4908B04CKKRTSFQV4KC"}, None),
         ({"id": "Mid 2"}, None),
+        # Re-review S3-2c: minted ids are never names; more boundaries and words.
+        ({"id": "wgs-QBQ26C6122140K1H055R"}, None),
+        ({"id": "wgs-QBQ26C6122140K1H0R55"}, None),
+        ({"id": "wgs-QBQ26C6122140K1H0L55"}, "left"),  # L is not Crockford: a user's id
+        ({"id": "wgs-QBQ26C6122140K1H055R", "selectors": {"appearance_labels": ["HF_R"]}}, "right"),
+        ({"id": "woofer_L1"}, "left"),
+        ({"id": "wooferL2"}, "left"),
+        ({"id": "L1"}, "left"),
+        ({"id": "R1"}, "right"),
+        ({"id": "MFRIGHT"}, "right"),
+        ({"id": "Woofer_Rt"}, "right"),
+        ({"id": "MF_Lft"}, "left"),
+        ({"id": "mfleft"}, "left"),
+        ({"id": "wooferleft"}, "left"),
+        ({"id": "leftwoofer"}, "left"),
+        ({"id": "Rgt tweeter"}, "right"),
+        ({"id": "Leftover"}, None),
+        ({"id": "Lateral"}, None),
+        ({"id": "Rim"}, None),
+        ({"id": "Lf"}, None),
+        ({"id": "LR"}, None),
+        ({"id": "TL"}, None),
+        ({"id": "Rhorn"}, None),
+        ({"id": "ROUND"}, None),
+        ({"id": "LEDRing"}, None),
+        ({"id": "upright"}, None),
+        ({"id": "Bright"}, None),
+        ({"id": "source-hf"}, None),
+        ({"id": "s1", "role": "LF", "name": "Rear port"}, None),
     ],
 )
 def test_a_source_is_sided_only_by_its_own_words(source: dict[str, Any], side: str | None) -> None:
@@ -816,3 +845,29 @@ def test_a_declared_half_with_a_side_identified_source_is_refused(tmp_path: Path
     # Control: the same declaration of an unsided source is mirrored.
     declared = _ingest(bundle("declared-woofer", "woofer"), tmp_path / "data-control")
     assert declared["symmetry"]["domain_planes"] == ["x0"]
+
+
+def test_a_stored_record_mirroring_a_side_identified_source_is_refused_at_plan_and_submission(
+    tmp_path: Path,
+) -> None:
+    """Re-review S3-2c, note 3: a record prepared before the check cannot bypass it."""
+
+    import json
+
+    from server.jobs.runtime import SIDE_IDENTIFIED_SOURCE_CODE, _imported_side_identity_refusal
+
+    record = _ingest(_box_bundle(tmp_path, "stored", sources=["woofer"]), tmp_path / "data")
+    assert record["symmetry"]["domain_planes"] == ["x0"]
+    assert _imported_side_identity_refusal(record) is None
+    older = json.loads(json.dumps(record))
+    older["sources"][0]["selectors"] = {**older["sources"][0]["selectors"], "appearance_labels": ["Woofer_Rt"]}
+    refusal = _imported_side_identity_refusal(older)
+    assert refusal is not None and refusal[0] == SIDE_IDENTIFIED_SOURCE_CODE
+    assert "identified as the right one" in refusal[1]
+    plan, outcomes = _solve_verdicts(older)
+    assert plan["code"] == SIDE_IDENTIFIED_SOURCE_CODE
+    assert set(outcomes.values()) == {SIDE_IDENTIFIED_SOURCE_CODE}
+    # A plane WG cut itself is not judged: its mirror test is per identity.
+    whole = json.loads(json.dumps(older))
+    whole["symmetry"]["cut_planes"] = list(whole["symmetry"]["domain_planes"])
+    assert _imported_side_identity_refusal(whole) is None
