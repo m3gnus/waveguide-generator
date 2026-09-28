@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -109,14 +110,20 @@ def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
     assert actual == provenance["files"]
     oracle = json.loads((CORPUS / "ORACLE.json").read_text())
     bare = json.loads((CORPUS / "BARE.json").read_text())
-    assert len(oracle) == 30
+    disk_setup = json.loads((CORPUS / "DISK_SETUP.json").read_text())
+    assert len(oracle) == 37
     for name, expected in oracle.items():
         folder = CORPUS / f"{name}.wgreturn"
         manifest = (
             bare[name] if name in bare else json.loads((folder / "wgreturn.json").read_bytes())
         )
         assert _verdict(lambda: validate_manifest(manifest)) == expected["validate_manifest"], name
-        assert _verdict(lambda: read_wgreturn(folder)) == expected["read_wgreturn"], name
+        disk_folder = folder
+        if name in disk_setup:
+            disk_folder = tmp_path / f"{name}.wgreturn"
+            shutil.copytree(folder, disk_folder)
+            (disk_folder / disk_setup[name]["link"]).symlink_to(disk_setup[name]["target"])
+        assert _verdict(lambda: read_wgreturn(disk_folder)) == expected["read_wgreturn"], name
         data = tmp_path / name
         data.mkdir()
         inbox = ipc_folder(data, create=True) / solve_command.SOLVE_REQUESTS_DIRECTORY
@@ -148,15 +155,45 @@ def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
             store.close()
 
 
-def test_oracle_mutation_guard():
-    oracle = json.loads((CORPUS / "ORACLE.json").read_text())
-    base = json.loads((CORPUS / "base-1-1.wgreturn/wgreturn.json").read_text())
-    base_verdict = _verdict(lambda: validate_manifest(base))
-    assert base_verdict == oracle["base-1-1"]["validate_manifest"]
-    base["instances"][0]["chirality"] = "mirrored"
-    changed = _verdict(lambda: validate_manifest(base))
-    assert changed != base_verdict
-    assert changed == oracle["mirrored-chirality"]["validate_manifest"]
+def test_oracle_rule_mutation_exits_nonzero(tmp_path: Path):
+    """A rule removed in a fresh process must make the committed oracle red."""
+
+    plugin = tmp_path / "oracle_mutant.py"
+    plugin.write_text(
+        "from server.cadlink import wgreturn\n"
+        "def pytest_collection_modifyitems(items):\n"
+        "    original = wgreturn._fail\n"
+        "    def without_chirality(path, message):\n"
+        "        if path.endswith('.chirality') and message == \"Phase 2 accepts only 'original'\":\n"
+        "            return None\n"
+        "        return original(path, message)\n"
+        "    wgreturn._fail = without_chirality\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "server/tests/test_wglink_packaged_pair.py::test_endpoint_oracle_bytes_and_messages",
+            "-q",
+            "-p",
+            "oracle_mutant",
+            "-p",
+            "no:cacheprovider",
+        ],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PYTHONPATH": str(tmp_path) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "first-error-chirality" in result.stdout or "mirrored-chirality" in result.stdout
 
 
 @pytest.mark.parametrize("name", sorted(json.loads((CORPUS / "GEOMETRY.json").read_text())))
@@ -221,29 +258,35 @@ def test_geometry_oracle_without_solver(name: str, tmp_path: Path):
         store.close()
 
 
-def test_pinned_writer_bundle_request_claim_and_ingest(packaged: Path, tmp_path: Path, monkeypatch):
+def test_pinned_writer_bundle_request_claim_and_ingest(packaged: Path, tmp_path: Path):
     with (
         _from_package(packaged, "wglink_return.py") as writer,
         _from_package(packaged, "wglink_watch.py") as watcher,
     ):
-        base = json.loads((CORPUS / "base-1-1.wgreturn/wgreturn.json").read_text())
+        fixture = CORPUS / "automatic-full.wgreturn"
+        step = (fixture / "assembly.step").read_bytes()
+        base = json.loads((fixture / "wgreturn.json").read_text())
         fields = deepcopy(base)
         fields["return_record"] = fields.pop("return")
         fields.pop("acoustics")
-        fields["files"]["assembly.step"]["sha256"] = "sha256:" + _sha(b"STEP")
+        fields["wgreturn_version"] = "1.1"
+        fields["required_features"].remove("domain-automatic-v1")
+        fields["assembly"].pop("domain")
+        fields["assembly"]["signature_hash"] = "sha256:" + "4" * 64
+        fields["scope"]["included"][0].update(component="Body1", external_reference="none")
         manifest = writer.build_return_manifest(**fields)
         workspace = tmp_path / "workspace"
         bundle = workspace / "wgreturn/pinned.wgreturn"
         bundle.mkdir(parents=True)
-        (bundle / "assembly.step").write_bytes(b"STEP")
+        (bundle / "assembly.step").write_bytes(step)
         (bundle / "wgreturn.json").write_text(
             writer.dumps_return_manifest(manifest), encoding="utf-8"
         )
         read = read_wgreturn(bundle)
-        assert read.manifest["sources"][0]["id"] == "source-hf"
+        assert read.manifest["sources"][0]["id"] == "throat"
         assert read.degradations == ()
-        assert source_physical_name(101, "source-hf", "instance-1", "HF") == (
-            "wg-import-v1|tag=101|source_id=source-hf|instance_id=instance-1|role=HF"
+        assert source_physical_name(101, "throat", None, "HF") == (
+            "wg-import-v1|tag=101|source_id=throat|instance_id=null|role=HF"
         )
 
         data = tmp_path / "data"
@@ -270,37 +313,40 @@ def test_pinned_writer_bundle_request_claim_and_ingest(packaged: Path, tmp_path:
             operation = store.get_operation("pinned-solve")
             assert operation is not None and operation["kind"] == "prepare_and_solve"
 
-            from test_cadlink_ingest import _built_for_source
-
-            monkeypatch.setattr(
-                ingest,
-                "build_imported_mesh_isolated",
-                lambda *a, **k: _built_for_source("source-hf"),
-            )
-            record = ingest.ingest_bundle(
+            record = _run_in_gmsh_session(
+                ingest.ingest_bundle,
                 bundle,
-                {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"source-hf": 8}},
+                {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"throat": 8}},
                 [],
                 store,
                 data,
-                expected_design_id=manifest["instances"][0]["design_id"],
+                prep_options={"symmetry_mode": "auto"},
             )
-            assert [source["id"] for source in record["sources"]] == ["source-hf"]
-            assert record["source_tags"] == {"source-hf": 101}
+            assert [source["id"] for source in record["sources"]] == ["throat"]
+            assert record["source_tags"] == {"throat": 101}
             assert record["tag_map"]["101"] == {
-                "source_id": "source-hf",
-                "instance_id": "instance-1",
+                "source_id": "throat",
+                "instance_id": None,
                 "role": "HF",
             }
+            assert (
+                record["mesh_content_sha256"]
+                == json.loads((CORPUS / "GEOMETRY.json").read_text())["automatic-full"][
+                    "mesh_content_sha256"
+                ]
+            )
         finally:
             store.close()
 
         oracle = json.loads((CORPUS / "ORACLE.json").read_text())
-        (bundle / "assembly.step").write_bytes(b"WRNG")
-        assert (
-            _verdict(lambda: read_wgreturn(bundle)) == oracle["checksum-mismatch"]["read_wgreturn"]
-        )
-        (bundle / "assembly.step").write_bytes(b"STEP")
+        tampered = step[:-1] + bytes([step[-1] ^ 1])
+        (bundle / "assembly.step").write_bytes(tampered)
+        assert _verdict(lambda: read_wgreturn(bundle)) == {
+            "accepted": False,
+            "message": "bundle member 'assembly.step' checksum mismatch: declared "
+            f"sha256:{_sha(step)}, actual sha256:{_sha(tampered)}",
+        }
+        (bundle / "assembly.step").write_bytes(step)
         (bundle / "extra.txt").write_bytes(b"extra")
         assert (
             _verdict(lambda: read_wgreturn(bundle)) == oracle["undeclared-member"]["read_wgreturn"]
@@ -332,6 +378,22 @@ def test_pinned_writer_negative_manifest_messages(packaged: Path):
                 == json.loads((CORPUS / "ORACLE.json").read_text())[name]["validate_manifest"]
             )
         assert writer.__file__.endswith("wglink_return.py")
+
+
+def test_oversized_step_refusal_is_exact(tmp_path: Path):
+    bundle = tmp_path / "oversized.wgreturn"
+    shutil.copytree(CORPUS / "base-1-1.wgreturn", bundle)
+    size = 64 * 1024 * 1024 + 1
+    with (bundle / "assembly.step").open("r+b") as member:
+        member.truncate(size)
+    manifest = json.loads((bundle / "wgreturn.json").read_text())
+    manifest["files"]["assembly.step"].update(size_bytes=size, sha256="sha256:" + "0" * 64)
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest), encoding="utf-8")
+    assert _verdict(lambda: read_wgreturn(bundle)) == {
+        "accepted": False,
+        "message": "bundle member 'assembly.step' is 67,108,865 bytes, over the "
+        "67,108,864 byte limit for one STEP input",
+    }
 
 
 def test_request_versions_and_exact_refusals(tmp_path: Path):
@@ -376,7 +438,23 @@ def test_request_versions_and_exact_refusals(tmp_path: Path):
         for schema in (1, 2):
             row = store.get_operation(f"case-{schema}")
             assert row["state"] == "rejected"
-            assert json.loads(row["outcome_json"])["message"] == solve_command.OUTDATED_ADDIN_REASON
+            assert json.loads(row["outcome_json"])["message"] == (
+                "This solve request came from a WGLink add-in older than this Waveguide "
+                "Generator, which it no longer accepts. Restart Fusion so it loads the WGLink "
+                "that WG installed, then use Solve in WG again."
+            )
+        sent = {
+            **base,
+            "schemaVersion": 4,
+            "kind": "receive_snapshot",
+            "commandId": "case-send",
+            "operationId": "case-send",
+        }
+        sent.pop("returnId")
+        (folder / "case-send.json").write_text(json.dumps(sent))
+        solve_command.collect_solve_deliveries(data, store, refuse=refusals.append)
+        assert store.get_operation("case-send")["kind"] == "receive_snapshot"
+        assert refusals == []
         bad = {
             **base,
             "schemaVersion": 3,

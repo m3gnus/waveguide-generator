@@ -1,0 +1,6 @@
+{
+  "symlink-member": {
+    "link": "linked.bin",
+    "target": "assembly.step"
+  }
+}

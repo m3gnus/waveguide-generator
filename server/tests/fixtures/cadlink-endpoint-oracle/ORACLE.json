@@ -159,6 +159,22 @@
       "message": null
     }
   },
+  "duplicate-drive-channel": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
   "duplicate-json-key": {
     "inbox_claim": {
       "accepted": true,
@@ -205,6 +221,22 @@
     "validate_manifest": {
       "accepted": false,
       "message": "$.instances[0].chirality: Phase 2 accepts only 'original'"
+    }
+  },
+  "forbidden-source-tag": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.sources[0].tag: CAD-authored verdict keys are forbidden"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.sources[0].tag: CAD-authored verdict keys are forbidden"
     }
   },
   "invalid-member-digest": {
@@ -319,6 +351,22 @@
       "message": "$.required_features: missing required feature(s): checksummed-files-v1"
     }
   },
+  "missing-fem-member": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "declared bundle member is missing: fem/air.step"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
   "missing-member": {
     "inbox_claim": {
       "accepted": true,
@@ -415,6 +463,22 @@
       "message": null
     }
   },
+  "oversized-json": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "wgreturn.json: 1,048,577 bytes exceeds the 1,048,576 byte limit for a return manifest"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
   "source-id-space": {
     "inbox_claim": {
       "accepted": true,
@@ -429,6 +493,22 @@
     "validate_manifest": {
       "accepted": false,
       "message": "$.sources[0].id: source-identity-v1 source identity must be trimmed"
+    }
+  },
+  "symlink-member": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "bundle member is a symlink: linked.bin"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
     }
   },
   "undeclared-member": {
@@ -461,6 +541,38 @@
     "validate_manifest": {
       "accepted": false,
       "message": "$.required_features: unknown required feature(s): future-physics-v1"
+    }
+  },
+  "upper-source-tag": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "visible-false": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
     }
   },
   "zero-source-area": {

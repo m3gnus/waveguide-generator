@@ -31,7 +31,7 @@
     "assembly.step": {
       "media_type": "model/step",
       "purpose": "exterior-assembly",
-      "sha256": "sha256:a1ef69fbaebc5d8d8c65105e36680383d0601b6657c29fada4a6ca3f97689b01",
+      "sha256": "sha256:122e0ef44bc83860143c3cf4fe37b55f73c285c0c89acedd30f7dde353bd6b47",
       "size_bytes": 347912
     }
   },
@@ -83,7 +83,7 @@
           "volume_mm3": 130349.38105222261
         },
         "local_body_state": "unknown",
-        "observed_at": "2026-09-28T08:56:45Z",
+        "observed_at": "2026-09-28T09:35:15Z",
         "observed_fingerprint": {
           "bbox_mm": [
             -77.72908242439999,
@@ -244,8 +244,8 @@
     "instance-records-v1"
   ],
   "return": {
-    "created_at": "2026-09-28T08:56:45Z",
-    "id": "wgr_01M3KKP6WTZV283PXZF1W6M6ED"
+    "created_at": "2026-09-28T09:35:15Z",
+    "id": "wgr_01M3KNWPQFYZ186M7N37KN13FK"
   },
   "scope": {
     "fem_air_volumes": [],

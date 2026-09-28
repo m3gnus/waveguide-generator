@@ -101,6 +101,9 @@ def _cases():
         "non-null-acoustics": lambda m: m.__setitem__("acoustics", {}),
         "mirrored-chirality": lambda m: m["instances"][0].__setitem__("chirality", "mirrored"),
         "source-id-space": lambda m: m["sources"][0].__setitem__("id", " source-hf"),
+        "visible-false": lambda m: m["scope"]["included"][0].__setitem__("visible", False),
+        "forbidden-source-tag": lambda m: m["sources"][0].__setitem__("tag", 101),
+        "upper-source-tag": lambda m: m["sources"][0].__setitem__("TAG", 101),
         "zero-source-area": lambda m: m["sources"][0]["observed"].__setitem__("total_area_mm2", 0),
         "automatic-without-feature": lambda m: m["assembly"].__setitem__(
             "domain", {"kind": "automatic"}
@@ -121,9 +124,29 @@ def _cases():
         mutate(manifest)
         yield name, manifest, {"assembly.step": STEP}, None
 
+    repeated_channel = deepcopy(base)
+    another = deepcopy(repeated_channel["sources"][0])
+    another["id"] = "source-hf-two"
+    repeated_channel["sources"].append(another)
+    yield "duplicate-drive-channel", repeated_channel, {"assembly.step": STEP}, None
+
+    missing_fem = deepcopy(base)
+    missing_fem["required_features"].append("fem-air-volume-v1")
+    fem = b"FEM STEP"
+    missing_fem["files"]["fem/air.step"] = {
+        "sha256": "sha256:" + _sha(fem),
+        "size_bytes": len(fem),
+        "media_type": "model/step",
+        "purpose": "fem-air-volume",
+    }
+    missing_fem["scope"]["fem_air_volumes"] = [{"file": "fem/air.step", "n_bodies_expected": 1}]
+    yield "missing-fem-member", missing_fem, {"assembly.step": STEP}, None
+
     yield "checksum-mismatch", deepcopy(base), {"assembly.step": b"WRNG"}, None
     yield "undeclared-member", deepcopy(base), {"assembly.step": STEP, "extra.txt": b"extra"}, None
     yield "missing-member", deepcopy(base), {}, None
+    yield "symlink-member", deepcopy(base), {"assembly.step": STEP}, None
+    yield "oversized-json", deepcopy(base), {"assembly.step": STEP}, b" " * (1024 * 1024 + 1)
     yield "nonfinite-json", deepcopy(base), {"assembly.step": STEP}, b'{"value":NaN}'
     yield (
         "duplicate-json-key",
@@ -198,17 +221,39 @@ def _geometry_cases(root: Path):
 
 
 def main() -> None:
-    current = subprocess.check_output(
-        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+    current_main = subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "main"], text=True
     ).strip()
-    if current != REFERENCE_WG_COMMIT:
-        raise SystemExit(f"Oracle generation requires WG {REFERENCE_WG_COMMIT}; found {current}")
+    if current_main != REFERENCE_WG_COMMIT:
+        raise SystemExit(
+            f"Oracle generation requires main {REFERENCE_WG_COMMIT}; found {current_main}"
+        )
+    changed_production = subprocess.check_output(
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "diff",
+            "--name-only",
+            REFERENCE_WG_COMMIT,
+            "HEAD",
+            "--",
+            "server/cadlink",
+            "server/mesh",
+        ],
+        text=True,
+    ).strip()
+    if changed_production:
+        raise SystemExit(f"Oracle production code differs from main: {changed_production}")
     if DEST.exists():
         shutil.rmtree(DEST)
     DEST.mkdir(parents=True)
-    (DEST / ".gitattributes").write_text("*.step binary\n")
+    (DEST / ".gitattributes").write_text(
+        "*.step binary\noversized-json.wgreturn/wgreturn.json binary\n"
+    )
     results = {}
     bare_for_invalid_json = {}
+    disk_setup = {"symlink-member": {"link": "linked.bin", "target": "assembly.step"}}
     geometry = {}
     with tempfile.TemporaryDirectory(prefix="cadlink-oracle-") as generated:
         for name, manifest, members, raw in (*_cases(), *_geometry_cases(Path(generated))):
@@ -224,13 +269,18 @@ def main() -> None:
             (folder / "wgreturn.json").write_bytes(payload)
             for member, data in members.items():
                 (folder / member).write_bytes(data)
-            if name in {"duplicate-json-key", "nonfinite-json", "non-utf8-json"}:
+            if name in {"duplicate-json-key", "nonfinite-json", "non-utf8-json", "oversized-json"}:
                 bare_for_invalid_json[name] = manifest
+            link = folder / "linked.bin" if name == "symlink-member" else None
+            if link is not None:
+                link.symlink_to("assembly.step")
             results[name] = {
                 "validate_manifest": _verdict(lambda m=manifest: validate_manifest(m)),
                 "read_wgreturn": _verdict(lambda f=folder: read_wgreturn(f)),
                 "inbox_claim": _claim(folder, name, payload, Path(generated)),
             }
+            if link is not None:
+                link.unlink()
             if (
                 name.startswith(("automatic-", "declared-"))
                 and name != "automatic-without-feature"
@@ -290,6 +340,7 @@ def main() -> None:
     (DEST / "BARE.json").write_text(
         json.dumps(bare_for_invalid_json, indent=2, sort_keys=True) + "\n"
     )
+    (DEST / "DISK_SETUP.json").write_text(json.dumps(disk_setup, indent=2, sort_keys=True) + "\n")
     (DEST / "GEOMETRY.json").write_text(json.dumps(geometry, indent=2, sort_keys=True) + "\n")
     files = {
         p.relative_to(DEST).as_posix(): _sha(p.read_bytes())
@@ -300,7 +351,7 @@ def main() -> None:
     provenance = {
         "schema": 1,
         "generator": "scripts/generate_cadlink_endpoint_oracle.py",
-        "wg_commit": current,
+        "wg_commit": REFERENCE_WG_COMMIT,
         "addin_commit": source["commit"],
         "files": files,
     }
