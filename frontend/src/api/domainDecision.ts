@@ -121,6 +121,9 @@ export function displaySymmetry(record: Pick<CadReturnIngestRecord, 'domain_deci
 } {
   const decision = recordDomainDecision(record);
   if (decision) {
+    // A refused decision solves nothing, whatever planes it records: every
+    // engine meets its refusal, so nothing is shown as a reduced solve.
+    if (decision.refusal) return { solvedPlanes: [], cadCutPlanes: [] };
     const solvedPlanes = mirrorPlanes(decision.solver_domain.planes);
     const cadCut = mirrorPlanes(decision.cad_cuts
       .filter((cut) => cut.status === 'mirrored' || cut.status === 'recovered')
@@ -171,11 +174,19 @@ function fractionWords(fraction: string): string {
   return fraction === 'quarter' ? 'a quarter' : fraction === 'half' ? 'a half' : fraction;
 }
 
-/** Why a refused decision is refused, in a few words (its message says the rest). */
+/** Why a refused decision is refused, in a few words (its message says the rest).
+ *
+ * In the server's own order (`domain_decision.py:_decide`): an open cut rim on
+ * an origin plane, then an oblique rim, then an off-centre rim, then an
+ * improper frame -- so the headline names the same cut as the message below it.
+ */
 function refusalHeadline(decision: DomainDecisionCore & Partial<DomainDecisionExtras>): string {
   const refusal = decision.refusal!;
-  if (refusal.code === 'imported_frame_improper') {
-    return 'Refused: the solver frame is not a proper rotation — send the model again';
+  const refused = decision.cad_cuts.filter((cut) => cut.status === 'refused').map((cut) => cut.plane);
+  if (refused.length) {
+    // The message names the rim it refuses ("open along x = 0"): that one.
+    const named = refused.find((plane) => refusal.message.includes(`open along ${planeWords(plane)}`)) ?? refused[0];
+    return `Refused: cut in CAD at ${planeWords(named)} cannot be recovered — send the uncut model`;
   }
   if ((decision.oblique_cuts ?? []).length) return 'Refused: cut on an oblique plane — send the uncut model';
   const offCentre = (decision.off_centre_cuts ?? [])[0];
@@ -183,8 +194,9 @@ function refusalHeadline(decision: DomainDecisionCore & Partial<DomainDecisionEx
     const offset = typeof offCentre.offset_mm === 'number' ? `${Number(offCentre.offset_mm.toPrecision(6))} mm` : 'off the origin';
     return `Refused: cut off-centre at ${offCentre.plane_axis ?? '?'} = ${offset} — send the uncut model`;
   }
-  const refused = decision.cad_cuts.filter((cut) => cut.status === 'refused').map((cut) => cut.plane);
-  if (refused.length) return `Refused: cut in CAD at ${joinPlanes(refused)} cannot be recovered — send the uncut model`;
+  if (refusal.code === 'imported_frame_improper') {
+    return 'Refused: the solver frame is not a proper rotation — send the model again';
+  }
   return 'Refused: this model cannot be solved as it stands';
 }
 

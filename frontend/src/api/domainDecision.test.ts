@@ -83,6 +83,28 @@ describe('the concluded reading, in plain words', () => {
     expect(decisionReading(decisionFixture({ refusal: { code: 'imported_frame_improper', message: 'm' } })).text)
       .toBe('Refused: the solver frame is not a proper rotation — send the model again');
   });
+
+  it('names the cut the refusal message names, in the server\'s order', () => {
+    // An origin-plane rim and an oblique rim: the server refuses the open rim
+    // first (domain_decision.py), so the headline must name it too.
+    const both = decisionFixture({
+      ...REFUSED_CUT,
+      oblique_cuts: [{ rim_edges: 40 }],
+      off_centre_cuts: [{ plane_axis: 'y', offset_mm: 3, rim_edges: 12 }],
+    });
+    expect(decisionReading(both).text).toBe('Refused: cut in CAD at x = 0 cannot be recovered — send the uncut model');
+    expect(both.refusal!.message).toContain('open along x = 0');
+    // Two refused rims: the one the message names.
+    const two = decisionFixture({
+      ...REFUSED_CUT,
+      cad_cuts: [{ ...REFUSED_CUT.cad_cuts[0] }, { ...REFUSED_CUT.cad_cuts[0], plane: 'y0', solver_plane: 'y0' }],
+      refusal: { code: 'imported_open_half_shell', message: 'The model is open along y = 0 (80 rim edges).' },
+    });
+    expect(decisionReading(two).text).toBe('Refused: cut in CAD at y = 0 cannot be recovered — send the uncut model');
+    // Oblique before off-centre.
+    expect(decisionReading(decisionFixture({ ...REFUSED_OBLIQUE, off_centre_cuts: [{ plane_axis: 'x', offset_mm: 5 }] })).text)
+      .toBe('Refused: cut on an oblique plane — send the uncut model');
+  });
 });
 
 describe('what the viewport mirrors for display', () => {
@@ -100,6 +122,17 @@ describe('what the viewport mirrors for display', () => {
       .toEqual({ solvedPlanes: ['x0', 'y0'], cadCutPlanes: ['x0'] });
     expect(displaySymmetry({ domain_decision: PROVENANCE_HALF, symmetry }))
       .toEqual({ solvedPlanes: ['x0'], cadCutPlanes: ['x0'] });
+  });
+
+  it('mirrors nothing for any refused decision, even one whose planes WG cut', () => {
+    const improper = decisionFixture({
+      ...WG_HALF,
+      frame: { ...WG_HALF.frame, proper: false, determinant: -1 },
+      confidence: 'refused',
+      refusal: { code: 'imported_frame_improper', message: 'The solver frame this model was meshed in is not a proper rotation.' },
+    });
+    expect(displaySymmetry({ domain_decision: improper, symmetry: { cut_planes: ['x0'], domain_planes: ['x0'] } }))
+      .toEqual({ solvedPlanes: [], cadCutPlanes: [] });
   });
 
   it('mirrors nothing it does not solve reduced', () => {
