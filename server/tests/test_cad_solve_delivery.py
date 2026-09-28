@@ -127,7 +127,7 @@ def _delivery_files(data_dir) -> list[str]:
     """Every solve delivery or claim file WG could still act on."""
 
     folder = _ipc(data_dir)
-    names = [path.name for path in folder.iterdir() if path.name.startswith(".wg-solve")]
+    names = [path.name for path in folder.iterdir() if path.name.startswith(".wg-solve") and not path.is_dir()]
     requests = folder / V2_DIR
     if requests.is_dir():
         names += [f"{V2_DIR}/{path.name}" for path in requests.iterdir()]

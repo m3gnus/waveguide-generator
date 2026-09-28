@@ -829,7 +829,7 @@ sent; if it still cannot be confirmed, the user sees **Unconfirmed**, with the s
 and a prompt to check WG's CAD Link panel before sending again. It never reports "not
 asked" or silently invents a new request ID.
 
-**Consuming a delivery.** WG takes each file in five steps:
+**Consuming a delivery.** WG takes each file in six steps:
 
 1. **Claim** it: rename it to a unique `.wg-solve-claim-<random>.json` in the same
    folder. A producer that writes the same path afterwards writes a new file, which the
@@ -850,9 +850,45 @@ asked" or silently invents a new request ID.
      (`preparation_failed`), as it would have without the claim. A claim that waits never
      holds up the files behind it, and its operation is not started while it waits, even
      by a pass that stops before it reaches the claim.
-5. **Delete** the claim. WG deletes only the file it consumed, and only after the store
-   holds the operation. If the delete fails, the next poll recovers the same operation
-   from the claim that is left.
+5. **Acknowledge**: publish the outcome as a file (see "Request acknowledgement file").
+   It is written after the operation is durable and before the claim is deleted. If it
+   cannot be written, the claim stays and the next poll recovers the same operation and
+   writes it then.
+6. **Delete** the claim. WG deletes only the file it consumed, and only after the store
+   holds the operation and the acknowledgement is written. If the delete fails, the next
+   poll recovers the same operation from the claim that is left.
+
+**Request acknowledgement file.** Once a request file is gone, the producer cannot tell
+whether WG accepted it or refused it. So WG writes
+`<data dir>/ipc/wglink/.wg-solve-acks/<commandId>.json`, next to the request inbox,
+before it deletes the request. It changes nothing about what is accepted or refused.
+
+```json
+{"schemaVersion": 1, "commandId": "...", "operationId": "...", "outcome": "accepted",
+ "reason": null, "jobId": null, "digest": "sha256:...", "at": "2026-09-29T10:00:00Z"}
+```
+
+- `outcome` is `accepted` when WG holds the operation, whatever it later becomes: a Solve
+  then prepares and becomes a job (or not) as its own record shows. It is `refused` when
+  WG will not take the request, and `reason` is the message the user reads. `jobId` is set
+  by a redelivery after the job exists. A request that names no usable command id gets no
+  file.
+- The refusals are: a request from an older add-in, a request WG identified but could not
+  accept (unknown kind, bad `returnId`, an id that is not a plain operation id), a
+  request whose snapshot is rejected at acceptance, and a different request under an id
+  that already names an operation. The last one never replaces an existing file for the
+  id, so it cannot turn the accepted original into a refusal.
+- The file is staged under a name starting with `.` and moved into place with
+  `os.replace`, so a reader sees a whole file. On Windows the replace is retried briefly
+  when a reader holds the target (`PermissionError`). A redelivery of the same request
+  writes the same outcome again.
+- A crash between persisting and writing leaves the claim, so the next start redelivers
+  the request, gets the same operation (no second job), and writes the file.
+- Files are kept for 24 hours and at most 500; the delivery pass prunes the oldest,
+  and stale staging files, at most once a minute.
+- WG advertises `solveAcknowledgement: 1` in `wg-capabilities.json` while its inbox
+  consumer runs. An add-in reads the acknowledgement only when it sees that; against a WG
+  without it the file never exists, and the add-in may say only that WG took the request.
 
 **Crash and power-cut positions.** If WG stops between any two of the steps above, or
 before or during preparation, the next start still gives each request exactly one
@@ -1093,8 +1129,12 @@ it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomic
 every start:
 
 ```json
-{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1, "documentUp": 1}
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "solveAcknowledgement": 1, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1, "documentUp": 1}
 ```
+
+- **`solveAcknowledgement: 1`** means WG publishes the outcome of every request in its
+  inbox as `.wg-solve-acks/<commandId>.json` before it deletes the request (see "Request
+  acknowledgement file"). Read by the same rules as the delivery versions.
 
 - **`sourceIdentity: 1`** means WG reads returns that require `source-identity-v1`
   (`docs/reference/MULTI-INSTANCE-CAD-IDENTITY.md`, "Cross-export source identity"). An

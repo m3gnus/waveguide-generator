@@ -44,6 +44,7 @@ def test_capabilities_advertise_source_identity_without_changing_delivery() -> N
         "schemaVersion": 1,
         "producer": "waveguide-generator",
         "solveCommandDelivery": 4,
+        "solveAcknowledgement": 1,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
         "liveProtocol": 1,

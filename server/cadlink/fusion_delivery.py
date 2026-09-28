@@ -71,6 +71,12 @@ AUTOMATIC_DOMAIN = 1
 # ``wg-endpoint.json`` (``server/cadlink/live``). The add-in goes live only when
 # WG advertises this; otherwise it keeps to the files above.
 LIVE_PROTOCOL = 1
+# WG publishes the outcome of every request in its inbox as
+# ``.wg-solve-acks/<commandId>.json`` before it deletes the request
+# (``solve_command.write_acknowledgement``). The add-in reads it only when WG
+# advertises this; an older WG leaves no file, and the add-in falls back to
+# "the request file is gone".
+SOLVE_ACKNOWLEDGEMENT = 1
 SEQUENCE_FIELD = "deliverySequence"
 # What a WG before delivery version 3 wrote beside the request folders.
 LEGACY_SLOT_FILENAMES = (".fusion-return-request.json", ".fusion-handoff.json")
@@ -126,6 +132,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "schemaVersion": CAPABILITIES_SCHEMA_VERSION,
         "producer": "waveguide-generator",
         "solveCommandDelivery": SOLVE_COMMAND_DELIVERY,
+        "solveAcknowledgement": SOLVE_ACKNOWLEDGEMENT,
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
         "sourceIdentity": SOURCE_IDENTITY,
         "liveProtocol": LIVE_PROTOCOL,
@@ -134,6 +141,7 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
     }
     if not solve_delivery:
         del advertised["solveCommandDelivery"]
+        del advertised["solveAcknowledgement"]
     return advertised
 
 
