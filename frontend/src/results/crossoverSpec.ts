@@ -263,10 +263,13 @@ export function expandLegacy(
   levelMatch = true,
   align = true,
   reference?: string,
+  /** The sections' slope: LR4 is what the legacy form means; an untouched
+   * CAD chain passes WG's default (shared/solve-defaults.json). */
+  slope: { family: FilterFamily; order: number } = { family: 'lr', order: 4 },
 ): CrossoverSpec {
   const gain: GainSetting = levelMatch ? { mode: 'auto' } : { mode: 'manual', db: 0 };
   const delay: DelaySetting = align ? { mode: 'auto' } : { mode: 'manual', ms: 0 };
-  const section = (fcHz: number): FilterSection => ({ family: 'lr', order: 4, fcHz });
+  const section = (fcHz: number): FilterSection => ({ family: slope.family, order: slope.order, fcHz });
   return {
     members: [...members],
     reference: reference && members.includes(reference) ? reference : members[members.length - 1],

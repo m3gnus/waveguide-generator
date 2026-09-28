@@ -97,7 +97,7 @@ describe('CAD setup publisher', () => {
     expect((setup.geometry.drive_channels as Array<{ source_ids: string[] }>)[0].source_ids).toEqual(['source-hf']);
     // The engine is the selector's, whatever the backend later finds capable.
     expect(setup.options.engine).toBe('bempp');
-    expect(setup.options.frequency_range).toEqual([200, 20_000]);
+    expect(setup.options.frequency_range).toEqual([50, 20_000]);
     expect(setup.options.num_frequencies).toBe(24);
     expect(setup.options.polar_config).toEqual(useSolveOptionsStore.getState().options().polar_config);
     expect(setup.preparation).toEqual({ area_drift_overrides: [], symmetry_mode: 'full' });

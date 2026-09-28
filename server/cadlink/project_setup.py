@@ -122,7 +122,7 @@ def project_setup(
 
     The project's recorded setup for exactly these sources, with the engine
     selected in WG. None when the project has none for them: a first-time
-    model waits for the user to choose its settings.
+    model is then solved with WG's default settings (``default_setup``).
     """
 
     row = store.get_project_setup(lineage_id, inventory_sha256(sources))

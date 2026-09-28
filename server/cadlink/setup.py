@@ -27,6 +27,9 @@ from .operations import canonical_json
 
 
 SETUP_SCHEMA_VERSION = 1
+#: ``CadSolveSetup.origin`` of a setup WG made from its default settings
+#: (``default_setup``), rather than one a person chose.
+DEFAULTS_ORIGIN = "wg_defaults"
 # What the snapshot contributes to a submission, and so what a setup must not.
 _SNAPSHOT_FIELDS = frozenset(
     {"type", "ingest_id", "manifest_sha256", "artifact_sha256", "acknowledged_findings"}
@@ -70,6 +73,11 @@ class CadSolveSetup(BaseModel):
     #: Drive channel id -> the library driver its numbers were resolved from.
     driver_references: dict[str, DriverReference] = Field(default_factory=dict)
     label: str | None = None
+    #: ``DEFAULTS_ORIGIN`` when WG made this setup from its default settings
+    #: for a model nobody chose settings for; None for a person's own. Left
+    #: out of the content when None, so every setup recorded before it keeps
+    #: its revision id.
+    origin: Literal["wg_defaults"] | None = None
 
 
 def solve_request_for(
@@ -134,7 +142,10 @@ def validate_setup(value: Mapping[str, Any]) -> CadSolveSetup:
 def setup_content(setup: CadSolveSetup) -> str:
     """The canonical JSON a revision stores and is identified by."""
 
-    return canonical_json(setup.model_dump(mode="json"))
+    content = setup.model_dump(mode="json")
+    if content.get("origin") is None:
+        content.pop("origin", None)
+    return canonical_json(content)
 
 
 def setup_digest(setup: CadSolveSetup) -> str:
@@ -143,6 +154,7 @@ def setup_digest(setup: CadSolveSetup) -> str:
 
 __all__ = [
     "CadSolveSetup",
+    "DEFAULTS_ORIGIN",
     "DriverReference",
     "PreparationOptions",
     "SETUP_SCHEMA_VERSION",

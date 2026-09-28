@@ -1,0 +1,50 @@
+{
+  "about": "WG's default solve settings, stated once. The frontend's initial solve settings and the backend's default CAD setup both read this file; change a default here and both follow. Directivity, solver and spacing are shared by parametric and CAD; the sweep range and points and everything under cad are CAD's (a parametric design carries its own f1, f2 and number of frequencies).",
+  "sweep": {
+    "start_hz": 50,
+    "end_hz": 20000,
+    "points": 24,
+    "spacing": "log"
+  },
+  "directivity": {
+    "angle_start_deg": 0,
+    "angle_end_deg": 180,
+    "angle_step_deg": 5,
+    "distance_m": 2,
+    "norm_angle_deg": 5,
+    "diagonal_inclination_deg": 45,
+    "enabled_axes": ["horizontal", "vertical", "diagonal"],
+    "observation_origin": "mouth",
+    "spherical_sampling": false,
+    "field_plane": true
+  },
+  "solver": {
+    "engine": "auto",
+    "accuracy": "fast",
+    "solver_mode": "full_3d",
+    "symmetry": "auto",
+    "mesh_validation_mode": "warn",
+    "verbose": false
+  },
+  "ground_plane": {
+    "enabled": false,
+    "axis": "y",
+    "height_m": 1.0
+  },
+  "cad": {
+    "drive_voltage_v": 2.83,
+    "preparation_symmetry_mode": "auto",
+    "exterior_only": false,
+    "unsuggested_mesh_size_mm": 1,
+    "crossover": {
+      "family": "lr",
+      "order": 4,
+      "band_roles": ["LF", "MF", "HF"],
+      "role_crossovers_hz": [
+        { "lower": "LF", "upper": "MF", "hz": 100 },
+        { "lower": "MF", "upper": "HF", "hz": 1000 },
+        { "lower": "LF", "upper": "HF", "hz": 1000 }
+      ]
+    }
+  }
+}

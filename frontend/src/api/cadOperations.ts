@@ -22,6 +22,10 @@ export interface CadOperationSummary {
   /** A reason code ("Outcomes"), or null. */
   reason: string | null;
   message: string | null;
+  /** Solved with WG's default settings, because none were recorded for the
+   * model: `message` says so, and where to change them. Absent from older
+   * backends. */
+  setupDefaults?: boolean;
   jobId: string | null;
   attemptGeneration: number;
   setupRevisionId: string | null;
@@ -77,6 +81,9 @@ export interface CadSolveSetup {
   };
   driver_references?: Record<string, { driver_id: string; source?: string | null }>;
   label?: string | null;
+  /** `wg_defaults` when WG made it from its default settings
+   * (shared/solve-defaults.json) for a model nobody chose settings for. */
+  origin?: 'wg_defaults' | null;
 }
 
 /** Blocking findings the user reviewed, on the one preparation that reported them. */

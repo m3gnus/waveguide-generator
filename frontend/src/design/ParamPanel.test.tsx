@@ -509,6 +509,8 @@ describe('ParamPanel inventory UX', () => {
           source.id === 'source-mf' ? { ...source, role: 'LF' } : { ...source, role: 'MF' }
         )),
       },
+      // A sweep that starts above the 100 Hz LF -> MF default.
+      frequencyStartHz: 200,
     }));
     expect(host.textContent).toContain('LF → MF');
     expect(host.textContent).toContain('100 Hz default is outside the sweep; using 2000 Hz.');

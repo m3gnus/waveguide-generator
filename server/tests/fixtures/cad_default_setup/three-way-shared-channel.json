@@ -1,0 +1,174 @@
+{
+  "about": "WG's default CAD setup for these sources and solver selection, as the frontend records it. The backend's default_setup.py and the frontend's first-time settings (buildCadProjectSetup on untouched stores) must both produce exactly this.",
+  "sources": [
+    {
+      "id": "source-lf-a",
+      "role": "LF",
+      "required": true,
+      "suggested_resolution_mm": 15,
+      "default_drive_channel_id": "drive-lf"
+    },
+    {
+      "id": "source-lf-b",
+      "role": "LF",
+      "required": true,
+      "suggested_resolution_mm": 15,
+      "default_drive_channel_id": "drive-lf"
+    },
+    {
+      "id": "source-x",
+      "role": "source",
+      "required": false,
+      "suggested_resolution_mm": 6,
+      "default_drive_channel_id": "drive-x"
+    },
+    {
+      "id": "source-hf",
+      "role": "HF",
+      "required": true,
+      "suggested_resolution_mm": 2.5,
+      "default_drive_channel_id": "drive-hf"
+    }
+  ],
+  "selection": {
+    "engine": "bempp",
+    "accuracy": "fast"
+  },
+  "setup": {
+    "driver_references": {},
+    "geometry": {
+      "combine": {
+        "channels": {
+          "drive-hf": {
+            "delay": {
+              "mode": "auto"
+            },
+            "gain": {
+              "mode": "auto"
+            },
+            "hp": {
+              "family": "lr",
+              "fc_hz": 1000,
+              "order": 4
+            },
+            "invert": null,
+            "lp": {
+              "family": "lr",
+              "fc_hz": 2714,
+              "order": 4
+            }
+          },
+          "drive-lf": {
+            "delay": {
+              "mode": "auto"
+            },
+            "gain": {
+              "mode": "auto"
+            },
+            "hp": null,
+            "invert": null,
+            "lp": {
+              "family": "lr",
+              "fc_hz": 1000,
+              "order": 4
+            }
+          },
+          "drive-x": {
+            "delay": {
+              "mode": "auto"
+            },
+            "gain": {
+              "mode": "auto"
+            },
+            "hp": {
+              "family": "lr",
+              "fc_hz": 2714,
+              "order": 4
+            },
+            "invert": null,
+            "lp": null
+          }
+        },
+        "members": [
+          "drive-lf",
+          "drive-hf",
+          "drive-x"
+        ],
+        "reference": "drive-x"
+      },
+      "drive_channels": [
+        {
+          "id": "drive-lf",
+          "motion": "normal",
+          "source_ids": [
+            "source-lf-a",
+            "source-lf-b"
+          ]
+        },
+        {
+          "id": "drive-x",
+          "motion": "normal",
+          "source_ids": [
+            "source-x"
+          ]
+        },
+        {
+          "id": "drive-hf",
+          "motion": "normal",
+          "source_ids": [
+            "source-hf"
+          ]
+        }
+      ],
+      "exterior_only": false,
+      "mesh": {
+        "rigid_size_mm": 15,
+        "source_size_mm": {
+          "source-hf": 2.5,
+          "source-lf-a": 15,
+          "source-lf-b": 15,
+          "source-x": 6
+        },
+        "transition_mm": 15
+      },
+      "skipped_source_ids": []
+    },
+    "options": {
+      "engine": "bempp",
+      "frequency_range": [
+        50,
+        20000
+      ],
+      "frequency_spacing": "log",
+      "mesh_validation_mode": "warn",
+      "num_frequencies": 24,
+      "polar_config": {
+        "angle_range": [
+          0,
+          180,
+          37
+        ],
+        "angle_step": 5,
+        "distance": 2,
+        "enabled_axes": [
+          "horizontal",
+          "vertical",
+          "diagonal"
+        ],
+        "field_plane": true,
+        "inclination": 45,
+        "norm_angle": 5,
+        "observation_origin": "mouth",
+        "spherical_sampling": false
+      },
+      "solver_mode": "full_3d",
+      "symmetry": "auto",
+      "verbose": false
+    },
+    "preparation": {
+      "area_drift_overrides": [],
+      "symmetry_mode": "auto"
+    },
+    "schema_version": 1
+  }
+}

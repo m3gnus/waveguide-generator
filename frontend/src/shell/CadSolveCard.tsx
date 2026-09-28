@@ -197,7 +197,13 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
       }
     }
   }
-  return <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>;
+  return <>
+    <p className={`cad-solve-run cad-solve-run-${tone}`} role="status" data-run-operation-id={latest.operationId}>{body}</p>
+    {/* No settings were recorded for this model, so WG solved it with its
+        defaults; the backend's own words say so and where to change them. */}
+    {latest.state === 'accepted' && latest.setupDefaults && latest.message
+      && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">{latest.message}</p>}
+  </>;
 }
 
 /**

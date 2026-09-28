@@ -118,7 +118,7 @@ REASON_CODES: Mapping[str, str] = {
     "adapter_not_started": CANCELLED,
 }
 BASELINE_KINDS = frozenset({"document_signature_hash"})
-OUTCOME_FIELDS = frozenset({"message", "reconciled", "evidence"})
+OUTCOME_FIELDS = frozenset({"message", "reconciled", "evidence", "setup_defaults"})
 EVIDENCE_FIELDS = ("operation_id", "export_id")
 
 _EXACT_CAD_TARGET = ("document_id", "design_id", "instance_id", "expected_baseline")
@@ -313,6 +313,15 @@ def validate_outcome(
         raise ValueError("outcome.evidence is recorded only with reconciled: true")
     elif "reconciled" in outcome:
         normalized["reconciled"] = False
+    if "setup_defaults" in outcome:
+        # A solve prepared with WG's default settings (default_setup.py): the
+        # card and the run details say so.
+        if not isinstance(outcome["setup_defaults"], bool):
+            raise ValueError("outcome.setup_defaults must be true or false")
+        if outcome["setup_defaults"]:
+            if state != ACCEPTED:
+                raise ValueError("outcome.setup_defaults is recorded only with an accepted solve")
+            normalized["setup_defaults"] = True
     return canonical_json(normalized) if normalized else None
 
 

@@ -16,6 +16,13 @@ import {
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
 import { useSolveOptionsStore, type SolveAccuracy } from './solveOptions';
+import {
+  DEFAULT_CROSSOVER,
+  DEFAULT_DRIVE_VOLTAGE_V,
+  DEFAULT_EXTERIOR_ONLY,
+  DEFAULT_SWEEP,
+  UNSUGGESTED_MESH_SIZE_MM,
+} from './solveDefaults';
 
 export interface CadDriveChannel {
   id: string;
@@ -300,7 +307,7 @@ function initialFromBundle(bundle: CadReturnBundle | null) {
   const sources = bundle?.readable ? bundle.sources : [];
   const sourceSizesMm = Object.fromEntries(sources.map((source) => [source.id, source.suggestedResolutionMm]));
   const suggestions = sources.map((source) => source.suggestedResolutionMm).filter((value) => value > 0);
-  const coarsest = suggestions.length ? Math.max(...suggestions) : 1;
+  const coarsest = suggestions.length ? Math.max(...suggestions) : UNSUGGESTED_MESH_SIZE_MM;
   return {
     sourceSizesMm,
     rigidSizeMm: coarsest,
@@ -945,16 +952,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   projectLineageId: null,
   ...initialFromBundle(null),
   areaDriftSourceIds: [],
-  exteriorOnly: false,
+  exteriorOnly: DEFAULT_EXTERIOR_ONLY,
   combineEnabled: null,
   combineSpec: null,
   channelDrivers: {},
   passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
-  driveVoltageV: 2.83,
+  driveVoltageV: DEFAULT_DRIVE_VOLTAGE_V,
   maxDriveVoltageV: null,
-  frequencyStartHz: 200,
-  frequencyEndHz: 20_000,
-  frequencyCount: 24,
+  frequencyStartHz: DEFAULT_SWEEP.startHz,
+  frequencyEndHz: DEFAULT_SWEEP.endHz,
+  frequencyCount: DEFAULT_SWEEP.points,
   needsIngest: true,
   ingestedBundleIdentity: null,
   ingestStaleReason: null,
@@ -969,16 +976,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       selectedBundle,
       projectLineageId: project,
       ...initialFromBundle(selectedBundle),
-      exteriorOnly: false,
+      exteriorOnly: DEFAULT_EXTERIOR_ONLY,
       combineEnabled: null,
       combineSpec: null,
       channelDrivers: {},
       passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
-      driveVoltageV: 2.83,
+      driveVoltageV: DEFAULT_DRIVE_VOLTAGE_V,
       maxDriveVoltageV: null,
-      frequencyStartHz: 200,
-      frequencyEndHz: 20_000,
-      frequencyCount: 24,
+      frequencyStartHz: DEFAULT_SWEEP.startHz,
+      frequencyEndHz: DEFAULT_SWEEP.endHz,
+      frequencyCount: DEFAULT_SWEEP.points,
       ...(restored ?? {}),
       ingestRecord: null,
       areaDriftOverrides: [],
@@ -1001,16 +1008,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
         selectedBundle: bundle,
         projectLineageId: project,
         ...initialFromBundle(bundle),
-        exteriorOnly: false,
+        exteriorOnly: DEFAULT_EXTERIOR_ONLY,
         combineEnabled: null,
         combineSpec: null,
         channelDrivers: {},
         passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
-        driveVoltageV: 2.83,
+        driveVoltageV: DEFAULT_DRIVE_VOLTAGE_V,
         maxDriveVoltageV: null,
-        frequencyStartHz: 200,
-        frequencyEndHz: 20_000,
-        frequencyCount: 24,
+        frequencyStartHz: DEFAULT_SWEEP.startHz,
+        frequencyEndHz: DEFAULT_SWEEP.endHz,
+        frequencyCount: DEFAULT_SWEEP.points,
         ...(restored ?? {}),
         ingestRecord: null,
         areaDriftOverrides: [],
@@ -1612,7 +1619,7 @@ export interface CombinePair {
   order: number;
 }
 
-const ROLE_BAND_RANK: Record<string, number> = { LF: 0, MF: 1, HF: 2 };
+const ROLE_BAND_RANK: Readonly<Record<string, number>> = DEFAULT_CROSSOVER.bandRank;
 
 /** Canonicalize band roles without rewriting structural CAD roles. A return
  * whose sources say `hf`/` LF ` must still rank as HF/LF: an exact lookup
@@ -1626,11 +1633,7 @@ function canonicalSourceRole(role: string | undefined): string {
 
 /** What a speaker designer expects to see in the field before touching it.
  * Keyed lowest band first, matching the chain's own order. */
-const ROLE_DEFAULT_HZ: Record<string, number> = {
-  'LF→MF': 100,
-  'MF→HF': 1_000,
-  'LF→HF': 1_000,
-};
+const ROLE_DEFAULT_HZ: Readonly<Record<string, number>> = DEFAULT_CROSSOVER.roleHz;
 
 /** The default crossover for a pair of banded roles, or undefined when either
  * end is unroled or the two share a band. */
@@ -1766,6 +1769,8 @@ export function combineBaseSpec(state: CombineChainState): CrossoverSpec | null 
     pairs.map((pair) => pair.defaultOrFallbackHz),
     combineLevelMatchDefault(state),
     true,
+    undefined,
+    DEFAULT_CROSSOVER,
   );
 }
 
@@ -1864,16 +1869,16 @@ export function resetCadReturnStore(): void {
     projectLineageId: null,
     ...initialFromBundle(null),
     areaDriftSourceIds: [],
-    exteriorOnly: false,
+    exteriorOnly: DEFAULT_EXTERIOR_ONLY,
     combineEnabled: null,
     combineSpec: null,
     channelDrivers: {},
     passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
-    driveVoltageV: 2.83,
+    driveVoltageV: DEFAULT_DRIVE_VOLTAGE_V,
     maxDriveVoltageV: null,
-    frequencyStartHz: 200,
-    frequencyEndHz: 20_000,
-    frequencyCount: 24,
+    frequencyStartHz: DEFAULT_SWEEP.startHz,
+    frequencyEndHz: DEFAULT_SWEEP.endHz,
+    frequencyCount: DEFAULT_SWEEP.points,
     needsIngest: true,
     ingestedBundleIdentity: null,
     ingestStaleReason: null,

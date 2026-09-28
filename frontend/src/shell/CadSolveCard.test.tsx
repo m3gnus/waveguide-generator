@@ -296,6 +296,21 @@ describe('CAD Solve card run status', () => {
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Done');
   });
 
+  it('says when WG solved the model with its default settings, and where to change them', async () => {
+    const note = "Solved with WG's default settings \u2014 change them in WG.";
+    publishOperation(operation({ message: note, setupDefaults: true }));
+    publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-defaults')?.textContent).toBe(note);
+  });
+
+  it('says nothing about defaults for a run solved with settings someone chose', async () => {
+    publishOperation(operation({ setupDefaults: false }));
+    publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-defaults')).toBeNull();
+  });
+
   it('does not invent a reason for a cancelled job', async () => {
     publishOperation(operation());
     publishJobs([job({ status: 'cancelled', stage: 'cancelled', error_message: null })]);

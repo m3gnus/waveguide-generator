@@ -1730,6 +1730,9 @@ class CadOperationSummary(BaseModel):
     stage: str | None
     reason: str | None
     message: str | None
+    #: Solved with WG's default settings, none being recorded for the model
+    #: (``default_setup.py``); ``message`` then says so in words.
+    setup_defaults: bool = Field(default=False, alias="setupDefaults")
     job_id: str | None = Field(alias="jobId")
     attempt_generation: int = Field(alias="attemptGeneration")
     setup_revision_id: str | None = Field(alias="setupRevisionId")

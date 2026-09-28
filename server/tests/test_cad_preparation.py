@@ -49,8 +49,15 @@ from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnError, read_wgreturn
 
 
-def _manifest(step: bytes, document: bytes | None = None) -> dict[str, Any]:
-    """A complete, valid return manifest (as in test_cadlink_wgreturn.py)."""
+def _manifest(
+    step: bytes, document: bytes | None = None, *, sized: bool = True
+) -> dict[str, Any]:
+    """A complete, valid return manifest (as in test_cadlink_wgreturn.py).
+
+    ``sized=False`` leaves out the source's suggested mesh size, which WG's
+    default settings cannot supply: such a first-time model still waits for
+    its settings, so a test can retain a snapshot without solving it.
+    """
 
     instance = "instance-1"
     manifest = {
@@ -75,6 +82,8 @@ def _manifest(step: bytes, document: bytes | None = None) -> dict[str, Any]:
         "sources": [{"id": "source-hf", "role": "HF", "instance_id": instance, "required": True, "default_drive_channel_id": "drive-hf", "patch_policy": "single-connected", "expected_connected_components": 1, "selectors": {"linked_throat": {"instance_id": instance}, "appearance_labels": ["HF"]}, "observed": {"face_count": 1, "total_area_mm2": 506.696, "per_face_area_mm2": [506.696], "bodies": ["speaker"]}, "suggested_resolution_mm": 4}],
         "acoustics": None,
     }
+    if not sized:
+        del manifest["sources"][0]["suggested_resolution_mm"]
     if document is not None:
         # The captured Fusion document the add-in puts beside the geometry.
         manifest["files"]["model.f3d"] = {
@@ -92,13 +101,14 @@ def _write_return(
     *,
     step: bytes = b"STEP",
     document: bytes | None = None,
+    sized: bool = True,
 ) -> tuple[str, str]:
     bundle = workspace / "wgreturn" / name
     bundle.mkdir(parents=True)
     (bundle / "assembly.step").write_bytes(step)
     if document is not None:
         (bundle / "model.f3d").write_bytes(document)
-    body = json.dumps(_manifest(step, document)).encode("utf-8")
+    body = json.dumps(_manifest(step, document, sized=sized)).encode("utf-8")
     (bundle / "wgreturn.json").write_bytes(body)
     return f"wgreturn/{name}", "sha256:" + hashlib.sha256(body).hexdigest()
 
@@ -238,8 +248,10 @@ def harness(tmp_path: Path) -> Harness:
     return Harness(tmp_path)
 
 
-def _received(harness: Harness, command_id: str = "cmd-1") -> tuple[str, str]:
-    bundle_path, manifest = _write_return(harness.workspace)
+def _received(
+    harness: Harness, command_id: str = "cmd-1", *, sized: bool = True
+) -> tuple[str, str]:
+    bundle_path, manifest = _write_return(harness.workspace, sized=sized)
     _accept(harness.store, command_id, bundle_path, manifest)
     return bundle_path, manifest
 
@@ -304,22 +316,74 @@ def test_a_solve_is_prepared_from_the_retained_snapshot_and_submitted_once(harne
     assert stages.index("validating") < stages.index("preparing-mesh") < stages.index("ready") < stages.index("submitted")
 
 
-def test_a_first_cad_authored_model_waits_for_its_setup(harness: Harness) -> None:
+def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: Harness) -> None:
+    from server.cadlink.default_setup import DEFAULT_SETTINGS_NOTE
+
     _received(harness)
+
+    summary = harness.prepare()
+
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
+    assert summary["setupDefaults"] is True
+    assert summary["message"] == DEFAULT_SETTINGS_NOTE
+    request = harness.submitted[0]
+    options = request.model_dump(mode="json")["options"]
+    assert options["frequency_range"] == [50.0, 20000.0]
+    assert options["num_frequencies"] == 24
+    assert options["frequency_spacing"] == "log"
+    assert options["engine"] == "auto" and options["accuracy"] == "fast"
+    assert options["polar_config"]["angle_range"] == [0.0, 180.0, 37]
+    assert request.geometry.mesh.source_size_mm == {"source-hf": 4.0}
+    assert [channel.id for channel in request.geometry.drive_channels] == ["drive-hf"]
+    # The revision it solved with is bound to the operation and says it is WG's defaults.
+    row = harness.row()
+    assert row["setup_revision_id"] == summary["setupRevisionId"]
+    revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
+    assert revision["origin"] == "wg_defaults"
+
+
+def test_a_first_time_model_the_defaults_cannot_mesh_waits_for_its_settings(
+    harness: Harness,
+) -> None:
+    _received(harness, sized=False)
 
     summary = harness.prepare()
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
     assert summary["message"] == (
-        "Choose the solve settings for Tritonia speaker in WG, then solve it."
+        "WG cannot solve Tritonia speaker with its default settings: its return suggests "
+        "no mesh size for source-hf, and WG does not guess one. Choose its settings in WG, "
+        "then solve it."
     )
+    assert summary["setupDefaults"] is False
     assert harness.ingest.calls == [] and harness.submitted == []
+
+
+def test_a_named_setup_revision_that_is_gone_still_waits(harness: Harness) -> None:
+    """Explicit settings are never swapped for the defaults."""
+
+    _received(harness)
+
+    summary = harness.prepare(setup_revision_id="wgs_gone")
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
+    assert harness.ingest.calls == [] and harness.submitted == []
+
+
+def test_a_setup_revision_carries_its_origin_only_when_it_is_wg_defaults() -> None:
+    plain = validate_setup(_setup())
+    assert "origin" not in json.loads(setup_content(plain))
+    marked = validate_setup({**_setup(), "origin": "wg_defaults"})
+    assert json.loads(setup_content(marked))["origin"] == "wg_defaults"
+    assert setup_digest(marked) != setup_digest(plain)
+    with pytest.raises(ValueError):
+        validate_setup({**_setup(), "origin": "someone"})
 
 
 def test_an_accepted_return_still_prepares_after_its_folder_is_removed_and_wg_restarts(
     harness: Harness, tmp_path: Path
 ) -> None:
-    _received(harness)
+    _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"  # retained, then waits
     shutil.rmtree(harness.workspace)
     harness.store.close()
@@ -1172,7 +1236,7 @@ def test_a_retained_copy_wg_cannot_read_is_taken_again_from_the_wglink_folder(
 ) -> None:
     """Sending again, or pressing Solve now, has to be able to get past a bad copy."""
 
-    _received(harness)
+    _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"  # retained, then waits
     copy = _retained_copy(harness)
     (copy / "wgreturn.json").write_bytes(b"{ not json")
@@ -1188,7 +1252,7 @@ def test_a_retained_copy_wg_cannot_read_is_taken_again_from_the_wglink_folder(
 def test_an_unreadable_copy_with_the_return_gone_says_what_the_user_can_do(
     harness: Harness,
 ) -> None:
-    bundle_path, _manifest = _received(harness)
+    bundle_path, _manifest = _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"
     (_retained_copy(harness) / "wgreturn.json").write_bytes(b"{ not json")
     (harness.workspace / bundle_path).rename(harness.workspace / "elsewhere")
@@ -1243,7 +1307,7 @@ def test_a_different_valid_bundle_under_another_digest_is_never_solved(
     rather than mesh B's geometry under A's recorded identity.
     """
 
-    bundle_path, manifest_a = _received(harness)
+    bundle_path, manifest_a = _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"
     copy = _retained_copy(harness)
     _plant(harness, copy)
@@ -1261,7 +1325,7 @@ def test_a_different_valid_bundle_under_another_digest_is_replaced_by_the_right_
 ) -> None:
     """And with the return still in the WGLink folder, A is put back and solved."""
 
-    _received(harness)
+    _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"
     copy = _retained_copy(harness)
     _plant(harness, copy)
@@ -1313,7 +1377,7 @@ def test_a_member_damaged_retained_copy_is_replaced_when_solve_now_is_pressed(
     blaming the user's return while the good one sat in the WGLink folder.
     """
 
-    _received(harness)
+    _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"
     copy = _retained_copy(harness)
     (copy / "assembly.step").write_bytes(b"")
@@ -1334,7 +1398,7 @@ def test_a_damaged_copy_that_cannot_be_replaced_waits_rather_than_rejects(
     ``exchange_bundle_path`` raises, on a terminal state.
     """
 
-    bundle_path, _manifest = _received(harness)
+    bundle_path, _manifest = _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"
     (_retained_copy(harness) / "assembly.step").write_bytes(b"")
     (harness.workspace / bundle_path).rename(harness.workspace / "elsewhere")
@@ -1919,7 +1983,7 @@ def test_a_request_that_was_never_bound_is_dismissed_without_the_jobs_store(
 def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog) -> None:
     import logging
 
-    _received(harness)
+    _received(harness, sized=False)
 
     def logged(*parts: str) -> bool:
         return any(

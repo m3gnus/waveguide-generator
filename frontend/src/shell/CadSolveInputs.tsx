@@ -109,9 +109,13 @@ export function CadSolveInputs({
       <div><dt>Received</dt><dd>{operation?.createdAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
       <div><dt>Last moved</dt><dd>{operation?.updatedAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
     </dl>
+    {/* Solved with WG's default settings: said plainly, not as a report. */}
+    {operation?.setupDefaults && operation.message
+      && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">{operation.message}</p>}
     {/* Verbatim, because it is evidence: whatever the adapter or the
         preparation reported is what a second report has to be compared with. */}
-    {operation?.message && <p className="cad-solve-inputs-reported">Reported · {operation.message}</p>}
+    {operation?.message && !operation.setupDefaults
+      && <p className="cad-solve-inputs-reported">Reported · {operation.message}</p>}
     {(operationError || setupError) && <span className="cad-solve-inputs-error">
       Could not read all bound inputs: {operationError ?? setupError}
     </span>}

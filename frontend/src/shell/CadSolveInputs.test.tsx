@@ -179,4 +179,23 @@ describe('CAD solve input identities', () => {
     expect(host.textContent).toContain(first);
     expect(host.textContent).toContain(second);
   });
+
+  it('says plainly when a run was solved with WG\'s default settings', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const note = "Solved with WG's default settings \u2014 change them in WG.";
+
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({
+        setupRevisionId: null, state: 'accepted', stage: 'submitted', reason: null,
+        jobId: 'job-1', message: note, setupDefaults: true,
+      })}
+      resolvedEngine="metal"
+      engineSource="job"
+    />));
+
+    expect(host.querySelector('[data-setup-defaults="true"]')?.textContent).toBe(note);
+    // Said once, as a statement, not again as a verbatim report.
+    expect(host.querySelector('.cad-solve-inputs-reported')).toBeNull();
+  });
 });

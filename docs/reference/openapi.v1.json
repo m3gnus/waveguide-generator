@@ -339,6 +339,11 @@
             ],
             "title": "Reason"
           },
+          "setupDefaults": {
+            "default": false,
+            "title": "Setupdefaults",
+            "type": "boolean"
+          },
           "setupRevisionId": {
             "anyOf": [
               {

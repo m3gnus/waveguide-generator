@@ -70,13 +70,23 @@ from .operations import (
     TERMINAL_STATES,
     canonical_json,
 )
+from .default_setup import DEFAULT_SETTINGS_NOTE, default_setup
 from .project_setup import (
+    inventory_sha256,
     project_setup,
     snapshot_project,
     solver_anchor,
+    solver_selection,
     widen_polar_to_derivation,
 )
-from .setup import CadSolveSetup, solve_request_for, validate_setup
+from .setup import (
+    DEFAULTS_ORIGIN,
+    CadSolveSetup,
+    setup_content,
+    setup_digest,
+    solve_request_for,
+    validate_setup,
+)
 from .domain_decision import decision_problem
 from .domain_interpretation import (
     excitation_problem,
@@ -222,6 +232,8 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
         "stage": stage,
         "reason": row.get("reason"),
         "message": outcome.get("message") if isinstance(outcome, Mapping) else None,
+        # Solved with WG's default settings: ``message`` says so in words.
+        "setupDefaults": bool(isinstance(outcome, Mapping) and outcome.get("setup_defaults")),
         "jobId": row.get("job_id"),
         "attemptGeneration": int(row.get("attempt_generation") or 0),
         "setupRevisionId": row.get("setup_revision_id"),
@@ -620,14 +632,18 @@ def _finish(
     job_id: str | None = None,
     stage: str | None = None,
     release_binding: bool = False,
+    setup_defaults: bool = False,
 ) -> dict[str, Any]:
+    outcome: dict[str, Any] = {"message": message} if message else {}
+    if setup_defaults:
+        outcome["setup_defaults"] = True
     row = ctx.store.record_outcome(
         operation_id,
         generation,
         state,
         job_id=job_id,
         reason=reason,
-        outcome={"message": message} if message else None,
+        outcome=outcome or None,
         stage=stage,
         release_binding=release_binding,
     )
@@ -662,7 +678,8 @@ def _load_setup(
 
     One the request names; otherwise the snapshot's project's own, with the
     engine selected in WG (CAD-OPERATIONS.md, "Project setups"). None when the
-    project has none for these sources yet.
+    project has none for these sources yet -- the caller then uses WG's
+    default settings -- or when the revision named is gone.
     """
 
     if revision_id:
@@ -938,9 +955,23 @@ def _prepare_sync(
             )
         _advance(ctx, operation_id, generation, snapshot=_snapshot_record(store, retained))
 
+    named_revision = _operation_setup_revision(store, row, request.setup_revision_id)
     try:
-        loaded = _load_setup(
-            ctx, _operation_setup_revision(store, row, request.setup_revision_id), retained
+        loaded = _load_setup(ctx, named_revision, retained)
+        if loaded is None and named_revision is None:
+            # A first-time model -- no settings recorded for its project and
+            # these sources: WG's default settings, never another project's.
+            loaded = _default_setup(ctx, retained)
+    except _DefaultsUnavailable as exc:
+        snapshot = _snapshot_record(store, retained)
+        _advance(ctx, operation_id, generation, snapshot=snapshot)
+        document = snapshot["document_name"] or "this model"
+        return "done", _finish(
+            ctx, operation_id, generation, NEEDS_USER_INPUT, reason="setup_required",
+            message=(
+                f"WG cannot solve {document} with its default settings: {exc}. "
+                "Choose its settings in WG, then solve it."
+            ),
         )
     except WgReturnError as exc:
         return "done", _finish(
@@ -954,8 +985,8 @@ def _prepare_sync(
             "Choose them again in WG, then press Solve now.",
         )
     if loaded is None:
-        # A first-time CAD-authored model never borrows settings from whatever
-        # project is open: it waits for the user to choose them.
+        # The settings this operation names are gone: it never borrows settings
+        # from whatever project is open, and waits for the user to choose them.
         # Whose it is may have become known since it was retained.
         snapshot = _snapshot_record(store, retained)
         _advance(ctx, operation_id, generation, snapshot=snapshot)
@@ -1053,6 +1084,9 @@ def _prepare_sync(
                 ctx, operation_id, generation, NEEDS_USER_INPUT, reason="preparation_failed",
                 message=f"Preparing the mesh failed: {exc}",
             )
+
+    if setup.origin == DEFAULTS_ORIGIN:
+        _remember_default_setup(store, retained_manifest, record, revision_id)
 
     blocking = [
         str(finding.get("id"))
@@ -1168,6 +1202,57 @@ def _prepare_sync(
     return "submit", (solve_request, revision_id)
 
 
+class _DefaultsUnavailable(ValueError):
+    """WG's default settings cannot solve this model; the message says why."""
+
+
+def _default_setup(
+    ctx: PreparationContext, retained: Mapping[str, Any]
+) -> tuple[CadSolveSetup, str]:
+    """WG's default setup for a first-time model, as a setup revision.
+
+    With the engine and accuracy selected in WG, as every project setup is
+    (``project_setup``). The revision is bound to the operation like any
+    other, so a retry reuses it and the run names exactly what it solved.
+    """
+
+    manifest = read_snapshot(str(retained["retained_path"]), retained=True).manifest
+    try:
+        setup = default_setup(manifest, solver_selection(ctx.store))
+    except ValueError as exc:
+        raise _DefaultsUnavailable(str(exc)) from exc
+    revision = ctx.store.create_setup_revision(setup_content(setup), setup_digest(setup))
+    return setup, str(revision["revision_id"])
+
+
+def _remember_default_setup(
+    store: CadLinkStore,
+    manifest: Mapping[str, Any],
+    record: Mapping[str, Any],
+    revision_id: str,
+) -> None:
+    """Make the defaults a first-time model was solved with its project's setup.
+
+    Once the ingest has filed the snapshot under a project, so the next solve
+    of the same sources reuses them and the user changes them in WG like any
+    other settings. Never over settings the project has meanwhile: a person's
+    own choice always wins over WG's defaults.
+    """
+
+    project = record.get("project")
+    lineage_id = snapshot_project(store, manifest) or (
+        str(project.get("lineage_id") or "").strip() if isinstance(project, Mapping) else ""
+    )
+    if not lineage_id:
+        return
+    inventory = inventory_sha256(
+        [source for source in manifest.get("sources") or [] if isinstance(source, Mapping)]
+    )
+    if store.get_project_setup(lineage_id, inventory) is not None:
+        return
+    store.record_project_setup(lineage_id, inventory, revision_id)
+
+
 async def _submit(
     ctx: PreparationContext,
     operation_id: str,
@@ -1248,9 +1333,23 @@ async def _submit(
             _finish, ctx, operation_id, generation, NEEDS_USER_INPUT, reason="interrupted",
             message=f"Submitting the solve failed: {exc}. Press Solve now to try again.",
         )
+    defaults = await asyncio.to_thread(_is_default_setup, store, revision_id)
     return await asyncio.to_thread(
         _finish, ctx, operation_id, generation, ACCEPTED, job_id=job_id, stage=STAGE_SUBMITTED,
+        message=DEFAULT_SETTINGS_NOTE if defaults else None, setup_defaults=defaults,
     )
+
+
+def _is_default_setup(store: CadLinkStore, revision_id: str | None) -> bool:
+    """Whether a setup revision is WG's default settings (``default_setup``)."""
+
+    row = store.get_setup_revision(revision_id) if revision_id else None
+    if row is None:
+        return False
+    try:
+        return json.loads(row["setup_json"]).get("origin") == DEFAULTS_ORIGIN
+    except (TypeError, ValueError, AttributeError):
+        return False
 
 
 def _restart_pending(ctx: PreparationContext) -> str | None:

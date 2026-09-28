@@ -175,7 +175,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `target_not_exact` | `rejected` | The target does not resolve to exactly one instance |
 | `snapshot_invalid` | `rejected` | The snapshot fails verification, or no longer matches the operation's inputs |
 | `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Delivery over HTTP"). Sending it again is a new operation |
-| `setup_required` | `needs_user_input` | No setup revision is bound yet; a CAD-authored model never borrows the open project's |
+| `setup_required` | `needs_user_input` | The settings named or recorded cannot be used, or WG's defaults cannot solve a first-time model (a source with no suggested mesh size); a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in (see "Unlinked solver frame") |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
@@ -319,8 +319,20 @@ whatever project is open. Nothing on the backend reads the live UI:
 - **The engine is the one selected in WG.** A recorded setup keeps its engine only until
   the selection says otherwise; the setup actually used is itself a setup revision, which
   the operation names.
-- **None yet** means `setup_required`: a first-time model waits for the user to choose
-  its settings, and never borrows another project's.
+- **None yet** means WG's default settings: a first-time model is prepared and solved
+  with them (`server/cadlink/default_setup.py`), never with another project's. The
+  defaults are stated once, in `shared/solve-defaults.json`, which the frontend's initial
+  solve settings read too, so they are exactly what a first-time Solve in WG would use:
+  the default sweep and directivity, the selected engine and accuracy, each source's
+  suggested mesh size, one drive channel per default drive channel id at the model's own
+  drive (no driver is invented), and the default crossover chain for two or more
+  channels. The setup is a revision marked `origin: "wg_defaults"`; it is bound to the
+  operation and, once the ingest has filed the snapshot under a project, recorded as that
+  project's setup for its sources unless the user recorded one meanwhile, so the next
+  solve reuses it. The accepted outcome says so (`setup_defaults`, and a message the solve
+  card and run details show). What the defaults cannot supply -- a source whose return
+  suggests no mesh size -- is still `setup_required`, with a message naming it. A named
+  revision that is gone waits too; it is never replaced by the defaults.
 - **The polar grid** of the request is widened to what the ingestion derived for the
   snapshot, as the frontend does; the runtime refuses a narrower one.
 

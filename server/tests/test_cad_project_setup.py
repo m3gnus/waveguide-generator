@@ -58,11 +58,17 @@ def _project(harness: Harness, coverage: float) -> tuple[str, str]:
     return identity.design_id, identity.lineage_id
 
 
-def _project_return(harness: Harness, name: str, design_id: str, lineage_id: str) -> tuple[str, str]:
-    """A return Fusion exported from that project's design."""
+def _project_return(
+    harness: Harness, name: str, design_id: str, lineage_id: str, *, sized: bool = True
+) -> tuple[str, str]:
+    """A return Fusion exported from that project's design.
+
+    ``sized=False``: its source suggests no mesh size, so WG's defaults cannot
+    solve it and a first-time solve still waits for its settings.
+    """
 
     step = b"STEP " + name.encode()
-    manifest = copy.deepcopy(_manifest(step))
+    manifest = copy.deepcopy(_manifest(step, sized=sized))
     manifest["instances"][0]["design_id"] = design_id
     manifest["instances"][0]["lineage_id"] = lineage_id
     bundle = harness.workspace / "wgreturn" / f"{name}.wgreturn"
@@ -204,8 +210,12 @@ def test_a_reassigned_source_identity_does_not_inherit_the_project_setup(harness
 
     summary = harness.prepare("cmd-9")
 
-    assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
-    assert harness.submitted == []
+    # Not the other source's settings: WG's defaults, for the new inventory.
+    assert (summary["state"], summary["setupDefaults"]) == ("accepted", True)
+    assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 4.0
+    assert harness.store.get_project_setup(
+        lineage, inventory_sha256([{"id": "cad-source-17", "role": "HF", "required": True}])
+    )["revision_id"] != summary["setupRevisionId"]
 
 
 def test_a_legacy_source_inventory_digest_is_byte_stable(harness: Harness) -> None:
@@ -302,17 +312,80 @@ def test_backend_preparation_defaults_older_selection_and_setup_to_fast(harness:
     assert revision["options"].get("accuracy", "fast") == "fast"
 
 
-def test_a_model_with_no_recorded_setup_waits_for_its_settings(harness: Harness) -> None:
+def test_a_model_with_no_recorded_setup_is_solved_with_wg_defaults_and_remembers_them(
+    harness: Harness,
+) -> None:
+    from server.cadlink.default_setup import DEFAULT_SETTINGS_NOTE
+
+    b_design, b_lineage = _project(harness, 60.0)
+    _select_engine(harness, "metal", "accurate")
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+
+    first = harness.prepare("cmd-b")  # Fusion's Solve, nothing recorded yet
+
+    assert (first["state"], first["jobId"]) == ("accepted", "job-1")
+    assert (first["setupDefaults"], first["message"]) == (True, DEFAULT_SETTINGS_NOTE)
+    request = harness.submitted[-1]
+    # The shared solver selection, and the model's own suggested mesh size.
+    assert (request.options.engine, request.options.accuracy) == ("metal", "accurate")
+    assert request.geometry.mesh.source_size_mm == {"source-hf": 4.0}
+    revision = json.loads(harness.store.get_setup_revision(first["setupRevisionId"])["setup_json"])
+    assert revision["origin"] == "wg_defaults"
+    # Recorded as the project's setup for these sources ...
+    sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
+    recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
+    assert recorded["revision_id"] == first["setupRevisionId"]
+
+    # ... so the next Solve reuses exactly it.
+    again_path, again_manifest = _project_return(harness, "b2", b_design, b_lineage)
+    _accept(harness.store, "cmd-b2", again_path, again_manifest)
+    second = harness.prepare("cmd-b2")
+
+    assert (second["state"], second["setupRevisionId"]) == ("accepted", first["setupRevisionId"])
+    assert second["setupDefaults"] is True
+
+    # Settings the user then chooses in WG replace the defaults, and say nothing of them.
+    _record_setup(harness, b_lineage, _setup(rigid=9.0, engine="metal", accuracy="accurate"))
+    third_path, third_manifest = _project_return(harness, "b3", b_design, b_lineage)
+    _accept(harness.store, "cmd-b3", third_path, third_manifest)
+    third = harness.prepare("cmd-b3")
+
+    assert third["state"] == "accepted" and third["setupDefaults"] is False
+    assert third["message"] is None
+    assert harness.submitted[-1].geometry.mesh.rigid_size_mm == 9.0
+
+
+def test_defaults_never_replace_settings_recorded_while_they_were_prepared(
+    harness: Harness,
+) -> None:
     b_design, b_lineage = _project(harness, 60.0)
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+    # The user records settings while WG meshes the first-time model.
+    harness.ingest.during = lambda: _record_setup(harness, b_lineage, _setup(rigid=9.0))
+
+    summary = harness.prepare("cmd-b")
+
+    assert (summary["state"], summary["setupDefaults"]) == ("accepted", True)
+    sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
+    recorded = harness.store.get_project_setup(b_lineage, inventory_sha256(sources))
+    assert recorded["revision_id"] != summary["setupRevisionId"]
+
+
+def test_a_model_the_defaults_cannot_mesh_waits_naming_what_is_missing(harness: Harness) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage, sized=False)
     _accept(harness.store, "cmd-b", bundle_path, manifest)
 
     summary = harness.prepare("cmd-b")
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
-    assert harness.submitted == []
-    # It names the document whose settings are wanted, which the UI cannot know.
+    assert harness.submitted == [] and harness.ingest.calls == []
+    # It names the document and exactly what the defaults cannot supply.
     assert "Tritonia speaker" in summary["message"]
+    assert "default settings" in summary["message"]
+    assert "no mesh size for source-hf" in summary["message"]
 
 
 def _deliver(harness: Harness, command_id: str, bundle_path: str, manifest: str) -> Path:
@@ -346,9 +419,9 @@ def _pass(harness: Harness, running: set[str] | frozenset[str] = frozenset()) ->
 
 def test_a_stored_snapshot_is_solvable_with_fusion_closed(harness: Harness) -> None:
     b_design, b_lineage = _project(harness, 60.0)
-    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage, sized=False)
     _deliver(harness, "cmd-b", bundle_path, manifest)
-    assert _pass(harness) == ["cmd-b"]  # retained, then waits: no settings yet
+    assert _pass(harness) == ["cmd-b"]  # retained, then waits: no usable settings yet
     assert harness.row("cmd-b")["reason"] == "setup_required"
     # Fusion is closed: no heartbeat and no exchange folder.
     shutil.rmtree(harness.workspace)
@@ -426,7 +499,7 @@ def test_the_backend_collects_and_prepares_solve_commands_itself(harness: Harnes
 
 def test_the_loop_never_retries_an_operation_waiting_for_the_user(harness: Harness) -> None:
     b_design, b_lineage = _project(harness, 60.0)
-    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage, sized=False)
     _deliver(harness, "cmd-b", bundle_path, manifest)
 
     assert _pass(harness) == ["cmd-b"]
@@ -871,3 +944,23 @@ def test_a_solve_now_an_update_restart_overtakes_waits_for_it_and_then_runs(
     row = harness.row("cmd-b")
     assert (row["state"], row["job_id"]) == ("accepted", "job-1")
     assert len(harness.ingest.calls) == 1
+
+
+def test_a_recorded_setup_that_cannot_be_used_still_waits_rather_than_using_defaults(
+    harness: Harness,
+) -> None:
+    b_design, b_lineage = _project(harness, 60.0)
+    bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
+    sources = read_wgreturn(harness.workspace / bundle_path).manifest["sources"]
+    # A setup this build cannot take, recorded for exactly these sources.
+    unusable = harness.store.create_setup_revision('{"geometry": {}}', "sha256:" + "9" * 64)
+    harness.store.record_project_setup(
+        b_lineage, inventory_sha256(sources), str(unusable["revision_id"])
+    )
+    _accept(harness.store, "cmd-b", bundle_path, manifest)
+
+    summary = harness.prepare("cmd-b")
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
+    assert "cannot be used" in summary["message"]
+    assert harness.submitted == [] and harness.ingest.calls == []

@@ -549,6 +549,7 @@ describe('combined output', () => {
 
   it('falls back inside the sweep when the role default lies outside it', () => {
     useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'LF', 'source-hf': 'MF' }));
+    useCadReturnStore.getState().setSweep({ frequencyStartHz: 200, frequencyEndHz: 20_000, frequencyCount: 24 });
     // 100 Hz would be refused by the server's own band check on a 200 Hz sweep,
     // so the log-spaced sqrt(200 * 20000) = 2000 Hz is used instead.
     const [pair] = combineChain(useCadReturnStore.getState());
@@ -562,6 +563,8 @@ describe('combined output', () => {
 
   it('keeps the log-spaced fallback and listing order for an unroled return', () => {
     useCadReturnStore.getState().selectBundle(rebanded({ 'source-mf': 'AUX', 'source-hf': 'AUX' }));
+    // sqrt(200 * 20000): the log-spaced midpoint of this sweep.
+    useCadReturnStore.getState().setSweep({ frequencyStartHz: 200, frequencyEndHz: 20_000, frequencyCount: 24 });
     expect(combineChain(useCadReturnStore.getState())).toEqual([{
       key: 'drive-mf→drive-hf',
       lower: 'drive-mf',

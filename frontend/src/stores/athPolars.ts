@@ -1,4 +1,5 @@
 import type { ConfigBlock } from './design';
+import { DEFAULT_POLAR_UI } from './solveDefaults';
 
 const ATH_POLAR_PREFIX = 'ABEC.Polars:';
 const AXIS_ORDER = ['horizontal', 'vertical', 'diagonal'] as const;
@@ -27,17 +28,10 @@ export interface AthPolarUiState {
   fieldPlane: boolean;
 }
 
+/** WG's default directivity rig, from shared/solve-defaults.json (./solveDefaults). */
 export const DEFAULT_ATH_POLAR_UI: AthPolarUiState = Object.freeze({
-  angleStart: 0,
-  angleEnd: 180,
-  angleStep: 5,
-  distance: 2,
-  normAngle: 5,
-  diagonalAngle: 45,
-  enabledAxes: [...AXIS_ORDER],
-  observationOrigin: 'mouth',
-  sphericalSampling: false,
-  fieldPlane: true,
+  ...DEFAULT_POLAR_UI,
+  enabledAxes: [...DEFAULT_POLAR_UI.enabledAxes],
 });
 
 function isRecord(value: unknown): value is Record<string, unknown> {

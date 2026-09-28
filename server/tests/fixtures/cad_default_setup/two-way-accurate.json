@@ -1,0 +1,131 @@
+{
+  "about": "WG's default CAD setup for these sources and solver selection, as the frontend records it. The backend's default_setup.py and the frontend's first-time settings (buildCadProjectSetup on untouched stores) must both produce exactly this.",
+  "sources": [
+    {
+      "id": "source-hf",
+      "role": "HF",
+      "required": true,
+      "suggested_resolution_mm": 3,
+      "default_drive_channel_id": "drive-hf"
+    },
+    {
+      "id": "source-lf",
+      "role": "LF",
+      "required": true,
+      "suggested_resolution_mm": 12,
+      "default_drive_channel_id": "drive-lf"
+    }
+  ],
+  "selection": {
+    "engine": "auto",
+    "accuracy": "accurate"
+  },
+  "setup": {
+    "driver_references": {},
+    "geometry": {
+      "combine": {
+        "channels": {
+          "drive-hf": {
+            "delay": {
+              "mode": "auto"
+            },
+            "gain": {
+              "mode": "auto"
+            },
+            "hp": {
+              "family": "lr",
+              "fc_hz": 1000,
+              "order": 4
+            },
+            "invert": null,
+            "lp": null
+          },
+          "drive-lf": {
+            "delay": {
+              "mode": "auto"
+            },
+            "gain": {
+              "mode": "auto"
+            },
+            "hp": null,
+            "invert": null,
+            "lp": {
+              "family": "lr",
+              "fc_hz": 1000,
+              "order": 4
+            }
+          }
+        },
+        "members": [
+          "drive-lf",
+          "drive-hf"
+        ],
+        "reference": "drive-hf"
+      },
+      "drive_channels": [
+        {
+          "id": "drive-hf",
+          "motion": "normal",
+          "source_ids": [
+            "source-hf"
+          ]
+        },
+        {
+          "id": "drive-lf",
+          "motion": "normal",
+          "source_ids": [
+            "source-lf"
+          ]
+        }
+      ],
+      "exterior_only": false,
+      "mesh": {
+        "rigid_size_mm": 12,
+        "source_size_mm": {
+          "source-hf": 3,
+          "source-lf": 12
+        },
+        "transition_mm": 12
+      },
+      "skipped_source_ids": []
+    },
+    "options": {
+      "accuracy": "accurate",
+      "engine": "auto",
+      "frequency_range": [
+        50,
+        20000
+      ],
+      "frequency_spacing": "log",
+      "mesh_validation_mode": "warn",
+      "num_frequencies": 24,
+      "polar_config": {
+        "angle_range": [
+          0,
+          180,
+          37
+        ],
+        "angle_step": 5,
+        "distance": 2,
+        "enabled_axes": [
+          "horizontal",
+          "vertical",
+          "diagonal"
+        ],
+        "field_plane": true,
+        "inclination": 45,
+        "norm_angle": 5,
+        "observation_origin": "mouth",
+        "spherical_sampling": false
+      },
+      "solver_mode": "full_3d",
+      "symmetry": "auto",
+      "verbose": false
+    },
+    "preparation": {
+      "area_drift_overrides": [],
+      "symmetry_mode": "auto"
+    },
+    "schema_version": 1
+  }
+}

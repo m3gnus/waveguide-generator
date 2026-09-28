@@ -398,6 +398,8 @@ describe('M1b: one Solve card, to the revealed result', () => {
       } },
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [800]),
+      // A sweep starting above WG's default, so the crossovers below it are blocked.
+      frequencyStartHz: 200,
     });
     await mount();
     await vi.waitFor(() => expect(solveButton().disabled).toBe(false));
@@ -425,7 +427,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(host.querySelector('[data-frame-preview-axis="+x"]')).not.toBeNull();
     // The model and the settings Solve uses, each in one line.
     expect(host.querySelector('.cad-solve-summary')!.textContent).toBe('Body1 · 1 source (HF) · full model, WG mirrors it at x = 0');
-    expect(host.querySelector('.cad-solve-settings > span')!.textContent).toBe('200 Hz–20 kHz · 24 freq · AUTO (Metal) · ~3 min');
+    expect(host.querySelector('.cad-solve-settings > span')!.textContent).toBe('50 Hz–20 kHz · 24 freq · AUTO (Metal) · ~3 min');
     expect(solveButtons()).toHaveLength(1);
 
     await pressSolve();
@@ -441,7 +443,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
     expect(mocks.prepareCadOperation).toHaveBeenCalledWith(operationId, { setupRevisionId: expect.any(String), submit: true, frameAxis: '+x' });
     const bound = revisions.get(mocks.prepareCadOperation.mock.calls[0][1].setupRevisionId as string)!;
-    expect(bound.options).toMatchObject({ frequency_range: [200, 20_000], num_frequencies: 24 });
+    expect(bound.options).toMatchObject({ frequency_range: [50, 20_000], num_frequencies: 24 });
     // The remembered settings are the ones solved, without the run's name.
     const remembered = mocks.putProjectSetup.mock.calls[0][0].setup as CadSolveSetup;
     expect({ ...remembered.options, solver_mode: 'full_3d' }).toEqual(bound.options);

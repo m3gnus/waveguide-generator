@@ -3,6 +3,7 @@ import { withEditSignals } from './solveSettingsEdits';
 import { createJSONStorage, persist } from 'zustand/middleware';
 import { DEFAULT_ATH_POLAR_UI, MIN_POLAR_DISTANCE_M, athPolarOverrides } from './athPolars';
 import { durableSettings } from './durableSettings';
+import { DEFAULT_GROUND_PLANE, DEFAULT_SOLVER, DEFAULT_SWEEP } from './solveDefaults';
 import { MAX_FREQUENCY_POINTS, parseFrequencyList, type FrequencyListParse } from './frequencyList';
 import {
   ENGINE_PATTERN,
@@ -217,22 +218,24 @@ export interface PersistedSolveOptions {
   groundPlane: GroundPlaneConfig;
 }
 
+/** WG's defaults, from shared/solve-defaults.json (./solveDefaults), which the
+ * backend's default CAD setup reads too. */
 export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
-  engine: 'auto',
-  accuracy: 'fast',
-  solverMode: 'full_3d',
-  symmetry: 'auto',
-  meshValidationMode: 'warn',
-  verbose: false,
-  frequencySpacing: 'log',
+  engine: DEFAULT_SOLVER.engine,
+  accuracy: DEFAULT_SOLVER.accuracy,
+  solverMode: DEFAULT_SOLVER.solverMode,
+  symmetry: DEFAULT_SOLVER.symmetry,
+  meshValidationMode: DEFAULT_SOLVER.meshValidationMode,
+  verbose: DEFAULT_SOLVER.verbose,
+  frequencySpacing: DEFAULT_SWEEP.spacing,
   frequencyMode: 'range',
   frequencyListText: '',
   polar: defaultPolarUi,
   // Off by default: a ground plane changes the answer, so it is never on
-  // unless asked for. 1.0 m is a listening-axis starting height, not a
+  // unless asked for. The height is a listening-axis starting height, not a
   // constant -- the server refuses rather than guesses if the model would
   // cross the plane at it.
-  groundPlane: Object.freeze({ enabled: false, axis: 'y', height_m: 1.0 }) as GroundPlaneConfig,
+  groundPlane: Object.freeze({ ...DEFAULT_GROUND_PLANE }) as GroundPlaneConfig,
 });
 
 export function defaultSolveOptions(): PersistedSolveOptions {
