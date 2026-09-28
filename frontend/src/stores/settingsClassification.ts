@@ -28,6 +28,7 @@ export type SolveOptionKey = Exclude<keyof PersistedSolveOptions, 'polar'> | `po
  */
 export const SOLVE_OPTION_EFFECTS: Record<SolveOptionKey, PreferenceEffect> = {
   engine: 'solve-affecting',
+  accuracy: 'solve-affecting',
   solverMode: 'solve-affecting',
   symmetry: 'solve-affecting',
   meshValidationMode: 'solve-affecting',

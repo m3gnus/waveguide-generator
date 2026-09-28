@@ -541,22 +541,30 @@ def test_a_linked_return_with_the_axis_along_minus_z_is_rotated_not_refused(
     np.testing.assert_allclose(nodes, _nodes(MESH) * np.asarray([1.0, -1.0, -1.0]))
 
 
-@pytest.mark.parametrize("backend", ["metal", "cuda", "rocm", None])
-def test_only_the_cpu_backend_takes_imported_geometry(backend: str | None) -> None:
+@pytest.mark.parametrize("backend", ["metal", "cuda", "rocm", "cpu"])
+def test_imported_adapter_passes_selected_backend_to_beat(
+    backend: str, recording_beat: _RecordingBeat, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        beat_imported,
+        "beat_backend_statuses",
+        lambda: {backend: {"available": True, "reason": "ok", "backend": backend}},
+    )
     engine = beat.BeatEngine(backend)
 
-    refusal = engine.imported_preflight(_record(), MESH)
-
-    assert refusal is not None and "does not solve imported CAD geometry" in refusal
-    with pytest.raises(beat.BeatUnavailable, match="does not solve imported CAD geometry"):
-        asyncio.run(
-            engine.run(
-                _request(),
-                cancel_cb=lambda: None,
-                stage_cb=lambda *_: None,
-                imported_record=_record(),
-            )
+    assert engine.imported_preflight(_record(), MESH) is None
+    result = asyncio.run(
+        engine.run(
+            _request(),
+            cancel_cb=lambda: None,
+            stage_cb=lambda *_: None,
+            imported_record=_record(),
         )
+    )
+
+    assert recording_beat.solves
+    assert {solve["config"].beat_backend for solve in recording_beat.solves} == {backend}
+    assert result.results["metadata"]["solver_engine"]["device"] == backend
 
 
 def test_the_passive_cardioid_campaign_is_refused_on_beat(
@@ -598,7 +606,7 @@ def test_the_imported_ground_plane_backstop_names_no_single_engine() -> None:
     assert "Metal" not in str(caught.value)
 
 
-def test_the_registry_declares_imported_geometry_for_beat_cpu_only(
+def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from server.solver import bempp, circsym, metal
@@ -618,7 +626,7 @@ def test_the_registry_declares_imported_geometry_for_beat_cpu_only(
     imported = sorted(
         name for name, info in engines.items() if "imported" in info.geometry_sources
     )
-    assert imported == ["beat-cpu", "metal"]
+    assert imported == ["beat-cpu", "beat-cuda", "beat-metal", "beat-rocm", "metal"]
     assert engines["beat-cpu"].symmetry_domains == ("full", "half-yz", "quarter")
     assert engines["metal"].imported_features == ("passive-cardioid",)
     assert engines["beat-cpu"].imported_features == ()

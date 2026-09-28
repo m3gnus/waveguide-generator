@@ -20,6 +20,7 @@ import type {
   MeshValidationMode,
   ObservationOrigin,
   SymmetryMode,
+  SolveAccuracy,
 } from './solveOptions';
 import { MAX_FREQUENCY_POINTS, parseFrequencyList } from './frequencyList';
 
@@ -27,6 +28,7 @@ export const WG_SOLVE_BLOCK = 'WG.Solve';
 
 /** Portable solve settings that belong to the design rather than to the machine. */
 export interface WgSolveSettings {
+  accuracy?: SolveAccuracy;
   symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
   verbose: boolean;
@@ -86,6 +88,8 @@ export function wgSolveOverrides(blocks: unknown): Partial<WgSolveSettings> | nu
   const source = items(blocks);
   if (!source) return null;
   const overrides: Partial<WgSolveSettings> = {};
+  const accuracy = oneOf(source.Accuracy, ['fast', 'accurate']);
+  if (accuracy) overrides.accuracy = accuracy;
 
   // Legacy blocks may contain Engine. It is intentionally ignored: backend
   // selection belongs to this machine and must not be overwritten by opening
@@ -147,6 +151,7 @@ export function withWgSolveBlock(
     SphericalSampling: settings.sphericalSampling ? '1' : '0',
     FieldPlane: settings.fieldPlane ? '1' : '0',
   };
+  if (settings.accuracy) values.Accuracy = settings.accuracy;
   // Only a usable list is written. Persisting a half-typed one would hand the
   // next reader a file that refuses to solve.
   if (settings.frequencyMode === 'list') {

@@ -4482,6 +4482,14 @@
             "title": "Cancellation Requested",
             "type": "boolean"
           },
+          "channel_solve_executions": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Channel Solve Executions",
+            "type": "object"
+          },
           "client_metadata": {
             "additionalProperties": true,
             "title": "Client Metadata",
@@ -4734,6 +4742,27 @@
               }
             ],
             "title": "Script Snapshot"
+          },
+          "solve_accuracy": {
+            "default": "fast",
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Solve Accuracy",
+            "type": "string"
+          },
+          "solve_execution": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Execution"
           },
           "solve_options": {
             "$ref": "#/components/schemas/SolveOptions"
@@ -5056,6 +5085,14 @@
             "title": "Cancellation Requested",
             "type": "boolean"
           },
+          "channel_solve_executions": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Channel Solve Executions",
+            "type": "object"
+          },
           "client_metadata": {
             "additionalProperties": true,
             "title": "Client Metadata",
@@ -5319,6 +5356,27 @@
               }
             ],
             "title": "Script Snapshot"
+          },
+          "solve_accuracy": {
+            "default": "fast",
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Solve Accuracy",
+            "type": "string"
+          },
+          "solve_execution": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Solve Execution"
           },
           "solve_options": {
             "$ref": "#/components/schemas/SolveOptions"
@@ -7772,6 +7830,15 @@
         "additionalProperties": false,
         "description": "Execution choices kept separate from the authoritative v2 design.",
         "properties": {
+          "accuracy": {
+            "default": "fast",
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Accuracy",
+            "type": "string"
+          },
           "engine": {
             "default": "auto",
             "title": "Engine",

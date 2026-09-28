@@ -148,6 +148,7 @@ class SolveOptions(JobModel):
     """Execution choices kept separate from the authoritative v2 design."""
 
     engine: str = "auto"
+    accuracy: Literal["fast", "accurate"] = "fast"
     # ``auto`` remains accepted for old clients but resolves as Full 3D. The
     # axisymmetric formulation is explicit-only through ``circsym``.
     solver_mode: Literal["auto", "full_3d", "circsym"] = "full_3d"
@@ -1278,6 +1279,9 @@ class JobItem(JobModel):
     completed_at: str | None = None
     config_summary: dict[str, Any]
     solve_options: SolveOptions
+    solve_accuracy: Literal["fast", "accurate"] = "fast"
+    solve_execution: dict[str, Any] | None = None
+    channel_solve_executions: dict[str, dict[str, Any]] = Field(default_factory=dict)
     has_results: bool
     has_mesh_artifact: bool
     has_pressure_basis_artifact: bool = False

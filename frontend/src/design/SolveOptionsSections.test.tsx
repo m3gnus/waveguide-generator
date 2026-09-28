@@ -56,13 +56,32 @@ describe('solve and directivity control help', () => {
 
   it('documents every solve option', () => {
     render(<SolveOptionsControls />);
-    for (const id of ['solve-engine', 'solve-mode', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
+    for (const id of ['solve-accuracy', 'solve-engine', 'solve-mode', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
       const control = host.querySelector(`#${id}`)!;
       expect(control, id).not.toBeNull();
       // The hover target is the labelled row, not the input itself.
       const row = control.closest('.select-row, .toggle-row')!;
       expect(hoverText(row).length, `${id} has no hover help`).toBeGreaterThan(40);
     }
+  });
+
+  it('uses one accuracy control and store in parametric and CAD Link modes', () => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [
+        { name: 'beat-metal', available: false, reason: 'offline', version: null, fast_paths: [] },
+        { name: 'beat-cpu', available: true, reason: null, version: 'test', fast_paths: [] },
+      ],
+    });
+    render(<SolveOptionsControls mode="parametric" />);
+    const select = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+    expect(select.value).toBe('fast');
+    act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+    expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
+    expect(host.textContent).toContain('Accurate will use BEAT CPU');
+    render(<SolveOptionsControls mode="cad" />);
+    expect(host.querySelector<HTMLSelectElement>('#solve-accuracy')?.value).toBe('accurate');
+    expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
+    expect(host.textContent).toContain('Burton–Miller via BEAT');
   });
 
   it('keeps the portable axisymmetric path in machine-local solve options', () => {

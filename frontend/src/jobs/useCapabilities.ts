@@ -90,16 +90,25 @@ export function useCapabilities(): CapabilitiesSnapshot {
 /** Full capability record for controls whose support is version-dependent. */
 export function useActiveBackendCapability(): EngineCapability | null {
   const engine = useSolveOptionsStore((state) => state.engine);
+  const accuracy = useSolveOptionsStore((state) => state.accuracy);
   const { engines, engineSelection } = useCapabilities();
-  return activeBackendCapability(engine, engines, engineSelection);
+  return activeBackendCapability(accuracyEngine(engine, accuracy, engines), engines, engineSelection);
+}
+
+/** Match the server's BEAT GPU readiness order for UI capability previews. */
+export function accuracyEngine(engine: string, accuracy: 'fast' | 'accurate', engines: readonly EngineCapability[]): string {
+  if (engine !== 'auto' || accuracy === 'fast') return engine;
+  return ['beat-metal', 'beat-cuda', 'beat-rocm', 'beat-cpu']
+    .find((name) => engines.some((item) => item.name === name && item.available)) ?? 'beat-cpu';
 }
 
 /** Candidates the server may select for the current explicit/AUTO request. */
 export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
   const engine = useSolveOptionsStore((state) => state.engine);
+  const accuracy = useSolveOptionsStore((state) => state.accuracy);
   const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const { engines, engineSelection } = useCapabilities();
-  return plannedBackendCapabilities(engine, engines, engineSelection, solverMode);
+  return plannedBackendCapabilities(accuracyEngine(engine, accuracy, engines), engines, engineSelection, solverMode);
 }
 
 /**

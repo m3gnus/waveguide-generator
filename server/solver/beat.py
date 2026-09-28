@@ -118,15 +118,12 @@ _BEAT_BACKEND_KEYWORDS: dict[str, tuple[str, ...]] = {
 def beat_geometry_sources(backend: str) -> tuple[str, ...]:
     """What one BEAT backend's adapter solves (``EngineInfo.geometry_sources``).
 
-    Imported CAD geometry on the CPU backend only: the backend
-    ``server/solver/beat_imported.py`` was qualified on, and the one every
-    desktop platform provisions. The accelerators run the same Julia solver
-    and would take the same adapter, but none has been qualified on a return.
-    The symmetry-domain, feature and preflight gates that make the declaration
-    safe live in ``resolve_imported_submission`` and ``BeatEngine``.
+    The imported adapter passes the selected backend to the same Julia solver.
+    Its symmetry-domain, feature and preflight gates live in
+    ``resolve_imported_submission`` and ``BeatEngine``.
     """
 
-    return ("parametric", "imported") if backend == BEAT_CPU_BACKEND else ("parametric",)
+    return ("parametric", "imported")
 
 
 def _probe_reason_is_about(backend: str, reason: str) -> bool:
@@ -872,21 +869,9 @@ class BeatEngine:
             field_trace_unavailable_reason=field_trace_reason,
         )
 
-    def _imported_refusal(self) -> str | None:
-        if self.backend == BEAT_CPU_BACKEND:
-            return None
-        label = BEAT_BACKEND_LABELS.get(self.backend or "", self.name)
-        return (
-            f"{label} does not solve imported CAD geometry: BEAT's imported path "
-            "is qualified on its CPU backend only. Select BEAT · CPU or Metal."
-        )
-
     def imported_preflight(self, record: Mapping[str, Any], msh_text: str) -> str | None:
         """Why this engine cannot solve an ingestion record, asked at submission."""
 
-        refusal = self._imported_refusal()
-        if refusal is not None:
-            return refusal
         from .beat_imported import imported_beat_preflight
 
         return imported_beat_preflight(record, msh_text)
@@ -901,9 +886,6 @@ class BeatEngine:
         artifact_cb: ArtifactCallback | None,
         result_cb: ResultCallback | None,
     ) -> EngineRunResult:
-        refusal = self._imported_refusal()
-        if refusal is not None:
-            raise BeatUnavailable(refusal)
         if imported_record is None:
             raise ValueError("imported BEAT solve requires its ingestion record")
         from .beat_imported import solve_imported_beat_from_msh_text
@@ -927,7 +909,7 @@ class BeatEngine:
             msh_text,
             request,
             imported_record,
-            backend=BEAT_CPU_BACKEND,
+            backend=self.backend or BEAT_CPU_BACKEND,
             stage_callback=stage_cb,
             cancellation_callback=cancel_cb,
             result_callback=result_cb,

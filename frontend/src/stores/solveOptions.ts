@@ -21,6 +21,9 @@ export type ObservationOrigin = 'mouth' | 'throat';
 export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
 export type SolverMode = 'auto' | 'full_3d' | 'circsym';
 export type FrequencyMode = 'range' | 'list';
+export type SolveAccuracy = 'fast' | 'accurate';
+export const accuracyForEngine = (engine: string): SolveAccuracy =>
+  engine === 'beat' || engine.startsWith('beat-') ? 'accurate' : 'fast';
 /**
  * The coordinate a rigid ground plane bounds. Never an axis-pair token: `xy`
  * already means legacy bi-symmetry in WG and x-and-y mirrors in BEAT, so the
@@ -58,6 +61,7 @@ export interface GroundPlaneConfig {
 
 export interface SolveOptions {
   engine: string;
+  accuracy?: SolveAccuracy;
   solver_mode?: SolverMode;
   symmetry: SymmetryMode;
   mesh_validation_mode: MeshValidationMode;
@@ -203,6 +207,7 @@ export function polarUiFromConfig(config: unknown): PolarUiState | null {
 /** Exactly the solve settings that are written to durable storage. */
 export interface PersistedSolveOptions {
   engine: string;
+  accuracy: SolveAccuracy;
   solverMode: SolverMode;
   symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
@@ -216,6 +221,7 @@ export interface PersistedSolveOptions {
 
 export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
   engine: 'auto',
+  accuracy: 'fast',
   solverMode: 'full_3d',
   symmetry: 'auto',
   meshValidationMode: 'warn',
@@ -311,6 +317,9 @@ export function normalizePersistedSolveOptions(
   const storedSolverMode = oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode);
   return {
     engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
+    accuracy: (typeof stored.engine === 'string' && stored.engine !== 'auto')
+      ? accuracyForEngine(stored.engine)
+      : oneOf(stored.accuracy, ['fast', 'accurate'], fallback.accuracy),
     // AUTO historically opted eligible designs into Axisymmetric. It is now a
     // legacy spelling of Full 3D so old machine-local settings cannot silently
     // select a different formulation after upgrade.
@@ -344,6 +353,7 @@ function normalizeGroundPlane(
 
 interface SolveOptionsStore extends PersistedSolveOptions {
   setEngine: (engine: string) => void;
+  setAccuracy: (accuracy: SolveAccuracy) => void;
   setSolverMode: (solverMode: SolverMode) => void;
   setSymmetry: (symmetry: SymmetryMode) => void;
   setMeshValidationMode: (mode: MeshValidationMode) => void;
@@ -358,15 +368,16 @@ interface SolveOptionsStore extends PersistedSolveOptions {
   options: () => SolveOptions;
 }
 
-/** The setters a person drives. The engine is recorded apart, as the solver selection. */
+/** The setters a person drives, including the advanced engine override. */
 const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
-  'setSolverMode', 'setSymmetry', 'setMeshValidationMode', 'setVerbose', 'setFrequencySpacing',
+  'setEngine', 'setAccuracy', 'setSolverMode', 'setSymmetry', 'setMeshValidationMode', 'setVerbose', 'setFrequencySpacing',
   'setFrequencyMode', 'setFrequencyListText', 'updatePolar', 'updateGroundPlane', 'toggleAxis',
 ];
 
 export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => withEditSignals(get, {
   ...defaultSolveOptions(),
-  setEngine: (engine) => set({ engine }),
+  setEngine: (engine) => set({ engine, accuracy: engine === 'auto' ? get().accuracy : accuracyForEngine(engine) }),
+  setAccuracy: (accuracy) => set({ accuracy, engine: 'auto' }),
   setSolverMode: (solverMode) => set({ solverMode }),
   setSymmetry: (symmetry) => set({ symmetry }),
   setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
@@ -394,6 +405,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   options: () => {
     const base: SolveOptions = {
       engine: get().engine,
+      ...(get().accuracy === 'accurate' ? { accuracy: 'accurate' } : {}),
       solver_mode: get().solverMode,
       symmetry: get().symmetry,
       mesh_validation_mode: get().meshValidationMode,
@@ -463,9 +475,10 @@ export function restoreSolveSettingsFromBlocks(blocks: unknown): void {
   restorePolarUiFromAthBlocks(blocks);
   const solve = wgSolveOverrides(blocks);
   if (!solve) return;
-  const { observationOrigin, sphericalSampling, fieldPlane, ...flat } = solve;
+  const { accuracy, observationOrigin, sphericalSampling, fieldPlane, ...flat } = solve;
   useSolveOptionsStore.setState((state) => ({
     ...flat,
+    ...(accuracy && state.engine === 'auto' ? { accuracy } : {}),
     polar: {
       ...state.polar,
       ...(observationOrigin !== undefined ? { observationOrigin } : {}),

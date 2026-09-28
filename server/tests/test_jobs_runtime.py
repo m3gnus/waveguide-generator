@@ -49,6 +49,24 @@ def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
     )
 
 
+def test_result_records_choice_engine_and_actual_formulation_per_channel() -> None:
+    request = _request()
+    request.options.engine = "beat-metal"
+    request.options.accuracy = "accurate"
+    results = {
+        "metadata": {"beat": {"formulation": "burton_miller"}},
+        "channels": {
+            "lf": {"metadata": {"beat": {"formulation": "burton_miller"}}},
+            "hf": {"metadata": {"beat": {"formulation": "burton_miller"}}},
+        },
+    }
+    enriched = JobRuntime._with_request_metadata(results, request)
+    expected = {"accuracy": "accurate", "engine": "beat-metal", "formulation": "burton_miller"}
+    assert enriched["metadata"]["solve_execution"] == expected
+    assert enriched["channels"]["lf"]["metadata"]["solve_execution"] == expected
+    assert enriched["channels"]["hf"]["metadata"]["solve_execution"] == expected
+
+
 def _bare_request(*, engine: str = "bempp", wall: float | None = 0) -> SolveRequest:
     mesh = {} if wall is None else {"wall_thickness": wall}
     return SolveRequest.model_validate(
@@ -585,8 +603,13 @@ def test_completed_unrated_job_keeps_mesh_available_during_grace_window(
         assert job["status"] == "complete"
         assert job["has_mesh_artifact"] is True
         assert job["has_results"] is True
+        assert job["solve_accuracy"] == "fast"
+        assert job["solve_execution"] == {
+            "accuracy": "fast", "engine": "dryrun", "formulation": None,
+        }
+        assert job["channel_solve_executions"] == {}
         assert runtime.store.get_mesh_artifact(job_id).startswith("$MeshFormat")
-        assert runtime.store.get_results(job_id) is not None
+        assert runtime.store.get_results(job_id)["metadata"]["solve_execution"] == job["solve_execution"]
         await runtime.shutdown()
 
     asyncio.run(scenario())

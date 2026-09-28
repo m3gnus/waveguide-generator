@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { EChartsOption } from 'echarts';
 import {
   UNQUALIFIED_MESSAGE,
+  UNQUALIFIED_BM_MESSAGE,
   channelQualificationSummary,
   chartUnqualifiedBands,
   formatUnqualifiedRanges,
@@ -171,6 +172,14 @@ describe('power qualification', () => {
     const unknown = powerQualificationOf({ frequencies: [100], metadata: { power_qualification: { status: 'unknown', unknown_reason: 'power_check_unavailable' } } } as unknown as ResultPayload)!;
     expect(powerChipLabel(unknown)).toBe('Power check: unknown');
     expect(powerQualificationDetail(unknown)[0]).toContain('carries no radiated-power check');
+  });
+  it('uses neutral wording for an unqualified Burton–Miller channel', () => {
+    const result = flat([1.2]);
+    (result.metadata as Record<string, unknown>).metal = { formulation: 'burton_miller' };
+    const flags = powerQualificationOf(result)!;
+    expect(flags.status).toBe('unqualified');
+    expect(powerQualificationDetail(flags)[0]).toBe(UNQUALIFIED_BM_MESSAGE);
+    expect(powerQualificationDetail(flags).join(' ')).not.toContain('stabilisation');
   });
   it('judges combined members only inside the sum\'s own validity band', () => {
     // Review reproducer: LF ceiling 250 Hz, HF ceiling 1 kHz, HF fails only at 300 Hz.

@@ -35,6 +35,65 @@ def _cpu_info(available: bool, reason: str) -> registry.EngineInfo:
     return registry.EngineInfo("beat-cpu", available, reason, "1")
 
 
+@pytest.mark.parametrize(
+    ("available", "expected"),
+    [
+        ({"beat-metal", "beat-cpu"}, "beat-metal"),
+        ({"beat-cuda", "beat-cpu"}, "beat-cuda"),
+        ({"beat-rocm", "beat-cpu"}, "beat-rocm"),
+        ({"beat-cpu"}, "beat-cpu"),
+    ],
+)
+def test_accurate_resolves_ready_beat_gpu_then_cpu(available: set[str], expected: str) -> None:
+    names = ("metal", "beat-metal", "beat-cuda", "beat-rocm", "beat-cpu")
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo(name, name in available or name == "metal", "test", "1")
+            for name in names
+        ],
+        factory=lambda name: object() if name in available or name == "metal" else None,
+    )
+    request = _planner_request()
+    request.options.accuracy = "accurate"
+
+    resolved = asyncio.run(resolve_submission(request, engine_registry))
+
+    assert resolved.engine_name == expected
+    assert resolved.request.options.accuracy == "accurate"
+    assert resolved.symmetry_metadata["solver_plan"]["accuracy"] == "accurate"
+
+
+def test_accurate_refuses_missing_beat_instead_of_switching_to_metal() -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo("metal", True, "ready", "1")],
+        factory=lambda _name: object(),
+    )
+    request = _planner_request()
+    request.options.accuracy = "accurate"
+    with pytest.raises(EngineUnavailableError, match="Accurate requires a ready BEAT"):
+        asyncio.run(resolve_submission(request, engine_registry))
+
+
+def test_explicit_engine_overrides_accuracy_and_accurate_refuses_coupled_baffle() -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [
+            registry.EngineInfo("metal", True, "ready", "1"),
+            registry.EngineInfo("beat-metal", True, "ready", "1"),
+        ],
+        factory=lambda _name: object(),
+    )
+    explicit = _planner_request(engine="metal")
+    explicit.options.accuracy = "accurate"
+    resolved = asyncio.run(resolve_submission(explicit, engine_registry))
+    assert resolved.engine_name == "metal"
+    assert resolved.request.options.accuracy == "fast"
+
+    baffle = _planner_request(sim_type="infinite-baffle")
+    baffle.options.accuracy = "accurate"
+    with pytest.raises(SymmetryValidationError, match="Accurate via BEAT cannot solve a coupled infinite baffle"):
+        asyncio.run(resolve_submission(baffle, engine_registry))
+
+
 def test_cpu_refresh_preserves_terminal_event_during_an_inflight_probe(
     monkeypatch,
 ) -> None:
@@ -720,6 +779,7 @@ def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "axisymmetric",
         "engine": "axisym",
+        "accuracy": "fast",
         "reason": "forced by solver_mode='circsym'",
         "eligibility_reasons": [],
         "cost_evidence": {"model": "test", "full_3d_quadrants": 1},
@@ -775,6 +835,7 @@ def test_formulation_planner_falls_back_to_selected_full_3d_backend(
     assert resolution.symmetry_metadata["solver_plan"] == {
         "formulation": "full-3d",
         "engine": "bempp",
+        "accuracy": "fast",
         "reason": "explicit solver_mode='full_3d'",
         "eligibility_reasons": [],
         # The planner request leaves the wall unset, so BEMPP's closed-wall

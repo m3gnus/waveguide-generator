@@ -61,6 +61,24 @@ describe('solve and directivity options', () => {
     expect(useSolveOptionsStore.getState().options().symmetry).toBe('half_yz');
   });
 
+  it('persists accuracy, clears an advanced override, and lets an explicit engine take precedence', async () => {
+    const store = useSolveOptionsStore.getState();
+    store.setEngine('metal');
+    store.setAccuracy('accurate');
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'auto', accuracy: 'accurate' });
+    expect(useSolveOptionsStore.getState().options()).toMatchObject({ engine: 'auto', accuracy: 'accurate' });
+    const saved = localStorage.getItem('waveguide-v2-solve-options');
+    expect(saved).toContain('"accuracy":"accurate"');
+    resetSolveOptionsStore();
+    localStorage.setItem('waveguide-v2-solve-options', saved!);
+    await useSolveOptionsStore.persist.rehydrate();
+    expect(useSolveOptionsStore.getState().accuracy).toBe('accurate');
+    useSolveOptionsStore.getState().setEngine('bempp');
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'bempp', accuracy: 'fast' });
+    useSolveOptionsStore.getState().setEngine('beat-metal');
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-metal', accuracy: 'accurate' });
+  });
+
   it('persists solver path as a machine-local execution choice', () => {
     useSolveOptionsStore.getState().setSolverMode('circsym');
     const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as { state?: { solverMode?: string } };

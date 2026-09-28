@@ -31,6 +31,7 @@ import {
 } from '../results/crossoverSpec';
 import { buildImportedSubmission } from '../jobs/importedSubmission';
 import { resetDocumentStore, useDocumentStore } from './document';
+import { resetSolveOptionsStore, useSolveOptionsStore } from './solveOptions';
 
 const solveProfileStorageKey = 'waveguide-v2-g3-cad-solve-profiles';
 
@@ -64,8 +65,23 @@ function project(lineage_id: string) {
 describe('CAD return store', () => {
   beforeEach(() => {
     localStorage.clear();
+    resetSolveOptionsStore();
     resetDocumentStore();
     resetCadReturnStore();
+  });
+
+  it('saves and restores the shared accuracy choice in a CAD project profile', () => {
+    useDocumentStore.getState().setCadLink({
+      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
+    }, 'current');
+    useCadReturnStore.getState().selectBundle(bundle);
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    const saved = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    expect(saved.profiles[0].solveSelection).toEqual({ accuracy: 'accurate', engine: 'auto' });
+    resetCadReturnStore();
+    resetSolveOptionsStore();
+    useCadReturnStore.getState().selectBundle(bundle);
+    expect(useSolveOptionsStore.getState()).toMatchObject({ accuracy: 'accurate', engine: 'auto' });
   });
 
   it('initializes complete sizes and one default channel per source', () => {

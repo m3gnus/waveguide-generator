@@ -6,7 +6,7 @@ import {
   type EngineCapability,
   type EngineSelection,
 } from '../jobs/actions';
-import { useCapabilities } from '../jobs/useCapabilities';
+import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -104,6 +104,7 @@ export function StatusBar() {
   const cadReturn = useCadReturnStore();
   const filename = useDocumentStore((state) => state.filename);
   const selectedEngine = useSolveOptionsStore((state) => state.engine);
+  const accuracy = useSolveOptionsStore((state) => state.accuracy);
   const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
   const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
@@ -114,7 +115,7 @@ export function StatusBar() {
   // naming an engine that would refuse it.
   const cadPlan = useImportedSolvePlan(mode === 'cad').plan;
   const engineLabel = mode !== 'cad'
-    ? engineStatusLabel(engines, engineSelection, selectedEngine, solverMode, isLoading)
+    ? engineStatusLabel(engines, engineSelection, accuracyEngine(selectedEngine, accuracy, engines), solverMode, isLoading)
     : cadPlan && cadPlan.engine === null
       ? `${selectedEngine.toUpperCase()} · NO CAD SOLVE`
       : engineStatusLabel(engines, engineSelection, cadPlan?.engine ?? selectedEngine, 'full_3d', isLoading);

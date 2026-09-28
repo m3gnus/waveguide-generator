@@ -184,6 +184,14 @@ describe('WG.Solve config block', () => {
     expect(blocks[WG_SOLVE_BLOCK].items.Engine).toBeUndefined();
   });
 
+  it('round-trips the accuracy choice in a saved design without serializing an engine', () => {
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    const block = withWgSolveBlock({}, wgSolveSettingsFromStore());
+    expect(block[WG_SOLVE_BLOCK].items.Accuracy).toBe('accurate');
+    expect(block[WG_SOLVE_BLOCK].items.Engine).toBeUndefined();
+    expect(wgSolveOverrides(block)?.accuracy).toBe('accurate');
+  });
+
   it('drops values it cannot read rather than guessing at a different solve', () => {
     const overrides = wgSolveOverrides({
       [WG_SOLVE_BLOCK]: {

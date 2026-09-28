@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { withEditSignals } from './solveSettingsEdits';
+import { subscribeSolveSettingsEdits, withEditSignals } from './solveSettingsEdits';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import type { DriverKind } from '../api/drivers';
 import {
@@ -15,6 +15,7 @@ import {
 } from '../results/crossoverSpec';
 import { useDocumentStore } from './document';
 import { namespaceStorage } from './durableSettings';
+import { useSolveOptionsStore, type SolveAccuracy } from './solveOptions';
 
 export interface CadDriveChannel {
   id: string;
@@ -290,6 +291,7 @@ interface StoredSolveProfile {
   owner: string;
   inventory: SourceInventoryEntry[];
   settings: PersistedSolveSettings;
+  solveSelection?: { accuracy: SolveAccuracy; engine: string };
 }
 
 let selectedSolveProfileKey: string | null = null;
@@ -700,6 +702,11 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
         settings: legacyCombineChoice && settings.combineEnabled === false
           ? { ...settings, combineEnabled: null }
           : settings,
+        ...(isObject(value.solveSelection)
+          && (value.solveSelection.accuracy === 'fast' || value.solveSelection.accuracy === 'accurate')
+          && typeof value.solveSelection.engine === 'string'
+          ? { solveSelection: { accuracy: value.solveSelection.accuracy, engine: value.solveSelection.engine } }
+          : {}),
       });
     }
     if (new Set(profiles.map(({ key }) => key)).size !== profiles.length) {
@@ -774,6 +781,10 @@ function saveSolveProfile(state: CadReturnState): void {
     owner,
     inventory,
     settings: persistedSolveSettings(state),
+    solveSelection: {
+      accuracy: useSolveOptionsStore.getState().accuracy,
+      engine: useSolveOptionsStore.getState().engine,
+    },
   };
   writeStoredSolveProfiles([profile, ...readStoredSolveProfiles().filter((item) => item.key !== key)]);
   selectedSolveProfileKey = key;
@@ -807,6 +818,7 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
   if (index < 0) return null;
   const profile = profiles[index];
   if (!compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) return null;
+  if (profile.solveSelection) useSolveOptionsStore.setState(profile.solveSelection);
   if (index > 0) writeStoredSolveProfiles([profile, ...profiles.filter((_, itemIndex) => itemIndex !== index)]);
   return profile.settings;
 }
@@ -1835,6 +1847,11 @@ export function blockingFindings(record: CadReturnIngestRecord | null): CadRetur
 export function blockingFindingWire(record: CadReturnIngestRecord): string[] {
   return blockingFindings(record).map((finding) => `${record.report_sha256}:${finding.id}`);
 }
+
+// The shared accuracy/backend controls live outside the CAD return store.
+// Save a project's choice when a person edits either control, rather than
+// waiting for an unrelated mesh or driver edit to persist its profile.
+subscribeSolveSettingsEdits(() => saveSolveProfile(useCadReturnStore.getState()));
 
 export function resetCadReturnStore(): void {
   supersedeIngestIntent();

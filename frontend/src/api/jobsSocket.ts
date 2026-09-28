@@ -39,6 +39,7 @@ export interface JobItem {
   config_summary: Record<string, unknown>;
   solve_options: {
     engine: string;
+    accuracy?: 'fast' | 'accurate';
     symmetry: string;
     frequency_range: number[] | null;
     num_frequencies: number | null;
@@ -49,6 +50,9 @@ export interface JobItem {
     polar_config: Record<string, unknown>;
     stage_delay_ms: number;
   };
+  solve_accuracy?: 'fast' | 'accurate';
+  solve_execution?: { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null } | null;
+  channel_solve_executions?: Record<string, { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null }>;
   has_results: boolean;
   has_mesh_artifact: boolean;
   /** Whether the run produced a port-exit radiation-impedance matrix, i.e. it

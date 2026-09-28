@@ -51,7 +51,7 @@ import { AnchoredPanel } from '../prefs/AnchoredPanel';
 import { radiationImpedanceTraces } from '../results/radiationImpedance';
 import { powerAgreementHealth, powerCheckMessage } from '../results/radiatedPower';
 import { channelLabel } from '../results/channelLabel';
-import { UNQUALIFIED_MESSAGE, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
+import { unqualifiedMessage, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
 import { solveAttention } from './solveAttention';
 
 /**
@@ -2013,6 +2013,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
     () => unqualifiedCaption(named.length ? named : [{ id: 'primary', label: 'Primary', result, wrapper }]),
     [named, result, wrapper],
   );
+  const unqualifiedFormulation = powerQualificationOf(result, wrapper ?? result)?.formulation ?? null;
   const activeLabel = compared.find((item) => item.result === result)?.label ?? compared[0]?.label ?? 'the primary run';
   // The detail dialog owns the rendered chart while it is open, so capture from
   // there rather than from the card behind it -- otherwise the large view would
@@ -2061,7 +2062,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
-        {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${UNQUALIFIED_MESSAGE}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
+        {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${unqualifiedMessage(unqualifiedFormulation)}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
         {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
         <span className="result-chrome-spacer"/>
         {imageReady && <>

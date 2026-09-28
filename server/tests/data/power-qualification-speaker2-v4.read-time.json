@@ -371,7 +371,7 @@
       "missing": [],
       "recorded": true
      },
-     "message": "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver."
+     "message": "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver. Re-solve with Accurate."
     }
    }
   },
@@ -890,7 +890,7 @@
      "unqualified_channels": [
       "drive-lf"
      ],
-     "message": "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver."
+     "message": "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver. Re-solve with Accurate."
     }
    }
   }

@@ -6,8 +6,9 @@ observation sphere (``metadata.radiated_power``). When the exterior solution is
 sound they agree. A channel whose estimates disagree by more than
 ``POWER_AGREEMENT_THRESHOLD_DB`` inside its recorded frequency-validity band, or
 whose driven-face power is nonpositive or missing there, is *unqualified* at
-that frequency: its response there is sensitive to the solver's stabilisation
-(the default complex-wavenumber shift) and must not be read as an answer.
+that frequency. For complex-k this can indicate sensitivity to the default
+stabilisation shift; for Burton–Miller it is a neutral failure that may arise
+from the mesh or source. Neither should be read as an answer there.
 
 This module only contains the failure. It never changes a stored level and never
 applies a retrospective correction: the disagreement is evidence that the
@@ -61,8 +62,25 @@ PERSISTED_MARKER = f'"power_qualification_version": {POWER_QUALIFICATION_VERSION
 
 UNQUALIFIED_MESSAGE = (
     "Unqualified: this channel's result is sensitive to solver stabilisation "
-    "here; treat it as unreliable until re-solved with a qualified solver."
+    "here; treat it as unreliable until re-solved with a qualified solver. "
+    "Re-solve with Accurate."
 )
+UNQUALIFIED_BM_MESSAGE = (
+    "Unqualified: driven-face and far-field power do not balance here. "
+    "Check the mesh, source and frequency range."
+)
+UNQUALIFIED_NEUTRAL_MESSAGE = (
+    "Unqualified: driven-face and far-field power do not balance here. "
+    "Treat this result as unreliable at the affected frequencies."
+)
+
+
+def _unqualified_message(formulation: str | None) -> str:
+    if formulation and formulation.startswith("complex_k"):
+        return UNQUALIFIED_MESSAGE
+    if formulation == "burton_miller":
+        return UNQUALIFIED_BM_MESSAGE
+    return UNQUALIFIED_NEUTRAL_MESSAGE
 
 REASON_POWER_MISMATCH = "power_mismatch"
 REASON_NONPOSITIVE_FACE_POWER = "nonpositive_face_power"
@@ -332,7 +350,7 @@ def qualify_channel(
         "unknown_reason": unknown_reason,
         "worst": worst,
         "provenance": provenance,
-        "message": UNQUALIFIED_MESSAGE if unqualified else None,
+        "message": _unqualified_message(provenance["formulation"]) if unqualified else None,
     }
 
 
@@ -426,7 +444,7 @@ def qualify_combined(
         "provenance": _provenance(payload, wrapper),
         "members": member_status,
         "unqualified_channels": unqualified_channels,
-        "message": UNQUALIFIED_MESSAGE if unqualified_channels else None,
+        "message": _unqualified_message(_provenance(payload, wrapper)["formulation"]) if unqualified_channels else None,
     }
 
 

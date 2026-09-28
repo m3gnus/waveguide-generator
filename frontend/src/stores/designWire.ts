@@ -36,6 +36,7 @@ export function wgSolveSettingsFromStore(
   state = useSolveOptionsStore.getState(),
 ): WgSolveSettings {
   return {
+    accuracy: state.accuracy,
     symmetry: state.symmetry,
     meshValidationMode: state.meshValidationMode,
     verbose: state.verbose,
@@ -61,6 +62,7 @@ export function wgSolveSettingsFromSolveOptions(options: unknown): WgSolveSettin
     ? options.frequencies_hz.filter((value): value is number => Number.isFinite(value))
     : [];
   return {
+    accuracy: options.accuracy === 'accurate' ? 'accurate' : 'fast',
     symmetry: (typeof options.symmetry === 'string' ? options.symmetry : 'auto') as SymmetryMode,
     meshValidationMode: (typeof options.mesh_validation_mode === 'string'
       ? options.mesh_validation_mode

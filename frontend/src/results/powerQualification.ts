@@ -16,7 +16,14 @@ import { formatValidityFrequency, resultFrequencyValidity } from './validity';
 
 export const POWER_QUALIFICATION_THRESHOLD_DB = 0.5;
 
-export const UNQUALIFIED_MESSAGE = "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver.";
+export const UNQUALIFIED_MESSAGE = "Unqualified: this channel's result is sensitive to solver stabilisation here; treat it as unreliable until re-solved with a qualified solver. Re-solve with Accurate.";
+export const UNQUALIFIED_BM_MESSAGE = 'Unqualified: driven-face and far-field power do not balance here. Check the mesh, source and frequency range.';
+export const UNQUALIFIED_NEUTRAL_MESSAGE = 'Unqualified: driven-face and far-field power do not balance here. Treat this result as unreliable at the affected frequencies.';
+export function unqualifiedMessage(formulation: string | null): string {
+  if (formulation?.startsWith('complex_k')) return UNQUALIFIED_MESSAGE;
+  if (formulation === 'burton_miller') return UNQUALIFIED_BM_MESSAGE;
+  return UNQUALIFIED_NEUTRAL_MESSAGE;
+}
 
 export type PowerQualificationStatus = 'qualified' | 'unqualified' | 'unknown';
 export type FrequencyQualification = 'qualified' | 'unqualified' | 'outside_validity' | 'unchecked';
@@ -397,7 +404,7 @@ const UNKNOWN_TEXT: Record<string, string> = {
 export function powerQualificationDetail(flags: PowerQualification, channelLabel: (id: string) => string = (id) => id): string[] {
   const lines: string[] = [];
   if (flags.status === 'unqualified') {
-    lines.push(`${UNQUALIFIED_MESSAGE}`);
+    lines.push(unqualifiedMessage(flags.formulation));
     lines.push(`Affected: ${formatUnqualifiedRanges(flags.ranges)}${flags.validityMaxHz !== null ? `, inside the ${formatValidityFrequency(flags.validityMaxHz)} validity limit` : ''}.`);
     const why = flags.reasons.map((reason) => REASON_TEXT[reason]).filter(Boolean);
     if (why.length) lines.push(`Why: ${why.join('; ')}.`);

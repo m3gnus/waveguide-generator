@@ -377,8 +377,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 # No "ground-plane": see _ground_plane_axes. The gap is in this
                 # application, not in hornlab-beat-bem.
                 mountings=("free-standing",),
-                # Declared by the adapter: imported geometry on the CPU
-                # backend only (``beat_geometry_sources``).
+                # Declared by the adapter for each ready BEAT backend.
                 geometry_sources=beat_geometry_sources(backend),
                 symmetry_domains=_symmetry_domains(name),
                 field_traces=bool(status.get("surface_traces")),

@@ -738,6 +738,39 @@ def _axisymmetric_symmetry_metadata(request: SolveRequest) -> dict[str, Any]:
     }
 
 
+async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> tuple[SolveRequest, str | None]:
+    """Resolve the shared accuracy choice without changing an explicit engine.
+
+    BEAT GPU readiness is the existing capability probe's verdict. CPU is used
+    only when none of those backends is ready; a geometry refusal never triggers
+    a switch to a different formulation or engine.
+    """
+    engine = request.options.engine
+    if engine != "auto":
+        # Old clients explicitly naming BEAT sent no accuracy field. Keep
+        # their existing axisymmetric and unavailable-engine behavior; the new
+        # UI sends Accurate when its BEAT override is selected.
+        if request.options.accuracy == "accurate" and not (
+            engine == "beat" or engine.startswith("beat-")
+        ):
+            request = request.model_copy(deep=True)
+            request.options.accuracy = "fast"
+        return request, None
+    if request.options.accuracy != "accurate":
+        return request, None
+    capabilities = {info.name: info for info in await registry.capabilities()}
+    for name in ("beat-metal", "beat-cuda", "beat-rocm", "beat-cpu"):
+        info = capabilities.get(name)
+        if info is not None and info.available:
+            request = request.model_copy(deep=True)
+            request.options.engine = name
+            return request, name
+    raise EngineUnavailableError(
+        "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
+        "Enable BEAT, or choose Fast."
+    )
+
+
 async def resolve_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
@@ -758,6 +791,7 @@ async def resolve_submission(
             "imported geometry must be prepared by JobRuntime.submit",
         )
 
+    request, _ = await _accuracy_engine(request, engine_registry)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
@@ -767,6 +801,8 @@ async def resolve_submission(
     # design into a different formulation. Metal/BEMPP/BEAT remain selectable
     # full-3D backends while explicit CircSym uses the portable runner on every OS.
     solver_mode = str(request.options.solver_mode or "full_3d").strip().lower()
+    if request.options.accuracy == "accurate" and solver_mode == "circsym":
+        raise ValueError("Accurate requires a full 3-D BEAT solve. Choose Full 3D or Fast for Axisymmetric.")
     forced_axisym = engine_name == "axisym" or solver_mode == "circsym"
     if engine_name == "axisym" and solver_mode == "full_3d":
         raise ValueError("engine='axisym' cannot run solver_mode='full_3d'")
@@ -832,6 +868,7 @@ async def resolve_submission(
             symmetry_metadata["solver_plan"] = {
                 "formulation": "axisymmetric",
                 "engine": "axisym",
+                "accuracy": request.options.accuracy,
                 "reason": axisym_reason,
                 "eligibility_reasons": [],
                 "cost_evidence": plan_cost,
@@ -860,6 +897,7 @@ async def resolve_submission(
         symmetry_metadata["solver_plan"] = {
             "formulation": "full-3d",
             "engine": engine_name,
+            "accuracy": request.options.accuracy,
             "reason": (
                 "explicit solver_mode='full_3d'"
                 if solver_mode == "full_3d"
@@ -867,6 +905,22 @@ async def resolve_submission(
             ),
             "eligibility_reasons": axisym_reasons,
         }
+    if request.options.accuracy == "accurate":
+        if resolved_quadrants == 12:
+            raise SymmetryValidationError(
+                "Accurate via BEAT cannot solve an xz-only half domain. "
+                "Use a full or yz-half/quarter domain, or choose Fast."
+            )
+        if _requested_mounting(request) == "infinite-baffle":
+            raise SymmetryValidationError(
+                "Accurate via BEAT cannot solve a coupled infinite baffle. "
+                "Use a free-standing mounting, or choose Fast and a compatible engine."
+            )
+        if _ground_plane_axis(request) is not None:
+            raise SymmetryValidationError(
+                "Accurate via BEAT cannot solve a rigid ground plane in this adapter. "
+                "Turn off the ground plane, or choose Fast and a compatible engine."
+            )
 
     if engine_name == "auto":
         # Resolve against the requested mounting, not just the host's engine
@@ -926,6 +980,12 @@ async def resolve_submission(
         if engine_name not in {"axisym", "dryrun"} and (
             await engine_registry.get_engine(engine_name) is None
         ):
+            if request.options.accuracy == "accurate":
+                reason = await engine_registry.unavailable_reason(engine_name)
+                raise EngineUnavailableError(
+                    f"Accurate requires BEAT engine '{engine_name}', which is unavailable. "
+                    f"{reason or 'No capability reason was reported.'} Choose Fast or enable BEAT."
+                )
             # A stored engine selection outlives the machine it was made on. Pick
             # BEAT on a box that has it, open the app on one that does not, and the
             # refusal this used to raise reached the UI as nothing but a disabled
@@ -1346,6 +1406,8 @@ async def resolve_imported_submission(
             "resolve_imported_submission resolves imported geometry only; "
             "parametric submissions resolve through resolve_submission"
         )
+    original_requested = request.options.engine
+    request, _ = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
     request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     if request_refusal is not None:
@@ -1433,9 +1495,10 @@ async def resolve_imported_submission(
             )
             raise ImportedSolveRefusal(
                 "imported_engine_unsupported",
-                f"engine {name!r} cannot solve this CAD return: {reason}"
+                f"{'Accurate via BEAT' if request.options.accuracy == 'accurate' else f'engine {name!r}'} cannot solve this CAD return: {reason}"
                 + ("" if reason.endswith(".") else ".")
-                + f" Engines that can: {', '.join(able) if able else 'none on this host'}.",
+                + f" Engines that can: {', '.join(able) if able else 'none on this host'}. "
+                + ("Choose Fast and a compatible engine, or change the CAD domain/features." if request.options.accuracy == 'accurate' else ""),
                 details={
                     "engine": name,
                     "reason_code": verdict.code,
@@ -1477,9 +1540,10 @@ async def resolve_imported_submission(
     metadata["solver_plan"] = {
         "formulation": "full-3d",
         "engine": selected,
+        "accuracy": request.options.accuracy,
         # The user's own choice, kept beside what it resolved to: recalling a
         # run must restore this, not the engine AUTO happened to pick.
-        "requested": requested,
+        "requested": original_requested,
         "reason": reason,
         "eligibility_reasons": passed_over,
     }
@@ -2360,6 +2424,8 @@ class JobRuntime:
             assert imported is not None
             script_snapshot = imported.anchor_snapshot
         task_metadata: dict[str, Any] = {
+            "solve_accuracy": request.options.accuracy,
+            "solver_plan": symmetry_metadata.get("solver_plan"),
             "log_tail": [],
             "design_revision": request.design_revision,
             "polar_grid": polar_grid,
@@ -3615,6 +3681,9 @@ class JobRuntime:
                 effective_request=effective_request,
                 symmetry_metadata=symmetry_metadata,
             )
+            await asyncio.to_thread(self.store.mutate_job_metadata, job_id, {
+                "solve_execution": results["metadata"]["solve_execution"],
+            })
             self._check_cancelled(job_id)
             await self._stage(
                 job_id, "postprocess", 0.90, "Postprocessing synthetic results", delay
@@ -3974,16 +4043,26 @@ class JobRuntime:
             )
         completed_at = _now_iso()
         try:
+            finished_results = self._with_request_metadata(
+                outcome.results,
+                request,
+                effective_request=effective_request,
+                symmetry_metadata=symmetry_metadata,
+                cad_identity=cad_identity,
+            )
+            channel_executions = {
+                channel_id: payload.get("metadata", {}).get("solve_execution")
+                for channel_id, payload in (finished_results.get("channels") or {}).items()
+                if isinstance(payload, Mapping)
+            }
+            await asyncio.to_thread(self.store.mutate_job_metadata, job_id, {
+                "solve_execution": finished_results["metadata"]["solve_execution"],
+                "channel_solve_executions": channel_executions,
+            })
             event = await asyncio.to_thread(
                 self.store.complete_job,
                 job_id,
-                self._with_request_metadata(
-                    outcome.results,
-                    request,
-                    effective_request=effective_request,
-                    symmetry_metadata=symmetry_metadata,
-                    cad_identity=cad_identity,
-                ),
+                finished_results,
                 {
                     "status": "complete",
                     "stage": "complete",
@@ -4360,6 +4439,7 @@ class JobRuntime:
                     else "generated_grid"
                 ),
                 "engine": request.options.engine,
+                "accuracy": request.options.accuracy,
                 "design_revision": request.design_revision,
                 "polar_grid": request.options.polar_config.resolved_grid(),
             }
@@ -4374,6 +4454,7 @@ class JobRuntime:
                 else "generated_grid"
             ),
             "engine": request.options.engine,
+            "accuracy": request.options.accuracy,
             "design_revision": 0,
             "ingest_id": request.geometry.ingest_id,
             "drive_channel_ids": [
@@ -4411,6 +4492,31 @@ class JobRuntime:
         metadata["polar_grid"] = request.options.polar_config.resolved_grid()
         if symmetry_metadata is not None:
             metadata["symmetry"] = dict(symmetry_metadata)
+        engine = request.options.engine
+        choice = request.options.accuracy
+        def execution(payload: Mapping[str, Any]) -> dict[str, Any]:
+            local = payload.get("metadata") or {}
+            formulation = next(
+                (block["formulation"] for name in ("solver_engine", "beat", "metal", "axisym", "bempp")
+                 if isinstance((block := local.get(name)), Mapping)
+                 and isinstance(block.get("formulation"), str)),
+                None,
+            )
+            return {"accuracy": choice, "engine": engine, "formulation": formulation}
+        metadata["solve_execution"] = execution(enriched)
+        channels = enriched.get("channels")
+        if isinstance(channels, Mapping):
+            copied = {}
+            for channel_id, payload in channels.items():
+                if isinstance(payload, Mapping):
+                    item = dict(payload)
+                    channel_meta = dict(item.get("metadata") or {})
+                    channel_meta["solve_execution"] = execution(item)
+                    item["metadata"] = channel_meta
+                    copied[channel_id] = item
+                else:
+                    copied[channel_id] = payload
+            enriched["channels"] = copied
         enriched["metadata"] = metadata
         return enrich_result_contract(
             enriched,
@@ -4651,6 +4757,9 @@ class JobRuntime:
             "completed_at": row.get("completed_at"),
             "config_summary": row.get("config_summary_json") or {},
             "solve_options": _stored_solve_options(stored_config).model_dump(mode="json"),
+            "solve_accuracy": metadata.get("solve_accuracy") or "fast",
+            "solve_execution": metadata.get("solve_execution"),
+            "channel_solve_executions": metadata.get("channel_solve_executions") or {},
             "has_results": bool(row.get("has_results")),
             "has_mesh_artifact": bool(row.get("has_mesh_artifact")),
             "has_pressure_basis_artifact": bool(

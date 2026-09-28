@@ -1,7 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
-import { useCapabilities } from '../jobs/useCapabilities';
+import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
 import {
   activeBackendCapability,
   backendLimitation,
@@ -94,10 +94,16 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
     : importedPlan.isPending
       ? 'Checking which engines can solve this CAD model…'
       : importedPlan.plan?.reason ?? importedPlan.error ?? 'Prepare the CAD return to see which engines can solve it.';
+  const beatGpu = engines.find((engine) => ['beat-metal', 'beat-cuda', 'beat-rocm'].includes(engine.name) && engine.available);
+  const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
+    <HelpTipRow className="select-row" text="Fast uses the normal solver selection. Accurate uses BEAT's Burton–Miller formulation on a ready GPU, or BEAT CPU when no GPU backend is ready."><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
+    <p className="section-note">Accurate: Burton–Miller via BEAT — slower, needed for drivers in chambers/sheltered passages.</p>
+    {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
+    {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. The accuracy choice reflects this engine. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
-      <HelpTipRow className="select-row" text="Which BEM engine runs Full 3D. AUTO takes the first full-3D backend that is actually available on this machine. Axisymmetric uses the portable meridian runner independently of this choice."><label htmlFor="solve-engine">Full 3D backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
-        <option value="auto">AUTO — first available</option>
+      <HelpTipRow className="select-row" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence and updates that choice."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+        <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.label || engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>
       <p className="section-note">{meridianAvailable
@@ -112,8 +118,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
           imported submission sends it as it is. The formulation and domain are
           not choices here, so they stay facts. An engine that cannot solve
           imported geometry is listed, disabled, with that reason. */}
-      <HelpTipRow className="select-row" text="Which BEM engine solves the imported model: the same choice as the parametric workspace's Full 3D backend. AUTO takes the first available engine that solves imported CAD geometry."><label htmlFor="cad-solve-engine">Solver</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
-        <option value="auto">AUTO — first available</option>
+      <HelpTipRow className="select-row" text="Advanced engine override shared with parametric mode. AUTO follows Fast or Accurate; an explicit engine takes precedence."><label htmlFor="cad-solve-engine">Advanced backend</label><select id="cad-solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+        <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => {
           const verdict = verdicts.get(engine.name.toLowerCase());
           const imported = declaresImportedGeometry(engine);
@@ -158,14 +164,14 @@ export function GroundPlaneControls() {
   const store = useSolveOptionsStore();
   const { engines, engineSelection } = useCapabilities();
   const ground = store.groundPlane;
-  const backend = activeBackendCapability(store.engine, engines, engineSelection);
+  const backend = activeBackendCapability(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection);
   // Judged against the whole plan, as the coupled-baffle control is. With
   // engine AUTO the "active" backend is only the first candidate the server
   // would walk -- Metal on a Mac -- so limiting on it alone reported "METAL
   // does not support a rigid ground plane" for a solve the server routes to
   // BEMPP and runs. A warning that fires on a solve which succeeds teaches a
   // user to ignore the warning.
-  const plan = plannedBackendCapabilities(store.engine, engines, engineSelection, store.solverMode);
+  const plan = plannedBackendCapabilities(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection, store.solverMode);
   const limitation = backendLimitation(backend, 'ground-plane', plan);
   const belowGround = ground.enabled ? belowGroundNote(ground.height_m, store.polar) : undefined;
   // The union over the plan, for the same reason the limitation is plan-based:

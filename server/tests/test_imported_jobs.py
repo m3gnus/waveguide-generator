@@ -2985,7 +2985,7 @@ def test_resolve_imported_submission_is_one_named_function_beside_resolve_submis
         )
 
 
-# BEAT's CPU backend declares imported geometry too. Declaring it is not the
+# BEAT's backends declare imported geometry too. Declaring it is not the
 # whole test: selection also reads the engine's symmetry domains, its imported
 # features and its adapter's preflight, and refuses a ground plane everywhere.
 
@@ -3066,6 +3066,67 @@ def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path
     assert caught.value.details["reason_code"] == "imported_symmetry_unsupported_by_engine"
     assert caught.value.details["capable_engines"] == ["metal"]
     assert "Engines that can: metal." in str(caught.value)
+
+
+def test_imported_accurate_refuses_xz_half_without_switching_to_metal(tmp_path: Path) -> None:
+    from server.jobs.runtime import resolve_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    request.options.accuracy = "accurate"
+    registry = _DeclaredRegistry(_metal(), _beat_cpu())
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(resolve_imported_submission(
+            request,
+            registry,
+            symmetry_metadata={"resolved_quadrants": 12},
+        ))
+    assert "Accurate via BEAT cannot solve" in str(caught.value)
+    assert "Choose Fast" in str(caught.value)
+    assert caught.value.details["engine"] == "beat-cpu"
+
+
+def test_imported_accurate_selects_ready_beat_gpu() -> None:
+    from server.jobs.runtime import resolve_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    request.options.accuracy = "accurate"
+    beat_metal = EngineInfo(
+        "beat-metal", True, "ready", "1",
+        geometry_sources=("parametric", "imported"),
+        symmetry_domains=("full", "half-yz", "quarter"),
+    )
+    resolution = asyncio.run(
+        resolve_imported_submission(request, _DeclaredRegistry(_metal(), beat_metal, _beat_cpu()))
+    )
+
+    assert resolution.engine_name == "beat-metal"
+    assert resolution.request.options.accuracy == "accurate"
+    assert resolution.request.options.engine == "beat-metal"
+
+
+def test_imported_accurate_refuses_passive_cardioid_without_switching_to_metal() -> None:
+    from server.jobs.runtime import resolve_imported_submission
+
+    request = _request(
+        "wgi_" + "0" * 26,
+        passive_cardioid_rear_volume_l=6.0,
+        passive_cardioid_port_length_mm=25.0,
+        model_port_area_m2=0.05,
+        bem_port_area_m2=0.009471859930646809,
+        port_area_source="user",
+        passive_cardioid_foam_resistance_pa_s_m3=10_000.0,
+    )
+    request.options.engine = "auto"
+    request.options.accuracy = "accurate"
+    metal = EngineInfo(
+        "metal", True, "ready", "1",
+        geometry_sources=("parametric", "imported"),
+        imported_features=("passive-cardioid",),
+    )
+    with pytest.raises(ImportedSolveRefusal, match="Choose Fast"):
+        asyncio.run(resolve_imported_submission(request, _DeclaredRegistry(metal, _beat_cpu())))
 
 
 def test_imported_auto_passes_beat_cpu_over_for_a_y_only_half(tmp_path: Path) -> None:
@@ -3678,7 +3739,7 @@ def _guard_expected_capable(fixture: _GuardFixture, assembly_backend: str) -> se
     caught rather than echoed back as the prediction:
 
     * Metal mirrors every imported domain and runs the passive cardioid;
-    * BEAT · CPU mirrors full, x0-half and quarter domains, runs no campaign,
+    * BEAT mirrors full, x0-half and quarter domains, runs no campaign,
       and needs a frame that leaves its mirror plane where it is;
     * BEMPP takes imported geometry only while it assembles on OpenCL, runs no
       campaign, and needs a record that shows it has no free rim;
@@ -3689,7 +3750,7 @@ def _guard_expected_capable(fixture: _GuardFixture, assembly_backend: str) -> se
         return set()
     capable = {"metal"}
     if fixture.planes != ("y0",) and not fixture.cardioid and not fixture.tilted:
-        capable.add("beat-cpu")
+        capable.update({"beat-cpu", "beat-cuda", "beat-metal", "beat-rocm"})
     if (
         assembly_backend == "opencl"
         and not fixture.cardioid

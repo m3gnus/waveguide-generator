@@ -17,6 +17,7 @@ from server.jobs.store import JobStore
 from server.solver.power_qualification import (
     PERSISTED_MARKER,
     UNQUALIFIED_MESSAGE,
+    UNQUALIFIED_BM_MESSAGE,
     annotate_results,
     annotate_stored_text,
     qualify_channel,
@@ -112,6 +113,15 @@ def test_all_within_threshold_is_qualified_with_no_message() -> None:
     assert flags["message"] is None
     assert flags["provenance"]["formulation"] == "complex_k"
     assert flags["provenance"]["complex_k_shift"] == 0.005
+
+
+def test_burton_miller_failure_has_neutral_wording() -> None:
+    channel = _channel([1.0])
+    channel["metadata"]["metal"] = {"formulation": "burton_miller"}
+    flags = qualify_channel(channel)
+    assert flags["status"] == "unqualified"
+    assert flags["message"] == UNQUALIFIED_BM_MESSAGE
+    assert "stabilisation" not in flags["message"]
 
 
 @pytest.mark.parametrize(

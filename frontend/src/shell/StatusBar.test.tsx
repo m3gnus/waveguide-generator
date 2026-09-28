@@ -12,6 +12,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 const previewSnapshot = vi.hoisted(() => ({ connection: 'connected' as const, epoch: null, frame: null, displayedRevision: null, lastValidRevision: null, stale: false, dropped: 0, error: null, errorRevision: null }));
 
 vi.mock('../jobs/useCapabilities', () => ({
+  accuracyEngine: (engine: string) => engine,
   useCapabilities: () => ({
     engines: [
       { name: 'metal', available: true, reason: null, version: '1.0', fast_paths: [] },
