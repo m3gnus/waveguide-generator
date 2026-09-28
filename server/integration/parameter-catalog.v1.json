@@ -2045,7 +2045,7 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "All six superformula terms as one comma-separated list, in the order a, b, m, n1, n2, n3. A complete six-value list overrides every individual field below and uses its single m for both m1 and m2; a shorter list is ignored.",
+      "description": "All six superformula terms as one comma-separated list, in the order a, b, m, n1, n2, n3. A complete six-value list overrides every individual field below and uses its single m for both m1 and m2. A single value (such as 0) means not given, and the individual fields apply. A list of two to five values is refused with an error.",
       "visible_when": {
         "path": "guiding_curve.curve_type",
         "operator": "equals",
