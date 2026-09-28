@@ -599,8 +599,10 @@ through the same route and stages as a solve requested by Fusion.
   (`addinInboxTransfer`). With the gate off, the page ages a held status past its window
   into "Fusion last reported <time>, not observed since" by itself, with no request. With
   the gate off the returns listing still runs as before for an add-in that does not
-  declare the inbox transfer (the shipped pin publishes a plain Send only as a return in
-  the folder), and the CAD Link panel says so. While
+  declare the inbox transfer (an add-in without `diagnostics.activation` publishes a
+  plain Send only as a return in the folder); the shipped pin `ea0f529` declares it and
+  sends every Send through the inbox regardless of the gate, and the CAD Link panel says
+  so. While
   the consumer is off the live delivery route answers a retryable 409
   `delivery_consumer_disabled` instead of accepting what nothing would run.
 - **Coordination gate.** Unset or unrecognized `WG2_CAD_COORDINATION` values default to
@@ -731,17 +733,18 @@ need.
 A WG-bound Fusion request reaches WG as its own file:
 `<data dir>/ipc/wglink/.wg-solve-requests/<commandId>.json`. Schema 4 carries a `kind`:
 `prepare_and_solve` is Solve and `receive_snapshot` is Send. Schema 3 remains a Solve
-for compatibility with the shipped WGLink pin and other schema-3 fallbacks. Schemas 1
-and 2 are refused as outdated.
+for compatibility with add-ins that only speak schema 3; the shipped pin `ea0f529`
+writes schema 4 for both kinds, since WG advertises `solveCommandDelivery: 4` while its
+inbox consumer runs. Schemas 1 and 2 are refused as outdated.
 
 **Packaged WGLink compatibility policy.** The package WG ships names one exact add-in
 `sourceCommit` in `integrations/wglink/source.json`. That commit is provenance and an
 installation identity; the reader still checks each return's format, required features,
 member inventory and checksums. The current pin writes `wgreturn` 1.1 with base features
-and, when applicable, reduced-domain and source-identity features. It writes schema-3
-Solve requests. A plain Send from this pin publishes a return for WG's folder listing;
-it does not write a schema-3 Send request. Development add-ins may write newer optional
-features and schema-4 Send or Solve requests. A writer emits an optional feature only
+and, when applicable, reduced-domain and source-identity features. It writes schema-4
+Send (`receive_snapshot`) and Solve (`prepare_and_solve`) requests while WG advertises
+`solveCommandDelivery: 4`; against a WG that advertises exactly 3 it falls back to a
+schema-3 Solve and refuses to write a Send at all. A writer emits an optional feature only
 after WG advertises its capability. Missing or too-old required capability is a visible
 refusal, never a reinterpretation. The packaged-pair contract test builds the actual
 pinned package by commit object, imports its writer from the extracted archive, and
@@ -770,13 +773,16 @@ requests and the heartbeat use delivery version 3. WG advertises
 - **Files WG cannot identify as requests.** WG leaves a staging name, non-JSON file,
   another target, or otherwise unidentifiable content alone. A file it can identify as a
   request but cannot validate is claimed, refused visibly, and deleted.
-- **What the shipped pin writes.** The pinned WGLink `04b2524b` reports delivery version
-  3 and writes schema-3 Solves, which WG accepts as `prepare_and_solve`. Its plain Send
-  is not a schema-3 inbox request: WG finds that return by listing the returns folder.
-  A WGLink older than delivery version 3 writes the single slot
-  `.wg-solve-request.json`, or a version-2 file in the folder above; WG claims such a
-  command and refuses it with the remedy as its reason. It is never run. A command under
-  an ID the store already holds is instead a repeat delivery, and is recovered or
+- **What the shipped pin writes.** The pinned WGLink `ea0f529` decides its schema from
+  what WG advertises. WG advertises `solveCommandDelivery: 4` while its inbox consumer
+  runs, so the pin writes schema-4 requests for both kinds: a Send (`receive_snapshot`)
+  and a Solve (`prepare_and_solve`) each land in the inbox as their own file, and WG
+  accepts each as its named kind. Only against a WG that advertises exactly 3 does it
+  fall back to the schema-3 Solve file; a Send is then refused outright, not silently
+  published as a folder return. A WGLink older than delivery version 3 writes the single
+  slot `.wg-solve-request.json`, or a version-2 file in the folder above; WG claims such
+  a command and refuses it with the remedy as its reason. It is never run. A command
+  under an ID the store already holds is instead a repeat delivery, and is recovered or
   refused as the delivery table says.
 
 If a Send or Solve write's outcome is unknown, the add-in retries the same ID and fields
@@ -1162,19 +1168,19 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
 `recovery_required`. A missing observation stays `processing`.
 
-| Add-in field/value at pinned add-in `04b2524b4` | WG result |
+| Add-in field/value at pinned add-in `ea0f529` | WG result |
 | --- | --- |
 | `recentOutcomes: superseded` (`_pending_handoff`) | `cancelled` / `superseded` |
 | `recentOutcomes: discarded` (`_sweep_leftover_claims`) | `cancelled` / `adapter_not_started` |
 | `recentOutcomes: reconciled` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | reconciled `accepted`, using the operation's export identity |
 | `recentOutcomes: recoveryRequired` (`_apply_pending_handoff`, `_sweep_leftover_claims`) | `recovery_required` for Insert/Update only |
 | `recentOutcomes: wgOutdated` (`_notice_outdated_wg`) | logged and ignored |
-| `recentOutcomes: notTaken` (`_notice_untaken_solves`, solve channel) | ignored for Fusion-bound rows |
+| `recentOutcomes: notTaken` (`_pickup_check`, `_startup_pickup_check`) | ignored for Fusion-bound rows |
 | `lastRequest: refused` (`_apply_pending_return_request`, `_apply_pending_handoff`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
 | `lastRequest: applied` (`_apply_pending_return_request`, `_apply_pending_handoff`) | accepts a return request; a mutation still requires document evidence |
 | `lastRequest: failed` (`_apply_pending_return_request`, `_apply_pending_handoff`) | logged and left `processing` |
 | `lastRequest: running` (`_begin_request`) | left `processing` |
-| `lastRequest: requested` (`_request_wg_solve`, solve channel) | ignored for Fusion-bound rows |
+| `lastRequest: requested` (`_submit_to_wg`) | ignored for Fusion-bound rows |
 
 `recentOutcomes` is a 16-item ring. `lastRequest` is one overwritten slot, matched by
 `correlationId` (the operation ID for WG-produced requests); WG logs its correlation

@@ -705,8 +705,8 @@ export function CadLinkCoordinator() {
     // a clock unless CAD work is in flight -- a Send or pull the user started,
     // or an operation that has not finished. Everything else is event-driven:
     // mount, focus, entering CAD mode, a folder chosen, and operation pushes.
-    // One exception: an add-in that does not declare the inbox transfer (the
-    // shipped pin, or one WG has not heard from) publishes a plain Send only as
+    // One exception: an add-in that does not declare the inbox transfer (an
+    // older add-in, or one WG has not heard from) publishes a plain Send only as
     // a return in the folder, and the listing is the only thing that finds it,
     // so the listing keeps today's cadence for it.
     if (cadCoordinationOff() && !(listing && !addinDeclaresInbox.current)) {

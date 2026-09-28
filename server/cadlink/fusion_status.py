@@ -526,7 +526,7 @@ def _link_payload(value: object) -> dict[str, Any] | None:
 #: How an add-in's heartbeat reaches WG, from its own diagnostics: ``command`` --
 #: published only when it runs a command (automatic coordination off) --,
 #: ``continuous`` -- on its own clock --, or ``unknown`` (an add-in that does not
-#: say, such as the shipped pin).
+#: say, such as an add-in older than the M1 activation gate).
 OBSERVATION_POLICY_COMMAND = "command"
 OBSERVATION_POLICY_CONTINUOUS = "continuous"
 OBSERVATION_POLICY_UNKNOWN = "unknown"
@@ -553,8 +553,9 @@ def addin_declares_inbox_transfer(payload: Mapping[str, Any]) -> bool:
     """Whether this add-in sends Send and Solve through WG's request inbox.
 
     The M1 add-in reports its activation gate (``diagnostics.activation``) and
-    writes every WG-bound request to the inbox; the shipped pin reports neither,
-    and still publishes a plain Send only as a return WG must find by listing.
+    writes every WG-bound request to the inbox, as the shipped pin does. An
+    older add-in reports neither and publishes a plain Send only as a return WG
+    must find by listing.
     """
 
     activation = _activation(payload)
