@@ -5,7 +5,9 @@ WG instance carries no throat frame: nothing in it says which way the model
 radiates. WG used to solve it in the assembly frame as modelled (+Z) and warn
 nothing; a mis-framed model then gave wrong directivity in silence. Now the
 forward axis is confirmed once per project, after WG infers it from the
-geometry (``frame_infer``) and shows it; no path solves it before then.
+geometry (``frame_infer``) and shows it. Until then only WG's own confident
+automatic axis may be solved (``record_automatic_axis``); otherwise no path
+solves it.
 
 Two contracts exist. Both name the forward ``axis``, one of
 ``+z -z +x -x +y -y``, and map it to the solver's +Z about the assembly origin.

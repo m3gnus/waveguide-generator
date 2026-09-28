@@ -205,3 +205,38 @@ def _record_meshed_in(harness, record: dict[str, Any], axis: str) -> dict[str, A
     changed = copy.deepcopy(record)
     changed["normalisation"]["solver_frame"]["axis"] = axis
     return changed
+
+
+def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(real, monkeypatch) -> None:
+    """A drift between the manifest side and the record side must not loop."""
+
+    harness, mesher = real
+    _verdict(monkeypatch, status="automatic", axis="+x")
+    # The record side keeps naming an axis nothing is ever meshed in.
+    monkeypatch.setattr(preparation, "record_automatic_axis", lambda store, record: "-y")
+    stages: list[str] = []
+    real_advance = preparation._advance
+
+    def advance(ctx, operation_id, generation, **fields):
+        if fields.get("stage"):
+            stages.append(fields["stage"])
+        return real_advance(ctx, operation_id, generation, **fields)
+
+    monkeypatch.setattr(preparation, "_advance", advance)
+    passes: list[bool] = []
+    real_prepare = preparation._prepare_sync
+
+    def counted(*args, **kwargs):
+        passes.append(bool(kwargs.get("automatic_retry")))
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(preparation, "_prepare_sync", counted)
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+
+    _prepare(harness)
+
+    assert passes == [False, True]
+    assert len(mesher.calls) <= 2
+    # A stage only moves forward: validating is entered once.
+    assert stages.count("validating") == 1

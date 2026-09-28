@@ -895,12 +895,21 @@ def _project_gate(retained: Mapping[str, Any]) -> dict[str, str]:
 
 
 def _prepare_sync(
-    ctx: PreparationContext, operation_id: str, generation: int, request: PreparationInput
+    ctx: PreparationContext,
+    operation_id: str,
+    generation: int,
+    request: PreparationInput,
+    *,
+    automatic_retry: bool = False,
 ) -> tuple[str, Any]:
     """The blocking half: retain, mesh, record. Returns what happens next.
 
     ``("done", row)`` when the operation already reached its outcome;
     ``("submit", (solve_request, revision_id))`` when a request is ready.
+
+    ``automatic_retry`` marks the one second pass made to mesh along WG's
+    confident automatic axis: it never starts another, and it does not move
+    the stage back to validating.
     """
 
     store = ctx.store
@@ -917,7 +926,10 @@ def _prepare_sync(
     # automatic continuation (after the update restart, say) and a retry that
     # names none are held to it, and only a press naming another replaces it.
     validating = _advance(
-        ctx, operation_id, generation, stage=STAGE_VALIDATING,
+        ctx, operation_id, generation,
+        # A stage only moves forward within an attempt: the automatic second
+        # pass is already past validating.
+        **({} if automatic_retry else {"stage": STAGE_VALIDATING}),
         frame_axis=request.expected_frame_axis,
     )
     expected_frame_axis = request.expected_frame_axis or validating.get("frame_axis")
@@ -1139,6 +1151,7 @@ def _prepare_sync(
         and automatic is not None
         and automatic != solver_frame.automatic_axis
         and automatic != _record_frame_axis(record)
+        and not automatic_retry
     ):
         # Nothing confirmed and WG is confident which way the model faces: the
         # survey mirrors the mesh back to CAD coordinates, so the suggestion
@@ -1149,7 +1162,15 @@ def _prepare_sync(
             "CAD operation %s, attempt %d: preparing again along the automatic axis %s.",
             operation_id, generation, automatic,
         )
-        return _prepare_sync(ctx, operation_id, generation, request)
+        return _prepare_sync(ctx, operation_id, generation, request, automatic_retry=True)
+    if automatic_retry and automatic is not None and automatic != _record_frame_axis(record):
+        # Bounded: a second pass that still disagrees is a defect, not a reason
+        # to mesh again. The frame gate below answers it.
+        logger.error(
+            "CAD operation %s, attempt %d: the automatic axis %s was not the axis meshed "
+            "(%s) on the second pass; not preparing again.",
+            operation_id, generation, automatic, _record_frame_axis(record),
+        )
 
     blocking = [
         str(finding.get("id"))

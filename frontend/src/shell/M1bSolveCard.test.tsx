@@ -557,8 +557,28 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(host.querySelector('input[type="radio"]')).toBeNull();
     await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
     expect(host.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe('+x');
-    // Nothing is confirmed by asking to change it.
+    // Nothing is confirmed by asking to change it, or by Done without a pick.
     expect(puts).toEqual([]);
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
+    expect(puts).toEqual([]);
+  });
+
+  it('confirms the axis picked after Change from an automatic run, so the next solve uses it', async () => {
+    await mount();
+    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[value="-z"]')!.click(); await flush(); });
+    expect(puts).toEqual([]);
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
+    expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
+  });
+
+  it('does not reopen the chooser on a later remount', async () => {
+    await mount();
+    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
+    expect(useCadSolverFrameStore.getState().changeRequests.wgi_first).toBe(0);
+    await act(async () => { root.render(<div/>); await flush(); });
+    await mount();
+    expect(host.querySelector('input[type="radio"]')).toBeNull();
   });
 
   it('leaves the frame to the backend gate when it cannot be read, and never guesses one', async () => {
@@ -572,7 +592,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
       root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}><CadSolveCard record={record} label="Speaker"/></JobsCoordinator>);
       await flush(8);
     });
-    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame')!.textContent).toContain('Solve still stops to ask'));
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame')!.textContent).toContain('Solve stops to ask'));
     await pressSolve();
     expect(puts).toEqual([]);
     expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();

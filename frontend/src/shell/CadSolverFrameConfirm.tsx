@@ -175,8 +175,19 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
   useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
   // The run line's "Change" (an automatic axis) opens this same chooser.
+  // Opened this way, the chooser confirms the axis picked (a Fusion Solve
+  // never shows it, so nothing else would): the request is consumed, so a
+  // remount never opens it again by itself.
   const changeRequested = useCadSolverFrameStore((state) => state.changeRequests[ingestId] ?? 0);
-  useEffect(() => { if (changeRequested > 0) setChanging(true); }, [changeRequested]);
+  const consumeChange = useCadSolverFrameStore((state) => state.consumeChange);
+  const [confirmOnDone, setConfirmOnDone] = useState(false);
+  useEffect(() => {
+    if (changeRequested > 0) {
+      setChanging(true);
+      setConfirmOnDone(true);
+      consumeChange(ingestId);
+    }
+  }, [changeRequested, consumeChange, ingestId]);
   const frame = view?.frame ?? null;
   const { mesh } = useFrameMesh(ingestId, fetcher);
 
@@ -186,7 +197,7 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   if (view.linked) return null;
   if (!frame) {
     return <p className="cad-solver-frame cad-detail" role="status">
-      WG could not read which way {label} radiates ({view.error}). Solve still stops to ask before it solves.
+      WG could not read which way {label} radiates ({view.error}). If WG is not sure which way it faces, Solve stops to ask.
     </p>;
   }
   const axis = view.axis;
@@ -201,6 +212,12 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
       .then((answer) => apply(ingestId, answer))
       .catch((reason: unknown) => setSwitchError(reason instanceof Error ? reason.message : String(reason)))
       .finally(() => setSwitching(false));
+  };
+  const done = () => {
+    setChanging(false);
+    // Only a pick is a change; Done alone confirms nothing.
+    if (confirmOnDone && view.picked && axis) switchTo(axis);
+    setConfirmOnDone(false);
   };
   const unsupported = frame.axes.find((item) => !item.allowed && item.reason)?.reason ?? null;
   return <div className="cad-solver-frame" data-frame-preview="ready" data-solver-frame={axis ?? 'unset'}>
@@ -239,10 +256,10 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
       {axis
         ? <>
           <FramePreview frame={frame} axis={axis} mesh={mesh} views="both"/>
-          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. Solve confirms it for this project.</p>
+          <p className="cad-detail">Solver frame: model {axis} → solver +Z (blue arrow). Drive sources are shown in orange. {confirmOnDone ? 'Done confirms it for this project.' : 'Solve confirms it for this project.'}</p>
         </>
         : <p className="cad-detail">Choose the model axis that points out of the mouth; the preview shows it as the solver +Z.</p>}
-      {changing && <button className="link-button" data-action="done-solver-frame" onClick={() => setChanging(false)}>Done</button>}
+      {changing && <button className="link-button" data-action="done-solver-frame" onClick={done}>Done</button>}
     </>}
     {view.changedFrom && axis && <p className="cad-alert cad-alert-notice cad-solver-frame-changed" role="status">
       This project’s solver frame was changed elsewhere to {axis}; this card showed {view.changedFrom}. Solve now solves along {axis}.

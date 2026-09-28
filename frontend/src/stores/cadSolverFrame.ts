@@ -40,6 +40,8 @@ interface CadSolverFrameStore {
    * frame card to open its axis chooser; the card reads it, never the reverse. */
   changeRequests: Record<string, number>;
   requestChange: (ingestId: string) => void;
+  /** The card took the request (opened its chooser); it is not asked again on a remount. */
+  consumeChange: (ingestId: string) => void;
   load: (ingestId: string, fetcher?: typeof fetch) => Promise<void>;
   /** The user's pick among the allowed axes, shown and confirmed by Solve. */
   pick: (ingestId: string, axis: SolverFrameAxis) => void;
@@ -87,6 +89,10 @@ const loads = new Map<string, Promise<void>>();
 export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => ({
   frames: {},
   changeRequests: {},
+  consumeChange: (ingestId) => {
+    if (!get().changeRequests[ingestId]) return;
+    set({ changeRequests: { ...get().changeRequests, [ingestId]: 0 } });
+  },
   requestChange: (ingestId) => set({
     changeRequests: { ...get().changeRequests, [ingestId]: (get().changeRequests[ingestId] ?? 0) + 1 },
   }),
@@ -159,7 +165,8 @@ export function frameSolveBlocker(ingestId: string | null | undefined): string |
  *
  * Only a frame the card has on screen is confirmed: with nothing read (the
  * card never showed one) or a read that failed, nothing is sent, and the
- * backend's own frame gate still stops the solve and asks. An axis already
+ * backend decides: it solves along its own confident automatic axis, or stops
+ * at its frame gate and asks. An axis already
  * confirmed for the project is not sent again. Whether the confirmation agrees
  * with the automatic suggestion is the server's to record.
  */

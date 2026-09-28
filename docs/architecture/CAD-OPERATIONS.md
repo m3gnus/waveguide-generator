@@ -450,7 +450,13 @@ press at all when WG is confident.
   carried. **Nothing is confirmed:** no `cad_frame_confirmations` row is written, so it
   is never taken as the user's confirmation for a later solve; a later WG Solve confirms
   the axis it shows, and a Change to another axis is a confirmation like any other and
-  is the axis of every later solve. The accepted operation records the axis in its
+  is the axis of every later solve of that project. For an unsaved document (no
+  project) a confirmation belongs to that exact snapshot, so a Change applies to it only
+  and the next Send is a new snapshot that WG judges again. In the card, Change from an
+  automatic run confirms the axis picked when Done is pressed (a Fusion Solve shows no
+  axis, so nothing else would). The second mesh is made once (an explicit single
+  retry; if it still disagrees the frame gate answers), keeps the stage, and leaves the
+  as-modelled ingest of the survey pass unreferenced until cleanup. The accepted operation records the axis in its
   outcome (`frame_axis_automatic`, summary `frameAxisAutomatic`); the CAD solve card says
   "Solved along the automatic axis +x" with a Change that opens the frame card's chooser,
   and the run details say the same. When WG is not confident (`ask`, `unavailable`, an
@@ -460,17 +466,20 @@ press at all when WG is confident.
   solver +Z, which is the chosen CAD forward direction; a source facing back along it is
   flipped to drive outward, as for a model modelled along +z.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
-  frame is not the confirmed one under the same requirement
+  frame is neither the confirmed one under the same requirement nor, while nothing is
+  confirmed, WG's confident automatic axis the record was meshed in
   (`frame_confirmation_required`), so `/api/solve`, a retry, a CAD operation's own
   submission and a recovered bound request all meet it. A record prepared before the
-  contract states no frame and is never taken as confirmed; it is prepared again. A
-  refusal with that code releases the binding and keeps the reason.
+  contract states no frame and is never taken as confirmed or automatic; it is prepared
+  again. A refusal with that code releases the binding and keeps the reason.
   - **One exception: jobs already queued.** A job accepted before an upgrade to this
     contract and still queued is requeued by `JobRuntime.start` as it was submitted; it
     is not submitted again, so it is not re-gated. Every later solve of that model is.
   - **Headless solves.** `server/cli/solve.py` submits through the same runtime, so a
-    headless solve of an unlinked ingestion is refused until its frame is confirmed. The
-    frame is confirmed only in WG's CAD Link panel or through the route below, for
+    headless solve of an unlinked ingestion is refused until its frame is confirmed,
+    unless it was meshed along WG's confident automatic axis (a CLI import meshed as
+    modelled where WG is confident about another axis is refused; prepare it again).
+    The frame is confirmed in WG's CAD Link panel or through the route below, for
     example `PUT /api/cadlink/solver-frame` with `{"ingestId": "wgi_…", "axis": "+z"}`.
 - **Routes.** `GET /api/cadlink/solver-frame?operationId=|ingestId=` answers every axis's
   `solverFromAssembly` and `previewFromRecord` (the matrix that turns the record's

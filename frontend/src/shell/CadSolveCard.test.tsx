@@ -336,6 +336,9 @@ describe('CAD Solve card run status', () => {
     // Before the run is done, it does not claim a solve.
     act(() => publishJobs([job()]));
     expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).toContain('Solving along the automatic axis +x');
+    act(() => publishJobs([job({ status: 'error', error_message: 'solver crashed' })]));
+    expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).toContain('Along the automatic axis +x');
+    expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).not.toContain('Solv');
   });
 
   it('says nothing about an axis for a run whose axis was confirmed', async () => {

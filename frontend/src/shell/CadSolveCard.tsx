@@ -212,7 +212,7 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
         without asking; the frame card above has the Change. */}
     {latest.state === 'accepted' && latest.frameAxisAutomatic
       && <p className="cad-detail cad-solve-frame-automatic" data-frame-axis-automatic={latest.frameAxisAutomatic}>
-        {automaticAxisNote(latest.frameAxisAutomatic, latestJob?.status === 'complete')}
+        {automaticAxisNote(latest.frameAxisAutomatic, latestJob?.status)}
         {' \u00b7 '}<button
           className="link-button"
           data-action="change-automatic-frame"

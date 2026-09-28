@@ -2556,10 +2556,12 @@ class JobRuntime:
                 details=mismatches,
             )
         # An unlinked (CAD-authored) model solves only in the solver frame its
-        # project confirmed, exactly the one this record was meshed in. Every
+        # project confirmed -- or, with nothing confirmed, in WG's own confident
+        # automatic axis -- exactly the one this record was meshed in. Every
         # submission meets this -- a direct solve, a retry, a CAD operation's
-        # own -- so no path solves a model whose frame nobody confirmed
-        # (docs/architecture/CAD-OPERATIONS.md, "Unlinked solver frame").
+        # own -- so no path solves a frame that is neither confirmed nor
+        # confidently inferred (docs/architecture/CAD-OPERATIONS.md,
+        # "Unlinked solver frame").
         frame_refusal = await asyncio.to_thread(
             record_frame_refusal, self.cadlink_store, record
         )
