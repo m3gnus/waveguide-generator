@@ -9,7 +9,7 @@ import pytest
 
 from server.design.schema import DesignConfig
 from server.solver.context import SolverContext
-from server.solver import bempp, circsym, metal
+from server.solver import bempp, metal
 
 
 def _context(
@@ -424,136 +424,6 @@ def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:
     assert response["metadata"]["field_trace_retention"]["estimated_bytes"] is None
 
 
-def test_circsym_adapter_uses_meridian_cancellation_stages_and_coupled_ib(monkeypatch) -> None:
-    captured = {}
-    stages = []
-    monotonic_ticks = iter([0.0, 0.1])
-
-    class MeridianBuild:
-        baffle_z = 0.06
-        metadata = {"apertureTag": 12, "segment_count": 8}
-
-        @staticmethod
-        def as_metal_meridian(cls):
-            return "native-meridian"
-
-    def config_factory(**kwargs):
-        captured.update(kwargs)
-        return _Config(**kwargs)
-
-    def solve(meridian, config):
-        assert meridian == "native-meridian"
-        assert config.should_continue() is True
-        config.progress_callback(0, 2, 500.0)
-        config.on_frequency_result(0, 500.0, {})
-        return _result()
-
-    monkeypatch.setattr(circsym, "build_meridian", lambda config: MeridianBuild())
-    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda config: [])
-    monkeypatch.setattr(circsym, "MeridianMesh", object)
-    monkeypatch.setattr(circsym, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(circsym, "native_config", config_factory)
-    monkeypatch.setattr(circsym, "solve_circsym", solve)
-    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "mock"})
-    monkeypatch.setattr(circsym, "metal_status", lambda: {"available": True, "reason": "mock"})
-    monkeypatch.setattr(circsym.time, "monotonic", lambda: next(monotonic_ticks))
-    cancellations = 0
-
-    def cancel():
-        nonlocal cancellations
-        cancellations += 1
-
-    context = _context(axial=True, sim_type=1)
-    context.solver_mode = "circsym"
-    response = circsym.solve_circsym_design(
-        context,
-        stage_callback=lambda *values: stages.append(values),
-        cancellation_callback=cancel,
-    )
-    assert captured["circsym_baffle_z"] == 0.06
-    assert captured["circsym_aperture_tag"] == 12
-    assert captured["source_motion"] == "axial"
-    assert cancellations == 5
-    assert [stage for stage, _, _ in stages] == [
-        "mesh_prepare",
-        "setup",
-        "frequency_solve",
-        "finalizing",
-    ]
-    assert response["metadata"]["solver_mode"] == "circsym"
-    assert response["metadata"]["infinite_baffle"]["backend"] == "circsym_coupled"
-
-
-def test_circsym_meridian_resolution_is_refined_from_sweep_top(monkeypatch) -> None:
-    monkeypatch.setattr(circsym, "solver_sound_speed_m_per_s", lambda _name: 300.0)
-    original = {
-        "mesh": {
-            "throatResolution": 3.0,
-            "mouthResolution": 15.0,
-            "rearResolution": 40.0,
-            "apertureResolutionScale": 2.0,
-        }
-    }
-
-    refined, report = circsym._frequency_refined_meridian_config(
-        original,
-        10_000.0,
-    )
-
-    assert original["mesh"]["mouthResolution"] == 15.0
-    assert refined["mesh"] == {
-        "throatResolution": 3.0,
-        "mouthResolution": 5.0,
-        "rearResolution": 5.0,
-        "apertureResolutionScale": 1.0,
-    }
-    assert report["policy"] == "wavelength_over_6_max_segment"
-    assert report["max_segment_mm"] == pytest.approx(5.0)
-    assert report["refined"] is True
-
-
-def test_circsym_missing_mesh_controls_preserve_legacy_discretization(monkeypatch) -> None:
-    monkeypatch.setattr(circsym, "solver_sound_speed_m_per_s", lambda _name: 300.0)
-
-    missing, missing_report = circsym._frequency_refined_meridian_config(
-        {},
-        1_000.0,
-    )
-    legacy, legacy_report = circsym._frequency_refined_meridian_config(
-        {
-            "mesh": {
-                "throatResolution": 3.0,
-                "mouthResolution": 12.0,
-                "rearResolution": 18.0,
-                "apertureResolutionScale": 1.0,
-            }
-        },
-        1_000.0,
-    )
-
-    assert missing["mesh"] == legacy["mesh"]
-    assert missing_report["applied"] == legacy_report["applied"]
-    assert missing_report["refined"] is legacy_report["refined"] is False
-
-
-@pytest.mark.parametrize(
-    ("value", "message"),
-    [
-        ("mouth_res * 0.5", "fixed numeric value"),
-        (0, "finite and positive"),
-        (float("inf"), "finite and positive"),
-    ],
-)
-def test_circsym_formula_or_invalid_resolution_is_a_clear_ineligibility(
-    value: object, message: str
-) -> None:
-    with pytest.raises(ValueError, match=message):
-        circsym._frequency_refined_meridian_config(
-            {"mesh": {"mouthResolution": value}},
-            10_000.0,
-        )
-
-
 def _explicit_context(frequencies: tuple[float, ...]) -> SolverContext:
     context = _context()
     context.frequencies_hz = frequencies
@@ -631,41 +501,6 @@ def test_bempp_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
         lambda: {"available": True, "reason": "mock CPU", "assembly_backend": "numba"},
     )
     response = bempp.solve_bempp_from_msh_text("msh", _explicit_context(frequencies))
-    assert seen["freqs"] == list(frequencies)
-    assert response["metadata"]["frequency_source"] == "explicit_list"
-
-
-def test_circsym_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
-    frequencies = (500.0, 812.3, 1000.0)
-    seen: dict[str, object] = {}
-
-    class MeridianBuild:
-        baffle_z = 0.06
-        metadata = {"segment_count": 8}
-
-        @staticmethod
-        def as_metal_meridian(cls):
-            return "native-meridian"
-
-    def solve_circsym_frequencies(meridian, freqs, config):
-        seen["freqs"] = list(freqs)
-        return _result_at(frequencies)
-
-    monkeypatch.setattr(circsym, "build_meridian", lambda config: MeridianBuild())
-    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda config: [])
-    monkeypatch.setattr(circsym, "MeridianMesh", object)
-    monkeypatch.setattr(circsym, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(circsym, "native_config", lambda **kwargs: _Config(**kwargs))
-    monkeypatch.setattr(
-        circsym, "solve_circsym", lambda meridian, config: pytest.fail("grid path must not run")
-    )
-    monkeypatch.setattr(circsym, "solve_circsym_frequencies", solve_circsym_frequencies)
-    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "mock"})
-    monkeypatch.setattr(circsym, "metal_status", lambda: {"available": True, "reason": "mock"})
-
-    context = _explicit_context(frequencies)
-    context.solver_mode = "circsym"
-    response = circsym.solve_circsym_design(context)
     assert seen["freqs"] == list(frequencies)
     assert response["metadata"]["frequency_source"] == "explicit_list"
 

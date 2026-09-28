@@ -724,11 +724,6 @@ def solve_bempp_from_msh_text(
     """Solve one authoritative Gmsh artifact on the guarded CPU backend."""
 
     context.validate()
-    if context.solver_mode == "circsym":
-        raise ValueError(
-            "BEMPP full 3D cannot execute the axisymmetric formulation; "
-            "the solve planner must route it to the Axisymmetric runner"
-        )
     if not _load_api() or SolveConfig is None or bempp_solve is None:
         raise BemppUnavailable("hornlab-bempp-bem is not installed.")
     status = bempp_status()
@@ -1172,16 +1167,6 @@ class BemppEngine:
                 artifact_cb=artifact_cb,
                 result_cb=result_cb,
             )
-        if (request.options.solver_mode or "").strip().lower() == "circsym":
-            from .circsym import AxisymmetricEngine
-
-            return await AxisymmetricEngine().run(
-                request,
-                cancel_cb=cancel_cb,
-                stage_cb=stage_cb,
-                artifact_cb=artifact_cb,
-                result_cb=result_cb,
-            )
         context = SolverContext.from_request(request, solver_mode="full_3d")
         mesh = await build_solver_mesh(
             request.design,
@@ -1205,9 +1190,6 @@ class BemppEngine:
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"
-        results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
-            "the solve planner selected the full-3D BEMPP formulation"
-        ]
         field_traces = results.pop("_field_traces", None)
         field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
         return EngineRunResult(

@@ -20,21 +20,19 @@ const engine = (
   name: string,
   available: boolean,
   mountings: string[],
-  formulations = ['full-3d'],
 ) => ({
   name, available, reason: available ? 'ok' : `${name} unavailable`, version: null, fast_paths: [],
-  formulations, mountings, geometry_sources: ['parametric'],
+  formulations: ['full-3d'], mountings, geometry_sources: ['parametric'],
 });
 
 const capabilities = (metalAvailable: boolean) => ({
   engines: [
     engine('metal', metalAvailable, ['free-standing', 'infinite-baffle']),
     engine('bempp', true, ['free-standing', 'infinite-baffle']),
-    engine('axisym', true, ['free-standing', 'infinite-baffle'], ['axisymmetric']),
   ],
   engineSelection: {
     default: 'auto', resolvedDefault: metalAvailable ? 'metal' : 'bempp',
-    full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+    full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'],
   },
 });
 
@@ -116,11 +114,10 @@ describe('solver-backend parameter gating', () => {
         engine('metal', false, ['free-standing', 'infinite-baffle']),
         engine('beat', true, ['free-standing']),
         engine('bempp', true, ['free-standing', 'infinite-baffle']),
-        engine('axisym', false, ['free-standing', 'infinite-baffle'], ['axisymmetric']),
       ],
       engineSelection: {
         default: 'auto', resolvedDefault: 'beat',
-        full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+        full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'],
       },
     };
 
@@ -134,25 +131,4 @@ describe('solver-backend parameter gating', () => {
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
   });
 
-  it('replans backend gating when Axisymmetric is selected explicitly', async () => {
-    const payload = {
-      engines: [
-        engine('beat', true, ['free-standing']),
-        engine('axisym', true, ['free-standing', 'infinite-baffle'], ['axisymmetric']),
-      ],
-      engineSelection: {
-        default: 'auto', resolvedDefault: 'beat',
-        full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
-      },
-    };
-
-    await mount(payload);
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
-
-    await act(async () => {
-      useSolveOptionsStore.setState({ solverMode: 'circsym' });
-      await Promise.resolve();
-    });
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
-  });
 });

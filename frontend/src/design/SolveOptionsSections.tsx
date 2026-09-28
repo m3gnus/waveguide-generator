@@ -28,16 +28,9 @@ import {
   type ObservationOrigin,
   type PolarAxis,
   type PolarUiState,
-  type SolverMode,
 } from '../stores/solveOptions';
 import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
-
-export const solverModeLabels = {
-  auto: 'Full 3D (legacy automatic mode)',
-  full_3d: 'Full 3D',
-  circsym: 'Axisymmetric (meridian)',
-} as const;
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
 
@@ -45,7 +38,6 @@ function engineDisplayName(name: string): string {
   switch (name.toLowerCase()) {
     case 'metal': return 'Metal';
     case 'bempp': return 'BEMPP';
-    case 'axisym': return 'Axisymmetric';
     case 'beat-metal': return 'BEAT Metal';
     case 'beat-cuda': return 'BEAT CUDA';
     case 'beat-rocm': return 'BEAT ROCm';
@@ -57,15 +49,12 @@ function engineDisplayName(name: string): string {
 
 function fastEngineForParametric(
   requested: string,
-  solverMode: SolverMode,
   engines: readonly EngineCapability[],
   engineSelection: Readonly<EngineSelection>,
 ): string | null {
   let resolved: string;
   try {
-    resolved = solverMode === 'circsym'
-      ? engineSelection.axisymmetricRunner
-      : resolveEngine(requested, { engines, engineSelection }, solverMode);
+    resolved = resolveEngine(requested, { engines, engineSelection });
   } catch {
     return null;
   }
@@ -76,21 +65,19 @@ function fastEngineForParametric(
 
 function accurateEngineForParametric(
   requested: string,
-  solverMode: SolverMode,
   engines: readonly EngineCapability[],
 ): string | null {
-  if (solverMode === 'circsym') return null;
   const resolved = accuracyEngine(requested, 'accurate', engines);
   return engines.some((engine) => engine.available && engine.name.toLowerCase() === resolved.toLowerCase())
     ? resolved.toLowerCase()
     : null;
 }
 
-// The BEM adapters and portable meridian adapter use DEFAULT_BEM_FORMULATION
-// from server/solver/formulation.py. BEAT uses Burton–Miller, and dry-run has
-// no BEM formulation, so neither gets the complex-k damping caveat.
+// The BEM adapters use DEFAULT_BEM_FORMULATION from server/solver/formulation.py.
+// BEAT uses Burton–Miller, and dry-run has no BEM formulation, so neither gets
+// the complex-k damping caveat.
 function usesComplexK(engine: string): boolean {
-  return ['metal', 'bempp', 'axisym'].includes(engine);
+  return ['metal', 'bempp'].includes(engine);
 }
 
 /**
@@ -169,16 +156,12 @@ function accurateHelp(
   pending: boolean,
   hasImportedPlan: boolean,
   importedPlanReason?: string,
-  solverMode?: SolverMode,
 ): string {
   if (!engine) {
     if (mode === 'cad') {
       if (pending) return `${ACCURATE_HELP} Checking which BEAT backend can solve this CAD return…`;
       if (hasImportedPlan) return `${ACCURATE_HELP} No BEAT backend can solve this CAD return${importedPlanReason ? `: ${importedPlanReason}` : ''}.`;
       return `${ACCURATE_HELP} Prepare the CAD return to see whether a BEAT backend can solve it.`;
-    }
-    if (solverMode === 'circsym') {
-      return `${ACCURATE_HELP} Accurate requires Full 3D; switch from Axisymmetric to run it.`;
     }
     return pending
       ? `${ACCURATE_HELP} Checking which BEAT backend is ready…`
@@ -228,9 +211,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
 } = {}) {
   const store = useSolveOptionsStore();
   const { engines, engineSelection, error, isLoading: capabilitiesLoading } = useCapabilities();
-  const backendEngines = engines.filter((engine) => !['axisym', 'circsym'].includes(engine.name.toLowerCase()));
-  const axisymEngine = engines.find((engine) => engine.name.toLowerCase() === 'axisym');
-  const meridianAvailable = axisymEngine?.available === true;
+  const backendEngines = engines;
   // For imported geometry the server says, per engine, whether it can take
   // this return, and where the user's choice resolves. Before a return is
   // prepared there is no record to ask about, and the list shows only what
@@ -240,8 +221,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const importedEngine = importedPlan.plan?.engine
     ? verdicts.get(importedPlan.plan.engine)?.label || importedPlan.plan.engine
     : null;
-  const parametricFastEngine = fastEngineForParametric(store.engine, store.solverMode, engines, engineSelection);
-  const parametricAccurateEngine = accurateEngineForParametric(store.engine, store.solverMode, engines);
+  const parametricFastEngine = fastEngineForParametric(store.engine, engines, engineSelection);
+  const parametricAccurateEngine = accurateEngineForParametric(store.engine, engines);
   const helpEngine = mode === 'cad'
     ? importedPlan.plan?.engine ?? null
     : store.accuracy === 'accurate' ? parametricAccurateEngine : parametricFastEngine;
@@ -251,12 +232,12 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   // of the selected choice, from the imported plan.
   const explainerFast = mode === 'cad'
     ? (store.accuracy === 'fast' && store.engine === 'auto' ? importedPlan.plan?.engine ?? null : null)
-    : fastEngineForParametric('auto', store.solverMode, engines, engineSelection);
+    : fastEngineForParametric('auto', engines, engineSelection);
   const explainerAccurate = mode === 'cad'
     ? (store.accuracy === 'accurate' && store.engine === 'auto' ? importedPlan.plan?.engine ?? null : null)
-    : accurateEngineForParametric('auto', 'full_3d', engines);
+    : accurateEngineForParametric('auto', engines);
   const accuracyHelp = store.accuracy === 'accurate'
-    ? accurateHelp(helpEngine, mode, helpPending, importedPlan.plan !== null, importedPlan.plan?.reason, store.solverMode)
+    ? accurateHelp(helpEngine, mode, helpPending, importedPlan.plan !== null, importedPlan.plan?.reason)
     : fastHelp(helpEngine, mode, helpPending, importedPlan.plan !== null);
   const runsOn = importedEngine
     ? `${importedEngine} · full 3-D · free space`
@@ -274,13 +255,6 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <HelpTipRow className="select-row" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.label || engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
-      </select></HelpTipRow>
-      <p className="section-note">{meridianAvailable
-        ? 'Axisymmetric is available as an explicit solver path on this machine. It is never selected automatically.'
-        : 'Selected backend capability: Full 3D. The axisymmetric runner is unavailable.'}</p>
-      <HelpTipRow className="select-row" text="Machine-local formulation choice. Full 3D is the default. Axisymmetric must be selected explicitly and uses the same portable meridian runner with any Full 3D backend choice. The choice is not saved into design files."><label htmlFor="solve-mode">Solver path</label><select id="solve-mode" value={store.solverMode === 'auto' ? 'full_3d' : store.solverMode} onChange={(event) => store.setSolverMode(event.target.value as SolverMode)}>
-        <option value="full_3d">{solverModeLabels.full_3d}</option>
-        {(meridianAvailable || store.solverMode === 'circsym') && <option value="circsym" disabled={!meridianAvailable}>{solverModeLabels.circsym}{meridianAvailable ? '' : ' · unavailable'}</option>}
       </select></HelpTipRow>
     </> : <>
       {/* The engine is the same choice as the parametric workspace's: the
@@ -340,7 +314,7 @@ export function GroundPlaneControls() {
   // does not support a rigid ground plane" for a solve the server routes to
   // BEMPP and runs. A warning that fires on a solve which succeeds teaches a
   // user to ignore the warning.
-  const plan = plannedBackendCapabilities(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection, store.solverMode);
+  const plan = plannedBackendCapabilities(accuracyEngine(store.engine, store.accuracy, engines), engines, engineSelection);
   const limitation = backendLimitation(backend, 'ground-plane', plan);
   const belowGround = ground.enabled ? belowGroundNote(ground.height_m, store.polar) : undefined;
   // The union over the plan, for the same reason the limitation is plan-based:
@@ -618,7 +592,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     {cardinalDiagonal && <p className="section-note" role="status">A diagonal at {Number(polar.diagonalAngle.toFixed(6))}° is the {Math.abs((polar.diagonalAngle % 180 + 180) % 180 - 90) < 1e-6 ? 'vertical' : 'horizontal'} plane, so it will be measured and plotted twice. Use an angle between the planes, such as 45°.</p>}
     <HelpTipRow className="select-row" text="The point the measurement angles pivot around. Mouth rotates about the mouth centre, which is what a measured polar set matches; Throat pivots at the driver instead."><label htmlFor="polar-observation-origin">Measurement origin</label><select id="polar-observation-origin" value={polar.observationOrigin} onChange={(event) => update({ observationOrigin: event.target.value as ObservationOrigin })}><option value="mouth">Mouth</option><option value="throat">Throat</option></select></HelpTipRow>
     <ToggleRow id="polar-spherical-sampling" label="Keep 3D balloon result" help="WG samples a spherical field for Directivity Index independently of the selected H/V/D display planes. Enable this to retain that grid for the 3D balloon and forward-beam views; availability depends on the backend." checked={polar.sphericalSampling} onChange={(sphericalSampling) => update({ sphericalSampling })} />
-    <ToggleRow id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This needs a full-3D solve (not axisymmetric) and adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
+    <ToggleRow id="polar-field-plane" label="Keep field plane data" help="Retains the surface data needed for acoustic field planes. This adds ~0.1–1 MB per typical parametric job, with larger results for CAD-link imports." checked={polar.fieldPlane !== false} onChange={(fieldPlane) => update({ fieldPlane })} />
     <p className="section-note">Directivity Index always uses the complete spherical field. “Keep 3D balloon result” controls whether WG also stores that field for 3D views.</p>
     {effective && <div className={`effective-grid-readout${effective.widened ? ' widened' : ''}`} role="status"><b>{effective.summary}</b><span>{effective.detail}</span><small>Display planes and angle range only; Directivity Index always uses the complete spherical field.</small></div>}
     <SolvedWithReadout/>

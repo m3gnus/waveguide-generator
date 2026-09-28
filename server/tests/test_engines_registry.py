@@ -69,17 +69,6 @@ def test_accurate_resolves_ready_beat_gpu_then_cpu(available: set[str], expected
         assert "fallback_reason" not in resolved.symmetry_metadata["solver_plan"]
 
 
-def test_explicit_beat_with_axisymmetric_mode_keeps_fast_portable_runner() -> None:
-    engine_registry = registry.EngineRegistry(
-        detector=lambda: [registry.EngineInfo("axisym", True, "ready", "1")],
-        factory=lambda _name: object(),
-    )
-    request = _planner_request(engine="beat-cpu", solver_mode="circsym")
-    resolved = asyncio.run(resolve_submission(request, engine_registry))
-    assert resolved.engine_name == "axisym"
-    assert resolved.request.options.accuracy == "fast"
-
-
 def test_accurate_refuses_missing_beat_instead_of_switching_to_metal() -> None:
     engine_registry = registry.EngineRegistry(
         detector=lambda: [registry.EngineInfo("metal", True, "ready", "1")],
@@ -376,16 +365,14 @@ def _stub_beat_backends(monkeypatch, **available: bool) -> None:
 
 
 def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> None:
-    from server.solver import bempp, circsym, metal
+    from server.solver import bempp, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "helper loadable", "version": "1"})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
     _stub_beat_backends(monkeypatch, cpu=True)
-    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "meridian ready", "version": "2"})
     detected = registry.detect_engines(environ={"WG2_ENABLE_DRYRUN": "1"})
     assert [(item.name, item.available, item.reason) for item in detected] == [
         ("dryrun", True, "Enabled explicitly by WG2_ENABLE_DRYRUN=1"),
-        ("axisym", True, "meridian ready"),
         ("metal", True, "helper loadable"),
         ("bempp", False, "package absent"),
         ("beat-cuda", False, "cuda stub"),
@@ -393,11 +380,8 @@ def test_detection_uses_honest_probe_reasons_and_dryrun_gate(monkeypatch) -> Non
         ("beat-metal", False, "metal stub"),
         ("beat-cpu", True, "cpu stub"),
     ]
-    assert detected[1].formulations == ("axisymmetric",)
-    assert detected[1].mountings == ("free-standing", "infinite-baffle")
-    assert detected[1].cancellation_granularity == "intra-frequency"
-    assert detected[2].fast_paths == ()
-    assert all(item.name != "circsym" for item in detected)
+    assert detected[1].fast_paths == ()
+    assert all(item.name != "axisym" for item in detected)
     # The wire name is an identifier; the label is what the picker shows.
     labels = {item.name: item.display_label() for item in detected}
     assert labels["beat-cuda"] == "BEAT \u00b7 CUDA \u2014 NVIDIA GPU"
@@ -449,11 +433,10 @@ def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
     "half" here would promise it.
     """
 
-    from server.solver import beat, bempp, circsym, metal
+    from server.solver import beat, bempp, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "package absent", "version": None})
-    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": False, "reason": "absent", "version": None})
     _stub_beat_backends(monkeypatch, cuda=True)
     detected = {item.name: item for item in registry.detect_engines(environ={})}
     # The backend is an execution choice, not a formulation: every variant
@@ -477,11 +460,10 @@ def test_beat_field_trace_capability_follows_the_installed_package(
     after a pin bump. The probe reports what the installed package can do.
     """
 
-    from server.solver import beat, bempp, circsym, metal
+    from server.solver import beat, bempp, metal
 
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "no helper", "version": None})
     monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "absent", "version": None})
-    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": False, "reason": "absent", "version": None})
     for supported in (False, True):
         monkeypatch.setattr(
             beat,
@@ -667,260 +649,6 @@ def _planner_request(
     )
 
 
-def _reported_rosse_request(*, engine: str, solver_mode: str = "circsym") -> SolveRequest:
-    """The circular support case that regressed between 0.3.1 and 0.3.2."""
-
-    return SolveRequest.model_validate(
-        {
-            "design": {
-                "formula": "R-OSSE",
-                "R": 600,
-                "a": 45,
-                "a0": 5.25,
-                "b": 0.22,
-                "k": 9.5,
-                "m": 0.8,
-                "q": 5,
-                "r": 0.06,
-                "r0": 19.5,
-                "tmax": 1,
-                "simulation": {
-                    "f1": 50,
-                    "f2": 20_000,
-                    "num_frequencies": 40,
-                    "sim_type": "freestanding",
-                },
-            },
-            "options": {
-                "engine": engine,
-                "solver_mode": solver_mode,
-                "symmetry": "auto",
-            },
-        }
-    )
-
-
-@pytest.mark.parametrize(
-    "engine",
-    ["auto", "metal", "bempp", "beat", "beat-cpu", "beat-metal", "beat-cuda", "beat-rocm"],
-)
-def test_reported_circular_rosse_explicit_axisym_works_with_every_backend_choice(
-    monkeypatch,
-    engine: str,
-) -> None:
-    from server.solver import circsym
-
-    monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: [])
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_plan_cost",
-        lambda _request, *, full_3d_quadrants: {
-            "model": "test",
-            "full_3d_quadrants": full_3d_quadrants,
-        },
-    )
-    engine_registry = registry.EngineRegistry(
-        detector=lambda: [
-            registry.EngineInfo("axisym", True, "portable CPU", "1"),
-            *(
-                []
-                if engine == "auto"
-                else [registry.EngineInfo(engine, True, "full-3D preference", "1")]
-            ),
-        ],
-        factory=lambda name: object(),
-    )
-
-    resolution = asyncio.run(
-        resolve_submission(_reported_rosse_request(engine=engine), engine_registry)
-    )
-
-    assert resolution.engine_name == "axisym"
-    assert resolution.symmetry_metadata["solver_plan"]["reason"] == (
-        "forced by solver_mode='circsym'"
-    )
-
-
-def test_reported_circular_rosse_is_eligible_and_refined_to_20khz() -> None:
-    from server.solver.circsym import (
-        axisymmetric_eligibility_reasons,
-        axisymmetric_plan_cost,
-    )
-
-    request = _reported_rosse_request(engine="bempp")
-
-    assert axisymmetric_eligibility_reasons(request) == []
-    cost = axisymmetric_plan_cost(request, full_3d_quadrants=1)
-    refinement = cost["meridian_frequency_refinement"]
-    assert refinement["max_frequency_hz"] == 20_000.0
-    assert refinement["refined"] is True
-    assert refinement["max_segment_mm"] == pytest.approx(
-        1000.0 * refinement["sound_speed_m_per_s"] / (6.0 * 20_000.0)
-    )
-
-
-def test_formulation_planner_uses_portable_axisym_without_revolved_symmetry(
-    monkeypatch,
-) -> None:
-    from server.solver import circsym
-
-    monkeypatch.setattr(
-        "server.jobs.runtime.resolve_symmetry",
-        lambda _design: pytest.fail(
-            "axisymmetric submissions must not build a revolved surface"
-        ),
-    )
-    monkeypatch.setattr(circsym, "axisymmetric_eligibility_reasons", lambda _request: [])
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_plan_cost",
-        lambda _request, *, full_3d_quadrants: {
-            "model": "test",
-            "full_3d_quadrants": full_3d_quadrants,
-        },
-    )
-    engine_registry = registry.EngineRegistry(
-        detector=lambda: [
-            registry.EngineInfo("axisym", True, "portable CPU", "1"),
-            registry.EngineInfo("bempp", True, "Windows CPU fallback", "1"),
-        ],
-        factory=lambda name: object() if name in {"axisym", "bempp"} else None,
-    )
-
-    resolution = asyncio.run(
-        resolve_submission(_planner_request(solver_mode="circsym"), engine_registry)
-    )
-
-    assert resolution.engine_name == "axisym"
-    assert resolution.request.options.engine == "axisym"
-    assert resolution.symmetry_metadata["solver_plan"] == {
-        "formulation": "axisymmetric",
-        "engine": "axisym",
-        "accuracy": "fast",
-        "reason": "forced by solver_mode='circsym'",
-        "eligibility_reasons": [],
-        "cost_evidence": {"model": "test", "full_3d_quadrants": 1},
-    }
-    assert resolution.symmetry_metadata["domain"] == "continuous-axisymmetric"
-
-
-def test_axisymmetric_cost_evidence_uses_refined_meridian_and_requested_domain() -> None:
-    from server.solver.circsym import axisymmetric_plan_cost
-
-    cost = axisymmetric_plan_cost(_planner_request(), full_3d_quadrants=1)
-
-    assert cost["model"] == "deterministic-reduced-vs-revolved-dense-v1"
-    assert cost["frequency_count"] == 3
-    assert cost["frequency_max_hz"] == 8000.0
-    assert cost["meridian_segments"] > 0
-    assert cost["azimuth_quadrature"]["maximum"] >= cost["azimuth_quadrature"][
-        "minimum"
-    ]
-    assert cost["axisymmetric"]["ring_quadrature_terms"] > 0
-    assert cost["full_3d_equivalent"]["requested_quadrants"] == 1
-    assert cost["full_3d_equivalent"]["domain_fraction"] == 0.25
-    assert cost["full_3d_equivalent"]["estimated_triangles"] >= cost[
-        "meridian_segments"
-    ]
-    assert cost["relative_dense_unknowns"] >= 1.0
-    assert cost["relative_dense_matrix_memory"] >= 1.0
-
-
-def test_formulation_planner_falls_back_to_selected_full_3d_backend(
-    monkeypatch,
-) -> None:
-    from server.solver import circsym
-
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_eligibility_reasons",
-        lambda _request: ["mouth is not circular"],
-    )
-    engine_registry = registry.EngineRegistry(
-        detector=lambda: [
-            registry.EngineInfo("axisym", True, "portable CPU", "1"),
-            registry.EngineInfo("bempp", True, "CPU", "1"),
-        ],
-        factory=lambda name: object() if name in {"axisym", "bempp"} else None,
-    )
-
-    resolution = asyncio.run(
-        resolve_submission(_planner_request(engine="bempp"), engine_registry)
-    )
-
-    assert resolution.engine_name == "bempp"
-    assert resolution.symmetry_metadata["solver_plan"] == {
-        "formulation": "full-3d",
-        "engine": "bempp",
-        "accuracy": "fast",
-        "reason": "explicit solver_mode='full_3d'",
-        "eligibility_reasons": [],
-        # The planner request leaves the wall unset, so BEMPP's closed-wall
-        # default applies and is reported.
-        "adjustments": [
-            {
-                "kind": "bempp_wall_default",
-                "requested": "omitted",
-                "effective_mm": 5.0,
-                "reason_code": "bempp_free_standing_requires_closed_wall",
-                "policy_version": 1,
-            }
-        ],
-    }
-
-
-def test_submission_plan_endpoint_uses_the_submitted_design(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    from server.solver import circsym
-
-    eligibility_reasons: list[str] = []
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_eligibility_reasons",
-        lambda _request: eligibility_reasons,
-    )
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_plan_cost",
-        lambda _request, *, full_3d_quadrants: {
-            "model": "test",
-            "full_3d_quadrants": full_3d_quadrants,
-        },
-    )
-    engine_registry = registry.EngineRegistry(
-        detector=lambda: [
-            registry.EngineInfo("axisym", True, "portable CPU", "1"),
-            registry.EngineInfo("beat", False, "GPU backend is offline", None),
-        ],
-        factory=lambda name: object() if name == "axisym" else None,
-    )
-    runtime = JobRuntime(
-        JobStore(tmp_path / "jobs.db"),
-        engine_registry=engine_registry,
-    )
-    endpoint = next(
-        route.endpoint
-        for route in create_jobs_router(runtime).routes
-        if getattr(route, "path", None) == "/api/solve/plan"
-    )
-    request = _planner_request(engine="beat", solver_mode="circsym")
-
-    eligible = asyncio.run(endpoint(request))
-    assert eligible.engine == "axisym"
-    assert eligible.formulation == "axisymmetric"
-    assert eligible.eligibility_reasons == []
-
-    eligibility_reasons.append("mouth is not circular")
-    ineligible = asyncio.run(endpoint(request))
-    assert ineligible.status_code == 422
-    refusal = json.loads(ineligible.body)
-    assert refusal["error"]["code"] == "invalid_solve_plan"
-    assert "Forced axisymmetric solver mode is not eligible" in refusal["error"]["message"]
-    assert "mouth is not circular" in refusal["error"]["message"]
-
-
 def test_a_stored_legacy_beat_request_still_submits(monkeypatch) -> None:
     """A design file written before the backends were separately selectable.
 
@@ -929,20 +657,12 @@ def test_a_stored_legacy_beat_request_still_submits(monkeypatch) -> None:
     formulation selection now means Full 3D and never opts into Axisymmetric.
     """
 
-    from server.solver import circsym
-
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_eligibility_reasons",
-        lambda _request: ["mouth is not circular"],
-    )
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
-            registry.EngineInfo("axisym", True, "portable CPU", "1"),
             registry.EngineInfo("beat-cuda", False, "no NVIDIA GPU", None),
             registry.EngineInfo("beat-cpu", True, "Julia found", "1"),
         ],
-        factory=lambda name: object() if name in {"axisym", "beat-cpu"} else None,
+        factory=lambda name: object() if name == "beat-cpu" else None,
     )
 
     resolution = asyncio.run(
@@ -966,13 +686,6 @@ def test_a_legacy_beat_request_with_no_beat_backend_substitutes_and_says_why(
     which is what this did before the substitution fallback existed.
     """
 
-    from server.solver import circsym
-
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_eligibility_reasons",
-        lambda _request: ["mouth is not circular"],
-    )
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
             registry.EngineInfo("bempp", True, "CPU", "1"),
@@ -1004,13 +717,6 @@ def test_a_beat_variant_this_host_lacks_substitutes_like_any_other_engine(
     refuses instead of falling back.
     """
 
-    from server.solver import circsym
-
-    monkeypatch.setattr(
-        circsym,
-        "axisymmetric_eligibility_reasons",
-        lambda _request: ["mouth is not circular"],
-    )
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
             registry.EngineInfo("metal", True, "helper loadable", "1"),
@@ -1924,3 +1630,26 @@ def test_the_plan_endpoint_reports_no_adjustment_when_the_wall_is_left_alone(
 
     assert plan.engine == engine
     assert plan.adjustments == []
+
+
+@pytest.mark.parametrize(
+    ("engine", "mode"),
+    [("auto", "circsym"), ("axisym", "full_3d"), ("circsym", "full_3d")],
+)
+def test_removed_mode_plan_refuses_before_engine_fallback(
+    tmp_path: Path, engine: str, mode: str
+) -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo("bempp", True, "ready", "1")],
+        factory=lambda name: object() if name == "bempp" else None,
+    )
+    runtime = JobRuntime(JobStore(tmp_path / "jobs.db"), engine_registry=engine_registry)
+    endpoint = next(
+        route.endpoint for route in create_jobs_router(runtime).routes
+        if getattr(route, "path", None) == "/api/solve/plan"
+    )
+    response = asyncio.run(endpoint(_planner_request(engine=engine, solver_mode=mode)))
+    assert response.status_code == 422
+    error = json.loads(response.body)["error"]
+    assert error["code"] == "removed_solver_mode"
+    assert "Axisymmetric solving has been removed" in error["message"]

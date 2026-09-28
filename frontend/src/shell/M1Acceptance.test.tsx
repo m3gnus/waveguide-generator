@@ -70,7 +70,7 @@ vi.mock('../jobs/actions', async (importOriginal) => {
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
     engines: [{ name: 'metal', available: true, reason: null, version: null, fast_paths: [], formulations: ['full-3d'] }],
-    engineSelection: { default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'], axisymmetricRunner: 'axisym' },
+    engineSelection: { default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal'] },
     error: null,
     isLoading: false,
   }),

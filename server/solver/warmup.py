@@ -531,8 +531,7 @@ def prewarm_bempp_worker_for_engine(engine: str | None) -> bool:
     ``engine`` is AUTO's already-resolved answer, passed in rather than probed
     for. Probing here instead cost a second, concurrent ``detect_engines()`` at
     boot: this ran on its own thread 2 ms after ``EngineRegistry.prewarm``
-    started the same work, and neither ``lru_cache`` nor ``circsym_status``
-    (which has no cache at all) serialises a miss, so both threads did the full
+    started the same work, and ``lru_cache`` does not serialise a miss, so both threads did the full
     probe. The registry already owns one snapshot behind an ``asyncio.Lock``;
     the caller awaits that and hands the answer over.
 

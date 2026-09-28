@@ -340,8 +340,8 @@ const ENGINE_LABELS: Record<string, string> = {
   'beat-rocm': 'BEAT ROCm',
   official_beat: 'Official BEAT',
   bempp: 'BEMPP',
-  circsym: 'CircSym',
-  axisym: 'CircSym',
+  circsym: 'Axisymmetric (removed)',
+  axisym: 'Axisymmetric (removed)',
   dryrun: 'Dry run',
 };
 
@@ -364,7 +364,7 @@ function resolvedDomain(job: Pick<JobItem, 'config_summary'>): string | null {
   const symmetry = job.config_summary?.symmetry;
   if (symmetry && typeof symmetry === 'object' && !Array.isArray(symmetry)) {
     const value = symmetry as Record<string, unknown>;
-    if (value.domain === 'continuous-axisymmetric') return 'axisymmetric';
+    if (value.domain === 'continuous-axisymmetric') return 'Axisymmetric (removed)';
     const resolved = value.resolved;
     if (typeof resolved === 'string') {
       if (resolved === 'full' || resolved === 'full_3d') return 'full';

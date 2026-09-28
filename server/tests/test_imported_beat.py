@@ -618,10 +618,9 @@ def test_the_imported_ground_plane_backstop_names_no_single_engine() -> None:
 def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from server.solver import bempp, circsym, metal
+    from server.solver import bempp, metal
 
     available = {"available": True, "reason": "ok", "version": "t"}
-    monkeypatch.setattr(circsym, "circsym_status", lambda: dict(available))
     monkeypatch.setattr(metal, "metal_status", lambda: dict(available))
     monkeypatch.setattr(bempp, "bempp_status", lambda: dict(available))
     monkeypatch.setattr(

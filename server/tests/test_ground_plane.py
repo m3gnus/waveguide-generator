@@ -15,7 +15,6 @@ from server.engines.registry import EngineInfo, _mountings, detect_engines
 from server.jobs.models import GroundPlaneConfig, SolveOptions
 from server.solver import beat as _beat_module
 from server.solver import bempp as _bempp_module
-from server.solver import circsym as _circsym_module
 from server.solver import metal as _metal_module
 from server.solver.ground_plane import (
     GROUND_PLANE_AXES,
@@ -62,7 +61,6 @@ def _no_real_solver_probes(monkeypatch: pytest.MonkeyPatch) -> None:
         "ground_plane_composes_with_symmetry": True,
     })
     monkeypatch.setattr(_metal_module, "metal_status", lambda: dict(_STUB_STATUS))
-    monkeypatch.setattr(_circsym_module, "circsym_status", lambda: dict(_STUB_STATUS))
 
 
 
@@ -405,14 +403,6 @@ def _grounded_request(*, engine: str = "auto", solver_mode: str = "auto"):
     )
 
 
-def test_ground_plane_is_not_axisymmetric_eligible():
-    from server.solver.circsym import axisymmetric_eligibility_reasons
-
-    assert axisymmetric_eligibility_reasons(_grounded_request()) == [
-        "a rigid ground plane requires a full-3D solver"
-    ]
-
-
 def test_auto_formulation_defaults_to_ground_capable_full_3d_backend():
     import asyncio
 
@@ -421,9 +411,6 @@ def test_auto_formulation_defaults_to_ground_capable_full_3d_backend():
 
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
-            registry.EngineInfo(
-                "axisym", True, "test", "1", mountings=("free-standing",)
-            ),
             registry.EngineInfo(
                 "bempp",
                 True,
@@ -515,44 +502,6 @@ def test_an_engine_that_can_ground_is_accepted():
         resolve_submission(_grounded_request(engine="bempp"), engine_registry)
     )
     assert resolution.engine_name == "bempp"
-
-
-def test_an_axisymmetric_plan_does_not_smuggle_a_ground_plane_past_the_gate():
-    """Finding that motivated the boundary refusal, pinned.
-
-    Explicit Axisymmetric planning happens before the Full 3D mounting gate,
-    so its own eligibility refusal must keep an unsupported ground plane out.
-    """
-    import asyncio
-
-    from server.engines import registry
-    from server.jobs.runtime import SymmetryValidationError, resolve_submission
-    from server.solver import circsym
-
-    engine_registry = registry.EngineRegistry(
-        detector=lambda: [
-            registry.EngineInfo("axisym", True, "test", "1", mountings=("free-standing",)),
-            registry.EngineInfo(
-                "bempp", True, "test", "1",
-                mountings=("free-standing", "ground-plane"),
-                ground_plane_axes=("x", "y", "z"),
-            ),
-        ],
-        factory=lambda name: object(),
-    )
-
-    original = circsym.axisymmetric_eligibility_reasons
-    circsym.axisymmetric_eligibility_reasons = lambda _request: []
-    try:
-        with pytest.raises(SymmetryValidationError, match="rigid ground plane"):
-            asyncio.run(
-                resolve_submission(
-                    _grounded_request(engine="auto", solver_mode="circsym"),
-                    engine_registry,
-                )
-            )
-    finally:
-        circsym.axisymmetric_eligibility_reasons = original
 
 
 def test_capability_tests_here_launch_no_solver_and_no_subprocess(

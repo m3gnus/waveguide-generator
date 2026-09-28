@@ -32,6 +32,18 @@ function row(groups: SummaryGroup[], groupTitle: string, label: string) {
 }
 
 describe('simulation summary groups', () => {
+  it('displays an old Axisymmetric result with its original provenance', () => {
+    const result = {
+      frequencies: [1000],
+      metadata: {
+        solve_path: 'axisymmetric-meridian', solver_backend: 'axisym',
+        axisym: { solver_mode: 'circsym' },
+      },
+    } as ResultPayload;
+    const groups = summaryGroups({ result, job: job({ solve_path: 'axisymmetric-meridian' }) });
+    expect(row(groups, 'Solve', 'Path')?.value).toBe('Axisymmetric (removed)');
+  });
+
   it('builds ordered provenance groups for a full parametric result', () => {
     const result: ResultPayload = {
       frequencies: [100, 1_000, 20_000],

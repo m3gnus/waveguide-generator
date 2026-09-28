@@ -607,7 +607,6 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                 "default": "auto",
                 "resolvedDefault": None,
                 "full3dOrder": list(FULL3D_ENGINE_ORDER),
-                "axisymmetricRunner": "axisym",
             },
         }
 

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-import threading
 
 import pytest
 
@@ -13,7 +12,6 @@ from server.engines.registry import EngineInfo, EngineRegistry
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime, SymmetryValidationError
 from server.jobs.store import JobStore
-from server.solver.base import EngineRunResult
 from server.solver.metal import MetalEngine
 from server.solver.symmetry import resolve_symmetry
 
@@ -216,68 +214,8 @@ def _metal_request(mode: str = "auto", *, diagonal_angle: float = 45.0) -> Solve
     )
 
 
-def test_metal_explicit_axisym_uses_meridian_path(monkeypatch) -> None:
-    from server.solver import circsym, metal
-
-    async def forbidden_mesh(*_args, **_kwargs):
-        pytest.fail("explicit Axisymmetric must not build a full-3D mesh")
-
-    class FakeCircSym:
-        async def run(self, *_args, **_kwargs):
-            return EngineRunResult(results={"metadata": {"solver_backend": "metal"}})
-
-    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda _config: [])
-    monkeypatch.setattr(
-        circsym,
-        "circsym_status",
-        lambda: {"available": True, "reason": "ready", "version": "1"},
-    )
-    monkeypatch.setattr(circsym, "CircSymEngine", FakeCircSym)
-    monkeypatch.setattr(metal, "build_solver_mesh", forbidden_mesh)
-
-    async def scenario() -> None:
-        request = _metal_request(mode="circsym")
-        # A legacy design-local value is inert; machine-local options decide.
-        request.design.root.simulation.solver_mode = "circsym"
-        outcome = await MetalEngine().run(
-            request, cancel_cb=lambda: None, stage_cb=lambda *_args: None
-        )
-        metadata = outcome.results["metadata"]
-        assert metadata["solve_path"] == "axisymmetric-meridian"
-        assert metadata["axisymmetric_eligibility_reasons"] == []
-        assert metadata["solve_path_reason"] == "forced by solver_mode='circsym'"
-
-    asyncio.run(scenario())
-
-
 def test_metal_legacy_auto_always_uses_the_full_3d_path(monkeypatch) -> None:
-    from server.solver import circsym, metal
-
-    class ObservationWithoutNativeInclination:
-        def __init__(
-            self,
-            *,
-            planes,
-            distance_m,
-            angle_min_deg,
-            angle_max_deg,
-            angle_count,
-            origin,
-            custom_points=None,
-        ):
-            del (
-                planes,
-                distance_m,
-                angle_min_deg,
-                angle_max_deg,
-                angle_count,
-                origin,
-                custom_points,
-            )
-
-    class ForbiddenCircSym:
-        async def run(self, *_args, **_kwargs):
-            pytest.fail("legacy AUTO must never enter the mesh-free CircSym path")
+    from server.solver import metal
 
     async def fake_mesh(*_args, **_kwargs):
         return {
@@ -286,14 +224,6 @@ def test_metal_legacy_auto_always_uses_the_full_3d_path(monkeypatch) -> None:
             "metadata": {},
         }
 
-    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda _config: [])
-    monkeypatch.setattr(
-        circsym,
-        "circsym_status",
-        lambda: {"available": True, "reason": "ready", "version": "1"},
-    )
-    monkeypatch.setattr(circsym, "ObservationConfig", ObservationWithoutNativeInclination)
-    monkeypatch.setattr(circsym, "CircSymEngine", ForbiddenCircSym)
     monkeypatch.setattr(metal, "build_solver_mesh", fake_mesh)
     monkeypatch.setattr(
         metal,
@@ -309,70 +239,8 @@ def test_metal_legacy_auto_always_uses_the_full_3d_path(monkeypatch) -> None:
         )
         metadata = outcome.results["metadata"]
         assert metadata["solve_path"] == "full-3d"
-        assert metadata["axisymmetric_eligibility_reasons"] == []
         assert metadata["solve_path_reason"] == (
             "legacy solver_mode='auto' defaults to native full 3D"
         )
-
-    asyncio.run(scenario())
-
-
-def test_metal_circsym_eligibility_probe_runs_off_the_event_loop(monkeypatch) -> None:
-    from server.solver import circsym
-
-    event_loop_thread = threading.get_ident()
-    probe_threads: list[int] = []
-
-    def probe(_config):
-        probe_threads.append(threading.get_ident())
-        return []
-
-    class FakeCircSym:
-        async def run(self, request, **_kwargs):
-            return EngineRunResult(results={"metadata": {"solver_backend": "metal"}})
-
-    monkeypatch.setattr(circsym, "circsym_rejection_reasons", probe)
-    monkeypatch.setattr(
-        circsym,
-        "circsym_status",
-        lambda: {"available": True, "reason": "ready", "version": "1"},
-    )
-    monkeypatch.setattr(circsym, "CircSymEngine", FakeCircSym)
-
-    async def scenario() -> None:
-        await MetalEngine().run(
-            _metal_request(mode="circsym"),
-            cancel_cb=lambda: None,
-            stage_cb=lambda *_args: None,
-        )
-
-    asyncio.run(scenario())
-    assert len(probe_threads) == 1
-    assert probe_threads[0] != event_loop_thread
-
-
-def test_metal_forced_circsym_rejects_ineligible_geometry(monkeypatch) -> None:
-    from server.solver import circsym
-
-    monkeypatch.setattr(
-        circsym,
-        "circsym_rejection_reasons",
-        lambda _config: ["guiding curve is not circular"],
-    )
-    monkeypatch.setattr(
-        circsym,
-        "circsym_status",
-        lambda: {"available": True, "reason": "ready", "version": "1"},
-    )
-    async def scenario() -> None:
-        with pytest.raises(
-            ValueError,
-            match="Forced axisymmetric solver mode is not eligible.*guiding curve",
-        ):
-            await MetalEngine().run(
-                _metal_request(mode="circsym"),
-                cancel_cb=lambda: None,
-                stage_cb=lambda *_args: None,
-            )
 
     asyncio.run(scenario())

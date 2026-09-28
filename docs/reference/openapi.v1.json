@@ -7995,10 +7995,7 @@
             ]
           },
           "formulation": {
-            "enum": [
-              "axisymmetric",
-              "full-3d"
-            ],
+            "const": "full-3d",
             "title": "Formulation",
             "type": "string"
           },

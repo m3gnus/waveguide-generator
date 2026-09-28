@@ -680,7 +680,6 @@ def solve_imported_bempp_from_msh_text(
         "solver_backend": "bempp",
         "solver_mode": "full_3d",
         "solve_path": "full-3d",
-        "axisymmetric_eligibility_reasons": ["imported geometry solves full 3-D only"],
         "solver_engine": {
             "engine": "bempp",
             "package": "hornlab-bempp-bem",

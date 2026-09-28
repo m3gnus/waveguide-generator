@@ -707,19 +707,11 @@ def test_unsupported_field_plane_details_distinguish_formulation_and_mounting(
         axisym = json.loads(axisym_raw)
         coupled = json.loads(coupled_raw)
         assert axisym == {
-            "detail": (
-                "Axisymmetric meridian solves do not retain exterior field traces."
-            ),
+            "detail": "This historical Axisymmetric result has no field-plane traces.",
             "error_contract_version": 1,
             "code": "unsupported_axisymmetric_formulation",
-            "message": (
-                "Axisymmetric meridian solves do not retain exterior field traces."
-            ),
-            "remedy": (
-                "Set Solver mode to Full 3D and re-solve with Metal or BEMPP. "
-                "For a coupled infinite-baffle design, also change Simulation "
-                "type to Free-standing."
-            ),
+            "message": "This historical Axisymmetric result has no field-plane traces.",
+            "remedy": "Re-solve with a field-plane-capable configuration.",
         }
         assert coupled == {
             "detail": (

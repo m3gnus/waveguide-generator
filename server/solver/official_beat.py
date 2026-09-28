@@ -70,8 +70,6 @@ def preflight(request: SolveRequest, imported_record: Mapping[str, Any] | None =
         raise OfficialBeatUnavailable("Official BEAT bridge does not support a rigid ground plane")
     if imported_record is not None or isinstance(request.geometry, ImportedGeometrySource):
         raise OfficialBeatUnavailable("Official BEAT bridge does not support imported or multi-source geometry")
-    if (request.options.solver_mode or "").strip().lower() == "circsym":
-        raise OfficialBeatUnavailable("Official BEAT bridge requires a full-3D solve")
     context = SolverContext.from_request(request, solver_mode="full_3d")
     if context.sim_type != 2:
         raise OfficialBeatUnavailable("Official BEAT bridge does not support a coupled infinite baffle")

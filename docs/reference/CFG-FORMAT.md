@@ -104,7 +104,7 @@ Frequencies = 500, 1000, 2500, 8000
 
 | Key | Values | Notes |
 | --- | --- | --- |
-| `Symmetry` | `auto`, `full`, `half_xz`, `half_yz`, `quarter` | The solved full-3D domain. Axisymmetric solves use exact continuous rotational symmetry. |
+| `Symmetry` | `auto`, `full`, `half_xz`, `half_yz`, `quarter` | The solved full-3D domain. |
 | `MeshValidation` | `warn`, `strict`, `off` | |
 | `Verbose` | `0`, `1` | |
 | `SweepPoints` | `range`, `list` | |
@@ -130,7 +130,7 @@ behave differently — or fail — depending on where it was opened.
 | --- | --- |
 | `WG.Solve.Engine` | Accepted for backward compatibility, never honoured, and named in the open report. Removed from any file WG writes. |
 | `WG.Solve.SolverMode` | The same. |
-| `Simulation.SolverMode` | The legacy top-level spelling. Dropped at import, and named in the open report. |
+| `Simulation.SolverMode` | The legacy top-level spelling, including `circsym`, is accepted and ignored. It is dropped at import and named in the open report. |
 
 **Stating one cannot be mistaken for setting one.** All three report themselves.
 `Simulation.SolverMode` is dropped at import and reported as a migration — see

@@ -40,7 +40,7 @@ describe('solveStageWord', () => {
     const rank = { 'Preparing mesh': 0, 'Starting…': 1, Solving: 2, Combining: 3, Done: 4 } as const;
     const sequences = [
       // runtime.py starts real jobs at initializing; full-3D adapters mesh
-      // before their setup callback. CircSym emits mesh_prepare itself.
+      // before their setup callback.
       ['queued', 'initializing', 'mesh', 'assemble', 'solve', 'postprocess', 'complete'],
       // Imported BEAT/BEMPP use the already prepared CAD mesh, then setup.
       ['queued', 'initializing', 'assemble', 'solve', 'postprocess', 'complete'],
@@ -187,7 +187,7 @@ describe('resolveEngineLabel', () => {
     for (const engine of ['beat-cpu', 'beat-metal', 'beat-cuda', 'beat-rocm']) {
       expect(resolveEngineLabel(engine)).not.toMatch(/[·—]/);
     }
-    expect(resolveEngineLabel('axisym')).toBe('CircSym');
+    expect(resolveEngineLabel('axisym')).toBe('Axisymmetric (removed)');
   });
 
   it('title-cases an unrecognized slug rather than shouting it', () => {
@@ -224,11 +224,11 @@ describe('solveDetailLine', () => {
     }
   });
 
-  it('names the continuous CircSym domain before its quadrant metadata', () => {
+  it('labels a historical Axisymmetric result before its quadrant metadata', () => {
     expect(solveDetailLine({
       config_summary: { symmetry: { domain: 'continuous-axisymmetric', resolved_quadrants: 1 } },
       solve_options: { engine: 'axisym' } as JobItem['solve_options'],
-    })).toBe('CircSym · axisymmetric');
+    })).toBe('Axisymmetric (removed) · Axisymmetric (removed)');
   });
 
   it('normalizes CAD half plane names to the same domain words as parametric solves', () => {

@@ -55,6 +55,7 @@ from server.jobs.runtime import (
     JobNotFoundError,
     JobResourceUnavailableError,
     JobRuntime,
+    RemovedSolverError,
     SymmetryValidationError,
     UnknownEngineError,
     resolve_submission,
@@ -176,7 +177,7 @@ class SolvePlanResponse(BaseModel):
     """The request-specific engine/formulation selected by the runtime."""
 
     engine: str
-    formulation: Literal["axisymmetric", "full-3d"]
+    formulation: Literal["full-3d"]
     reason: str
     eligibility_reasons: list[str]
     engine_substitution: EngineSubstitution | None = None
@@ -433,6 +434,14 @@ def create_jobs_router(
                 details=exc.details,
                 client_request_id=body.client_request_id,
             )
+        except RemovedSolverError as exc:
+            return _error_response(
+                422,
+                code=exc.code,
+                stage="planning",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
         except (SymmetryValidationError, ValueError) as exc:
             return _error_response(
                 422,
@@ -488,6 +497,14 @@ def create_jobs_router(
             return _error_response(
                 422,
                 code="unknown_engine",
+                stage="submission",
+                message=str(exc),
+                client_request_id=body.client_request_id,
+            )
+        except RemovedSolverError as exc:
+            return _error_response(
+                422,
+                code=exc.code,
                 stage="submission",
                 message=str(exc),
                 client_request_id=body.client_request_id,
@@ -554,6 +571,13 @@ def create_jobs_router(
             return SolveAccepted(job_id=await runtime.retry(job_id))
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        except RemovedSolverError as exc:
+            return _error_response(
+                422,
+                code=exc.code,
+                stage="retry",
+                message=str(exc),
+            )
         except (
             UnknownEngineError,
             SymmetryValidationError,

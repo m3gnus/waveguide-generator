@@ -128,8 +128,7 @@ def _apply_bempp_wall_default(
 ) -> tuple[SolveRequest, dict[str, Any] | None]:
     """Materialize ATH's closed-wall default for BEMPP free-standing solves.
 
-    BEMPP full 3D and the axisymmetric formulation are separate paths. BEMPP's
-    open-shell pressure space treats free-rim
+    BEMPP's open-shell pressure space treats free-rim
     degrees of freedom differently from the closed-body formulation. Keep an
     inactive enclosure plus a missing/zero wall from silently entering that
     backend-specific topology. Revalidating the copied wire also keeps the
@@ -747,34 +746,22 @@ def _design_quadrants_text(request: SolveRequest) -> str | None:
     return quadrants.text() if quadrants is not None else None
 
 
-def _axisymmetric_symmetry_metadata(request: SolveRequest) -> dict[str, Any]:
-    """Describe the continuous domain without building a revolved surface."""
-
-    reason = "axisymmetric formulation is continuously rotationally symmetric"
-    requested_quadrants = {
-        "auto": 1,
-        "full": 1234,
-        "half_xz": 12,
-        "half_yz": 14,
-        "quarter": 1,
-    }[request.options.symmetry]
-    return {
-        "requested": request.options.symmetry,
-        "resolved_quadrants": requested_quadrants,
-        "auto_resolution": {
-            "quadrants": 1,
-            "xz": True,
-            "yz": True,
-            "reasons": {"xz": [reason], "yz": [reason]},
-            "tolerance_mm": 0.0,
-            "relative_tolerance": 0.0,
-        },
-        "design_quadrants": _design_quadrants_text(request),
-        "domain": "continuous-axisymmetric",
-    }
-
-
 _ACCURATE_CPU_FALLBACK = "Accurate ran on BEAT CPU because no GPU backend was ready"
+
+
+class RemovedSolverError(ValueError):
+    """A request names the removed Axisymmetric solver mode or engine."""
+
+    code = "removed_solver_mode"
+
+
+def _refuse_removed_solver(request: SolveRequest) -> None:
+    """Keep historical requests decodable, but never start their removed solver."""
+
+    if request.options.solver_mode == "circsym" or request.options.engine in {"axisym", "circsym"}:
+        raise RemovedSolverError(
+            "Axisymmetric solving has been removed. Choose Full 3D and a supported engine to run a new solve."
+        )
 
 
 async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> tuple[SolveRequest, str | None]:
@@ -787,7 +774,7 @@ async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> t
     engine = request.options.engine
     if engine != "auto":
         # Old clients explicitly naming BEAT sent no accuracy field. Keep
-        # their existing axisymmetric and unavailable-engine behavior; the new
+        # their unavailable-engine behavior; the new
         # UI sends Accurate when its BEAT override is selected.
         if request.options.accuracy == "accurate" and not (
             engine == "beat" or engine.startswith("beat-")
@@ -830,122 +817,47 @@ async def resolve_submission(
             "imported geometry must be prepared by JobRuntime.submit",
         )
 
+    _refuse_removed_solver(request)
     request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
 
-    # Axisymmetric is an explicit formulation choice. ``auto`` remains a
-    # backwards-compatible wire value but follows Full 3D; it must never opt a
-    # design into a different formulation. Metal/BEMPP/BEAT remain selectable
-    # full-3D backends while explicit CircSym uses the portable runner on every OS.
+    # ``auto`` remains a backwards-compatible wire value for Full 3D.
     solver_mode = str(request.options.solver_mode or "full_3d").strip().lower()
-    if request.options.accuracy == "accurate" and solver_mode == "circsym":
-        raise ValueError("Accurate requires a full 3-D BEAT solve. Choose Full 3D or Fast for Axisymmetric.")
-    forced_axisym = engine_name == "axisym" or solver_mode == "circsym"
-    if engine_name == "axisym" and solver_mode == "full_3d":
-        raise ValueError("engine='axisym' cannot run solver_mode='full_3d'")
-    axisym_reasons: list[str] = []
-    probe_axisym = engine_name != "dryrun" and (
-        engine_name == "axisym" or solver_mode == "circsym"
+    resolution = await asyncio.to_thread(resolve_symmetry, request.design)
+    # Subtract the mirror plane a ground plane makes unavailable before the
+    # mode is validated, so AUTO degrades quarter to half_yz on a floor and
+    # a forced conflicting mode fails naming the ground plane -- instead of
+    # meshing a reduced domain the solver will then refuse.
+    resolution = restrict_for_ground_plane(
+        resolution, _ground_plane_axis(request)
     )
-    axisym_registered = (
-        await engine_registry.get_engine("axisym") is not None
-        if probe_axisym
-        else False
-    )
-    if forced_axisym and not axisym_registered:
-        reason = await engine_registry.unavailable_reason("axisym")
-        raise EngineUnavailableError(
-            "The Axisymmetric runner is unavailable. "
-            + (reason or "No capability reason was reported.")
+    try:
+        resolved_quadrants = validate_symmetry_mode(
+            request.options.symmetry, resolution
         )
-    consider_axisym = (
-        axisym_registered
-        and (engine_name == "axisym" or solver_mode == "circsym")
-    )
-    if consider_axisym:
-        from server.solver.circsym import (
-            axisymmetric_eligibility_reasons,
-            axisymmetric_plan_cost,
-        )
-
-        axisym_reasons = await asyncio.to_thread(
-            axisymmetric_eligibility_reasons,
-            request,
-        )
-        if (engine_name == "axisym" or solver_mode == "circsym") and axisym_reasons:
-            raise ValueError(
-                "Forced axisymmetric solver mode is not eligible: "
-                + "; ".join(axisym_reasons)
-            )
-        if not axisym_reasons:
-            symmetry_metadata = _axisymmetric_symmetry_metadata(request)
-            axisym_reason = (
-                "forced by solver_mode='circsym'"
-                if solver_mode == "circsym"
-                else "selected by engine='axisym'"
-            )
-            try:
-                plan_cost = await asyncio.to_thread(
-                    axisymmetric_plan_cost,
-                    request,
-                    full_3d_quadrants=int(
-                        symmetry_metadata["resolved_quadrants"]
-                    ),
-                )
-            except Exception as exc:
-                # Eligibility remains authoritative. A diagnostic cost model
-                # must never turn an otherwise valid solve into a refusal.
-                plan_cost = {
-                    "model": "unavailable",
-                    "reason": str(exc),
-                }
-            request = request.model_copy(deep=True)
-            request.options.engine = "axisym"
-            engine_name = "axisym"
-            symmetry_metadata["solver_plan"] = {
-                "formulation": "axisymmetric",
-                "engine": "axisym",
-                "accuracy": request.options.accuracy,
-                "reason": axisym_reason,
-                "eligibility_reasons": [],
-                "cost_evidence": plan_cost,
-            }
-    if engine_name != "axisym":
-        resolution = await asyncio.to_thread(resolve_symmetry, request.design)
-        # Subtract the mirror plane a ground plane makes unavailable before the
-        # mode is validated, so AUTO degrades quarter to half_yz on a floor and
-        # a forced conflicting mode fails naming the ground plane -- instead of
-        # meshing a reduced domain the solver will then refuse.
-        resolution = restrict_for_ground_plane(
-            resolution, _ground_plane_axis(request)
-        )
-        try:
-            resolved_quadrants = validate_symmetry_mode(
-                request.options.symmetry, resolution
-            )
-        except ValueError as exc:
-            raise SymmetryValidationError(str(exc)) from exc
-        symmetry_metadata = {
-            "requested": request.options.symmetry,
-            "resolved_quadrants": resolved_quadrants,
-            "auto_resolution": resolution.as_dict(),
-            "design_quadrants": _design_quadrants_text(request),
-        }
-        symmetry_metadata["solver_plan"] = {
-            "formulation": "full-3d",
-            "engine": engine_name,
-            "accuracy": request.options.accuracy,
-            "reason": (
-                "explicit solver_mode='full_3d'"
-                if solver_mode == "full_3d"
-                else "legacy solver_mode='auto' defaults to full-3d"
-            ),
-            "eligibility_reasons": axisym_reasons,
-        }
-        if cpu_fallback is not None:
-            symmetry_metadata["solver_plan"]["fallback_reason"] = cpu_fallback
+    except ValueError as exc:
+        raise SymmetryValidationError(str(exc)) from exc
+    symmetry_metadata = {
+        "requested": request.options.symmetry,
+        "resolved_quadrants": resolved_quadrants,
+        "auto_resolution": resolution.as_dict(),
+        "design_quadrants": _design_quadrants_text(request),
+    }
+    symmetry_metadata["solver_plan"] = {
+        "formulation": "full-3d",
+        "engine": engine_name,
+        "accuracy": request.options.accuracy,
+        "reason": (
+            "explicit solver_mode='full_3d'"
+            if solver_mode == "full_3d"
+            else "legacy solver_mode='auto' defaults to full-3d"
+        ),
+        "eligibility_reasons": [],
+    }
+    if cpu_fallback is not None:
+        symmetry_metadata["solver_plan"]["fallback_reason"] = cpu_fallback
     if request.options.accuracy == "accurate":
         if resolved_quadrants == 12:
             raise SymmetryValidationError(
@@ -982,7 +894,7 @@ async def resolve_submission(
             }.get(mounting or "", "")
             raise EngineUnavailableError(
                 f"AUTO could not resolve a compatible solve engine{unsupported} from "
-                "this host's capabilities. Install/enable Axisymmetric, Metal, BEAT, "
+                "this host's capabilities. Install/enable Metal, BEAT, "
                 "or BEMPP; explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
                 "synthetic development solves."
             )
@@ -1004,12 +916,6 @@ async def resolve_submission(
             # engine and only names its backend. If no BEAT backend is
             # available at all, the name stands and the substitution below
             # takes over, which is the correct outcome for that case.
-            #
-            # Deliberately here rather than at the whitelist check above: an
-            # explicit "beat" with eligible circular geometry resolves to the
-            # axisymmetric meridian runner without BEAT's availability ever
-            # being consulted, and mapping the name early would have taken
-            # that away.
             resolved_beat = resolve_legacy_beat_engine(
                 await engine_registry.capabilities()
             )
@@ -1018,7 +924,7 @@ async def resolve_submission(
                 request = request.model_copy(deep=True)
                 request.options.engine = engine_name
                 symmetry_metadata["solver_plan"]["engine"] = engine_name
-        if engine_name not in {"axisym", "dryrun"} and (
+        if engine_name != "dryrun" and (
             await engine_registry.get_engine(engine_name) is None
         ):
             if request.options.accuracy == "accurate":
@@ -1039,8 +945,7 @@ async def resolve_submission(
             # UI state, not part of the design, and leaving it alone is what lets it
             # re-engage by itself the day the engine becomes available here.
             #
-            # Excluded: `axisym`, which is a formulation and is refused earlier with
-            # its own message, and `dryrun`, a development toggle whose entire point
+            # Excluded: `dryrun`, a development toggle whose entire point
             # is that a real engine must never quietly stand in for it.
             unavailable_reason = await engine_registry.unavailable_reason(engine_name)
             # The requested mounting, not the design's sim_type: a ground plane
@@ -1062,7 +967,7 @@ async def resolve_submission(
                     f"Solve engine '{engine_name}' is unavailable, and no other "
                     f"engine on this host{unsupported} can take its place. "
                     + (unavailable_reason or "No capability reason was reported.")
-                    + " Install/enable Axisymmetric, Metal, BEAT, or BEMPP; "
+                    + " Install/enable Metal, BEAT, or BEMPP; "
                     "explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
                     "synthetic development solves."
                 )
@@ -1103,8 +1008,7 @@ async def resolve_submission(
     if _ground_plane_axis(request) is not None:
         # Every path that picks an engine converges here, which is the point.
         # The AUTO gate above filters candidates by mounting, but it is only
-        # reached when the engine is literally "auto": an axisymmetric plan is
-        # chosen before it, an explicitly selected engine skips it, and a
+        # reached when the engine is literally "auto": an explicitly selected engine skips it, and a
         # substitution for an unavailable engine resolves separately. All three
         # would otherwise accept a ground plane and hand it to an adapter that
         # never reads it, returning a free-standing answer to a question about
@@ -1127,7 +1031,7 @@ async def resolve_submission(
                 "plane off."
             )
     if (
-        engine_name not in {"axisym", "dryrun"}
+        engine_name != "dryrun"
         and await engine_registry.get_engine(engine_name) is not None
         and not await engine_registry.supports_symmetry(engine_name, resolved_quadrants)
     ):
@@ -1288,15 +1192,6 @@ def _imported_request_refusal(
     open_half = _imported_open_half_refusal(record, msh_text)
     if open_half is not None:
         return open_half
-    if (
-        request.options.engine in {"axisym", "circsym"}
-        or request.options.solver_mode == "circsym"
-    ):
-        return (
-            "imported_circsym_unsupported",
-            "imported geometry supports full 3-D solves only; "
-            "axisymmetric mode is unavailable",
-        )
     if request.options.ground_plane.enabled:
         return (
             "imported_ground_plane_unsupported",
@@ -1451,8 +1346,7 @@ async def resolve_imported_submission(
       request is refused with ``imported_engine_unsupported``, naming the
       engines that do. An explicit engine that fails one of the checks above is
       refused with the reason that check names.
-    * Axisymmetric solving of imported geometry stays refused, and so does a
-      rigid ground plane, on every engine.
+    * A rigid ground plane stays refused on every engine.
 
     An engine that declares imported geometry but is unavailable on this host
     raises ``EngineUnavailableError``: the host lacks a capability, the request
@@ -1472,6 +1366,7 @@ async def resolve_imported_submission(
             "resolve_imported_submission resolves imported geometry only; "
             "parametric submissions resolve through resolve_submission"
         )
+    _refuse_removed_solver(request)
     original_requested = request.options.engine
     request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
@@ -1642,6 +1537,7 @@ async def plan_imported_submission(
 
     if not isinstance(request.geometry, ImportedGeometrySource):
         raise ValueError("the imported plan resolves imported geometry only")
+    _refuse_removed_solver(request)
     declared = _imported_capabilities(await engine_registry.capabilities(), _imported_accuracy(request))
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
     needed_features = _imported_features_needed(request.geometry)
@@ -2451,6 +2347,7 @@ class JobRuntime:
         self._started = False
 
     async def submit(self, request: SolveRequest) -> str:
+        _refuse_removed_solver(request)
         await self.start()
         submission_key = request.client_request_id
         submission_request_sha256 = canonical_json_sha256(
@@ -2583,6 +2480,7 @@ class JobRuntime:
         sizes) when it is made.
         """
 
+        _refuse_removed_solver(request)
         geometry = request.geometry
         if not isinstance(geometry, ImportedGeometrySource):
             raise ValueError("the imported plan resolves imported geometry only")
@@ -2954,6 +2852,7 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         request = _replay_request(row)
+        _refuse_removed_solver(request)
         if isinstance(request.geometry, ImportedGeometrySource) and self.cadlink_store is not None:
             # A retry solves the parent's record again: only under the domain
             # decision the parent was submitted with.
@@ -3538,6 +3437,7 @@ class JobRuntime:
     async def _run_job(self, job_id: str, row: Mapping[str, Any]) -> None:
         try:
             effective_request = SolveRequest.model_validate(row["config_json"])
+            _refuse_removed_solver(effective_request)
             task_metadata = (
                 dict(row.get("task_metadata") or {})
                 if isinstance(row.get("task_metadata"), Mapping)
@@ -3732,7 +3632,6 @@ class JobRuntime:
             )
             result_metadata = results.setdefault("metadata", {})
             result_metadata.setdefault("solve_path", "full-3d")
-            result_metadata.setdefault("axisymmetric_eligibility_reasons", [])
             result_metadata.update(
                 {
                     "field_plane_available": False,
@@ -3977,7 +3876,6 @@ class JobRuntime:
         self._check_cancelled(job_id)
         outcome_metadata = outcome.results.setdefault("metadata", {})
         outcome_metadata.setdefault("solve_path", "full-3d")
-        outcome_metadata.setdefault("axisymmetric_eligibility_reasons", [])
         outcome_metadata["solve_wall_time_seconds"] = time.perf_counter() - solve_started
         if outcome.msh_text and not artifact_persisted:
             try:

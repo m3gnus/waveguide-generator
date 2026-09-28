@@ -1,6 +1,6 @@
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
-import { useSolveOptionsStore, type SolveOptions, type SolverMode } from '../stores/solveOptions';
+import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
 export interface EngineCapability {
   name: string;
@@ -30,7 +30,6 @@ export interface EngineSelection {
   readonly default: string;
   readonly resolvedDefault: string | null;
   readonly full3dOrder: readonly string[];
-  readonly axisymmetricRunner: string;
 }
 
 export interface Capabilities {
@@ -68,7 +67,7 @@ export interface PlanAdjustment {
 }
 export interface SolvePlan {
   engine: string;
-  formulation: 'axisymmetric' | 'full-3d';
+  formulation: 'full-3d';
   reason: string;
   eligibility_reasons: string[];
   engine_substitution?: EngineSubstitution | null;
@@ -179,9 +178,7 @@ export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Ca
 
 interface EngineModePlan {
   requested: string;
-  runner: string;
   full3dOrder: readonly string[];
-  solverMode: SolverMode;
 }
 
 /** Normalize and validate the engine/formulation pair exactly once. */
@@ -191,32 +188,23 @@ function engineModePlan(
     engines: readonly EngineCapability[];
     engineSelection?: Readonly<EngineSelection>;
   },
-  solverMode: SolverMode,
 ): EngineModePlan {
   const requested = engine.trim().toLowerCase();
-  const runner = capabilities.engineSelection?.axisymmetricRunner.trim().toLowerCase() ?? '';
   const known = capabilities.engines.some((item) => item.name.toLowerCase() === requested);
   if (requested !== 'auto' && !known) {
     throw new Error(`Unknown solve engine: ${requested || '(empty)'}`);
-  }
-  if (requested === runner && solverMode === 'full_3d') {
-    throw new Error(`Engine '${runner}' cannot run solver mode Full 3D.`);
-  }
-  if (requested === 'dryrun' && solverMode === 'circsym') {
-    throw new Error('Dry-run cannot run forced Axisymmetric solver mode.');
   }
   const full3dOrder = capabilities.engineSelection?.full3dOrder.map((name) => name.toLowerCase())
     ?? capabilities.engines
       .filter((item) => item.formulations?.includes('full-3d'))
       .map((item) => item.name.toLowerCase());
-  return { requested, runner, full3dOrder, solverMode };
+  return { requested, full3dOrder };
 }
 
 /**
  * Server-advertised candidates the formulation planner may reach, in order.
  *
- * This is shared by capability gating and submission resolution so explicit
- * Axisymmetric routing cannot drift between those two UI surfaces.
+ * This is shared by capability gating and submission resolution.
  */
 export function plannedEngineNames(
   engine: string,
@@ -224,20 +212,9 @@ export function plannedEngineNames(
     engines: readonly EngineCapability[];
     engineSelection?: Readonly<EngineSelection>;
   },
-  solverMode: SolverMode = 'full_3d',
 ): readonly string[] {
-  const plan = engineModePlan(engine, capabilities, solverMode);
-  if (plan.solverMode === 'circsym') return plan.runner ? [plan.runner] : [];
-  if (plan.solverMode === 'full_3d' || plan.solverMode === 'auto') {
-    return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
-  }
-  if (plan.requested === 'dryrun' || plan.requested === plan.runner) {
-    return [plan.requested];
-  }
-  const axisymFirst = plan.runner ? [plan.runner] : [];
-  return plan.requested === 'auto'
-    ? [...axisymFirst, ...plan.full3dOrder]
-    : [...axisymFirst, plan.requested];
+  const plan = engineModePlan(engine, capabilities);
+  return plan.requested === 'auto' ? plan.full3dOrder : [plan.requested];
 }
 
 export function resolveEngine(
@@ -246,21 +223,9 @@ export function resolveEngine(
     engines: readonly EngineCapability[];
     engineSelection?: Readonly<EngineSelection>;
   },
-  solverMode: SolverMode = 'full_3d',
 ): string {
-  const plan = engineModePlan(engine, capabilities, solverMode);
+  const plan = engineModePlan(engine, capabilities);
   const selection = capabilities.engineSelection;
-  if (solverMode === 'circsym') {
-    const runner = plan.runner;
-    const axisym = capabilities.engines.find((item) => item.available
-      && item.name.toLowerCase() === runner);
-    if (axisym) return runner!;
-    const advertised = capabilities.engines.find((item) => item.name.toLowerCase() === runner);
-    const detail = advertised?.reason ? ` ${advertised.reason}` : '';
-    throw new Error(runner
-      ? `Forced Axisymmetric mode requires the advertised ${runner} runner, but it is unavailable.${detail}`
-      : 'Forced Axisymmetric mode is unavailable because the server advertised no axisymmetric runner.');
-  }
   if (plan.requested !== 'auto') return plan.requested;
   const order = plan.full3dOrder;
   const resolvedDefault = selection?.resolvedDefault?.toLowerCase() ?? null;
@@ -269,16 +234,7 @@ export function resolveEngine(
     ?? order.flatMap((name) => capabilities.engines.filter((item) => item.available
       && item.name.toLowerCase() === name))[0];
   if (available) return available.name.toLowerCase();
-  // AUTO is retained only as a wire/storage compatibility value and now means
-  // Full 3D. Axisymmetric is reached exclusively through explicit CircSym.
-  if (solverMode === 'full_3d' || solverMode === 'auto') {
-    throw new Error('No full-3D solver backend is currently available');
-  }
-  const runner = plan.runner;
-  const axisym = capabilities.engines.find((item) => item.available
-    && item.name.toLowerCase() === runner);
-  if (axisym) return runner!;
-  throw new Error('No solver backend is currently available');
+  throw new Error('No full-3D solver backend is currently available');
 }
 
 export async function fetchSymmetry(
@@ -388,7 +344,7 @@ export async function postSolvePlan(
   if (
     typeof plan.engine !== 'string'
     || !plan.engine.trim()
-    || (plan.formulation !== 'axisymmetric' && plan.formulation !== 'full-3d')
+    || plan.formulation !== 'full-3d'
     || typeof plan.reason !== 'string'
     || !Array.isArray(plan.eligibility_reasons)
     || !plan.eligibility_reasons.every((reason) => typeof reason === 'string')

@@ -561,8 +561,6 @@ def solve_beat_from_msh_text(
             "The HornLab BEAT adapter cannot apply a rigid ground plane; "
             "select a ground-plane-capable engine."
         )
-    if context.solver_mode == "circsym":
-        raise ValueError("BEAT cannot run solver_mode='circsym'; use the Axisymmetric runner or full_3d")
     reject_beat_infinite_baffle(context)
     package = _load_api()
     if package is None:
@@ -829,8 +827,6 @@ class BeatEngine:
                 "request without imported geometry; refusing rather than "
                 "guessing which of the two to solve."
             )
-        if (request.options.solver_mode or "").strip().lower() == "circsym":
-            raise ValueError("BEAT cannot run solver_mode='circsym'; select Axisymmetric or use full_3d")
         context = SolverContext.from_request(request, solver_mode="full_3d")
         reject_beat_infinite_baffle(context)
         mesh = await build_solver_mesh(
@@ -855,9 +851,6 @@ class BeatEngine:
         )
         results.setdefault("metadata", {})["mesh_stats"] = mesh["stats"]
         results.setdefault("metadata", {})["solve_path"] = "full-3d"
-        results.setdefault("metadata", {})["axisymmetric_eligibility_reasons"] = [
-            "the solve planner selected the full-3D BEAT formulation"
-        ]
         field_traces = results.pop("_field_traces", None)
         field_trace_reason = results.pop("_field_trace_unavailable_reason", None)
         return EngineRunResult(

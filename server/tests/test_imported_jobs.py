@@ -1381,16 +1381,6 @@ def test_required_fem_volume_needs_exterior_only_override(tmp_path: Path) -> Non
             "imported_engine_unsupported",
         ),
         (
-            lambda value, _record: value.options.__setattr__("engine", "circsym"),
-            {},
-            "imported_circsym_unsupported",
-        ),
-        (
-            lambda value, _record: value.options.__setattr__("solver_mode", "circsym"),
-            {},
-            "imported_circsym_unsupported",
-        ),
-        (
             lambda _value, _record: None,
             {"infinite_baffle": True},
             "imported_infinite_baffle_unsupported",
@@ -3822,10 +3812,9 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
 
     from server.engines.registry import create_engine, detect_engines, engine_supports_symmetry
     from server.jobs.runtime import resolve_imported_submission
-    from server.solver import beat, bempp, circsym
+    from server.solver import beat, bempp
 
     available = {"available": True, "reason": "ok", "version": "t"}
-    monkeypatch.setattr(circsym, "circsym_status", lambda: dict(available))
     monkeypatch.setattr(metal, "metal_status", lambda: dict(available))
     monkeypatch.setattr(
         bempp,
@@ -3863,8 +3852,7 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
                 request = _plan_request(ingest_id, info.name, **geometry_changes)
                 request.options.ground_plane.enabled = facts.ground_plane
                 declared = (
-                    info.name != "axisym"
-                    and "imported" in info.geometry_sources
+                    "imported" in info.geometry_sources
                     and engine_supports_symmetry(info, quadrants)
                     and needed <= set(info.imported_features)
                     and not facts.ground_plane

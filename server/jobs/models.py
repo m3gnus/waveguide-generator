@@ -149,8 +149,9 @@ class SolveOptions(JobModel):
 
     engine: str = "auto"
     accuracy: Literal["fast", "accurate"] = "fast"
-    # ``auto`` remains accepted for old clients but resolves as Full 3D. The
-    # axisymmetric formulation is explicit-only through ``circsym``.
+    # ``auto`` remains accepted for old clients but resolves as Full 3D.
+    # ``circsym`` stays decodable so historical Axisymmetric requests load;
+    # planning, submission, retry and execution refuse it.
     solver_mode: Literal["auto", "full_3d", "circsym"] = "full_3d"
     symmetry: str = "auto"
     frequency_range: list[float] | None = None

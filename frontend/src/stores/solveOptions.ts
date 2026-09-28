@@ -19,7 +19,7 @@ export type FrequencySpacing = 'log' | 'linear';
 export type PolarAxis = 'horizontal' | 'vertical' | 'diagonal';
 export type ObservationOrigin = 'mouth' | 'throat';
 export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
-export type SolverMode = 'auto' | 'full_3d' | 'circsym';
+export type SolverMode = 'auto' | 'full_3d';
 export type FrequencyMode = 'range' | 'list';
 export type SolveAccuracy = 'fast' | 'accurate';
 /**
@@ -32,7 +32,7 @@ export type GroundPlaneAxis = 'x' | 'y' | 'z';
 
 export const GROUND_PLANE_AXES: GroundPlaneAxis[] = ['x', 'y', 'z'];
 
-export const SOLVER_MODES: SolverMode[] = ['auto', 'full_3d', 'circsym'];
+export const SOLVER_MODES: SolverMode[] = ['auto', 'full_3d'];
 
 export { MAX_FREQUENCY_POINTS, parseFrequencyList };
 export type { FrequencyListParse };
@@ -312,14 +312,16 @@ export function normalizePersistedSolveOptions(
   fallback: PersistedSolveOptions = DEFAULT_SOLVE_OPTIONS,
 ): PersistedSolveOptions {
   const stored = isRecord(raw) ? raw : {};
+  const removedEngine = stored.engine === 'axisym' || stored.engine === 'circsym';
   const storedSolverMode = oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode);
   return {
-    engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
+    engine: removedEngine ? 'auto' : typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
     accuracy: oneOf(stored.accuracy, ['fast', 'accurate'], 'fast'),
     // AUTO historically opted eligible designs into Axisymmetric. It is now a
     // legacy spelling of Full 3D so old machine-local settings cannot silently
-    // select a different formulation after upgrade.
-    solverMode: storedSolverMode === 'auto' ? 'full_3d' : storedSolverMode,
+    // select a different formulation after upgrade. A stored `circsym` would
+    // also fall back through `oneOf`; it is named so the migration is explicit.
+    solverMode: removedEngine || stored.solverMode === 'circsym' || storedSolverMode === 'auto' ? 'full_3d' : storedSolverMode,
     symmetry: oneOf(stored.symmetry, SYMMETRY_MODES, fallback.symmetry),
     meshValidationMode: oneOf(stored.meshValidationMode, MESH_VALIDATION_MODES, fallback.meshValidationMode),
     verbose: typeof stored.verbose === 'boolean' ? stored.verbose : fallback.verbose,

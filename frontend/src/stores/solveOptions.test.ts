@@ -79,22 +79,27 @@ describe('solve and directivity options', () => {
     expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-metal', accuracy: 'fast' });
   });
 
-  it('loads legacy explicit BEAT and Axisymmetric settings as Fast without changing the engine', async () => {
+  it('migrates legacy BEAT CPU and Axisymmetric settings to Fast Full 3D', async () => {
     useSolveOptionsStore.getState().setAccuracy('accurate');
     localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
       state: { engine: 'beat-cpu', solverMode: 'circsym' }, version: 0,
     }));
     await useSolveOptionsStore.persist.rehydrate();
-    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'fast', solverMode: 'circsym' });
-    expect(useSolveOptionsStore.getState().options()).toMatchObject({ engine: 'beat-cpu', solver_mode: 'circsym' });
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'fast', solverMode: 'full_3d' });
+    expect(useSolveOptionsStore.getState().options()).toMatchObject({ engine: 'beat-cpu', solver_mode: 'full_3d' });
     expect(useSolveOptionsStore.getState().options().accuracy).toBeUndefined();
   });
 
-  it('persists solver path as a machine-local execution choice', () => {
-    useSolveOptionsStore.getState().setSolverMode('circsym');
-    const stored = JSON.parse(localStorage.getItem('waveguide-v2-solve-options') ?? '{}') as { state?: { solverMode?: string } };
-    expect(stored.state?.solverMode).toBe('circsym');
-    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
+  it.each(['axisym', 'circsym'])('migrates persisted removed engine %s and keeps other settings', (engine) => {
+    const polar = { ...defaultPolarUi, distance: 3.5 };
+    const options = normalizePersistedSolveOptions({
+      engine, solverMode: 'circsym', symmetry: 'quarter',
+      frequencyMode: 'list', frequencyListText: '500, 1000', polar,
+    });
+    expect(options).toMatchObject({
+      engine: 'auto', solverMode: 'full_3d', symmetry: 'quarter',
+      frequencyMode: 'list', frequencyListText: '500, 1000', polar,
+    });
   });
 
   it('migrates the legacy automatic formulation to Full 3D', async () => {

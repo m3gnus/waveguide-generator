@@ -837,9 +837,7 @@ export function solvePlanTitle(plan: SolvePlan, requestedEngine: string): string
     return `Solve current design with AUTO (${resolved.toUpperCase()})`;
   }
   if (plan.engine_substitution) {
-    // Distinct from the line below: that one is a formulation change (an
-    // axisymmetric design planned onto the full-3D backend), this one is the
-    // requested backend not existing on this machine at all.
+    // This reports a requested backend that does not exist on this machine.
     return `${engineSubstitutionNotice(plan.engine_substitution)} Solve now.`;
   }
   if (requested !== resolved) {

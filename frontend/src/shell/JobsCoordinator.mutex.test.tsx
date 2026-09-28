@@ -61,7 +61,7 @@ const mocks = vi.hoisted(() => ({
     engines: [] as Array<{ name: string; available: boolean; reason: string | null; version: string | null; fast_paths: string[]; formulations?: string[]; mountings?: string[] }>,
     engineSelection: {
       default: 'auto', resolvedDefault: 'metal' as string | null,
-      full3dOrder: ['metal', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+      full3dOrder: ['metal', 'bempp', 'dryrun'],
     },
   },
 }));
@@ -235,7 +235,7 @@ describe('solve invocation mutex', () => {
     ];
     mocks.capabilities.engineSelection = {
       default: 'auto', resolvedDefault: 'metal',
-      full3dOrder: ['metal', 'bempp', 'dryrun'], axisymmetricRunner: 'axisym',
+      full3dOrder: ['metal', 'bempp', 'dryrun'],
     };
     mocks.solvePlan = {
       engine: 'metal', formulation: 'full-3d',
@@ -293,88 +293,14 @@ describe('solve invocation mutex', () => {
     });
   });
 
-  it('blocks forced Axisymmetric mode when the advertised runner is unavailable', async () => {
-    mocks.solvePlan = null;
-    mocks.solvePlanError = 'Forced Axisymmetric mode requires the advertised axisym runner, but it is unavailable.';
-    useSolveOptionsStore.setState({ engine: 'auto', solverMode: 'circsym' });
-    await act(async () => {
-      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
-    });
-
-    const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.disabled).toBe(true);
-    expect(solve.title).toContain('requires the advertised axisym runner');
-    expect(solve.title).not.toContain('AUTO (metal)');
-  });
-
-  it('blocks invalid dry-run and stale engine selections in forced Axisymmetric mode', async () => {
-    mocks.solvePlan = null;
-    mocks.solvePlanError = 'Dry-run cannot run forced Axisymmetric solver mode.';
-    useSolveOptionsStore.setState({ engine: 'dryrun', solverMode: 'circsym' });
-    await act(async () => {
-      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
-    });
-    const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.disabled).toBe(true);
-    expect(solve.title).toContain('Dry-run cannot run forced Axisymmetric');
-
-    mocks.solvePlanError = 'Unknown solve engine: stale-engine';
-    useSolveOptionsStore.setState({ engine: 'stale-engine' });
-    await act(async () => { await Promise.resolve(); });
-    expect(solve.disabled).toBe(true);
-    expect(solve.title).toContain('Unknown solve engine');
-  });
-
-  it('allows explicit Axisymmetric planning when the saved Full 3D backend is offline', async () => {
+  it('blocks an ineligible design when its explicit full-3D engine is offline', async () => {
     mocks.capabilities.engines = [
       { name: 'beat', available: false, reason: 'GPU backend is offline', version: null, fast_paths: [], formulations: ['full-3d'] },
-      { name: 'axisym', available: true, reason: null, version: '1', fast_paths: [], formulations: ['axisymmetric'] },
-    ];
-    mocks.capabilities.engineSelection = {
-      default: 'auto', resolvedDefault: null,
-      full3dOrder: ['beat'], axisymmetricRunner: 'axisym',
-    };
-    mocks.solvePlan = {
-      engine: 'axisym', formulation: 'axisymmetric',
-      reason: "forced by solver_mode='circsym'",
-      eligibility_reasons: [],
-    };
-    mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
-    useSolveOptionsStore.setState({ engine: 'beat', solverMode: 'circsym' });
-    mocks.submitDesign.mockResolvedValue('axisym-job');
-    await act(async () => {
-      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
-    });
-
-    const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.disabled).toBe(false);
-    expect(solve.title).toBe('Solve current design with AXISYM (requested BEAT full-3D fallback)');
-    await act(async () => {
-      solve.click();
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    expect(mocks.submitDesign).toHaveBeenCalledOnce();
-
-    await act(async () => {
-      mocks.solvePlan = null;
-      mocks.solvePlanError = 'GPU backend is offline';
-      useSolveOptionsStore.setState({ solverMode: 'full_3d' });
-      await Promise.resolve();
-    });
-    expect(solve.disabled).toBe(true);
-    expect(solve.title).toBe('GPU backend is offline');
-  });
-
-  it('blocks an ineligible design when its explicit full-3D fallback is offline', async () => {
-    mocks.capabilities.engines = [
-      { name: 'beat', available: false, reason: 'GPU backend is offline', version: null, fast_paths: [], formulations: ['full-3d'] },
-      { name: 'axisym', available: true, reason: null, version: '1', fast_paths: [], formulations: ['axisymmetric'] },
+      { name: 'bempp', available: true, reason: null, version: '1', fast_paths: [], formulations: ['full-3d'] },
     ];
     mocks.solvePlan = null;
     mocks.solvePlanError = "Solve engine 'beat' is unavailable. GPU backend is offline";
-    useSolveOptionsStore.setState({ engine: 'beat', solverMode: 'auto' });
+    useSolveOptionsStore.setState({ engine: 'beat', solverMode: 'full_3d' });
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
     });
@@ -414,22 +340,6 @@ describe('solve invocation mutex', () => {
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(false);
     expect(solve.title).toBe('Solve current design with AUTO (BEMPP)');
-  });
-
-  it('names Axisym when the formulation is selected explicitly', async () => {
-    mocks.solvePlan = {
-      engine: 'axisym', formulation: 'axisymmetric',
-      reason: "forced by solver_mode='circsym'",
-      eligibility_reasons: [],
-    };
-    useSolveOptionsStore.setState({ engine: 'auto', solverMode: 'circsym' });
-    await act(async () => {
-      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
-    });
-
-    const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.disabled).toBe(false);
-    expect(solve.title).toBe('Solve current design with AUTO (AXISYM)');
   });
 
   // A result picked by hand pins the primary slot, and pinning outlived the
@@ -607,7 +517,7 @@ describe('solve invocation mutex', () => {
     ];
     await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
     const cpu = importedSubmission('wgi_no_metal');
-    cpu.options = { ...cpu.options, engine: 'beat-cpu', solver_mode: 'circsym' };
+    cpu.options = { ...cpu.options, engine: 'beat-cpu', solver_mode: 'full_3d' };
     await act(async () => {
       await expect(jobsCoordinatorBridge.getSnapshot().runImported(cpu)).resolves.toBe('job-cad');
     });
@@ -908,7 +818,7 @@ describe('solve invocation mutex', () => {
     const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
     readyCad(ingestId);
     act(() => useSolveOptionsStore.getState().setEngine(engine));
-    act(() => useSolveOptionsStore.getState().setSolverMode('circsym'));
+    act(() => useSolveOptionsStore.getState().setSolverMode('full_3d'));
 
     await act(async () => {
       root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
@@ -986,7 +896,7 @@ describe('solve invocation mutex', () => {
     const record = filedCad('wgi_normalised');
     act(() => workspaceModeStore.setMode('cad'));
     // Left over from parametric work: an imported model is solved in full 3-D.
-    act(() => useSolveOptionsStore.getState().setSolverMode('circsym'));
+    act(() => useSolveOptionsStore.getState().setSolverMode('full_3d'));
     act(() => {
       useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', {
         reason: 'setup_required',

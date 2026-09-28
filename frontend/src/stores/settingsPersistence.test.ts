@@ -154,7 +154,7 @@ describe('WG.Solve config block', () => {
   it('round-trips portable solve settings without replacing machine execution choices', () => {
     useSolveOptionsStore.setState({
       engine: 'metal',
-      solverMode: 'circsym',
+      solverMode: 'full_3d',
       symmetry: 'half_xz',
       meshValidationMode: 'strict',
       verbose: true,

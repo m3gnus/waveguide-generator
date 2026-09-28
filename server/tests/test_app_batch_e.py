@@ -10,9 +10,12 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+import pytest
+
 from server import app as app_module
 from server.app import VERSION, create_app
 from server.engines.registry import detect_engines
+from server.jobs.store import JobStore
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,59 +53,70 @@ class TestClient:
         headers: dict[str, str] | None = None,
         body: bytes = b"",
     ) -> Response:
-        async def request() -> Response:
-            sent: list[dict[str, Any]] = []
-            delivered = False
+        return asyncio.run(
+            self.request_async(method, path, headers=headers, body=body)
+        )
 
-            async def receive() -> dict[str, Any]:
-                nonlocal delivered
-                if not delivered:
-                    delivered = True
-                    return {
-                        "type": "http.request",
-                        "body": body,
-                        "more_body": False,
-                    }
-                return {"type": "http.disconnect"}
+    async def request_async(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        body: bytes = b"",
+    ) -> Response:
+        """One request on the caller's event loop, for app state bound to it."""
 
-            async def send(message: dict[str, Any]) -> None:
-                sent.append(message)
+        sent: list[dict[str, Any]] = []
+        delivered = False
 
-            request_headers = {"host": "127.0.0.1:3100"}
-            request_headers.update(
-                {name.lower(): value for name, value in (headers or {}).items()}
-            )
-            raw_headers = [
-                (name.encode("latin-1"), value.encode("latin-1"))
-                for name, value in request_headers.items()
-            ]
-            await self.app(
-                {
-                    "type": "http",
-                    "asgi": {"version": "3.0", "spec_version": "2.3"},
-                    "http_version": "1.1",
-                    "method": method,
-                    "scheme": "http",
-                    "path": path,
-                    "raw_path": path.encode("ascii"),
-                    "query_string": b"",
-                    "root_path": "",
-                    "headers": raw_headers,
-                    "client": ("127.0.0.1", 12345),
-                    "server": ("127.0.0.1", 3100),
-                },
-                receive,
-                send,
-            )
-            start = next(message for message in sent if message["type"] == "http.response.start")
-            response_body = b"".join(
-                message.get("body", b"")
-                for message in sent
-                if message["type"] == "http.response.body"
-            )
-            return Response(status_code=start["status"], body=response_body)
+        async def receive() -> dict[str, Any]:
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {
+                    "type": "http.request",
+                    "body": body,
+                    "more_body": False,
+                }
+            return {"type": "http.disconnect"}
 
-        return asyncio.run(request())
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        request_headers = {"host": "127.0.0.1:3100"}
+        request_headers.update(
+            {name.lower(): value for name, value in (headers or {}).items()}
+        )
+        raw_headers = [
+            (name.encode("latin-1"), value.encode("latin-1"))
+            for name, value in request_headers.items()
+        ]
+        await self.app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1",
+                "method": method,
+                "scheme": "http",
+                "path": path,
+                "raw_path": path.encode("ascii"),
+                "query_string": b"",
+                "root_path": "",
+                "headers": raw_headers,
+                "client": ("127.0.0.1", 12345),
+                "server": ("127.0.0.1", 3100),
+            },
+            receive,
+            send,
+        )
+        start = next(message for message in sent if message["type"] == "http.response.start")
+        response_body = b"".join(
+            message.get("body", b"")
+            for message in sent
+            if message["type"] == "http.response.body"
+        )
+        return Response(status_code=start["status"], body=response_body)
 
     def get(self, path: str, headers: dict[str, str] | None = None) -> Response:
         return self.request("GET", path, headers=headers)
@@ -191,10 +205,11 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     # Real detection (batch Q) probes THIS machine, so availability values are
     # environment-dependent; assert the report contract, not the environment.
     names = [engine["name"] for engine in engines]
-    assert {"axisym", "metal", "bempp"}.issubset(set(names))
+    assert {"metal", "bempp"}.issubset(set(names))
     # BEAT is advertised per execution backend, not as one entry.
     assert {"beat-cuda", "beat-rocm", "beat-metal", "beat-cpu"}.issubset(set(names))
     assert "beat" not in names
+    assert "axisym" not in names
     assert "circsym" not in names
     assert "dryrun" not in names
     assert all(
@@ -227,6 +242,81 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     assert enabled[0].name == "dryrun"
     assert enabled[0].available is True
 
+
+
+def _removed_solver_request(engine: str, solver_mode: str) -> dict[str, Any]:
+    return {
+        "design": {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 45,
+            "simulation": {"f1": 250, "f2": 8000, "num_frequencies": 5},
+        },
+        "options": {"engine": engine, "solver_mode": solver_mode, "stage_delay_ms": 0},
+    }
+
+
+@pytest.mark.parametrize(
+    ("engine", "solver_mode"),
+    [("auto", "circsym"), ("axisym", "full_3d"), ("circsym", "full_3d")],
+)
+def test_removed_solver_is_a_typed_422_at_plan_submit_and_retry(
+    tmp_path: Path, engine: str, solver_mode: str
+) -> None:
+    """Every HTTP boundary refuses the removed mode with one stable code, not a 500."""
+
+    application = create_app(data_dir=tmp_path)
+    runtime = application.state.jobs_runtime
+    client = TestClient(application)
+    payload = _removed_solver_request(engine, solver_mode)
+    now = "2026-09-28T12:00:00"
+    seed = JobStore.for_data_dir(application.state.data_dir)
+    seed.initialize()
+    seed.create_job({
+        "id": "historical-axisym",
+        "status": "error",
+        "created_at": now,
+        "updated_at": now,
+        "queued_at": now,
+        "started_at": now,
+        "progress": 0.5,
+        "stage": "solve",
+        "stage_message": "Solving",
+        "config_json": payload,
+        "config_summary_json": {"formula_type": "OSSE"},
+        "task_metadata": {},
+    })
+    seed.close()
+
+    def assert_refused(response, stage: str) -> None:
+        assert response.status_code == 422, response.text
+        error = response.json()["error"]
+        assert error["code"] == "removed_solver_mode"
+        assert error["stage"] == stage
+        assert "Axisymmetric solving has been removed" in error["message"]
+
+    async def scenario() -> None:
+        body = json.dumps(payload).encode()
+        headers = {"content-type": "application/json"}
+        try:
+            assert_refused(
+                await client.request_async("POST", "/api/solve/plan", headers=headers, body=body),
+                "planning",
+            )
+            assert_refused(
+                await client.request_async("POST", "/api/solve", headers=headers, body=body),
+                "submission",
+            )
+            assert_refused(
+                await client.request_async("POST", "/api/jobs/historical-axisym/retry"),
+                "retry",
+            )
+            jobs, _total = await runtime.list_jobs(status=None, limit=10, offset=0)
+            assert [job["id"] for job in jobs] == ["historical-axisym"]
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
 
 def test_capabilities_reports_the_journal_mode_sqlite_actually_granted(tmp_path: Path) -> None:
     """A store degraded to a rollback journal is readable off the running app.

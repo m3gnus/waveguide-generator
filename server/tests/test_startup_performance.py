@@ -495,8 +495,8 @@ def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
     """Probing separately ran a second cold detect_engines() racing the first.
 
     ``EngineRegistry.prewarm`` and this handler started 2 ms apart on different
-    threads, and neither ``lru_cache`` nor the uncached ``circsym_status``
-    serialises a miss, so both did the full probe. Awaiting ``capabilities()``
+    threads, and neither ``lru_cache`` nor the engine probes serialise a
+    miss, so both did the full probe. Awaiting ``capabilities()``
     joins the one snapshot instead.
     """
 

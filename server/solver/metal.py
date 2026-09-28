@@ -2222,9 +2222,6 @@ def solve_imported_metal_from_msh_text(
         "solver_backend": "metal",
         "solver_mode": "full_3d",
         "solve_path": "full-3d",
-        "axisymmetric_eligibility_reasons": [
-            "imported geometry solves full 3-D only"
-        ],
         "solver_engine": {
             "engine": "metal",
             "package": "hornlab-metal-bem",
@@ -2362,17 +2359,6 @@ def solve_imported_metal_from_msh_text(
     return envelope
 
 
-def _circsym_eligibility_reasons(request: SolveRequest) -> list[str]:
-    """Use the same authoritative meridian predicate as the outer planner."""
-
-    from . import circsym as circsym_adapter
-
-    return circsym_adapter.axisymmetric_eligibility_reasons(request)
-
-
-circsym_eligibility_reasons = _circsym_eligibility_reasons
-
-
 def _mesh_ladder_requested(request: SolveRequest) -> bool:
     return str(getattr(request.options, "mesh_ladder", "off")).strip().lower() == "auto"
 
@@ -2491,45 +2477,8 @@ class MetalEngine:
             )
 
         mode = str(request.options.solver_mode or "full_3d").strip().lower()
-        if mode not in {"auto", "full_3d", "circsym"}:
-            raise ValueError("solver_mode must be auto, full_3d, or circsym")
-
-        eligibility_reasons: list[str] = []
-        if mode == "circsym":
-            eligibility_reasons = await asyncio.to_thread(
-                _circsym_eligibility_reasons, request
-            )
-            from . import circsym as circsym_adapter
-
-            if mode == "circsym" and eligibility_reasons:
-                raise ValueError(
-                    "Forced axisymmetric solver mode is not eligible: "
-                    + "; ".join(eligibility_reasons)
-                )
-            if not eligibility_reasons:
-                outcome = await circsym_adapter.CircSymEngine().run(
-                    request,
-                    cancel_cb=cancel_cb,
-                    stage_cb=stage_cb,
-                    artifact_cb=artifact_cb,
-                    result_cb=result_cb,
-                )
-                metadata = outcome.results.setdefault("metadata", {})
-                metadata["solve_path"] = "axisymmetric-meridian"
-                metadata["axisymmetric_eligibility_reasons"] = []
-                metadata["solve_path_reason"] = "forced by solver_mode='circsym'"
-                outcome.field_trace_unavailable_reason = (
-                    "unsupported_axisymmetric_formulation"
-                )
-                if _mesh_ladder_requested(request):
-                    metadata["mesh_ladder"] = {
-                        "applied": False,
-                        "reason": (
-                            "the axisymmetric meridian fast path solves a 2D "
-                            "meridian, which the ladder does not size"
-                        ),
-                    }
-                return outcome
+        if mode not in {"auto", "full_3d"}:
+            raise ValueError("solver_mode must be auto or full_3d")
 
         context = SolverContext.from_request(request, solver_mode="full_3d")
         mesh = await build_solver_mesh(
@@ -2565,7 +2514,6 @@ class MetalEngine:
         elif ladder_plan is not None and isinstance(metadata.get("mesh_ladder"), dict):
             metadata["mesh_ladder"].update(ladder_plan.as_metadata())
         metadata["solve_path"] = "full-3d"
-        metadata["axisymmetric_eligibility_reasons"] = eligibility_reasons
         metadata["solve_path_reason"] = (
             "solver_mode='full_3d' selected native full 3D"
             if mode == "full_3d"
@@ -2585,7 +2533,6 @@ class MetalEngine:
 __all__ = [
     "MetalEngine",
     "MetalUnavailable",
-    "circsym_eligibility_reasons",
     "metal_status",
     "solve_imported_metal_from_msh_text",
     "solve_metal_from_msh_text",

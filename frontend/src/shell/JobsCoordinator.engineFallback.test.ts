@@ -103,12 +103,6 @@ describe('solvePlanTitle', () => {
     expect(title).not.toContain('full-3D fallback');
   });
 
-  it('still reports the axisymmetric-to-full-3D case as before', () => {
-    expect(solvePlanTitle(plan({ engine: 'bempp' }), 'metal')).toBe(
-      'Solve current design with BEMPP (requested METAL full-3D fallback)',
-    );
-  });
-
   it('is unchanged when the requested engine ran', () => {
     expect(solvePlanTitle(plan(), 'bempp')).toBe('Solve current design with BEMPP');
   });

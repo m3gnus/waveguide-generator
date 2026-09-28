@@ -284,13 +284,9 @@ class FieldPlaneService:
             )
         if unavailable_reason == "unsupported_axisymmetric_formulation":
             raise FieldPlaneUnsupported(
-                "Axisymmetric meridian solves do not retain exterior field traces.",
+                "This historical Axisymmetric result has no field-plane traces.",
                 code="unsupported_axisymmetric_formulation",
-                remedy=(
-                    "Set Solver mode to Full 3D and re-solve with Metal or BEMPP. "
-                    "For a coupled infinite-baffle design, also change Simulation "
-                    "type to Free-standing."
-                ),
+                remedy="Re-solve with a field-plane-capable configuration.",
             )
         if unavailable_reason == "unsupported_ground_plane":
             raise FieldPlaneUnsupported(

@@ -42,13 +42,6 @@ def test_unavailable_status_refuses_solve(monkeypatch) -> None:
         beat.solve_beat_from_msh_text("$MeshFormat\n", _context())
 
 
-def test_circsym_mode_is_rejected() -> None:
-    with pytest.raises(ValueError, match="circsym"):
-        beat.solve_beat_from_msh_text(
-            "$MeshFormat\n", _context(solver_mode="circsym")
-        )
-
-
 def test_infinite_baffle_is_rejected() -> None:
     with pytest.raises(ValueError, match="infinite-baffle"):
         beat.solve_beat_from_msh_text("$MeshFormat\n", _context(sim_type=1))

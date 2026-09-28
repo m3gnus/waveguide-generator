@@ -57,7 +57,7 @@ describe('solve and directivity control help', () => {
 
   it('documents every solve option', () => {
     render(<SolveOptionsControls />);
-    for (const id of ['solve-accuracy', 'solve-engine', 'solve-mode', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
+    for (const id of ['solve-accuracy', 'solve-engine', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {
       const control = host.querySelector(`#${id}`)!;
       expect(control, id).not.toBeNull();
       // The hover target is the labelled row, not the input itself.
@@ -72,7 +72,7 @@ describe('solve and directivity control help', () => {
         { name: 'beat-cpu', available: true, reason: null, version: 'test', fast_paths: [], formulations: ['full-3d'] },
       ],
       engineSelection: {
-        default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'], axisymmetricRunner: 'axisym',
+        default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'],
       },
       cpuPreparationInFlight: false,
     });
@@ -118,20 +118,20 @@ describe('solve and directivity control help', () => {
     },
   ])('describes the resolved Fast and Accurate engines for $name in both modes', (platform) => {
     const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu'];
-    const capabilityEngines = [...engineOrder, 'axisym'].map((name) => ({
+    const capabilityEngines = engineOrder.map((name) => ({
       name,
       available: platform.ready.includes(name),
       reason: platform.ready.includes(name) ? null : 'not ready',
       version: platform.ready.includes(name) ? 'test' : null,
       fast_paths: [],
-      formulations: name === 'axisym' ? ['axisymmetric'] : ['full-3d'],
+      formulations: ['full-3d'],
       geometry_sources: name === 'metal' || name === 'beat-cpu' ? ['parametric', 'imported'] : ['parametric'],
     }));
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: capabilityEngines,
       engineSelection: {
         default: 'auto', resolvedDefault: platform.resolvedDefault,
-        full3dOrder: engineOrder, axisymmetricRunner: 'axisym',
+        full3dOrder: engineOrder,
       },
       cpuPreparationInFlight: false,
     });
@@ -190,42 +190,6 @@ describe('solve and directivity control help', () => {
     } else {
       expect(cadAccurateText).toContain('No BEAT backend can solve this CAD return');
     }
-  });
-
-  it('keeps the portable axisymmetric path in machine-local solve options', () => {
-    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
-      engines: [
-        { name: 'beat-cpu', available: true, reason: null, version: 'test', fast_paths: [], formulations: ['full-3d'] },
-        { name: 'axisym', available: true, reason: null, version: 'test', fast_paths: ['axisymmetric-meridian'], formulations: ['axisymmetric'] },
-      ],
-      engineSelection: {
-        default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'], axisymmetricRunner: 'axisym',
-      },
-      cpuPreparationInFlight: false,
-    });
-    render(<SolveOptionsControls />);
-    const control = host.querySelector<HTMLSelectElement>('#solve-mode')!;
-    expect([...control.options].map((option) => option.textContent)).toEqual([
-      'Full 3D', 'Axisymmetric (meridian)',
-    ]);
-    expect(control.value).toBe('full_3d');
-    act(() => {
-      control.value = 'circsym';
-      control.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(useSolveOptionsStore.getState().solverMode).toBe('circsym');
-    expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
-    const accuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
-    expect(hoverText(accuracy.closest('.select-row')!)).toBe(
-      'Fast: Axisymmetric, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.',
-    );
-    act(() => {
-      accuracy.value = 'accurate';
-      accuracy.dispatchEvent(new Event('change', { bubbles: true }));
-    });
-    expect(hoverText(accuracy.closest('.select-row')!)).toBe(
-      'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions. Accurate requires Full 3D; switch from Axisymmetric to run it.',
-    );
   });
 
   it('keeps design and CAD-import sweep ids unique with working labels', () => {
@@ -400,7 +364,7 @@ describe('solve and directivity control help', () => {
     expect(hoverText(host.querySelector('.axis-toggles')!)).toContain('planes through the horn axis');
     expect(hoverText(host.querySelector('#polar-spherical-sampling')!.closest('.toggle-row')!)).toContain('balloon');
     const fieldPlaneHelp = hoverText(host.querySelector('#polar-field-plane')!.closest('.toggle-row')!);
-    expect(fieldPlaneHelp).toContain('full-3D solve');
+    expect(fieldPlaneHelp).toContain('surface data needed for acoustic field planes');
     expect(fieldPlaneHelp).toContain('0.1–1 MB');
     expect(fieldPlaneHelp).toContain('CAD-link imports');
   });
@@ -419,7 +383,7 @@ describe('solve and directivity control help', () => {
           geometry_sources: ['parametric', 'imported'],
         })),
         engineSelection: {
-          default: 'auto', resolvedDefault, full3dOrder: engineOrder, axisymmetricRunner: 'axisym',
+          default: 'auto', resolvedDefault, full3dOrder: engineOrder,
         },
         cpuPreparationInFlight: false,
       });

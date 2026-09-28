@@ -138,12 +138,9 @@ has not been solved has no measured rig to show, and WG does not guess one.
 
 ### What each backend can solve
 
-WG selects the **formulation** separately from the Full 3D backend. **Full 3D**
-is the default formulation. **Axisymmetric (meridian)** is an explicit choice
-for eligible round designs; it runs on CPU on macOS, Windows, and Linux and can
-use Metal acceleration on Apple Silicon. The Full 3D backend selector chooses
-**Metal** (Apple GPU), one of the **BEAT** engines, or **BEMPP** (CPU/OpenCL).
-Changing that backend preference does not change an explicit Axisymmetric run.
+WG uses Full 3D solving with ordinary AUTO, half, and quarter symmetry reduction.
+The backend selector chooses **Metal** (Apple GPU), one of the **BEAT**
+engines, or **BEMPP** (CPU/OpenCL).
 
 BEAT is one solver with four interchangeable execution backends, and the Solver
 backend list offers each of them separately:
@@ -192,8 +189,7 @@ and takes BEAT · CPU, which it can only reach on a machine where that 1 kHz
 solve has already run. Choosing an engine yourself always overrides AUTO: an
 explicit BEMPP stays BEMPP, and an explicit BEAT · CPU stays BEAT · CPU.
 
-The infinite-baffle setting is design physics, not a solver choice. Axisymmetric,
-Metal full 3D, and current BEMPP full 3D all implement the coupled interior plus
+The infinite-baffle setting is design physics, not a solver choice. Metal full 3D and current BEMPP full 3D both implement the coupled interior plus
 Rayleigh-aperture formulation. BEMPP currently uses a validated full-domain mesh
 for that formulation; Metal can also use half/quarter domains. BEAT does not yet
 support coupled infinite baffle. No backend substitutes an image/double-horn
@@ -235,7 +231,7 @@ pressure at zero on a free rim where Metal does not; close the shell in CAD, or
 choose another engine. It also refuses a return prepared by a WG too old to
 record that count; prepare it again. The passive-cardioid campaign is
 Metal-only. Field-plane traces are available
-from free-standing Metal and BEMPP full-3D solves; Axisymmetric, coupled-IB and
+from free-standing Metal and BEMPP full-3D solves; coupled-IB and
 ground-plane solves report that traces are unavailable. A grounded solve keeps
 none because the field evaluation carries no ground image: it would draw the
 horn in free space with no floor in the picture, while the polar and impedance

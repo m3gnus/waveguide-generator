@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import os
 from pathlib import Path
 import subprocess
@@ -14,8 +13,7 @@ import numpy as np
 import pytest
 
 from server.design.schema import DesignConfig
-from server.jobs.models import SolveRequest
-from server.solver import bempp, circsym, metal
+from server.solver import bempp, metal
 from server.solver.acoustics import solver_sound_speed_m_per_s
 from server.solver.beam_shape import beam_shape_summary
 from server.solver.context import SolverContext
@@ -62,72 +60,6 @@ def _native_result(frequencies: list[float] | None = None) -> SimpleNamespace:
     )
 
 
-@pytest.mark.parametrize("metadata", [{}, {"apertureTag": 0}, {"apertureTag": -3}])
-def test_circsym_infinite_baffle_requires_positive_aperture_tag(metadata: dict) -> None:
-    with pytest.raises(ValueError, match="aperture tag"):
-        circsym._validated_aperture_tag(metadata, 1)
-    assert circsym._validated_aperture_tag({"apertureTag": 12}, 1) == 12
-
-
-def test_bempp_engine_delegates_axisymmetric_mode_to_portable_runner(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request = SolveRequest.model_validate(
-        {
-            "design": {"formula": "OSSE", "simulation": {"solver_mode": "circsym"}},
-            "options": {"engine": "bempp", "solver_mode": "circsym"},
-        }
-    )
-
-    called = False
-
-    class FakeAxisymmetricEngine:
-        async def run(self, seen_request, **_kwargs):
-            nonlocal called
-            called = True
-            assert seen_request is request
-            return SimpleNamespace(results={"metadata": {"solver_backend": "axisym"}})
-
-    monkeypatch.setattr(circsym, "AxisymmetricEngine", FakeAxisymmetricEngine)
-
-    async def scenario() -> None:
-        outcome = await bempp.BemppEngine().run(
-            request, cancel_cb=lambda: None, stage_cb=lambda *_args: None
-        )
-        assert outcome.results["metadata"]["solver_backend"] == "axisym"
-
-    asyncio.run(scenario())
-    assert called is True
-
-
-def test_axisymmetric_engine_reports_its_specific_field_trace_limitation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    request = SolveRequest.model_validate(
-        {
-            "design": {"formula": "OSSE", "simulation": {"solver_mode": "circsym"}},
-            "options": {"engine": "axisym", "solver_mode": "circsym"},
-        }
-    )
-    monkeypatch.setattr(
-        circsym,
-        "solve_circsym_design",
-        lambda *_args, **_kwargs: {"metadata": {}},
-    )
-
-    async def scenario() -> None:
-        outcome = await circsym.AxisymmetricEngine().run(
-            request,
-            cancel_cb=lambda: None,
-            stage_cb=lambda *_args: None,
-        )
-        assert outcome.field_trace_unavailable_reason == (
-            "unsupported_axisymmetric_formulation"
-        )
-
-    asyncio.run(scenario())
-
-
 def test_old_native_helpers_get_explicit_unsupported_option_errors(
     monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -142,27 +74,6 @@ def test_old_native_helpers_get_explicit_unsupported_option_errors(
     with pytest.raises(metal.MetalUnavailable, match="required BEM formulation"):
         metal.solve_metal_from_msh_text("msh", _context())
 
-    class Meridian:
-        baffle_z = 0.0
-        metadata: dict[str, Any] = {}
-
-        @staticmethod
-        def as_metal_meridian(_cls: Any) -> object:
-            return object()
-
-    monkeypatch.setattr(circsym, "build_meridian", lambda _config: Meridian())
-    monkeypatch.setattr(circsym, "circsym_rejection_reasons", lambda _config: [])
-    monkeypatch.setattr(circsym, "MeridianMesh", object)
-    monkeypatch.setattr(circsym, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
-    monkeypatch.setattr(circsym, "solve_circsym", lambda *_args: None)
-    monkeypatch.setattr(circsym, "circsym_status", lambda: {"available": True, "reason": "ok"})
-    monkeypatch.setattr(
-        circsym,
-        "native_config",
-        lambda **_kwargs: (_ for _ in ()).throw(TypeError("unexpected 'circsym_baffle_z'")),
-    )
-    with pytest.raises(circsym.CircSymUnavailable, match="baffle position"):
-        circsym.solve_circsym_design(_context(solver_mode="circsym"))
 
 
 def test_optional_native_imports_treat_oserror_as_unavailable() -> None:
@@ -174,10 +85,9 @@ def guarded(name, *args, **kwargs):
         raise OSError("binary loader failed")
     return original(name, *args, **kwargs)
 builtins.__import__ = guarded
-from server.solver import metal, bempp, circsym
+from server.solver import metal, bempp
 assert metal.native_config is None
 assert bempp.SolveConfig is None
-assert circsym.build_meridian is None
 '''
     completed = subprocess.run(
         [sys.executable, "-c", script], text=True, capture_output=True, check=False

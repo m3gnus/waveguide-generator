@@ -2822,7 +2822,7 @@ Nothing is sent anywhere; it runs entirely on your machine.
             # The same claim Windows is held to, and for the same reason: bempp
             # is the portable CPU backend, it does not need an OpenCL ICD to be
             # available, and a Linux bundle that cannot run it can solve
-            # nothing but axisymmetric geometries.
+            # no supported solver geometry.
             raise BundleError(
                 "Bundled backend verification did not report the Linux bempp/numba backend ready"
             )

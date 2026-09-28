@@ -117,7 +117,6 @@ describe('imported solve submission wire', () => {
       needsIngest: false,
     });
     useSolveOptionsStore.getState().setEngine('beat-cpu');
-    useSolveOptionsStore.getState().setSolverMode('circsym');
 
     const options = buildImportedSubmission(useCadReturnStore.getState()).options;
 

@@ -7,14 +7,13 @@ import { CAPABILITIES_STALE_MS, useCapabilities, useCapabilityRefreshOnReconnect
 
 const CAPABILITIES = {
   engines: [
-    { name: 'metal', available: true, reason: 'ok', version: '0.1.0', fast_paths: ['axisymmetric-meridian'] },
+    { name: 'metal', available: true, reason: 'ok', version: '0.1.0', fast_paths: [] },
     { name: 'bempp', available: false, reason: 'not installed', version: null, fast_paths: [] },
   ],
   engineSelection: {
     default: 'auto',
     resolvedDefault: 'metal',
     full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'],
-    axisymmetricRunner: 'axisym',
   },
 };
 

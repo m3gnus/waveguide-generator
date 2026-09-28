@@ -19,7 +19,7 @@ import {
 
 const engine = (name: string, available: boolean): EngineCapability => ({
   name, available, reason: null, version: null, fast_paths: [],
-  formulations: name === 'axisym' ? ['axisymmetric'] : ['full-3d'],
+  formulations: ['full-3d'],
   mountings: name === 'beat' ? ['free-standing'] : ['free-standing', 'infinite-baffle'],
   geometry_sources: name === 'metal' ? ['parametric', 'imported'] : ['parametric'],
 });
@@ -28,7 +28,6 @@ const selection: EngineSelection = {
   default: 'auto',
   resolvedDefault: 'metal',
   full3dOrder: ['metal', 'beat', 'bempp', 'dryrun'],
-  axisymmetricRunner: 'axisym',
 };
 
 const field = (id: string) => {
@@ -60,71 +59,37 @@ describe('backend feature support', () => {
   it('grants Metal full-3D mounting/import features but keeps meridian separate', () => {
     const metal = engine('metal', true);
     expect(backendSupports(metal, 'infinite-baffle')).toBe(true);
-    expect(backendSupports(metal, 'meridian-fast-path')).toBe(false);
     expect(backendSupports(metal, 'imported-geometry')).toBe(true);
   });
 
   it('gives BEMPP coupled IB but not meridian or imported geometry', () => {
     const bempp = engine('bempp', true);
     expect(backendSupports(bempp, 'infinite-baffle')).toBe(true);
-    expect(backendSupports(bempp, 'meridian-fast-path')).toBe(false);
     expect(backendSupports(bempp, 'imported-geometry')).toBe(false);
-    expect(backendSupports(engine('axisym', true), 'meridian-fast-path')).toBe(true);
   });
 
-  it('keeps Axisym out of AUTO while applying its capabilities when explicitly selected', () => {
-    const beat = { ...engine('beat', true), formulations: ['full-3d'], mountings: ['free-standing'] };
-    const axisym = { ...engine('axisym', true), formulations: ['axisymmetric'], mountings: ['free-standing', 'infinite-baffle'] };
-
-    const autoPlan = plannedBackendCapabilities('auto', [beat, axisym], {
-      ...selection, resolvedDefault: 'beat', full3dOrder: ['beat'],
-    });
-    expect(backendSupports(beat, 'infinite-baffle')).toBe(false);
-    expect(autoPlan.map((item) => item.name)).toEqual(['beat']);
-    expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(false);
-    expect(backendLimitation(beat, 'infinite-baffle', autoPlan)).toBeDefined();
-
-    // Explicit Axisymmetric is independent of the saved Full 3D backend.
-    const explicitAutoPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'auto');
-    expect(explicitAutoPlan.map((item) => item.name)).toEqual(['beat']);
-    expect(backendSupports(beat, 'infinite-baffle', explicitAutoPlan)).toBe(false);
-    const explicitAxisymPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'circsym');
-    expect(explicitAxisymPlan.map((item) => item.name)).toEqual(['axisym']);
-    expect(backendSupports(beat, 'infinite-baffle', explicitAxisymPlan)).toBe(true);
-    const explicitFull3dPlan = plannedBackendCapabilities('beat', [beat, axisym], selection, 'full_3d');
-    expect(explicitFull3dPlan.map((item) => item.name)).toEqual(['beat']);
-    expect(backendSupports(beat, 'infinite-baffle', explicitFull3dPlan)).toBe(false);
-  });
-
-  it('lets AUTO skip BEAT for a coupled IB-capable BEMPP without Axisym', () => {
+  it('lets AUTO skip BEAT for a coupled IB-capable BEMPP', () => {
     const beat = { ...engine('beat', true), mountings: ['free-standing'] };
     const bempp = { ...engine('bempp', true), mountings: ['free-standing', 'infinite-baffle'] };
-    const axisym = { ...engine('axisym', false), mountings: ['free-standing', 'infinite-baffle'] };
     const advertised = {
       ...selection, resolvedDefault: 'beat', full3dOrder: ['metal', 'beat', 'bempp'],
     };
 
-    const autoPlan = plannedBackendCapabilities('auto', [beat, bempp, axisym], advertised);
+    const autoPlan = plannedBackendCapabilities('auto', [beat, bempp], advertised);
     expect(autoPlan.map((item) => item.name)).toEqual(['beat', 'bempp']);
     expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(true);
     expect(backendSupports(beat, 'infinite-baffle', plannedBackendCapabilities('beat', [beat, bempp], advertised))).toBe(false);
   });
 
-  it('keeps forced CircSym limited to Axisym instead of full-3D fallbacks', () => {
+  it('keeps an AUTO plan with only BEAT from claiming infinite baffle', () => {
     const beat = { ...engine('beat', true), mountings: ['free-standing'] };
-    const bempp = { ...engine('bempp', true), mountings: ['free-standing', 'infinite-baffle'] };
-    const axisym = { ...engine('axisym', true), mountings: ['free-standing'] };
-    const host = [beat, bempp, axisym];
-    const advertised = { ...selection, resolvedDefault: 'beat', full3dOrder: ['beat', 'bempp'] };
-
-    const full3dPlan = plannedBackendCapabilities('auto', host, advertised, 'full_3d');
-    expect(full3dPlan.map((item) => item.name)).toEqual(['beat', 'bempp']);
-    expect(backendSupports(beat, 'infinite-baffle', full3dPlan)).toBe(true);
-
-    const circsymPlan = plannedBackendCapabilities('auto', host, advertised, 'circsym');
-    expect(circsymPlan.map((item) => item.name)).toEqual(['axisym']);
-    expect(backendSupports(beat, 'infinite-baffle', circsymPlan)).toBe(false);
-    expect(backendSupports(bempp, 'infinite-baffle', circsymPlan)).toBe(false);
+    const autoPlan = plannedBackendCapabilities('auto', [beat], {
+      ...selection, resolvedDefault: 'beat', full3dOrder: ['beat'],
+    });
+    expect(autoPlan.map((item) => item.name)).toEqual(['beat']);
+    expect(backendSupports(beat, 'infinite-baffle')).toBe(false);
+    expect(backendSupports(beat, 'infinite-baffle', autoPlan)).toBe(false);
+    expect(backendLimitation(beat, 'infinite-baffle', autoPlan)).toBeDefined();
   });
 
   it('uses the server capability payload for version-dependent BEMPP IB support', () => {
@@ -188,8 +153,7 @@ describe('legacy beat engine migration', () => {
     default: 'auto',
     resolvedDefault: 'metal',
     full3dOrder: ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu', 'dryrun'],
-    axisymmetricRunner: 'axisym',
-  };
+    };
 
   it('narrows a stored beat to the best variant this host can run', () => {
     // "beat" meant "the family, and let the probe choose". It still means

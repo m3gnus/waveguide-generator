@@ -65,43 +65,14 @@ On the development Mac in this batch, warm median time over seven calls with the
 
 FREEFORM is slower because its authoritative continuous cross-section reconstruction is substantially more expensive even at this coarse grid. Callers should debounce live edit requests and discard stale responses by design revision, just as they do for preview work.
 
-## Axisymmetric formulation planner
+## Solver formulation
 
-Symmetry-domain reduction, formulation, and execution backend are independent
-decisions. The solve planner considers the machine-local `solver_mode` before it
-chooses a full-3D backend:
+Axisymmetric solving was removed on 2026-09-28. Historical `circsym` requests
+and results remain readable, but new solves using that mode are refused. Full-3D
+symmetry reduction still supports AUTO, half and quarter domains.
 
-- `auto`: legacy wire spelling for Full 3D. It never selects Axisymmetric.
-- `full_3d`: always use Metal, BEAT, or BEMPP full 3D.
-- `circsym`: force the axisymmetric formulation and fail with the eligibility
-  reasons if it cannot run. `circsym` remains the compatibility wire spelling;
-  the product label is **Axisymmetric (meridian)**.
-
-`axisym` is advertised independently by `/api/capabilities` and runs on CPU on
-all supported operating systems, with optional Metal acceleration where present.
-The backend selector therefore chooses the Full 3D implementation, not the
-axisymmetric implementation. The meridian is refined from the highest requested
-frequency, unlike a fixed Full 3D mesh. A rigid ground plane is never eligible
-because the meridian formulation has no ground-image boundary; an explicit
-Axisymmetric request is refused with that reason rather than changing formulation.
-
-`Simulation.SolverMode` in legacy design text is a
-machine setting, not a portable one, so it is never read from a design and
-design export never writes it. A file that states one still opens: the value is
-dropped during import and the drop is reported as migration
-`006_machine_solver_mode_not_portable`, which the file-open report and
-`wg validate --json` both carry. Any spelling is treated the same way, including
-one that is not a valid mode, because no spelling of it was going to be
-honoured. Opening a file is not editing it, so an untouched save returns the
-author's bytes unchanged and the line survives there; the first real edit
-serializes canonically and removes it.
-
-Result/job symmetry metadata records `solver_plan` with the chosen
-formulation, engine, reason, and eligibility reasons. Explicit Axisymmetric plans
-also include `cost_evidence`: deterministic counts from the frequency-refined
-meridian (unknowns, azimuthal quadrature work, matrix memory, and a revolved
-full-3D triangle scale for the requested symmetry domain). These are transparent
-complexity comparisons rather than machine-specific wall-clock promises.
+`Simulation.SolverMode` in legacy design text is accepted and dropped on load
+under migration `006_machine_solver_mode_not_portable`.
 
 ## CAD returns that arrive already cut
 

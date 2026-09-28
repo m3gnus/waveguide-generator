@@ -16,7 +16,7 @@ exactly that.
 
 It also compares ``pins.json`` against what is installed, because a probe can
 say "ready" about the wrong commit.  A drifted venv is what dropped coupled
-infinite baffle and axisymmetric cancellation off a Windows box while every
+infinite baffle off a Windows box while every
 module still reported version ``0.1.0``
 (``docs/validation/2026-08/PINNED-VS-INSTALLED.md``).  Drift is printed loudly
 but does not set the exit status: the host can still solve, and failing an
@@ -99,11 +99,9 @@ def main() -> int:
         BEAT_BACKEND_LABELS,
         beat_backend_statuses,
     )
-    from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
 
     print("Solve backends:")
-    axisym = _report("Axisymmetric (portable CPU)", circsym_status())
     metal = _report("Metal (Apple Silicon)", metal_status())
     # One line per BEAT execution backend, the same four the app offers. A
     # single "BEAT" line here could only report whichever one the probe named,
@@ -117,7 +115,7 @@ def main() -> int:
 
     report_dependency_drift()
 
-    if axisym or metal or beat or bempp:
+    if metal or beat or bempp:
         return 0
 
     print()

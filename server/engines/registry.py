@@ -71,14 +71,13 @@ FULL3D_ENGINE_ORDER: tuple[str, ...] = full3d_engine_order()
 
 #: Every engine name a solve request may name. Derived from the order above so
 #: adding a backend there is enough to make it requestable, plus the formulation
-#: and family names that are not full-3D backends: ``auto``, the axisymmetric
-#: meridian runner, and the legacy bare ``beat``.
+#: and family names that are not full-3D backends: ``auto`` and the legacy bare ``beat``.
 #:
 #: The names are spelled out rather than imported from ``server.solver.beat``
 #: on purpose -- this module is imported at boot and that one pulls the optional
 #: Julia package with it. ``test_engines_registry`` pins the two together.
 SELECTABLE_ENGINE_NAMES: frozenset[str] = frozenset(
-    {"auto", "axisym", "beat"} | set(FULL3D_ENGINE_ORDER)
+    {"auto", "beat"} | set(FULL3D_ENGINE_ORDER)
 )
 
 
@@ -241,42 +240,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
         beat_geometry_sources,
     )
     from server.solver.bempp import bempp_status
-    from server.solver.circsym import circsym_status
     from server.solver.metal import metal_status
-
-    try:
-        meridian_status = circsym_status()
-    except Exception as exc:
-        meridian_status = {
-            "available": False,
-            "reason": f"axisymmetric-meridian detection failed: {exc}",
-            "version": None,
-        }
-
-    engines.append(
-        EngineInfo(
-            name="axisym",
-            label="Axisymmetric meridian",
-            available=bool(meridian_status.get("available")),
-            reason=str(
-                meridian_status.get("reason")
-                or "axisymmetric capability probe returned no reason"
-            ),
-            version=(
-                str(meridian_status["version"])
-                if meridian_status.get("version") is not None
-                else None
-            ),
-            fast_paths=("axisymmetric-meridian",),
-            formulations=("axisymmetric",),
-            mountings=("free-standing", "infinite-baffle"),
-            geometry_sources=("parametric",),
-            symmetry_domains=("continuous-axisymmetric",),
-            field_traces=False,
-            di_sphere=True,
-            cancellation_granularity="intra-frequency",
-        )
-    )
 
     # BEAT's symmetry and DI entries were stale rather than wrong: the package
     # has mapped WG's "yz" half onto its x mirror and "yz+xz" quarter onto its
@@ -442,14 +406,6 @@ def create_engine(name: str) -> Any | None:
         from server.solver.beat import BeatEngine
 
         return BeatEngine(beat_backend)
-    if normalized == "circsym":
-        from server.solver.circsym import AxisymmetricEngine
-
-        return AxisymmetricEngine()
-    if normalized == "axisym":
-        from server.solver.circsym import AxisymmetricEngine
-
-        return AxisymmetricEngine()
     return None
 
 

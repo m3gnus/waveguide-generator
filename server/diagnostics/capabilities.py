@@ -59,7 +59,6 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
             "default": "auto",
             "resolvedDefault": resolved,
             "full3dOrder": list(order),
-            "axisymmetricRunner": "axisym",
         },
         "dependencies": {"pinned": pinned, "installed": installed, "drift": drift},
         # A store whose filesystem refused write-ahead logging still works, just

@@ -1,5 +1,4 @@
 import { plannedEngineNames, type EngineCapability, type EngineSelection } from '../jobs/actions';
-import type { SolverMode } from '../stores/solveOptions';
 
 export type BackendIdentity = string | EngineCapability | null;
 
@@ -19,8 +18,6 @@ export type BackendFeature =
   | 'infinite-baffle'
   /** Rigid ground-plane solves — ``server/solver/ground_plane.py``. */
   | 'ground-plane'
-  /** The axisymmetric meridian fast path — ``server/solver/bempp.py``. */
-  | 'meridian-fast-path'
   /** Solving ingested CAD geometry — ``server/jobs/runtime.py``. */
   | 'imported-geometry';
 
@@ -28,18 +25,15 @@ export type BackendFeature =
 const FEATURE_LABELS: Record<BackendFeature, string> = {
   'infinite-baffle': 'coupled infinite-baffle simulation',
   'ground-plane': 'a rigid ground plane',
-  'meridian-fast-path': 'the axisymmetric meridian fast path',
   'imported-geometry': 'solving imported CAD geometry',
 };
 
 /** What to do instead, so a warning is actionable rather than just a refusal. */
 const FEATURE_REMEDIES: Record<BackendFeature, string> = {
   'infinite-baffle':
-    'Use Metal or BEMPP full 3D, or the Axisymmetric meridian path for eligible circular geometry.',
+    'Use Metal or BEMPP full 3D.',
   'ground-plane':
     'Ground-plane solves need BEMPP full 3D on this build. Note that an infinite baffle is a different boundary, not a substitute.',
-  'meridian-fast-path':
-    'Use Full 3D; this geometry cannot use the platform-neutral meridian runner.',
   'imported-geometry':
     'Choose AUTO, or an engine the solver list marks as solving imported CAD geometry.',
 };
@@ -96,8 +90,7 @@ export function activeBackendCapability(
  * Available capabilities the server may plan for the requested engine.
  *
  * Full 3D walks the server-advertised backend order when the engine is AUTO.
- * Explicit CircSym includes only the advertised meridian runner, independently
- * of the selected full-3D backend. Keeping the whole AUTO-engine plan matters on a GPU host:
+ * Keeping the whole AUTO-engine plan matters on a GPU host:
  * BEAT can be the resolved free-standing default while BEMPP later in the plan
  * handles coupled infinite-baffle solves.
  *
@@ -109,15 +102,10 @@ export function plannedBackendCapabilities(
   engine: string,
   engines: readonly EngineCapability[],
   selection?: Readonly<EngineSelection>,
-  solverMode: SolverMode = 'full_3d',
 ): readonly EngineCapability[] {
   let advertised: readonly string[];
   try {
-    advertised = plannedEngineNames(
-      engine,
-      { engines, engineSelection: selection },
-      solverMode,
-    );
+    advertised = plannedEngineNames(engine, { engines, engineSelection: selection });
   } catch {
     // Gating is deliberately total while capabilities/local settings settle;
     // resolveEngine still blocks the stale or contradictory submission.
@@ -192,9 +180,7 @@ export function backendSupports(
   if (!backend) return true;
   const normalized = backendName(backend);
   if (!normalized) return true;
-  // When supplied, the plan is authoritative: a full-3D backend outside a
-  // forced CircSym plan must not rescue a feature the sole Axisym candidate
-  // lacks (and vice versa).
+  // When supplied, the plan is authoritative.
   if (plan !== undefined) {
     return plan.some((item) => capabilitySupports(item, feature));
   }
@@ -209,7 +195,6 @@ export function backendSupports(
 function capabilitySupports(backend: EngineCapability, feature: BackendFeature): boolean {
   if (feature === 'infinite-baffle') return backend.mountings?.includes('infinite-baffle') ?? true;
   if (feature === 'ground-plane') return backend.mountings?.includes('ground-plane') ?? true;
-  if (feature === 'meridian-fast-path') return backend.formulations?.includes('axisymmetric') ?? true;
   return backend.geometry_sources?.includes('imported') ?? true;
 }
 

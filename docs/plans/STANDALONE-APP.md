@@ -492,7 +492,7 @@ browser tab rather than a window.
   runtime set (`server/requirements-runtime.txt` + `requirements-pins.txt`)
   into one directory produced a 531 MB tree in 81 s. Copied to a different
   path, `scripts/check_backends.py` reported Metal, bempp and the axisymmetric
-  engine ready and `launch/serve.py` served the interface. python-build-standalone
+  engine (since removed) ready and `launch/serve.py` served the interface. python-build-standalone
   links `libpython` through `@rpath`, so the tree is relocatable without
   `install_name_tool` post-processing.
 - **Window.** pywebview 6.x on CPython 3.13 (pure pyobjc on macOS, WebView2

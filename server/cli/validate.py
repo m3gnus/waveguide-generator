@@ -155,11 +155,7 @@ def _solve_path_summary(symmetry_metadata: dict[str, Any]) -> dict[str, Any]:
     plan = plan if isinstance(plan, dict) else {}
     reasons = [str(reason) for reason in plan.get("eligibility_reasons") or []]
     return {
-        "predicted": (
-            "axisymmetric-meridian"
-            if plan.get("formulation") == "axisymmetric"
-            else "full-3d"
-        ),
+        "predicted": "full-3d",
         "reasons": reasons,
     }
 

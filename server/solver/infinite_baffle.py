@@ -1,8 +1,7 @@
-"""Coupled infinite-baffle validation shared by full-3D and axisymmetric paths.
+"""Coupled infinite-baffle validation for full-3D engines.
 
 V1 rejects the tempting but incorrect free-field/image shortcut: full 3-D uses
-Metal/BEMPP use the mesher's aperture physical tag and native Rayleigh coupling,
-while Axisymmetric uses its meridian aperture tag. See v1
+Metal/BEMPP use the mesher's aperture physical tag and native Rayleigh coupling. See v1
 ``metal_solver.py:310-359,396-405`` and
 ``metal_solver.py:477-500,550-558``.
 """
@@ -67,7 +66,7 @@ def reject_bempp_infinite_baffle(context: SolverContext) -> None:
     if context.sim_type == 1:
         raise ValueError(
             "The installed BEMPP adapter has not enabled coupled infinite-baffle "
-            "support. Upgrade hornlab-bempp-bem or use Axisymmetric/Metal."
+            "support. Upgrade hornlab-bempp-bem or use Metal."
         )
 
 
@@ -75,7 +74,7 @@ def reject_beat_infinite_baffle(context: SolverContext) -> None:
     if context.sim_type == 1:
         raise ValueError(
             "The BEAT backend cannot solve coupled infinite-baffle requests. "
-            "Use Axisymmetric, Metal full 3D, or BEMPP full 3D."
+            "Use Metal full 3D or BEMPP full 3D."
         )
 
 

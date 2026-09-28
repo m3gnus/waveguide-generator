@@ -471,7 +471,7 @@ function readableToken(value: string): string {
 
 function readableSolvePath(value: string): string {
   if (value === 'full-3d' || value === 'full_3d') return 'full 3D';
-  if (value === 'axisymmetric-meridian' || value === 'circsym') return 'axisymmetric meridian';
+  if (value === 'axisymmetric-meridian' || value === 'circsym') return 'Axisymmetric (removed)';
   return readableToken(value).replaceAll('-', ' ');
 }
 

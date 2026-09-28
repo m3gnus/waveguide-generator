@@ -533,7 +533,7 @@ def test_runtime_reconnect_snapshot_keeps_multi_channel_rows_in_step(
 
 
 def test_single_channel_provisional_rows_stay_in_step(tmp_path: Path) -> None:
-    # Every parametric streamed solve (Metal, BEAT, bempp, circsym) sends the
+    # Every parametric streamed solve (Metal, BEAT, bempp) sends the
     # builder's shape unwrapped, so its shared list sits at the top level.
     frames = [
         _streamed_response(index, frequency, 90.0 + index)
@@ -1921,3 +1921,94 @@ def test_a_job_that_starts_as_the_stop_begins_marks_itself(tmp_path: Path) -> No
             await runtime.shutdown()
 
     assert asyncio.run(scenario()) == 1
+
+
+@pytest.mark.parametrize(
+    ("engine", "mode"),
+    [("dryrun", "circsym"), ("axisym", "full_3d"), ("circsym", "full_3d")],
+)
+def test_removed_solver_requests_decode_but_cannot_submit_or_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, engine: str, mode: str
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+    request = _request(delay_ms=0)
+    request.options.engine = engine
+    request.options.solver_mode = mode
+    stored = request.model_dump(mode="json")
+    assert SolveRequest.model_validate(stored).options.solver_mode == mode
+
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        old = _running_job("old-axisym")
+        old["status"] = "error"
+        old["config_json"] = stored
+        store.create_job(old)
+        runtime = JobRuntime(store)
+        with pytest.raises(ValueError, match="Axisymmetric solving has been removed"):
+            await runtime.submit(request)
+        assert await runtime.get_effective_request("old-axisym")
+        with pytest.raises(ValueError, match="Axisymmetric solving has been removed"):
+            await runtime.retry("old-axisym")
+        assert len((await runtime.list_jobs(status=None, limit=10, offset=0))[0]) == 1
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_upgrade_fails_queued_axisymmetric_job_and_runs_the_next_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    removed = _running_job("old-queued")
+    removed.update(status="queued", started_at=None, stage="queued", progress=0.0)
+    removed["config_json"]["options"]["solver_mode"] = "circsym"
+    ordinary = _running_job("next-queued")
+    ordinary.update(status="queued", started_at=None, stage="queued", progress=0.0)
+    store.create_job(removed)
+    store.create_job(ordinary)
+
+    async def scenario() -> None:
+        runtime = JobRuntime(store)
+        await runtime.start()
+        await runtime.wait_idle()
+        old = await runtime.get_job("old-queued")
+        next_job = await runtime.get_job("next-queued")
+        assert old["status"] == "error"
+        assert "Axisymmetric solving has been removed" in old["error_message"]
+        assert next_job["status"] == "complete"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_historical_axisymmetric_job_and_result_remain_readable(tmp_path: Path) -> None:
+    store = JobStore(tmp_path / "jobs.db")
+    store.initialize()
+    old = _running_job("historical-axisym")
+    old.update(status="complete", stage="complete", progress=1.0)
+    old["config_json"]["options"].update(engine="axisym", solver_mode="circsym")
+    store.create_job(old)
+    result = {
+        "frequencies": [1000.0],
+        "metadata": {
+            "solver_backend": "axisym",
+            "solve_path": "axisymmetric-meridian",
+            "axisym": {"solver_mode": "circsym"},
+        },
+    }
+    store.store_results("historical-axisym", result)
+
+    async def scenario() -> None:
+        runtime = JobRuntime(store)
+        assert (await runtime.get_effective_request("historical-axisym")).options.solver_mode == "circsym"
+        metadata = (await runtime.get_results("historical-axisym"))["metadata"]
+        assert metadata["solver_backend"] == "axisym"
+        assert metadata["solve_path"] == "axisymmetric-meridian"
+        assert metadata["axisym"] == {"solver_mode": "circsym"}
+        assert (await runtime.get_job("historical-axisym"))["status"] == "complete"
+        await runtime.shutdown()
+
+    asyncio.run(scenario())

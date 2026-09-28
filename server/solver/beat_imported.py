@@ -1067,7 +1067,6 @@ def solve_imported_beat_from_msh_text(
         "solver_backend": "beat",
         "solver_mode": "full_3d",
         "solve_path": "full-3d",
-        "axisymmetric_eligibility_reasons": ["imported geometry solves full 3-D only"],
         "solver_engine": {
             "engine": beat_engine_name(backend),
             "package": "hornlab-beat-bem",

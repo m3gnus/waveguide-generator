@@ -558,9 +558,8 @@ def observation_frame_basis(config: Any) -> dict[str, Any] | None:
     disagreeing with the solve the first time a horn sits in a deep cabinet --
     the case ``_gmsh22_observation_frame`` documents at length.
 
-    Returns ``None`` for a backend that has no explicit frame (the axisymmetric
-    path, whose geometry is its own frame), so the field is absent rather than
-    invented.
+    Returns ``None`` for a backend that has no explicit frame, so the field is
+    absent rather than invented.
     """
 
     frame = getattr(config, "frame_override", None)

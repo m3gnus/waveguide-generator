@@ -35,7 +35,6 @@ const capabilities = (engines: ReturnType<typeof engine>[], resolvedDefault = 'b
     // component started judging AUTO against the planned order rather than
     // against one active backend.
     full3dOrder: ['metal', 'beat-metal', 'beat-cpu', 'bempp', 'dryrun'],
-    axisymmetricRunner: 'axisym',
   },
 });
 

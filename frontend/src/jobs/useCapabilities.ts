@@ -43,7 +43,6 @@ const NO_ENGINE_SELECTION: Readonly<EngineSelection> = Object.freeze({
   default: 'auto',
   resolvedDefault: null,
   full3dOrder: Object.freeze([]),
-  axisymmetricRunner: '',
 });
 const plannerSupportByClient = new WeakMap<QueryClient, string>();
 
@@ -106,9 +105,8 @@ export function accuracyEngine(engine: string, accuracy: 'fast' | 'accurate', en
 export function usePlannedBackendCapabilities(): readonly EngineCapability[] {
   const engine = useSolveOptionsStore((state) => state.engine);
   const accuracy = useSolveOptionsStore((state) => state.accuracy);
-  const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const { engines, engineSelection } = useCapabilities();
-  return plannedBackendCapabilities(accuracyEngine(engine, accuracy, engines), engines, engineSelection, solverMode);
+  return plannedBackendCapabilities(accuracyEngine(engine, accuracy, engines), engines, engineSelection);
 }
 
 /**

@@ -63,7 +63,15 @@ explicit Metal-BEM selection that starts no BEAT worker. Use an isolated
 worker registry and application data directory. Source-suite or wheel-level
 lifecycle results do not close the installed-app and physical-platform gates.
 
-## Apple Silicon owned runner
+## Historical Axisymmetric qualification (removed 2026-09-28)
+
+The Axisymmetric commands and comparisons in this section document the retired
+solver. They are retained as historical evidence and are no longer live WG
+gates: WG no longer offers the mode, and the tests and scripts they name may
+not exist in current module checkouts. Do not run them as part of a release
+wave.
+
+### Apple Silicon owned runner (historical)
 
 Build the feature-current native helper, then run the end-to-end formulation and
 domain comparison:
@@ -104,7 +112,7 @@ python -m pytest \
   -q
 ```
 
-## Windows owned runner
+### Windows owned runner (historical)
 
 Install the release-candidate checkouts into the WG venv. Metal/Swift is not
 required and must remain unavailable without affecting Axisymmetric:
@@ -127,7 +135,7 @@ assembly and field backends, total and per-frequency benchmark time, pass/skip
 counts, and full tracebacks for failures. Expected skips are Metal-only tests;
 portable CircSym physics and both cross-OS goldens must run, not skip.
 
-## Cross-solver coupled infinite-baffle gate
+### Cross-solver coupled infinite-baffle gate (historical)
 
 On a host with both packages installed:
 
@@ -142,7 +150,7 @@ python -m pytest \
 This gate covers the Airy pattern, aperture continuity, rear silence, and the
 absolute amplitude/phase convention shared with CircSym.
 
-## External axisymmetric reference status
+### External axisymmetric reference status (historical)
 
 **Closed for the axisymmetric infinite baffle, 2026-09-03.** An independent
 ABEC3 reference now exists and agrees on absolute level, not only on pattern.
@@ -192,7 +200,7 @@ in the fixture, so `compare.py` re-solves only our side and re-reports every
 number above. Regenerating the ABEC side does need ABEC3 (F5 then F7 by hand --
 it exposes no command line), and that is the only manual step.
 
-### What this does and does not license
+#### What this does and does not license
 
 It validates **one path**: the CircSym/axisymmetric coupled infinite baffle,
 against one external solver, on one body of revolution. Say that, and no more.
@@ -212,9 +220,10 @@ remain mandatory. They are still not ABEC validation, and describing them that
 way is still wrong -- what changed is that the CircSym path now has a real
 external reference to cite instead.
 
-### Feeding an ABEC mesh to our solvers
+## Feeding an ABEC mesh to our solvers
 
-Three preparation steps are mandatory, and every one of them fails quietly. A
+These steps were learned on the historical Axisymmetric comparison above and
+apply to any future ABEC comparison, including a full-3D one. Three preparation steps are mandatory, and every one of them fails quietly. A
 harness that skips any of them produces a confident, wrong verdict about our
 engine.
 
@@ -265,9 +274,4 @@ every case the default stays 343.0, so a harness that leaves it alone runs
 - Exact four repository SHAs and whether each worktree was clean.
 - Machine, OS/build, CPU/GPU/OpenCL device, RAM, and package versions.
 - Passed/failed/skipped totals with reasons for every skip.
-- Axisymmetric/full/quarter maximum SPL, phase, and pattern deltas.
-- Closed-body Axisymmetric/full-3D level, phase, pattern, and DI deltas at 1 and
-  16 kHz.
-- Coupled-baffle CircSym/3-D and BEMPP/CircSym maximum deltas.
-- CircSym benchmark JSON and compute-backend diagnostics.
 - Stop/cancellation result, including observed maximum response latency.

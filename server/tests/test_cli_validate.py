@@ -172,21 +172,6 @@ def test_validate_accepts_the_canonical_http_solve_request(
     assert report["errors"] == []
 
 
-def test_path_prediction_uses_planner_axisymmetric_decision() -> None:
-    from server.cli import validate
-
-    summary = validate._solve_path_summary(
-        {
-            "solver_plan": {
-                "formulation": "axisymmetric",
-                "eligibility_reasons": [],
-            }
-        }
-    )
-
-    assert summary == {"predicted": "axisymmetric-meridian", "reasons": []}
-
-
 def test_path_prediction_reports_planner_full_3d_fallback() -> None:
     from server.cli import validate
 

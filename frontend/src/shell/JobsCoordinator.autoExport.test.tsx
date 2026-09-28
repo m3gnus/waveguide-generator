@@ -20,7 +20,7 @@ vi.mock('../results/exporters', () => ({
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
     engines: [],
-    engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: [], axisymmetricRunner: 'axisym' },
+    engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: [] },
     error: null,
     isLoading: false,
   }),

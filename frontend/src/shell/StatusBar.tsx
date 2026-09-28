@@ -12,7 +12,7 @@ import { usePreferences, type Preferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
-import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode, type SolverMode } from '../stores/solveOptions';
+import { parseFrequencyList, useSolveOptionsStore, type FrequencyMode } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { previewErrorMessage, previewMeshMetrics } from '../viewport/presentation';
 import { Icon } from './icons';
@@ -68,24 +68,13 @@ export function engineStatusLabel(
   engines: readonly EngineCapability[],
   engineSelection: Readonly<EngineSelection>,
   selectedEngine: string,
-  solverMode: SolverMode,
   isLoading = false,
 ): string {
   let effectiveEngine = selectedEngine.toLowerCase();
   try {
-    effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection }, solverMode);
+    effectiveEngine = resolveEngine(selectedEngine, { engines, engineSelection });
   } catch {
-    // A forced meridian solve cannot fall back to the selected full-3D engine.
-    // Name the advertised dependency that is offline instead of implying AUTO
-    // or an explicit full-3D selection remains the path that will run.
-    const requested = selectedEngine.trim().toLowerCase();
-    const requestedIsKnown = requested === 'auto'
-      || engines.some((item) => item.name.toLowerCase() === requested);
-    if (solverMode === 'circsym' && requested !== 'dryrun' && requestedIsKnown) {
-      effectiveEngine = engineSelection.axisymmetricRunner.trim().toLowerCase() || 'axisym';
-    } else {
-      return `${effectiveEngine.toUpperCase()} · INVALID`;
-    }
+    return `${effectiveEngine.toUpperCase()} · INVALID`;
   }
   const engine = engines.find((item) => item.name.toLowerCase() === effectiveEngine);
   if (engine) return `${engine.name.toUpperCase()} · ${engine.available ? engine.version ?? 'READY' : 'OFFLINE'}`;
@@ -105,7 +94,6 @@ export function StatusBar() {
   const filename = useDocumentStore((state) => state.filename);
   const selectedEngine = useSolveOptionsStore((state) => state.engine);
   const accuracy = useSolveOptionsStore((state) => state.accuracy);
-  const solverMode = useSolveOptionsStore((state) => state.solverMode);
   const frequencyMode = useSolveOptionsStore((state) => state.frequencyMode);
   const frequencyListText = useSolveOptionsStore((state) => state.frequencyListText);
   const preferences = usePreferences();
@@ -115,10 +103,10 @@ export function StatusBar() {
   // naming an engine that would refuse it.
   const cadPlan = useImportedSolvePlan(mode === 'cad').plan;
   const engineLabel = mode !== 'cad'
-    ? engineStatusLabel(engines, engineSelection, accuracyEngine(selectedEngine, accuracy, engines), solverMode, isLoading)
+    ? engineStatusLabel(engines, engineSelection, accuracyEngine(selectedEngine, accuracy, engines), isLoading)
     : cadPlan && cadPlan.engine === null
       ? `${selectedEngine.toUpperCase()} · NO CAD SOLVE`
-      : engineStatusLabel(engines, engineSelection, cadPlan?.engine ?? selectedEngine, 'full_3d', isLoading);
+      : engineStatusLabel(engines, engineSelection, cadPlan?.engine ?? selectedEngine, isLoading);
   const previewError = preview.error ? previewErrorMessage(preview.error) : null;
   const meshMetrics = previewMeshMetrics(preview.frame);
   const cadTriangles = cadReturn.ingestRecord?.mesh?.stats.triangle_count;

@@ -355,7 +355,7 @@ async def bempp_worker_prewarm(
     revision called ``resolve_auto_engine()`` on its own thread and so ran a
     second ``detect_engines()`` 2 ms after ``EngineRegistry.prewarm`` began the
     first -- two concurrent cold probes, because ``lru_cache`` does not
-    serialise a miss and ``circsym_status`` is not cached at all.
+    serialise a miss.
     ``capabilities()`` is guarded by an ``asyncio.Lock``, so awaiting it here
     joins the one probe instead of racing it.
     """
