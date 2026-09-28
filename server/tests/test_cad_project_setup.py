@@ -129,11 +129,11 @@ def _identity_setup(source_id: str, rigid: float) -> dict[str, Any]:
     }
 
 
-def _select_engine(harness: Harness, engine: str) -> None:
+def _select_engine(harness: Harness, engine: str, accuracy: str = "fast") -> None:
     from server.cadlink.api import SolverSelectionRequest, put_solver_selection
 
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-    asyncio.run(put_solver_selection(SolverSelectionRequest(engine=engine), request))
+    asyncio.run(put_solver_selection(SolverSelectionRequest(engine=engine, accuracy=accuracy), request))
 
 
 # -- project setups ------------------------------------------------------------------
@@ -264,6 +264,42 @@ def test_the_engine_is_the_one_selected_in_wg(harness: Harness) -> None:
     # The operation names the exact setup it was solved with, engine included.
     revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
     assert revision["options"]["engine"] == "metal"
+
+
+@pytest.mark.parametrize(
+    ("stored_accuracy", "shared_accuracy"),
+    [("fast", "accurate"), ("accurate", "fast")],
+)
+def test_backend_preparation_uses_shared_accuracy_in_both_directions(
+    harness: Harness, stored_accuracy: str, shared_accuracy: str,
+) -> None:
+    design_id, lineage = _project(harness, 60.0)
+    setup = _setup(engine="auto")
+    setup["options"]["accuracy"] = stored_accuracy
+    _record_setup(harness, lineage, setup)
+    _select_engine(harness, "auto", shared_accuracy)
+    bundle_path, manifest = _project_return(harness, "choice", design_id, lineage)
+    _accept(harness.store, "cmd-choice", bundle_path, manifest)
+
+    summary = harness.prepare("cmd-choice")
+
+    assert harness.submitted[-1].options.accuracy == shared_accuracy
+    revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
+    assert revision["options"]["accuracy"] == shared_accuracy
+
+
+def test_backend_preparation_defaults_older_selection_and_setup_to_fast(harness: Harness) -> None:
+    design_id, lineage = _project(harness, 60.0)
+    _record_setup(harness, lineage, _setup(engine="auto"))
+    harness.store.set_setting("solver_selection", {"engine": "auto"})
+    bundle_path, manifest = _project_return(harness, "legacy", design_id, lineage)
+    _accept(harness.store, "cmd-legacy", bundle_path, manifest)
+
+    summary = harness.prepare("cmd-legacy")
+
+    assert harness.submitted[-1].options.accuracy == "fast"
+    revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
+    assert revision["options"].get("accuracy", "fast") == "fast"
 
 
 def test_a_model_with_no_recorded_setup_waits_for_its_settings(harness: Harness) -> None:

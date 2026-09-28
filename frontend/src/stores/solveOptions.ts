@@ -22,8 +22,6 @@ export type SymmetryMode = 'auto' | 'full' | 'half_xz' | 'half_yz' | 'quarter';
 export type SolverMode = 'auto' | 'full_3d' | 'circsym';
 export type FrequencyMode = 'range' | 'list';
 export type SolveAccuracy = 'fast' | 'accurate';
-export const accuracyForEngine = (engine: string): SolveAccuracy =>
-  engine === 'beat' || engine.startsWith('beat-') ? 'accurate' : 'fast';
 /**
  * The coordinate a rigid ground plane bounds. Never an axis-pair token: `xy`
  * already means legacy bi-symmetry in WG and x-and-y mirrors in BEAT, so the
@@ -317,9 +315,7 @@ export function normalizePersistedSolveOptions(
   const storedSolverMode = oneOf(stored.solverMode, SOLVER_MODES, fallback.solverMode);
   return {
     engine: typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
-    accuracy: (typeof stored.engine === 'string' && stored.engine !== 'auto')
-      ? accuracyForEngine(stored.engine)
-      : oneOf(stored.accuracy, ['fast', 'accurate'], fallback.accuracy),
+    accuracy: oneOf(stored.accuracy, ['fast', 'accurate'], 'fast'),
     // AUTO historically opted eligible designs into Axisymmetric. It is now a
     // legacy spelling of Full 3D so old machine-local settings cannot silently
     // select a different formulation after upgrade.
@@ -376,7 +372,7 @@ const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
 
 export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, get) => withEditSignals(get, {
   ...defaultSolveOptions(),
-  setEngine: (engine) => set({ engine, accuracy: engine === 'auto' ? get().accuracy : accuracyForEngine(engine) }),
+  setEngine: (engine) => set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) }),
   setAccuracy: (accuracy) => set({ accuracy, engine: 'auto' }),
   setSolverMode: (solverMode) => set({ solverMode }),
   setSymmetry: (symmetry) => set({ symmetry }),
@@ -469,16 +465,20 @@ export function restorePolarUiFromAthBlocks(blocks: unknown): void {
  *
  * Covers ATH's directivity blocks and WG's own `WG.Solve` block in one call,
  * so a design carries the sweep, mesh policy, and measurement origin it was
- * saved with. Settings the file is silent about are left as they are.
+ * saved with. Settings the file is silent about are left as they are, except
+ * accuracy: designs predating the choice mean Fast.
  */
 export function restoreSolveSettingsFromBlocks(blocks: unknown): void {
   restorePolarUiFromAthBlocks(blocks);
   const solve = wgSolveOverrides(blocks);
-  if (!solve) return;
+  if (!solve) {
+    useSolveOptionsStore.setState({ accuracy: 'fast' });
+    return;
+  }
   const { accuracy, observationOrigin, sphericalSampling, fieldPlane, ...flat } = solve;
   useSolveOptionsStore.setState((state) => ({
     ...flat,
-    ...(accuracy && state.engine === 'auto' ? { accuracy } : {}),
+    accuracy: accuracy ?? 'fast',
     polar: {
       ...state.polar,
       ...(observationOrigin !== undefined ? { observationOrigin } : {}),

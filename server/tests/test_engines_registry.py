@@ -61,6 +61,23 @@ def test_accurate_resolves_ready_beat_gpu_then_cpu(available: set[str], expected
     assert resolved.engine_name == expected
     assert resolved.request.options.accuracy == "accurate"
     assert resolved.symmetry_metadata["solver_plan"]["accuracy"] == "accurate"
+    if expected == "beat-cpu":
+        assert resolved.symmetry_metadata["solver_plan"]["fallback_reason"] == (
+            "Accurate ran on BEAT CPU because no GPU backend was ready"
+        )
+    else:
+        assert "fallback_reason" not in resolved.symmetry_metadata["solver_plan"]
+
+
+def test_explicit_beat_with_axisymmetric_mode_keeps_fast_portable_runner() -> None:
+    engine_registry = registry.EngineRegistry(
+        detector=lambda: [registry.EngineInfo("axisym", True, "ready", "1")],
+        factory=lambda _name: object(),
+    )
+    request = _planner_request(engine="beat-cpu", solver_mode="circsym")
+    resolved = asyncio.run(resolve_submission(request, engine_registry))
+    assert resolved.engine_name == "axisym"
+    assert resolved.request.options.accuracy == "fast"
 
 
 def test_accurate_refuses_missing_beat_instead_of_switching_to_metal() -> None:
@@ -1470,6 +1487,44 @@ def test_real_runtime_persists_advisory_mesh_warning_in_job_log(
         assert job["status"] == "complete"
         assert job["mesh_stats"]["warnings"] == [warning]
         assert warning in job["log_tail"]
+        await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_accurate_cpu_fallback_is_recorded_in_job_result_and_log(tmp_path: Path) -> None:
+    class BeatCpu:
+        name = "beat-cpu"
+
+        async def run(self, request, *, cancel_cb, stage_cb, artifact_cb):
+            cancel_cb()
+            await artifact_cb("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n", {"triangle_count": 7})
+            return EngineRunResult(results={
+                "frequencies": [500.0],
+                "directivity": {},
+                "spl_on_axis": {"frequencies": [500.0], "spl": [90.0]},
+                "metadata": {"beat": {"formulation": "burton_miller"}},
+            })
+
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "accurate-cpu.db"),
+            engine_registry=registry.EngineRegistry(
+                detector=lambda: [registry.EngineInfo("beat-cpu", True, "ready", "1")],
+                factory=lambda _name: BeatCpu(),
+            ),
+        )
+        request = _planner_request()
+        request.options.accuracy = "accurate"
+        job_id = await runtime.submit(request)
+        await runtime.wait_idle()
+        job = await runtime.get_job(job_id)
+        reason = "Accurate ran on BEAT CPU because no GPU backend was ready"
+        assert job["status"] == "complete"
+        assert reason in job["log_tail"]
+        assert runtime.store.get_job_row(job_id)["task_metadata"]["solver_plan"]["fallback_reason"] == reason
+        result = runtime.store.get_results(job_id)
+        assert result["metadata"]["solve_execution"]["fallback_reason"] == reason
         await runtime.shutdown()
 
     asyncio.run(scenario())

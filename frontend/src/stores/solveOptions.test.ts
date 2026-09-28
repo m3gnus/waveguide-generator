@@ -76,7 +76,18 @@ describe('solve and directivity options', () => {
     useSolveOptionsStore.getState().setEngine('bempp');
     expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'bempp', accuracy: 'fast' });
     useSolveOptionsStore.getState().setEngine('beat-metal');
-    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-metal', accuracy: 'accurate' });
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-metal', accuracy: 'fast' });
+  });
+
+  it('loads legacy explicit BEAT and Axisymmetric settings as Fast without changing the engine', async () => {
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    localStorage.setItem('waveguide-v2-solve-options', JSON.stringify({
+      state: { engine: 'beat-cpu', solverMode: 'circsym' }, version: 0,
+    }));
+    await useSolveOptionsStore.persist.rehydrate();
+    expect(useSolveOptionsStore.getState()).toMatchObject({ engine: 'beat-cpu', accuracy: 'fast', solverMode: 'circsym' });
+    expect(useSolveOptionsStore.getState().options()).toMatchObject({ engine: 'beat-cpu', solver_mode: 'circsym' });
+    expect(useSolveOptionsStore.getState().options().accuracy).toBeUndefined();
   });
 
   it('persists solver path as a machine-local execution choice', () => {

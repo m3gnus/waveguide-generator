@@ -153,12 +153,12 @@ export function putProjectSetup(
   return jsonRequest('/api/cadlink/project-setups', jsonBody('PUT', request), fetcher);
 }
 
-/** Record the engine selected in WG's solver selector. */
+/** Record the shared accuracy and engine selection for CAD preparation. */
 export function putSolverSelection(
-  engine: string,
+  selection: { engine: string; accuracy: 'fast' | 'accurate' },
   fetcher: typeof fetch = fetch,
-): Promise<{ engine: string }> {
-  return jsonRequest('/api/cadlink/solver-selection', jsonBody('PUT', { engine }), fetcher);
+): Promise<{ engine: string; accuracy: 'fast' | 'accurate' }> {
+  return jsonRequest('/api/cadlink/solver-selection', jsonBody('PUT', selection), fetcher);
 }
 
 /** A taken inbox file WG refused that has no operation row of its own

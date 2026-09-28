@@ -80,7 +80,8 @@ function bool(value: unknown): boolean | undefined {
  *
  * `null` means the file has no `WG.Solve` block at all, and an absent key
  * inside one means the same thing for that setting: the user's current choice
- * stands. Nothing here is repaired -- a value that cannot be read as written
+ * stands, except that an absent Accuracy is the legacy Fast choice. Nothing
+ * else here is repaired -- a value that cannot be read as written
  * is dropped rather than guessed at, so a hand-edited file can never quietly
  * change a solve into one the author did not describe.
  */
@@ -89,7 +90,7 @@ export function wgSolveOverrides(blocks: unknown): Partial<WgSolveSettings> | nu
   if (!source) return null;
   const overrides: Partial<WgSolveSettings> = {};
   const accuracy = oneOf(source.Accuracy, ['fast', 'accurate']);
-  if (accuracy) overrides.accuracy = accuracy;
+  overrides.accuracy = accuracy ?? 'fast';
 
   // Legacy blocks may contain Engine. It is intentionally ignored: backend
   // selection belongs to this machine and must not be overwritten by opening

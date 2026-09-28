@@ -13,7 +13,7 @@ import base64
 from collections import deque
 from contextlib import asynccontextmanager
 import copy
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 import importlib.metadata
 import inspect
@@ -738,6 +738,9 @@ def _axisymmetric_symmetry_metadata(request: SolveRequest) -> dict[str, Any]:
     }
 
 
+_ACCURATE_CPU_FALLBACK = "Accurate ran on BEAT CPU because no GPU backend was ready"
+
+
 async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> tuple[SolveRequest, str | None]:
     """Resolve the shared accuracy choice without changing an explicit engine.
 
@@ -764,7 +767,7 @@ async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> t
         if info is not None and info.available:
             request = request.model_copy(deep=True)
             request.options.engine = name
-            return request, name
+            return request, _ACCURATE_CPU_FALLBACK if name == "beat-cpu" else None
     raise EngineUnavailableError(
         "Accurate requires a ready BEAT GPU or BEAT CPU backend. "
         "Enable BEAT, or choose Fast."
@@ -791,7 +794,7 @@ async def resolve_submission(
             "imported geometry must be prepared by JobRuntime.submit",
         )
 
-    request, _ = await _accuracy_engine(request, engine_registry)
+    request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {engine_name}")
@@ -905,6 +908,8 @@ async def resolve_submission(
             ),
             "eligibility_reasons": axisym_reasons,
         }
+        if cpu_fallback is not None:
+            symmetry_metadata["solver_plan"]["fallback_reason"] = cpu_fallback
     if request.options.accuracy == "accurate":
         if resolved_quadrants == 12:
             raise SymmetryValidationError(
@@ -1349,6 +1354,28 @@ async def imported_engine_verdict(
     return ImportedEngineVerdict(info.name, label, True)
 
 
+def _imported_capabilities(
+    capabilities: tuple[EngineInfo, ...] | list[EngineInfo], accuracy: str
+) -> dict[str, EngineInfo]:
+    """Expose imported BEAT accelerators only for an Accurate request."""
+
+    return {
+        info.name: replace(info, geometry_sources=(*info.geometry_sources, "imported"))
+        if accuracy == "accurate" and info.name in {"beat-cuda", "beat-rocm", "beat-metal"}
+        and "imported" not in info.geometry_sources else info
+        for info in capabilities
+    }
+
+
+def _imported_accuracy(request: SolveRequest) -> str:
+    """The choice relevant to imported capability declarations, after explicit precedence."""
+
+    engine = request.options.engine
+    if engine != "auto" and engine != "beat" and not engine.startswith("beat-"):
+        return "fast"
+    return request.options.accuracy
+
+
 async def resolve_imported_submission(
     request: SolveRequest,
     engine_registry: EngineRegistry,
@@ -1407,7 +1434,7 @@ async def resolve_imported_submission(
             "parametric submissions resolve through resolve_submission"
         )
     original_requested = request.options.engine
-    request, _ = await _accuracy_engine(request, engine_registry)
+    request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     requested = request.options.engine
     request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     if request_refusal is not None:
@@ -1415,7 +1442,7 @@ async def resolve_imported_submission(
     if requested not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
-    declared = {info.name: info for info in await engine_registry.capabilities()}
+    declared = _imported_capabilities(await engine_registry.capabilities(), _imported_accuracy(request))
     order = full3d_engine_order()
     capable = [
         name
@@ -1547,6 +1574,8 @@ async def resolve_imported_submission(
         "reason": reason,
         "eligibility_reasons": passed_over,
     }
+    if cpu_fallback is not None:
+        metadata["solver_plan"]["fallback_reason"] = cpu_fallback
     return SubmissionResolution(
         request=request,
         engine_name=selected,
@@ -1574,7 +1603,7 @@ async def plan_imported_submission(
 
     if not isinstance(request.geometry, ImportedGeometrySource):
         raise ValueError("the imported plan resolves imported geometry only")
-    declared = {info.name: info for info in await engine_registry.capabilities()}
+    declared = _imported_capabilities(await engine_registry.capabilities(), _imported_accuracy(request))
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
     needed_features = _imported_features_needed(request.geometry)
     request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
@@ -3798,6 +3827,9 @@ class JobRuntime:
         effective_request = effective_request or request
 
         await self._append_log(job_id, f"Initializing {engine.name} solver")
+        fallback_reason = ((symmetry_metadata or {}).get("solver_plan") or {}).get("fallback_reason")
+        if fallback_reason:
+            await self._append_log(job_id, str(fallback_reason))
         for adjustment in _solver_plan_adjustments(symmetry_metadata):
             if adjustment.get("kind") == BEMPP_WALL_ADJUSTMENT_KIND:
                 await self._append_log(
@@ -4504,6 +4536,9 @@ class JobRuntime:
             )
             return {"accuracy": choice, "engine": engine, "formulation": formulation}
         metadata["solve_execution"] = execution(enriched)
+        fallback_reason = ((symmetry_metadata or {}).get("solver_plan") or {}).get("fallback_reason")
+        if fallback_reason:
+            metadata["solve_execution"]["fallback_reason"] = fallback_reason
         channels = enriched.get("channels")
         if isinstance(channels, Mapping):
             copied = {}

@@ -103,12 +103,16 @@ def snapshot_project(store: CadLinkStore, manifest: Mapping[str, Any]) -> str | 
     return str((row or {}).get("lineage_id") or "").strip() or None
 
 
-def solver_selection(store: CadLinkStore) -> str | None:
-    """The engine selected in WG's solver selector, as the frontend last recorded it."""
+def solver_selection(store: CadLinkStore) -> dict[str, str]:
+    """The shared accuracy and engine choice, as WG last recorded it."""
 
     value = store.get_setting(SOLVER_SELECTION)
     engine = value.get("engine") if isinstance(value, Mapping) else None
-    return str(engine) if isinstance(engine, str) and engine else None
+    accuracy = value.get("accuracy") if isinstance(value, Mapping) else None
+    return {
+        **({"engine": engine} if isinstance(engine, str) and engine else {}),
+        "accuracy": "accurate" if accuracy == "accurate" else "fast",
+    }
 
 
 def project_setup(
@@ -128,10 +132,11 @@ def project_setup(
     if revision is None:
         return None
     setup = validate_setup(json.loads(revision["setup_json"]))
-    engine = solver_selection(store)
-    if engine and setup.options.get("engine") != engine:
+    selection = solver_selection(store)
+    if any(setup.options.get(key, "fast" if key == "accuracy" else None) != value
+           for key, value in selection.items()):
         setup = validate_setup(
-            {**setup.model_dump(mode="json"), "options": {**setup.options, "engine": engine}}
+            {**setup.model_dump(mode="json"), "options": {**setup.options, **selection}}
         )
         revision = store.create_setup_revision(setup_content(setup), setup_digest(setup))
     return setup, str(revision["revision_id"])

@@ -118,12 +118,11 @@ _BEAT_BACKEND_KEYWORDS: dict[str, tuple[str, ...]] = {
 def beat_geometry_sources(backend: str) -> tuple[str, ...]:
     """What one BEAT backend's adapter solves (``EngineInfo.geometry_sources``).
 
-    The imported adapter passes the selected backend to the same Julia solver.
-    Its symmetry-domain, feature and preflight gates live in
-    ``resolve_imported_submission`` and ``BeatEngine``.
+    Fast keeps the established CPU-only imported declaration. Accurate may
+    select a ready accelerator through the request-specific imported planner.
     """
 
-    return ("parametric", "imported")
+    return ("parametric", "imported") if backend == BEAT_CPU_BACKEND else ("parametric",)
 
 
 def _probe_reason_is_about(backend: str, reason: str) -> bool:
@@ -876,6 +875,15 @@ class BeatEngine:
 
         return imported_beat_preflight(record, msh_text)
 
+    def _imported_refusal(self, accuracy: str) -> str | None:
+        if self.backend == BEAT_CPU_BACKEND or accuracy == "accurate":
+            return None
+        label = BEAT_BACKEND_LABELS.get(self.backend or "", self.name)
+        return (
+            f"{label} does not solve imported CAD geometry in Fast mode: "
+            "select BEAT CPU or Accurate."
+        )
+
     async def _run_imported(
         self,
         request: SolveRequest,
@@ -886,6 +894,9 @@ class BeatEngine:
         artifact_cb: ArtifactCallback | None,
         result_cb: ResultCallback | None,
     ) -> EngineRunResult:
+        refusal = self._imported_refusal(request.options.accuracy)
+        if refusal is not None:
+            raise BeatUnavailable(refusal)
         if imported_record is None:
             raise ValueError("imported BEAT solve requires its ingestion record")
         from .beat_imported import solve_imported_beat_from_msh_text

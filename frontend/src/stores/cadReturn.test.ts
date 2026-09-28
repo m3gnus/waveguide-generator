@@ -84,6 +84,25 @@ describe('CAD return store', () => {
     expect(useSolveOptionsStore.getState()).toMatchObject({ accuracy: 'accurate', engine: 'auto' });
   });
 
+  it('loads a CAD profile saved before accuracy existed as Fast', () => {
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    const saved = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
+    delete saved.profiles[0].solveSelection.accuracy;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(saved));
+    resetCadReturnStore();
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    expect(useSolveOptionsStore.getState()).toMatchObject({ accuracy: 'fast', engine: 'auto' });
+
+    delete saved.profiles[0].solveSelection;
+    localStorage.setItem(solveProfileStorageKey, JSON.stringify(saved));
+    resetCadReturnStore();
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_speaker');
+    expect(useSolveOptionsStore.getState().accuracy).toBe('fast');
+  });
+
   it('initializes complete sizes and one default channel per source', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     const state = useCadReturnStore.getState();

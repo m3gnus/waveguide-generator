@@ -8142,6 +8142,15 @@
       "SolverSelectionRequest": {
         "additionalProperties": false,
         "properties": {
+          "accuracy": {
+            "default": "fast",
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Accuracy",
+            "type": "string"
+          },
           "engine": {
             "minLength": 1,
             "title": "Engine",
@@ -10770,7 +10779,7 @@
     },
     "/api/cadlink/solver-selection": {
       "put": {
-        "description": "Record the engine selected in WG's solver selector; CAD Link never chooses one.",
+        "description": "Record WG's shared solve choice for backend-prepared CAD operations.",
         "operationId": "put_solver_selection_api_cadlink_solver_selection_put",
         "requestBody": {
           "content": {

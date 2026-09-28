@@ -553,9 +553,18 @@ def test_imported_adapter_passes_selected_backend_to_beat(
     engine = beat.BeatEngine(backend)
 
     assert engine.imported_preflight(_record(), MESH) is None
+    request = _request()
+    if backend != "cpu":
+        with pytest.raises(beat.BeatUnavailable, match="Fast mode"):
+            asyncio.run(engine.run(
+                request, cancel_cb=lambda: None, stage_cb=lambda *_: None,
+                imported_record=_record(),
+            ))
+        assert recording_beat.solves == []
+        request.options.accuracy = "accurate"
     result = asyncio.run(
         engine.run(
-            _request(),
+            request,
             cancel_cb=lambda: None,
             stage_cb=lambda *_: None,
             imported_record=_record(),
@@ -626,7 +635,7 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     imported = sorted(
         name for name, info in engines.items() if "imported" in info.geometry_sources
     )
-    assert imported == ["beat-cpu", "beat-cuda", "beat-metal", "beat-rocm", "metal"]
+    assert imported == ["beat-cpu", "metal"]
     assert engines["beat-cpu"].symmetry_domains == ("full", "half-yz", "quarter")
     assert engines["metal"].imported_features == ("passive-cardioid",)
     assert engines["beat-cpu"].imported_features == ()

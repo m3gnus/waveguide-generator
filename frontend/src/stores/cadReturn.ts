@@ -291,7 +291,7 @@ interface StoredSolveProfile {
   owner: string;
   inventory: SourceInventoryEntry[];
   settings: PersistedSolveSettings;
-  solveSelection?: { accuracy: SolveAccuracy; engine: string };
+  solveSelection?: { accuracy?: SolveAccuracy; engine: string };
 }
 
 let selectedSolveProfileKey: string | null = null;
@@ -703,9 +703,11 @@ function readStoredSolveProfiles(): StoredSolveProfile[] {
           ? { ...settings, combineEnabled: null }
           : settings,
         ...(isObject(value.solveSelection)
-          && (value.solveSelection.accuracy === 'fast' || value.solveSelection.accuracy === 'accurate')
           && typeof value.solveSelection.engine === 'string'
-          ? { solveSelection: { accuracy: value.solveSelection.accuracy, engine: value.solveSelection.engine } }
+          ? { solveSelection: {
+              accuracy: value.solveSelection.accuracy === 'accurate' ? 'accurate' as const : 'fast' as const,
+              engine: value.solveSelection.engine,
+            } }
           : {}),
       });
     }
@@ -818,7 +820,7 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
   if (index < 0) return null;
   const profile = profiles[index];
   if (!compatibleSourceInventory({ readable: true, sources: profile.inventory }, bundle)) return null;
-  if (profile.solveSelection) useSolveOptionsStore.setState(profile.solveSelection);
+  useSolveOptionsStore.setState({ accuracy: 'fast', ...profile.solveSelection });
   if (index > 0) writeStoredSolveProfiles([profile, ...profiles.filter((_, itemIndex) => itemIndex !== index)]);
   return profile.settings;
 }

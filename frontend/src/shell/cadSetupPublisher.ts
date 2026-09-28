@@ -167,7 +167,7 @@ export function startCadSetupPublisher(
   let published: string | null = null;
   let pending: CadProjectSetup | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let engine: string | null = null;
+  let solverSelection: string | null = null;
 
   const flush = () => {
     if (timer !== null) clearTimeout(timer);
@@ -203,19 +203,22 @@ export function startCadSetupPublisher(
     flush();
   };
 
-  const observeEngine = () => {
-    const next = useSolveOptionsStore.getState().engine;
-    if (next === engine) return;
-    engine = next;
-    void putSolverSelection(next, fetcher).catch(() => { if (engine === next) engine = null; });
+  const observeSolverSelection = () => {
+    const { engine, accuracy } = useSolveOptionsStore.getState();
+    const next = JSON.stringify({ engine, accuracy });
+    if (next === solverSelection) return;
+    solverSelection = next;
+    void putSolverSelection({ engine, accuracy }, fetcher).catch(() => {
+      if (solverSelection === next) solverSelection = null;
+    });
   };
 
   const unsubscribers = [
     subscribeSolveSettingsEdits(onEdit),
     useCadReturnStore.subscribe(onSelection),
-    useSolveOptionsStore.subscribe(observeEngine),
+    useSolveOptionsStore.subscribe(observeSolverSelection),
   ];
-  observeEngine();
+  observeSolverSelection();
   return () => {
     unsubscribers.forEach((unsubscribe) => unsubscribe());
     flush();

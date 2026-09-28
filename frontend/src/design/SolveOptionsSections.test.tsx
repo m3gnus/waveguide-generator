@@ -75,13 +75,14 @@ describe('solve and directivity control help', () => {
     render(<SolveOptionsControls mode="parametric" />);
     const select = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
     expect(select.value).toBe('fast');
+    expect(hoverText(select.closest('.select-row')!)).toBe('Fast: complex-k Metal (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.');
     act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
+    expect(hoverText(select.closest('.select-row')!)).toBe('Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.');
     expect(host.textContent).toContain('Accurate will use BEAT CPU');
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLSelectElement>('#solve-accuracy')?.value).toBe('accurate');
     expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
-    expect(host.textContent).toContain('Burton–Miller via BEAT');
   });
 
   it('keeps the portable axisymmetric path in machine-local solve options', () => {

@@ -2985,7 +2985,7 @@ def test_resolve_imported_submission_is_one_named_function_beside_resolve_submis
         )
 
 
-# BEAT's backends declare imported geometry too. Declaring it is not the
+# BEAT CPU declares imported geometry for Fast. Declaring it is not the
 # whole test: selection also reads the engine's symmetry domains, its imported
 # features and its adapter's preflight, and refuses a ground plane everywhere.
 
@@ -3094,7 +3094,7 @@ def test_imported_accurate_selects_ready_beat_gpu() -> None:
     request.options.accuracy = "accurate"
     beat_metal = EngineInfo(
         "beat-metal", True, "ready", "1",
-        geometry_sources=("parametric", "imported"),
+        geometry_sources=("parametric",),
         symmetry_domains=("full", "half-yz", "quarter"),
     )
     resolution = asyncio.run(
@@ -3104,6 +3104,32 @@ def test_imported_accurate_selects_ready_beat_gpu() -> None:
     assert resolution.engine_name == "beat-metal"
     assert resolution.request.options.accuracy == "accurate"
     assert resolution.request.options.engine == "beat-metal"
+
+
+@pytest.mark.parametrize(
+    ("platform", "metal_ready", "gpu", "expected"),
+    [
+        ("mac", True, "beat-metal", "metal"),
+        ("cuda", False, "beat-cuda", "beat-cpu"),
+        ("rocm", False, "beat-rocm", "beat-cpu"),
+        ("cpu", False, None, "beat-cpu"),
+    ],
+)
+def test_fast_auto_imported_resolution_keeps_legacy_platform_table(
+    platform: str, metal_ready: bool, gpu: str | None, expected: str,
+) -> None:
+    from server.jobs.runtime import resolve_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    gpu_info = [] if gpu is None else [EngineInfo(
+        gpu, True, platform, "1", geometry_sources=("parametric",),
+        symmetry_domains=("full", "half-yz", "quarter"),
+    )]
+    engines = _DeclaredRegistry(_metal(available=metal_ready), *gpu_info, _beat_cpu())
+    resolved = asyncio.run(resolve_imported_submission(request, engines))
+    assert resolved.engine_name == expected
+    assert resolved.request.options.accuracy == "fast"
 
 
 def test_imported_accurate_refuses_passive_cardioid_without_switching_to_metal() -> None:
@@ -3739,7 +3765,7 @@ def _guard_expected_capable(fixture: _GuardFixture, assembly_backend: str) -> se
     caught rather than echoed back as the prediction:
 
     * Metal mirrors every imported domain and runs the passive cardioid;
-    * BEAT mirrors full, x0-half and quarter domains, runs no campaign,
+    * BEAT CPU mirrors full, x0-half and quarter domains, runs no campaign,
       and needs a frame that leaves its mirror plane where it is;
     * BEMPP takes imported geometry only while it assembles on OpenCL, runs no
       campaign, and needs a record that shows it has no free rim;
@@ -3750,7 +3776,7 @@ def _guard_expected_capable(fixture: _GuardFixture, assembly_backend: str) -> se
         return set()
     capable = {"metal"}
     if fixture.planes != ("y0",) and not fixture.cardioid and not fixture.tilted:
-        capable.update({"beat-cpu", "beat-cuda", "beat-metal", "beat-rocm"})
+        capable.add("beat-cpu")
     if (
         assembly_backend == "opencl"
         and not fixture.cardioid

@@ -140,6 +140,17 @@ describe('opening a design does not discard remembered settings', () => {
 describe('WG.Solve config block', () => {
   beforeEach(() => { localStorage.clear(); resetSolveOptionsStore(); });
 
+  it('loads older WG and ATH designs without Accuracy as Fast', () => {
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    const olderWg = { [WG_SOLVE_BLOCK]: { items: { Symmetry: 'full', Engine: 'beat-cpu' } } };
+    expect(wgSolveOverrides(olderWg)?.accuracy).toBe('fast');
+    restoreSolveSettingsFromBlocks(olderWg);
+    expect(useSolveOptionsStore.getState()).toMatchObject({ accuracy: 'fast', engine: 'auto' });
+    useSolveOptionsStore.getState().setAccuracy('accurate');
+    restoreSolveSettingsFromBlocks({ 'Mesh.Enclosure': { items: { Depth: '0' } } });
+    expect(useSolveOptionsStore.getState().accuracy).toBe('fast');
+  });
+
   it('round-trips portable solve settings without replacing machine execution choices', () => {
     useSolveOptionsStore.setState({
       engine: 'metal',
@@ -204,7 +215,7 @@ describe('WG.Solve config block', () => {
         },
       },
     });
-    expect(overrides).toEqual({});
+    expect(overrides).toEqual({ accuracy: 'fast' });
   });
 
   it('will not restore list mode without a list that actually parses', () => {

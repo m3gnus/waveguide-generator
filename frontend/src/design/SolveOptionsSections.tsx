@@ -97,12 +97,13 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const beatGpu = engines.find((engine) => ['beat-metal', 'beat-cuda', 'beat-rocm'].includes(engine.name) && engine.available);
   const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
-    <HelpTipRow className="select-row" text="Fast uses the normal solver selection. Accurate uses BEAT's Burton–Miller formulation on a ready GPU, or BEAT CPU when no GPU backend is ready."><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
-    <p className="section-note">Accurate: Burton–Miller via BEAT — slower, needed for drivers in chambers/sheltered passages.</p>
+    <HelpTipRow className="select-row" text={store.accuracy === 'accurate'
+      ? 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.'
+      : 'Fast: complex-k Metal (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.'}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
-    {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. The accuracy choice reflects this engine. Selecting Fast or Accurate clears the override.</p>}
+    {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
-      <HelpTipRow className="select-row" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence and updates that choice."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
+      <HelpTipRow className="select-row" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available}>{engine.label || engine.name}{engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>

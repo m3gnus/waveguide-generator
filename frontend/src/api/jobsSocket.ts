@@ -51,7 +51,7 @@ export interface JobItem {
     stage_delay_ms: number;
   };
   solve_accuracy?: 'fast' | 'accurate';
-  solve_execution?: { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null } | null;
+  solve_execution?: { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null; fallback_reason?: string } | null;
   channel_solve_executions?: Record<string, { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null }>;
   has_results: boolean;
   has_mesh_artifact: boolean;

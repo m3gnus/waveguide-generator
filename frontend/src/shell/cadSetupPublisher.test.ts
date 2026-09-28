@@ -210,14 +210,20 @@ describe('CAD setup publisher', () => {
     stop();
   });
 
-  it('records the solver selection at start and whenever the selector changes', async () => {
+  it('records both accuracy and engine at start and whenever either changes', async () => {
     const { fetcher, to } = recorder();
     const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
     useSolveOptionsStore.getState().setEngine('bempp');
     useSolveOptionsStore.getState().setEngine('bempp');
     useSolveOptionsStore.getState().setEngine('metal');
+    useSolveOptionsStore.getState().setAccuracy('accurate');
     await Promise.resolve();
-    expect(to('/solver-selection')).toEqual([{ engine: 'auto' }, { engine: 'bempp' }, { engine: 'metal' }]);
+    expect(to('/solver-selection')).toEqual([
+      { engine: 'auto', accuracy: 'fast' },
+      { engine: 'bempp', accuracy: 'fast' },
+      { engine: 'metal', accuracy: 'fast' },
+      { engine: 'auto', accuracy: 'accurate' },
+    ]);
     stop();
   });
 });

@@ -2253,6 +2253,7 @@ class SolverSelectionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     engine: str = Field(min_length=1)
+    accuracy: Literal["fast", "accurate"] = "fast"
 
     @field_validator("engine")
     @classmethod
@@ -2296,11 +2297,12 @@ async def put_project_setup(payload: ProjectSetupRequest, request: Request) -> d
 async def put_solver_selection(
     payload: SolverSelectionRequest, request: Request
 ) -> dict[str, Any]:
-    """Record the engine selected in WG's solver selector; CAD Link never chooses one."""
+    """Record WG's shared solve choice for backend-prepared CAD operations."""
 
     store: CadLinkStore = request.app.state.cadlink_store
-    await asyncio.to_thread(store.set_setting, SOLVER_SELECTION, {"engine": payload.engine})
-    return {"engine": payload.engine}
+    selection = payload.model_dump()
+    await asyncio.to_thread(store.set_setting, SOLVER_SELECTION, selection)
+    return selection
 
 
 #: ``WG2_CAD_DELIVERY=0`` turns the backend's solve-command consumer off; the

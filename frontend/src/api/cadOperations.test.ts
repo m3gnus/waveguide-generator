@@ -85,12 +85,12 @@ describe('CAD operations client', () => {
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({ lineageId: 'wgl_a', inventory, setup });
   });
 
-  it('records the engine selected in WG, and nothing else', async () => {
+  it('records the shared solve selection', async () => {
     const { calls, fetcher } = recorder({ engine: 'bempp' });
-    await putSolverSelection('bempp', fetcher);
+    await putSolverSelection({ engine: 'bempp', accuracy: 'accurate' }, fetcher);
     expect(calls[0].url).toBe('/api/cadlink/solver-selection');
     expect(calls[0].init?.method).toBe('PUT');
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ engine: 'bempp' });
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({ engine: 'bempp', accuracy: 'accurate' });
   });
 
   it('lists the unfinished operations by default, and every operation on request', async () => {
