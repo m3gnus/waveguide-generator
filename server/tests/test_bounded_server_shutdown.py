@@ -114,6 +114,10 @@ class _Server:
                 continue
             lines.append(f"--- {path.name} (tail) ---")
             lines.extend(text.splitlines()[-40:])
+        stacks = self.output.with_name("stacks.txt")
+        if stacks.is_file():
+            lines.append("--- stacks.txt (native stacks of the unresponsive server) ---")
+            lines.extend(stacks.read_text(encoding="utf-8", errors="replace").splitlines()[:150])
         return "\n".join(lines)
 
 
@@ -140,6 +144,35 @@ def _http(
         return int(exc.code), exc.read()
 
 
+def _sample_stacks(server: _Server) -> None:
+    """Have a server that will not answer say where its threads are, where the OS can.
+
+    macOS ships ``sample``, which reads every thread's native stack from
+    outside; nothing in the server has to cooperate, and gmsh's C++ runtime
+    replaces the signal handlers a Python-side dump would use. The result goes
+    to ``stacks.txt`` beside the server's output, and into the failure text.
+    """
+
+    # The system tool by path: ``PATH`` can hold an unrelated ``sample``.
+    tool = "/usr/bin/sample"
+    if sys.platform != "darwin" or not os.access(tool, os.X_OK):
+        return
+    if server.process.poll() is not None:
+        return
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run(
+            [
+                tool,
+                str(server.process.pid),
+                "2",
+                "-file",
+                str(server.output.with_name("stacks.txt")),
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+
+
 def _wait_for(
     predicate: Callable[[], bool], timeout: float, what: str, server: _Server
 ) -> None:
@@ -153,6 +186,7 @@ def _wait_for(
                 f"{what}\n{server.evidence()}"
             )
         time.sleep(0.1)
+    _sample_stacks(server)
     pytest.fail(f"timed out after {timeout:.0f} s waiting for {what}\n{server.evidence()}")
 
 
@@ -164,6 +198,36 @@ def _server_log_contains(server: _Server, text: str) -> bool:
     except OSError:
         return False
     return text in log
+
+
+#: The background warmups every start schedules (``server/platform/warmup.py``).
+_START_WARMUPS = ("gmsh-session", "mesher-import", "engine-probe", "wglink-activation")
+
+
+def _wait_for_warmups_to_settle(server: _Server) -> None:
+    """Wait until this start's own background warmups have all ended.
+
+    A stop that lands while one is still running (the engine probe importing
+    BEMPP and Metal cold takes seconds on a loaded machine) is a stop during
+    startup work: the executor thread it runs on outlives the cleanup, so the
+    process is ended by the backstop and leaves its temporary directory for the
+    next start's sweep. That is correct, and it is not the clean exit a test of
+    the clean exit is about.
+    """
+
+    def settled() -> bool:
+        # This process's own output, not ``server.log``: a relaunch shares its
+        # data directory, and so that log, with the process before it.
+        try:
+            text = server.output.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+        return all(
+            f"Warmup {name} finished" in text or f"Warmup {name} did not complete" in text
+            for name in _START_WARMUPS
+        )
+
+    _wait_for(settled, START_TIMEOUT_SECONDS, "the start's warmups to settle", server)
 
 
 def _child_environment(
@@ -654,12 +718,14 @@ def test_the_next_start_sweeps_what_a_stopped_build_left_behind(
         assert earlier_recent.is_dir(), "the sweep removed a directory that may be in use"
         assert held.is_dir(), "the sweep removed a live process's directory"
         (relaunch_session,) = _sessions(temporary) - {held}
+        # Stopping mid-warmup is a different exit from the one asserted below.
+        _wait_for_warmups_to_settle(relaunch)
 
         stopped_at = relaunch.request_stop()
         _wait_for_exit(relaunch, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
         assert relaunch.process.returncode == 0, relaunch.evidence()
         # A clean exit removes its own directory rather than leaving it to a sweep.
-        assert not relaunch_session.exists()
+        assert not relaunch_session.exists(), relaunch.evidence()
         assert held.is_dir()
     finally:
         if holder.stdin is not None:
