@@ -72,9 +72,6 @@ OTHER_OPENINGS = "other-openings"
 #: coordinate plane, so a shell open on x = 0 *and* z = 0 needs this).
 OPEN_RIM_PREFIX = "open-rim-on-"
 NO_SOURCE_ON_PLANE = "no-source-on-plane"
-#: A source clear of a cut plane: its mirror image would be a second driver
-#: nothing shows the speaker has.
-SOURCE_OFF_PLANE = "source-off-plane"
 SOURCE_IDENTITY = "source-identity"
 SIDE_IDENTIFIED_SOURCE = "side-identified-source"
 SELF_INTERSECTION = "self-intersection"
@@ -88,7 +85,6 @@ CONDITIONS = (
     CROSSING,
     OTHER_OPENINGS,
     NO_SOURCE_ON_PLANE,
-    SOURCE_OFF_PLANE,
     SOURCE_IDENTITY,
     SIDE_IDENTIFIED_SOURCE,
     SELF_INTERSECTION,
@@ -247,7 +243,10 @@ def assess_cut_recovery(
     planes = geometry_cut_planes(observations)
     if observations is None or not planes:
         return CutRecovery()
-    absent = {str(item) for item in absent_sources}
+    # A source clear of the plane is allowed: one identity may own a mirrored
+    # pair of drivers (PartyMEH's MF pair), which a cut leaves one of. A pair
+    # identified as left and right is refused (SIDE_IDENTIFIED_SOURCE).
+    del absent_sources
     axis_letter = str(radiation_axis or "+z")[-1:].casefold()
     shared: list[Failure] = []
     if observations.other_open_edges:
@@ -321,17 +320,6 @@ def assess_cut_recovery(
                     f"a face lies in {words} and would solve as a wall across the cut",
                 )
             )
-        met = set(observation.sources_on_plane)
-        for source in sources:
-            source_id = str(source.get("id"))
-            if met and source_id not in met and source_id not in absent:
-                own.append(
-                    Failure(
-                        SOURCE_OFF_PLANE,
-                        f"source {source_id} does not meet {words}, so its mirror image would be "
-                        "a second driver nothing shows the speaker has",
-                    )
-                )
         if not observation.sources_on_plane:
             own.append(
                 Failure(

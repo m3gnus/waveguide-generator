@@ -723,16 +723,23 @@ def test_a_cut_on_an_oblique_plane_is_refused(tmp_path: Path) -> None:
     assert set(outcomes.values()) == {"imported_open_half_shell"}
 
 
-def test_a_driver_clear_of_the_cut_is_not_mirrored_into_a_pair(tmp_path: Path) -> None:
+def test_one_source_owning_a_mirrored_pair_is_recovered_from_its_kept_driver(tmp_path: Path) -> None:
+    """PartyMEH's MF: one identity, two drivers, the cut keeps one clear of the plane."""
+
     record = _ingest(
-        _box_bundle(tmp_path, "extra-driver", sources=["mid", "extra"], discs=((0.0, 15.0, 10.0), (-30.0, -20.0, 6.0))),
+        _box_bundle(tmp_path, "pair-one-identity", sources=["mid", "pair"], discs=((0.0, 15.0, 10.0), (-30.0, -20.0, 6.0))),
         tmp_path / "data",
     )
     decision = _decision(record)
-    [cut] = decision["cad_cuts"]
-    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.SOURCE_OFF_PLANE]
-    assert "source extra does not meet x = 0" in decision["refusal"]["message"]
-    assert decision["solver_domain"]["planes"] == []
+    assert decision["solver_domain"]["planes"] == ["x0"] and decision["refusal"] is None
+    assert "x0" not in decision["sources"]["by_id"]["pair"]["meets_planes"]
+    # The same pair named as one side's own driver is refused.
+    sided = _ingest(
+        _box_bundle(tmp_path, "pair-sided", sources=["mid", "woofer-left"], discs=((0.0, 15.0, 10.0), (-30.0, -20.0, 6.0))),
+        tmp_path / "data-sided",
+    )
+    [cut] = _decision(sided)["cad_cuts"]
+    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.SIDE_IDENTIFIED_SOURCE]
 
 
 def test_an_asymmetric_section_is_read_on_the_cad_curves() -> None:
