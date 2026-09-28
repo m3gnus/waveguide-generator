@@ -1587,9 +1587,11 @@ def ingest_bundle(
         observations = observe_record_mesh(built)
         built_inline_viewport = True
     if plan.source == DECLARATION:
-        # A declaration never overrides a failed flip condition either: the
-        # sources it mirrors must be identities a mirror may double.
-        identity = _side_identity_problem(manifest) or _source_identity_problem(built, skipped_source_ids)
+        # A declaration never overrides a failed flip condition either: a
+        # source named as one side's own driver is not one a mirror may double.
+        # (A declared linked throat is matched by its geometry contract rather
+        # than its paint, so the paint check that guards evidence is not asked.)
+        identity = _side_identity_problem(manifest)
         if identity is not None:
             raise IngestRefusal(
                 "stage 6 symmetry",
