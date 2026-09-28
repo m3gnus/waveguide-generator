@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { JobItem } from '../api/jobsSocket';
 import { summaryGroups, summaryText, type SummaryGroup } from './summary';
+import { RECOVERED_NEGATIVE_HALF, REFUSED_CUT, summaryOf, WG_QUARTER } from '../api/domainDecision.fixtures';
 import type { ResultPayload } from './types';
 
 /** Group a count the way the summary does — in the runner's locale, not en-US.
@@ -415,5 +416,37 @@ describe('summary text', () => {
       { title: 'Sweep', rows: [{ label: 'Points', value: '3' }, { label: 'Spacing', value: 'linear' }] },
     ])).toBe('RUN\n  Name: #1 · Horn\n\nSWEEP\n  Points: 3\n  Spacing: linear\n');
     expect(summaryText([])).toBe('');
+  });
+});
+
+describe('what a CAD run solved', () => {
+  const cadSource = (domainDecision: unknown): JobItem['cad_source'] => ({
+    ingest_id: 'wgi_1', design_id: null, lineage_id: null, archive_stem: null, manifest_sha256: null,
+    document_name: 'Speaker', return_state_hash: null, domain_decision: domainDecision as Record<string, unknown> | null,
+  });
+  const result: ResultPayload = { frequencies: [100, 200], metadata: {} } as ResultPayload;
+
+  it('states the recorded domain decision in the run details', () => {
+    const groups = summaryGroups({ result, job: job({ cad_source: cadSource(summaryOf(RECOVERED_NEGATIVE_HALF)) }) });
+    const domain = groups.find(({ title }) => title === 'Domain');
+    expect(domain?.tone).toBeUndefined();
+    expect(row(groups, 'Domain', 'Reading')?.value).toBe('Cut in CAD at x = 0 — recovered by mirroring (the x ≤ 0 side reflected)');
+    expect(row(groups, 'Domain', 'Solved as')?.value).toBe('half (mirrored at x = 0)');
+    expect(row(groups, 'Domain', 'Reflection')?.value).toBe('the x ≤ 0 side reflected');
+    expect(row(groups, 'Domain', 'Frame')?.value).toBe('+z forward, +y up');
+    // The Domain group sits before Solve: what was solved, then how.
+    const titles = groups.map(({ title }) => title);
+    expect(titles.indexOf('Domain')).toBeLessThan(titles.indexOf('Solve') < 0 ? Infinity : titles.indexOf('Solve'));
+
+    const quarter = summaryGroups({ result, job: job({ cad_source: cadSource(summaryOf(WG_QUARTER)) }) });
+    expect(row(quarter, 'Domain', 'Reading')?.value).toBe('Full model — solved as a quarter (x = 0 and y = 0)');
+    expect(row(quarter, 'Domain', 'Reflection')).toBeUndefined();
+  });
+
+  it('flags a refused decision, and says nothing for a run that recorded none', () => {
+    const refused = summaryGroups({ result, job: job({ cad_source: cadSource(summaryOf(REFUSED_CUT)) }) });
+    expect(refused.find(({ title }) => title === 'Domain')?.tone).toBe('warning');
+    expect(summaryGroups({ result, job: job({ cad_source: cadSource(null) }) }).find(({ title }) => title === 'Domain')).toBeUndefined();
+    expect(summaryGroups({ result, job: job() }).find(({ title }) => title === 'Domain')).toBeUndefined();
   });
 });

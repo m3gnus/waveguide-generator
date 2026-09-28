@@ -999,6 +999,8 @@ def test_legacy_imported_job_recovers_project_provenance_from_ingest(
                 "document_name": "Tritonia V",
                 "return_state_hash": "sha256:return-state",
                 "identity": None,
+                # A historical job recorded no domain decision: it states none.
+                "domain_decision": None,
             }
             assert item["cad_setup"] == runtime.store.get_job_row(job_id)[
                 "config_json"

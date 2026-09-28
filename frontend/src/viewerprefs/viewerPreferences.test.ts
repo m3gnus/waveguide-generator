@@ -8,6 +8,20 @@ import {
 } from './viewerPreferences';
 
 describe('viewer preference persistence', () => {
+  it('marks symmetry planes by default, and remembers turning it off', () => {
+    expect(DEFAULT_VIEWER_PREFERENCES.markSymmetryPlanes).toBe(true);
+    // A stored envelope from before the toggle existed keeps the default.
+    expect(parseViewerPreferences(JSON.stringify({ schemaVersion: 2, viewer: { rotateSpeed: 1 } })).markSymmetryPlanes).toBe(true);
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+    };
+    new ViewerPreferencesStore(storage).update({ markSymmetryPlanes: false });
+    expect(new ViewerPreferencesStore(storage).getSnapshot().markSymmetryPlanes).toBe(false);
+    expect(parseViewerPreferences(JSON.stringify({ schemaVersion: 2, viewer: { markSymmetryPlanes: 'yes' } })).markSymmetryPlanes).toBe(true);
+  });
+
   it('persists every viewer preference beneath one versioned namespace', () => {
     const values = new Map<string, string>();
     const storage = {

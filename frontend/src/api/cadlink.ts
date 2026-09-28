@@ -344,6 +344,9 @@ export interface CadReturnIngestRecord {
     finding_id?: string;
   };
   findings: CadReturnFinding[];
+  /** The one domain decision ingest sealed (`api/domainDecision.ts`); absent
+   * on an earlier build's record. */
+  domain_decision?: unknown;
   symmetry: {
     cut_planes?: string[];
     planes?: Record<string, { accepted?: boolean; residuals?: unknown; [key: string]: unknown }>;

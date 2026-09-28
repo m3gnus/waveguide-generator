@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
+import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
@@ -317,5 +318,21 @@ describe('CAD Solve card run status', () => {
     const text = host.querySelector('.cad-solve-run')?.textContent ?? '';
     expect(text).not.toBe('Preparing mesh');
     expect(text.toLowerCase()).toContain("isn't showing in the jobs list");
+  });
+
+  it('states the concluded domain from the record\'s decision on the model card', async () => {
+    const interpretation = {
+      contract: 'cad-domain-interpretation-v1', reading: 'reduced', planes: ['x0'], domain_planes: ['x0'],
+      looks_cut: [], ambiguous: [], evidence: { source: null, recovered: true }, reflected_planes: ['x0'], choices: [],
+    };
+    const fetcher = (async () => new Response(JSON.stringify({ ingestId: 'wgi_run', available: true, pending: null }), { status: 200 })) as typeof fetch;
+    await act(async () => root.render(<CadSolveCard
+      record={{ ...record(), domain_interpretation: interpretation, domain_decision: RECOVERED_NEGATIVE_HALF }}
+      label="PartyMEH"
+      fetcher={fetcher}
+    />));
+    expect(host.querySelector('.cad-domain-line')?.textContent)
+      .toBe('Cut in CAD at x = 0 — recovered by mirroring (the x ≤ 0 side reflected)');
+    expect(host.querySelector('[data-domain-input="cut"]')).not.toBeNull();
   });
 });

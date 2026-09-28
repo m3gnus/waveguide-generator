@@ -166,3 +166,33 @@ describe('imported source roles', () => {
     expect(imported.scene.surfaces[0].materialClass).toBe('horn-smooth');
   });
 });
+
+describe('the whole model of a reduced CAD solve', () => {
+  const negativeHalf = () => mesh([-1, 0, 0, -2, 0, 0, -1, 1, 0], [[0, 1, 2]]);
+  const positiveHalf = () => mesh([1, 0, 0, 1, 1, 0, 2, 0, 0], [[0, 1, 2]]);
+
+  it('mirrors the display tessellation of a model cut in CAD and names its mirror plane', () => {
+    const imported = createImportedMeshScene('cut.msh', negativeHalf(), 'cad', 'wgi_cut', ['x0'], {
+      fullDomain: true, cadCutPlanes: ['x0'], solvedTriangleCount: 1,
+    });
+    expect(imported.triangleCount).toBe(2);
+    expect(imported.solvedTriangleCount).toBe(1);
+    expect(imported.scene.bounds.min.x).toBe(-2);
+    expect(imported.scene.bounds.max.x).toBe(2);
+    expect(imported.scene.symmetryPlanes).toEqual(['x0']);
+  });
+
+  it('mirrors the solve mesh across every plane the solver mirrors, CAD cuts included', () => {
+    const imported = createImportedMeshScene('solve.msh', positiveHalf(), 'cad', 'wgi_cut', ['x0', 'y0']);
+    expect(imported.triangleCount).toBe(4);
+    expect(imported.scene.surfaces.filter((item) => item.solvedDomain)).toHaveLength(1);
+    expect(imported.scene.symmetryPlanes).toEqual(['x0', 'y0']);
+  });
+
+  it('marks no plane on a model solved whole, or on a parametric solver mesh', () => {
+    expect(createImportedMeshScene('whole.msh', positiveHalf(), 'cad', 'wgi_whole', [], { fullDomain: true }).scene.symmetryPlanes)
+      .toBeUndefined();
+    expect(createImportedMeshScene('param.msh', positiveHalf(), 'solver', null, ['x0']).scene.symmetryPlanes)
+      .toBeUndefined();
+  });
+});

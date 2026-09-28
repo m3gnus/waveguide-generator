@@ -3,7 +3,7 @@ import type { FrameScene } from './frameScene';
 import type { ParsedMSH } from './mshParser';
 import { ROLE_MATERIAL_FAMILY, SOURCE_ROLES } from './types';
 import type { SceneSurface, SourceRole } from './types';
-import { expandImportedSymmetry, markParametricSolvedDomain, quadrantsForCutPlanes } from './symmetryScene';
+import { completeCadCutDisplay, expandImportedSymmetry } from './symmetryScene';
 
 let nextArtifactToken = 1;
 
@@ -29,6 +29,10 @@ export interface ImportedMeshSceneOptions {
   solvedTriangleCount?: number;
   /** Stable digest/token supplied by the artifact owner when available. */
   artifactToken?: string;
+  /** With `fullDomain`: the planes the model was already cut on in CAD, so
+   * the "full" display artifact is the piece CAD kept and is mirrored across
+   * them to show the whole speaker (`api/domainDecision.ts:displaySymmetry`). */
+  cadCutPlanes?: readonly string[];
 }
 
 interface CreaseSplitGeometry {
@@ -286,9 +290,13 @@ export function createImportedMeshScene(
   }
   if (bounds.isEmpty()) bounds.set(new Vector3(-1, -1, -1), new Vector3(1, 1, 1));
   const solvedScene = { surfaces, bounds, unitsPerMetre: 1 as const, hasCurvature: false };
-  const scene = options.fullDomain
-    ? markParametricSolvedDomain(solvedScene, quadrantsForCutPlanes(symmetryCutPlanes))
+  const expanded = options.fullDomain
+    ? completeCadCutDisplay(solvedScene, options.cadCutPlanes ?? [], symmetryCutPlanes)
     : expandImportedSymmetry(solvedScene, symmetryCutPlanes);
+  // Only a CAD return marks its mirror planes: a parametric solver mesh keeps
+  // the display it always had.
+  const planes = (['x0', 'y0'] as const).filter((plane) => symmetryCutPlanes.includes(plane));
+  const scene = source === 'cad' && planes.length ? { ...expanded, symmetryPlanes: planes } : expanded;
   return {
     name,
     source,

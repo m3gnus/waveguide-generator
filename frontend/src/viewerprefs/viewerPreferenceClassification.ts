@@ -23,6 +23,7 @@ export const VIEWER_PREFERENCE_EFFECTS: Record<keyof ViewerPreferences, Preferen
   liveUpdate: 'render-refreshing',
   tintSolvedRegion: 'render-refreshing',
   sourceRoleColors: 'render-refreshing',
+  markSymmetryPlanes: 'render-refreshing',
   // Read once, when a viewport mounts, and never again for that viewport.
   startupCameraMode: 'inert',
   fieldPlaneDisplayMode: 'render-refreshing',

@@ -1,4 +1,5 @@
 import type { JobItem } from '../api/jobsSocket';
+import { decisionSummaryRows, readDomainDecision, type DomainDecisionSummary } from '../api/domainDecision';
 import { runDisplayName } from '../prefs/preferences';
 import { channelLabel } from './channelLabel';
 import { FILTER_FAMILY_SHORT, isFilterFamily } from './crossoverSpec';
@@ -91,6 +92,12 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
     }
     group(groups, 'Validity', validityRows, validity.exceedsCeiling ? 'warning' : undefined);
   }
+
+  // What a CAD run actually solved: the domain decision its job recorded --
+  // the reading, the planes mirrored, any reflection and the frame -- so a
+  // result says which model it is the answer for.
+  const decision = readDomainDecision<DomainDecisionSummary>(job?.cad_source?.domain_decision);
+  if (decision) group(groups, 'Domain', decisionSummaryRows(decision), decision.refusal ? 'warning' : undefined);
 
   const solve: SummaryRow[] = [];
   const engine = firstString(metadata('engine'), metadata('solver_backend'), metadata('solver_mode'));

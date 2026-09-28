@@ -271,3 +271,38 @@ approval carries to it. It replaced the blocking `undeclared-reduced-domain`
 finding: the non-blocking `domain-solved-as-shown`,
 `interpreted-reduced-domain` and `recovered-reduced-domain` findings record
 which reading was solved.
+
+### What the model card, the viewport and a run show (S3-3)
+
+Every reader shows the record's one decision (`domain_decision`), never its own
+derivation. The model card states the concluded reading in plain words ("Full
+model — solved as a half (x = 0)", "Cut in CAD at x = 0 — recovered by
+mirroring", "Refused: cut on an oblique plane — send the uncut model"), the
+refusal every engine meets and the flip conditions a refused cut failed, and
+offers exactly the decision's `offered_changes`. A Change is remembered for the
+project; Solve then prepares again and decides afresh, and the reading shown
+stops being used.
+
+Whenever the solver's domain is reduced, the viewport shows the **whole**
+mirrored model, for display only: the solve mesh is mirrored across every plane
+the solver mirrors, and the display tessellation of a model already cut in CAD
+(mirrored on evidence or recovered, whichever side it kept) is mirrored across
+its CAD cut planes. The piece the solver assembles keeps the solved-region
+tint, and the mirror planes are drawn faintly unless "Mark symmetry planes" is
+off. A refused or as-shown model mirrors nothing. The solver inputs never
+change, and the camera still aims along the solver frame.
+
+A job records the decision's summary; a run's details (Results → summary,
+"Domain") state the reading, the fraction and planes mirrored, any reflection,
+the frame and the decision's hash.
+
+**Frame.** A model cut in CAD (declared, mirrored on evidence or recovered)
+is still solved only as modelled (+Z). Every direction lying in the cut
+plane would map it onto a solver origin plane with a proper rotation, but the
+recovery, the reflection and the evidence checks are made on the planes as
+modelled, and the frame is confirmed before the domain is decided; allowing
+other axes would change the solve inputs of S3-1/S3-2 rather than their
+display. The model card says so ("Radiates along +z as modelled …"), and the
+frame control keeps offering the other axes disabled with their reason. A
+full model WG cuts itself is unaffected: it is cut in whichever frame the user
+confirmed.

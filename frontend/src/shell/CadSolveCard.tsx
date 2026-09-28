@@ -11,6 +11,7 @@ import { OnScreenSolveStatus } from './CadOperationsSection';
 import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
 import type { DomainInterpretation } from '../api/domainInterpretation';
+import { recordDomainDecision } from '../api/domainDecision';
 import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
 import { clearSolveStageClock, resolveEngineLabel, SolveProgressView } from './solveProgress';
@@ -224,7 +225,12 @@ export function CadSolveCard({ record, label, fetcher }: {
   const interpretation = recordInterpretation(record);
   return <section className="cad-solve-card" aria-label={`Solve ${label}`}>
     <p className="cad-solve-summary">{modelSummary(record)}</p>
-    {interpretation && <CadDomainInterpretation ingestId={record.ingest_id} interpretation={interpretation} fetcher={fetcher}/>}
+    {interpretation && <CadDomainInterpretation
+      ingestId={record.ingest_id}
+      interpretation={interpretation}
+      decision={recordDomainDecision(record)}
+      fetcher={fetcher}
+    />}
     {unlinked && <CadSolverFrame ingestId={record.ingest_id} manifestSha256={record.manifest_sha256} label={label} fetcher={fetcher}/>}
     <SettingsLine record={record}/>
     <OnScreenSolveStatus record={record}/>

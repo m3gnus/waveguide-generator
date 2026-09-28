@@ -531,6 +531,18 @@
             ],
             "title": "Document Name"
           },
+          "domain_decision": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Domain Decision"
+          },
           "identity": {
             "anyOf": [
               {

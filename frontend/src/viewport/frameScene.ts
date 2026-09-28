@@ -11,6 +11,10 @@ export interface FrameScene {
   unitsPerMetre: 1 | 1_000;
   hasCurvature: boolean;
   edgeModeUnavailable?: boolean;
+  /** The origin mirror planes a reduced CAD solve was expanded across for
+   * display (solver frame). Set only on CAD scenes; the viewport may mark
+   * them subtly. */
+  symmetryPlanes?: ReadonlyArray<'x0' | 'y0'>;
 }
 
 export function hasRenderableSurfaces(scene: FrameScene | null): boolean {

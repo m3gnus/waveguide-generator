@@ -213,6 +213,30 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('carries the domain decision a CAD run recorded, and refuses a malformed one', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    const cadSource = {
+      ingest_id: 'wgi_saved', design_id: null, lineage_id: null, archive_stem: null,
+      manifest_sha256: null, document_name: null, return_state_hash: null,
+    };
+    const decision = { contract: 'cad-domain-decision-v1', solver_domain: { planes: ['x0'], fraction: 'half' } };
+
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [job({ cad_source: { ...cadSource, domain_decision: decision } })] });
+    expect(manager.getSnapshot().jobs[0].cad_source?.domain_decision).toEqual(decision);
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 2, jobs: [job({ cad_source: { ...cadSource, domain_decision: null } })] });
+    expect(manager.getSnapshot().cursor).toBe(2);
+
+    socket.message({
+      v: 1, kind: 'snapshot', epoch: 4, cursor: 3,
+      jobs: [job({ cad_source: { ...cadSource, domain_decision: 'half' as never } })],
+    });
+    expect(manager.getSnapshot()).toMatchObject({ cursor: 2, error: 'Invalid jobs snapshot message' });
+    manager.stop();
+  });
+
   it('rejects malformed event cursors before applying a valid recovery event', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

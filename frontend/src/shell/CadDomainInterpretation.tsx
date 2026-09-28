@@ -5,6 +5,7 @@ import {
   type DomainInterpretation,
   type DomainReading,
 } from '../api/domainInterpretation';
+import { decisionReading, type DomainDecision } from '../api/domainDecision';
 
 function planeWords(plane: string): string {
   return `${plane.charAt(0)} = 0`;
@@ -79,13 +80,39 @@ function sameReading(a: DomainReading | null | undefined, b: DomainReading): boo
 }
 
 /**
+ * The model card's line, "Automatic + Change", from the record's one domain
+ * decision (`api/domainDecision.ts`): the concluded reading in plain words,
+ * the Changes it offers, and -- when every engine refuses it -- the refusal
+ * and the conditions it failed. An earlier build's record, which has no
+ * decision, keeps the interpretation's line (`domainLine`).
+ */
+export function decisionLine(decision: DomainDecision, interpretation?: DomainInterpretation | null): {
+  text: string;
+  change: boolean;
+  refused: boolean;
+  refusal: string | null;
+  failed: string[];
+  frameNote: string | null;
+  choices: DomainReading[];
+} {
+  const source = interpretation?.evidence?.source;
+  const reading = decisionReading(decision, { userChoice: source === 'user' || source === 'user-lineage' });
+  const choices = Array.isArray(decision.offered_changes) ? decision.offered_changes : interpretation?.choices ?? [];
+  return { ...reading, change: choices.length > 0, choices };
+}
+
+/**
  * The domain line on a CAD model's Solve card, with Change. Nothing here asks
  * and nothing here prepares: a Change is remembered for the model's project,
- * and Solve prepares the model again under it.
+ * and Solve prepares the model again under it -- a new preparation and a new
+ * decision; the one shown stops being used (the server refuses to reuse a
+ * preparation whose decision no longer matches).
  */
-export function CadDomainInterpretation({ ingestId, interpretation, fetcher = fetch }: {
+export function CadDomainInterpretation({ ingestId, interpretation, decision = null, fetcher = fetch }: {
   ingestId: string;
   interpretation: DomainInterpretation;
+  /** The record's sealed decision; null for an earlier build's record. */
+  decision?: DomainDecision | null;
   fetcher?: typeof fetch;
 }) {
   const [changing, setChanging] = useState(false);
@@ -116,7 +143,9 @@ export function CadDomainInterpretation({ ingestId, interpretation, fetcher = fe
       .catch(() => undefined);
     return () => { current = false; };
   }, [fetcher, ingestId]);
-  const { text, change } = domainLine(interpretation);
+  const concluded = decision ? decisionLine(decision, interpretation) : null;
+  const { text, change } = concluded ?? domainLine(interpretation);
+  const choices = concluded ? concluded.choices : interpretation.choices;
   const choose = (reading: DomainReading) => {
     const generation = ++requestGeneration.current;
     setSaving(true);
@@ -137,8 +166,14 @@ export function CadDomainInterpretation({ ingestId, interpretation, fetcher = fe
         if (generation === requestGeneration.current) setSaving(false);
       });
   };
-  return <div className="cad-domain" data-domain-reading={interpretation.reading}>
-    <p className="cad-domain-line">
+  return <div
+    className="cad-domain"
+    data-domain-reading={interpretation.reading}
+    data-domain-input={decision?.input_reading}
+    data-domain-refused={concluded?.refused ? '' : undefined}
+    data-domain-superseded={pending ? '' : undefined}
+  >
+    <p className={concluded?.refused ? 'cad-domain-line cad-domain-refused' : 'cad-domain-line'}>
       <span>{text}</span>
       {change && <>{' · '}<button
         className="link-button"
@@ -147,8 +182,13 @@ export function CadDomainInterpretation({ ingestId, interpretation, fetcher = fe
         onClick={() => setChanging(!changing)}
       >Change</button></>}
     </p>
+    {concluded?.refused && concluded.refusal && <p className="cad-detail cad-domain-refusal" role="alert">{concluded.refusal}</p>}
+    {concluded?.refused && concluded.failed.length > 0 && <ul className="cad-detail cad-domain-failed" aria-label="Why it cannot be mirrored">
+      {concluded.failed.map((item) => <li key={item}>{item}</li>)}
+    </ul>}
+    {concluded?.frameNote && <p className="cad-detail cad-domain-frame">{concluded.frameNote}</p>}
     {changing && <div className="cad-domain-choices" role="group" aria-label="Solve this model as">
-      {interpretation.choices.map((reading) => <button
+      {choices.map((reading) => <button
         key={readingWords(reading)}
         className="link-button"
         data-action="choose-domain"
@@ -159,6 +199,7 @@ export function CadDomainInterpretation({ ingestId, interpretation, fetcher = fe
     </div>}
     {pending && <p className="cad-detail cad-domain-pending" role="status">
       Solve prepares it again: {readingWords(pending).replace(/^Solve it /, '').toLowerCase()}.
+      {decision ? ' WG decides its domain afresh then; the reading above is no longer used.' : ''}
     </p>}
     {error && <p className="cad-domain-error" role="alert">Could not change how this model is read: {error}</p>}
   </div>;

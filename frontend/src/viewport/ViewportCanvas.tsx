@@ -14,6 +14,7 @@ import { useFieldPlaneStore } from './fieldPlaneStore';
 import type { FrameScene } from './frameScene';
 import { createMaterialLibrary } from './materials';
 import { SurfaceMesh } from './SurfaceMesh';
+import { planesToMark, SymmetryPlaneMarks } from './SymmetryPlaneMarks';
 import type { CameraPreset, DisplayMode, ViewportTheme } from './types';
 
 export type CameraRequest =
@@ -728,6 +729,7 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis,
   const center = useMemo(() => scene.bounds.getCenter(new Vector3()), [scene.bounds]);
   const size = useMemo(() => scene.bounds.getSize(new Vector3()), [scene.bounds]);
   const controls = useRef<OrbitControlsInstance>(null);
+  const markedPlanes = planesToMark(scene, preferences);
   const capQuad = useMemo(() => clipDefinition ? deriveCapQuad(clipDefinition, scene.bounds, {
     preferredAxisU: clipMode === 'field-plane' && fieldPlane
       ? new Vector3(...fieldPlane.axis_u)
@@ -786,6 +788,12 @@ function Scene({ scene, sceneMarker, mode, showEnclosure, clipMode, sectionAxis,
       materials={materials}
       scheduler={scheduler}
     />)}
+    {markedPlanes.length ? <SymmetryPlaneMarks
+      bounds={scene.bounds}
+      planes={markedPlanes}
+      theme={theme}
+      scheduler={scheduler}
+    /> : null}
     {capQuad && capTrusted && <mesh
       matrix={capQuad.matrix}
       matrixAutoUpdate={false}

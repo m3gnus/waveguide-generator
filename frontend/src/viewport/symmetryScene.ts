@@ -53,6 +53,28 @@ function mirroredSurface(surface: SceneSurface, axis: MirrorAxis, suffix: string
   };
 }
 
+function mirrorAxes(cutPlanes: readonly string[]): MirrorAxis[] {
+  return [
+    ...(cutPlanes.includes('x0') ? [0 as const] : []),
+    ...(cutPlanes.includes('y0') ? [1 as const] : []),
+  ];
+}
+
+function mirroredCopies(surfaces: SceneSurface[], axes: readonly MirrorAxis[]): SceneSurface[] {
+  let result = surfaces;
+  axes.forEach((axis) => {
+    const existing = result;
+    const suffix = axis === 0 ? 'x' : 'y';
+    result = [
+      ...existing,
+      ...existing
+        .filter((surface) => !liesOnPlane(surface, axis))
+        .map((surface) => mirroredSurface(surface, axis, suffix)),
+    ];
+  });
+  return result;
+}
+
 /** Expand a positive-side solver domain back to the complete physical model.
  * The original triangles remain marked as the domain actually assembled and
  * solved; reflected display-only copies are deliberately unmarked. */
@@ -60,26 +82,38 @@ export function expandImportedSymmetry(
   scene: FrameScene,
   cutPlanes: readonly string[],
 ): FrameScene {
-  const axes: MirrorAxis[] = [
-    ...(cutPlanes.includes('x0') ? [0 as const] : []),
-    ...(cutPlanes.includes('y0') ? [1 as const] : []),
-  ];
+  const axes = mirrorAxes(cutPlanes);
   if (!axes.length) return {
     ...scene,
     surfaces: scene.surfaces.map((surface) => ({ ...surface, solvedDomain: false })),
   };
-  let surfaces: SceneSurface[] = scene.surfaces.map((surface) => ({ ...surface, solvedDomain: true }));
-  axes.forEach((axis) => {
-    const existing = surfaces;
-    const suffix = axis === 0 ? 'x' : 'y';
-    surfaces = [
-      ...existing,
-      ...existing
-        .filter((surface) => !liesOnPlane(surface, axis))
-        .map((surface) => mirroredSurface(surface, axis, suffix)),
-    ];
-  });
+  const surfaces = mirroredCopies(
+    scene.surfaces.map((surface) => ({ ...surface, solvedDomain: true })),
+    axes,
+  );
   return { ...scene, surfaces, bounds: sceneBounds(surfaces) };
+}
+
+/** Complete a model that was already cut in CAD on `cadCutPlanes` for display.
+ *
+ * The display tessellation is of the model as it arrived, whichever side of
+ * each cut it kept; mirroring it across those planes shows the whole speaker
+ * the solver's reduced domain stands for. Display only: the solver's input
+ * is its own solve mesh. The piece the solver assembles -- the positive side
+ * of every plane it mirrors, `solvedPlanes` -- is then marked by triangle
+ * centroid, exactly as a WG-cut full model's display is. */
+export function completeCadCutDisplay(
+  scene: FrameScene,
+  cadCutPlanes: readonly string[],
+  solvedPlanes: readonly string[],
+): FrameScene {
+  const axes = mirrorAxes(cadCutPlanes);
+  const surfaces = mirroredCopies(
+    scene.surfaces.map((surface) => ({ ...surface, solvedDomain: false })),
+    axes,
+  );
+  const whole = axes.length ? { ...scene, surfaces, bounds: sceneBounds(surfaces) } : { ...scene, surfaces };
+  return markParametricSolvedDomain(whole, quadrantsForCutPlanes(solvedPlanes));
 }
 
 function triangleInSolvedDomain(

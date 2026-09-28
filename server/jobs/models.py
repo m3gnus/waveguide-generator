@@ -1261,6 +1261,11 @@ class CadSource(JobModel):
     document_name: str | None = None
     return_state_hash: str | None = None
     identity: CadIdentityProvenance | None = None
+    #: The domain decision the run was submitted and solved under, as the job
+    #: recorded it (``server/cadlink/domain_decision.py:decision_summary``):
+    #: what was read, the planes solved, any reflection, and the frame. Null
+    #: for a run saved before decisions existed.
+    domain_decision: dict[str, Any] | None = None
 
 
 class JobItem(JobModel):

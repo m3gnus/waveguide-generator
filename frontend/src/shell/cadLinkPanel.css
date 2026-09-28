@@ -229,5 +229,10 @@ details.cad-check[open] > summary .cad-check-chevron { transform: rotate(90deg);
 .cad-domain-choices { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 2px 0 0 12px; }
 .cad-domain-choices button[aria-pressed="true"] { font-weight: 600; }
 .cad-domain-error { margin: 2px 0 0; color: var(--red); }
+.cad-domain-refused { color: var(--red); }
+.cad-domain-refusal { margin: 2px 0 0; }
+.cad-domain-failed { margin: 2px 0 0 12px; padding-left: 12px; }
+.cad-domain-frame { margin: 2px 0 0; }
+.cad-domain[data-domain-superseded] .cad-domain-line > span { opacity: 0.6; }
 .cad-model-details { margin-top: 8px; color: var(--fg3); font-size: var(--text-base); }
 .cad-model-details summary { cursor: pointer; }

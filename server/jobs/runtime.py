@@ -4815,6 +4815,11 @@ class JobRuntime:
                     or recovered_document.get("return_state_hash")
                 ),
                 "identity": imported_metadata.get("identity"),
+                "domain_decision": (
+                    dict(imported_metadata["domain_decision"])
+                    if isinstance(imported_metadata.get("domain_decision"), Mapping)
+                    else None
+                ),
             }
         item = {
             "id": row.get("id"),

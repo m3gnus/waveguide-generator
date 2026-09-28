@@ -33,6 +33,7 @@ import { rememberCadProject } from '../stores/cadProjectMemory';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { createImportedMeshScene } from '../viewport/importedMesh';
+import { displaySymmetry } from '../api/domainDecision';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
 import { startCadSetupPublisher } from './cadSetupPublisher';
@@ -312,14 +313,19 @@ const viewportMeshUrl = (ingestId: string): string =>
   `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`;
 
 function cadDisplayScene(record: CadReturnIngestRecord, name: string, meshText: string) {
+  // The display tessellation is of the model as it arrived: whole for a model
+  // WG cut itself, the kept piece for one cut in CAD -- which is mirrored for
+  // display, so a reduced solve always shows the whole speaker.
+  const { solvedPlanes, cadCutPlanes } = displaySymmetry(record);
   return createImportedMeshScene(
     name,
     parseMSH(meshText),
     'cad',
     record.ingest_id,
-    record.symmetry.cut_planes ?? [],
+    solvedPlanes,
     {
       fullDomain: true,
+      cadCutPlanes,
       solvedTriangleCount: record.mesh?.stats.triangle_count,
       artifactToken: record.viewport_mesh?.content_sha256 ?? `${record.ingest_id}:viewport`,
     },
@@ -475,7 +481,8 @@ export async function showIngestedMeshInViewport(
         parseMSH(result.text),
         'cad',
         ingestId,
-        record.symmetry.cut_planes ?? [],
+        // Every plane the solver mirrors -- WG's own cuts and CAD cuts alike.
+        displaySymmetry(record).solvedPlanes,
         {
           solvedTriangleCount: record.mesh?.stats.triangle_count,
           artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
@@ -537,7 +544,7 @@ export async function showIngestedSolverMeshInViewport(
       parseMSH(meshText),
       'cad',
       ingestId,
-      record.symmetry.cut_planes ?? [],
+      displaySymmetry(record).solvedPlanes,
       {
         solvedTriangleCount: record.mesh?.stats.triangle_count,
         artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,

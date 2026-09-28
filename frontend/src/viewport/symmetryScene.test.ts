@@ -1,7 +1,7 @@
 import { Box3, Vector3 } from 'three';
 import { describe, expect, it } from 'vitest';
 import type { FrameScene } from './frameScene';
-import { expandImportedSymmetry, markParametricSolvedDomain, quadrantsForSolveMode } from './symmetryScene';
+import { completeCadCutDisplay, expandImportedSymmetry, markParametricSolvedDomain, quadrantsForSolveMode } from './symmetryScene';
 import type { SceneSurface } from './types';
 
 function surface(positions: number[], indices: number[]): SceneSurface {
@@ -73,5 +73,46 @@ describe('symmetry display geometry', () => {
     expect(quadrantsForSolveMode('half_yz')).toBe(14);
     expect(quadrantsForSolveMode('full')).toBe(1234);
     expect(quadrantsForSolveMode('auto', 1)).toBe(1);
+  });
+
+  it('completes a CAD half kept on the negative side and marks the piece the solver assembles', () => {
+    // The display tessellation of a model cut in CAD at x = 0 that kept x <= 0.
+    const half = scene(surface(
+      [-1, 0, 0, -2, 0, 0, -1, 1, 0],
+      [0, 1, 2],
+    ));
+    const whole = completeCadCutDisplay(half, ['x0'], ['x0']);
+
+    expect(whole.surfaces.reduce((count, item) => count + item.indices.length / 3, 0)).toBe(2);
+    expect(whole.bounds.min.x).toBe(-2);
+    expect(whole.bounds.max.x).toBe(2);
+    // The solver's reflected piece is the positive side: the mirrored copy.
+    const solved = whole.surfaces.filter((item) => item.solvedDomain);
+    expect(solved).toHaveLength(1);
+    const xs = [...solved[0].indices].map((index) => solved[0].positions[index * 3]);
+    expect(Math.min(...xs)).toBeGreaterThanOrEqual(0);
+  });
+
+  it('completes a CAD half that WG then mirrors to a quarter, marking one quadrant', () => {
+    // Kept x >= 0 in CAD; WG's own y = 0 cut is not in the display artifact.
+    const half = scene(surface(
+      [1, 1, 0, 2, 1, 0, 1, 2, 0, 1, -1, 0, 2, -1, 0, 1, -2, 0],
+      [0, 1, 2, 3, 4, 5],
+    ));
+    const whole = completeCadCutDisplay(half, ['x0'], ['x0', 'y0']);
+
+    expect(whole.surfaces.reduce((count, item) => count + item.indices.length / 3, 0)).toBe(4);
+    expect(whole.surfaces.filter((item) => item.solvedDomain).reduce((count, item) => count + item.indices.length / 3, 0)).toBe(1);
+  });
+
+  it('leaves a display that was never cut in CAD whole, marking only what is solved', () => {
+    const full = scene(surface(
+      [1, 1, 0, 2, 1, 0, 1, 2, 0, -1, 1, 0, -2, 1, 0, -1, 2, 0],
+      [0, 1, 2, 3, 4, 5],
+    ));
+    const marked = completeCadCutDisplay(full, [], ['x0']);
+    expect(marked.surfaces.reduce((count, item) => count + item.indices.length / 3, 0)).toBe(2);
+    expect(marked.bounds).toBe(full.bounds);
+    expect(marked.surfaces.find((item) => item.solvedDomain)?.indices).toHaveLength(3);
   });
 });

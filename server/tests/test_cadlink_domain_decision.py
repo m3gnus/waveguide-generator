@@ -449,7 +449,7 @@ def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Pa
     # The job records the very summary the plan showed.
     confirm_frame(_store(data_dir), record, "+z")
 
-    async def submit() -> dict[str, Any]:
+    async def submit() -> tuple[dict[str, Any], dict[str, Any]]:
         runtime = JobRuntime(
             JobStore(tmp_path / "jobs.db"),
             engine_registry=_PausedRegistry(),  # type: ignore[arg-type]
@@ -457,13 +457,19 @@ def test_preview_plan_preparation_and_job_consume_the_same_decision(tmp_path: Pa
         )
         try:
             job_id = await runtime.submit(_job_request(record))
-            return runtime.store.get_job_row(job_id)
+            return runtime.store.get_job_row(job_id), await runtime.get_job(job_id)
         finally:
             await runtime.shutdown()
 
-    job = asyncio.run(submit())
+    job, item = asyncio.run(submit())
     recorded = job["task_metadata"]["imported_geometry"]["domain_decision"]
     assert recorded == summary
+    # The run's details state the decision it was solved under: the job item
+    # every client reads carries the summary exactly as the job recorded it.
+    from server.jobs.models import JobStatusResponse
+
+    assert item["cad_source"]["domain_decision"] == summary
+    assert JobStatusResponse.model_validate(item).cad_source.domain_decision == summary
     assert job["task_metadata"]["symmetry"]["cut_planes"] == summary["solver_domain"]["planes"]
 
 

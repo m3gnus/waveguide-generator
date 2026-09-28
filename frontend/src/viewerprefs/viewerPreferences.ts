@@ -17,6 +17,9 @@ export interface ViewerPreferences {
   /** Paint each acoustic source in its CAD role colour — HF red, MF amber, LF
    * blue, port exit green — instead of the one neutral cap material. */
   sourceRoleColors: boolean;
+  /** Draw the mirror planes of a reduced CAD solve faintly on the whole
+   * model the viewport shows. Display only. */
+  markSymmetryPlanes: boolean;
   startupCameraMode: CameraProjection;
   fieldPlaneDisplayMode: FieldPlaneDisplayMode;
   fieldPlaneRangeLocked: boolean;
@@ -55,6 +58,7 @@ export const DEFAULT_VIEWER_PREFERENCES: Readonly<ViewerPreferences> = Object.fr
   liveUpdate: true,
   tintSolvedRegion: true,
   sourceRoleColors: true,
+  markSymmetryPlanes: true,
   // Orthographic projection keeps circles circular on screen and makes small
   // H/V geometry differences inspectable without perspective foreshortening.
   startupCameraMode: 'orthographic',
@@ -99,6 +103,7 @@ export function parseViewerPreferences(raw: string | null): ViewerPreferences {
       liveUpdate: typeof stored.liveUpdate === 'boolean' ? stored.liveUpdate : DEFAULT_VIEWER_PREFERENCES.liveUpdate,
       tintSolvedRegion: typeof stored.tintSolvedRegion === 'boolean' ? stored.tintSolvedRegion : DEFAULT_VIEWER_PREFERENCES.tintSolvedRegion,
       sourceRoleColors: typeof stored.sourceRoleColors === 'boolean' ? stored.sourceRoleColors : DEFAULT_VIEWER_PREFERENCES.sourceRoleColors,
+      markSymmetryPlanes: typeof stored.markSymmetryPlanes === 'boolean' ? stored.markSymmetryPlanes : DEFAULT_VIEWER_PREFERENCES.markSymmetryPlanes,
       startupCameraMode: stored.startupCameraMode === 'orthographic' || stored.startupCameraMode === 'perspective'
         ? stored.startupCameraMode
         : DEFAULT_VIEWER_PREFERENCES.startupCameraMode,

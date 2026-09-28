@@ -173,6 +173,10 @@ export interface CadSource {
   document_name: string | null;
   return_state_hash: string | null;
   identity?: CadIdentityProvenance | null;
+  /** The domain decision the run was solved under, as the job recorded it
+   * (`api/domainDecision.ts:DomainDecisionSummary`); null for a run saved
+   * before decisions existed. */
+  domain_decision?: Record<string, unknown> | null;
 }
 
 export interface JobsSnapshot {
@@ -306,7 +310,8 @@ function isCadSource(value: unknown): value is CadSource {
       && (value.identity.solver_anchor_instance_id === null || typeof value.identity.solver_anchor_instance_id === 'string')
       && Array.isArray(value.identity.instances)
       && Array.isArray(value.identity.drive_channels)
-    ));
+    ))
+    && (!hasOwn(value, 'domain_decision') || value.domain_decision === null || isRecord(value.domain_decision));
 }
 
 function isCadSetup(value: unknown): value is CadSetup {
