@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
+import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
@@ -68,29 +69,139 @@ describe('solve and directivity control help', () => {
   it('uses one accuracy control and store in parametric and CAD Link modes', () => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [
-        { name: 'beat-metal', available: false, reason: 'offline', version: null, fast_paths: [] },
-        { name: 'beat-cpu', available: true, reason: null, version: 'test', fast_paths: [] },
+        { name: 'beat-cpu', available: true, reason: null, version: 'test', fast_paths: [], formulations: ['full-3d'] },
       ],
+      engineSelection: {
+        default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'], axisymmetricRunner: 'axisym',
+      },
+      cpuPreparationInFlight: false,
     });
     render(<SolveOptionsControls mode="parametric" />);
     const select = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
     expect(select.value).toBe('fast');
-    expect(hoverText(select.closest('.select-row')!)).toBe('Fast: complex-k Metal (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.');
+    expect(hoverText(select.closest('.select-row')!)).toBe('Fast: BEAT CPU. Good for locating resonances.');
     act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
     expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
-    expect(hoverText(select.closest('.select-row')!)).toBe('Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.');
+    expect(hoverText(select.closest('.select-row')!)).toBe('Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions. Runs via BEAT CPU — slower; no GPU backend ready.');
     expect(host.textContent).toContain('Accurate will use BEAT CPU');
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLSelectElement>('#solve-accuracy')?.value).toBe('accurate');
     expect(host.querySelector('#cad-solve-engine')).not.toBeNull();
+    expect(hoverText(host.querySelector('#solve-accuracy')!.closest('.select-row')!)).toContain('Prepare the CAD return');
+  });
+
+  it.each([
+    {
+      name: 'Apple Silicon', ready: ['metal', 'beat-metal', 'beat-cpu', 'bempp'], resolvedDefault: 'metal',
+      parametricFast: 'Fast: Metal, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.',
+      cadFastEngine: 'metal', accurateEngine: 'beat-metal', cadAccurateEngine: 'beat-metal',
+    },
+    {
+      name: 'Windows with CUDA', ready: ['beat-cuda', 'beat-cpu', 'bempp'], resolvedDefault: 'beat-cuda',
+      parametricFast: 'Fast: BEAT CUDA. Good for locating resonances.',
+      cadFastEngine: 'beat-cpu', accurateEngine: 'beat-cuda', cadAccurateEngine: 'beat-cuda',
+    },
+    {
+      name: 'Windows CPU-only', ready: ['bempp', 'beat-cpu'], resolvedDefault: 'bempp',
+      parametricFast: 'Fast: BEMPP, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.',
+      cadFastEngine: 'beat-cpu', accurateEngine: 'beat-cpu', cadAccurateEngine: 'beat-cpu',
+    },
+    {
+      name: 'Linux with ROCm', ready: ['beat-rocm', 'beat-cpu', 'bempp'], resolvedDefault: 'beat-rocm',
+      parametricFast: 'Fast: BEAT ROCm. Good for locating resonances.',
+      cadFastEngine: 'beat-cpu', accurateEngine: 'beat-rocm', cadAccurateEngine: 'beat-rocm',
+    },
+    {
+      name: 'no BEAT backend', ready: ['bempp'], resolvedDefault: 'bempp',
+      parametricFast: 'Fast: BEMPP, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.',
+      cadFastEngine: null, accurateEngine: null, cadAccurateEngine: null,
+    },
+  ])('describes the resolved Fast and Accurate engines for $name in both modes', (platform) => {
+    const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu'];
+    const capabilityEngines = [...engineOrder, 'axisym'].map((name) => ({
+      name,
+      available: platform.ready.includes(name),
+      reason: platform.ready.includes(name) ? null : 'not ready',
+      version: platform.ready.includes(name) ? 'test' : null,
+      fast_paths: [],
+      formulations: name === 'axisym' ? ['axisymmetric'] : ['full-3d'],
+      geometry_sources: name === 'metal' || name === 'beat-cpu' ? ['parametric', 'imported'] : ['parametric'],
+    }));
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: capabilityEngines,
+      engineSelection: {
+        default: 'auto', resolvedDefault: platform.resolvedDefault,
+        full3dOrder: engineOrder, axisymmetricRunner: 'axisym',
+      },
+      cpuPreparationInFlight: false,
+    });
+    const importedPlanFor = (engine: string | null): ImportedSolvePlanSnapshot => {
+      const plan: ImportedSolvePlan = {
+        ingest_id: 'cad-test', requested: 'auto', engine,
+        reason: engine ? 'AUTO selected a ready imported engine' : 'No ready backend supports this CAD return',
+        engines: [],
+      };
+      return { plan, error: null, isPending: false };
+    };
+
+    resetSolveOptionsStore();
+    importedPlan.current = importedPlanFor(platform.cadFastEngine);
+    render(<SolveOptionsControls mode="parametric" />);
+    const accuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+    expect(hoverText(accuracy.closest('.select-row')!)).toBe(platform.parametricFast);
+    act(() => {
+      importedPlan.current = importedPlanFor(platform.cadAccurateEngine);
+      accuracy.value = 'accurate';
+      accuracy.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const accurateText = hoverText(accuracy.closest('.select-row')!);
+    if (platform.accurateEngine === 'beat-cpu') {
+      expect(accurateText).toContain('Runs via BEAT CPU — slower; no GPU backend ready.');
+    } else if (platform.accurateEngine) {
+      const label = platform.accurateEngine === 'beat-metal' ? 'BEAT Metal'
+        : platform.accurateEngine === 'beat-cuda' ? 'BEAT CUDA' : 'BEAT ROCm';
+      expect(accurateText).toContain(`Runs via ${label}.`);
+    } else {
+      expect(accurateText).toContain('No BEAT backend is ready here; Accurate cannot run on this machine.');
+    }
+
+    resetSolveOptionsStore();
+    importedPlan.current = importedPlanFor(platform.cadFastEngine);
+    render(<SolveOptionsControls mode="cad" />);
+    const cadAccuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+    const expectedCadFast = platform.cadFastEngine === null
+      ? 'Fast: No backend can solve this CAD return.'
+      : platform.cadFastEngine === 'metal'
+        ? 'Fast: Metal, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.'
+        : 'Fast: BEAT CPU. Good for locating resonances.';
+    expect(hoverText(cadAccuracy.closest('.select-row')!)).toBe(expectedCadFast);
+    act(() => {
+      importedPlan.current = importedPlanFor(platform.cadAccurateEngine);
+      cadAccuracy.value = 'accurate';
+      cadAccuracy.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    const cadAccurateText = hoverText(cadAccuracy.closest('.select-row')!);
+    if (platform.cadAccurateEngine === 'beat-cpu') {
+      expect(cadAccurateText).toContain('Runs via BEAT CPU — slower; no GPU backend ready.');
+    } else if (platform.cadAccurateEngine) {
+      const label = platform.cadAccurateEngine === 'beat-metal' ? 'BEAT Metal'
+        : platform.cadAccurateEngine === 'beat-cuda' ? 'BEAT CUDA' : 'BEAT ROCm';
+      expect(cadAccurateText).toContain(`Runs via ${label}.`);
+    } else {
+      expect(cadAccurateText).toContain('No BEAT backend can solve this CAD return');
+    }
   });
 
   it('keeps the portable axisymmetric path in machine-local solve options', () => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
       engines: [
-        { name: 'metal', available: true, reason: null, version: 'test', fast_paths: [] },
-        { name: 'axisym', available: true, reason: null, version: 'test', fast_paths: ['axisymmetric-meridian'] },
+        { name: 'beat-cpu', available: true, reason: null, version: 'test', fast_paths: [], formulations: ['full-3d'] },
+        { name: 'axisym', available: true, reason: null, version: 'test', fast_paths: ['axisymmetric-meridian'], formulations: ['axisymmetric'] },
       ],
+      engineSelection: {
+        default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'], axisymmetricRunner: 'axisym',
+      },
+      cpuPreparationInFlight: false,
     });
     render(<SolveOptionsControls />);
     const control = host.querySelector<HTMLSelectElement>('#solve-mode')!;
@@ -104,6 +215,17 @@ describe('solve and directivity control help', () => {
     });
     expect(useSolveOptionsStore.getState().solverMode).toBe('circsym');
     expect(useSolveOptionsStore.getState().options().solver_mode).toBe('circsym');
+    const accuracy = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+    expect(hoverText(accuracy.closest('.select-row')!)).toBe(
+      'Fast: Axisymmetric, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.',
+    );
+    act(() => {
+      accuracy.value = 'accurate';
+      accuracy.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(hoverText(accuracy.closest('.select-row')!)).toBe(
+      'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions. Accurate requires Full 3D; switch from Axisymmetric to run it.',
+    );
   });
 
   it('keeps design and CAD-import sweep ids unique with working labels', () => {

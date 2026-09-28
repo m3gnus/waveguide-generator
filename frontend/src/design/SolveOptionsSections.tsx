@@ -1,6 +1,8 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
+import { resolveEngine } from '../jobs/actions';
+import type { EngineCapability, EngineSelection } from '../jobs/actions';
 import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
 import {
   activeBackendCapability,
@@ -36,6 +38,103 @@ export const solverModeLabels = {
   full_3d: 'Full 3D',
   circsym: 'Axisymmetric (meridian)',
 } as const;
+
+const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
+
+function engineDisplayName(name: string): string {
+  switch (name.toLowerCase()) {
+    case 'metal': return 'Metal';
+    case 'bempp': return 'BEMPP';
+    case 'axisym': return 'Axisymmetric';
+    case 'beat-metal': return 'BEAT Metal';
+    case 'beat-cuda': return 'BEAT CUDA';
+    case 'beat-rocm': return 'BEAT ROCm';
+    case 'beat-cpu': return 'BEAT CPU';
+    case 'dryrun': return 'Dry run';
+    default: return name;
+  }
+}
+
+function fastEngineForParametric(
+  requested: string,
+  solverMode: SolverMode,
+  engines: readonly EngineCapability[],
+  engineSelection: Readonly<EngineSelection>,
+): string | null {
+  let resolved: string;
+  try {
+    resolved = solverMode === 'circsym'
+      ? engineSelection.axisymmetricRunner
+      : resolveEngine(requested, { engines, engineSelection }, solverMode);
+  } catch {
+    return null;
+  }
+  return engines.some((engine) => engine.available && engine.name.toLowerCase() === resolved.toLowerCase())
+    ? resolved.toLowerCase()
+    : null;
+}
+
+function accurateEngineForParametric(
+  requested: string,
+  solverMode: SolverMode,
+  engines: readonly EngineCapability[],
+): string | null {
+  if (solverMode === 'circsym') return null;
+  const resolved = accuracyEngine(requested, 'accurate', engines);
+  return engines.some((engine) => engine.available && engine.name.toLowerCase() === resolved.toLowerCase())
+    ? resolved.toLowerCase()
+    : null;
+}
+
+function fastHelp(
+  engine: string | null,
+  mode: WorkspaceMode,
+  pending: boolean,
+  hasImportedPlan: boolean,
+): string {
+  if (mode === 'cad' && !engine) {
+    if (pending) return 'Fast: Checking which backend can solve this CAD return…';
+    return hasImportedPlan
+      ? 'Fast: No backend can solve this CAD return.'
+      : 'Fast: Prepare the CAD return to see which backend will run.';
+  }
+  if (!engine) {
+    return pending
+      ? 'Fast: Checking which solver backend is ready on this machine…'
+      : 'Fast: No ready solver backend is available on this machine.';
+  }
+
+  // The BEM adapters and portable meridian adapter use DEFAULT_BEM_FORMULATION
+  // from server/solver/formulation.py. BEAT uses Burton–Miller, and dry-run has
+  // no BEM formulation, so neither gets the complex-k damping caveat.
+  const complexK = ['metal', 'bempp', 'axisym'].includes(engine);
+  return `Fast: ${engineDisplayName(engine)}${complexK ? ', complex-k (numerical shift 0.005)' : ''}. Good for locating resonances${complexK ? '; sharp chamber resonances may look milder' : ''}.`;
+}
+
+function accurateHelp(
+  engine: string | null,
+  mode: WorkspaceMode,
+  pending: boolean,
+  hasImportedPlan: boolean,
+  importedPlanReason?: string,
+  solverMode?: SolverMode,
+): string {
+  if (!engine) {
+    if (mode === 'cad') {
+      if (pending) return `${ACCURATE_HELP} Checking which BEAT backend can solve this CAD return…`;
+      if (hasImportedPlan) return `${ACCURATE_HELP} No BEAT backend can solve this CAD return${importedPlanReason ? `: ${importedPlanReason}` : ''}.`;
+      return `${ACCURATE_HELP} Prepare the CAD return to see whether a BEAT backend can solve it.`;
+    }
+    if (solverMode === 'circsym') {
+      return `${ACCURATE_HELP} Accurate requires Full 3D; switch from Axisymmetric to run it.`;
+    }
+    return pending
+      ? `${ACCURATE_HELP} Checking which BEAT backend is ready…`
+      : `${ACCURATE_HELP} No BEAT backend is ready here; Accurate cannot run on this machine.`;
+  }
+  if (engine === 'beat-cpu') return `${ACCURATE_HELP} Runs via BEAT CPU — slower; no GPU backend ready.`;
+  return `${ACCURATE_HELP} Runs via ${engineDisplayName(engine)}.`;
+}
 
 /**
  * Sweep-point source: a generated grid, or the exact frequencies to solve.
@@ -76,7 +175,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   ingestRecord?: CadReturnIngestRecord | null;
 } = {}) {
   const store = useSolveOptionsStore();
-  const { engines, error } = useCapabilities();
+  const { engines, engineSelection, error, isLoading: capabilitiesLoading } = useCapabilities();
   const backendEngines = engines.filter((engine) => !['axisym', 'circsym'].includes(engine.name.toLowerCase()));
   const axisymEngine = engines.find((engine) => engine.name.toLowerCase() === 'axisym');
   const meridianAvailable = axisymEngine?.available === true;
@@ -89,6 +188,15 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const importedEngine = importedPlan.plan?.engine
     ? verdicts.get(importedPlan.plan.engine)?.label || importedPlan.plan.engine
     : null;
+  const parametricFastEngine = fastEngineForParametric(store.engine, store.solverMode, engines, engineSelection);
+  const parametricAccurateEngine = accurateEngineForParametric(store.engine, store.solverMode, engines);
+  const helpEngine = mode === 'cad'
+    ? importedPlan.plan?.engine ?? null
+    : store.accuracy === 'accurate' ? parametricAccurateEngine : parametricFastEngine;
+  const helpPending = capabilitiesLoading || (mode === 'cad' && importedPlan.isPending);
+  const accuracyHelp = store.accuracy === 'accurate'
+    ? accurateHelp(helpEngine, mode, helpPending, importedPlan.plan !== null, importedPlan.plan?.reason, store.solverMode)
+    : fastHelp(helpEngine, mode, helpPending, importedPlan.plan !== null);
   const runsOn = importedEngine
     ? `${importedEngine} · full 3-D · free space`
     : importedPlan.isPending
@@ -97,9 +205,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const beatGpu = engines.find((engine) => ['beat-metal', 'beat-cuda', 'beat-rocm'].includes(engine.name) && engine.available);
   const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
-    <HelpTipRow className="select-row" text={store.accuracy === 'accurate'
-      ? 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.'
-      : 'Fast: complex-k Metal (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.'}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
+    <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>
