@@ -98,7 +98,7 @@ describe('CAD setup publisher', () => {
     // The engine is the selector's, whatever the backend later finds capable.
     expect(setup.options.engine).toBe('bempp');
     expect(setup.options.frequency_range).toEqual([50, 20_000]);
-    expect(setup.options.num_frequencies).toBe(32);
+    expect(setup.options.num_frequencies).toBe(36);
     expect(setup.options.polar_config).toEqual(useSolveOptionsStore.getState().options().polar_config);
     expect(setup.preparation).toEqual({ area_drift_overrides: [], symmetry_mode: 'full' });
   });

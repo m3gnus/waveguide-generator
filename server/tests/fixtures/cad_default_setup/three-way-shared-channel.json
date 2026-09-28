@@ -141,7 +141,7 @@
       ],
       "frequency_spacing": "log",
       "mesh_validation_mode": "warn",
-      "num_frequencies": 32,
+      "num_frequencies": 36,
       "polar_config": {
         "angle_range": [
           0,

@@ -19,13 +19,16 @@ from server.cadlink.default_setup import (
     SOLVE_DEFAULTS_PATH,
     default_setup,
     solve_defaults,
+    sweep_points,
     unsized_sources,
 )
 from server.cadlink.setup import DEFAULTS_ORIGIN, setup_content, validate_setup
 from server.jobs.models import SolveOptions
 
 
-FIXTURES = sorted((Path(__file__).parent / "fixtures" / "cad_default_setup").glob("*.json"))
+_FIXTURE_DIR = Path(__file__).parent / "fixtures" / "cad_default_setup"
+FIXTURES = sorted(path for path in _FIXTURE_DIR.glob("*.json") if path.name != "sweep_points.json")
+SWEEP_POINTS = json.loads((_FIXTURE_DIR / "sweep_points.json").read_text(encoding="utf-8"))["cases"]
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -75,7 +78,7 @@ def test_the_shipped_defaults_file_passes_the_shape_check() -> None:
     [
         ("{ not json", "solve-defaults.json"),
         ('{"sweep": {}}', "sweep.start_hz is missing"),
-        (None, "sweep.points has the wrong type"),
+        (None, "sweep.points_per_octave has the wrong type"),
     ],
 )
 def test_a_damaged_defaults_file_is_reported_as_damaged(
@@ -85,7 +88,7 @@ def test_a_damaged_defaults_file_is_reported_as_damaged(
 
     if content is None:
         data = json.loads(SOLVE_DEFAULTS_PATH.read_text(encoding="utf-8"))
-        data["sweep"]["points"] = "32"
+        data["sweep"]["points_per_octave"] = "4"
         content = json.dumps(data)
     damaged = tmp_path / "solve-defaults.json"
     damaged.write_text(content, encoding="utf-8")
@@ -116,7 +119,15 @@ def test_the_default_options_are_a_valid_solve() -> None:
     )
     options = SolveOptions.model_validate(built.options)
     assert options.engine == "auto"
-    assert options.num_frequencies == solve_defaults()["sweep"]["points"]
+    sweep = solve_defaults()["sweep"]
+    assert options.num_frequencies == sweep_points(
+        sweep["start_hz"], sweep["end_hz"], sweep["points_per_octave"]
+    ) == 36
+
+
+@pytest.mark.parametrize("case", SWEEP_POINTS, ids=lambda case: f"{case['start_hz']}-{case['end_hz']}@{case['points_per_octave']}")
+def test_the_default_point_count_follows_the_shared_rule(case: dict) -> None:
+    assert sweep_points(case["start_hz"], case["end_hz"], case["points_per_octave"]) == case["points"]
 
 
 def test_a_source_with_no_suggested_mesh_size_is_named_not_guessed() -> None:

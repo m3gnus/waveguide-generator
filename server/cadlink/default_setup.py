@@ -50,7 +50,7 @@ _NUMBER = (int, float)
 _SHAPE: dict[tuple[str, ...], type | tuple[type, ...]] = {
     ("sweep", "start_hz"): _NUMBER,
     ("sweep", "end_hz"): _NUMBER,
-    ("sweep", "points"): int,
+    ("sweep", "points_per_octave"): _NUMBER,
     ("sweep", "spacing"): str,
     ("directivity", "angle_start_deg"): _NUMBER,
     ("directivity", "angle_end_deg"): _NUMBER,
@@ -107,6 +107,20 @@ def solve_defaults() -> dict[str, Any]:
         raise SolveDefaultsDamaged(f"{SOLVE_DEFAULTS_PATH.name}: {exc}") from exc
     _check_shape(data)
     return data
+
+
+def sweep_points(start_hz: float, end_hz: float, points_per_octave: float) -> int:
+    """How many frequencies a default sweep has: a density, not a fixed count.
+
+    ``ceil(log2(end / start) * points_per_octave) + 1``, so the band is covered
+    at least that densely end to end (50 Hz-20 kHz at 4 per octave: 36). The
+    frontend's ``sweepPoints`` states the same rule; the cases in
+    server/tests/fixtures/cad_default_setup/sweep_points.json hold both to it.
+    The small tolerance keeps a whole number of octaves from rounding up.
+    """
+
+    octaves = math.log2(float(end_hz) / float(start_hz))
+    return math.ceil(octaves * float(points_per_octave) - 1e-9) + 1
 
 
 def _polar_config(directivity: Mapping[str, Any]) -> dict[str, Any]:
@@ -269,7 +283,7 @@ def default_setup(
         "frequency_spacing": sweep["spacing"],
         "polar_config": _polar_config(defaults["directivity"]),
         "frequency_range": [sweep["start_hz"], sweep["end_hz"]],
-        "num_frequencies": sweep["points"],
+        "num_frequencies": sweep_points(sweep["start_hz"], sweep["end_hz"], sweep["points_per_octave"]),
         **({"ground_plane": dict(ground)} if ground["enabled"] else {}),
     }
     accuracy = selection.get("accuracy") or solver["accuracy"]
@@ -303,6 +317,7 @@ def default_setup(
 
 __all__ = [
     "DAMAGED_DEFAULTS_MESSAGE",
+    "sweep_points",
     "DEFAULT_SETTINGS_NOTE",
     "SolveDefaultsDamaged",
     "SOLVE_DEFAULTS_PATH",

@@ -9,6 +9,8 @@ import hfOnly from '../../../server/tests/fixtures/cad_default_setup/hf-only.jso
 import lfMfHf from '../../../server/tests/fixtures/cad_default_setup/three-way-lf-mf-hf.json';
 import threeWay from '../../../server/tests/fixtures/cad_default_setup/three-way-shared-channel.json';
 import twoWay from '../../../server/tests/fixtures/cad_default_setup/two-way-accurate.json';
+import { sweepPoints } from '../stores/solveDefaults';
+import sweepPointCases from '../../../server/tests/fixtures/cad_default_setup/sweep_points.json';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 
 /**
@@ -81,10 +83,14 @@ describe('WG default CAD setup parity', () => {
     expect(built?.setup).toEqual(fixture.setup);
   });
 
+  it.each(sweepPointCases.cases)('derives the default point count by the shared rule: $start_hz-$end_hz Hz at $points_per_octave per octave', (item) => {
+    expect(sweepPoints(item.start_hz, item.end_hz, item.points_per_octave)).toBe(item.points);
+  });
+
   it('starts every store from the shared file', () => {
     const cad = useCadReturnStore.getState();
     expect([cad.frequencyStartHz, cad.frequencyEndHz, cad.frequencyCount])
-      .toEqual([sharedDefaults.sweep.start_hz, sharedDefaults.sweep.end_hz, sharedDefaults.sweep.points]);
+      .toEqual([sharedDefaults.sweep.start_hz, sharedDefaults.sweep.end_hz, 36]);
     expect(cad.driveVoltageV).toBe(sharedDefaults.cad.drive_voltage_v);
     expect(cad.exteriorOnly).toBe(sharedDefaults.cad.exterior_only);
     expect(useCadPreparationStore.getState().symmetryMode).toBe(sharedDefaults.cad.preparation_symmetry_mode);

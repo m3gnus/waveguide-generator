@@ -3,7 +3,7 @@
   "sweep": {
     "start_hz": 50,
     "end_hz": 20000,
-    "points": 32,
+    "points_per_octave": 4,
     "spacing": "log"
   },
   "directivity": {

@@ -39,10 +39,22 @@ export const DEFAULT_POLAR_UI: Readonly<DefaultPolarUi> = Object.freeze({
   fieldPlane: directivity.field_plane,
 });
 
+/**
+ * How many frequencies a default sweep has: `ceil(log2(end / start) *
+ * pointsPerOctave) + 1` (50 Hz-20 kHz at 4 per octave: 36). The backend's
+ * `sweep_points` (server/cadlink/default_setup.py) states the same rule; the
+ * cases in server/tests/fixtures/cad_default_setup/sweep_points.json hold
+ * both to it. The tolerance keeps a whole number of octaves from rounding up.
+ */
+export function sweepPoints(startHz: number, endHz: number, pointsPerOctave: number): number {
+  return Math.ceil(Math.log2(endHz / startHz) * pointsPerOctave - 1e-9) + 1;
+}
+
 export const DEFAULT_SWEEP = Object.freeze({
   startHz: defaults.sweep.start_hz,
   endHz: defaults.sweep.end_hz,
-  points: defaults.sweep.points,
+  pointsPerOctave: defaults.sweep.points_per_octave,
+  points: sweepPoints(defaults.sweep.start_hz, defaults.sweep.end_hz, defaults.sweep.points_per_octave),
   spacing: defaults.sweep.spacing as 'log' | 'linear',
 });
 
