@@ -867,21 +867,40 @@ def test_a_wg_that_predates_the_feature_refuses_the_bundle_by_name(
 ) -> None:
     """The gate exists so an old reader stops, instead of solving a half whole.
 
-    Simulated by taking the feature back out of this reader's supported set,
-    which is exactly the state a WG released before it was in.
+    Simulated by taking the feature back out of the supported set the shared
+    WG ingress profile enforces, which is exactly the state a WG released before
+    it was in. The gate runs right after the version checks, so a reader that
+    does not know the feature refuses it by name before it interprets any of
+    the feature's vocabulary or reports a later fault.
     """
 
     from server.cadlink import wgreturn as module
 
+    assert module.SUPPORTED_FEATURES is module.protocol._wg_SUPPORTED_FEATURES
     monkeypatch.setattr(
-        module,
-        "SUPPORTED_FEATURES",
-        module.SUPPORTED_FEATURES - {"reduced-domain-v1"},
+        module.protocol,
+        "_wg_SUPPORTED_FEATURES",
+        module.protocol._wg_SUPPORTED_FEATURES - {"reduced-domain-v1"},
     )
-    with pytest.raises(
-        WgReturnError, match=r"unknown required feature\(s\): reduced-domain-v1"
-    ):
-        validate_manifest(_with_domain())
+    by_name = "$.required_features: unknown required feature(s): reduced-domain-v1"
+
+    bad_return_id = _with_domain()
+    bad_return_id["return"]["id"] = "bad"
+    unknown_plane = _with_domain(cut_planes=["z9"])
+    many_faults = _with_domain(cut_planes=["z9"])
+    many_faults["return"]["id"] = "bad"
+    many_faults["acoustics"] = {}
+    for manifest in (_with_domain(), bad_return_id, unknown_plane, many_faults):
+        with pytest.raises(WgReturnError) as refused:
+            validate_manifest(manifest)
+        assert str(refused.value) == by_name
+
+    # The version checks still come first.
+    bad_version = _with_domain()
+    bad_version["wgreturn_version"] = "1.x"
+    with pytest.raises(WgReturnError) as refused:
+        validate_manifest(bad_version)
+    assert str(refused.value) == "$.wgreturn_version: must be exactly major.minor"
 
 
 def test_the_export_frame_is_named_and_checked() -> None:

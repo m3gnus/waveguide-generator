@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import ast
 from copy import deepcopy
+import dataclasses
+import enum
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from server.cadlink import fusion_status, ingest, operations, step_evidence, wglink_protocol
@@ -159,3 +163,202 @@ def test_development_writer_reader_claim_and_ingest(addin: Path, tmp_path: Path)
                     assert record["tag_map"]["101"]["role"] == "HF"
         finally:
             store.close()
+
+
+# -- WG keeps no copy of the ingress contract --------------------------------
+
+# Every contract value WG reads from ``wgreturn`` is the vendored WG ingress
+# profile's own object. An equal literal is not enough: it would stop following
+# the profile at the next re-vendor while every test stays green.
+WGRETURN_PROFILE_ALIASES = (
+    "SUPPORTED_MAJOR",
+    "SUPPORTED_VERSION",
+    "SUPPORTED_FEATURES",
+    "EXPORT_FRAMES",
+    "DOCUMENT_UP_FEATURE",
+    "DOCUMENT_UP_AXES",
+    "DOMAIN_PLANES",
+    "DOMAIN_KIND_FOR_PLANES",
+    "REDUCED_DOMAIN_FEATURE",
+    "DOMAIN_AUTOMATIC_FEATURE",
+    "DOMAIN_AUTOMATIC",
+    "CUT_FEATURE_KINDS",
+    "CUT_TOOL_KINDS",
+    "CUT_ORIGIN_PLANES",
+    "CUT_KEPT_SIDES",
+    "SOURCE_IDENTITY_FEATURE",
+    "GMSH_PHYSICAL_NAME_MAX_BYTES",
+    "SOURCE_IDENTITY_MAX_BYTES",
+    "WORST_CASE_SOURCE_TAG",
+    "REQUIRED_BASE_FEATURES",
+    "FORBIDDEN_VERDICT_KEYS",
+    "_WINDOWS_DRIVE",
+)
+# ``read_wgreturn`` checks the member table with these, raising WG's own error
+# type, so they stay local; they must remain the profile's helpers verbatim.
+WGRETURN_LOCAL_HELPERS = ("_mapping", "_list", "_string", "_integer", "_required", "_portable_member_name")
+WGRETURN = ROOT / "server/cadlink/wgreturn.py"
+
+
+def test_wgreturn_contract_values_are_the_profile_objects():
+    from server.cadlink import wgreturn
+
+    for name in WGRETURN_PROFILE_ALIASES:
+        assert getattr(wgreturn, name) is getattr(wglink_protocol, "_wg_" + name), name
+    tree = ast.parse(WGRETURN.read_text())
+    for node in tree.body:
+        targets = [node.target] if isinstance(node, (ast.AnnAssign, ast.AugAssign)) else getattr(node, "targets", [])
+        for target in targets:
+            if isinstance(target, ast.Name) and target.id in WGRETURN_PROFILE_ALIASES:
+                assert ast.unparse(node.value) == f"protocol._wg_{target.id}", (
+                    f"wgreturn.{target.id} must alias the vendored profile, not redefine it"
+                )
+
+
+def _without_docstring_and_annotations(function: ast.FunctionDef, prefix: str) -> str:
+    function = deepcopy(function)
+    body = function.body
+    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+        function.body = body[1:]
+    function.returns = None
+    for argument in (*function.args.args, *function.args.kwonlyargs):
+        argument.annotation = None
+    for node in (function, *ast.walk(function)):
+        for field in ("id", "name"):
+            name = getattr(node, field, None)
+            if isinstance(name, str) and name.startswith(prefix):
+                setattr(node, field, name[len(prefix):])
+    return ast.dump(function)
+
+
+def test_wgreturn_keeps_only_verbatim_profile_helpers():
+    wg = {node.name: node for node in ast.parse(WGRETURN.read_text()).body if isinstance(node, ast.FunctionDef)}
+    vendored = {node.name: node for node in ast.parse(VENDORED.read_text()).body if isinstance(node, ast.FunctionDef)}
+    for name in WGRETURN_LOCAL_HELPERS:
+        assert _without_docstring_and_annotations(wg[name], "_wg_") == _without_docstring_and_annotations(vendored["_wg_" + name], "_wg_"), name
+    # No other copy of a profile validator survives in WG. ``_fail`` raises WG's
+    # own error type and ``validate_manifest`` delegates to the profile.
+    copies = {name for name in wg if "_wg_" + name in vendored} - set(WGRETURN_LOCAL_HELPERS) - {"_fail", "validate_manifest"}
+    assert copies == set()
+
+
+def _profile_literals(source: str, prefix: str, namespace: dict) -> dict:
+    functions = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name.startswith(prefix):
+            body = node.body
+            if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str):
+                body = body[1:]
+            functions[node.name[len(prefix):]] = [
+                sub.value
+                for statement in body
+                for sub in ast.walk(statement)
+                if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+            ]
+
+    def jsonable(value):
+        if isinstance(value, (frozenset, set)):
+            return sorted(value)
+        if isinstance(value, tuple):
+            return list(value)
+        if isinstance(value, dict):
+            return sorted([jsonable(key), jsonable(item)] for key, item in value.items())
+        if hasattr(value, "pattern"):
+            return value.pattern
+        return value
+
+    constants = {
+        name[len(prefix):]: jsonable(value)
+        for name, value in namespace.items()
+        if name.startswith(prefix) and name[len(prefix):].lstrip("_")[:1].isupper()
+    }
+    return {"functions": functions, "constants": constants}
+
+
+def test_wg_ingress_literals_match_the_pre_consolidation_reader():
+    """Every message and constant of the WG ingress profile, pinned side by side.
+
+    ``wg-ingress-literals.json`` was extracted from WG's own reader at 129085bd,
+    before the validator moved into the shared module, with the same function as
+    this test. The committed oracles cover only some messages; this covers every
+    string the profile can emit, so a re-vendor that rewords one fails here even
+    when the vendored hash was updated with it.
+    """
+
+    expected = json.loads((ROOT / "server/tests/fixtures/wg-ingress-literals.json").read_text())
+    actual = _profile_literals(VENDORED.read_text(), "_wg_", vars(wglink_protocol))
+    assert actual == expected
+
+
+# -- Hash sites: byte goldens through the real call sites -------------------
+
+# Computed at 129085bd, before the hash sites moved to named profiles.
+REQUEST_DIGEST_NON_ASCII = "sha256:ff2005fe471198911fc020ffd008d5fb521d494421ab1cfd04e4f6b8e0ff9638"
+DESIGN_HASH_NON_ASCII = "sha256:1e90c0011be979e9a43b113ea8e28037b070be6e9def0b1d762250aac1c2d1e3"
+DESIGN_HASH_NAN = "sha256:74485b0126616c29f67e48fb9033a771406b9f9f51ce8a0dcedc2e94551ac519"
+MESHING_SEMANTICS_FINGERPRINT = "sha256:476d21c20c85d17301052ecf8df78fc19f8c42918dcf6c26e74c82e94a1fe9fb"
+BASELINE_MESHING_SEMANTICS = "sha256:79aa14dff0812302be2bd64c494913fd39f370466ca80458ce285f6a63c173c8"
+INGEST_NORMALISED = (
+    '{"array":[1.5,-0.0],"band":"HF","flt":0.25,'
+    '"point":{"name":"H\\u00f6rn \\u96ea","xyz":[1,2.5]},"scalar":3,"tup":[1,"\\u00e9"]}'
+)
+NON_ASCII_DESIGN = (
+    "; Parameter config\n; Waveguide Generator design-format: 2\nOSSE = {\n}\n"
+    "Coverage.Angle = 45\nLength = 120\nThroat.Profile = 1\nNotiz = Hörn 雪\n"
+)
+
+
+def test_request_digest_golden_with_non_ascii_input():
+    digest = operations.request_digest(
+        "prepare_and_solve",
+        {},
+        {"return_id": "wgr_é", "bundle_path": "wgreturn/Hörn 雪.wgreturn", "manifest_sha256": "sha256:abc"},
+    )
+    assert digest == REQUEST_DIGEST_NON_ASCII
+    with pytest.raises(ValueError, match="Out of range float values"):
+        operations.canonical_json({"x": float("nan")})
+
+
+def test_design_hash_golden_non_ascii_and_nan_permitted(monkeypatch: pytest.MonkeyPatch):
+    from server.cadlink import identity
+    from server.design import textcfg
+
+    assert identity.design_hash(textcfg.parse(NON_ASCII_DESIGN).design) == DESIGN_HASH_NON_ASCII
+
+    # A design payload carrying NaN still hashes (the historical json.dumps
+    # default), through design_hash's own profile call.
+    class Payload:
+        def model_dump(self, mode: str) -> dict:
+            assert mode == "json"
+            return {"x": float("nan"), "é": "雪", "n": -0.0}
+
+    monkeypatch.setattr(textcfg, "serialize", lambda design: "")
+    monkeypatch.setattr(textcfg, "parse", lambda text: SimpleNamespace(design=Payload()))
+    assert identity.design_hash(object()) == DESIGN_HASH_NAN
+
+
+def test_meshing_semantics_goldens():
+    assert ingest._BASELINE_MESHING_SEMANTICS == BASELINE_MESHING_SEMANTICS
+    assert ingest.meshing_semantics_fingerprint() == MESHING_SEMANTICS_FINGERPRINT
+
+
+def test_ingest_canonical_normalises_python_values():
+    class Band(enum.Enum):
+        HIGH = "HF"
+
+    @dataclasses.dataclass
+    class Point:
+        name: str
+        xyz: tuple
+
+    value = {
+        "point": Point("Hörn 雪", (1, 2.5)),
+        "band": Band.HIGH,
+        "array": np.array([1.5, -0.0]),
+        "scalar": np.int64(3),
+        "flt": np.float32(0.25),
+        "tup": (1, "é"),
+    }
+    assert ingest._canonical(value).decode("ascii") == INGEST_NORMALISED
+    with pytest.raises(ValueError, match="Out of range float values"):
+        ingest._canonical({"x": np.float64("nan")})

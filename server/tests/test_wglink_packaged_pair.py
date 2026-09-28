@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import types
 import zipfile
 
 import pytest
@@ -89,24 +90,33 @@ def _from_package(folder: Path, filename: str):
     assert name not in sys.modules
     protocol = None
     protocol_path = folder / "wglink_protocol.py"
-    if filename != "wglink_protocol.py" and protocol_path.exists() and "wglink_protocol" not in sys.modules:
-        protocol_spec = importlib.util.spec_from_file_location("wglink_protocol", protocol_path)
-        assert protocol_spec and protocol_spec.loader
-        protocol = importlib.util.module_from_spec(protocol_spec)
-        sys.modules["wglink_protocol"] = protocol
-        protocol_spec.loader.exec_module(protocol)
-        assert Path(protocol.__file__).resolve() == protocol_path.resolve()
-    sys.modules[name] = module  # dataclasses needs the module while it executes
+    existing = sys.modules.get("wglink_protocol")
+    if existing is not None:
+        # Only an enclosing load of the same folder may have put it there; a
+        # leaked or foreign module would silently stand in for this folder's.
+        assert protocol_path.exists() and Path(existing.__file__).resolve() == protocol_path.resolve(), (
+            f"a foreign wglink_protocol is already imported from {existing.__file__}"
+        )
     try:
+        if filename != "wglink_protocol.py" and protocol_path.exists() and existing is None:
+            protocol_spec = importlib.util.spec_from_file_location("wglink_protocol", protocol_path)
+            assert protocol_spec and protocol_spec.loader
+            protocol = importlib.util.module_from_spec(protocol_spec)
+            sys.modules["wglink_protocol"] = protocol
+            protocol_spec.loader.exec_module(protocol)
+            assert Path(protocol.__file__).resolve() == protocol_path.resolve()
+        sys.modules[name] = module  # dataclasses needs the module while it executes
         spec.loader.exec_module(module)
         assert Path(module.__file__).resolve() == path.resolve()
         assert Path(module.__file__).resolve().is_relative_to(folder.resolve())
         yield module
     finally:
-        assert sys.modules.pop(name) is module
+        if name in sys.modules:
+            assert sys.modules.pop(name) is module
         assert name not in sys.modules
         if protocol is not None:
-            assert sys.modules.pop("wglink_protocol") is protocol
+            if "wglink_protocol" in sys.modules:
+                assert sys.modules.pop("wglink_protocol") is protocol
             assert "wglink_protocol" not in sys.modules
 
 
@@ -439,3 +449,38 @@ def test_request_versions_and_exact_refusals(tmp_path: Path):
         ]
     finally:
         store.close()
+
+
+def test_the_loader_leaves_no_module_behind_when_a_load_fails(tmp_path: Path):
+    folder = tmp_path / "WGLink"
+    folder.mkdir()
+    (folder / "wglink_protocol.py").write_text("raise RuntimeError('protocol import failed')\n")
+    (folder / "wglink_return.py").write_text("import wglink_protocol\n")
+    with pytest.raises(RuntimeError, match="protocol import failed"):
+        with _from_package(folder, "wglink_return.py"):
+            pass
+    assert "wglink_protocol" not in sys.modules
+    assert "_wglink_pinned_wglink_return" not in sys.modules
+
+    (folder / "wglink_protocol.py").write_text("VALUE = 1\n")
+    (folder / "wglink_return.py").write_text("import wglink_protocol\nraise RuntimeError('writer import failed')\n")
+    with pytest.raises(RuntimeError, match="writer import failed"):
+        with _from_package(folder, "wglink_return.py"):
+            pass
+    assert "wglink_protocol" not in sys.modules
+    assert "_wglink_pinned_wglink_return" not in sys.modules
+
+
+def test_the_loader_refuses_a_foreign_protocol_module(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    folder = tmp_path / "WGLink"
+    folder.mkdir()
+    (folder / "wglink_protocol.py").write_text("VALUE = 1\n")
+    (folder / "wglink_return.py").write_text("import wglink_protocol\n")
+    foreign = types.ModuleType("wglink_protocol")
+    foreign.__file__ = str(tmp_path / "elsewhere" / "wglink_protocol.py")
+    monkeypatch.setitem(sys.modules, "wglink_protocol", foreign)
+    with pytest.raises(AssertionError, match="foreign wglink_protocol"):
+        with _from_package(folder, "wglink_return.py"):
+            pass
+    assert sys.modules["wglink_protocol"] is foreign
+    assert "_wglink_pinned_wglink_return" not in sys.modules
