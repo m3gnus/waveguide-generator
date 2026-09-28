@@ -108,6 +108,14 @@ def _cases():
         "automatic-without-feature": lambda m: m["assembly"].__setitem__(
             "domain", {"kind": "automatic"}
         ),
+        "automatic-empty-cut-planes": lambda m: (
+            m["required_features"].append("domain-automatic-v1"),
+            m["assembly"].__setitem__("domain", {"kind": "automatic", "cut_planes": []}),
+        ),
+        "document-up-without-feature": lambda m: m["coordinate_system"].__setitem__(
+            "document_up", "+y"
+        ),
+        "degraded-without-skip": lambda m: m["scope"].__setitem__("status", "degraded"),
         "invalid-member-digest": lambda m: m["files"]["assembly.step"].__setitem__(
             "sha256", "sha256:SHORT"
         ),

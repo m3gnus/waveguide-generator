@@ -15,6 +15,22 @@
       "message": null
     }
   },
+  "automatic-empty-cut-planes": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.assembly.domain: an automatic domain states nothing else, got cut_planes"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.assembly.domain: an automatic domain states nothing else, got cut_planes"
+    }
+  },
   "automatic-full": {
     "inbox_claim": {
       "accepted": true,
@@ -157,6 +173,38 @@
     "validate_manifest": {
       "accepted": true,
       "message": null
+    }
+  },
+  "degraded-without-skip": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.scope.status: must be 'degraded' iff scope.skipped contains a degraded entry"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.scope.status: must be 'degraded' iff scope.skipped contains a degraded entry"
+    }
+  },
+  "document-up-without-feature": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.required_features: document-up-v1 is required exactly when $.coordinate_system.document_up is present"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.required_features: document-up-v1 is required exactly when $.coordinate_system.document_up is present"
     }
   },
   "duplicate-drive-channel": {

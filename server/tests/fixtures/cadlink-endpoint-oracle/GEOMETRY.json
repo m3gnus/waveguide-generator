@@ -3,6 +3,10 @@
     "accepted": false,
     "message": "stage 6 symmetry: symmetry: Fusion recorded Split Body 3 on this model, so WG would mirror it, but the cut on x = 0 is capped: a face closes it, which would solve as a wall. Delete the cap face so the cut is open."
   },
+  "automatic-empty-cut-planes": {
+    "accepted": false,
+    "message": "stage 1 bundle validation: $.assembly.domain: an automatic domain states nothing else, got cut_planes"
+  },
   "automatic-full": {
     "accepted": true,
     "domain_decision": {
@@ -56,10 +60,10 @@
       },
       "identity": {
         "choice_sha256": null,
-        "decision_sha256": "sha256:563ed8a788d36f19a57c752b6a225925e0d60070b9ca91de20f6e132894933b3",
+        "decision_sha256": "sha256:07e157953c3f5349c53268ba8595404f0e350b8ecfbc329518bb0557293f3c83",
         "mesh_content_sha256": "sha256:a5787ed3818d95e0e5cbbe34f356902f83b8f7d6c70ad27dee7f4dc985302013",
         "observations_sha256": "sha256:7c87f439c4b71c82332051f42201a4669c7f26ed21d20c7b162e9b05a38253e4",
-        "snapshot_sha256": "sha256:776a6197448ead01ab3b6a2f97bd89aeaa727523d64ef3a9ea9e80d3c00e5157",
+        "snapshot_sha256": "sha256:5194a1d73f2d12d61ba949246f39f0a0d0cded97a76949fd501cb6c55fa6c028",
         "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
       },
       "input_reading": "full",
@@ -401,10 +405,10 @@
       },
       "identity": {
         "choice_sha256": null,
-        "decision_sha256": "sha256:25c2981ea8d696e6f65dd3960eb8a40847cfa646ee8824a6e923c4b4efd8960e",
+        "decision_sha256": "sha256:fef11742dd90d54d2b1b8763f849d13c284239e3276daf97513e0769402bb657",
         "mesh_content_sha256": "sha256:693e9ba79b081352a7bc04397d318ac7f38a4c75444ea8020d395773bc318cd2",
         "observations_sha256": "sha256:fe0cfb93c944a2ec0094b3d2f53c1dc8e03f65b00452955f579df53144e4f3ad",
-        "snapshot_sha256": "sha256:e605aded3c7954c4d64b8ad1ea623a41b1418973c7029ef4b476a9baea769337",
+        "snapshot_sha256": "sha256:eef4fab64128045d513e53cec1d2a284e064b0122a3af7ad5d20d6d5d26e9fe9",
         "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
       },
       "input_reading": "cut",
@@ -789,10 +793,10 @@
       },
       "identity": {
         "choice_sha256": "sha256:407b9f2668b3a70bca70f50d944b06089805472491f8602bd992530b973a40a9",
-        "decision_sha256": "sha256:a1283641b44665a948f64711e03fea25a481128a62484da71d8659f8199431ee",
+        "decision_sha256": "sha256:374ccc7b88da693d4b467847729b75537cdb170364ba3dbc3c9d889a1404c35a",
         "mesh_content_sha256": "sha256:d52098fe0bdf00314d3e933f093e542f0e93a22f0ed6cea302f4b777af7b4aec",
         "observations_sha256": "sha256:fe0cfb93c944a2ec0094b3d2f53c1dc8e03f65b00452955f579df53144e4f3ad",
-        "snapshot_sha256": "sha256:8ee3fe3df5e7dd700b79ac7bbb81655d43f9e5a871a61acf21a728be3aab2ae3",
+        "snapshot_sha256": "sha256:319b94b8af4c945ac5078fa94d97d493e73dab8a82e7b9065e8e8180d26f77ec",
         "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
       },
       "input_reading": "cut",
@@ -1210,10 +1214,10 @@
       },
       "identity": {
         "choice_sha256": null,
-        "decision_sha256": "sha256:e91b2e500549855b866c56b1e1bfa88baf6d3d0e8f6cfbbc65287aa3673c316e",
+        "decision_sha256": "sha256:b2c78c939fc8224e70cc1841fc0e134e8f9aabc3aee9167e7b3207cff6976296",
         "mesh_content_sha256": "sha256:fbae4357d09576dd63f5669e6c90ccfb2557d8c9d6b6f0895cb3f7198a4c1e35",
         "observations_sha256": "sha256:e4a86c216272ae406718630172633dcb210a925ee9e23f0343aa010f9d404a1e",
-        "snapshot_sha256": "sha256:f5e29e6491365842be38c25baf518b7cdaf8588fe1a2a4393e6b861a9faaf5cb",
+        "snapshot_sha256": "sha256:19fca7f1510e5ef301fa0884767c97b8ff92fb5c3ddfd1819c7702c7ae277568",
         "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
       },
       "input_reading": "cut",
@@ -1606,10 +1610,10 @@
       },
       "identity": {
         "choice_sha256": "sha256:20a3e1bb08562655555c54426576d2625807068636827cfdca408bc354a6b0d2",
-        "decision_sha256": "sha256:606fcaa31aef8243fc1e80ea211a7e1fa16089e238a027afcaa2663a4ce5e564",
+        "decision_sha256": "sha256:79b0f5518fec817706fa2cd79b4bb1c64983c72fda38d4c0320c3b9cb420cd42",
         "mesh_content_sha256": "sha256:1fc21a3274c59daf65698363b90a620838af574db81d2d9cd7c8f8b755d1d99c",
         "observations_sha256": "sha256:48a3bfff8805a92699d385cd56a2d1c2c25bff1c4522813519ae1fccafb9dfb2",
-        "snapshot_sha256": "sha256:cf2021e3b0fbab588adb0762b55ccce08036d5816ca330c343f70f58083e3ec8",
+        "snapshot_sha256": "sha256:e351498735363756d92c30d730f8a006a0738517aa1b5e8bca973d89242ffbc2",
         "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
       },
       "input_reading": "cut",
@@ -2057,10 +2061,10 @@
       },
       "identity": {
         "choice_sha256": null,
-        "decision_sha256": "sha256:c5d407b965484d60f6a24546dc30f7de9f9996d0229688c7ee50d9047eaaedd9",
+        "decision_sha256": "sha256:5e73acaf2cfffaf48de4db9e100044b5f72fc1a3e9c30ab75204a22c193c329e",
         "mesh_content_sha256": "sha256:d52098fe0bdf00314d3e933f093e542f0e93a22f0ed6cea302f4b777af7b4aec",
         "observations_sha256": "sha256:1cb2651b64b6b1b85bb4a6dcc07ebe6ebc1689830a85b811b30ab6a8293bd0d6",
-        "snapshot_sha256": "sha256:8d62ccb53ca2ca8b07a53b88c3b32fc00f0e90dd527fe254e0f4fdf2a47b08fe",
+        "snapshot_sha256": "sha256:4f19ab8a2dd1d3294d6ed1f9996add38332b99d65418f0a0656ec09b6ab1e5de",
         "source_map_sha256": "sha256:353a8762b0f77b212221e5f6159d45387a082a81bf0474de870da850ab547c4a"
       },
       "input_reading": "cut",

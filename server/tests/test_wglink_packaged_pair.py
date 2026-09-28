@@ -111,7 +111,7 @@ def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
     oracle = json.loads((CORPUS / "ORACLE.json").read_text())
     bare = json.loads((CORPUS / "BARE.json").read_text())
     disk_setup = json.loads((CORPUS / "DISK_SETUP.json").read_text())
-    assert len(oracle) == 37
+    assert len(oracle) == 40
     for name, expected in oracle.items():
         folder = CORPUS / f"{name}.wgreturn"
         manifest = (
