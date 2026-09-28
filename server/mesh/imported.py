@@ -19,6 +19,8 @@ from typing import Any
 
 import numpy as np
 
+from server.cadlink.wglink_protocol import source_physical_name
+
 from server.mesh.builder import (
     MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
     _dense_solver_memory_limit_stats,
@@ -1697,12 +1699,7 @@ def _surface_normal(gmsh: Any, surface: int) -> np.ndarray:
     return normal / length if length > 0.0 else normal
 
 
-def _physical_name(tag: int, source_id: str, instance_id: Any, role: str) -> str:
-    instance = "null" if instance_id is None else str(instance_id)
-    return (
-        f"wg-import-v1|tag={tag}|source_id={source_id}|"
-        f"instance_id={instance}|role={role}"
-    )
+_physical_name = source_physical_name
 
 
 def _mesh_arrays(mesh: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

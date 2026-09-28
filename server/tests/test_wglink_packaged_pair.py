@@ -87,6 +87,15 @@ def _from_package(folder: Path, filename: str):
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     assert name not in sys.modules
+    protocol = None
+    protocol_path = folder / "wglink_protocol.py"
+    if filename != "wglink_protocol.py" and protocol_path.exists() and "wglink_protocol" not in sys.modules:
+        protocol_spec = importlib.util.spec_from_file_location("wglink_protocol", protocol_path)
+        assert protocol_spec and protocol_spec.loader
+        protocol = importlib.util.module_from_spec(protocol_spec)
+        sys.modules["wglink_protocol"] = protocol
+        protocol_spec.loader.exec_module(protocol)
+        assert Path(protocol.__file__).resolve() == protocol_path.resolve()
     sys.modules[name] = module  # dataclasses needs the module while it executes
     try:
         spec.loader.exec_module(module)
@@ -96,6 +105,9 @@ def _from_package(folder: Path, filename: str):
     finally:
         assert sys.modules.pop(name) is module
         assert name not in sys.modules
+        if protocol is not None:
+            assert sys.modules.pop("wglink_protocol") is protocol
+            assert "wglink_protocol" not in sys.modules
 
 
 def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
@@ -134,12 +146,12 @@ def test_oracle_rule_mutation_exits_nonzero(tmp_path: Path):
     plugin.write_text(
         "from server.cadlink import wgreturn\n"
         "def pytest_collection_modifyitems(items):\n"
-        "    original = wgreturn._fail\n"
+        "    original = wgreturn.protocol._wg__fail\n"
         "    def without_chirality(path, message):\n"
         "        if path.endswith('.chirality') and message == \"Phase 2 accepts only 'original'\":\n"
         "            return None\n"
         "        return original(path, message)\n"
-        "    wgreturn._fail = without_chirality\n",
+        "    wgreturn.protocol._wg__fail = without_chirality\n",
         encoding="utf-8",
     )
     result = subprocess.run(

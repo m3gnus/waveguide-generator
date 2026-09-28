@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import hashlib
-import json
 import math
 from pathlib import Path
 from typing import Any
@@ -20,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from server.mesh.imported import geometry_candidate_matches
+from server.cadlink.wglink_protocol import ASCII_STRICT, canonical_json
 
 
 _VOLUME_REL_TOLERANCE = 3.0e-5
@@ -33,13 +33,7 @@ class ReturnedStepError(ValueError):
 
 
 def _canonical(value: Any) -> bytes:
-    return json.dumps(
-        value,
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    return canonical_json(value, ASCII_STRICT).encode("utf-8")
 
 
 def _sha256(data: bytes) -> str:

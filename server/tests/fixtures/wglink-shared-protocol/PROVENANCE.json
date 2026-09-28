@@ -1,0 +1,16 @@
+{
+  "base": "99488a00ed2ec4475567785f7c46f49f2d7e9e8f",
+  "endpoint": "validate_return_manifest",
+  "generator": "scripts/generate_wgreturn_endpoint_oracle.py",
+  "golden_functions": [
+    "wglink_send._canonical_hash",
+    "wglink_core._json",
+    "WGLink._fingerprint_hash (isolated source extraction)"
+  ],
+  "sha256": {
+    "cases.json": "1254265d0ef286bc13a937c7cf04f745693c8c3551e3316d237f609ed1e8cb22",
+    "goldens.json": "f40b4607d472cdc8b59dabf82f3f6c2fcd0d2f3c57db05b506d2ae677d0a42ad",
+    "wg_ingress_cases.json": "16bf36b4e4223e8dcc358c5030f03b376a3789931d7aa8e57ae79f0096e0662b"
+  },
+  "wg_ingress_source": "waveguide-generator 12db5a557a6a86d969a120a95b7de37eb5260980"
+}

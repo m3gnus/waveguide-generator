@@ -1,0 +1,6935 @@
+[
+  {
+    "expected": {
+      "accepted": true,
+      "message": null
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "base"
+  },
+  {
+    "expected": {
+      "accepted": true,
+      "message": null
+    },
+    "manifest": {
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "missing_acoustics"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "acoustics must be null in wgreturn_version 1.0"
+    },
+    "manifest": {
+      "acoustics": {},
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "non_null_acoustics"
+  },
+  {
+    "expected": {
+      "accepted": true,
+      "message": null
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "01.0"
+    },
+    "name": "leading_zero_version"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "unsupported wgreturn_version '2.0'; reader supports major 1"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "2.0"
+    },
+    "name": "unsupported_major"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "unsupported required_features: 'future-physics-v1'"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1",
+        "future-physics-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "unknown_feature"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "required_features is missing launch feature(s): assembly-frame-v1"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "missing_base_feature"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "required_features must contain unique feature names"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1",
+        "checksummed-files-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "duplicate_feature"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "domain-automatic-v1 is required exactly when assembly.domain.kind is 'automatic'"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "domain": {
+          "kind": "automatic"
+        },
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "automatic_feature_missing"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "assembly.domain automatic states nothing else; got cut_planes"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "domain": {
+          "cut_planes": [],
+          "kind": "automatic"
+        },
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1",
+        "domain-automatic-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "automatic_extra_member"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "document-up-v1 is required exactly when coordinate_system.document_up is present"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "document_up": "+y",
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "document_up_feature_missing"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "scope.included[0].visible must be true"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": false,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "included_invisible"
+  },
+  {
+    "expected": {
+      "accepted": true,
+      "message": null
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              0.0
+            ],
+            "total_area_mm2": 0.0
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "source_zero_area"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "sources must have unique default_drive_channel_id values"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "duplicate_channel"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "wgreturn.sources[0].tag is WG-authored verdict data and must not appear in CAD evidence"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0,
+          "tag": 1
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "forbidden_tag"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "wgreturn.sources[0].TAG is WG-authored verdict data and must not appear in CAD evidence"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "TAG": 1,
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "uppercase_tag"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "instances[0].chirality 'mirrored' is unsupported; mirrored links have no producer and must be recreated without mirroring"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "mirrored",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "bad_chirality"
+  },
+  {
+    "expected": {
+      "accepted": true,
+      "message": null
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:BAD",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "bad_sha"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "scope.status must be degraded exactly when a recorded scope reason is degraded"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "degraded"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "degraded_mismatch"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "sources[0].id must be trimmed under source-identity-v1"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1",
+        "source-identity-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": " source-hf ",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "bad_source_identity"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "unsupported required_features: 'future-physics-v1'"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "wrong",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1",
+        "future-physics-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "multiple_fault_features_before_chirality"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "instances[0].chirality 'wrong' is unsupported; mirrored links have no producer and must be recreated without mirroring"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "wrong",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "wrong",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "multiple_fault_chirality_before_source"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "scope.included[0].visible must be true"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": false,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "wrong",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "multiple_fault_scope_before_source"
+  },
+  {
+    "expected": {
+      "accepted": true,
+      "message": null
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "domain": {
+          "cut_planes": [
+            "x0"
+          ],
+          "declared_by": "cad-author",
+          "evidence": {
+            "x0": {
+              "max_mm": 12.0,
+              "min_mm": 0.0,
+              "tolerance_mm": 0.01
+            }
+          },
+          "kind": "half"
+        },
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1",
+        "reduced-domain-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "declared_half"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "reduced-domain-v1 is required exactly when assembly.domain declares a reduced domain"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "domain": {
+          "cut_planes": [
+            "x0"
+          ],
+          "declared_by": "cad-author",
+          "evidence": {
+            "x0": {
+              "max_mm": 12.0,
+              "min_mm": 0.0,
+              "tolerance_mm": 0.01
+            }
+          },
+          "kind": "half"
+        },
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "declared_half_missing_feature"
+  },
+  {
+    "expected": {
+      "accepted": false,
+      "message": "assembly.cut_provenance is accepted only with domain-automatic-v1"
+    },
+    "manifest": {
+      "acoustics": null,
+      "assembly": {
+        "bbox_mm": [
+          [
+            -172.0,
+            -427.0,
+            -185.23
+          ],
+          [
+            172.0,
+            152.0,
+            94.77
+          ]
+        ],
+        "cut_provenance": [],
+        "file": "assembly.step",
+        "n_bodies_expected": 1
+      },
+      "coordinate_system": {
+        "handedness": "right",
+        "length_unit": "mm",
+        "matrix_convention": "row-major-local-to-parent",
+        "solver_anchor_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+      },
+      "document": {
+        "name": "Tritonia speaker",
+        "native_id": null
+      },
+      "files": {
+        "assembly.step": {
+          "media_type": "model/step",
+          "purpose": "exterior-assembly",
+          "sha256": "sha256:9898989898989898989898989898989898989898989898989898989898989898",
+          "size_bytes": 6221931
+        }
+      },
+      "generator": {
+        "adapter": "hornlab-fusion-addin/WGLink",
+        "adapter_version": "1.0.0",
+        "cad_app": "fusion360",
+        "cad_version": "2704.1.53"
+      },
+      "instances": [
+        {
+          "assembly_from_link": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "body_evidence": {
+            "baseline_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            },
+            "local_body_state": "unmodified",
+            "observed_at": "2026-08-12T09:14:03Z",
+            "observed_fingerprint": {
+              "bbox_mm": [
+                -172.0,
+                -427.0,
+                -185.23,
+                172.0,
+                152.0,
+                94.77
+              ],
+              "is_solid": true,
+              "volume_mm3": 53546796.0
+            }
+          },
+          "build_mode": "enclosure",
+          "chirality": "original",
+          "config": {
+            "dimensions": {
+              "length": {
+                "raw": "130",
+                "value": 130.0
+              }
+            },
+            "extra_keys": {
+              "Symmetry": "1234",
+              "Tag": "preserved WG input"
+            },
+            "root": {
+              "formula": "OSSE"
+            }
+          },
+          "design_hash": "sha256:6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b",
+          "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "edit_version": 19,
+          "export_id": "wge_01J4Y2ZDK8Z3TFD3E7V9XKQ4M",
+          "export_sequence": 7,
+          "formula": "osse",
+          "geometry_hash": "sha256:9696969696969696969696969696969696969696969696969696969696969696",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+          "occurrence_path": "Tritonia speaker/wg_tritonia_",
+          "origin_bundle_id": "wgb_01J4Y2ZFK8Z3TFD3E7V9XKQ4M",
+          "parameter_prefix": "wg_tritonia_",
+          "source_contract": {
+            "axis_link": {
+              "direction": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "expected_disc_area_mm2": 506.707,
+            "role": "HF",
+            "throat_diameter_mm": 25.4,
+            "throat_plane_link": {
+              "normal": [
+                0.0,
+                0.0,
+                1.0
+              ],
+              "origin_mm": [
+                0.0,
+                0.0,
+                0.0
+              ]
+            },
+            "throat_z_mm": 0.0
+          }
+        }
+      ],
+      "required_features": [
+        "checksummed-files-v1",
+        "assembly-frame-v1",
+        "instance-records-v1"
+      ],
+      "return": {
+        "created_at": "2026-08-12T09:14:03Z",
+        "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+      },
+      "scope": {
+        "fem_air_volumes": [],
+        "included": [
+          {
+            "body_kind": "solid",
+            "component": "wg_tritonia",
+            "external_reference": "none",
+            "name": "speaker",
+            "object_id": "body-0001",
+            "visible": true,
+            "wglink_instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+          }
+        ],
+        "selection": "root",
+        "skipped": [
+          {
+            "kind": "hidden_body",
+            "name": "jig_left",
+            "object_id": "body-0002",
+            "reason": "hidden bodies are excluded by policy",
+            "severity": "info"
+          },
+          {
+            "count": 14,
+            "kind": "construction",
+            "object_id": "construction-1",
+            "reason": "construction entities have no STEP representation",
+            "severity": "info"
+          }
+        ],
+        "status": "clean"
+      },
+      "sources": [
+        {
+          "default_drive_channel_id": "drive-hf",
+          "expected_connected_components": 1,
+          "id": "source-hf",
+          "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a",
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 1,
+            "per_face_area_mm2": [
+              506.696
+            ],
+            "total_area_mm2": 506.696
+          },
+          "patch_policy": "single-connected",
+          "required": true,
+          "role": "HF",
+          "selectors": {
+            "appearance_labels": [
+              "HF"
+            ],
+            "linked_throat": {
+              "instance_id": "0b6a41c2-a17e-45fb-ae8c-bdf0239e581a"
+            }
+          },
+          "suggested_resolution_mm": 4.0
+        },
+        {
+          "default_drive_channel_id": "drive-lf",
+          "expected_connected_components": 2,
+          "id": "source-lf",
+          "instance_id": null,
+          "observed": {
+            "bodies": [
+              "speaker"
+            ],
+            "face_count": 2,
+            "per_face_area_mm2": [
+              19885.94,
+              19885.94
+            ],
+            "total_area_mm2": 39771.88
+          },
+          "patch_policy": "explicit-disconnected",
+          "required": true,
+          "role": "LF",
+          "selectors": {
+            "appearance_labels": [
+              "LF"
+            ]
+          },
+          "suggested_resolution_mm": 30.0
+        }
+      ],
+      "wgreturn_version": "1.1"
+    },
+    "name": "cut_provenance_without_automatic"
+  }
+]

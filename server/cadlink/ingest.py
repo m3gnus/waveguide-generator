@@ -23,7 +23,7 @@ from server.cadlink.isolated import (
 from server.cadlink.isolation import ChildRefusal
 from server.cadlink.store import CadLinkStore
 from server.design.textcfg import parse
-from server.exports.geometry_identity import geometry_hash_for_design, normalize_json_value
+from server.exports.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import (
     ImportedMeshDependencyError,
     RoleResolutionError,
@@ -34,6 +34,8 @@ from server.mesh.artifact import mesh_text_sha256
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
+
+from .wglink_protocol import ASCII_NORMALIZED, canonical_json
 
 from .cut_recovery import (
     ASYMMETRIC_SECTION,
@@ -167,13 +169,7 @@ class IngestRefusal(ValueError):
 
 
 def _canonical(value: Any) -> bytes:
-    return json.dumps(
-        normalize_json_value(value),
-        allow_nan=False,
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
+    return canonical_json(value, ASCII_NORMALIZED).encode("utf-8")
 
 
 def solve_model_sha256(record: Mapping[str, Any]) -> str:

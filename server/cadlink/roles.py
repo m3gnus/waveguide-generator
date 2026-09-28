@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 
-_BAND_ROLES = frozenset({"LF", "MF", "HF"})
+from .wglink_protocol import SOURCE_ROLES
+
+_BAND_ROLES = frozenset(SOURCE_ROLES[:3])
 
 
 def canonical_source_role(role: str) -> str:

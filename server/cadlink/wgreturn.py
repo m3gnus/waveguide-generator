@@ -17,6 +17,7 @@ import re
 from typing import Any, Iterable, Mapping
 import unicodedata
 
+from server.cadlink import wglink_protocol as protocol
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES, MAX_WGRETURN_JSON_BYTES
 
 
@@ -120,19 +121,9 @@ SOURCE_IDENTITY_MAX_BYTES = 25
 WORST_CASE_SOURCE_TAG = 9999
 
 
-def source_physical_name(tag: int, source_id: str, instance_id: Any, role: str) -> str:
-    """The mesh physical name ingestion gives a source.
+source_physical_name = protocol.source_physical_name
 
-    A copy of ``server.mesh.imported._physical_name``, which this light reader
-    does not import (the mesh module loads the meshing stack); a test pins the
-    two equal.
-    """
 
-    instance = "null" if instance_id is None else str(instance_id)
-    return (
-        f"wg-import-v1|tag={tag}|source_id={source_id}|"
-        f"instance_id={instance}|role={role}"
-    )
 REQUIRED_BASE_FEATURES = frozenset(
     {"checksummed-files-v1", "assembly-frame-v1", "instance-records-v1"}
 )
@@ -707,222 +698,16 @@ def _validate_source(
 
 
 def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
-    """Validate all schema fields consumed by Phase-2 ingestion."""
-
-    _validate_finite_tree(manifest)
-    version = _string(_required(manifest, "wgreturn_version", "$"), "$.wgreturn_version")
-    assert version is not None
-    match = _VERSION.fullmatch(version)
-    if match is None:
-        _fail("$.wgreturn_version", "must be exactly major.minor")
-    if int(match.group(1)) != SUPPORTED_MAJOR:
-        _fail("$.wgreturn_version", f"unsupported major {match.group(1)}; reader supports {SUPPORTED_VERSION}")
-    minor_version = int(match.group(2))
-    features = _list(_required(manifest, "required_features", "$"), "$.required_features")
-    feature_names = []
-    for index, item in enumerate(features):
-        name = _string(item, f"$.required_features[{index}]")
-        assert name is not None
-        feature_names.append(name)
-    if len(set(feature_names)) != len(feature_names):
-        _fail("$.required_features", "feature names must be unique")
-    unknown = sorted(set(feature_names) - SUPPORTED_FEATURES)
+    """Validate the unchanged WG ingress contract through the shared profile."""
+    try:
+        protocol.validate_structure(manifest, protocol.WG_INGRESS)
+    except protocol.ProtocolValidationError as exc:
+        raise WgReturnValidationError(str(exc)) from exc
+    # Keep this reader's feature gate effective when its supported set is narrowed
+    # (for example, by an older WG build). The shared profile checks the full set.
+    unknown = sorted(set(manifest["required_features"]) - SUPPORTED_FEATURES)
     if unknown:
         _fail("$.required_features", f"unknown required feature(s): {', '.join(unknown)}")
-    missing_features = sorted(REQUIRED_BASE_FEATURES - set(feature_names))
-    if missing_features:
-        _fail("$.required_features", f"missing required feature(s): {', '.join(missing_features)}")
-
-    returned = _mapping(_required(manifest, "return", "$"), "$.return")
-    return_id = _string(_required(returned, "id", "$.return"), "$.return.id")
-    if return_id is None or _RETURN_ID.fullmatch(return_id) is None:
-        _fail("$.return.id", "must be a wgr_ ULID")
-    _timestamp(_required(returned, "created_at", "$.return"), "$.return.created_at")
-    generator = _mapping(_required(manifest, "generator", "$"), "$.generator")
-    for key in ("adapter", "adapter_version", "cad_app", "cad_version"):
-        _string(_required(generator, key, "$.generator"), f"$.generator.{key}")
-    document = _mapping(_required(manifest, "document", "$"), "$.document")
-    _string(_required(document, "name", "$.document"), "$.document.name")
-    _string(document.get("native_id"), "$.document.native_id", nullable=True)
-    _string(document.get("request_id"), "$.document.request_id", nullable=True)
-    coordinates = _mapping(_required(manifest, "coordinate_system", "$"), "$.coordinate_system")
-    fixed = {
-        "length_unit": "mm",
-        "handedness": "right",
-        "matrix_convention": "row-major-local-to-parent",
-    }
-    for key, expected in fixed.items():
-        if _required(coordinates, key, "$.coordinate_system") != expected:
-            _fail(f"$.coordinate_system.{key}", f"must equal {expected!r}")
-    if "export_frame" in coordinates:
-        frame = _string(coordinates["export_frame"], "$.coordinate_system.export_frame")
-        if frame not in EXPORT_FRAMES:
-            _fail(
-                "$.coordinate_system.export_frame",
-                f"must be one of {', '.join(EXPORT_FRAMES)}",
-            )
-
-    # Paired in both directions, as the reduced domain is: a stated up that no
-    # feature makes binding, or a feature with nothing stated, is refused.
-    if ("document_up" in coordinates) != (DOCUMENT_UP_FEATURE in feature_names):
-        _fail(
-            "$.required_features",
-            f"{DOCUMENT_UP_FEATURE} is required exactly when "
-            "$.coordinate_system.document_up is present",
-        )
-    if "document_up" in coordinates:
-        up = _string(coordinates["document_up"], "$.coordinate_system.document_up")
-        if up not in DOCUMENT_UP_AXES:
-            _fail(
-                "$.coordinate_system.document_up",
-                f"must be one of {', '.join(DOCUMENT_UP_AXES)}",
-            )
-
-    assembly = _mapping(_required(manifest, "assembly", "$"), "$.assembly")
-    _string(_required(assembly, "file", "$.assembly"), "$.assembly.file")
-    _integer(_required(assembly, "n_bodies_expected", "$.assembly"), "$.assembly.n_bodies_expected", minimum=1)
-    _bbox(_required(assembly, "bbox_mm", "$.assembly"), "$.assembly.bbox_mm")
-    # Version 1.1 makes the document signature mandatory so a missing value
-    # cannot silently turn an unknown freshness comparison into "unchanged".
-    if minor_version >= 1:
-        _string(
-            _required(assembly, "signature_hash", "$.assembly"),
-            "$.assembly.signature_hash",
-        )
-    elif assembly.get("signature_hash") is not None:
-        _string(assembly["signature_hash"], "$.assembly.signature_hash")
-    domain_planes = _domain(
-        assembly.get("domain"),
-        automatic_feature=DOMAIN_AUTOMATIC_FEATURE in feature_names,
-    )
-    # Paired in both directions, so neither an ignored reduction nor a
-    # decorative feature name is representable.
-    if bool(domain_planes) != (REDUCED_DOMAIN_FEATURE in feature_names):
-        _fail(
-            "$.required_features",
-            f"{REDUCED_DOMAIN_FEATURE} is required exactly when "
-            "$.assembly.domain declares a reduced domain",
-        )
-
-    scope = _mapping(_required(manifest, "scope", "$"), "$.scope")
-    _string(_required(scope, "selection", "$.scope"), "$.scope.selection")
-    included = _list(_required(scope, "included", "$.scope"), "$.scope.included")
-    for index, item in enumerate(included):
-        entry_path = f"$.scope.included[{index}]"
-        entry = _mapping(item, entry_path)
-        for key in ("object_id", "name", "body_kind", "external_reference"):
-            _string(_required(entry, key, entry_path), f"{entry_path}.{key}")
-        if entry["body_kind"] not in {"solid", "surface"}:
-            _fail(f"{entry_path}.body_kind", "must be 'solid' or 'surface'")
-        if not isinstance(_required(entry, "visible", entry_path), bool):
-            _fail(f"{entry_path}.visible", "must be boolean")
-        _string(entry.get("wglink_instance_id"), f"{entry_path}.wglink_instance_id", nullable=True)
-    if "cut_provenance" in assembly:
-        # Only a writer that left the domain to WG records its cuts; beside a
-        # declaration they would be a second, conflicting statement.
-        if DOMAIN_AUTOMATIC_FEATURE not in feature_names:
-            _fail(
-                "$.assembly.cut_provenance",
-                f"is accepted only with {DOMAIN_AUTOMATIC_FEATURE} and an automatic domain",
-            )
-        _cut_provenance(
-            assembly["cut_provenance"],
-            {str(item["object_id"]) for item in included if isinstance(item, Mapping)},
-        )
-    skipped = _list(_required(scope, "skipped", "$.scope"), "$.scope.skipped")
-    degraded = False
-    for index, item in enumerate(skipped):
-        skip = _mapping(item, f"$.scope.skipped[{index}]")
-        for key in ("object_id", "kind", "reason"):
-            _string(_required(skip, key, f"$.scope.skipped[{index}]"), f"$.scope.skipped[{index}].{key}")
-        severity = _string(_required(skip, "severity", f"$.scope.skipped[{index}]"), f"$.scope.skipped[{index}].severity")
-        if severity not in {"info", "degraded"}:
-            _fail(f"$.scope.skipped[{index}].severity", "must be 'info' or 'degraded'")
-        degraded = degraded or severity == "degraded"
-    status = _string(_required(scope, "status", "$.scope"), "$.scope.status")
-    if status not in {"clean", "degraded"}:
-        _fail("$.scope.status", "must be 'clean' or 'degraded'")
-    if (status == "degraded") != degraded:
-        _fail("$.scope.status", "must be 'degraded' iff scope.skipped contains a degraded entry")
-    fem = _list(_required(scope, "fem_air_volumes", "$.scope"), "$.scope.fem_air_volumes")
-    if fem and "fem-air-volume-v1" not in feature_names:
-        _fail("$.required_features", "fem-air-volume-v1 is required when FEM air volumes are present")
-    for index, item in enumerate(fem):
-        volume = _mapping(item, f"$.scope.fem_air_volumes[{index}]")
-        _string(_required(volume, "file", f"$.scope.fem_air_volumes[{index}]"), f"$.scope.fem_air_volumes[{index}].file")
-        expected = volume.get(
-            "n_bodies_expected",
-            volume.get("n_solids_expected", volume.get("expected_solids")),
-        )
-        if expected != 1:
-            _fail(f"$.scope.fem_air_volumes[{index}]", "must declare exactly one expected solid")
-
-    instances = _list(_required(manifest, "instances", "$"), "$.instances")
-    instance_ids = [_validate_instance(item, f"$.instances[{index}]") for index, item in enumerate(instances)]
-    if len(set(instance_ids)) != len(instance_ids):
-        _fail("$.instances", "instance_id values must be unique")
-    object_ids = [str(item["object_id"]) for item in included]
-    if len(set(object_ids)) != len(object_ids):
-        _fail("$.scope.included", "object_id values must be unique")
-    instance_id_set = set(instance_ids)
-    for index, item in enumerate(included):
-        owner = item.get("wglink_instance_id")
-        if owner is not None and owner not in instance_id_set:
-            _fail(
-                f"$.scope.included[{index}].wglink_instance_id",
-                f"does not name an instances[] record: {owner!r}",
-            )
-    anchor = coordinates.get("solver_anchor_instance_id")
-    if len(instances) == 1:
-        if anchor is not None and anchor != instance_ids[0]:
-            _fail("$.coordinate_system.solver_anchor_instance_id", "must name the sole instance")
-    elif len(instances) > 1:
-        if anchor not in set(instance_ids):
-            _fail("$.coordinate_system.solver_anchor_instance_id", "is required and must name an instance when multiple instances exist")
-    elif anchor is not None:
-        _fail("$.coordinate_system.solver_anchor_instance_id", "must be null or absent when instances is empty")
-
-    sources = _list(_required(manifest, "sources", "$"), "$.sources")
-    if not sources:
-        _fail("$.sources", "must contain at least one source")
-    source_identity = SOURCE_IDENTITY_FEATURE in feature_names
-    source_ids = [
-        _validate_source(
-            item,
-            f"$.sources[{index}]",
-            set(instance_ids),
-            source_identity=source_identity,
-        )
-        for index, item in enumerate(sources)
-    ]
-    if len(set(source_ids)) != len(source_ids):
-        if source_identity:
-            # Two sources claiming one identity is an ambiguous resolution the
-            # writer must refuse; WG does not choose between them.
-            _fail(
-                "$.sources",
-                f"{SOURCE_IDENTITY_FEATURE} source identities must be unique within the return",
-            )
-        _fail("$.sources", "source ids must be unique")
-    channel_owners: dict[str, set[str]] = {}
-    for source in sources:
-        source_record = _mapping(source, "$.sources")
-        owner = source_record.get("instance_id")
-        if not isinstance(owner, str) or not owner:
-            continue
-        channel = str(source_record["default_drive_channel_id"])
-        channel_owners.setdefault(channel, set()).add(owner)
-    reused_channels = sorted(
-        channel for channel, owners in channel_owners.items() if len(owners) > 1
-    )
-    if reused_channels:
-        _fail(
-            "$.sources",
-            "default_drive_channel_id values must not span linked instances: "
-            + ", ".join(reused_channels),
-        )
-    if _required(manifest, "acoustics", "$") is not None:
-        _fail("$.acoustics", "must be null in Phase 2")
     return manifest
 
 

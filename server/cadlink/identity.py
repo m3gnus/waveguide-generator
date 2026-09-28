@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
-import json
 import re
 import secrets
 import time
@@ -13,6 +12,7 @@ from typing import Literal, Mapping
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from server.design.schema import ConfigBlock, DesignConfig
+from .wglink_protocol import ASCII_NAN_PERMITTED, canonical_json
 
 
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -174,9 +174,7 @@ def design_hash(design: DesignConfig) -> str:
     from server.design.textcfg import parse, serialize
 
     normalized = parse(serialize(design)).design
-    canonical = json.dumps(
-        normalized.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode("utf-8")
+    canonical = canonical_json(normalized.model_dump(mode="json"), ASCII_NAN_PERMITTED).encode("utf-8")
     return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 
