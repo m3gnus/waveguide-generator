@@ -591,6 +591,22 @@ def test_a_clean_negative_cut_is_recoverable_by_reflection() -> None:
         ({"id": "Bright"}, None),
         ({"id": "source-hf"}, None),
         ({"id": "s1", "role": "LF", "name": "Rear port"}, None),
+        # Glued position words are sided; a short list of ordinary words is not.
+        ({"id": "frontleft"}, "left"),
+        ({"id": "bottomleft"}, "left"),
+        ({"id": "upperleft"}, "left"),
+        ({"id": "lowerright"}, "right"),
+        ({"id": "rearright"}, "right"),
+        ({"id": "leftside"}, "left"),
+        ({"id": "farleft"}, "left"),
+        ({"id": "rightangle"}, None),
+        ({"id": "Brightness"}, None),
+        ({"id": "Leftovers"}, None),
+        ({"id": "copyright"}, None),
+        ({"id": "cleft"}, None),
+        ({"id": "MFR"}, None),
+        ({"id": "HFR"}, None),
+        ({"id": "WOOFERL"}, None),
     ],
 )
 def test_a_source_is_sided_only_by_its_own_words(source: dict[str, Any], side: str | None) -> None:

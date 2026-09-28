@@ -105,14 +105,15 @@ _SIDE_WORDS = {
     "rt": "right",
     "rgt": "right",
 }
-#: Driver words a glued "left"/"right" may follow or precede ("mfleft",
-#: "wooferright", "leftwoofer"): only these, so "upright", "bright" and
-#: "leftover" are not sides.
-_DRIVER_WORDS = frozenset(
+#: Words that start or end with "left"/"right" without naming a side. Any
+#: other such word is read as a side ("frontleft", "leftside", "mfright"):
+#: when in doubt, refuse.
+_NOT_SIDE_WORDS = frozenset(
     {
-        "lf", "mf", "hf", "bass", "mid", "midrange", "sub", "subwoofer", "woofer",
-        "tweeter", "driver", "horn", "port", "cone", "dome", "cd", "top", "speaker",
-        "spk", "ch", "channel", "src", "source",
+        "leftover", "leftovers", "leftist",
+        "rightangle", "rightangled", "righteous", "rightful", "rightly", "rightmost",
+        "bright", "upright", "fright", "wright", "alright", "outright", "downright",
+        "forthright", "copyright", "birthright", "playwright", "cartwright", "cleft",
     }
 )
 _WORD = re.compile(r"[a-z0-9]+")
@@ -131,10 +132,10 @@ _MINTED_SOURCE_ID = re.compile(r"^wgs-[0-9A-HJKMNP-TV-Z]{20}$")
 def _word_side(word: str) -> str | None:
     if word in _SIDE_WORDS:
         return _SIDE_WORDS[word]
+    if word in _NOT_SIDE_WORDS or word.isdigit():
+        return None
     for side in ("left", "right"):
-        if word.endswith(side) and word[: -len(side)] in _DRIVER_WORDS:
-            return side
-        if word.startswith(side) and word[len(side):] in _DRIVER_WORDS:
+        if word.startswith(side) or word.endswith(side):
             return side
     return None
 
