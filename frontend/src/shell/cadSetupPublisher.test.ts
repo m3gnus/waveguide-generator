@@ -227,3 +227,85 @@ describe('CAD setup publisher', () => {
     stop();
   });
 });
+
+describe('CAD setup publisher: what an edit not yet sent does', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    resetCadReturnStore();
+    resetCadPreparationStore();
+    resetDocumentStore();
+    resetSolveOptionsStore();
+    workspaceModeStore.setMode('cad');
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    localStorage.clear();
+    workspaceModeStore.setMode('parametric');
+  });
+
+  it('sends an edit still inside the debounce when the project is switched, under the project it was made in', async () => {
+    vi.useFakeTimers();
+    const { fetcher, to } = recorder();
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(to('/project-setups')).toEqual([]);
+
+    useCadReturnStore.getState().selectBundle(null, null);
+    await vi.advanceTimersByTimeAsync(0);
+
+    const recorded = to('/project-setups') as Array<{ lineageId: string; setup: { geometry: { exterior_only: boolean } } }>;
+    expect(recorded.map(({ lineageId }) => lineageId)).toEqual(['wgl_a']);
+    expect(recorded[0].setup.geometry.exterior_only).toBe(true);
+    stop();
+  });
+
+  it('sends an edit still inside the debounce when the publisher stops', async () => {
+    vi.useFakeTimers();
+    const { fetcher, to } = recorder();
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(to('/project-setups')).toEqual([]);
+
+    stop();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(to('/project-setups')).toHaveLength(1);
+    // The timer went with it: nothing more is sent later.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(to('/project-setups')).toHaveLength(1);
+  });
+
+  it('does not retry a failed recording by itself: the next edit sends the setup again', async () => {
+    // Best effort by design today. The gap is that a failed PUT leaves the
+    // backend without the edit until the user edits again.
+    vi.useFakeTimers();
+    const calls: unknown[] = [];
+    let failing = true;
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/project-setups')) {
+        calls.push(JSON.parse(String(init?.body)));
+        if (failing) throw new Error('offline');
+      }
+      return json({});
+    }) as unknown as typeof fetch;
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(1);
+
+    failing = false;
+    useCadReturnStore.getState().setExteriorOnly(false);
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+});

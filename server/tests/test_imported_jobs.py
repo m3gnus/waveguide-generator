@@ -1255,6 +1255,75 @@ def test_retrying_an_unlinked_job_after_the_frame_changed_is_refused(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_a_queued_unlinked_job_runs_in_its_own_frame_after_a_later_confirmation(
+    tmp_path: Path,
+) -> None:
+    """Execution never re-reads confirmations: a queued job keeps the axis it was submitted in."""
+
+    from server.cadlink.solver_frame import confirm_frame, frame_matrix
+
+    gate = asyncio.Event()
+    seen: list[dict[str, Any]] = []
+
+    class GatedEngine:
+        name = "metal"
+
+        async def run(
+            self,
+            _request: SolveRequest,
+            *,
+            cancel_cb: Any,
+            stage_cb: Any,
+            imported_record: dict[str, Any],
+            artifact_cb: Any = None,
+        ) -> EngineRunResult:
+            seen.append(imported_record["normalisation"])
+            if len(seen) == 1:
+                await gate.wait()
+            return EngineRunResult(
+                results={
+                    "channels": {"left": {}, "right": {}},
+                    "channel_order": ["left", "right"],
+                    "metadata": {},
+                },
+                msh_text=imported_record["_execution_msh_text"],
+                mesh_stats={"triangle_count": 3},
+            )
+
+    async def scenario() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        runtime, ingest_id, record = await _runtime_fixture(tmp_path, _unlinked_changes("+y"))
+        runtime.engine_registry = _AlwaysRegistry(GatedEngine())  # type: ignore[assignment]
+        stored = {**record, "ingest_id": ingest_id}
+        try:
+            confirm_frame(runtime.cadlink_store, stored, "+y")
+            first = await runtime.submit(_request(ingest_id))
+            queued = await runtime.submit(_request(ingest_id))
+            # The frame is confirmed again, elsewhere, while the second job waits.
+            confirm_frame(runtime.cadlink_store, stored, "-x")
+            gate.set()
+            rows = []
+            for job_id in (first, queued):
+                for _ in range(300):
+                    row = runtime.store.get_job_row(job_id)
+                    if row["status"] in {"complete", "error"}:
+                        break
+                    await asyncio.sleep(0.01)
+                rows.append(row)
+            return rows, list(seen)
+        finally:
+            await runtime.shutdown()
+
+    rows, frames = asyncio.run(scenario())
+
+    assert [row["status"] for row in rows] == ["complete", "complete"], [
+        row.get("error_message") for row in rows
+    ]
+    assert len(frames) == 2
+    for frame in frames:
+        assert frame["solver_frame"]["axis"] == "+y"
+        assert frame["matrix"] == frame_matrix("+y").tolist()
+
+
 def test_a_linked_record_is_not_gated_by_any_frame_confirmation(tmp_path: Path) -> None:
     async def scenario() -> None:
         runtime, ingest_id, _ = await _runtime_fixture(tmp_path)

@@ -146,6 +146,7 @@ class FakeIngest:
         self.during: Callable[[], object] | None = None
         self.error: BaseException | None = None
         self.polar_grid_derivation: dict[str, Any] | None = None
+        self.symmetry: dict[str, Any] | None = None
 
     def __call__(
         self, bundle_path, mesh, skipped, store, data_dir, *, prep_options, commit_guard,
@@ -180,6 +181,8 @@ class FakeIngest:
             }
             if self.polar_grid_derivation is not None:
                 payload["polar_grid_derivation"] = self.polar_grid_derivation
+            if self.symmetry is not None:
+                payload["symmetry"] = self.symmetry
             payload["report_sha256"] = "sha256:" + hashlib.sha256(
                 json.dumps(payload, sort_keys=True).encode()
             ).hexdigest()
@@ -458,6 +461,42 @@ def test_a_return_that_changed_after_the_request_is_refused(harness: Harness) ->
 
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
     assert harness.submitted == []
+
+
+def test_a_domain_mirrored_off_the_radiation_axis_is_refused_through_preparation(
+    harness: Harness,
+) -> None:
+    """The excitation gate runs on the real check, not a stand-in, on the way to a job.
+
+    The solve request already refuses what the other branches of the check
+    guard (a source in two channels, a motion outside normal and axial), so a
+    mirror plane that does not contain the radiation axis is the case that
+    reaches the gate from a prepared record.
+    """
+
+    harness.ingest.symmetry = {"cut_planes": ["z0"], "domain_planes": ["z0"]}
+    _received(harness)
+    revision = _revision(harness.store, _setup())
+
+    refused = harness.prepare(setup_revision_id=revision)
+
+    assert (refused["state"], refused["reason"]) == ("needs_user_input", "submission_refused"), refused
+    assert "does not contain the radiation axis" in refused["message"]
+    assert harness.submitted == []
+
+
+def test_a_domain_mirrored_on_a_plane_holding_the_radiation_axis_is_solved(
+    harness: Harness,
+) -> None:
+    """Control for the gate above: the same record on a supported plane submits."""
+
+    harness.ingest.symmetry = {"cut_planes": ["x0"], "domain_planes": ["x0"]}
+    _received(harness)
+
+    solved = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert solved["state"] == "accepted", solved
+    assert len(harness.submitted) == 1
 
 
 # -- fencing -------------------------------------------------------------------------

@@ -141,6 +141,24 @@ def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(tmp_pa
     assert harness.submitted == []
 
 
+def test_a_request_naming_a_bundle_with_a_torn_step_is_never_ingested(tmp_path) -> None:
+    """Fusion died mid-export: the manifest is whole, the STEP it lists is cut short."""
+
+    harness = Harness(tmp_path)
+    bundle_path, manifest = _write_return(harness.workspace, step=b"STEP-DATA" * 200)
+    step = harness.workspace / bundle_path / "assembly.step"
+    step.write_bytes(step.read_bytes()[:100])
+    _write_command(harness.data_dir, bundle_path, manifest)
+
+    _collect(harness)
+    summary = harness.prepare()
+
+    assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
+    assert harness.ingest.calls == [] and harness.submitted == []
+    assert ledger_entry(harness.store, "cmd-1")["state"] == "refused"
+    assert _held(harness.data_dir) is None
+
+
 def test_a_newer_return_does_not_cancel_a_command_for_an_older_one(
     tmp_path, data_dir, store
 ) -> None:
