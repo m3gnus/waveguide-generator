@@ -865,25 +865,41 @@ before it deletes the request. It changes nothing about what is accepted or refu
 
 ```json
 {"schemaVersion": 1, "commandId": "...", "operationId": "...", "outcome": "accepted",
- "reason": null, "jobId": null, "digest": "sha256:...", "at": "2026-09-29T10:00:00Z"}
+ "reason": null, "jobId": null, "digest": "sha256:...", "manifestSha256": "sha256:...",
+ "kind": "prepare_and_solve", "at": "2026-09-29T10:00:00Z"}
 ```
 
 - `outcome` is `accepted` when WG holds the operation, whatever it later becomes: a Solve
   then prepares and becomes a job (or not) as its own record shows. It is `refused` when
   WG will not take the request, and `reason` is the message the user reads. `jobId` is set
-  by a redelivery after the job exists. A request that names no usable command id gets no
-  file.
+  by a redelivery after the job exists. `manifestSha256` and `kind` are the request's own,
+  so the add-in can match the file to the request it wrote; `digest` is WG-internal and
+  opaque. A request that names no usable command id gets no file.
 - The refusals are: a request from an older add-in, a request WG identified but could not
   accept (unknown kind, bad `returnId`, an id that is not a plain operation id), a
-  request whose snapshot is rejected at acceptance, and a different request under an id
-  that already names an operation. The last one never replaces an existing file for the
-  id, so it cannot turn the accepted original into a refusal.
+  and a request whose snapshot is rejected at acceptance. A copy under an id WG already
+  holds as an operation (a different request, or an invalid one) never produces a refusal:
+  the file for that id always describes the operation, written from its row, so a later
+  copy cannot turn an accepted original into a refusal.
 - The file is staged under a name starting with `.` and moved into place with
   `os.replace`, so a reader sees a whole file. On Windows the replace is retried briefly
   when a reader holds the target (`PermissionError`). A redelivery of the same request
   writes the same outcome again.
+- Before the file is written WG forces the acceptance durable (a WAL checkpoint of the
+  CAD store), and after the replace it flushes the folder on POSIX. Without that, a power
+  cut could roll back the acceptance while the file and the request's delete survived, and
+  the add-in would see "accepted" for an operation WG lost.
 - A crash between persisting and writing leaves the claim, so the next start redelivers
   the request, gets the same operation (no second job), and writes the file.
+- **No file, and what the add-in does then.** Some requests get no file: one with no usable
+  command id, one WG cannot read (the claim is kept and read again), a power cut, and one
+  whose acknowledgement cannot be written. A file that cannot be created or written
+  (for example a plain file named `.wg-solve-acks`) keeps its claim for 30 passes and is
+  reported once per pass with a warning; then WG gives it up with one error and consumes
+  the request, whose operation is durable. A file can also lag the request's disappearance
+  by up to about 30 passes while its snapshot is retained. The add-in must not wait for
+  ever: after about two minutes with its request gone and no file, it says that WG took the
+  request but has not confirmed it, never "refused" and never "solving".
 - Files are kept for 24 hours and at most 500; the delivery pass prunes the oldest,
   and stale staging files, at most once a minute.
 - WG advertises `solveAcknowledgement: 1` in `wg-capabilities.json` while its inbox
@@ -901,6 +917,8 @@ the next start finds:
 | after the claim, before acceptance | a claim, no operation | reads the claim and accepts it |
 | after acceptance, before retention | a claim, operation `received` | recovers the operation from the claim, retains, deletes the claim |
 | after retention, before the delete | a claim, snapshot retained | recovers, deletes the claim |
+| after acceptance, before the acknowledgement | a claim, operation `received`, no acknowledgement | redelivers the same request: same operation, no second job, writes the acknowledgement, deletes the claim |
+| after the acknowledgement, before the delete | a claim and an acknowledgement | recovers, writes the same acknowledgement again, deletes the claim |
 | after the delete, before preparation | no file, operation `received` | the delivery pass prepares it |
 | while preparing | no file, operation `processing` | `needs_user_input` (`interrupted`); Solve now submits one job |
 | after the job was created | job under `cad-solve:<id>`, not yet recorded | start-up recovery records `accepted` with that job |

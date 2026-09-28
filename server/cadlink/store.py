@@ -2713,6 +2713,20 @@ class CadLinkStore:
             self._connections.add(conn)
         return conn
 
+    def make_durable(self) -> None:
+        """Flush every committed write to disk before returning.
+
+        The store runs WAL with ``synchronous=NORMAL``, where a power cut can
+        roll back the last commits. A checkpoint syncs the log and the database
+        file, so what was committed before this call survives one.
+        """
+
+        self.initialize()
+        if str(self.db_path) == ":memory:":
+            return
+        with self._lock:
+            self._connect().execute("PRAGMA wal_checkpoint(FULL)").fetchall()
+
     def _read_one(self, sql: str, parameters: tuple[object, ...]) -> dict[str, Any] | None:
         """Read without creating a registry merely because a file was opened."""
 

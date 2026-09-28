@@ -96,7 +96,9 @@ _unreadable_waits: dict[str, tuple[str, int]] = {}
 _refused_claims: set[str] = set()
 # Refused claims whose acknowledgement file could not be written yet, by claim
 # name: (command id, reason). The delete waits for the acknowledgement.
-_pending_refusal_acks: dict[str, tuple[str, str]] = {}
+_pending_refusal_acks: dict[str, tuple[str, str, str | None, str | None]] = {}
+# Passes an acknowledgement has failed to be written, by claim name.
+_ack_failures: dict[str, int] = {}
 _DELIVERY_DIR_FDS = os.name != "nt" and all(
     operation in os.supports_dir_fd for operation in (os.open, os.rename, os.unlink)
 )
@@ -159,6 +161,11 @@ ACK_REFUSED = "refused"
 # folder never holds more than ACK_MAX_FILES (oldest go first).
 ACK_RETENTION_SECONDS = 24 * 3600
 ACK_MAX_FILES = 500
+# An acknowledgement that cannot be written keeps its claim for this many passes
+# (about half a minute at the loop's cadence). Then WG gives it up, once and
+# loudly, and consumes the request: the operation is durable either way, and a
+# producer that finds no acknowledgement says so rather than waiting.
+ACK_FAILURE_PASSES = 30
 # Pruning runs at most this often, from the delivery pass.
 ACK_PRUNE_INTERVAL_SECONDS = 60.0
 # The JSON outcome ledger of earlier versions. The store imports it once and
@@ -885,6 +892,8 @@ def write_acknowledgement(
     reason: str | None = None,
     job_id: str | None = None,
     digest: str | None = None,
+    manifest_sha256: str | None = None,
+    kind: str | None = None,
     only_if_missing: bool = False,
 ) -> bool:
     """Publish the outcome of a delivered request, atomically. False: could not be written.
@@ -908,6 +917,8 @@ def write_acknowledgement(
         "reason": reason,
         "jobId": job_id,
         "digest": digest,
+        "manifestSha256": manifest_sha256,
+        "kind": kind,
         "at": utc_now(),
     }
     try:
@@ -933,6 +944,7 @@ def write_acknowledgement(
             try:
                 os.replace(temporary, target)
                 replaced = True
+                _sync_directory(directory)
                 return True
             except PermissionError:
                 if attempt + 1 == _HELD_ATTEMPTS:
@@ -948,6 +960,46 @@ def write_acknowledgement(
             except OSError:
                 logger.debug("Could not remove the staged acknowledgement %s.", temporary.name)
     return False  # pragma: no cover - the loop always returns or raises
+
+
+def _sync_directory(directory: Path) -> None:
+    """Flush a folder's entries to disk (POSIX), so a rename outlives a power cut."""
+
+    if os.name == "nt":
+        return
+    try:
+        descriptor = os.open(directory, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _ack_written(claim_name: str, written: bool) -> bool:
+    """Whether a claim may go on to be deleted after its acknowledgement was tried.
+
+    A failed write keeps the claim for ``ACK_FAILURE_PASSES`` passes; then it is
+    given up once, with an error, and the request is consumed without one.
+    """
+
+    if written:
+        _ack_failures.pop(claim_name, None)
+        return True
+    failed = _ack_failures.get(claim_name, 0) + 1
+    if failed >= ACK_FAILURE_PASSES:
+        _ack_failures.pop(claim_name, None)
+        logger.error(
+            "Could not publish the acknowledgement for %s in %d passes; giving it up. "
+            "The request is consumed, and its producer will find no acknowledgement.",
+            claim_name, failed,
+        )
+        return True
+    _ack_failures[claim_name] = failed
+    return False
 
 
 def prune_acknowledgements(
@@ -1099,27 +1151,51 @@ def _keep_for_retention(claim: Path, command: PendingSolveCommand) -> bool:
     return False
 
 
+def _echo(payload: object) -> tuple[str | None, str | None]:
+    """The manifest hash and kind a request names, for its acknowledgement."""
+
+    if not isinstance(payload, Mapping):
+        return None, None
+    manifest, kind = payload.get("manifestSha256"), payload.get("kind")
+    return (
+        manifest if isinstance(manifest, str) else None,
+        kind if isinstance(kind, str) else None,
+    )
+
+
+def _row_manifest(row: Mapping[str, Any]) -> str | None:
+    try:
+        inputs = json.loads(row.get("inputs_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    manifest = inputs.get("manifest_sha256") if isinstance(inputs, Mapping) else None
+    return manifest if isinstance(manifest, str) else None
+
+
 def _publish_acknowledgement(
     data_dir: Path,
     store: CadLinkStore,
     command: PendingSolveCommand,
-    conflict_reason: str | None,
 ) -> bool:
     """Publish what became of a delivered request. False: not written yet.
 
-    A different request under an id that already names an operation is refused,
-    but never replaces the acknowledgement of the operation that holds the id.
-    Everything else is the operation's own state, so a redelivery replays it.
+    The operation's own row is the acknowledgement, so a redelivery replays it,
+    and a different request under an id the store holds -- a conflict -- speaks
+    for the operation, never against it. The row is forced durable first: an
+    acknowledgement must not outlive an acceptance a power cut can undo.
     """
 
-    if conflict_reason is not None:
-        return write_acknowledgement(
-            data_dir, command.command_id, ACK_REFUSED, reason=conflict_reason,
-            only_if_missing=True,
-        )
     row = store.get_operation(command.command_id)
     if row is None:
         return True
+    try:
+        store.make_durable()
+    except Exception:  # noqa: BLE001 - an acknowledgement is never owed on a row that may vanish
+        logger.warning(
+            "Could not make the acceptance of solve command %s durable.",
+            command.command_id, exc_info=True,
+        )
+        return False
     # Only a rejected row is a refusal; received, processing and accepted rows
     # are operations WG holds.
     refused_outcome = row["state"] == REJECTED
@@ -1130,6 +1206,8 @@ def _publish_acknowledgement(
         reason=_entry(row)["reason"] if refused_outcome else None,
         job_id=row["job_id"],
         digest=row.get("request_digest"),
+        manifest_sha256=_row_manifest(row) or command.manifest_sha256,
+        kind=row["kind"],
     )
 
 
@@ -1215,6 +1293,10 @@ def collect_solve_deliveries(
         for name in set(_unreadable_waits) - present:
             del _unreadable_waits[name]
         _refused_claims.intersection_update(present)
+        for name in set(_pending_refusal_acks) - present:
+            del _pending_refusal_acks[name]
+        for name in set(_ack_failures) - present:
+            del _ack_failures[name]
         if held is not None:
             # A pass can stop at an answer before it reaches a waiting claim;
             # that claim's operation is held all the same.
@@ -1226,9 +1308,10 @@ def collect_solve_deliveries(
                 # refusal whose acknowledgement is still owed writes it first.
                 owed = _pending_refusal_acks.get(delivery.path.name)
                 if owed is not None:
-                    if not write_acknowledgement(
-                        data_dir, owed[0], ACK_REFUSED, reason=owed[1]
-                    ):
+                    if not _ack_written(delivery.path.name, write_acknowledgement(
+                        data_dir, owed[0], ACK_REFUSED, reason=owed[1],
+                        manifest_sha256=owed[2], kind=owed[3],
+                    )):
                         continue
                     del _pending_refusal_acks[delivery.path.name]
                 _acknowledge(delivery.path, quiet=True, dir_fd=delivery.dir_fd)
@@ -1290,13 +1373,20 @@ def collect_solve_deliveries(
                 _retention_waits.pop(claim.name, None)
                 # The refusal is published before the request is deleted, when
                 # the request names an id to publish it under.
+                # An id the store already holds is an operation with its own
+                # acknowledgement: a refusal never speaks for it.
                 refused_id = refusal["operationId"]
-                if refused_id is not None and not write_acknowledgement(
-                    data_dir, refused_id, ACK_REFUSED, reason=refusal["reason"]
-                ):
-                    _pending_refusal_acks[claim.name] = (refused_id, refusal["reason"])
-                    _refused_claims.add(claim.name)
-                    continue
+                if refused_id is not None and store.get_operation(refused_id) is None:
+                    echoed = _echo(payload)
+                    if not _ack_written(claim.name, write_acknowledgement(
+                        data_dir, refused_id, ACK_REFUSED, reason=refusal["reason"],
+                        manifest_sha256=echoed[0], kind=echoed[1],
+                    )):
+                        _pending_refusal_acks[claim.name] = (
+                            refused_id, refusal["reason"], echoed[0], echoed[1],
+                        )
+                        _refused_claims.add(claim.name)
+                        continue
                 if not _acknowledge(claim, dir_fd=delivery.dir_fd):
                     # Held: reported once, the delete retried quietly each pass.
                     _refused_claims.add(claim.name)
@@ -1324,7 +1414,9 @@ def collect_solve_deliveries(
                         conflict["reason"] if conflict is not None
                         else "This id already names a request that is still running; this copy was not taken."
                     )
-                    refused(inbox_refusal(payload, delivery.path.name, conflict_reason))
+                    if claim.name not in _ack_failures:
+                        # Reported once, not again while only its acknowledgement waits.
+                        refused(inbox_refusal(payload, delivery.path.name, conflict_reason))
                 answer = _file_answer(command, accepted)
                 if (
                     accepted.retention == RETAIN_TRANSIENT
@@ -1339,7 +1431,9 @@ def collect_solve_deliveries(
             # The outcome is published before the request is deleted. If it
             # cannot be written the claim stays, and the next poll recovers the
             # same operation and publishes then.
-            if not _publish_acknowledgement(data_dir, store, command, conflict_reason):
+            if not _ack_written(
+                claim.name, _publish_acknowledgement(data_dir, store, command)
+            ):
                 continue
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.

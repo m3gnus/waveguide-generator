@@ -16,7 +16,9 @@ import pytest
 
 from server.cadlink import fusion_delivery, solve_command
 from server.cadlink.solve_command import (
+    ACK_FAILURE_PASSES,
     ACK_MAX_FILES,
+    record_outcome,
     SOLVE_ACKS_DIRECTORY,
     collect_solve_deliveries,
     prune_acknowledgements,
@@ -55,11 +57,11 @@ def store(data_dir):
 
 @pytest.fixture(autouse=True)
 def _fresh_state():
-    for name in ("_retention_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks"):
+    for name in ("_retention_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
         getattr(solve_command, name).clear()
     solve_command._last_ack_prune = 0.0
     yield
-    for name in ("_retention_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks"):
+    for name in ("_retention_waits", "_unreadable_waits", "_refused_claims", "_pending_refusal_acks", "_ack_failures"):
         getattr(solve_command, name).clear()
 
 
@@ -70,6 +72,10 @@ def _acks(data_dir) -> Path:
 def _ack(data_dir, command_id):
     path = _acks(data_dir) / f"{command_id}.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def _claims(data_dir) -> list[str]:
+    return [name for name in _delivery_files(data_dir) if "claim" in name]
 
 
 def _poll(data_dir, store):
@@ -169,7 +175,7 @@ def test_a_conflicting_copy_is_refused_but_never_replaces_the_operations_acknowl
     assert _delivery_files(data_dir) == []
 
 
-def test_a_conflict_with_no_acknowledgement_yet_is_refused_with_the_reason(
+def test_a_conflict_never_writes_a_refusal_under_an_id_the_store_holds(
     data_dir, workspace, store
 ) -> None:
     bundle_path, manifest = _bundle(workspace)
@@ -180,8 +186,161 @@ def test_a_conflict_with_no_acknowledgement_yet_is_refused_with_the_reason(
 
     _poll(data_dir, store)
 
+    # The operation's own state, describing the original request.
     ack = _ack(data_dir, "cmd-1")
-    assert ack["outcome"] == "refused" and "different request" in ack["reason"]
+    assert ack["outcome"] == "accepted" and ack["manifestSha256"] == manifest
+
+
+def test_an_invalid_copy_under_a_held_id_never_downgrades_the_accepted_acknowledgement(
+    data_dir, workspace, store
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest, schema=4, kind="prepare_and_solve")
+    _poll(data_dir, store)
+    assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
+    _file(data_dir, "cmd-1", bundle_path, manifest, schema=4, kind="explode")
+
+    _poll(data_dir, store)
+
+    assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
+    assert _waiting(store) == ["cmd-1"]
+    assert _delivery_files(data_dir) == []
+
+
+def test_every_acknowledgement_names_the_request_it_answers(
+    data_dir, workspace, store
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-s", bundle_path, manifest, schema=4, kind="prepare_and_solve")
+    _file(data_dir, "cmd-bad", bundle_path, manifest, schema=4, kind="explode")
+    _file(data_dir, "cmd-old", bundle_path, manifest, schema=2)
+
+    _poll(data_dir, store)
+
+    solve = _ack(data_dir, "cmd-s")
+    assert (solve["manifestSha256"], solve["kind"]) == (manifest, "prepare_and_solve")
+    bad = _ack(data_dir, "cmd-bad")
+    assert (bad["manifestSha256"], bad["kind"]) == (manifest, "explode")
+    old = _ack(data_dir, "cmd-old")
+    assert old["manifestSha256"] == manifest and old["kind"] == "prepare_and_solve"
+
+
+def test_a_snapshot_rejected_at_acceptance_is_acknowledged_as_refused(
+    data_dir, workspace, store
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+
+    def reject(operation_id):
+        record_outcome(store, operation_id, state="refused", reason="The snapshot is not valid.")
+        return solve_command.RETAIN_INVALID
+
+    collect_solve_deliveries(data_dir, store, retain=reject)
+
+    ack = _ack(data_dir, "cmd-1")
+    assert ack["outcome"] == "refused" and "not valid" in ack["reason"]
+    assert _delivery_files(data_dir) == []
+
+
+def test_the_acceptance_is_made_durable_before_its_acknowledgement_is_written(
+    data_dir, workspace, store, monkeypatch
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    order: list[str] = []
+    real_durable = CadLinkStore.make_durable
+
+    def durable(self):
+        order.append(f"durable(ack={'yes' if _ack(data_dir, 'cmd-1') else 'no'})")
+        return real_durable(self)
+
+    monkeypatch.setattr(CadLinkStore, "make_durable", durable)
+
+    _poll(data_dir, store)
+
+    assert order == ["durable(ack=no)"]
+    assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
+
+
+def test_an_acceptance_that_cannot_be_made_durable_keeps_the_request(
+    data_dir, workspace, store, monkeypatch
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+
+    def broken(self):
+        raise OSError("disk")
+
+    monkeypatch.setattr(CadLinkStore, "make_durable", broken)
+    _poll(data_dir, store)
+
+    assert _ack(data_dir, "cmd-1") is None and len(_delivery_files(data_dir)) == 1
+
+
+def test_the_acknowledgement_folder_is_flushed_after_the_replace(
+    data_dir, monkeypatch
+) -> None:
+    if os.name == "nt":
+        pytest.skip("directories are not flushed on Windows")
+    synced: list[bool] = []
+    real_fsync = os.fsync
+
+    def fsync(descriptor):
+        synced.append(True)
+        return real_fsync(descriptor)
+
+    monkeypatch.setattr(solve_command.os, "fsync", fsync)
+    write_acknowledgement(data_dir, "cmd-1", "accepted")
+    # The staged file, then the folder.
+    assert len(synced) == 2
+
+
+def test_an_unusable_acknowledgement_folder_is_given_up_once_after_a_bounded_number_of_passes(
+    data_dir, workspace, store, monkeypatch, caplog
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _ipc(data_dir)
+    (_ipc(data_dir) / SOLVE_ACKS_DIRECTORY).write_text("in the way", encoding="utf-8")
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    _file(data_dir, "cmd-2", bundle_path, "sha256:" + "b" * 64, schema=4, kind="explode")
+    monkeypatch.setattr(solve_command, "ACK_FAILURE_PASSES", 3)
+    reports: list[dict] = []
+
+    with caplog.at_level("ERROR"):
+        for _ in range(2):
+            collect_solve_deliveries(data_dir, store, refuse=reports.append)
+        assert len(_claims(data_dir)) == 2, "given up too early"
+        collect_solve_deliveries(data_dir, store, refuse=reports.append)
+
+    assert _claims(data_dir) == []
+    assert store.get_operation("cmd-1") is not None
+    assert len(reports) == 1, "the refusal was reported again on each pass"
+    assert len([r for r in caplog.records if "giving it up" in r.getMessage()]) == 2
+    assert ACK_FAILURE_PASSES >= 3
+
+
+def test_an_owed_refusal_is_forgotten_when_its_claim_disappears(
+    data_dir, workspace, store, monkeypatch
+) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-bad", bundle_path, manifest, schema=4, kind="explode")
+    real_replace = os.replace
+
+    def replace(source, destination, *args, **kwargs):
+        if Path(destination).parent.name == SOLVE_ACKS_DIRECTORY:
+            raise PermissionError(13, "held")
+        return real_replace(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(solve_command.os, "replace", replace)
+    monkeypatch.setattr(solve_command, "_HELD_RETRY_SECONDS", 0)
+    _poll(data_dir, store)
+    assert solve_command._pending_refusal_acks and solve_command._ack_failures
+    for path in (_ipc(data_dir) / ".wg-solve-requests").iterdir():
+        path.unlink()
+
+    _poll(data_dir, store)
+
+    assert not solve_command._pending_refusal_acks and not solve_command._ack_failures
 
 
 def test_a_redelivery_replays_the_same_acknowledgement_with_the_job(

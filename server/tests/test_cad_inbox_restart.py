@@ -206,6 +206,12 @@ def _assert_exactly_once(wg: Wg, request: dict[str, Any], submissions: int) -> N
     operation_id = request["operationId"]
     assert _operation_rows(wg) == [(operation_id, "accepted")]
     assert _inbox(wg) == []
+    # The request was acknowledged, after any restart, before it was deleted.
+    ack_path = wg.data_dir / "ipc" / "wglink" / ".wg-solve-acks" / f"{operation_id}.json"
+    ack = json.loads(ack_path.read_text(encoding="utf-8"))
+    assert (ack["outcome"], ack["commandId"]) == ("accepted", operation_id)
+    assert ack["manifestSha256"] == request["manifestSha256"]
+    assert ack["kind"] == request.get("kind", PREPARE_AND_SOLVE)
     row = wg.store.get_operation(operation_id)
     assert row is not None
     jobs = _jobs_for(wg, operation_id)
