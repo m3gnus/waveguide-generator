@@ -36,6 +36,10 @@ export interface CadFrameView {
 
 interface CadSolverFrameStore {
   frames: Record<string, CadFrameView>;
+  /** Bumped when something else on the card (the run line's "Change") asks the
+   * frame card to open its axis chooser; the card reads it, never the reverse. */
+  changeRequests: Record<string, number>;
+  requestChange: (ingestId: string) => void;
   load: (ingestId: string, fetcher?: typeof fetch) => Promise<void>;
   /** The user's pick among the allowed axes, shown and confirmed by Solve. */
   pick: (ingestId: string, axis: SolverFrameAxis) => void;
@@ -82,6 +86,10 @@ const loads = new Map<string, Promise<void>>();
 
 export const useCadSolverFrameStore = create<CadSolverFrameStore>((set, get) => ({
   frames: {},
+  changeRequests: {},
+  requestChange: (ingestId) => set({
+    changeRequests: { ...get().changeRequests, [ingestId]: (get().changeRequests[ingestId] ?? 0) + 1 },
+  }),
   load: (ingestId, fetcher = fetch) => {
     const running = loads.get(ingestId);
     if (running) return running;
@@ -173,5 +181,5 @@ export async function confirmDisplayedFrame(
 /** Tests only. */
 export function resetCadSolverFrameStore(): void {
   loads.clear();
-  useCadSolverFrameStore.setState({ frames: {} });
+  useCadSolverFrameStore.setState({ frames: {}, changeRequests: {} });
 }

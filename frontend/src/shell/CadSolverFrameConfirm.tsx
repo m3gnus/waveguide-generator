@@ -174,6 +174,9 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
     .join('|'));
   useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
   useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
+  // The run line's "Change" (an automatic axis) opens this same chooser.
+  const changeRequested = useCadSolverFrameStore((state) => state.changeRequests[ingestId] ?? 0);
+  useEffect(() => { if (changeRequested > 0) setChanging(true); }, [changeRequested]);
   const frame = view?.frame ?? null;
   const { mesh } = useFrameMesh(ingestId, fetcher);
 

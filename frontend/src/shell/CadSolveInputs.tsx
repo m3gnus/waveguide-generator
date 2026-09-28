@@ -26,6 +26,12 @@ export function defaultSettingsNote(message: string | null, solved: boolean): st
   return solved && message ? message : USING_DEFAULT_SETTINGS;
 }
 
+/** What a run whose axis WG chose itself says about it: one sentence for the
+ * card and the run details. "Solved" only once the run completed. */
+export function automaticAxisNote(axis: string, solved: boolean): string {
+  return `${solved ? 'Solved' : 'Solving'} along the automatic axis ${axis}`;
+}
+
 export const USING_DEFAULT_SETTINGS = "Using WG's default settings \u2014 change them in WG.";
 
 function setupEngine(detail: SetupRevisionDetail | null): string | null {
@@ -126,6 +132,10 @@ export function CadSolveInputs({
     {operation?.setupDefaults
       && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">
         {defaultSettingsNote(operation.message, jobStatus === 'complete')}
+      </p>}
+    {operation?.frameAxisAutomatic
+      && <p className="cad-solve-inputs-frame" data-frame-axis-automatic={operation.frameAxisAutomatic}>
+        {automaticAxisNote(operation.frameAxisAutomatic, jobStatus === 'complete')}. Change it in the CAD Link panel.
       </p>}
     {/* Verbatim, because it is evidence: whatever the adapter or the
         preparation reported is what a second report has to be compared with. */}

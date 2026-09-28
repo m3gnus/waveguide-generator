@@ -26,6 +26,10 @@ export interface CadOperationSummary {
    * model: `message` says so, and where to change them. Absent from older
    * backends. */
   setupDefaults?: boolean;
+  /** The solver axis WG chose itself -- confident, and never confirmed -- for
+   * a solve that was not shown one (a Fusion Solve of a model whose axis WG had
+   * not shown). Null or absent when the axis was confirmed. */
+  frameAxisAutomatic?: string | null;
   jobId: string | null;
   attemptGeneration: number;
   setupRevisionId: string | null;

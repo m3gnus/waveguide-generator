@@ -1733,6 +1733,9 @@ class CadOperationSummary(BaseModel):
     #: Solved with WG's default settings, none being recorded for the model
     #: (``default_setup.py``); ``message`` then says so in words.
     setup_defaults: bool = Field(default=False, alias="setupDefaults")
+    #: The solver axis WG chose itself (confident, never confirmed), when the
+    #: solve was not shown one; the card says so and offers Change.
+    frame_axis_automatic: str | None = Field(default=None, alias="frameAxisAutomatic")
     job_id: str | None = Field(alias="jobId")
     attempt_generation: int = Field(alias="attemptGeneration")
     setup_revision_id: str | None = Field(alias="setupRevisionId")

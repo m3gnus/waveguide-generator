@@ -49,7 +49,13 @@ bound ``ingest_id``.
 
 The automatic suggestion (``frame_infer``) is computed inside the explicit
 import and preparation commands and cached per snapshot and algorithm version.
-It preselects; it never confirms. A confirmed frame whose identity matches
+It preselects; it never confirms. A **confident** suggestion (status
+``automatic``) is also the axis a Solve uses when nothing is confirmed and the
+user was not shown one -- a Fusion Solve of a never-confirmed model: the
+preparation meshes in it (``resolve_for_manifest(automatic=True)``), the frame
+gate accepts exactly that frame (``record_frame_refusal``), and the operation
+records it as automatic (``record_solved_frame_provenance``). No confirmation
+is written; a suggestion that is not confident still stops the solve. A confirmed frame whose identity matches
 always wins over it, and a suggestion that clearly disagrees with the
 confirmed frame is reported, never acted on.
 """
@@ -306,6 +312,11 @@ class FrameResolution:
     #: The axis the project confirmed under contract v1 (``carried_axis``):
     #: preselected and meshed in, never taken as confirmed.
     carried_axis: str | None = None
+    #: The axis WG's own confident automatic inference names, when nothing is
+    #: confirmed or carried and the caller asked for it (``resolve_for_manifest``
+    #: ``automatic=True``): a Solve that never showed the axis meshes in it and
+    #: solves along it. Never a confirmation.
+    automatic_axis: str | None = None
 
     @property
     def confirmed(self) -> bool:
@@ -325,6 +336,8 @@ class FrameResolution:
             return self.confirmed_axis  # type: ignore[return-value]
         if self.carried_axis is not None and self.carried_axis in self.allowed_axes:
             return self.carried_axis
+        if self.automatic_axis is not None and self.automatic_axis in self.allowed_axes:
+            return self.automatic_axis
         return AS_MODELLED
 
     @property
@@ -379,9 +392,17 @@ def carried_axis(
 
 
 def resolve_for_manifest(
-    store: CadLinkStore, manifest: Mapping[str, Any], manifest_sha256: str
+    store: CadLinkStore,
+    manifest: Mapping[str, Any],
+    manifest_sha256: str,
+    *,
+    automatic: bool = False,
 ) -> FrameResolution | None:
-    """The frame state of a snapshot about to be prepared; None when it is linked."""
+    """The frame state of a snapshot about to be prepared; None when it is linked.
+
+    ``automatic``: a Solve that may use WG's confident automatic axis
+    (:func:`automatic_solve_axis`) meshes in it when nothing is confirmed.
+    """
 
     if not is_unlinked_manifest(manifest):
         return None
@@ -389,14 +410,82 @@ def resolve_for_manifest(
 
     key = confirmation_key(snapshot_project(store, manifest), manifest_sha256)
     requirement = frame_requirement(manifest)
+    allowed = allowed_axes(manifest)
+    confirmed = _confirmed_axis(store, key, requirement)
+    carried = carried_axis(store.get_frame_confirmation(key), requirement)
+    automatic_axis = None
+    if automatic and (confirmed is None or confirmed not in allowed) and carried is None:
+        automatic_axis = automatic_solve_axis(
+            store.get_frame_suggestion(manifest_sha256, _algorithm_version()), allowed
+        )
     return FrameResolution(
         key=key,
         requirement=requirement,
-        allowed_axes=allowed_axes(manifest),
-        confirmed_axis=_confirmed_axis(store, key, requirement),
+        allowed_axes=allowed,
+        confirmed_axis=confirmed,
         document_up=document_up(manifest),
-        carried_axis=carried_axis(store.get_frame_confirmation(key), requirement),
+        carried_axis=carried,
+        automatic_axis=automatic_axis,
     )
+
+
+def _algorithm_version() -> str:
+    from .frame_infer import ALGORITHM_VERSION
+
+    return ALGORITHM_VERSION
+
+
+def automatic_solve_axis(
+    suggestion: Mapping[str, Any] | None, allowed: Iterable[str]
+) -> str | None:
+    """The axis a Solve may use without asking, or None when WG must ask.
+
+    "Confident" is ``frame_infer``'s own verdict, not a new one: the suggestion
+    has status ``automatic`` (vote share, lead and supporting evidence all
+    passed; ``frame_infer.infer_frame``) and names an axis this snapshot allows.
+    An ``ask`` or ``unavailable`` suggestion never qualifies.
+    """
+
+    from .frame_infer import STATUS_AUTOMATIC
+
+    if suggestion is None or suggestion.get("status") != STATUS_AUTOMATIC:
+        return None
+    axis = suggestion.get("axis")
+    return axis if isinstance(axis, str) and axis in set(allowed) else None
+
+
+def record_automatic_axis(store: CadLinkStore, record: Mapping[str, Any]) -> str | None:
+    """The confident automatic axis this record's snapshot would be solved along.
+
+    None for a linked record, a record stating no frame, one whose project (or
+    snapshot) already confirmed a frame under this requirement, one with a v1
+    confirmation carried forward, and whenever WG is not confident.
+    """
+
+    if not record_is_unlinked(record):
+        return None
+    frame = _record_frame(record)
+    if frame is None:
+        return None
+    key = record_confirmation_key(record)
+    requirement = dict(frame["requirement"])
+    if _confirmed_axis(store, key, requirement) is not None:
+        return None
+    if carried_axis(store.get_frame_confirmation(key), requirement) is not None:
+        return None
+    return automatic_solve_axis(_cached_suggestion(store, record), _record_allowed(frame))
+
+
+def record_solved_frame_provenance(
+    store: CadLinkStore, record: Mapping[str, Any]
+) -> str | None:
+    """``"automatic"`` when this record solves along WG's own confident axis
+    with no confirmation behind it, else None."""
+
+    frame = _record_frame(record) if record_is_unlinked(record) else None
+    if frame is None:
+        return None
+    return "automatic" if record_automatic_axis(store, record) == frame.get("axis") else None
 
 
 def record_solver_frame(
@@ -552,6 +641,10 @@ def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str 
     requirement = dict(frame["requirement"])
     confirmed = _confirmed_axis(store, key, requirement)
     allowed = _record_allowed(frame)
+    if confirmed is None and record_automatic_axis(store, record) == frame["axis"]:
+        # WG is confident which way it faces and this is the frame it was
+        # meshed in: solved along it, and never recorded as a confirmation.
+        return None
     if confirmed is None:
         return (
             "Confirm this model's solver frame in WG first: choose the axis it "
@@ -829,6 +922,9 @@ __all__ = [
     "frame_requirement",
     "frame_spec",
     "is_unlinked_manifest",
+    "automatic_solve_axis",
+    "record_automatic_axis",
+    "record_solved_frame_provenance",
     "record_confirmation_key",
     "record_frame_identity",
     "record_frame_refusal",

@@ -5,12 +5,13 @@ import type { CadOperationSummary } from '../api/cadOperations';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { useCadOperationsStore } from '../stores/cadOperations';
 import { useCadReturnStore } from '../stores/cadReturn';
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseFrequencyList } from '../stores/frequencyList';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 import { OnScreenSolveStatus } from './CadOperationsSection';
 import { CadDomainInterpretation } from './CadDomainInterpretation';
 import { CadSolverFrame } from './CadSolverFrameConfirm';
-import { defaultSettingsNote } from './CadSolveInputs';
+import { automaticAxisNote, defaultSettingsNote } from './CadSolveInputs';
 import type { DomainInterpretation } from '../api/domainInterpretation';
 import { recordDomainDecision } from '../api/domainDecision';
 import { pluralized } from './cadTime';
@@ -206,6 +207,17 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
     {latest.state === 'accepted' && latest.setupDefaults
       && <p className="cad-detail cad-solve-defaults" data-setup-defaults="true">
         {defaultSettingsNote(latest.message, latestJob?.status === 'complete')}
+      </p>}
+    {/* WG was confident which way the model faces and solved along that axis
+        without asking; the frame card above has the Change. */}
+    {latest.state === 'accepted' && latest.frameAxisAutomatic
+      && <p className="cad-detail cad-solve-frame-automatic" data-frame-axis-automatic={latest.frameAxisAutomatic}>
+        {automaticAxisNote(latest.frameAxisAutomatic, latestJob?.status === 'complete')}
+        {' \u00b7 '}<button
+          className="link-button"
+          data-action="change-automatic-frame"
+          onClick={() => useCadSolverFrameStore.getState().requestChange(record.ingest_id)}
+        >Change</button>
       </p>}
   </>;
 }

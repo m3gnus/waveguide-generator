@@ -107,6 +107,8 @@ from .solver_frame import (
     record_frame_refusal,
     record_is_unlinked,
     resolution_identity,
+    record_automatic_axis,
+    record_solved_frame_provenance,
     resolve_for_manifest as resolve_solver_frame,
 )
 from .solve_command import (
@@ -239,6 +241,11 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
         "message": outcome.get("message") if isinstance(outcome, Mapping) else None,
         # Solved with WG's default settings: ``message`` says so in words.
         "setupDefaults": bool(isinstance(outcome, Mapping) and outcome.get("setup_defaults")),
+        # The solver axis WG chose itself, confident and unconfirmed (the
+        # solve was never shown one); null when the axis was confirmed.
+        "frameAxisAutomatic": (
+            outcome.get("frame_axis_automatic") if isinstance(outcome, Mapping) else None
+        ),
         "jobId": row.get("job_id"),
         "attemptGeneration": int(row.get("attempt_generation") or 0),
         "setupRevisionId": row.get("setup_revision_id"),
@@ -638,10 +645,13 @@ def _finish(
     stage: str | None = None,
     release_binding: bool = False,
     setup_defaults: bool = False,
+    frame_axis_automatic: str | None = None,
 ) -> dict[str, Any]:
     outcome: dict[str, Any] = {"message": message} if message else {}
     if setup_defaults:
         outcome["setup_defaults"] = True
+    if frame_axis_automatic:
+        outcome["frame_axis_automatic"] = frame_axis_automatic
     row = ctx.store.record_outcome(
         operation_id,
         generation,
@@ -1034,7 +1044,9 @@ def _prepare_sync(
             "WG takes a fresh copy from the WGLink folder. If the return has left that "
             "folder, send the model again from Fusion.",
         )
-    solver_frame = resolve_solver_frame(store, retained_manifest, manifest_sha256)
+    solver_frame = resolve_solver_frame(
+        store, retained_manifest, manifest_sha256, automatic=True
+    )
     frame_axis = solver_frame.axis if solver_frame is not None else None
     frame_identity = resolution_identity(solver_frame) if solver_frame is not None else None
 
@@ -1113,6 +1125,32 @@ def _prepare_sync(
                 ctx, operation_id, generation, replace(request, setup_revision_id=standing)
             )
 
+    # The automatic frame suggestion (M1e), inside this explicit command and
+    # cached per snapshot: the frame card preselects it. It never confirms,
+    # and a survey that fails only leaves the card asking.
+    try:
+        ensure_frame_suggestion(store, record)
+        automatic = record_automatic_axis(store, record)
+    except Exception as exc:  # noqa: BLE001 - advisory by construction
+        logger.warning("Solver frame suggestion failed for %s: %s", record.get("ingest_id"), exc)
+        automatic = None
+    if (
+        solver_frame is not None
+        and automatic is not None
+        and automatic != solver_frame.automatic_axis
+        and automatic != _record_frame_axis(record)
+    ):
+        # Nothing confirmed and WG is confident which way the model faces: the
+        # survey mirrors the mesh back to CAD coordinates, so the suggestion
+        # holds whatever frame it was meshed in. The model is meshed again
+        # along it, once; the next Solve of the snapshot finds the cached
+        # suggestion and meshes along it at once.
+        logger.info(
+            "CAD operation %s, attempt %d: preparing again along the automatic axis %s.",
+            operation_id, generation, automatic,
+        )
+        return _prepare_sync(ctx, operation_id, generation, request)
+
     blocking = [
         str(finding.get("id"))
         for finding in record.get("findings") or []
@@ -1137,14 +1175,6 @@ def _prepare_sync(
         operation_id, generation, preparation_id,
     )
     _publish(ctx, prepared)
-
-    # The automatic frame suggestion (M1e), inside this explicit command and
-    # cached per snapshot: the frame card preselects it. It never confirms,
-    # and a survey that fails only leaves the card asking.
-    try:
-        ensure_frame_suggestion(store, record)
-    except Exception as exc:  # noqa: BLE001 - advisory by construction
-        logger.warning("Solver frame suggestion failed for %s: %s", preparation_id, exc)
 
     # Before findings and approvals: a frame confirmed differently is a new
     # preparation, and approvals never carry to it. Read from the record, for
@@ -1373,10 +1403,26 @@ async def _submit(
             message=f"Submitting the solve failed: {exc}. Press Solve now to try again.",
         )
     defaults = await asyncio.to_thread(_is_default_setup, store, revision_id)
+    automatic_axis = await asyncio.to_thread(
+        _automatic_frame_axis, store, solve_request.geometry.ingest_id
+    )
     return await asyncio.to_thread(
         _finish, ctx, operation_id, generation, ACCEPTED, job_id=job_id, stage=STAGE_SUBMITTED,
         message=DEFAULT_SETTINGS_NOTE if defaults else None, setup_defaults=defaults,
+        frame_axis_automatic=automatic_axis,
     )
+
+
+def _automatic_frame_axis(store: CadLinkStore, ingest_id: str) -> str | None:
+    """The axis a solve of this ingest used when WG chose it, else None."""
+
+    ingest = store.get_ingest(str(ingest_id))
+    if ingest is None:
+        return None
+    record = json.loads(ingest["record_json"])
+    if record_solved_frame_provenance(store, record) != "automatic":
+        return None
+    return _record_frame_axis(record)
 
 
 def _is_default_setup(store: CadLinkStore, revision_id: str | None) -> bool:

@@ -552,6 +552,15 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
   });
 
+  it('opens the axis chooser when the run line asks to change an automatic axis', async () => {
+    await mount();
+    expect(host.querySelector('input[type="radio"]')).toBeNull();
+    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
+    expect(host.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.value).toBe('+x');
+    // Nothing is confirmed by asking to change it.
+    expect(puts).toEqual([]);
+  });
+
   it('leaves the frame to the backend gate when it cannot be read, and never guesses one', async () => {
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

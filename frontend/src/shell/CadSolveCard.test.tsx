@@ -9,6 +9,7 @@
  * reached any given point by any path -- including one a waiting Fusion
  * request advanced -- renders identically.
  */
+import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -321,6 +322,27 @@ describe('CAD Solve card run status', () => {
     publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
     expect(host.querySelector('.cad-solve-defaults')).toBeNull();
+  });
+
+  it('says which axis WG chose itself, and Change opens the frame chooser', async () => {
+    publishOperation(operation({ frameAxisAutomatic: '+x' }));
+    publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    const line = host.querySelector('.cad-solve-frame-automatic');
+    expect(line?.textContent).toBe('Solved along the automatic axis +x \u00b7 Change');
+    const before = useCadSolverFrameStore.getState().changeRequests[record().ingest_id] ?? 0;
+    act(() => { (line?.querySelector('button') as HTMLButtonElement).click(); });
+    expect(useCadSolverFrameStore.getState().changeRequests[record().ingest_id]).toBe(before + 1);
+    // Before the run is done, it does not claim a solve.
+    act(() => publishJobs([job()]));
+    expect(host.querySelector('.cad-solve-frame-automatic')?.textContent).toContain('Solving along the automatic axis +x');
+  });
+
+  it('says nothing about an axis for a run whose axis was confirmed', async () => {
+    publishOperation(operation({ frameAxisAutomatic: null }));
+    publishJobs([job({ status: 'complete', progress: 1, stage: 'postprocess', stage_message: null, completed_at: '2026-09-23T00:01:00Z' })]);
+    await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
+    expect(host.querySelector('.cad-solve-frame-automatic')).toBeNull();
   });
 
   it('does not invent a reason for a cancelled job', async () => {

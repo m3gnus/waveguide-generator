@@ -119,7 +119,9 @@ REASON_CODES: Mapping[str, str] = {
     "adapter_not_started": CANCELLED,
 }
 BASELINE_KINDS = frozenset({"document_signature_hash"})
-OUTCOME_FIELDS = frozenset({"message", "reconciled", "evidence", "setup_defaults"})
+OUTCOME_FIELDS = frozenset(
+    {"message", "reconciled", "evidence", "setup_defaults", "frame_axis_automatic"}
+)
 EVIDENCE_FIELDS = ("operation_id", "export_id")
 
 _EXACT_CAD_TARGET = ("document_id", "design_id", "instance_id", "expected_baseline")
@@ -321,6 +323,15 @@ def validate_outcome(
             if state != ACCEPTED:
                 raise ValueError("outcome.setup_defaults is recorded only with an accepted solve")
             normalized["setup_defaults"] = True
+    if "frame_axis_automatic" in outcome:
+        # The solver axis WG chose itself, confident and unconfirmed
+        # (solver_frame.record_solved_frame_provenance).
+        axis = outcome["frame_axis_automatic"]
+        if state != ACCEPTED:
+            raise ValueError("outcome.frame_axis_automatic is recorded only with an accepted solve")
+        if axis not in ("+z", "-z", "+x", "-x", "+y", "-y"):
+            raise ValueError("outcome.frame_axis_automatic must be a solver frame axis")
+        normalized["frame_axis_automatic"] = axis
     return canonical_json(normalized) if normalized else None
 
 

@@ -177,7 +177,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Delivery over HTTP"). Sending it again is a new operation |
 | `setup_required` | `needs_user_input` | The settings named or recorded cannot be used, or WG's defaults cannot solve a first-time model (a source with no suggested mesh size); a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
-| `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in (see "Unlinked solver frame") |
+| `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in and for which WG is not confident of its own (see "Unlinked solver frame") |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
 | `engine_unavailable` | `needs_user_input` | The engine the setup names cannot take this record; the message names the capable engines |
 | `submission_refused` | `needs_user_input` | The jobs system refused the request, or submitting it failed without creating a job |
@@ -344,8 +344,10 @@ whatever project is open. Nothing on the backend reads the live UI:
 
 A return with no WG instance -- a model drawn from scratch in CAD -- carries no throat
 frame, so nothing in it says which way it radiates. It is not solvable until its solver
-frame is confirmed, once per project. WG infers the frame from the geometry and
-preselects it, so confirming it is normally one press of Solve.
+frame is confirmed, once per project, or WG is confident enough to choose it itself (see
+"Automatic axis" below). WG infers the frame from the geometry and preselects it, so
+confirming it is normally one press of Solve in WG, and a Solve from Fusion needs no
+press at all when WG is confident.
 `server/cadlink/solver_frame.py` is the executable half of this section, and
 `server/cadlink/frame_infer.py` the inference.
 
@@ -433,6 +435,27 @@ preselects it, so confirming it is normally one press of Solve.
   later attempt -- an automatic continuation after the update restart, a retry that
   names none -- is held to it, and only a prepare naming another axis replaces it. `+z` is never written into the ingest options, so no mesh cached before
   this contract is made again.
+- **Automatic axis (Solve without a shown axis).** A Solve that was never shown the
+  axis -- a Fusion Solve of an unlinked model nothing has confirmed, including every
+  Solve of an unsaved document, whose snapshot and so confirmation key are new on each
+  Send -- does not stop when WG is **confident**. Confident is `frame_infer`'s own verdict,
+  not a second heuristic: the cached suggestion has status `automatic` (vote share, lead
+  and supporting evidence all passed) and names an axis the snapshot allows
+  (`solver_frame.automatic_solve_axis`). Then the preparation surveys the mesh it just
+  made and, when the automatic axis is not the one it was meshed in, meshes again along
+  it once (`resolve_for_manifest(automatic=True)`; the next Solve of that snapshot finds
+  the cached suggestion and meshes along it at once). The frame gate -- backend
+  preparation and the jobs system's submission gate alike (`record_frame_refusal`) --
+  accepts exactly that frame while no confirmation exists and no v1 confirmation is
+  carried. **Nothing is confirmed:** no `cad_frame_confirmations` row is written, so it
+  is never taken as the user's confirmation for a later solve; a later WG Solve confirms
+  the axis it shows, and a Change to another axis is a confirmation like any other and
+  is the axis of every later solve. The accepted operation records the axis in its
+  outcome (`frame_axis_automatic`, summary `frameAxisAutomatic`); the CAD solve card says
+  "Solved along the automatic axis +x" with a Change that opens the frame card's chooser,
+  and the run details say the same. When WG is not confident (`ask`, `unavailable`, an
+  axis the snapshot does not allow) the solve still stops at `frame_confirmation_required`
+  with the frame card's question.
 - **Axial drive.** An `axial` channel is driven along the record's observation axis,
   solver +Z, which is the chosen CAD forward direction; a source facing back along it is
   flipped to drive outward, as for a model modelled along +z.

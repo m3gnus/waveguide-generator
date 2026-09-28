@@ -780,9 +780,9 @@ def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monke
     from server.cadlink.api import CadReturnIngestRequest, post_ingest
 
     harness, mesher = real
-    monkeypatch.setattr("server.cadlink.api._schedule_deferred_viewport", lambda *_args: None)
-    monkeypatch.setattr("server.cadlink.api._schedule_cad_document_capture", lambda *_args: None)
-    monkeypatch.setattr("server.cadlink.api._schedule_frame_suggestion", lambda *_args: None)
+    monkeypatch.setattr("server.cadlink.api._schedule_deferred_viewport", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("server.cadlink.api._schedule_cad_document_capture", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("server.cadlink.api._schedule_frame_suggestion", lambda *_args, **_kwargs: None)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     waiting = _prepare(harness)
@@ -810,7 +810,7 @@ def test_the_record_is_gated_even_when_the_manifest_resolution_says_linked(real,
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    monkeypatch.setattr(preparation, "resolve_solver_frame", lambda *_args: None)
+    monkeypatch.setattr(preparation, "resolve_solver_frame", lambda *_args, **_kwargs: None)
 
     summary = _prepare(harness)
 

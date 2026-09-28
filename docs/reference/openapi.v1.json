@@ -283,6 +283,17 @@
             ],
             "title": "Createdat"
           },
+          "frameAxisAutomatic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frameaxisautomatic"
+          },
           "jobId": {
             "anyOf": [
               {
