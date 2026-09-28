@@ -649,6 +649,63 @@ def reflect_triangle_mesh(
     return reflected_points, reflected_triangles, record
 
 
+#: How far from perpendicular a curve may meet a mirror plane of a model cut
+#: in CAD. CAD curves are exact, so this only absorbs spline fitting.
+SECTION_ANGLE_TOLERANCE_DEG = 1.0
+#: How close to a mirror plane a curve end must be to be on it (mm).
+SECTION_PLANE_TOLERANCE_MM = 1.0e-3
+
+
+def asymmetric_section(gmsh: Any, planes: Iterable[str]) -> list[dict[str, Any]]:
+    """Curves that meet a pre-cut mirror plane at an angle, in the OCC model.
+
+    A model cut on its own symmetry plane is continued smoothly by its mirror
+    image, so every curve that ends on the plane -- a driver's rim, a port's
+    edge, a wall's edge -- meets it at a right angle. A curve that meets it
+    at an angle would kink in the mirrored model: the cut went through
+    something that is not symmetric about the plane (an off-centre driver, an
+    off-axis port), and mirroring would build another speaker. Conservative:
+    a symmetric shape with a corner on the plane (a diamond cut through its
+    points) is refused too. Curves lying in the plane are the cut's own rim.
+    Read on the exact CAD curves, never on the mesh.
+    """
+
+    found: list[dict[str, Any]] = []
+    axes = [REFLECTION_AXIS[plane] for plane in planes if plane in REFLECTION_AXIS]
+    if not axes:
+        return found
+    cosine = math.cos(math.radians(SECTION_ANGLE_TOLERANCE_DEG))
+    for _dim, curve in gmsh.model.getEntities(1):
+        box = gmsh.model.getBoundingBox(1, curve)
+        try:
+            low, high = gmsh.model.getParametrizationBounds(1, curve)
+        except Exception:  # noqa: BLE001 - a curve without a parametrisation has no tangent
+            continue
+        for axis in axes:
+            if abs(box[axis]) <= SECTION_PLANE_TOLERANCE_MM and abs(box[axis + 3]) <= SECTION_PLANE_TOLERANCE_MM:
+                continue  # lies in the plane
+            for parameter in (float(low[0]), float(high[0])):
+                point = np.asarray(gmsh.model.getValue(1, curve, [parameter]), dtype=float)
+                if abs(point[axis]) > SECTION_PLANE_TOLERANCE_MM:
+                    continue
+                tangent = np.asarray(gmsh.model.getDerivative(1, curve, [parameter]), dtype=float)[:3]
+                length = float(np.linalg.norm(tangent))
+                if length <= 0.0:
+                    continue
+                if abs(float(tangent[axis])) / length < cosine:
+                    found.append(
+                        {
+                            "plane": "xyz"[axis] + "0",
+                            "curve": int(curve),
+                            "point_mm": [round(float(value), 6) for value in point],
+                            "angle_from_normal_deg": round(
+                                math.degrees(math.acos(min(1.0, abs(float(tangent[axis])) / length))), 3
+                            ),
+                        }
+                    )
+    return found
+
+
 def _reflect_raw_mesh(raw_mesh: Any, planes: Sequence[str]) -> dict[str, Any]:
     """Reflect gmsh's raw meshio mesh in place, before post-processing reads it."""
 
@@ -2880,6 +2937,21 @@ def build_imported_mesh(
             )
         normalisation_record["matrix"] = solver_from_assembly.tolist()
         normalisation_record["vertical_recentre"] = recentre
+        if declared_cut_planes:
+            # Overseer condition 3, on the exact CAD curves: nothing crossing
+            # a pre-cut mirror plane may meet it at an angle. No declaration,
+            # recorded evidence or reading overrides it.
+            kinks = asymmetric_section(gmsh, declared_cut_planes)
+            if kinks:
+                worst = max(kinks, key=lambda item: item["angle_from_normal_deg"])
+                raise ImportedMeshError(
+                    "symmetry: asymmetric-section: "
+                    f"{len(kinks)} curve end(s) meet the cut on {worst['plane'][0]} = 0 at an "
+                    f"angle (up to {worst['angle_from_normal_deg']:.1f} degrees from square, at "
+                    f"{', '.join(f'{value:.1f}' for value in worst['point_mm'])} mm), so the "
+                    "model is not symmetric about it: the cut passes through a driver, port "
+                    "or other feature off its centre, and the mirror would build another speaker"
+                )
         surfaces = gmsh_surface_tags()
         face_order = advanced_face_order(Path(assembly_path))
         if len(surfaces) != len(face_order):

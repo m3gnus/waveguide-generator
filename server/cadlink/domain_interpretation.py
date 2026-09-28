@@ -428,6 +428,11 @@ class Observations:
     #: off the origin (``{"plane_axis", "offset_mm", "solver_axis",
     #: "rim_edges"}``, the axis and offset in CAD terms): a cut WG cannot mirror.
     off_origin_rims: list[dict[str, Any]] = field(default_factory=list)
+    #: Cut rims on an oblique plane: a component's free rigid edges all in one
+    #: plane that is square to none of the solver's axes, spanning the shell
+    #: that lies to one side of it (``{"normal", "offset_mm", "rim_edges"}``,
+    #: solver frame). A cut WG cannot mirror.
+    oblique_rims: list[dict[str, Any]] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -435,6 +440,7 @@ class Observations:
             "other_open_edges": self.other_open_edges,
             "free_edges": self.free_edges,
             "off_origin_rims": [dict(item) for item in self.off_origin_rims],
+            "oblique_rims": [dict(item) for item in self.oblique_rims],
             "tolerance_mm": TOLERANCE_MM,
         }
 
@@ -553,6 +559,69 @@ def _off_origin_cut_rims(
     return sorted(found, key=lambda item: (item["plane_axis"], item["offset_mm"]))
 
 
+#: A rim is planar when its vertices are within this fraction of the shell's
+#: diagonal of their best-fit plane (and at least the snap tolerance).
+OBLIQUE_PLANARITY_REL = 1.0e-4
+#: A plane is square to an axis when its normal is within this of the axis.
+OBLIQUE_AXIS_TOLERANCE_DEG = 0.5
+
+
+def _oblique_cut_rims(
+    points: np.ndarray,
+    components: np.ndarray,
+    rigid_free: np.ndarray,
+    tolerance_mm: float,
+) -> list[dict[str, Any]]:
+    """Cut rims on planes square to no solver axis (solver frame).
+
+    Per connected rigid shell: its free edges all lie in one plane, the shell
+    lies to one side of that plane, and the rim spreads across the shell in
+    two in-plane directions (the same reading as an origin-plane cut rim).
+    Planes square to a solver axis are read elsewhere: x/y cut rims on and
+    off the origin, and openings square to the radiation axis (a mouth).
+    """
+
+    found: list[dict[str, Any]] = []
+    if len(rigid_free) < MIN_RIM_EDGES:
+        return found
+    owners = components[rigid_free[:, 0]]
+    cosine = float(np.cos(np.radians(OBLIQUE_AXIS_TOLERANCE_DEG)))
+    for component in np.unique(owners):
+        edges = rigid_free[owners == component]
+        if len(edges) < MIN_RIM_EDGES:
+            continue
+        rim_points = points[np.unique(edges.ravel())]
+        shell = points[components == component]
+        diagonal = float(np.linalg.norm(np.ptp(shell, axis=0)))
+        if diagonal <= 0.0 or len(rim_points) < 3:
+            continue
+        centre = rim_points.mean(axis=0)
+        _u, singular, vt = np.linalg.svd(rim_points - centre, full_matrices=False)
+        normal = vt[-1]
+        tolerance = max(tolerance_mm, OBLIQUE_PLANARITY_REL * diagonal)
+        if float(np.max(np.abs((rim_points - centre) @ normal))) > tolerance:
+            continue
+        if float(np.max(np.abs(normal))) >= cosine:
+            continue  # square to a solver axis: read by the other detectors
+        distances = (shell - centre) @ normal
+        if np.any(distances < -tolerance) and np.any(distances > tolerance):
+            continue  # the shell is on both sides: not a cut there
+        in_plane = vt[:2]
+        rim_extent = np.ptp((rim_points - centre) @ in_plane.T, axis=0)
+        shell_extent = np.ptp((shell - centre) @ in_plane.T, axis=0)
+        if np.all(shell_extent > tolerance) and np.all(
+            rim_extent >= SPANNING_RIM_FRACTION * shell_extent
+        ):
+            found.append(
+                {
+                    "normal": [round(float(value), 6) for value in normal],
+                    "offset_mm": round(float(centre @ normal), 6),
+                    "rim_edges": int(len(edges)),
+                }
+            )
+    return found
+
+
 def observe(
     points_mm: np.ndarray,
     triangles: np.ndarray,
@@ -659,6 +728,9 @@ def observe(
         free_edges=int(len(free)),
         off_origin_rims=_off_origin_cut_rims(
             points, components, free[rigid_free] if len(free) else free, rotation, tolerance_mm
+        ),
+        oblique_rims=_oblique_cut_rims(
+            points, components, free[rigid_free] if len(free) else free, tolerance_mm
         ),
     )
 
@@ -1041,6 +1113,15 @@ def open_half_refusal_message(plane: str, rim_edges: int, reason: str | None = N
         f"The model is open along {plane_words(plane)} ({rim_edges} rim edges), "
         "so WG would solve half a speaker in free space. Send the uncut "
         "model — WG finds the symmetry and reduces it automatically."
+    )
+
+
+def oblique_cut_refusal_message(rim_edges: int) -> str:
+    return (
+        f"The model is open along an oblique plane ({rim_edges} rim edges): it looks cut on "
+        "an oblique plane, which WG cannot mirror in this version, and solved as shown it "
+        "would be part of a speaker in free space. Send the uncut model — WG finds the "
+        "symmetry and reduces it automatically."
     )
 
 

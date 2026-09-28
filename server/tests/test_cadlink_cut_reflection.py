@@ -579,3 +579,177 @@ def test_a_rim_on_another_plane_blocks_unless_it_is_a_cut_judged_too() -> None:
     )
     both = cr.assess_cut_recovery(quarter, sources=[{"id": "driver"}], radiation_axis="+z")
     assert both.planes == ("x0", "y0") and both.recoverable and both.reflect == ("x0", "y0")
+
+
+# ------------------------------------------------------------------ review S3-2 reproducers
+
+
+def test_provenance_never_overrides_a_front_back_cut_or_resets_the_confirmed_frame(tmp_path: Path) -> None:
+    """Review finding 1: a negative y0 cut facing -y is refused with and without provenance."""
+
+    from server.cadlink.ingest import IngestRefusal
+    from test_cadlink_domain_automatic import provenance
+
+    box = dict(x_side=0, y_side=-1, discs=((15.0, 0.0, 10.0),))
+    automatic = _ingest(_box_bundle(tmp_path, "front-back-auto", **box), tmp_path / "data-auto", solver_frame="-y")
+    decision = _decision(automatic)
+    assert decision["solver_domain"]["planes"] == [] and decision["frame"]["axis"] == "-y"
+    assert "square to the radiation axis (-y)" in decision["refusal"]["message"]
+    _, outcomes = _solve_verdicts(automatic)
+    assert set(outcomes.values()) == {"imported_open_half_shell"}
+
+    x_side, y_side = 0, -1
+    centre = _half_disc_centre(15.0, 0.0, 10.0, x_side, y_side)
+    bundle = _bundle(
+        tmp_path, "front-back-provenance", lambda path: _cut_box(path, **box), _faces_near(centre),
+        cut=[provenance("body-0", "y0", kept_side="negative")],
+    )
+    with pytest.raises(IngestRefusal, match=r"square to the radiation axis \(-y\)"):
+        _ingest(bundle, tmp_path / "data-provenance", solver_frame="-y")
+
+
+def test_a_cut_model_confirmed_to_face_another_way_is_never_mirrored_by_resetting_its_frame(
+    tmp_path: Path,
+) -> None:
+    """The plane contains the confirmed axis, but a mirror would need +z: refused, frame kept."""
+
+    from server.cadlink.ingest import IngestRefusal
+    from test_cadlink_domain_automatic import provenance
+
+    record = _ingest(_box_bundle(tmp_path, "facing-x"), tmp_path / "data", solver_frame="-y")
+    decision = _decision(record)
+    assert decision["frame"]["axis"] == "-y" and decision["solver_domain"]["planes"] == []
+    [cut] = decision["cad_cuts"]
+    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.FRAME_NOT_MODELLED]
+    assert "change the frame you confirmed" in decision["refusal"]["message"]
+    bundle = _bundle(
+        tmp_path, "facing-x-provenance", lambda path: _cut_box(path), _faces_near(_half_disc_centre(0.0, 15.0, 10.0, -1, 0)),
+        cut=[provenance("body-0", "x0", kept_side="negative")],
+    )
+    with pytest.raises(IngestRefusal, match="change the frame you confirmed"):
+        _ingest(bundle, tmp_path / "data-provenance", solver_frame="-y")
+
+
+def test_a_cut_through_an_off_centre_driver_is_refused(tmp_path: Path) -> None:
+    """Review finding 2: the driver touches the plane but is not bisected by it."""
+
+    whole_area = math.pi * 100.0
+    record = _ingest(
+        _bundle(tmp_path, "off-centre-driver", lambda path: _cut_box(path, discs=((-5.0, 15.0, 10.0),)),
+                _faces_near((-7.0, 15.0, 0.0))),
+        tmp_path / "data",
+    )
+    decision = _decision(record)
+    # Mirrored, the retained 252.7 mm2 would become 505.5 mm2, not 314.2 mm2.
+    retained = decision["sources"]["by_id"]["throat"]["retained_area_mm2"]
+    assert 2.0 * retained > 1.5 * whole_area
+    assert decision["solver_domain"]["planes"] == []
+    [cut] = decision["cad_cuts"]
+    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.ASYMMETRIC_SECTION]
+    assert "at an angle (up to 30.0 degrees from square" in decision["refusal"]["message"]
+    _, outcomes = _solve_verdicts(record)
+    assert set(outcomes.values()) == {"imported_open_half_shell"}
+
+
+def _box_with_port(path: Path, *, port_x: float) -> None:
+    def build() -> None:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        box = occ.addBox(-60.0, -40.0, -80.0, 120.0, 80.0, 80.0)
+        tube = occ.addCylinder(port_x, -20.0, -90.0, 0.0, 0.0, 100.0, 10.0)
+        shape, _ = occ.cut([(3, box)], [(3, tube)])
+        occ.fragment(shape, [(2, occ.addDisk(0.0, 15.0, 0.0, 10.0, 10.0))])
+        _surfaces_only()
+        occ.healShapes(sewFaces=True, makeSolids=False)
+        occ.synchronize()
+        gmsh.write(str(path))
+        gmsh.clear()
+
+    _run_in_gmsh_session(build)
+    _cut_open(path, {"x": (-math.inf, 0.0)})
+
+
+@pytest.mark.parametrize(("port_x", "recovered"), [(-5.0, False), (0.0, True)], ids=["off-axis-port", "centred-port"])
+def test_a_cut_through_an_off_axis_port_is_refused(tmp_path: Path, port_x: float, recovered: bool) -> None:
+    """Review finding 2: the cut reshapes an off-axis port; a centred one is mirrored."""
+
+    record = _ingest(
+        _bundle(tmp_path, f"port-{port_x}", lambda path: _box_with_port(path, port_x=port_x),
+                _faces_near((-4.0 * 10.0 / (3.0 * math.pi), 15.0, 0.0))),
+        tmp_path / "data",
+    )
+    decision = _decision(record)
+    assert (decision["solver_domain"]["planes"] == ["x0"]) is recovered
+    if recovered:
+        assert decision["refusal"] is None and decision["reflected_axes"] == ["x"]
+    else:
+        [cut] = decision["cad_cuts"]
+        assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.ASYMMETRIC_SECTION]
+        _, outcomes = _solve_verdicts(record)
+        assert set(outcomes.values()) == {"imported_open_half_shell"}
+
+
+def test_a_cut_on_an_oblique_plane_is_refused(tmp_path: Path) -> None:
+    """Review finding 3: a clean half rotated 20 degrees is a cut, not an open sheet."""
+
+    angle = math.radians(20.0)
+
+    def geometry(path: Path) -> None:
+        _cut_box(path)
+
+        def rotate() -> None:
+            gmsh.option.setNumber("General.Terminal", 0)
+            gmsh.clear()
+            occ = gmsh.model.occ
+            shapes = occ.importShapes(str(path), highestDimOnly=True)
+            occ.rotate(shapes, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, angle)
+            occ.synchronize()
+            gmsh.write(str(path))
+            gmsh.clear()
+
+        _run_in_gmsh_session(rotate)
+
+    x, y = -4.0 * 10.0 / (3.0 * math.pi), 15.0
+    centre = (x * math.cos(angle) - y * math.sin(angle), x * math.sin(angle) + y * math.cos(angle), 0.0)
+    record = _ingest(_bundle(tmp_path, "oblique", geometry, _faces_near(centre)), tmp_path / "data")
+    decision = _decision(record)
+    [oblique] = decision["oblique_cuts"]
+    assert oblique["normal"] == pytest.approx([-math.cos(angle), -math.sin(angle), 0.0], abs=1e-6)
+    assert decision["input_reading"] == dd.INPUT_CUT
+    assert decision["solver_domain"]["planes"] == []
+    assert "cut on an oblique plane" in decision["refusal"]["message"]
+    _, outcomes = _solve_verdicts(record)
+    assert set(outcomes.values()) == {"imported_open_half_shell"}
+
+
+def test_a_driver_clear_of_the_cut_is_not_mirrored_into_a_pair(tmp_path: Path) -> None:
+    record = _ingest(
+        _box_bundle(tmp_path, "extra-driver", sources=["mid", "extra"], discs=((0.0, 15.0, 10.0), (-30.0, -20.0, 6.0))),
+        tmp_path / "data",
+    )
+    decision = _decision(record)
+    [cut] = decision["cad_cuts"]
+    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.SOURCE_OFF_PLANE]
+    assert "source extra does not meet x = 0" in decision["refusal"]["message"]
+    assert decision["solver_domain"]["planes"] == []
+
+
+def test_an_asymmetric_section_is_read_on_the_cad_curves() -> None:
+    from server.mesh.imported import asymmetric_section
+
+    def run(centre_x: float) -> list[dict[str, Any]]:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.clear()
+        occ = gmsh.model.occ
+        disc = occ.addDisk(centre_x, 0.0, 0.0, 10.0, 10.0)
+        occ.intersect([(2, disc)], [(3, occ.addBox(-20.0, -20.0, -1.0, 20.0, 40.0, 2.0))])
+        occ.synchronize()
+        found = asymmetric_section(gmsh, ["x0"])
+        gmsh.clear()
+        return found
+
+    assert _run_in_gmsh_session(run, 0.0) == []
+    kinks = _run_in_gmsh_session(run, -5.0)
+    assert len(kinks) == 2
+    assert [item["angle_from_normal_deg"] for item in kinks] == pytest.approx([30.0, 30.0], abs=1e-6)

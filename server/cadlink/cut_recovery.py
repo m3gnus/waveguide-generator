@@ -55,6 +55,15 @@ CONTRACT = "cad-cut-recovery-v1"
 #: The failed conditions, by code. Every refusal names one or more of them.
 FRONT_BACK = "front-back-cut"
 UNSUPPORTED_PLANE = "unsupported-plane"
+#: The model is confirmed to face another way than it was modelled (+z): a
+#: reduced domain is solved only as modelled, and a mirror never resets the
+#: confirmed frame.
+FRAME_NOT_MODELLED = "frame-not-as-modelled"
+#: A curve of the model meets the cut plane at an angle: its mirror image
+#: would kink there, so the halves are not each other's mirror images (an
+#: off-centre driver or port cut through, say). Judged on the CAD geometry by
+#: the mesher (``server.mesh.imported.asymmetric_section``).
+ASYMMETRIC_SECTION = "asymmetric-section"
 CAPPED = "capped"
 CROSSING = "crossing-geometry"
 OTHER_OPENINGS = "other-openings"
@@ -63,6 +72,9 @@ OTHER_OPENINGS = "other-openings"
 #: coordinate plane, so a shell open on x = 0 *and* z = 0 needs this).
 OPEN_RIM_PREFIX = "open-rim-on-"
 NO_SOURCE_ON_PLANE = "no-source-on-plane"
+#: A source clear of a cut plane: its mirror image would be a second driver
+#: nothing shows the speaker has.
+SOURCE_OFF_PLANE = "source-off-plane"
 SOURCE_IDENTITY = "source-identity"
 SIDE_IDENTIFIED_SOURCE = "side-identified-source"
 SELF_INTERSECTION = "self-intersection"
@@ -71,13 +83,16 @@ MESH_DENIED = "mesh-denied"
 CONDITIONS = (
     FRONT_BACK,
     UNSUPPORTED_PLANE,
+    FRAME_NOT_MODELLED,
     CAPPED,
     CROSSING,
     OTHER_OPENINGS,
     NO_SOURCE_ON_PLANE,
+    SOURCE_OFF_PLANE,
     SOURCE_IDENTITY,
     SIDE_IDENTIFIED_SOURCE,
     SELF_INTERSECTION,
+    ASYMMETRIC_SECTION,
     MESH_DENIED,
 )
 
@@ -218,6 +233,7 @@ def assess_cut_recovery(
     radiation_axis: str,
     identity_problem: str | None = None,
     integrity_problem: str | None = None,
+    absent_sources: Iterable[str] = (),
 ) -> CutRecovery:
     """Judge every cut the observations show against the flip conditions.
 
@@ -231,6 +247,7 @@ def assess_cut_recovery(
     planes = geometry_cut_planes(observations)
     if observations is None or not planes:
         return CutRecovery()
+    absent = {str(item) for item in absent_sources}
     axis_letter = str(radiation_axis or "+z")[-1:].casefold()
     shared: list[Failure] = []
     if observations.other_open_edges:
@@ -281,6 +298,8 @@ def assess_cut_recovery(
                     "so it is not a symmetry plane of the speaker",
                 )
             )
+        elif str(radiation_axis or "+z") != "+z":
+            own.append(Failure(FRAME_NOT_MODELLED, frame_not_modelled_message(str(radiation_axis))))
         elif plane not in SUPPORTED_PLANES:
             own.append(
                 Failure(
@@ -302,6 +321,17 @@ def assess_cut_recovery(
                     f"a face lies in {words} and would solve as a wall across the cut",
                 )
             )
+        met = set(observation.sources_on_plane)
+        for source in sources:
+            source_id = str(source.get("id"))
+            if met and source_id not in met and source_id not in absent:
+                own.append(
+                    Failure(
+                        SOURCE_OFF_PLANE,
+                        f"source {source_id} does not meet {words}, so its mirror image would be "
+                        "a second driver nothing shows the speaker has",
+                    )
+                )
         if not observation.sources_on_plane:
             own.append(
                 Failure(
@@ -312,6 +342,34 @@ def assess_cut_recovery(
             )
         failures[plane] = (*own, *shared)
     return CutRecovery(planes=tuple(planes), kept_sides=kept, failures=failures)
+
+
+def frame_not_modelled_message(axis: str) -> str:
+    return (
+        "WG mirrors a cut model only in the frame it was modelled in (+z), and this "
+        f"model is confirmed to face {axis}; mirroring it would change the frame you confirmed"
+    )
+
+
+def frame_flip_problem(planes: Iterable[str], radiation_axis: str) -> str | None:
+    """Why the confirmed frame forbids mirroring these CAD planes, or None.
+
+    The same conditions :func:`assess_cut_recovery` judges, for recorded
+    evidence: a plane square to the radiation axis is never a symmetry plane,
+    and a mirror is solved only as modelled, never by resetting the frame.
+    """
+
+    axis = str(radiation_axis or "+z")
+    letter = axis[-1:].casefold()
+    for plane in planes:
+        if plane[0] == letter:
+            return (
+                f"the cut on {plane_words(plane)} is square to the radiation axis ({axis}), "
+                "so it is not a symmetry plane of the speaker"
+            )
+    if axis != "+z":
+        return frame_not_modelled_message(axis)
+    return None
 
 
 def recovery_options(
@@ -358,6 +416,7 @@ __all__ = [
     "CONDITIONS",
     "CONTRACT",
     "OPEN_RIM_PREFIX",
+    "frame_flip_problem",
     "CutRecovery",
     "Failure",
     "assess_cut_recovery",

@@ -36,10 +36,12 @@ from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
 
 from .cut_recovery import (
+    ASYMMETRIC_SECTION,
     MESH_DENIED,
     CutRecovery,
     Failure,
     assess_cut_recovery,
+    frame_flip_problem,
     recovery_options,
     side_of_source,
 )
@@ -1527,7 +1529,10 @@ def ingest_bundle(
             plan,
             observations,
             identity_problem=(
-                _source_identity_problem(shown[0], skipped_source_ids)
+                # Evidence never overrides a failed flip condition: the
+                # confirmed frame is judged first, and never reset.
+                frame_flip_problem(plan.evidenced_planes, solver_frame_axis)
+                or _source_identity_problem(shown[0], skipped_source_ids)
                 or _side_identity_problem(manifest)
                 or _reconstruction_integrity_problem(shown[0])
             ),
@@ -1571,8 +1576,6 @@ def ingest_bundle(
                 options = mirrored_options
                 applied_planes = evidence_outcome.applied
                 reflected_planes = evidence_outcome.reflect
-                if solver_frame is not None:
-                    solver_frame = frame_spec(AS_MODELLED, manifest)
         built, cache_key, cache_hit, mesh_path = chosen
         built_inline_viewport = bool(applied_planes)
     else:
@@ -1600,17 +1603,23 @@ def ingest_bundle(
             radiation_axis=solver_frame_axis,
             identity_problem=_source_identity_problem(built, skipped_source_ids),
             integrity_problem=_reconstruction_integrity_problem(built),
+            absent_sources=set(skipped_source_ids)
+            | {
+                str(source_id)
+                for source_id, resolution in (built.get("role_resolution") or {}).items()
+                if isinstance(resolution, Mapping) and resolution.get("skipped")
+            },
         )
         if recovery.recoverable:
             recovered_options = recovery_options(options, recovery, plan_identity=plan.identity())
             try:
                 recovered = mesh_for(recovered_options, include_viewport=not defer_viewport)
             except IngestRefusal as exc:
+                denial = _mesher_denial(str(exc))
                 recovery = recovery.with_failure(
-                    Failure(
-                        MESH_DENIED,
-                        f"its reduced mesh does not verify ({_mesher_denial(str(exc))})",
-                    )
+                    Failure(ASYMMETRIC_SECTION, denial.split(ASYMMETRIC_SECTION + ":", 1)[1].strip())
+                    if ASYMMETRIC_SECTION + ":" in denial
+                    else Failure(MESH_DENIED, f"its reduced mesh does not verify ({denial})")
                 )
             else:
                 options = recovered_options
@@ -1618,8 +1627,6 @@ def ingest_bundle(
                 applied_planes = tuple(recovered_options["domain_interpretation"]["applied"])
                 reflected_planes = recovery.reflect
                 built_inline_viewport = not defer_viewport
-                if solver_frame is not None:
-                    solver_frame = frame_spec(AS_MODELLED, manifest)
     (
         viewport_lookup_key,
         _viewport_index,

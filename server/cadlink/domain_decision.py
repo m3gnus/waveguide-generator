@@ -77,6 +77,7 @@ from .domain_interpretation import (
     READING_REDUCED,
     cut_shaped_open_rim,
     interpretation_record,
+    oblique_cut_refusal_message,
     off_centre_cut_refusal_message,
     open_half_refusal_message,
 )
@@ -374,6 +375,9 @@ def _decide(
     off_centre = [
         dict(item) for item in (observed_json or {}).get("off_origin_rims") or []
     ] if not domain_planes else []
+    oblique = [
+        dict(item) for item in (observed_json or {}).get("oblique_rims") or []
+    ] if not domain_planes else []
 
     # -- evidence: supporting, contradicted, ignored
     supporting: list[dict[str, Any]] = []
@@ -424,6 +428,11 @@ def _decide(
             "code": OPEN_HALF_CODE,
             "message": open_half_refusal_message(*open_rim, reason=reason or None),
         }
+    elif oblique:
+        refusal = {
+            "code": OPEN_HALF_CODE,
+            "message": oblique_cut_refusal_message(int(oblique[0]["rim_edges"])),
+        }
     elif off_centre:
         first = off_centre[0]
         refusal = {
@@ -443,7 +452,7 @@ def _decide(
     judged = interpretation.get("conclusions") or {}
     possible_cap = any("possible-cap" in (item.get("reasons") or []) for item in judged.values())
     candidate = any(item.get("status") == "candidate" for item in judged.values())
-    if evidence_source == DECLARATION or mirrored or open_rim is not None or off_centre:
+    if evidence_source == DECLARATION or mirrored or open_rim is not None or off_centre or oblique:
         input_reading = INPUT_CUT
     elif observed_json is None or possible_cap or candidate:
         # A face that may cap a cut or be a wall, or a clean positive-side rim
@@ -476,6 +485,7 @@ def _decide(
         "resolved_reading": reading,
         "cad_cuts": cad_cuts,
         "off_centre_cuts": off_centre,
+        "oblique_cuts": oblique,
         "wg_cut_planes": wg_cut_planes,
         "solver_domain": {
             "planes": domain_planes,
