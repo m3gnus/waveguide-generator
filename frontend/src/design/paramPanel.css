@@ -238,3 +238,9 @@
 .crossover-view-row { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
 .crossover-advanced-flag { color: var(--amber); font-size: var(--text-micro); }
 .section-note.warning { color: var(--amber); }
+
+/* "What's the difference?" under Solve accuracy: collapsed by default, and the
+   native <summary> keeps it reachable and toggleable from the keyboard. */
+.accuracy-explainer > summary { width: fit-content; color: var(--fg2); cursor: pointer; }
+.accuracy-explainer > summary:hover { color: var(--fg1); }
+.accuracy-explainer > p { margin: 4px 0 0; text-wrap: pretty; }

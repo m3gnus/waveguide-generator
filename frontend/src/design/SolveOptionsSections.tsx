@@ -86,6 +86,61 @@ function accurateEngineForParametric(
     : null;
 }
 
+// The BEM adapters and portable meridian adapter use DEFAULT_BEM_FORMULATION
+// from server/solver/formulation.py. BEAT uses Burton–Miller, and dry-run has
+// no BEM formulation, so neither gets the complex-k damping caveat.
+function usesComplexK(engine: string): boolean {
+  return ['metal', 'bempp', 'axisym'].includes(engine);
+}
+
+/**
+ * The plain-language "What's the difference?" text under the accuracy select.
+ *
+ * `fastEngine` / `accurateEngine` are what each choice resolves to on this
+ * machine under AUTO, or null when that is not known (CAD Link only knows the
+ * engine for the currently selected mode, and a host may have none ready). A
+ * null engine gets the general description rather than a guess.
+ */
+export function accuracyExplainer(fastEngine: string | null, accurateEngine: string | null): string[] {
+  const complexKFast = 'a plain exterior BEM solve breaks down at fictitious frequencies — resonances of the '
+    + 'space enclosed by the mesh surface, which do not exist physically. Fast adds a small imaginary '
+    + 'shift (0.005) to the wavenumber k, which suppresses them, and solves every source from one matrix factorization, so it is cheap. '
+    + 'The trade-off is slight numerical damping: sharp chamber or cavity resonances can look milder than they are.';
+  let fast: string;
+  if (fastEngine?.startsWith('beat-')) {
+    fast = `Fast (default) — on this machine Fast runs on ${engineDisplayName(fastEngine)}, which already uses the `
+      + 'Burton–Miller formulation described under Accurate, so it adds no complex-k damping.';
+  } else if (fastEngine && usesComplexK(fastEngine)) {
+    fast = `Fast (default) — complex-wavenumber BEM, here on ${engineDisplayName(fastEngine)}: ${complexKFast}`;
+  } else {
+    fast = `Fast (default) — complex-wavenumber BEM (Metal or BEMPP): ${complexKFast} `
+      + 'Where Fast runs on a BEAT backend it uses Burton–Miller instead.';
+  }
+  const runsOn = accurateEngine === 'beat-cpu'
+    ? 'Runs through BEAT CPU, because no BEAT GPU backend is ready here'
+    : accurateEngine?.startsWith('beat-')
+      ? `Runs through ${engineDisplayName(accurateEngine)}`
+      : 'Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU';
+  const accurate = 'Accurate — Burton–Miller combined formulation: it combines the pressure equation with its '
+    + 'normal-derivative equation, which removes the fictitious frequencies without adding damping. '
+    + `${runsOn}; typically several times slower than Fast, and the first solve waits while BEAT starts up.`;
+  return [
+    fast,
+    accurate,
+    'When to pick Accurate: sheltered chambers or cavities driven near their resonance.',
+    'On measured builds both modes placed resonances at the same frequencies; the remaining differences to '
+      + 'measurement come from the mesh and the model, not the formulation. Neither mode changes mesh density — '
+      + 'that stays your setting.',
+  ];
+}
+
+function AccuracyExplainer({ fastEngine, accurateEngine }: { fastEngine: string | null; accurateEngine: string | null }) {
+  return <details className="section-note accuracy-explainer">
+    <summary>What’s the difference?</summary>
+    {accuracyExplainer(fastEngine, accurateEngine).map((text) => <p key={text.slice(0, 24)}>{text}</p>)}
+  </details>;
+}
+
 function fastHelp(
   engine: string | null,
   mode: WorkspaceMode,
@@ -104,10 +159,7 @@ function fastHelp(
       : 'Fast: No ready solver backend is available on this machine.';
   }
 
-  // The BEM adapters and portable meridian adapter use DEFAULT_BEM_FORMULATION
-  // from server/solver/formulation.py. BEAT uses Burton–Miller, and dry-run has
-  // no BEM formulation, so neither gets the complex-k damping caveat.
-  const complexK = ['metal', 'bempp', 'axisym'].includes(engine);
+  const complexK = usesComplexK(engine);
   return `Fast: ${engineDisplayName(engine)}${complexK ? ', complex-k (numerical shift 0.005)' : ''}. Good for locating resonances${complexK ? '; sharp chamber resonances may look milder' : ''}.`;
 }
 
@@ -194,6 +246,15 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
     ? importedPlan.plan?.engine ?? null
     : store.accuracy === 'accurate' ? parametricAccurateEngine : parametricFastEngine;
   const helpPending = capabilitiesLoading || (mode === 'cad' && importedPlan.isPending);
+  // The explainer describes what each choice runs under AUTO, since picking
+  // Fast or Accurate clears an engine override. CAD Link only knows the engine
+  // of the selected choice, from the imported plan.
+  const explainerFast = mode === 'cad'
+    ? (store.accuracy === 'fast' && store.engine === 'auto' ? importedPlan.plan?.engine ?? null : null)
+    : fastEngineForParametric('auto', store.solverMode, engines, engineSelection);
+  const explainerAccurate = mode === 'cad'
+    ? (store.accuracy === 'accurate' && store.engine === 'auto' ? importedPlan.plan?.engine ?? null : null)
+    : accurateEngineForParametric('auto', 'full_3d', engines);
   const accuracyHelp = store.accuracy === 'accurate'
     ? accurateHelp(helpEngine, mode, helpPending, importedPlan.plan !== null, importedPlan.plan?.reason, store.solverMode)
     : fastHelp(helpEngine, mode, helpPending, importedPlan.plan !== null);
@@ -206,6 +267,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   const beatCpu = engines.find((engine) => engine.name === 'beat-cpu' && engine.available);
   return <>
     <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
+    <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>

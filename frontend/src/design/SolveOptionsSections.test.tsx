@@ -405,6 +405,121 @@ describe('solve and directivity control help', () => {
     expect(fieldPlaneHelp).toContain('CAD-link imports');
   });
 
+  describe("the Fast / Accurate explainer", () => {
+    const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu'];
+    const setReady = (ready: string[], resolvedDefault: string) => {
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+        engines: engineOrder.map((name) => ({
+          name,
+          available: ready.includes(name),
+          reason: ready.includes(name) ? null : 'not ready',
+          version: ready.includes(name) ? 'test' : null,
+          fast_paths: [],
+          formulations: ['full-3d'],
+          geometry_sources: ['parametric', 'imported'],
+        })),
+        engineSelection: {
+          default: 'auto', resolvedDefault, full3dOrder: engineOrder, axisymmetricRunner: 'axisym',
+        },
+        cpuPreparationInFlight: false,
+      });
+    };
+    const explainer = () => host.querySelector<HTMLDetailsElement>('details.accuracy-explainer')!;
+    const paragraphs = () => [...explainer().querySelectorAll('p')].map((p) => p.textContent ?? '');
+    const planFor = (engine: string | null): ImportedSolvePlanSnapshot => ({
+      plan: { ingest_id: 'cad-test', requested: 'auto', engine, reason: 'test', engines: [] },
+      error: null,
+      isPending: false,
+    });
+
+    it.each([
+      {
+        engine: 'metal', ready: ['metal', 'beat-metal', 'beat-cpu', 'bempp'],
+        fast: 'here on Metal:', fastKind: 'complex-k', accurate: 'Runs through BEAT Metal;',
+      },
+      {
+        engine: 'bempp', ready: ['bempp', 'beat-cpu'],
+        fast: 'here on BEMPP:', fastKind: 'complex-k', accurate: 'Runs through BEAT CPU, because no BEAT GPU backend is ready here;',
+      },
+      {
+        engine: 'beat-cuda', ready: ['beat-cuda', 'beat-cpu', 'bempp'],
+        fast: 'on this machine Fast runs on BEAT CUDA, which already uses the Burton–Miller formulation', fastKind: 'burton-miller',
+        accurate: 'Runs through BEAT CUDA;',
+      },
+      {
+        engine: 'beat-cpu', ready: ['beat-cpu'],
+        fast: 'on this machine Fast runs on BEAT CPU, which already uses the Burton–Miller formulation', fastKind: 'burton-miller',
+        accurate: 'Runs through BEAT CPU, because no BEAT GPU backend is ready here;',
+      },
+    ])('names the resolved $engine engine in parametric mode', ({ engine, ready, fast, fastKind, accurate }) => {
+      setReady(ready, engine);
+      render(<SolveOptionsControls mode="parametric" />);
+      const [fastText, accurateText, when, measured] = paragraphs();
+      expect(fastText.startsWith('Fast (default) — ')).toBe(true);
+      expect(fastText).toContain(fast);
+      if (fastKind === 'complex-k') {
+        expect(fastText).toContain('small imaginary shift (0.005)');
+        expect(fastText).toContain('fictitious frequencies');
+        expect(fastText).toContain('sharp chamber or cavity resonances can look milder');
+      } else {
+        expect(fastText).toContain('adds no complex-k damping');
+        expect(fastText).not.toContain('0.005');
+      }
+      expect(accurateText).toContain('Burton–Miller combined formulation');
+      expect(accurateText).toContain('normal-derivative equation');
+      expect(accurateText).toContain('without adding damping');
+      expect(accurateText).toContain(accurate);
+      expect(accurateText).toContain('several times slower');
+      expect(accurateText).toContain('first solve waits while BEAT starts up');
+      expect(when).toBe('When to pick Accurate: sheltered chambers or cavities driven near their resonance.');
+      expect(measured).toContain('both modes placed resonances at the same frequencies');
+      expect(measured).toContain('Neither mode changes mesh density');
+      // The explainer describes both choices whichever one is selected.
+      const select = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+      act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+      expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
+      expect(paragraphs()).toEqual([fastText, accurateText, when, measured]);
+    });
+
+    it('describes the modes the same way in CAD Link mode, naming only the engine the plan resolved', () => {
+      setReady(['metal', 'beat-metal', 'beat-cpu', 'bempp'], 'metal');
+      importedPlan.current = planFor('metal');
+      render(<SolveOptionsControls mode="cad" />);
+      let [fastText, accurateText] = paragraphs();
+      expect(fastText).toContain('complex-wavenumber BEM, here on Metal:');
+      expect(accurateText).toContain('Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU;');
+
+      importedPlan.current = planFor('beat-cpu');
+      const select = host.querySelector<HTMLSelectElement>('#solve-accuracy')!;
+      act(() => { select.value = 'accurate'; select.dispatchEvent(new Event('change', { bubbles: true })); });
+      expect(useSolveOptionsStore.getState().options().accuracy).toBe('accurate');
+      [fastText, accurateText] = paragraphs();
+      expect(fastText).toContain('complex-wavenumber BEM (Metal or BEMPP):');
+      expect(fastText).toContain('Where Fast runs on a BEAT backend it uses Burton–Miller instead.');
+      expect(accurateText).toContain('Runs through BEAT CPU, because no BEAT GPU backend is ready here;');
+    });
+
+    it('is a collapsed native disclosure beside the select, with no wrapper around the rows', () => {
+      setReady(['metal', 'beat-metal', 'beat-cpu', 'bempp'], 'metal');
+      for (const mode of ['parametric', 'cad'] as const) {
+        render(<SolveOptionsControls mode={mode} />);
+        const details = explainer();
+        expect(host.querySelectorAll('details.accuracy-explainer')).toHaveLength(1);
+        expect(details.parentElement).toBe(host);
+        expect(details.previousElementSibling?.querySelector('#solve-accuracy')).not.toBeNull();
+        expect(details.open).toBe(false);
+        const summary = details.querySelector('summary')!;
+        expect(summary.textContent).toBe('What’s the difference?');
+        // A native <summary> is focusable and toggles on Enter/Space; the click
+        // below is the activation those keys perform.
+        act(() => { summary.click(); });
+        expect(details.open).toBe(true);
+        act(() => { summary.click(); });
+        expect(details.open).toBe(false);
+      }
+    });
+  });
+
   // `.section-body` is a container-query grid whose full-width exceptions select
   // direct children, so a help wrapper around these would silently reflow them.
   it('adds no wrapper element around the grid-positioned rows', () => {
