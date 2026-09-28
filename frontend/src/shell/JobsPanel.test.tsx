@@ -810,7 +810,7 @@ describe('jobs panel run list', () => {
     useCadReturnStore.setState({
       selectedBundle: cadBundle('cad-run'),
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
-      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      driveChannels: [{ id: 'drive', source_ids: ['source'] }],
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     });
     workspaceModeStore.setMode('cad');

@@ -84,11 +84,7 @@ export const CAD_CONTROLS = {
     // The section lost the solver's own vocabulary from its name, so the
     // keywords have to carry it: "drive channel" is still what the wire, the
     // server refusals and the CAD roles call this.
-    ['drive channel', 'drive channels', 'source assignment', 'channel', 'motion', 'driver', 'Thiele-Small', 'T/S'],
-  ),
-  channelMotion: control(
-    'cad.drive-channel.motion', 'Motion', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',
-    ['normal motion', 'axial motion', 'velocity'], 'ingested-return', 'cad.drive-channels',
+    ['drive channel', 'drive channels', 'source assignment', 'channel', 'driver', 'Thiele-Small', 'T/S'],
   ),
   driverSearch: control(
     'cad.driver.search', 'Find driver', CAD_CONTROL_SECTIONS.driveChannels, 'simulation',

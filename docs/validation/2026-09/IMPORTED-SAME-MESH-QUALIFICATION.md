@@ -9,6 +9,10 @@ Darwin arm64 (Python 3.13.1), with the module pins listed under Environment
 (including `hornlab-waveguide-mesher` `7fef1f6`). It describes that commit and
 those pins, not a current release status.
 
+Historical since 2026-09-29: this run includes the oscillating sphere and every
+axial-motion row. Axial source motion has since been removed, and the qualifier
+now runs the normal-motion fixtures only.
+
 Metal and BEAT-CPU were both available. Of 81 result rows, 79 are judged
 and pass, none fails, and two are not judged: the two
 `horn return, coarse vs fine density` rows (one per engine), marked

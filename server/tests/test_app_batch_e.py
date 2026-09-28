@@ -318,6 +318,76 @@ def test_removed_solver_is_a_typed_422_at_plan_submit_and_retry(
 
     asyncio.run(scenario())
 
+def _axial_imported_request() -> dict[str, Any]:
+    return {
+        "geometry": {
+            "type": "imported",
+            "ingest_id": "wgi_" + "0" * 26,
+            "manifest_sha256": "sha256:" + "1" * 64,
+            "artifact_sha256": "sha256:" + "2" * 64,
+            "drive_channels": [{"id": "hf", "source_ids": ["source-hf"], "motion": "axial"}],
+            "mesh": {
+                "rigid_size_mm": 8.0,
+                "transition_mm": 20.0,
+                "source_size_mm": {"source-hf": 3.0},
+            },
+        },
+        "options": {"engine": "metal", "frequencies_hz": [100.0, 500.0, 1000.0]},
+    }
+
+
+def test_removed_axial_channel_is_a_typed_422_at_imported_plan_submit_and_retry(
+    tmp_path: Path,
+) -> None:
+    """A stored or new imported request with an axial channel is refused, never a 500 or normal."""
+
+    application = create_app(data_dir=tmp_path)
+    runtime = application.state.jobs_runtime
+    client = TestClient(application)
+    payload = _axial_imported_request()
+    now = "2026-09-29T12:00:00"
+    seed = JobStore.for_data_dir(application.state.data_dir)
+    seed.initialize()
+    seed.create_job({
+        "id": "historical-axial",
+        "status": "error",
+        "created_at": now,
+        "updated_at": now,
+        "queued_at": now,
+        "started_at": now,
+        "progress": 0.5,
+        "stage": "solve",
+        "stage_message": "Solving",
+        "config_json": payload,
+        "config_summary_json": {"geometry_type": "imported"},
+        "task_metadata": {},
+    })
+    seed.close()
+
+    async def scenario() -> None:
+        body = json.dumps(payload).encode()
+        headers = {"content-type": "application/json"}
+        try:
+            for method, path, stage, request_body in (
+                ("POST", "/api/solve/imported-plan", "planning", body),
+                ("POST", "/api/solve", "submission", body),
+                ("POST", "/api/jobs/historical-axial/retry", "retry", None),
+            ):
+                kwargs = {"headers": headers, "body": request_body} if request_body else {}
+                response = await client.request_async(method, path, **kwargs)
+                assert response.status_code == 422, (path, response.text)
+                error = response.json()["error"]
+                assert error["code"] == "removed_source_motion", path
+                assert error["stage"] == stage, path
+                assert "Axial source motion has been removed" in error["message"]
+            jobs, _total = await runtime.list_jobs(status=None, limit=10, offset=0)
+            assert [job["id"] for job in jobs] == ["historical-axial"]
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_capabilities_reports_the_journal_mode_sqlite_actually_granted(tmp_path: Path) -> None:
     """A store degraded to a rollback journal is readable off the running app.
 

@@ -208,7 +208,7 @@ function readyCad(): CadReturnIngestRecord {
       designIds: [], sources: [{ id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-hf' }],
     },
     projectLineageId: 'wgl_test', ingestRecord: record, needsIngest: false,
-    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
     sourceSizesMm: { 'source-hf': 4 }, rigidSizeMm: 8, transitionMm: 12, skippedSourceIds: [],
   });
   importedMeshStore.setCad({ name: 'Speaker', source: 'cad', ingestId: 'wgi_first' } as ImportedMeshScene);
@@ -386,7 +386,7 @@ describe('M1b: one Solve card, to the revealed result', () => {
         ...state.selectedBundle!.sources,
       ] },
       driveChannels: [
-        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        { id: 'drive-mf', source_ids: ['source-mf'] },
         ...state.driveChannels,
       ],
       channelDrivers: { 'drive-hf': {

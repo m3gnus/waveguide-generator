@@ -64,9 +64,7 @@ REFERENCE_LEVEL = 1
 #: over every point and frequency (docs/validation/2026-09, WG 4dca8d33):
 #:
 #:     Metal pulsating    5.08e-02  1.24e-02  5.61e-03  ->  7.7e-02  1.9e-02  8.5e-03
-#:     Metal oscillating  6.81e-02  1.76e-02  5.27e-03  ->  1.1e-01  2.7e-02  8.0e-03
 #:     BEAT pulsating     5.41e-02  1.35e-02  3.36e-03     (0.70, 0.71, 0.40 of it)
-#:     BEAT oscillating   6.71e-02  1.72e-02  4.33e-03     (0.61, 0.64, 0.54 of it)
 #:
 #: Single precision needs almost none of the headroom: an engine against
 #: itself differs by at most 7.0e-5 (BEAT) and 8.0e-6 (Metal), under 1 % of the
@@ -76,24 +74,24 @@ REFERENCE_LEVEL = 1
 #: everywhere fails here, where it used to widen its own same-mesh tolerance.
 ANALYTIC_CEILINGS: dict[str, tuple[float, ...]] = {
     "pulsating": (7.7e-2, 1.9e-2, 8.5e-3),
-    "oscillating": (1.1e-1, 2.7e-2, 8.0e-3),
 }
 
 #: The least order in element size (the longest edge) at which an engine's
 #: worst analytic error must fall from the coarsest ladder sphere to the
 #: finest, whose edges are 3.9x shorter. The recorded ladder reads 1.62
-#: (Metal, pulsating: its complex-wavenumber error levels off near 5e-3), 1.88
-#: (Metal, oscillating), and 2.04 and 2.01 (BEAT). An error that does not fall
+#: (Metal, pulsating: its complex-wavenumber error levels off near 5e-3) and
+#: 2.04 (BEAT). An error that does not fall
 #: with the mesh -- a sign, a gain, a wrong constant -- reads about 0.
 MINIMUM_ORDER = 1.0
 
 #: The same-mesh tolerance per level, from the ceilings alone: two engines
 #: that each meet the ceiling C are within 2C of each other on that body (the
 #: triangle inequality), C the larger body's ceiling at that level. At the
-#: reference level, where the same-mesh fixtures run, it is 5.4e-2.
-SAME_MESH_TOLERANCE: tuple[float, ...] = tuple(
-    2.0 * max(ceilings[level] for ceilings in ANALYTIC_CEILINGS.values()) for level in range(len(LADDER))
-)
+#: reference level, where the same-mesh fixtures run, it is 5.4e-2. Recorded
+#: as fixed values: the larger ceiling came from the oscillating sphere, a
+#: rigid axial motion that has been removed, and dropping that body must not
+#: tighten what was qualified against it.
+SAME_MESH_TOLERANCE: tuple[float, ...] = (2.2e-1, 5.4e-2, 1.7e-2)
 
 
 # ---------------------------------------------------------------- geometry
@@ -198,26 +196,6 @@ def pulsating_sphere(radius: float, frequency_hz: float, distance: float) -> com
     return complex(
         AIR_DENSITY * radius**2 / distance * np.exp(1j * k * (distance - radius)) / (1.0 - 1j * k * radius)
     )
-
-
-def oscillating_sphere(
-    radius: float, frequency_hz: float, distance: float, cos_theta: np.ndarray
-) -> np.ndarray:
-    """A rigid sphere oscillating along its axis, per unit axial acceleration.
-
-    ``p = -rho cos(theta) h1(kr) / (k h1'(ka))`` with ``h1`` the outgoing
-    spherical Hankel function; its ``k -> 0`` limit is the incompressible
-    dipole ``rho a^3 cos(theta) / (2 r^2)``.
-    """
-
-    from scipy.special import spherical_jn, spherical_yn
-
-    k = 2.0 * math.pi * frequency_hz / SOUND_SPEED
-    h1 = spherical_jn(1, k * distance) + 1j * spherical_yn(1, k * distance)
-    h1_prime = spherical_jn(1, k * radius, derivative=True) + 1j * spherical_yn(
-        1, k * radius, derivative=True
-    )
-    return -AIR_DENSITY * np.asarray(cos_theta) * h1 / (k * h1_prime)
 
 
 # ---------------------------------------------------------------- records
@@ -484,18 +462,6 @@ def relative_error(candidate: np.ndarray, reference: np.ndarray) -> np.ndarray:
     return np.linalg.norm(candidate - reference, axis=1) / np.linalg.norm(reference, axis=1)
 
 
-def polar_cos_theta(solved: Solved) -> np.ndarray:
-    """cos(angle from the axis) at every polar-cut sample, (planes, angles)."""
-
-    return np.cos(np.radians(solved.angles_deg))[None, :].repeat(len(solved.planes), axis=0)
-
-
-def sphere_cos_theta(solved: Solved) -> np.ndarray | None:
-    if solved.sphere_theta_deg is None:
-        return None
-    return np.cos(np.radians(np.asarray(solved.sphere_theta_deg, dtype=float)))
-
-
 def analytic_observations(
     solved: Solved, kind: str, radius: float = SPHERE_RADIUS_M, *, include_sphere: bool = True
 ) -> np.ndarray:
@@ -507,13 +473,7 @@ def analytic_observations(
             sphere_count = 0 if solved.sphere_theta_deg is None else len(solved.sphere_theta_deg)
             sphere = np.full(sphere_count, value, dtype=complex)
         else:
-            polar = oscillating_sphere(radius, frequency, OBSERVATION_DISTANCE_M, polar_cos_theta(solved))
-            cos_sphere = sphere_cos_theta(solved)
-            sphere = (
-                np.zeros(0, dtype=complex)
-                if cos_sphere is None
-                else oscillating_sphere(radius, frequency, OBSERVATION_DISTANCE_M, cos_sphere)
-            )
+            raise ValueError(f"no analytic reference for a {kind!r} body")
         parts = [polar.reshape(-1)]
         if include_sphere and solved.sphere_theta_deg is not None:
             parts.append(sphere.reshape(-1))
@@ -538,10 +498,6 @@ TWO_CHANNELS = [
     {"id": "bottom", "source_ids": ["bottom"]},
 ]
 HEMISPHERE_TAGS = {"top": 101, "bottom": 102}
-
-
-def with_motion(channels: Sequence[Mapping[str, Any]], motion: str) -> list[dict[str, Any]]:
-    return [{**channel, "motion": motion} for channel in channels]
 
 
 @dataclass
@@ -635,22 +591,16 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         )
         return row
 
-    # Fixtures 2 + 3: analytic spheres on the refinement ladder. The breathing
-    # sphere is split into two hemisphere tags, solved as one merged channel
-    # and as two channels whose bases must sum to it. The oscillating sphere is
-    # one axial tag: an axial split would ask each engine a different question
-    # (see the rear-facing fixture below).
+    # Fixture 2: the analytic breathing sphere on the refinement ladder. It is
+    # split into two hemisphere tags, solved as one merged channel and as two
+    # channels whose bases must sum to it.
     level_errors: dict[tuple[str, str, int], np.ndarray] = {}
     for level in range(len(LADDER)):
-        for kind in ("pulsating", "oscillating"):
-            points, triangles, tags = sphere_mesh(level, split=kind == "pulsating")
+        for kind in ("pulsating",):
+            points, triangles, tags = sphere_mesh(level, split=True)
             text = gmsh22(points, triangles, tags)
-            if kind == "pulsating":
-                record = record_for(text, HEMISPHERE_TAGS)
-                cases = (("one channel", with_motion(ONE_CHANNEL, "normal")), ("two channels", with_motion(TWO_CHANNELS, "normal")))
-            else:
-                record = record_for(text, {"sphere": 101})
-                cases = (("one tag", [{"id": "sphere", "source_ids": ["sphere"], "motion": "axial"}]),)
+            record = record_for(text, HEMISPHERE_TAGS)
+            cases = (("one channel", ONE_CHANNEL), ("two channels", TWO_CHANNELS))
             for engine in engines:
                 solved_cases = {}
                 for label, channels in cases:
@@ -685,56 +635,24 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
     text = gmsh22(points, triangles, tags)
     record = record_for(text, HEMISPHERE_TAGS)
     pairs = [(a, b) for index, a in enumerate(engines) for b in engines[index + 1 :]]
-    for motion in ("normal", "axial"):
-        for label, channels in (("one channel", ONE_CHANNEL), ("two channels", TWO_CHANNELS)):
-            solved = {engine: solve(engine, record, with_motion(channels, motion)) for engine in engines}
-            for a, b in pairs:
-                for channel in solved[a].channel_ids:
-                    errors = relative_error(solved[a].observations(channel), solved[b].observations(channel))
-                    record_row(Row(f"same mesh: hemispheres, {motion}, {label}, {channel}", a, b, "complex per channel", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level],
-                                   note=("an axial hemisphere faces backwards; every engine must drive it as Metal does" if motion == "axial" else "")))
-                if len(solved[a].channel_ids) > 1:
-                    errors = relative_error(solved[a].observations(), solved[b].observations())
-                    record_row(Row(f"same mesh: hemispheres, {motion}, {label}, channel sum", a, b, "complex channel sum", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
+    for label, channels in (("one channel", ONE_CHANNEL), ("two channels", TWO_CHANNELS)):
+        solved = {engine: solve(engine, record, channels) for engine in engines}
+        for a, b in pairs:
+            for channel in solved[a].channel_ids:
+                errors = relative_error(solved[a].observations(channel), solved[b].observations(channel))
+                record_row(Row(f"same mesh: hemispheres, normal, {label}, {channel}", a, b, "complex per channel", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
+            if len(solved[a].channel_ids) > 1:
+                errors = relative_error(solved[a].observations(), solved[b].observations())
+                record_row(Row(f"same mesh: hemispheres, normal, {label}, channel sum", a, b, "complex channel sum", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
 
-    # Fixture 4: the oscillating sphere moved and turned in CAD. Its mesh and
-    # its anchor frame are rotated and translated together, so every solver
-    # frame response must equal the unmoved one -- and the analytic dipole,
-    # whose cos(theta) pattern makes a wrong axis or a wrong sign visible.
     rotation = rotation_matrix([1.0, -0.4, 0.7], 131.0)
     offset = np.asarray([0.21, -0.37, 0.52])
-    points, triangles, _tags = sphere_mesh(level, split=False)
-    one_tag = np.full(len(triangles), 101)
-    straight = record_for(gmsh22(points, triangles, one_tag), {"sphere": 101})
-    moved = record_for(
-        gmsh22(points @ rotation.T + offset, triangles, one_tag),
-        {"sphere": 101},
-        frame=frame_from(rotation, offset),
-    )
-    axial = [{"id": "sphere", "source_ids": ["sphere"], "motion": "axial"}]
-    for engine in engines:
-        base = solve(engine, straight, axial)
-        turned = solve(engine, moved, axial)
-        errors = relative_error(turned.observations(), base.observations())
-        # The same triangles, turned: only rounding and quadrature orientation
-        # differ, so the bound is the single-precision floor, not the mesh.
-        record_row(Row("rotated + translated oscillating sphere", engine, "unmoved", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 4: the frame rotation"))
-        # Moving the body must not change its error -- its own unmoved error
-        # plus the single-precision floor -- and the error must stay under the
-        # fixed ceiling. The smaller bound judges, so the engine's own error
-        # can only tighten this row, never widen it.
-        errors = relative_error(turned.observations(), analytic_observations(turned, "oscillating"))
-        bound = min(
-            float(np.max(level_errors[("oscillating", engine, level)])) + EXACT_TOLERANCE,
-            ANALYTIC_CEILINGS["oscillating"][level],
-        )
-        record_row(Row("rotated + translated oscillating sphere", engine, "analytic", "complex, all points", errors.tolist(), tolerance=bound, note="fixture 4 against the analytic reference"))
 
-    # Fixture 4, u/v-sensitive: a sphere whose source is an off-axis cap
+    # Fixture 4: a sphere whose source is an off-axis cap
     # centred at 30 degrees of azimuth -- between +x and +y, nearer +x -- so
     # no mirror or swap leaves its field alone. A u mirror, a v mirror (a
     # handedness error) and a u/v swap each move the cap and change the field,
-    # which the axisymmetric oscillating sphere cannot show. Moved and turned
+    # which an on-axis source cannot show. Moved and turned
     # in CAD, it must give the unmoved answer on each engine, and the engines
     # must agree with each other on the turned copy.
     points, triangles, _tags = sphere_mesh(level, split=False)
@@ -813,13 +731,11 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
     for planes in (("x0",), ("x0", "y0")):
         cut_points, cut_triangles, cut_tags = keep_side(points, triangles, tags, planes)
         cut = record_for(gmsh22(cut_points, cut_triangles, cut_tags), HEMISPHERE_TAGS, domain_planes=planes)
-        for motion in ("normal", "axial"):
-            channels = with_motion(ONE_CHANNEL, motion) if motion == "normal" else [{"id": "both", "source_ids": ["top", "bottom"], "motion": "axial"}]
-            for engine in engines:
-                full = solve(engine, whole, channels)
-                reduced = solve(engine, cut, channels)
-                errors = relative_error(reduced.observations(), full.observations())
-                record_row(Row(f"{'+'.join(planes)} return vs whole, {motion}", engine, "whole", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 6: reduced domain executed natively"))
+        for engine in engines:
+            full = solve(engine, whole, ONE_CHANNEL)
+            reduced = solve(engine, cut, ONE_CHANNEL)
+            errors = relative_error(reduced.observations(), full.observations())
+            record_row(Row(f"{'+'.join(planes)} return vs whole, normal", engine, "whole", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="fixture 6: reduced domain executed natively"))
 
     return {"rows": rows, "timings": timings, "level_errors": level_errors, "same_mesh_tolerance": {level: SAME_MESH_TOLERANCE[level] for level in range(len(LADDER))}, "reference_edge_m": h_ref}
 
@@ -839,7 +755,7 @@ def write_markdown(path: Path, result: Mapping[str, Any], status: Mapping[str, s
     lines += ["", "## Discretisation error on the analytic bodies", "", "Worst complex error over every observation point and frequency, per refinement level.", "", "| Engine | Body | " + " | ".join(f"L{level}" for level in range(len(LADDER))) + " |", "| --- | --- |" + " --- |" * len(LADDER)]
     engines_seen = sorted({engine for (_kind, engine, _level) in result["level_errors"]})
     for engine in engines_seen:
-        for kind in ("pulsating", "oscillating"):
+        for kind in ("pulsating",):
             values = [float(np.max(result["level_errors"][(kind, engine, level)])) for level in range(len(LADDER))]
             lines.append(f"| {engine} | {kind} | " + " | ".join(f"{value:.2e}" for value in values) + " |")
     lines += ["", "Fixed analytic ceilings, from the recorded Metal ladder: " + "; ".join(f"{kind} " + ", ".join(f"L{level} {value:.1e}" for level, value in enumerate(values)) for kind, values in ANALYTIC_CEILINGS.items()) + f". Least observed order across the ladder: {MINIMUM_ORDER:g}."]

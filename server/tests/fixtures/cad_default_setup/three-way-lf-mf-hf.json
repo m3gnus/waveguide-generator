@@ -92,21 +92,18 @@
       "drive_channels": [
         {
           "id": "drive-hf",
-          "motion": "normal",
           "source_ids": [
             "source-hf"
           ]
         },
         {
           "id": "drive-mf",
-          "motion": "normal",
           "source_ids": [
             "source-mf"
           ]
         },
         {
           "id": "drive-lf",
-          "motion": "normal",
           "source_ids": [
             "source-lf"
           ]

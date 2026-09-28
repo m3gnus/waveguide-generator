@@ -138,7 +138,7 @@ export interface FrequencyChannel {
 
 export interface FrequencyProgress {
   /** How many of `total` frequencies are solved in the printed sweep.
-   * Imported axial tag groups can restart this count. */
+   * An imported solve prints one channel's count at a time. */
   completed: number;
   total: number;
   /** Present only for an imported multi-channel solve (BEAT/BEMPP imported
@@ -291,7 +291,7 @@ function stageSample(job: JobProgressLike, stageWord: SolveStageWord, frequency:
   }
   const jobId = job.id;
   // The runtime reserves 35–85% for the frequency sweep. Its normalized
-  // value counts every axial tag group, even when the printed i/N restarts.
+  // value counts every channel, even though the printed i/N restarts with each.
   const completed = frequency.channel && Number.isFinite(job.progress)
     ? Math.max(0, Math.min(1, (job.progress - 0.35) / 0.5))
     : frequency.completed;

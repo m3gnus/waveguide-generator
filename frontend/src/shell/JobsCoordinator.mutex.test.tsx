@@ -159,7 +159,7 @@ function importedSubmission(ingestId: string): ImportedSolveSubmission {
   return {
     geometry: {
       type: 'imported', ingest_id: ingestId, manifest_sha256: `sha256:m:${ingestId}`, artifact_sha256: `sha256:a:${ingestId}`,
-      drive_channels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
+      drive_channels: [{ id: 'drive', source_ids: ['source'] }],
       mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { source: 4 } }, acknowledged_findings: [], skipped_source_ids: [], exterior_only: false,
     },
     options: {
@@ -199,7 +199,7 @@ function readyCad(ingestId: string): CadReturnIngestRecord {
       designIds: [], sources: [{ id: 'source-hf', role: 'source', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-hf' }],
     },
     projectLineageId: 'wgl_test', ingestRecord: record, needsIngest: false,
-    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
     sourceSizesMm: { 'source-hf': 4 }, rigidSizeMm: 8, transitionMm: 12, skippedSourceIds: [],
   });
   importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);
@@ -626,8 +626,8 @@ describe('solve invocation mutex', () => {
     readyCad('wgi_frequency');
     useCadReturnStore.setState({
       driveChannels: [
-        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-        { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-lf', source_ids: ['source-lf'] },
       ],
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-hf', 'drive-lf'], [1_000]),
@@ -695,8 +695,8 @@ describe('solve invocation mutex', () => {
     readyCad('wgi_invalid_frequency');
     useCadReturnStore.setState({
       driveChannels: [
-        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-        { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-lf', source_ids: ['source-lf'] },
       ],
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-hf', 'drive-lf'], [1_000]),
@@ -745,8 +745,8 @@ describe('solve invocation mutex', () => {
     readyCad('wgi_plan_snapshot');
     useCadReturnStore.setState({
       driveChannels: [
-        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-        { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-lf', source_ids: ['source-lf'] },
       ],
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-hf', 'drive-lf'], [1_000]),

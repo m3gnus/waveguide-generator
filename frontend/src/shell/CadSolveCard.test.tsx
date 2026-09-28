@@ -213,7 +213,7 @@ describe('CAD Solve card run status', () => {
     expect(host.querySelector('.cad-solve-run')?.textContent).toContain('ETA 0:40');
   });
 
-  it('uses overall work for a rear-facing imported axial drive whose printed count restarts', async () => {
+  it('uses overall work for an imported channel whose printed count restarts', async () => {
     publishOperation(operation());
     publishJobs([job({ stage: 'solve', stage_message: 'Solving frequency 1/4 of drive channel 2/2 (rear) with BEAT Engine', progress: 0.35 + 0.5 * 5 / 16 })]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));

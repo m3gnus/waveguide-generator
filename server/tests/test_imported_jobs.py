@@ -28,7 +28,9 @@ from server.jobs.runtime import (
     EngineUnavailableError,
     ImportedSolveRefusal,
     JobRuntime,
+    RemovedSourceMotionError,
     _imported_symmetry_metadata,
+    _refuse_removed_solver,
     _replay_request,
 )
 from server.jobs.store import JobStore
@@ -83,6 +85,21 @@ def _request(ingest_id: str, **geometry_changes: Any) -> SolveRequest:
             },
         }
     )
+
+
+def test_a_stored_axial_channel_decodes_but_a_new_solve_is_refused() -> None:
+    """Axial source motion is removed: old setups load, new solves are refused."""
+
+    request = _request("wgi_" + "0" * 26)
+    stored = request.model_dump(mode="json")
+    stored["geometry"]["drive_channels"][1]["motion"] = "axial"
+    decoded = SolveRequest.model_validate(stored)
+    assert decoded.geometry.drive_channels[1].motion == "axial"
+
+    _refuse_removed_solver(request)  # the ordinary normal request is untouched
+    with pytest.raises(RemovedSourceMotionError, match="Axial source motion has been removed") as raised:
+        _refuse_removed_solver(decoded)
+    assert raised.value.code == "removed_source_motion"
 
 
 def test_geometry_union_round_trip_and_legacy_rewrite() -> None:
@@ -1690,7 +1707,6 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     )
     request = _request("wgi_" + "0" * 26)
     request.options.frequencies_hz = [100.0, 200.0]
-    request.geometry.drive_channels[1].motion = "axial"
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
     record = _record(mesh_path)
@@ -1713,8 +1729,8 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     ]
     assert captured["config"]["frame_override"].origin.tolist() == [0.0, 0.08, 0.0]
     assert captured["config"]["native_symmetry_plane"] == "yz"
-    assert set(captured["config"]["source_velocity_profiles"]) == {101, 102, 103}
-    assert isinstance(captured["config"]["source_velocity_profiles"][103], metal.AxialProfile)
+    assert "source_velocity_profiles" not in captured["config"]
+    assert "source_motion" not in captured["config"]
     assert response["channel_order"] == ["left", "right"]
     assert set(response["channels"]) == {"left", "right"}
     assert response["result_kind"] == "multi_channel"
@@ -1840,7 +1856,7 @@ def test_frequency_validity_estimates_are_not_exposed_as_result_caveats(
     assert "global_frequency_caveat" not in above_response["metadata"]
 
 
-def test_unlinked_frame_fallback_and_real_mixed_motion_config(
+def test_unlinked_frame_fallback_and_real_native_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     captured: dict[str, Any] = {}
@@ -1860,7 +1876,6 @@ def test_unlinked_frame_fallback_and_real_mixed_motion_config(
     assert real_native_config is not None
     request = _request("wgi_" + "0" * 26)
     request.options.frequencies_hz = [100.0, 200.0]
-    request.geometry.drive_channels[1].motion = "axial"
     mesh_path = tmp_path / "imported.msh"
     mesh_path.write_text("msh", encoding="utf-8")
     record = _record(mesh_path)

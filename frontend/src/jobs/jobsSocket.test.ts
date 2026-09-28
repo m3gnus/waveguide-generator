@@ -189,7 +189,7 @@ describe('jobs websocket state machine', () => {
       type: 'imported' as const,
       ingest_id: 'wgi_saved',
       drive_channels: [{
-        id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' as const,
+        id: 'drive-hf', source_ids: ['source-hf'],
         driver: { sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8 },
       }],
       combine: null,

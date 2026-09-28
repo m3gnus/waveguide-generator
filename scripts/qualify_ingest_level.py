@@ -51,12 +51,12 @@ HORN_LADDER_CEILING = 3.0e-2
 HORN_TOLERANCE = 2.0 * HORN_LADDER_CEILING
 
 
-def _solve_record(engine: str, ingested: fixtures.Ingested, motion: str) -> Solved:
+def _solve_record(engine: str, ingested: fixtures.Ingested) -> Solved:
     from server.engines.registry import create_engine
     from server.solver.combine import deserialize_channel_bases
 
     request = fixtures.request_for_record(
-        ingested, engine=engine, motion=motion, frequencies=HORN_FREQUENCIES_HZ
+        ingested, engine=engine, frequencies=HORN_FREQUENCIES_HZ
     )
     started = time.perf_counter()
     outcome = asyncio.run(
@@ -180,7 +180,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     for label, deviation in HORN_LADDER:
         ingests[label] = fixtures.ingest(bundle, root / f"data-round-{label}", surface_deviation_mm=deviation)
         for engine in engines:
-            ladder[engine][label] = _solve_record(engine, ingests[label], "normal")
+            ladder[engine][label] = _solve_record(engine, ingests[label])
     reference = ingests["reference"]
     facts["horn_triangles"] = {label: int(ingests[label].record["mesh"]["stats"]["triangle_count"]) for label, _ in HORN_LADDER}
     facts["horn_domain"] = reference.record["symmetry"].get("domain_planes") or reference.record["symmetry"].get("cut_planes")
@@ -199,18 +199,16 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
 
     # Fixture 1 on a real return: the same ingested record into every engine.
     pairs = [(a, b) for index, a in enumerate(engines) for b in engines[index + 1 :]]
-    by_motion: dict[str, dict[str, Solved]] = {"normal": {engine: ladder[engine]["reference"] for engine in engines}}
-    by_motion["axial"] = {engine: _solve_record(engine, reference, "axial") for engine in engines}
-    for motion, solved in by_motion.items():
-        for a, b in pairs:
-            errors = relative_error(solved[a].observations(), solved[b].observations())
-            record_row(Row(f"same mesh: horn quarter return, {motion}", a, b, "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE))
+    solved = {engine: ladder[engine]["reference"] for engine in engines}
+    for a, b in pairs:
+        errors = relative_error(solved[a].observations(), solved[b].observations())
+        record_row(Row("same mesh: horn quarter return, normal", a, b, "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE))
 
     # Fixture 6 on a real return: WG's quarter against the forced full domain.
     full = fixtures.ingest(bundle, root / "data-round", symmetry_mode="full")
     facts["horn_full_triangles"] = full.record["mesh"]["stats"]["triangle_count"]
     for engine in engines:
-        whole = _solve_record(engine, full, "normal")
+        whole = _solve_record(engine, full)
         errors = relative_error(ladder[engine]["reference"].observations(), whole.observations())
         record_row(Row("horn: quarter return vs forced full domain", engine, "full", "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE, note="two meshes of one body on one engine"))
 
@@ -252,7 +250,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
             f"orientation_valid={rear_facts['orientation_valid']}; warnings={rear_facts['warnings']}; findings={rear_facts['findings']}"
         )
         for engine in engines:
-            errors = relative_error(_solve_record(engine, rear_quarter, "normal").observations(), _solve_record(engine, rear_full, "normal").observations())
+            errors = relative_error(_solve_record(engine, rear_quarter).observations(), _solve_record(engine, rear_full).observations())
             if inverted:
                 record_row(Row("DEFECT (ingest): source on the plug's rear -- WG's quarter vs its full domain", engine, "full", "complex, all points", errors.tolist(), note=note))
             else:
@@ -278,7 +276,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     else:
         facts["placed_frame"] = placed.record["anchor"]["throat_frame"]
         for engine in engines:
-            moved = _solve_record(engine, placed, "normal")
+            moved = _solve_record(engine, placed)
             errors = relative_error(moved.observations(), ladder[engine]["reference"].observations())
             record_row(Row("horn: placed in CAD (rotated + translated) vs unplaced", engine, "unplaced", "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE, note="normalisation undoes the placement; OCC re-meshes the placed body"))
 
@@ -317,7 +315,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     edited = fixtures.ingest(fixtures.linked_return(workspace, "edited", body_state="modified"), root / "data-edited")
     facts["edited_findings"] = [(item["kind"], item.get("verdict"), item.get("blocking")) for item in edited.record.get("findings") or []]
     for engine in engines:
-        solved = _solve_record(engine, edited, "normal")
+        solved = _solve_record(engine, edited)
         errors = relative_error(solved.observations(), ladder[engine]["reference"].observations())
         record_row(Row("return edited in CAD (acknowledged) vs the unedited return", engine, "unedited", "complex, all points", errors.tolist(), tolerance=EXACT_TOLERANCE, note="unedited STEP, edited body evidence: the acknowledgement must not change the solve"))
     return facts

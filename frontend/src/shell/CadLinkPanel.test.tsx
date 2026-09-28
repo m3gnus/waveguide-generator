@@ -2128,8 +2128,8 @@ describe('CadLinkPanel', () => {
       },
       // Listed HF-first on purpose: the chain must still run MF -> HF.
       driveChannels: [
-        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-mf', source_ids: ['source-mf'] },
       ],
     });
     useCadReturnStore.getState().setSweep({ frequencyStartHz: 200, frequencyEndHz: 5_000, frequencyCount: 24 });
@@ -2153,7 +2153,7 @@ describe('CadLinkPanel', () => {
       .toEqual({ mode: 'manual', ms: 0 });
 
     // A single remaining channel drops the wire even while enabled.
-    useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }] });
+    useCadReturnStore.setState({ driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }] });
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry).not.toHaveProperty('combine');
   });
 

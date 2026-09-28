@@ -60,9 +60,9 @@ function setCadReady({ cardioidPort = false }: { cardioidPort?: boolean } = {}):
     rigidSizeMm: 5,
     transitionMm: 4,
     driveChannels: [
-      { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
-      { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
-      ...(cardioidPort ? [{ id: 'drive-port', source_ids: ['source-port'], motion: 'normal' as const }] : []),
+      { id: 'drive-hf', source_ids: ['source-hf'] },
+      { id: 'drive-mf', source_ids: ['source-mf'] },
+      ...(cardioidPort ? [{ id: 'drive-port', source_ids: ['source-port'] }] : []),
     ],
     // Empty on purpose: with no toggle, an empty form is not a driver, and
     // half the assertions below depend on that distinction.
@@ -449,7 +449,8 @@ describe('ParamPanel inventory UX', () => {
     }
     // The grouping select is gone: each source drives its default channel.
     expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
-    expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
+    // Axial motion is removed, so there is no motion picker to show.
+    expect(host.querySelector('[aria-label^="Motion for"]')).toBeNull();
     expect(host.textContent).toContain('Cabinet & waveguide');
     expect(host.textContent).toContain('Size transition');
     expect(host.textContent).toContain('HF source');
@@ -779,8 +780,8 @@ describe('ParamPanel inventory UX', () => {
         ingestRecord: cadRecord,
         needsIngest: false,
         driveChannels: [
-          { id: 'passive_cardioid', source_ids: ['source-mf'], motion: 'normal' },
-          { id: 'drive-port', source_ids: ['source-port'], motion: 'normal' },
+          { id: 'passive_cardioid', source_ids: ['source-mf'] },
+          { id: 'drive-port', source_ids: ['source-port'] },
         ],
       });
       workspaceModeStore.setMode('cad');
@@ -830,7 +831,7 @@ describe('ParamPanel inventory UX', () => {
           ...cadBundle,
           sources: [{ id: 'source-hf', role: 'HF', required: true, suggestedResolutionMm: 2, defaultDriveChannelId: 'drive-hf' }],
         },
-        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+        driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
       });
       workspaceModeStore.setMode('cad');
       root.render(withQueryClient(<ParamPanel tab="simulation" />));
@@ -842,9 +843,8 @@ describe('ParamPanel inventory UX', () => {
     expect(summary.textContent).not.toContain('source-hf');
     expect(host.querySelector('.cad-channel-row')).toBeNull();
     expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
-    // Motion and the driver stay where they were; with no library stubbed the
+    // Motion has no control any more (axial was removed); the driver stays; with no library stubbed the
     // picker falls back to the manual T/S grid, and there is no toggle gating it.
-    expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
     expect(host.querySelector('.cad-channel[data-channel-id="drive-hf"] .cad-driver-grid')).not.toBeNull();
   });
 

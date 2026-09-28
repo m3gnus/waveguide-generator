@@ -59,12 +59,11 @@ function savedDriveChannels(setup: CadSetup | null | undefined, record: CadRetur
   const channels = raw.flatMap((channel): CadDriveChannel[] => {
     if (!channel || typeof channel.id !== 'string' || !channel.id.trim()
       || !Array.isArray(channel.source_ids) || channel.source_ids.length === 0
-      || (channel.motion !== undefined && channel.motion !== 'normal' && channel.motion !== 'axial')
       || channel.source_ids.some((id) => (
         typeof id !== 'string' || !knownSources.has(id) || assigned.has(id)
       ))) return [];
     channel.source_ids.forEach((id) => assigned.add(id));
-    return [{ id: channel.id, source_ids: [...channel.source_ids], motion: channel.motion ?? 'normal' }];
+    return [{ id: channel.id, source_ids: [...channel.source_ids] }];
   });
   return channels.length === raw.length ? channels : [];
 }
@@ -122,7 +121,6 @@ export function cadHistorySetup(job: JobItem, record: CadReturnIngestRecord): Ca
       const channel = grouped.get(source.default_drive_channel_id) ?? {
         id: source.default_drive_channel_id,
         source_ids: [],
-        motion: 'normal' as const,
       };
       channel.source_ids.push(source.id);
       grouped.set(channel.id, channel);

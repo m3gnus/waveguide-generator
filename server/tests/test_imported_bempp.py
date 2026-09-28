@@ -127,7 +127,7 @@ def _request(**geometry_changes: Any) -> SolveRequest:
         "artifact_sha256": ARTIFACT_SHA,
         "drive_channels": [
             {"id": "left", "source_ids": ["source-a", "source-b"]},
-            {"id": "right", "source_ids": ["source-c"], "motion": "axial"},
+            {"id": "right", "source_ids": ["source-c"]},
         ],
         "mesh": {
             "rigid_size_mm": 8.0,
@@ -217,12 +217,12 @@ def test_each_channel_is_one_sweep_driving_its_own_tags_in_the_records_frame(
     envelope = _solve(_request(), _record(planes=["x0"]))
 
     first, second = (solve["config"] for solve in recording_bempp.solves)
-    # Every member source of a channel at unit weight -- Metal's drive -- and
-    # each channel with its own motion.
+    # Every member source of a channel at unit weight -- Metal's drive.
     assert first.velocity_sources == {101: 1.0, 102: 1.0}
     assert second.velocity_sources == {103: 1.0}
+    # Normal motion is the package default, so none is passed.
     assert getattr(first, "source_motion", "normal") == "normal"
-    assert second.source_motion == "axial"
+    assert getattr(second, "source_motion", "normal") == "normal"
     for config in (first, second):
         assert list(config.frame_override.axis) == pytest.approx([1.0, 0.0, 0.0])
         assert list(config.frame_override.origin) == pytest.approx([0.05, 0.02, 0.03])

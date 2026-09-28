@@ -122,13 +122,9 @@ def recombine_stored_results(
         member_limits=member_limits,
     )
 
-    motions = {channel.motion for channel in geometry.drive_channels}
-    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
     quadrants_raw = member_metadata.get("quadrants")
     quadrants = int(quadrants_raw) if isinstance(quadrants_raw, (int, float)) else 1234
-    context = SolverContext.from_imported_request(
-        request, quadrants=quadrants, source_motion=config_motion
-    )
+    context = SolverContext.from_imported_request(request, quadrants=quadrants)
     observation = member_metadata.get("observation")
     observation = observation if isinstance(observation, Mapping) else {}
     distance_raw = observation.get("requested_distance_m")

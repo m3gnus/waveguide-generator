@@ -1209,9 +1209,9 @@ def interpretation_finding(
 
 
 #: How a drive channel may move its sources in a mirrored domain. ``normal``
-#: is a piston on each face, and ``axial`` moves along the solver's +Z, which
-#: lies in both supported mirror planes: each is its own mirror image.
-_REFLECTION_INVARIANT_MOTIONS = frozenset({"normal", "axial"})
+#: is a piston on each face, each moving along its own normal. Axial motion
+#: has been removed, so any other value is a refusal.
+_REFLECTION_INVARIANT_MOTIONS = frozenset({"normal"})
 
 
 def excitation_problem(record: Mapping[str, Any], drive_channels: Iterable[Any]) -> str | None:
@@ -1252,6 +1252,11 @@ def excitation_problem(record: Mapping[str, Any], drive_channels: Iterable[Any])
         motion = str(field_of(channel, "motion") or "normal")
         channel_id = str(field_of(channel, "id") or "?")
         sources = field_of(channel, "source_ids")
+        if motion == "axial":
+            return (
+                f"Drive channel {channel_id} asks for axial source motion, which has been "
+                "removed. Set its motion to normal (or drop it) and solve again."
+            )
         if motion not in _REFLECTION_INVARIANT_MOTIONS:
             return (
                 f"Drive channel {channel_id} moves its sources {motion!r}, which is not the same "

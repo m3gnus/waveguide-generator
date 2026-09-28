@@ -2211,8 +2211,6 @@ describe('CadLinkCoordinator', () => {
       const cad = useCadReturnStore.getState();
       cad.applyIngest(ingestRecord, cad.beginIngestIntent());
       cad.setSourceChannel('source-hf', 'custom-hf');
-      cad.setChannelMotion('custom-hf', 'axial');
-      cad.setChannelDriverField('custom-hf', 'sd_cm2', 54);
       cad.setCombineEnabled(true);
       cad.setCombineCrossover('custom-hf→custom-mf', 1_200);
       workspaceModeStore.setMode('cad');
@@ -2400,7 +2398,9 @@ describe('CadLinkCoordinator', () => {
         type: 'imported',
         ingest_id: record.ingest_id,
         drive_channels: [
-          { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+          // A run saved before axial motion was removed still says so; it
+          // reopens as the ordinary normal drive.
+          { id: 'drive-mf', source_ids: ['source-mf'], motion: 'axial' },
           {
             id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal',
             driver: {
@@ -2449,7 +2449,10 @@ describe('CadLinkCoordinator', () => {
 
     const state = useCadReturnStore.getState();
     expect(shown).toBe(true);
-    expect(state.driveChannels).toEqual(job.cad_setup?.drive_channels?.map(({ driver: _driver, ...channel }) => channel));
+    expect(state.driveChannels).toEqual([
+      { id: 'drive-mf', source_ids: ['source-mf'] },
+      { id: 'drive-hf', source_ids: ['source-hf'] },
+    ]);
     expect(state.channelDrivers['drive-hf']).toEqual({
       fields: {
         sd_cm2: 82, bl_t_m: 11.4, re_ohm: 5.8, le_mh: 0.4,
@@ -2509,7 +2512,7 @@ describe('CadLinkCoordinator', () => {
     cad_setup: {
       type: 'imported',
       ingest_id: ingestId,
-      drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
+      drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
       drive_voltage_v: voltage,
       mesh: { rigid_size_mm: voltage, transition_mm: voltage, source_size_mm: { 'source-hf': voltage } },
       skipped_source_ids: [],
