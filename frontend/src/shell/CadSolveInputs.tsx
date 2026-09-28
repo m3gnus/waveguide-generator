@@ -6,6 +6,7 @@ import {
   type CadOperationSummary,
   type SetupRevisionDetail,
 } from '../api/cadOperations';
+import type { CadProvenance } from '../api/jobsSocket';
 
 interface LoadState<T> {
   key: string;
@@ -37,6 +38,19 @@ export function automaticAxisNote(axis: string, jobStatus: string | undefined): 
 
 export const USING_DEFAULT_SETTINGS = "Using WG's default settings \u2014 change them in WG.";
 
+/** How a run's frame came to be, in words. */
+export function frameProvenanceText(provenance: string): string {
+  switch (provenance) {
+    case 'chosen': return 'chosen by you';
+    case 'suggested': return "WG's suggestion, confirmed by you";
+    case 'automatic': return "WG's automatic axis";
+    case 'carried': return 'carried from an earlier confirmation';
+    case 'linked': return "the WG design's frame";
+    case 'confirmed': return 'confirmed';
+    default: return 'not confirmed';
+  }
+}
+
 function setupEngine(detail: SetupRevisionDetail | null): string | null {
   const setup = detail?.setup as { options?: { engine?: unknown } } | undefined;
   const engine = setup?.options?.engine;
@@ -54,6 +68,9 @@ export interface CadSolveInputsProps {
   /** The run's own status, when this is a run's detail: "Solved with WG's
    * default settings" is said only of a run that completed. */
   jobStatus?: string;
+  /** What the run itself recorded (`task_metadata.cad`). It outlives the
+   * operation row, so it answers first and the operation is the fallback. */
+  jobCad?: CadProvenance | null;
   className?: string;
 }
 
@@ -64,6 +81,7 @@ export function CadSolveInputs({
   resolvedEngine,
   engineSource,
   jobStatus,
+  jobCad,
   className,
 }: CadSolveInputsProps) {
   const [operationLoad, setOperationLoad] = useState<LoadState<CadOperationDetail>>(EMPTY_LOAD);
@@ -80,7 +98,9 @@ export function CadSolveInputs({
 
   const loadedOperation = operationLoad.key === operationId ? operationLoad.value : null;
   const operation = suppliedOperation ?? loadedOperation;
-  const setupRevisionId = operation?.setupRevisionId ?? null;
+  const setupRevisionId = jobCad?.setup?.revision_id ?? operation?.setupRevisionId ?? null;
+  // The job's own record, else the operation's.
+  const setupDefaults = jobCad?.setup ? jobCad.setup.origin === 'wg_defaults' : Boolean(operation?.setupDefaults);
   const persistedEngine = engineSource === 'job'
     && typeof resolvedEngine === 'string' && resolvedEngine.trim()
     ? resolvedEngine
@@ -120,6 +140,9 @@ export function CadSolveInputs({
       </dd></div>
       <div><dt>Preparation</dt><dd><code>{operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
       <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
+      {jobCad?.frame && <div><dt>Frame</dt><dd data-frame-provenance={jobCad.frame.provenance}>
+        {jobCad.frame.axis && <code>{jobCad.frame.axis}</code>} {frameProvenanceText(jobCad.frame.provenance)}
+      </dd></div>}
       <div><dt>Engine</dt><dd><code>{engine ?? (loadingOperation || loadingEngine ? 'reading…' : 'not recorded')}</code></dd></div>
       {/* The protocol's own words for where this operation stands, and when it
           got there. The card above says it in the user's terms; PLAN A6 keeps
@@ -132,9 +155,9 @@ export function CadSolveInputs({
       <div><dt>Last moved</dt><dd>{operation?.updatedAt ?? (loadingOperation ? 'reading…' : 'not recorded')}</dd></div>
     </dl>
     {/* Solved with WG's default settings: said plainly, not as a report. */}
-    {operation?.setupDefaults
+    {setupDefaults
       && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">
-        {defaultSettingsNote(operation.message, jobStatus === 'complete')}
+        {defaultSettingsNote(operation?.message ?? null, jobStatus === 'complete')}
       </p>}
     {operation?.frameAxisAutomatic
       && <p className="cad-solve-inputs-frame" data-frame-axis-automatic={operation.frameAxisAutomatic}>
@@ -142,7 +165,7 @@ export function CadSolveInputs({
       </p>}
     {/* Verbatim, because it is evidence: whatever the adapter or the
         preparation reported is what a second report has to be compared with. */}
-    {operation?.message && !operation.setupDefaults
+    {operation?.message && !setupDefaults
       && <p className="cad-solve-inputs-reported">Reported · {operation.message}</p>}
     {(operationError || setupError) && <span className="cad-solve-inputs-error">
       Could not read all bound inputs: {operationError ?? setupError}

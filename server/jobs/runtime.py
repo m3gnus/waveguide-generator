@@ -2358,7 +2358,19 @@ class JobRuntime:
         self._restart_interrupted.clear()
         self._started = False
 
-    async def submit(self, request: SolveRequest) -> str:
+    async def submit(
+        self,
+        request: SolveRequest,
+        *,
+        cad_provenance: Mapping[str, Any] | None = None,
+    ) -> str:
+        """Queue a solve.
+
+        ``cad_provenance`` is the CAD operation's record of what it resolved
+        (setup revision, frame, operation and preparation). It is not part of
+        the wire request: it is kept on the job as ``task_metadata.cad``.
+        """
+
         _refuse_removed_solver(request)
         await self.start()
         submission_key = request.client_request_id
@@ -2434,6 +2446,8 @@ class JobRuntime:
                 "document": imported.document,
                 "identity": imported.identity,
             }
+        if imported is not None and cad_provenance:
+            task_metadata["cad"] = json.loads(json.dumps(cad_provenance, default=str))
         job_record = {
             "id": job_id,
             "parent_job_id": request.parent_job_id,
@@ -4798,6 +4812,9 @@ class JobRuntime:
                 "axisymmetric_eligibility_reasons"
             ) or [],
             "solve_wall_time_seconds": metadata.get("solve_wall_time_seconds"),
+            "cad_provenance": (
+                dict(metadata["cad"]) if isinstance(metadata.get("cad"), Mapping) else None
+            ),
             "cad_source": cad_source,
             "cad_setup": dict(geometry) if imported else None,
         }

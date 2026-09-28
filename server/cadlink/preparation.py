@@ -103,6 +103,7 @@ from .solver_frame import (
     CONTRACT as FRAME_CONTRACT,
     REASON as FRAME_CONFIRMATION_REQUIRED,
     ensure_frame_suggestion,
+    frame_provenance,
     record_frame_identity,
     record_frame_refusal,
     record_is_unlinked,
@@ -127,7 +128,9 @@ from .wgreturn import WgReturnError
 
 logger = logging.getLogger(__name__)
 
-SubmitFn = Callable[[SolveRequest], Awaitable[str]]
+#: Submits a request; ``cad_provenance`` is the CAD-side record the job keeps
+#: (``_cad_provenance``). It is not part of the wire request.
+SubmitFn = Callable[..., Awaitable[str]]
 
 
 @dataclass(frozen=True)
@@ -1380,8 +1383,18 @@ async def _submit(
         bound = row
     if bound is None:
         raise _Fenced()
+    # Decided once, before the job exists, by the one rule for it
+    # (``record_solved_frame_provenance``): the job's record and this
+    # operation's outcome both carry this value, so they cannot differ.
+    automatic_axis = await asyncio.to_thread(
+        _automatic_frame_axis, store, solve_request.geometry.ingest_id
+    )
     try:
-        job_id = await ctx.submit(solve_request)
+        provenance = await asyncio.to_thread(
+            _cad_provenance, store, operation_id, solve_request, bound, revision_id,
+            automatic_axis is not None,
+        )
+        job_id = await ctx.submit(solve_request, cad_provenance=provenance)
     except ctx.submission_refusals as exc:
         # The jobs system refused this exact request -- nothing was created --
         # so the binding is released and the user can change what they chose.
@@ -1424,9 +1437,6 @@ async def _submit(
             message=f"Submitting the solve failed: {exc}. Press Solve now to try again.",
         )
     defaults = await asyncio.to_thread(_is_default_setup, store, revision_id)
-    automatic_axis = await asyncio.to_thread(
-        _automatic_frame_axis, store, solve_request.geometry.ingest_id
-    )
     return await asyncio.to_thread(
         _finish, ctx, operation_id, generation, ACCEPTED, job_id=job_id, stage=STAGE_SUBMITTED,
         message=DEFAULT_SETTINGS_NOTE if defaults else None, setup_defaults=defaults,
@@ -1444,6 +1454,55 @@ def _automatic_frame_axis(store: CadLinkStore, ingest_id: str) -> str | None:
     if record_solved_frame_provenance(store, record) != "automatic":
         return None
     return _record_frame_axis(record)
+
+
+def _cad_provenance(
+    store: CadLinkStore,
+    operation_id: str,
+    solve_request: SolveRequest,
+    bound: Mapping[str, Any],
+    revision_id: str | None,
+    frame_automatic: bool,
+) -> dict[str, Any]:
+    """What the job keeps of the CAD operation that made it (``task_metadata.cad``).
+
+    The setup revision and its digest, whether that was WG's defaults or the
+    user's, the frame and how it came to be, the operation id and the
+    preparation. The operation row is kept for the ledger only; a run is
+    described from this record even after the row is gone. Never part of the
+    wire request. ``frame_automatic`` is the caller's, decided before the job
+    exists from ``record_solved_frame_provenance``.
+    """
+
+    provenance: dict[str, Any] = {"operation_id": operation_id}
+    revision = store.get_setup_revision(revision_id) if revision_id else None
+    if revision is not None:
+        provenance["setup"] = {
+            "revision_id": revision["revision_id"],
+            "digest": revision["content_sha256"],
+            "origin": "wg_defaults" if _is_default_setup(store, revision_id) else "user",
+        }
+    ingest = store.get_ingest(str(getattr(solve_request.geometry, "ingest_id", "") or ""))
+    if ingest is not None:
+        provenance["frame"] = frame_provenance(
+            store, json.loads(ingest["record_json"]), automatic=frame_automatic
+        )
+    preparation_id = bound.get("preparation_id")
+    preparation = store.get_preparation(str(preparation_id)) if preparation_id else None
+    if preparation is not None:
+        approvals = json.loads(bound["approvals_json"]) if bound.get("approvals_json") else []
+        provenance["preparation"] = {
+            "preparation_id": preparation["preparation_id"],
+            "report_sha256": preparation["report_sha256"],
+            "blocking_finding_ids": json.loads(preparation["blocking_findings_json"]),
+            "approvals": [
+                item for item in approvals
+                if isinstance(item, Mapping)
+                and item.get("preparation_id") == preparation["preparation_id"]
+            ],
+            "meshing_semantics": preparation["meshing_semantics"],
+        }
+    return provenance
 
 
 def _is_default_setup(store: CadLinkStore, revision_id: str | None) -> bool:

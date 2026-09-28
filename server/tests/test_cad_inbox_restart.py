@@ -96,7 +96,7 @@ class Wg:
         #: Raised once the job exists, before the operation records it.
         self.crash_after_job: bool = False
 
-    async def _submit(self, request) -> str:
+    async def _submit(self, request, cad_provenance=None) -> str:
         self.submitted.append(request)
         now = "2026-09-21T12:00:00"
         job_id, _created, _event = self.jobs.create_job_idempotent(
@@ -462,7 +462,7 @@ if point == "after-accept":
     CadLinkStore.accept_operation = accept
 elif point == "after-job":
     submit = wg._submit
-    async def after_job(request):
+    async def after_job(request, **kw):
         await submit(request)
         hold_here()
     wg._submit = after_job

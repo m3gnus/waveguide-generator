@@ -872,3 +872,77 @@ def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> Non
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed"), summary
     assert "no copy it can use" in summary["message"]
     assert len(mesher.calls) == calls and harness.submitted == []
+
+
+def _suggest(harness: Harness, record: dict[str, Any], axis: str, status: str = "automatic") -> None:
+    from server.cadlink.frame_infer import ALGORITHM_VERSION
+
+    harness.store.record_frame_suggestion(
+        str(record["manifest_sha256"]), ALGORITHM_VERSION,
+        {
+            "algorithm": ALGORITHM_VERSION, "status": status, "axis": axis,
+            "confidence": 0.9, "snapshotSha256": record["manifest_sha256"],
+        },
+        str(record["ingest_id"]),
+    )
+
+
+def test_frame_provenance_says_suggested_chosen_or_automatic(real) -> None:
+    from server.cadlink.solver_frame import frame_provenance
+
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness)
+    record = _record(harness, waiting)
+    axis = record["normalisation"]["solver_frame"]["axis"]
+
+    # Nobody confirmed and no survey: unconfirmed.
+    bare = frame_provenance(harness.store, record)
+    assert (bare["provenance"], bare["confirmed"]) == ("unconfirmed", False)
+
+    # The operation's own statement that WG used its automatic axis: not confirmed.
+    _suggest(harness, record, axis)
+    automatic = frame_provenance(harness.store, record, automatic=True)
+    assert (automatic["axis"], automatic["provenance"], automatic["confirmed"]) == (axis, "automatic", False)
+    assert automatic["suggestion"]["status"] == "automatic"
+    # A survey alone never labels a frame automatic.
+    assert frame_provenance(harness.store, record)["provenance"] == "unconfirmed"
+
+    # A person confirming the suggested axis: suggested, confirmed.
+    confirm_frame(harness.store, record, axis)
+    suggested = frame_provenance(harness.store, record, automatic=True)
+    # Confirmed by a person, so never "automatic" whatever the caller says.
+    assert (suggested["provenance"], suggested["confirmed"]) == ("suggested", True)
+    assert suggested["requirement"] == record["normalisation"]["solver_frame"]["requirement"]
+
+
+def test_a_solved_job_records_a_chosen_frame_and_a_suggested_one(real) -> None:
+    harness, _mesher = real
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness)
+    record = _record(harness, waiting)
+    axis = record["normalisation"]["solver_frame"]["axis"]
+    confirm_frame(harness.store, record, axis)  # no survey: the user chose it
+
+    assert _prepare(harness)["state"] == "accepted"
+    frame = harness.provenance[-1]["frame"]
+    assert (frame["axis"], frame["provenance"], frame["confirmed"]) == (axis, "chosen", True)
+
+    # The same project, its next export, after the survey agrees with the axis.
+    _suggest(harness, record, axis)
+    confirm_frame(harness.store, record, axis)
+    _received(harness, "authored2", _authored(step), step, command="cmd-2")
+    assert _prepare(harness, "cmd-2")["state"] == "accepted"
+    assert harness.provenance[-1]["frame"]["provenance"] == "suggested"
+    assert harness.provenance[-1]["operation_id"] == "cmd-2"
+
+
+def test_the_operations_own_automatic_statement_is_read_defensively() -> None:
+    assert preparation._frame_is_automatic({}) is False
+    assert preparation._frame_is_automatic({"outcome_json": None}) is False
+    assert preparation._frame_is_automatic({"outcome_json": "not json"}) is False
+    assert preparation._frame_is_automatic({"outcome_json": '{"message": "x"}'}) is False
+    assert preparation._frame_is_automatic({"outcome_json": '{"frame_axis_automatic": true}'}) is True
+    assert preparation._frame_is_automatic({"frame_axis_automatic": 1}) is True

@@ -1337,6 +1337,12 @@ class JobItem(JobModel):
     #: old rows must remain inspectable even if their accepted wire predates a
     #: later additive field or stricter validation rule.
     cad_setup: dict[str, Any] | None = None
+    #: What the CAD operation that made this run resolved, kept on the job
+    #: (``task_metadata.cad``): ``operation_id``, ``setup`` (``revision_id``,
+    #: ``digest``, ``origin`` = ``wg_defaults`` or ``user``), ``frame`` (``axis``,
+    #: ``provenance``, ``confirmed``, ``requirement``) and ``preparation``. Null
+    #: for a run made without one.
+    cad_provenance: dict[str, Any] | None = None
 
 
 class JobStatusResponse(JobItem):

@@ -211,12 +211,14 @@ class Harness:
         self.ingest = FakeIngest()
         self.jobs: dict[str, str] = {}
         self.submitted: list[Any] = []
+        self.provenance: list[Any] = []
         self.submit_error: BaseException | None = None
         self.published: list[dict[str, Any]] = []
         self.blocked: str | None = None
 
-    async def _submit(self, request) -> str:
+    async def _submit(self, request, cad_provenance=None) -> str:
         self.submitted.append(request)
+        self.provenance.append(cad_provenance)
         if self.submit_error is not None:
             error, self.submit_error = self.submit_error, None
             raise error
@@ -555,7 +557,7 @@ def test_a_dismissal_during_a_refused_submission_stands(harness: Harness) -> Non
     _received(harness)
     original = harness._submit
 
-    async def dismissed_then_refused(request):
+    async def dismissed_then_refused(request, **kw):
         harness.store.request_cancel("cmd-1")
         harness.submitted.append(request)
         raise Refused("the selected engine cannot take this record; pick one of: bempp")
@@ -573,9 +575,9 @@ def test_a_job_created_as_the_user_dismisses_is_still_recorded(harness: Harness)
     _received(harness)
     original = harness._submit
 
-    async def dismissed_then_created(request):
+    async def dismissed_then_created(request, **kw):
         harness.store.request_cancel("cmd-1")
-        return await original(request)
+        return await original(request, **kw)
 
     harness._submit = dismissed_then_created  # type: ignore[method-assign]
 
@@ -642,7 +644,7 @@ def test_a_submission_key_conflict_is_the_job_that_key_made(harness: Harness) ->
 
     _received(harness)
 
-    async def browser_got_there_first(request):
+    async def browser_got_there_first(request, **kw):
         harness.submitted.append(request)
         harness.jobs["cad-solve:cmd-1"] = "job-browser"
         raise SubmissionConflictError(
@@ -662,8 +664,8 @@ def test_wg_stopping_after_the_job_exists_recovers_that_job(harness: Harness) ->
     # The job is created and then the answer is lost.
     original = harness._submit
 
-    async def created_then_lost(request):
-        await original(request)
+    async def created_then_lost(request, **kw):
+        await original(request, **kw)
         raise ConnectionResetError("the answer never arrived")
 
     harness._submit = created_then_lost  # type: ignore[method-assign]
@@ -2257,3 +2259,43 @@ def test_a_solve_dismissed_while_an_update_restart_held_it_is_never_queued_again
     assert harness.store.requeue_operation("cmd-1", generation, reason=HELD) is None
     assert requeue_restart_parked(harness.context()) == []
     assert harness.row() == dismissed
+
+
+def test_the_job_carries_exactly_the_setup_revision_the_operation_bound(harness: Harness) -> None:
+    _received(harness)
+    revision = _revision(harness.store, _setup())
+
+    summary = harness.prepare(setup_revision_id=revision)
+
+    assert summary["state"] == "accepted"
+    cad = harness.provenance[0]
+    stored = harness.store.get_setup_revision(revision)
+    assert harness.row()["setup_revision_id"] == revision
+    assert cad["operation_id"] == "cmd-1"
+    assert cad["setup"] == {
+        "revision_id": revision,
+        "digest": stored["content_sha256"],
+        "origin": "user",
+    }
+    assert cad["preparation"]["preparation_id"] == summary["preparationId"]
+    assert cad["preparation"]["approvals"] == []
+    assert isinstance(cad["preparation"]["meshing_semantics"], str)
+    # A linked model has no frame to choose; the record says so.
+    assert cad["frame"]["provenance"] in {"linked", "unconfirmed", "chosen", "suggested"}
+    assert "setup" not in harness.submitted[0].model_dump(mode="json")
+    assert "cad_provenance" not in harness.submitted[0].model_dump(mode="json")
+
+
+def test_a_defaults_solve_is_labelled_from_the_job(harness: Harness) -> None:
+    _received(harness)
+
+    summary = harness.prepare()
+
+    assert summary["setupDefaults"] is True
+    cad = harness.provenance[0]
+    assert cad["setup"]["origin"] == "wg_defaults"
+    assert cad["setup"]["revision_id"] == summary["setupRevisionId"]
+    # Whatever the operation row later says, the record was taken with the job.
+    assert cad["setup"]["digest"] == harness.store.get_setup_revision(
+        summary["setupRevisionId"]
+    )["content_sha256"]

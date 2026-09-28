@@ -706,6 +706,41 @@ keyed input unchanged, is a new preparation. The fingerprint rounds those consta
 decimal places, so a last-bit difference between platforms' maths libraries is not a new
 identity. A retained run keeps the mesh its own record names; nothing deletes it.
 
+## Job provenance
+
+A job made from a CAD operation keeps its own record of what the operation resolved,
+in `task_metadata.cad`, next to `task_metadata.imported_geometry`. It is written when the
+job is created and never changed. The operation row stays the acceptance ledger; a run
+is described from the job even after that row is gone. `SolveRequest` is unchanged: the
+record travels through the keyword-only `cad_provenance` argument of
+`JobRuntime.submit` (`server/cadlink/preparation.py`, `_cad_provenance`), not through
+the wire request, and a direct submission carries none.
+
+| Field | Meaning |
+| --- | --- |
+| `operation_id` | The operation that made the job (also `cad-solve:<id>` in the job's submission key) |
+| `setup` | `{revision_id, digest, origin}`: the setup revision the operation bound, its content digest, and `wg_defaults` when nobody recorded settings for the model, else `user` |
+| `frame` | `{axis, provenance, confirmed, requirement, suggestion?}`, described below |
+| `preparation` | `{preparation_id, report_sha256, blocking_finding_ids, approvals, meshing_semantics}`: the ingestion it solved and the findings the user approved for it |
+
+`frame.provenance` says how the solver frame came to be, and `frame.confirmed` is true
+only when a person confirmed the axis:
+
+- `chosen`: a person picked the axis. `suggested`: a person confirmed the axis WG's
+  survey had proposed. Both are `confirmed: true`.
+- `automatic`: WG solved in its own automatic axis and nobody confirmed it
+  (`confirmed: false`). It is set only from the operation's own statement
+  (`frame_axis_automatic`), read defensively; `frame_provenance` holds no rule of its own
+  for what makes a frame automatic, and a person's confirmation always wins.
+- `carried`: an earlier contract's confirmation carried forward. `confirmed: false`.
+- `confirmed`: confirmed, by a row that predates the recorded provenance.
+- `linked`: a linked model, solved in its WG design's frame; there is nothing to choose.
+- `unconfirmed`: no confirmation and no automatic axis stands for the frame.
+
+The jobs API exposes the record as `cad_provenance` on a job (null when the job has
+none). The run details read "solved with WG's default settings" and the setup revision
+from it first, falling back to the operation for a job made before this record existed.
+
 ## Retention
 
 Cleanup never removes what a pending operation references. Retained snapshots and meshes

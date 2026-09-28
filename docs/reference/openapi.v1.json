@@ -4484,6 +4484,18 @@
             "title": "Axisymmetric Eligibility Reasons",
             "type": "array"
           },
+          "cad_provenance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cad Provenance"
+          },
           "cad_setup": {
             "anyOf": [
               {
@@ -5086,6 +5098,18 @@
             },
             "title": "Axisymmetric Eligibility Reasons",
             "type": "array"
+          },
+          "cad_provenance": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cad Provenance"
           },
           "cad_setup": {
             "anyOf": [

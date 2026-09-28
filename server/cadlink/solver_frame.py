@@ -721,6 +721,70 @@ def confirm_frame(
     )
 
 
+#: How the frame a run was solved in came to be. ``chosen``: a person picked the
+#: axis. ``suggested``: a person confirmed the axis WG's survey had proposed.
+#: ``automatic``: WG solved in its own automatic axis and nobody confirmed it
+#: (the operation's ``frame_axis_automatic`` says so).
+#: ``carried``: a project's earlier-contract confirmation carried forward.
+#: ``confirmed``: confirmed, but its row predates the recorded provenance.
+#: ``linked``: a linked model, solved in its WG design's frame; nothing to choose.
+#: ``unconfirmed``: the frame is not confirmed and no automatic axis stands for it.
+FRAME_PROVENANCES = (
+    "chosen", "suggested", "automatic", "carried", "confirmed", "linked", "unconfirmed",
+)
+
+
+def frame_provenance(
+    store: CadLinkStore, record: Mapping[str, Any], *, automatic: bool = False
+) -> dict[str, Any]:
+    """The frame provenance a job records, read from the record it solves.
+
+    ``{axis, provenance, confirmed, requirement}``, plus ``suggestion`` (the
+    cached survey, when there is one). ``confirmed`` is true only when a person
+    confirmed the axis, so a chosen or suggested frame is distinguishable from
+    one nobody confirmed.
+
+    ``automatic`` is the caller's statement that WG solved in its own
+    automatic axis. This module holds no rule for it: the definition of an
+    automatic frame is the operation's (``frame_axis_automatic``), and it
+    labels the frame ``automatic`` only when no person confirmed it.
+    """
+
+    if not record_is_unlinked(record):
+        return {"axis": None, "provenance": "linked", "confirmed": False, "requirement": None}
+    frame = _record_frame(record)
+    if frame is None:
+        return {"axis": None, "provenance": "unconfirmed", "confirmed": False, "requirement": None}
+    axis = frame["axis"]
+    requirement = dict(frame["requirement"])
+    row = store.get_frame_confirmation(record_confirmation_key(record))
+    suggestion = _cached_suggestion(store, record)
+    provenance = "unconfirmed"
+    confirmed = False
+    if row is not None and row.get("requirement") == requirement and row.get("axis") == axis:
+        held = (row.get("frame") or {}).get("provenance")
+        provenance = held if held in ("chosen", "suggested") else "confirmed"
+        confirmed = True
+    elif automatic:
+        provenance = "automatic"
+    elif carried_axis(row, requirement) == axis:
+        provenance = "carried"
+    out: dict[str, Any] = {
+        "axis": axis,
+        "provenance": provenance,
+        "confirmed": confirmed,
+        "requirement": requirement,
+    }
+    if suggestion is not None:
+        out["suggestion"] = {
+            "algorithm": suggestion.get("algorithm"),
+            "status": suggestion.get("status"),
+            "axis": suggestion.get("axis"),
+            "confidence": suggestion.get("confidence"),
+        }
+    return out
+
+
 # -- the automatic suggestion ----------------------------------------------------
 
 

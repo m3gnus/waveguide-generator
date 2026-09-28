@@ -944,6 +944,8 @@ def test_submit_persists_ingestion_mesh_summary_and_availability(tmp_path: Path)
             assert serialized["design_availability"]["source"] == "cad-import"
             assert serialized["design_availability"]["reopenable"] is False
             assert serialized["cad_setup"] == row["config_json"]["geometry"]
+            assert serialized["cad_provenance"] is None
+            assert "cad" not in row["task_metadata"]
             assert _replay_request(row).model_dump(mode="json") == SolveRequest.model_validate(
                 row["config_json"]
             ).model_dump(mode="json")
@@ -3993,3 +3995,35 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
         assert outcomes["beat-cpu"][3] == "preflight"
     if fixture == "no-open-edge-count" and assembly_backend == "opencl":
         assert outcomes["bempp"][3] == "preflight"
+
+
+def test_a_job_keeps_the_cad_provenance_it_was_submitted_with(tmp_path: Path) -> None:
+    """R11: the CAD record rides on the job, not on the wire request."""
+
+    provenance = {
+        "operation_id": "op-1",
+        "setup": {"revision_id": "wgs_a", "digest": "d" * 64, "origin": "wg_defaults"},
+        "frame": {"axis": "+z", "provenance": "automatic", "confirmed": False, "requirement": {}},
+        "preparation": {"preparation_id": "wgi_a", "approvals": []},
+    }
+
+    async def scenario() -> None:
+        runtime, ingest_id, _record_data = await _runtime_fixture(tmp_path)
+        try:
+            request = _request(ingest_id)
+            wire_before = request.model_dump(mode="json")
+            job_id = await runtime.submit(request, cad_provenance=provenance)
+            row = runtime.store.get_job_row(job_id)
+            assert row is not None
+            assert row["task_metadata"]["cad"] == provenance
+            assert runtime._serialize_job(row)["cad_provenance"] == provenance
+            # Nothing of it reaches the stored wire request.
+            assert row["config_json"] == SolveRequest.model_validate(
+                row["config_json"]
+            ).model_dump(mode="json")
+            assert "cad" not in json.dumps(row["config_json"]).replace("cad-import", "")
+            assert request.model_dump(mode="json") == wire_before
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())

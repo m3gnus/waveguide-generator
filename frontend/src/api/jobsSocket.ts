@@ -98,6 +98,37 @@ export interface JobItem {
   cad_source?: CadSource | null;
   /** Exact imported-geometry inputs persisted with a CAD run. */
   cad_setup?: CadSetup | null;
+  /** What the CAD operation that made this run resolved, kept on the job. */
+  cad_provenance?: CadProvenance | null;
+}
+
+/** Whether a run's frame was confirmed by a person, and how it came to be. */
+export type CadFrameProvenance =
+  | 'chosen' | 'suggested' | 'automatic' | 'carried' | 'confirmed' | 'linked' | 'unconfirmed';
+
+export interface CadProvenance {
+  operation_id?: string;
+  setup?: {
+    revision_id: string;
+    digest: string;
+    /** `wg_defaults` when nobody recorded settings for the model. */
+    origin: 'wg_defaults' | 'user';
+  };
+  frame?: {
+    axis: string | null;
+    provenance: CadFrameProvenance;
+    /** True only when a person confirmed the axis. */
+    confirmed: boolean;
+    requirement: Record<string, unknown> | null;
+    suggestion?: Record<string, unknown>;
+  };
+  preparation?: {
+    preparation_id: string;
+    report_sha256: string | null;
+    blocking_finding_ids: string[];
+    approvals: Array<Record<string, unknown>>;
+    meshing_semantics: string | null;
+  };
 }
 
 export interface CadSetup {
@@ -384,6 +415,7 @@ function isJobItem(value: unknown): value is JobItem {
   )) return false;
   if (hasOwn(value, 'cad_source') && !(value.cad_source === null || isCadSource(value.cad_source))) return false;
   if (hasOwn(value, 'cad_setup') && !(value.cad_setup === null || isCadSetup(value.cad_setup))) return false;
+  if (hasOwn(value, 'cad_provenance') && !(value.cad_provenance === null || isRecord(value.cad_provenance))) return false;
   return true;
 }
 

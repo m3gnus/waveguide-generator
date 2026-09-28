@@ -213,4 +213,47 @@ describe('CAD solve input identities', () => {
     expect(host.querySelector('[data-setup-defaults="true"]')?.textContent)
       .toBe("Using WG's default settings \u2014 change them in WG.");
   });
+
+  it("labels a defaults run from the job after its operation row is gone", async () => {
+    const fetcher = vi.fn(async () => json({ error: 'gone' }, 404));
+    vi.stubGlobal('fetch', fetcher);
+
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      resolvedEngine="metal"
+      engineSource="job"
+      jobStatus="complete"
+      jobCad={{
+        operation_id: 'op-1',
+        setup: { revision_id: 'wgs_job', digest: 'sha256:d', origin: 'wg_defaults' },
+      }}
+    />));
+    await vi.waitFor(() => expect(host.textContent).toContain('Could not read all bound inputs'));
+
+    expect(host.querySelector('[data-setup-defaults="true"]')?.textContent)
+      .toBe("Using WG's default settings \u2014 change them in WG.");
+    expect(host.textContent).toContain('Setup revisionwgs_job');
+  });
+
+  it('says how the frame came to be: automatic, suggested or chosen', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    const frame = (provenance: 'automatic' | 'suggested' | 'chosen', confirmed: boolean) => ({
+      operation_id: 'op-1',
+      frame: { axis: '+y', provenance, confirmed, requirement: null },
+    });
+    const render = (provenance: 'automatic' | 'suggested' | 'chosen', confirmed: boolean) => act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({ setupRevisionId: null })}
+      resolvedEngine="metal"
+      engineSource="job"
+      jobCad={frame(provenance, confirmed)}
+    />));
+
+    await render('automatic', false);
+    expect(host.querySelector('[data-frame-provenance="automatic"]')?.textContent).toContain("WG's automatic axis");
+    await render('suggested', true);
+    expect(host.querySelector('[data-frame-provenance="suggested"]')?.textContent).toContain('confirmed by you');
+    await render('chosen', true);
+    expect(host.querySelector('[data-frame-provenance="chosen"]')?.textContent).toContain('chosen by you');
+  });
 });
