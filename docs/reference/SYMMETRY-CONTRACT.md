@@ -212,18 +212,26 @@ conclusions:
 | Whole model across a plane | today's mirror test and auto-cut, unchanged | not applicable there (the evidence is set aside) |
 | A cut: a rigid-shell rim spanning its one-sided shell on x0/y0, a source meeting the plane, nothing crossing it, no cap, nothing else open, no side-identified or missing source (every flip condition holds) | **recovered from its geometry**: mirrored as the whole speaker's reduced domain, a negative-side cut reflected at mesh level; the other plane is still cut where it validates | mirrored the same way |
 | A cut that fails a flip condition (front/back, capped, crossed, another opening, no source on the plane, a left/right source, self-intersecting) | **refused at solve**, naming the condition | mirrored when the plane is open and uncapped with no other opening and the sources are validated identities; otherwise refused |
-| A cut rim off the origin planes (x = c or y = c, c ≠ 0) | refused at solve: off-centre cuts are not mirrored in this version | refused |
+| A cut rim off the origin planes (x = c or y = c, c ≠ 0), or on an oblique plane | refused at solve: off-centre and oblique cuts are not mirrored in this version | refused |
 | An opening that is not a cut (a port, a standalone sheet, a horn mouth on the solver's z0) | solved as shown | refused where evidence names it a cut |
 
 A cut is never solved as an open shell in free space. The flip conditions
 (`server/cadlink/cut_recovery.py`) are judged on the observations of the model
-as it arrived: the plane contains the radiation axis (x0/y0 of the frame the
-model was modelled in, and not the confirmed axis's own plane); the cut is
-clean (a spanning rim, one side only, no cap, no other open edge, and a source
-the plane meets -- the plane passes through the speaker's own drivers); nothing
+as it arrived: the plane contains the radiation axis and the model is solved in
+the frame it was modelled in (+Z): a cut square to the confirmed axis is a
+front/back cut, and a model confirmed to face another way is refused rather
+than mirrored by resetting its frame; the cut is clean (a spanning rim, one side
+only, no cap, no other open edge -- an open rim on another coordinate plane
+included, unless it is a cut judged too -- and a source the plane meets); nothing
 says the halves differ (every declared source found by its own faces, none
-named as a left or right one, no self-intersection); and the plane is an
+named as a left or right one, no self-intersection, and every CAD curve that
+ends on the plane meets it square -- a cut through an off-centre driver or an
+off-axis port meets it at an angle, `asymmetric-section`); and the plane is an
 origin plane. Recovery is all or nothing across the cuts the geometry shows.
+Recorded evidence and declarations never override a failed condition: the
+frame is judged for them too, and the section check runs on every pre-cut
+mirror plane. One source identity owning a mirrored pair of drivers (one kept
+clear of the plane) is mirrored; a pair named as one side's drivers is not.
 
 A cut that kept the **negative** side is recovered by reflecting its *mesh*:
 the retained geometry is meshed as it arrived, then every vertex is reflected
