@@ -540,6 +540,28 @@ def test_a_clean_negative_cut_is_recoverable_by_reflection() -> None:
         ({"id": "s2", "selectors": {"shell_names": ["Right tweeter"]}}, "right"),
         ({"id": "wgs-L4908B04CKKRTSFQV4KC", "role": "LF"}, None),
         ({"id": "throat", "role": "HF", "selectors": {"appearance_labels": ["LF", "MF"]}}, None),
+        # Acronym and digit boundaries (review S3-2b, finding 1).
+        ({"id": "MFLeft"}, "left"),
+        ({"id": "MFRight"}, "right"),
+        ({"id": "LeftMF"}, "left"),
+        ({"id": "LF_R"}, "right"),
+        ({"id": "TweeterR"}, "right"),
+        ({"id": "woofer2Left"}, "left"),
+        ({"id": "Left2"}, "left"),
+        ({"id": "LH woofer"}, "left"),
+        ({"id": "FrontL"}, "left"),
+        # Not sides: words that merely start with L or R, all-capital runs.
+        ({"id": "Rear"}, None),
+        ({"id": "RearWoofer"}, None),
+        ({"id": "Throat"}, None),
+        ({"id": "Front"}, None),
+        ({"id": "Rotor"}, None),
+        ({"id": "Lower"}, None),
+        ({"id": "MFL"}, None),
+        ({"id": "LFR"}, None),
+        ({"id": "HFr"}, None),
+        ({"id": "wgs-R4908B04CKKRTSFQV4KC"}, None),
+        ({"id": "Mid 2"}, None),
     ],
 )
 def test_a_source_is_sided_only_by_its_own_words(source: dict[str, Any], side: str | None) -> None:
@@ -760,3 +782,37 @@ def test_an_asymmetric_section_is_read_on_the_cad_curves() -> None:
     kinks = _run_in_gmsh_session(run, -5.0)
     assert len(kinks) == 2
     assert [item["angle_from_normal_deg"] for item in kinks] == pytest.approx([30.0, 30.0], abs=1e-6)
+
+
+@pytest.mark.parametrize("name", ["MFLeft", "MFRight"])
+def test_an_acronym_prefixed_side_name_refuses_the_reduction(tmp_path: Path, name: str) -> None:
+    """Review S3-2b, finding 1: "MFLeft" is as sided as "woofer-left"."""
+
+    record = _ingest(
+        _box_bundle(tmp_path, name, sources=["mid", name], discs=((0.0, 15.0, 10.0), (-30.0, -20.0, 6.0))),
+        tmp_path / "data",
+    )
+    decision = _decision(record)
+    [cut] = decision["cad_cuts"]
+    assert [item["code"] for item in cut["recovery"]["failed"]] == [cr.SIDE_IDENTIFIED_SOURCE]
+    assert decision["solver_domain"]["planes"] == []
+    _, outcomes = _solve_verdicts(record)
+    assert set(outcomes.values()) == {"imported_open_half_shell"}
+
+
+def test_a_declared_half_with_a_side_identified_source_is_refused(tmp_path: Path) -> None:
+    """Review S3-2b, finding 2: a declaration never overrides the source-identity condition."""
+
+    from server.cadlink.ingest import IngestRefusal
+
+    def bundle(name: str, source: str) -> Path:
+        return _bundle(
+            tmp_path, name, lambda path: _cut_box(path, x_side=1),
+            _faces_near(_half_disc_centre(0.0, 15.0, 10.0, 1, 0)), sources=[source], domain=("x0",),
+        )
+
+    with pytest.raises(IngestRefusal, match="declares it was already cut on x0, but source woofer-left is identified as the left one"):
+        _ingest(bundle("declared-left", "woofer-left"), tmp_path / "data")
+    # Control: the same declaration of an unsided source is mirrored.
+    declared = _ingest(bundle("declared-woofer", "woofer"), tmp_path / "data-control")
+    assert declared["symmetry"]["domain_planes"] == ["x0"]

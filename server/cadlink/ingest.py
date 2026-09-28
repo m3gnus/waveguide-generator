@@ -47,6 +47,7 @@ from .cut_recovery import (
 )
 from .domain_decision import decide_domain_and_frame
 from .domain_interpretation import (
+    DECLARATION,
     READING_AS_SHOWN,
     USER,
     USER_LINEAGE,
@@ -1585,6 +1586,18 @@ def ingest_bundle(
         )
         observations = observe_record_mesh(built)
         built_inline_viewport = True
+    if plan.source == DECLARATION:
+        # A declaration never overrides a failed flip condition either: the
+        # sources it mirrors must be identities a mirror may double.
+        identity = _side_identity_problem(manifest) or _source_identity_problem(built, skipped_source_ids)
+        if identity is not None:
+            raise IngestRefusal(
+                "stage 6 symmetry",
+                "symmetry: this return declares it was already cut on "
+                + ", ".join(declared_domain_planes(manifest))
+                + f", but {identity}. Send the whole model, or rename the source if it is not "
+                "one side's own driver.",
+            )
     # Stage 3: a model already cut in CAD that no evidence mirrored. Solved as
     # shown it would be part of a speaker in free space, so it is recovered as
     # the reduced domain of the whole speaker when every flip condition holds

@@ -102,6 +102,11 @@ _SIDE_WORDS = {
     "rh": "right",
 }
 _WORD = re.compile(r"[a-z0-9]+")
+#: Word boundaries inside one name: "wooferLeft" (lower to upper), "MFLeft"
+#: (an acronym before a capitalised word), "woofer2Left"/"Left2" (a digit
+#: against a word). An all-capital run is one word ("MFL", a generated id such
+#: as "wgs-L4908B04CKKRTSFQV4KC"), so a stray capital L or R in it is not a side.
+_BOUNDARY = re.compile(r"(?<=[a-z])(?=[A-Z0-9])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[0-9])(?=[A-Za-z])")
 
 
 def geometry_cut_planes(observations: Observations | None) -> list[str]:
@@ -140,8 +145,9 @@ def side_of_source(source: Mapping[str, Any]) -> str | None:
         *(str(item) for item in selectors.get("shell_names") or ()),
     ]
     for name in names:
-        # "Woofer_L", "HF-right", "LeftWoofer": words, split at case changes too.
-        spaced = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", name).casefold()
+        # "Woofer_L", "HF-right", "LeftWoofer", "MFLeft", "TweeterR": words,
+        # split at separators and at case and digit boundaries.
+        spaced = _BOUNDARY.sub(" ", name).casefold()
         for word in _WORD.findall(spaced):
             if word in _SIDE_WORDS:
                 return _SIDE_WORDS[word]
