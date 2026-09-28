@@ -2708,7 +2708,8 @@ def build_imported_mesh(
         from hornlab_mesher.step_import import (
             StepFaceGroup,
             StepLabelSelector,
-            advanced_face_order,
+            StepFaceOrderError,
+            advanced_face_order_for_surfaces,
             anchor_surface_order,
             gmsh_surface_geometries,
             gmsh_surface_tags,
@@ -2892,6 +2893,7 @@ def build_imported_mesh(
         occ_healing_options: Iterable[str] = (),
         surface_order_reference: list[Any] | None = None,
         allow_symmetry_reduction: bool = True,
+        surface_face_reference: list[int] | None = None,
     ) -> dict[str, Any]:
         gmsh.clear()
         gmsh.model.add("wgreturn-import")
@@ -2950,7 +2952,34 @@ def build_imported_mesh(
                     "or other feature off its centre, and the mirror would build another speaker"
                 )
         surfaces = gmsh_surface_tags()
-        face_order = advanced_face_order(Path(assembly_path))
+        if surface_face_reference is None:
+            # ADVANCED_FACE id of each surface, matched by geometry in the model
+            # as placed (normalisation and recentre included). Record order is
+            # not gmsh's surface order for every file, so it is never assumed;
+            # an ambiguous or failed match refuses the return.
+            addressed_faces = sorted(
+                {
+                    int(identifier)
+                    for source in source_list
+                    for identifier in source["selectors"].get("advanced_face_indices", ())
+                }
+            )
+            try:
+                face_order = advanced_face_order_for_surfaces(
+                    Path(assembly_path),
+                    list(surfaces),
+                    model_from_step=solver_from_assembly,
+                    addressed_faces=addressed_faces,
+                )
+            except StepFaceOrderError as exc:
+                raise ImportedMeshError(
+                    f"STEP import + normalisation: STEP faces cannot be mapped to OCC surfaces: {exc}"
+                ) from exc
+        else:
+            # A healed attempt: its surfaces are re-anchored to the unhealed
+            # order below, and healing may have moved the geometry the mapping
+            # reads, so the unhealed attempt's mapping is carried over.
+            face_order = list(surface_face_reference)
         if len(surfaces) != len(face_order):
             raise ImportedMeshError(
                 "STEP import + normalisation: STEP/Gmsh surface count mismatch "
@@ -3529,6 +3558,7 @@ def build_imported_mesh(
             "mesh_generation_error": mesh_error,
             "surface_order_reference": geometries,
             "surface_order": ordered_surfaces,
+            "surface_face_order": face_order,
             "reanchor_residuals": reanchor_residuals,
             "role_resolution": resolutions,
             "role_findings": findings,
@@ -3844,10 +3874,15 @@ def build_imported_mesh(
         return state
 
     def build(*, allow_symmetry_reduction: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+        unhealed_faces: list[int] | None = None
+
         def run(**kwargs: Any) -> dict[str, Any]:
+            if kwargs.get("surface_order_reference") is not None:
+                kwargs["surface_face_reference"] = unhealed_faces
             return attempt(allow_symmetry_reduction=allow_symmetry_reduction, **kwargs)
 
         unhealed = run()
+        unhealed_faces = list(unhealed["surface_face_order"])
         if unhealed.get("mesh_generation_error") is None:
             return unhealed, {
                 "attempted": False,
@@ -3963,6 +3998,7 @@ def build_imported_mesh(
     result.pop("mesh_generation_error", None)
     result.pop("surface_order_reference", None)
     result.pop("surface_order", None)
+    result.pop("surface_face_order", None)
     result.pop("reanchor_residuals", None)
     result.pop("source_specs", None)
     result.pop("cut_groups", None)
