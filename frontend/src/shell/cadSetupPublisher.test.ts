@@ -279,32 +279,128 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
     expect(to('/project-setups')).toHaveLength(1);
   });
 
-  it('does not retry a failed recording by itself: the next edit sends the setup again', async () => {
-    // Best effort by design today. The gap is that a failed PUT leaves the
-    // backend without the edit until the user edits again.
-    vi.useFakeTimers();
-    const calls: unknown[] = [];
-    let failing = true;
+  function flaky(failures: number) {
+    const calls: Array<{ body: unknown; keepalive: boolean | undefined }> = [];
+    let remaining = failures;
     const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).endsWith('/project-setups')) {
-        calls.push(JSON.parse(String(init?.body)));
-        if (failing) throw new Error('offline');
+        calls.push({ body: JSON.parse(String(init?.body)), keepalive: init?.keepalive });
+        if (remaining > 0) { remaining -= 1; throw new Error('offline'); }
       }
       return json({});
     }) as unknown as typeof fetch;
-    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    return { calls, fetcher };
+  }
+
+  it('retries a failed recording itself, with bounded backoff, and stays quiet when a retry lands', async () => {
+    vi.useFakeTimers();
+    const { calls, fetcher } = flaky(2);
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({
+      fetcher, debounceMs: 500, retryDelaysMs: [1_000, 4_000], onSaveState: (state) => states.push(state),
+    });
     useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(600);
     expect(calls).toHaveLength(1);
-
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(calls).toHaveLength(3);
+    expect(calls[2].body).toEqual(calls[0].body);
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(calls).toHaveLength(1);
+    expect(calls).toHaveLength(3);
+    expect(states).toEqual([]);
+    stop();
+  });
 
-    failing = false;
+  it('gives up after the last retry, says so once, and says saved when a later edit lands', async () => {
+    vi.useFakeTimers();
+    const { calls, fetcher } = flaky(3);
+    const states: string[] = [];
+    const stop = startCadSetupPublisher({
+      fetcher, debounceMs: 500, retryDelaysMs: [1_000, 4_000], onSaveState: (state) => states.push(state),
+    });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(600 + 1_000 + 4_000);
+    expect(calls).toHaveLength(3);
+    expect(states).toEqual(['failed']);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(calls).toHaveLength(3);
+
     useCadReturnStore.getState().setExteriorOnly(false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(4);
+    expect(states).toEqual(['failed', 'saved']);
+    stop();
+  });
+
+  it('does not retry an old setup once a newer edit has been sent', async () => {
+    vi.useFakeTimers();
+    const { calls, fetcher } = flaky(1);
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500, retryDelaysMs: [5_000] });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
     useCadReturnStore.getState().setExteriorOnly(true);
     await vi.advanceTimersByTimeAsync(600);
+    useCadReturnStore.getState().setExteriorOnly(false);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(calls).toHaveLength(2);
+    stop();
+  });
+
+  it.each([
+    ['visibilitychange to hidden', () => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    }],
+    ['pagehide', () => { window.dispatchEvent(new Event('pagehide')); }],
+  ])('sends an edit still inside the debounce on %s, as a request that survives unload', async (_name, leave) => {
+    vi.useFakeTimers();
+    const { calls, fetcher } = flaky(0);
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(calls).toHaveLength(0);
+    try { leave(); } finally {
+      Reflect.deleteProperty(document, 'visibilityState');
+    }
+    expect(calls).toHaveLength(1);
+    expect(calls[0].keepalive).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls).toHaveLength(1);
+    stop();
+  });
+
+  it('does nothing when the page becomes visible again, and an ordinary send is not keepalive', async () => {
+    vi.useFakeTimers();
+    const { calls, fetcher } = flaky(0);
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500 });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(calls).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].keepalive).toBeUndefined();
+    stop();
+  });
+
+  it('resends a failed recording at once, as keepalive, when the page is hidden before its retry', async () => {
+    vi.useFakeTimers();
+    const { calls, fetcher } = flaky(1);
+    const stop = startCadSetupPublisher({ fetcher, debounceMs: 500, retryDelaysMs: [10_000] });
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(calls).toHaveLength(1);
+    window.dispatchEvent(new Event('pagehide'));
+    expect(calls).toHaveLength(2);
+    expect(calls[1].keepalive).toBe(true);
+    await vi.advanceTimersByTimeAsync(20_000);
     expect(calls).toHaveLength(2);
     stop();
   });

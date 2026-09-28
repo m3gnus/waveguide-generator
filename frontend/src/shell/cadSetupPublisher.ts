@@ -37,6 +37,8 @@ type SolveOptionsSnapshot = ReturnType<typeof useSolveOptionsStore.getState>;
 type CadPreparationSnapshot = ReturnType<typeof useCadPreparationStore.getState>;
 
 const SETUP_DEBOUNCE_MS = 750;
+/** A failed recording is tried again after these waits, then given up on. */
+const SETUP_RETRY_DELAYS_MS = [1_000, 4_000];
 
 /** The project these settings belong to, as the solve profile files them. */
 function projectLineage(state: CadReturnSnapshot): string | null {
@@ -159,17 +161,47 @@ function selectionKey(state: CadReturnSnapshot): string | null {
  * solve" records the same setup on demand (CadLinkCoordinator).
  */
 export function startCadSetupPublisher(
-  options: { fetcher?: typeof fetch; debounceMs?: number } = {},
+  options: {
+    fetcher?: typeof fetch;
+    debounceMs?: number;
+    /** Waits before each retry of a failed recording; its length bounds the attempts. */
+    retryDelaysMs?: number[];
+    /** `failed` once every attempt at an edit has failed; `saved` when a later one lands. */
+    onSaveState?: (state: 'failed' | 'saved') => void;
+  } = {},
 ): () => void {
   const fetcher = options.fetcher ?? fetch;
   const debounceMs = options.debounceMs ?? SETUP_DEBOUNCE_MS;
+  const retryDelays = options.retryDelaysMs ?? SETUP_RETRY_DELAYS_MS;
+  const onSaveState = options.onSaveState ?? (() => undefined);
   let selection = selectionKey(useCadReturnStore.getState());
   let published: string | null = null;
   let pending: CadProjectSetup | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let solverSelection: string | null = null;
+  let failed = false;
+  // The recording that failed and waits for its next attempt.
+  let retrying: { next: CadProjectSetup; key: string; attempt: number; timer: ReturnType<typeof setTimeout> } | null = null;
+  let stopped = false;
 
-  const flush = () => {
+  const send = (next: CadProjectSetup, key: string, attempt: number, keepalive: boolean) => {
+    retrying = null;
+    putProjectSetup(next, fetcher, { keepalive }).then(() => {
+      if (failed && published === key) { failed = false; onSaveState('saved'); }
+    }, () => {
+      // A newer edit has taken over: it is what needs recording now.
+      if (published !== key) return;
+      if (attempt < retryDelays.length && !stopped) {
+        const wait = setTimeout(() => send(next, key, attempt + 1, false), retryDelays[attempt]);
+        retrying = { next, key, attempt: attempt + 1, timer: wait };
+        return;
+      }
+      published = null;
+      if (!failed) { failed = true; onSaveState('failed'); }
+    });
+  };
+
+  const flush = (keepalive = false) => {
     if (timer !== null) clearTimeout(timer);
     timer = null;
     const next = pending;
@@ -177,16 +209,27 @@ export function startCadSetupPublisher(
     if (!next) return;
     const key = JSON.stringify(next);
     if (key === published) return;
+    if (retrying) clearTimeout(retrying.timer);
+    retrying = null;
     published = key;
-    // Advisory: a failed recording is retried by the next edit, and until
-    // then the backend waits for a setup rather than guessing one.
-    void putProjectSetup(next, fetcher).catch(() => { if (published === key) published = null; });
+    send(next, key, 0, keepalive);
   };
+
+  // The page is going away or out of sight: nothing later will retry for us.
+  const leave = () => {
+    flush(true);
+    if (retrying) {
+      const { next, key, attempt, timer: wait } = retrying;
+      clearTimeout(wait);
+      send(next, key, attempt, true);
+    }
+  };
+  const onVisibility = () => { if (document.visibilityState === 'hidden') leave(); };
 
   const schedule = (next: CadProjectSetup) => {
     pending = next;
     if (timer !== null) clearTimeout(timer);
-    timer = setTimeout(flush, debounceMs);
+    timer = setTimeout(() => flush(), debounceMs);
   };
 
   const onEdit = () => {
@@ -218,9 +261,16 @@ export function startCadSetupPublisher(
     useCadReturnStore.subscribe(onSelection),
     useSolveOptionsStore.subscribe(observeSolverSelection),
   ];
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
+  if (typeof window !== 'undefined') window.addEventListener('pagehide', leave);
   observeSolverSelection();
   return () => {
     unsubscribers.forEach((unsubscribe) => unsubscribe());
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
+    if (typeof window !== 'undefined') window.removeEventListener('pagehide', leave);
     flush();
+    stopped = true;
+    if (retrying) clearTimeout(retrying.timer);
+    retrying = null;
   };
 }

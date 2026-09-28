@@ -120,6 +120,7 @@ interface CadLinkCoordinatorSnapshot {
   selectOnshapeInstance(instanceId: string): void;
 }
 
+const SETTINGS_NOT_SAVED = 'Settings not saved. Edit a setting to retry.';
 const unavailable = async () => { throw new Error('CAD Link coordinator is unavailable'); };
 const unavailableRefreshOnshape = async (_committed?: DesignIdentity) => unavailable();
 let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
@@ -1297,7 +1298,12 @@ export function CadLinkCoordinator() {
   // it collects each one, prepares it from its project's recorded setup and
   // reports on the jobs channel. This client records that setup as the user
   // edits it, and follows the operations.
-  useEffect(() => startCadSetupPublisher(), []);
+  useEffect(() => startCadSetupPublisher({
+    onSaveState: (state) => setError((current) => {
+      if (state === 'failed') return current ?? SETTINGS_NOT_SAVED;
+      return current === SETTINGS_NOT_SAVED ? null : current;
+    }),
+  }), []);
   useEffect(() => {
     const disconnect = connectCadOperations();
     void useCadOperationsStore.getState().load().catch(() => undefined);

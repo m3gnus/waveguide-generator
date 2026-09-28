@@ -121,8 +121,8 @@ export function isPendingCadOperation(operation: Pick<CadOperationSummary, 'stat
 const operationPath = (operationId: string): string =>
   `/api/cadlink/operations/${encodeURIComponent(operationId)}`;
 
-function jsonBody(method: string, body: unknown): RequestInit {
-  return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+function jsonBody(method: string, body: unknown, extra: RequestInit = {}): RequestInit {
+  return { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), ...extra };
 }
 
 /** Store the exact setup a manual CAD solve will bind. */
@@ -156,8 +156,14 @@ export async function createCadOperation(
 export function putProjectSetup(
   request: { lineageId: string; inventory: CadSourceInventoryEntry[]; setup: CadSolveSetup },
   fetcher: typeof fetch = fetch,
+  /** `keepalive` lets the request finish after the page is gone. */
+  options: { keepalive?: boolean } = {},
 ): Promise<{ lineageId: string; inventorySha256: string; revisionId: string }> {
-  return jsonRequest('/api/cadlink/project-setups', jsonBody('PUT', request), fetcher);
+  return jsonRequest(
+    '/api/cadlink/project-setups',
+    jsonBody('PUT', request, options.keepalive ? { keepalive: true } : {}),
+    fetcher,
+  );
 }
 
 /** Record the shared accuracy and engine selection for CAD preparation. */
