@@ -1,0 +1,229 @@
+{
+  "acoustics": null,
+  "assembly": {
+    "bbox_mm": [
+      [
+        -172,
+        -427,
+        -185.23
+      ],
+      [
+        172,
+        152,
+        94.77
+      ]
+    ],
+    "domain": {
+      "kind": "automatic"
+    },
+    "file": "assembly.step",
+    "n_bodies_expected": 1,
+    "signature_hash": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "coordinate_system": {
+    "handedness": "right",
+    "length_unit": "mm",
+    "matrix_convention": "row-major-local-to-parent",
+    "solver_anchor_instance_id": "instance-1"
+  },
+  "document": {
+    "name": "Tritonia speaker",
+    "native_id": null
+  },
+  "files": {
+    "assembly.step": {
+      "media_type": "model/step",
+      "purpose": "exterior-assembly",
+      "sha256": "sha256:78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
+      "size_bytes": 4
+    }
+  },
+  "generator": {
+    "adapter": "hornlab-fusion-addin/WGLink",
+    "adapter_version": "1.0.0",
+    "cad_app": "fusion360",
+    "cad_version": "2704.1.53"
+  },
+  "instances": [
+    {
+      "assembly_from_link": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "body_evidence": {
+        "baseline_fingerprint": {
+          "bbox_mm": [
+            0,
+            0,
+            0,
+            1,
+            1,
+            1
+          ],
+          "is_solid": true,
+          "volume_mm3": 12
+        },
+        "local_body_state": "unmodified",
+        "observed_at": "2026-08-12T09:14:03Z",
+        "observed_fingerprint": {
+          "bbox_mm": [
+            0,
+            0,
+            0,
+            1,
+            1,
+            1
+          ],
+          "is_solid": true,
+          "volume_mm3": 12
+        }
+      },
+      "build_mode": "enclosure",
+      "chirality": "original",
+      "config": {
+        "dimensions": {
+          "length": {
+            "raw": "130",
+            "value": 130
+          }
+        },
+        "extra_keys": {
+          "Symmetry": "1234",
+          "Tag": "preserved WG input"
+        },
+        "root": {
+          "formula": "OSSE"
+        }
+      },
+      "design_hash": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "design_id": "wgd_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+      "edit_version": 19,
+      "export_id": "wge_01J4Y2ZD000000000000000000",
+      "export_sequence": 7,
+      "formula": "osse",
+      "geometry_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "instance_id": "instance-1",
+      "lineage_id": "wgl_01J4Y2WZQK8Z3TFD3E7V9XKQ4M",
+      "occurrence_path": "Speaker/WGLink",
+      "origin_bundle_id": "wgb_01J4Y2ZF000000000000000000",
+      "parameter_prefix": "wg_tritonia_",
+      "source_contract": {
+        "axis_link": {
+          "direction": [
+            0,
+            0,
+            1
+          ],
+          "origin_mm": [
+            0,
+            0,
+            0
+          ]
+        },
+        "expected_disc_area_mm2": 506.707,
+        "role": "HF",
+        "throat_diameter_mm": 25.4,
+        "throat_plane_link": {
+          "normal": [
+            0,
+            0,
+            1
+          ],
+          "origin_mm": [
+            0,
+            0,
+            0
+          ]
+        },
+        "throat_z_mm": 0
+      }
+    }
+  ],
+  "required_features": [
+    "checksummed-files-v1",
+    "assembly-frame-v1",
+    "instance-records-v1",
+    "source-identity-v1"
+  ],
+  "return": {
+    "created_at": "2026-08-12T09:14:03Z",
+    "id": "wgr_01J5A8QK3M9T2XVBH0RD7NWE6C"
+  },
+  "scope": {
+    "fem_air_volumes": [],
+    "included": [
+      {
+        "body_kind": "surface",
+        "component": "speaker",
+        "external_reference": "none",
+        "name": "speaker",
+        "object_id": "speaker",
+        "visible": true,
+        "wglink_instance_id": "instance-1"
+      }
+    ],
+    "selection": "root",
+    "skipped": [
+      {
+        "kind": "construction",
+        "object_id": "construction",
+        "reason": "not geometry",
+        "severity": "info"
+      }
+    ],
+    "status": "clean"
+  },
+  "sources": [
+    {
+      "default_drive_channel_id": "drive-hf",
+      "expected_connected_components": 1,
+      "id": "source-hf",
+      "instance_id": "instance-1",
+      "observed": {
+        "bodies": [
+          "speaker"
+        ],
+        "face_count": 1,
+        "per_face_area_mm2": [
+          506.696
+        ],
+        "total_area_mm2": 506.696
+      },
+      "patch_policy": "single-connected",
+      "required": true,
+      "role": "HF",
+      "selectors": {
+        "appearance_labels": [
+          "HF"
+        ],
+        "linked_throat": {
+          "instance_id": "instance-1"
+        }
+      },
+      "suggested_resolution_mm": 4
+    }
+  ],
+  "wgreturn_version": "1.1"
+}

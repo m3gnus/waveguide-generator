@@ -1,0 +1,394 @@
+"""The WGLink shipped at source.json is a live writer for this WG reader."""
+
+from __future__ import annotations
+
+from contextlib import contextmanager
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import zipfile
+
+import pytest
+
+from scripts import build_wglink_package
+from server.cadlink import ingest, solve_command
+from server.cadlink.ingest import IngestRefusal
+from server.cadlink.fusion_delivery import capabilities, ipc_folder
+from server.cadlink.store import CadLinkStore
+from server.cadlink.wgreturn import read_wgreturn, source_physical_name, validate_manifest
+from server.mesh.gmsh_worker import _run_in_gmsh_session
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CORPUS = ROOT / "server/tests/fixtures/cadlink-endpoint-oracle"
+PIN = json.loads((ROOT / "integrations/wglink/source.json").read_text())
+
+
+def _sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _verdict(call) -> dict[str, object]:
+    try:
+        call()
+    except Exception as exc:
+        return {"accepted": False, "message": str(exc)}
+    return {"accepted": True, "message": None}
+
+
+def _run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, cwd=cwd, capture_output=True, text=True, check=False)
+
+
+@pytest.fixture(scope="module")
+def packaged(tmp_path_factory: pytest.TempPathFactory):
+    """Fetch an exact commit object, never a sibling working tree."""
+
+    root = tmp_path_factory.mktemp("wglink-pinned")
+    source = root / "source"
+    source.mkdir()
+    init = _run("git", "init", "-q", cwd=source)
+    assert init.returncode == 0, init.stderr
+    remote = os.environ.get("WGLINK_SOURCE_GIT") or PIN["repository"]
+    fetched = _run(
+        "git", "fetch", "--quiet", "--no-tags", "--depth", "1", remote, PIN["commit"], cwd=source
+    )
+    assert fetched.returncode == 0, (
+        f"Pinned WGLink source {PIN['commit']} is unavailable from {remote}: {fetched.stderr}"
+    )
+    checkout = _run("git", "checkout", "--quiet", "--detach", "FETCH_HEAD", cwd=source)
+    assert checkout.returncode == 0, checkout.stderr
+    assert _run("git", "rev-parse", "HEAD", cwd=source).stdout.strip() == PIN["commit"]
+    archive = build_wglink_package.build_package(source, root / "wglink.zip")
+    with zipfile.ZipFile(archive) as bundle:
+        provenance = json.loads(bundle.read("wglink/provenance.json"))
+        assert provenance["sourceCommit"] == PIN["commit"]
+        assert set(bundle.namelist()) == set(provenance["files"]) | {"wglink/provenance.json"}
+        for name, digest in provenance["files"].items():
+            assert _sha(bundle.read(name)) == digest, name
+        bundle.extractall(root / "extracted")
+    folder = root / "extracted/wglink/fusion-addins/WGLink"
+    return folder
+
+
+@contextmanager
+def _from_package(folder: Path, filename: str):
+    name = "_wglink_pinned_" + filename.removesuffix(".py")
+    path = folder / filename
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    assert name not in sys.modules
+    sys.modules[name] = module  # dataclasses needs the module while it executes
+    try:
+        spec.loader.exec_module(module)
+        assert Path(module.__file__).resolve() == path.resolve()
+        assert Path(module.__file__).resolve().is_relative_to(folder.resolve())
+        yield module
+    finally:
+        assert sys.modules.pop(name) is module
+        assert name not in sys.modules
+
+
+def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
+    provenance = json.loads((CORPUS / "PROVENANCE.json").read_text())
+    assert provenance["wg_commit"] == "12db5a557a6a86d969a120a95b7de37eb5260980"
+    assert provenance["addin_commit"] == PIN["commit"]
+    assert provenance["generator"] == "scripts/generate_cadlink_endpoint_oracle.py"
+    actual = {
+        p.relative_to(CORPUS).as_posix(): _sha(p.read_bytes())
+        for p in CORPUS.rglob("*")
+        if p.is_file() and p.name != "PROVENANCE.json"
+    }
+    assert actual == provenance["files"]
+    oracle = json.loads((CORPUS / "ORACLE.json").read_text())
+    bare = json.loads((CORPUS / "BARE.json").read_text())
+    assert len(oracle) == 30
+    for name, expected in oracle.items():
+        folder = CORPUS / f"{name}.wgreturn"
+        manifest = (
+            bare[name] if name in bare else json.loads((folder / "wgreturn.json").read_bytes())
+        )
+        assert _verdict(lambda: validate_manifest(manifest)) == expected["validate_manifest"], name
+        assert _verdict(lambda: read_wgreturn(folder)) == expected["read_wgreturn"], name
+        data = tmp_path / name
+        data.mkdir()
+        inbox = ipc_folder(data, create=True) / solve_command.SOLVE_REQUESTS_DIRECTORY
+        inbox.mkdir()
+        request = {
+            "schemaVersion": 3,
+            "target": "waveguide-generator",
+            "commandId": f"oracle-{name}",
+            "operationId": f"oracle-{name}",
+            "returnId": "wgr_1",
+            "bundlePath": f"wgreturn/{name}.wgreturn",
+            "manifestSha256": "sha256:" + _sha((folder / "wgreturn.json").read_bytes()),
+            "requestedAt": "2026-09-28T00:00:00Z",
+        }
+        (inbox / f"oracle-{name}.json").write_text(json.dumps(request))
+        store = CadLinkStore.for_data_dir(data)
+        try:
+            refusals = []
+            solve_command.collect_solve_deliveries(data, store, refuse=refusals.append)
+            row = store.get_operation(f"oracle-{name}")
+            observed = {
+                "accepted": row is not None and row["kind"] == "prepare_and_solve",
+                "kind": row["kind"] if row else None,
+                "state": row["state"] if row else None,
+                "message": refusals[0]["reason"] if refusals else None,
+            }
+            assert observed == expected["inbox_claim"], name
+        finally:
+            store.close()
+
+
+def test_oracle_mutation_guard():
+    oracle = json.loads((CORPUS / "ORACLE.json").read_text())
+    base = json.loads((CORPUS / "base-1-1.wgreturn/wgreturn.json").read_text())
+    base_verdict = _verdict(lambda: validate_manifest(base))
+    assert base_verdict == oracle["base-1-1"]["validate_manifest"]
+    base["instances"][0]["chirality"] = "mirrored"
+    changed = _verdict(lambda: validate_manifest(base))
+    assert changed != base_verdict
+    assert changed == oracle["mirrored-chirality"]["validate_manifest"]
+
+
+@pytest.mark.parametrize("name", sorted(json.loads((CORPUS / "GEOMETRY.json").read_text())))
+def test_geometry_oracle_without_solver(name: str, tmp_path: Path):
+    expected = json.loads((CORPUS / "GEOMETRY.json").read_text())[name]
+    folder = CORPUS / f"{name}.wgreturn"
+    manifest = json.loads((folder / "wgreturn.json").read_text())
+    sizes = {
+        "rigid_size_mm": 20,
+        "transition_mm": 30,
+        "source_size_mm": {
+            source["id"]: 4 if name == "onshape-linked" else 8 for source in manifest["sources"]
+        },
+    }
+    data = tmp_path / "data"
+    data.mkdir()
+    store = CadLinkStore(data / "cadlink.db")
+    try:
+        if not expected["accepted"]:
+            with pytest.raises(IngestRefusal) as caught:
+                _run_in_gmsh_session(
+                    ingest.ingest_bundle,
+                    folder,
+                    sizes,
+                    [],
+                    store,
+                    data,
+                    prep_options={"symmetry_mode": "auto"},
+                )
+            assert str(caught.value) == expected["message"]
+            return
+        record = _run_in_gmsh_session(
+            ingest.ingest_bundle,
+            folder,
+            sizes,
+            [],
+            store,
+            data,
+            prep_options={"symmetry_mode": "auto"},
+        )
+        physical_names = {
+            source_id: source_physical_name(
+                int(tag),
+                source_id,
+                record["tag_map"][str(tag)]["instance_id"],
+                record["tag_map"][str(tag)]["role"],
+            )
+            for source_id, tag in record["source_tags"].items()
+        }
+        observed = {
+            "accepted": True,
+            "source_ids": [source["id"] for source in record["sources"]],
+            "physical_names": physical_names,
+            "solver_frame": record["normalisation"]["solver_frame"],
+            "domain_interpretation": record["domain_interpretation"],
+            "domain_decision": record["domain_decision"],
+            "symmetry_verification": record["symmetry_verification"],
+            "mesh_content_sha256": record["mesh_content_sha256"],
+        }
+        assert observed == expected
+    finally:
+        store.close()
+
+
+def test_pinned_writer_bundle_request_claim_and_ingest(packaged: Path, tmp_path: Path, monkeypatch):
+    with (
+        _from_package(packaged, "wglink_return.py") as writer,
+        _from_package(packaged, "wglink_watch.py") as watcher,
+    ):
+        base = json.loads((CORPUS / "base-1-1.wgreturn/wgreturn.json").read_text())
+        fields = deepcopy(base)
+        fields["return_record"] = fields.pop("return")
+        fields.pop("acoustics")
+        fields["files"]["assembly.step"]["sha256"] = "sha256:" + _sha(b"STEP")
+        manifest = writer.build_return_manifest(**fields)
+        workspace = tmp_path / "workspace"
+        bundle = workspace / "wgreturn/pinned.wgreturn"
+        bundle.mkdir(parents=True)
+        (bundle / "assembly.step").write_bytes(b"STEP")
+        (bundle / "wgreturn.json").write_text(
+            writer.dumps_return_manifest(manifest), encoding="utf-8"
+        )
+        read = read_wgreturn(bundle)
+        assert read.manifest["sources"][0]["id"] == "source-hf"
+        assert read.degradations == ()
+        assert source_physical_name(101, "source-hf", "instance-1", "HF") == (
+            "wg-import-v1|tag=101|source_id=source-hf|instance_id=instance-1|role=HF"
+        )
+
+        data = tmp_path / "data"
+        data.mkdir()
+        ipc = ipc_folder(data, create=True)
+        (ipc / watcher.CAPABILITIES_FILENAME).write_text(
+            json.dumps(capabilities()), encoding="utf-8"
+        )
+        request = watcher.write_solve_request(
+            ipc,
+            command_id="pinned-solve",
+            return_id=manifest["return"]["id"],
+            bundle_path=bundle,
+            workspace_root=workspace,
+            requested_at=datetime(2026, 9, 28, tzinfo=timezone.utc),
+        )
+        payload = json.loads(request.read_text())
+        assert payload["schemaVersion"] == 3 and "kind" not in payload
+        store = CadLinkStore.for_data_dir(data)
+        try:
+            refusals = []
+            solve_command.collect_solve_deliveries(data, store, refuse=refusals.append)
+            assert refusals == []
+            operation = store.get_operation("pinned-solve")
+            assert operation is not None and operation["kind"] == "prepare_and_solve"
+
+            from test_cadlink_ingest import _built_for_source
+
+            monkeypatch.setattr(
+                ingest,
+                "build_imported_mesh_isolated",
+                lambda *a, **k: _built_for_source("source-hf"),
+            )
+            record = ingest.ingest_bundle(
+                bundle,
+                {"rigid_size_mm": 20, "transition_mm": 30, "source_size_mm": {"source-hf": 8}},
+                [],
+                store,
+                data,
+                expected_design_id=manifest["instances"][0]["design_id"],
+            )
+            assert [source["id"] for source in record["sources"]] == ["source-hf"]
+            assert record["source_tags"] == {"source-hf": 101}
+            assert record["tag_map"]["101"] == {
+                "source_id": "source-hf",
+                "instance_id": "instance-1",
+                "role": "HF",
+            }
+        finally:
+            store.close()
+
+        oracle = json.loads((CORPUS / "ORACLE.json").read_text())
+        (bundle / "assembly.step").write_bytes(b"WRNG")
+        assert (
+            _verdict(lambda: read_wgreturn(bundle)) == oracle["checksum-mismatch"]["read_wgreturn"]
+        )
+        (bundle / "assembly.step").write_bytes(b"STEP")
+        (bundle / "extra.txt").write_bytes(b"extra")
+        assert (
+            _verdict(lambda: read_wgreturn(bundle)) == oracle["undeclared-member"]["read_wgreturn"]
+        )
+        (bundle / "extra.txt").unlink()
+        for name in ("major-2", "unknown-feature"):
+            altered = deepcopy(manifest)
+            if name == "major-2":
+                altered["wgreturn_version"] = "2.0"
+            else:
+                altered["required_features"].append("future-physics-v1")
+            (bundle / "wgreturn.json").write_text(json.dumps(altered), encoding="utf-8")
+            assert _verdict(lambda: read_wgreturn(bundle)) == oracle[name]["read_wgreturn"]
+
+
+def test_pinned_writer_negative_manifest_messages(packaged: Path):
+    with _from_package(packaged, "wglink_return.py") as writer:
+        base = json.loads((CORPUS / "base-1-1.wgreturn/wgreturn.json").read_text())
+        for name in ("major-2", "unknown-feature"):
+            altered = deepcopy(base)
+            if name == "major-2":
+                altered["wgreturn_version"] = "2.0"
+            else:
+                altered["required_features"].append("future-physics-v1")
+            # WG's exact refusal remains independent of the writer's own
+            # validation and is asserted by the committed endpoint oracle.
+            assert (
+                _verdict(lambda m=altered: validate_manifest(m))
+                == json.loads((CORPUS / "ORACLE.json").read_text())[name]["validate_manifest"]
+            )
+        assert writer.__file__.endswith("wglink_return.py")
+
+
+def test_request_versions_and_exact_refusals(tmp_path: Path):
+    assert capabilities()["solveCommandDelivery"] == 4
+    assert capabilities()["fusionRequestDelivery"] == 3
+    data = tmp_path / "data"
+    data.mkdir()
+    store = CadLinkStore.for_data_dir(data)
+    folder = ipc_folder(data, create=True) / solve_command.SOLVE_REQUESTS_DIRECTORY
+    folder.mkdir()
+    base = {
+        "target": "waveguide-generator",
+        "commandId": "case",
+        "operationId": "case",
+        "returnId": "wgr_1",
+        "bundlePath": "wgreturn/case.wgreturn",
+        "manifestSha256": "sha256:" + "1" * 64,
+        "requestedAt": "2026-09-28T00:00:00Z",
+    }
+    try:
+        for schema in (1, 2, 3, 4):
+            payload = {
+                **base,
+                "schemaVersion": schema,
+                "commandId": f"case-{schema}",
+                "operationId": f"case-{schema}",
+            }
+            if schema == 4:
+                payload["kind"] = "prepare_and_solve"
+            target = (
+                ipc_folder(data) / solve_command.SOLVE_REQUEST_FILENAME
+                if schema == 1
+                else folder / f"case-{schema}.json"
+            )
+            target.write_text(json.dumps(payload))
+        refusals = []
+        for _ in range(4):
+            solve_command.collect_solve_deliveries(data, store, refuse=refusals.append)
+        assert store.get_operation("case-3")["kind"] == "prepare_and_solve"
+        assert store.get_operation("case-4")["kind"] == "prepare_and_solve"
+        assert refusals == []
+        for schema in (1, 2):
+            row = store.get_operation(f"case-{schema}")
+            assert row["state"] == "rejected"
+            assert json.loads(row["outcome_json"])["message"] == solve_command.OUTDATED_ADDIN_REASON
+        bad = {
+            **base,
+            "schemaVersion": 3,
+            "kind": "receive_snapshot",
+            "commandId": "bad-kind",
+            "operationId": "bad-kind",
+        }
+        (folder / "bad-kind.json").write_text(json.dumps(bad))
+        refusals.clear()
+        solve_command.collect_solve_deliveries(data, store, refuse=refusals.append)
+        assert [r["reason"] for r in refusals] == [
+            "A schema-3 request is a solve, and this one names another kind."
+        ]
+    finally:
+        store.close()

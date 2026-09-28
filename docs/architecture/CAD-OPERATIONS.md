@@ -718,6 +718,28 @@ A WG-bound Fusion request reaches WG as its own file:
 for compatibility with the shipped WGLink pin and other schema-3 fallbacks. Schemas 1
 and 2 are refused as outdated.
 
+**Packaged WGLink compatibility policy.** The package WG ships names one exact add-in
+`sourceCommit` in `integrations/wglink/source.json`. That commit is provenance and an
+installation identity; the reader still checks each return's format, required features,
+member inventory and checksums. The current pin writes `wgreturn` 1.1 with base features
+and, when applicable, reduced-domain and source-identity features. It writes schema-3
+Solve requests. A plain Send from this pin publishes a return for WG's folder listing;
+it does not write a schema-3 Send request. Development add-ins may write newer optional
+features and schema-4 Send or Solve requests. A writer emits an optional feature only
+after WG advertises its capability. Missing or too-old required capability is a visible
+refusal, never a reinterpretation. The packaged-pair contract test builds the actual
+pinned package by commit object, imports its writer from the extracted archive, and
+passes its bundle and request bytes through WG's reader, claim and ingest boundaries.
+
+These version numbers describe separate directions. The WGLink-to-WG file inbox uses
+schema 3 only for Solve (`prepare_and_solve`), and schema 4 for the explicitly named
+Send (`receive_snapshot`) and Solve kinds. A schema-3 request naming another kind is
+refused. Schemas 1 and 2 are outdated and refused with the update remedy. WG-to-Fusion
+requests and the heartbeat use delivery version 3. WG advertises
+`solveCommandDelivery: 4` only while its inbox consumer runs, and
+`fusionRequestDelivery: 3` for the reverse direction. Return capabilities such as
+`sourceIdentity`, `documentUp` and `automaticDomain` are advertised separately.
+
 - **Fields.** `target: "waveguide-generator"`, `schemaVersion`, `kind` for schema 4,
   `commandId`, `operationId` (equal to `commandId`), `bundlePath`, `manifestSha256` and
   `requestedAt`. A Solve also has `returnId`, which is present even when empty; Send

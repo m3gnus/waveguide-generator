@@ -1,0 +1,302 @@
+{
+  "acoustics": null,
+  "assembly": {
+    "bbox_mm": [
+      [
+        -77.72908242439999,
+        -77.72908242439999,
+        -5.0000001
+      ],
+      [
+        77.729082424401,
+        77.729082424401,
+        70.0000001
+      ]
+    ],
+    "file": "assembly.step",
+    "n_bodies_expected": 2,
+    "signature_hash": "sha256:835924da91d3b036a698018fddd3e2ec8aa237de9048ef208588e87304688fbc"
+  },
+  "coordinate_system": {
+    "handedness": "right",
+    "length_unit": "mm",
+    "matrix_convention": "row-major-local-to-parent",
+    "solver_anchor_instance_id": "onshape-PART"
+  },
+  "document": {
+    "name": "Demo Horn",
+    "native_id": "DID"
+  },
+  "files": {
+    "assembly.step": {
+      "media_type": "model/step",
+      "purpose": "exterior-assembly",
+      "sha256": "sha256:a1ef69fbaebc5d8d8c65105e36680383d0601b6657c29fada4a6ca3f97689b01",
+      "size_bytes": 347912
+    }
+  },
+  "generator": {
+    "adapter": "waveguide-generator/Onshape",
+    "adapter_version": "1.0",
+    "cad_app": "onshape",
+    "cad_version": "cloud-api"
+  },
+  "instances": [
+    {
+      "assembly_from_link": [
+        [
+          1,
+          0,
+          0,
+          0
+        ],
+        [
+          0,
+          1,
+          0,
+          0
+        ],
+        [
+          0,
+          0,
+          1,
+          0
+        ],
+        [
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "body_evidence": {
+        "baseline_fingerprint": {
+          "bbox_mm": [
+            -77.72959259589781,
+            -77.72959259589791,
+            -5.000510271497003,
+            77.72959259589783,
+            77.72959259589777,
+            70.00051027149703
+          ],
+          "is_solid": true,
+          "volume_mm3": 130349.38105222261
+        },
+        "local_body_state": "unknown",
+        "observed_at": "2026-09-28T08:56:45Z",
+        "observed_fingerprint": {
+          "bbox_mm": [
+            -77.72908242439999,
+            -77.72908242439999,
+            -5.0000001,
+            77.729082424401,
+            77.729082424401,
+            70.0000001
+          ],
+          "is_solid": true,
+          "volume_mm3": 130349.38105221158
+        }
+      },
+      "build_mode": "freestanding",
+      "chirality": "original",
+      "config": {
+        "L": {
+          "raw": null,
+          "value": 70.0
+        },
+        "a": {
+          "raw": null,
+          "value": 45.0
+        },
+        "a0": null,
+        "circ_arc_radius": null,
+        "circ_arc_term_angle": null,
+        "coverage_mode": null,
+        "enclosure": null,
+        "extra_blocks": {},
+        "extra_keys": {},
+        "formula": "OSSE",
+        "guiding_curve": {
+          "aspect_ratio": null,
+          "curve_type": null,
+          "distance": null,
+          "rotation": null,
+          "sf_a": null,
+          "sf_b": null,
+          "sf_m1": null,
+          "sf_m2": null,
+          "sf_n1": null,
+          "sf_n2": null,
+          "sf_n3": null,
+          "superellipse_n": null,
+          "superformula": null,
+          "width": null
+        },
+        "h": null,
+        "k": null,
+        "length_mode": null,
+        "mesh": {
+          "allow_large_mesh": null,
+          "angular_segments": null,
+          "aperture_resolution_scale": null,
+          "corner_segments": null,
+          "length_segments": null,
+          "max_edge": null,
+          "max_triangles": null,
+          "mouth_resolution": null,
+          "quadrants": null,
+          "rear_resolution": null,
+          "sampling_mode": null,
+          "throat_resolution": null,
+          "throat_segments": null,
+          "throat_slice_density": null,
+          "vertical_offset": null,
+          "wall_thickness": null,
+          "z_map_points": null
+        },
+        "morph": {
+          "allow_shrinkage": null,
+          "corner_radius": null,
+          "fixed_part": null,
+          "rate": null,
+          "target_exponent": null,
+          "target_height": null,
+          "target_shape": null,
+          "target_width": null
+        },
+        "n": null,
+        "output": {
+          "msh": null,
+          "stl": null
+        },
+        "q": null,
+        "r0": null,
+        "rotation": null,
+        "s": null,
+        "scale": null,
+        "simulation": {
+          "f1": null,
+          "f2": null,
+          "num_frequencies": null,
+          "sim_type": null,
+          "solver_mode": null
+        },
+        "slot_length": null,
+        "source": {
+          "contours": null,
+          "curvature": null,
+          "radius": null,
+          "shape": null,
+          "velocity": null,
+          "velocity_convention": null
+        },
+        "throat_ext_angle": null,
+        "throat_ext_length": null,
+        "throat_profile": null
+      },
+      "design_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "design_id": "wgd_01K00000000000000000000000",
+      "edit_version": 1,
+      "export_id": "wge_01K00000000000000000000000",
+      "export_sequence": 1,
+      "formula": "osse",
+      "geometry_hash": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "instance_id": "onshape-PART",
+      "lineage_id": "wgl_01K00000000000000000000000",
+      "occurrence_path": "Part Studio/PART",
+      "origin_bundle_id": "wgb_01K00000000000000000000000",
+      "parameter_prefix": "wg_demo_",
+      "source_contract": {
+        "axis_link": {
+          "direction": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            0.0,
+            0.0,
+            0.0
+          ]
+        },
+        "expected_disc_area_mm2": 506.7074790974975,
+        "role": "HF",
+        "throat_diameter_mm": 25.399999999999995,
+        "throat_plane_link": {
+          "normal": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "origin_mm": [
+            -4.934324553889585e-16,
+            -7.401486830834377e-16,
+            0.0
+          ]
+        },
+        "throat_z_mm": 0.0
+      }
+    }
+  ],
+  "required_features": [
+    "checksummed-files-v1",
+    "assembly-frame-v1",
+    "instance-records-v1"
+  ],
+  "return": {
+    "created_at": "2026-09-28T08:56:45Z",
+    "id": "wgr_01M3KKP6WTZV283PXZF1W6M6ED"
+  },
+  "scope": {
+    "fem_air_volumes": [],
+    "included": [
+      {
+        "body_kind": "solid",
+        "external_reference": "current linked Onshape Part Studio",
+        "name": "Shapes/Open CASCADE STEP translator 7.8 14/38/Open CASCADE STEP translator 7.8 14.1",
+        "object_id": "onshape:3:1",
+        "visible": true,
+        "wglink_instance_id": "onshape-PART"
+      },
+      {
+        "body_kind": "surface",
+        "external_reference": "current linked Onshape Part Studio",
+        "name": "Shapes/Open CASCADE STEP translator 7.8 14/39/Open CASCADE STEP translator 7.8 14.2",
+        "object_id": "onshape:2:18",
+        "visible": true,
+        "wglink_instance_id": null
+      }
+    ],
+    "selection": "linked-onshape-part-studio",
+    "skipped": [],
+    "status": "clean"
+  },
+  "sources": [
+    {
+      "default_drive_channel_id": "drive-hf",
+      "expected_connected_components": 1,
+      "id": "source-hf",
+      "instance_id": "onshape-PART",
+      "observed": {
+        "bodies": [
+          "Shapes/Open CASCADE STEP translator 7.8 14/39/Open CASCADE STEP translator 7.8 14.2"
+        ],
+        "face_count": 1,
+        "per_face_area_mm2": [
+          508.7363358438041
+        ],
+        "total_area_mm2": 508.7363358438041
+      },
+      "patch_policy": "single-connected",
+      "required": true,
+      "role": "HF",
+      "selectors": {
+        "linked_throat": {
+          "instance_id": "onshape-PART"
+        }
+      },
+      "suggested_resolution_mm": 4.0
+    }
+  ],
+  "wgreturn_version": "1.1"
+}

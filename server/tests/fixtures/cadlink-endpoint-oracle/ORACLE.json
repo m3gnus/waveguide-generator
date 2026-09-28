@@ -1,0 +1,482 @@
+{
+  "automatic-capped-half": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "automatic-full": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "automatic-half-as-shown": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "automatic-half-provenance": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "automatic-negative-half": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "automatic-quarter": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "automatic-without-feature": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.required_features: domain-automatic-v1 is required exactly when $.assembly.domain.kind is 'automatic'"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.required_features: domain-automatic-v1 is required exactly when $.assembly.domain.kind is 'automatic'"
+    }
+  },
+  "base-1-1": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "checksum-mismatch": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "bundle member 'assembly.step' checksum mismatch: declared sha256:78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7, actual sha256:ad9aa0a94b77adcf216d1925c40354b157afa9026e6b63ae70f086695a8147e9"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "declared-half": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "duplicate-json-key": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "wgreturn.json: duplicate JSON key 'wgreturn_version'"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "duplicate-portable-name": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.files: duplicate normalized member names 'ASSEMBLY.step' and 'assembly.step'"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "first-error-chirality": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.instances[0].chirality: Phase 2 accepts only 'original'"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.instances[0].chirality: Phase 2 accepts only 'original'"
+    }
+  },
+  "invalid-member-digest": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.files['assembly.step'].sha256: must be sha256: plus 64 lowercase hex digits"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "leading-zero-version": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.wgreturn_version: must be exactly major.minor"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.wgreturn_version: must be exactly major.minor"
+    }
+  },
+  "legacy-1-0": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "major-2": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.wgreturn_version: unsupported major 2; reader supports 1.1"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.wgreturn_version: unsupported major 2; reader supports 1.1"
+    }
+  },
+  "mirrored-chirality": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.instances[0].chirality: Phase 2 accepts only 'original'"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.instances[0].chirality: Phase 2 accepts only 'original'"
+    }
+  },
+  "missing-acoustics": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.acoustics: is required"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.acoustics: is required"
+    }
+  },
+  "missing-base-feature": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.required_features: missing required feature(s): checksummed-files-v1"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.required_features: missing required feature(s): checksummed-files-v1"
+    }
+  },
+  "missing-member": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "declared bundle member is missing: assembly.step"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "missing-signature": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.assembly.signature_hash: is required"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.assembly.signature_hash: is required"
+    }
+  },
+  "non-null-acoustics": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.acoustics: must be null in Phase 2"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.acoustics: must be null in Phase 2"
+    }
+  },
+  "non-utf8-json": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "wgreturn.json: must be UTF-8"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "nonfinite-json": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "wgreturn.json: non-finite JSON number 'NaN' is forbidden"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "onshape-linked": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": true,
+      "message": null
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "source-id-space": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.sources[0].id: source-identity-v1 source identity must be trimmed"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.sources[0].id: source-identity-v1 source identity must be trimmed"
+    }
+  },
+  "undeclared-member": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "undeclared bundle member: extra.txt"
+    },
+    "validate_manifest": {
+      "accepted": true,
+      "message": null
+    }
+  },
+  "unknown-feature": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.required_features: unknown required feature(s): future-physics-v1"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.required_features: unknown required feature(s): future-physics-v1"
+    }
+  },
+  "zero-source-area": {
+    "inbox_claim": {
+      "accepted": true,
+      "kind": "prepare_and_solve",
+      "message": null,
+      "state": "received"
+    },
+    "read_wgreturn": {
+      "accepted": false,
+      "message": "$.sources[0].observed.total_area_mm2: must be greater than zero"
+    },
+    "validate_manifest": {
+      "accepted": false,
+      "message": "$.sources[0].observed.total_area_mm2: must be greater than zero"
+    }
+  }
+}
