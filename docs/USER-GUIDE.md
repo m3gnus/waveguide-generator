@@ -180,14 +180,17 @@ available, AUTO takes BEMPP ahead of a provisioned BEAT · CPU, because BEMPP is
 the faster CPU engine over a full wide-band sweep. BEMPP assembles on an OpenCL
 device when it finds one and otherwise falls back to numba.
 
-Imported CAD geometry follows the same order with two differences: the BEAT GPU
-engines do not take it yet, and BEMPP offers it only where it assembles on
-OpenCL. On such a machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return
-too, although BEMPP's imported path is not yet qualified against Metal; BEAT ·
+Imported CAD geometry follows the same order with two differences: AUTO does
+not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
+Accurate), and BEMPP offers it only where it assembles on OpenCL. On such a
+machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return too, although BEMPP's imported path is not yet qualified against Metal; BEAT ·
 CPU's is. Without an OpenCL device, AUTO passes BEMPP over for imported geometry
 and takes BEAT · CPU, which it can only reach on a machine where that 1 kHz
 solve has already run. Choosing an engine yourself always overrides AUTO: an
-explicit BEMPP stays BEMPP, and an explicit BEAT · CPU stays BEAT · CPU.
+explicit BEMPP stays BEMPP, an explicit BEAT · CPU stays BEAT · CPU, and an
+explicit BEAT · Metal stays BEAT · Metal, in Fast as well as Accurate. BEAT ·
+CUDA and BEAT · ROCm take a CAD return only in Accurate; picking one in Fast is
+refused with the engines that can take the return on your machine.
 
 The infinite-baffle setting is design physics, not a solver choice. Metal full 3D and current BEMPP full 3D both implement the coupled interior plus
 Rayleigh-aperture formulation. BEMPP currently uses a validated full-domain mesh
@@ -222,7 +225,8 @@ solve is submitted whichever engine you choose.
 Imported CAD geometry takes the same engine choice as a design: the CAD solve
 options list the engines, and AUTO takes the first available one that solves
 imported geometry. Metal does, and so does BEAT · CPU, which runs on every
-platform without a GPU. BEMPP does too, where it assembles on an OpenCL device;
+platform without a GPU. BEAT · Metal does when you choose it yourself, in Fast
+or Accurate. BEMPP does too, where it assembles on an OpenCL device;
 a build that would fall back to numba does not offer imported geometry.
 BEAT · CPU mirrors an x0 half and an x0+y0 quarter natively; a return cut on y0
 alone is refused on BEAT with the reason, and solves on Metal or BEMPP. BEMPP

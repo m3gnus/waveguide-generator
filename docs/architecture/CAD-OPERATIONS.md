@@ -179,7 +179,8 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in and for which WG is not confident of its own (see "Unlinked solver frame") |
 | `preparation_failed` | `needs_user_input` | Retaining or meshing failed in a way another attempt can overcome: a worker crash, a timeout, a return that is not in the WGLink folder and has no retained copy |
-| `engine_unavailable` | `needs_user_input` | The engine the setup names cannot take this record; the message names the capable engines |
+| `engine_unavailable` | `needs_user_input` | The engine the setup names is not available on this host |
+| `engine_cannot_solve_return` | `needs_user_input` | The engine the setup names is present but cannot solve this record (for example a BEAT accelerator that takes CAD returns only in Accurate); the message names the engines here that can |
 | `submission_refused` | `needs_user_input` | The jobs system refused the request, or submitting it failed without creating a job |
 | `update_restart_pending` | `needs_user_input` | An update restart was approved while the preparation ran, so nothing was submitted. Queued again once no restart is pending (see "Preparation", "Update restart") |
 | `interrupted` | `needs_user_input` | The backend stopped, or the answer was lost, while an attempt held the operation |
@@ -282,7 +283,7 @@ reproduces, because the driver library has no revisions.
   names no snapshot, and is validated as a complete solve request before it is stored.
 - **The engine is the user's.** A setup carries the engine selected in WG's solver
   selector, never one CAD Link chose. If that engine cannot take the record, the
-  operation waits (`engine_unavailable`) with the capable engines named, and nothing
+  operation waits (`engine_cannot_solve_return`, or `engine_unavailable` when the engine is not on this host) with the capable engines named, and nothing
   switches engines silently. Recalling a run does not change the selector.
 
 ## Project setups
@@ -300,7 +301,7 @@ whatever project is open. Nothing on the backend reads the live UI:
   names no revision -- a frame confirmation, an approval, a retry -- continues with the
   revision the operation holds, or its last preparation's, so approvals given on that
   preparation still apply. A named revision always wins: an action that chooses settings
-  ("Use these settings and solve", a new engine after `engine_unavailable`) sends one.
+  ("Use these settings and solve", a new engine after `engine_unavailable` or `engine_cannot_solve_return`) sends one.
 - **Resolved from the snapshot.** A preparation of an operation that has never had a setup
   revision, and names none, takes the snapshot's project as ingestion files it -- the lineage of the solver anchor instance's
   WG design or, when the anchor names no design, the one its Fusion document already has;

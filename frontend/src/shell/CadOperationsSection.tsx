@@ -27,6 +27,7 @@ const REASON_COPY: Record<string, string> = {
   findings_need_review: 'blocking findings to review',
   preparation_failed: 'preparation failed',
   engine_unavailable: 'the selected engine cannot solve it',
+  engine_cannot_solve_return: 'the selected engine cannot solve this return',
   submission_refused: 'the jobs system refused it',
   interrupted: 'interrupted',
   ready_to_solve: 'ready to solve',
@@ -193,6 +194,12 @@ function guidance(operation: CadOperationSummary): Guidance {
       return {
         text: 'This model is on screen: check the settings above, then press Solve. WG remembers them for this project.',
         simulation: false,
+        action: null,
+      };
+    case 'engine_cannot_solve_return':
+      return {
+        text: 'Choose one of the engines it names, or Accurate where it says so, in the solver selector in Simulation, then press Solve. WG never switches engines for you.',
+        simulation: true,
         action: null,
       };
     case 'engine_unavailable':

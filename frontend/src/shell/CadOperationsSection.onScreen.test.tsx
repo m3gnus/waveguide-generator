@@ -179,6 +179,13 @@ describe('operation cards for the model on screen', () => {
     expect(cards()[0].textContent).toContain('Engines that can: bempp, beat-cpu.');
   });
 
+  it('names an engine that cannot solve the return by what it is, not as unavailable', async () => {
+    await show([solve({ reason: 'engine_cannot_solve_return', message: 'BEAT · CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.' })]);
+    const text = cards()[0].textContent ?? '';
+    expect(text).toContain('the selected engine cannot solve this return');
+    expect(text).toContain('Choose Accurate, or Metal / AUTO.');
+  });
+
   it('at the frame gate says it once: no repeated guidance, no finding ids, no filler, and approval named as a later step', async () => {
     stubReview();
     await show([solve({ reason: 'frame_confirmation_required', message: 'Confirm this model’s solver frame in WG first: choose the axis it radiates along.' })]);

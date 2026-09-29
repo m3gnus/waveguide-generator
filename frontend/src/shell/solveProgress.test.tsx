@@ -75,6 +75,8 @@ describe('operationStageWord', () => {
     expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'setup_required' })))
       .toBe('needs its solve settings');
     expect(operationWaitingReason(op({ state: 'received' }))).toBeNull();
+    expect(operationWaitingReason(op({ state: 'needs_user_input', reason: 'engine_cannot_solve_return' })))
+      .toBe('the selected engine cannot solve this return');
   });
 
   it('names cancellation and terminal outcomes', () => {

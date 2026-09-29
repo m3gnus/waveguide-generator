@@ -174,6 +174,7 @@ describe('the needs_user_input ladder', () => {
     ['op-fusion', 'setup_required', 'check the settings above, then press Solve', ['Dismiss']],
     ['op-fusion', 'submission_refused', 'pick one in the solver selector, in Simulation; then press Solve', ['Dismiss', 'Open Simulation']],
     ['manual-solve:op-1', 'engine_unavailable', 'Pick one of the engines it names in the solver selector, in Simulation, then press Solve', ['Dismiss', 'Open Simulation']],
+    ['op-fusion', 'engine_cannot_solve_return', 'Choose one of the engines it names, or Accurate where it says so, in the solver selector in Simulation, then press Solve', ['Dismiss', 'Open Simulation']],
     ['op-fusion', 'frame_confirmation_required', null, ['Dismiss']],
     ['op-fusion', 'ready_to_solve', null, ['Dismiss']],
   ])('leaves %s after %s to the Solve card', async (operationId, reason, words, buttons) => {

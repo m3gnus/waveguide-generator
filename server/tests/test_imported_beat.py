@@ -489,8 +489,10 @@ def test_imported_adapter_passes_selected_backend_to_beat(
 
     assert engine.imported_preflight(_record(), MESH) is None
     request = _request()
-    if backend != "cpu":
-        with pytest.raises(beat.BeatUnavailable, match="Fast mode"):
+    # Fast is refused on the unqualified accelerators only; BEAT does not see
+    # accuracy, so Metal takes the identical solve in Fast.
+    if backend in ("cuda", "rocm"):
+        with pytest.raises(beat.BeatUnavailable, match="only in Accurate"):
             asyncio.run(engine.run(
                 request, cancel_cb=lambda: None, stage_cb=lambda *_: None,
                 imported_record=_record(),

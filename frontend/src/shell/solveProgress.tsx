@@ -107,6 +107,7 @@ const OPERATION_REASON_WORDS: Record<string, string> = {
   update_restart_pending: 'held for the update restart',
   ready_to_solve: 'ready to solve',
   engine_unavailable: 'the selected engine cannot solve it',
+  engine_cannot_solve_return: 'the selected engine cannot solve this return',
   submission_refused: 'the jobs system refused it',
 };
 

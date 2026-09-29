@@ -756,7 +756,7 @@ def test_a_refused_submission_releases_the_binding_for_a_new_choice(harness: Har
 
     refused = harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="metal")))
 
-    assert (refused["state"], refused["reason"]) == ("needs_user_input", "engine_unavailable")
+    assert (refused["state"], refused["reason"]) == ("needs_user_input", "engine_cannot_solve_return")
     assert "pick one of" in refused["message"]
     assert harness.row()["request_json"] is None
     accepted = harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="bempp")))
@@ -2321,3 +2321,51 @@ def test_a_failure_collecting_provenance_is_not_reported_as_a_failed_submission(
     # Fail closed: nothing was submitted, and the binding is released.
     assert harness.submitted == []
     assert harness.row()["request_json"] is None
+
+
+class EngineUnavailableError(RuntimeError):
+    """Named like the jobs system's own; the mapping reads the type by name."""
+
+
+def _coded(code: str) -> BaseException:
+    error = Refused("a refusal")
+    error.reason_code = code
+    return error
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (EngineUnavailableError("Solve engine 'x' is unavailable."), "engine_unavailable"),
+        (_coded("imported_engine_unsupported"), "engine_cannot_solve_return"),
+        (_coded("imported_return_unsupported_by_engine"), "engine_cannot_solve_return"),
+        (_coded("imported_no_engine_solves_return"), "engine_cannot_solve_return"),
+        (_coded("frame_confirmation_required"), "frame_confirmation_required"),
+        # Codes that merely contain "engine" are not engine problems.
+        (_coded("imported_engine_frame_mismatch"), "submission_refused"),
+        (_coded("engine_specific_symmetry_violation"), "submission_refused"),
+        (_coded("imported_ground_plane_unsupported"), "submission_refused"),
+        (_coded(""), "submission_refused"),
+    ],
+)
+def test_a_submission_refusal_is_named_by_type_and_exact_code(error: BaseException, expected: str) -> None:
+    code = str(getattr(error, "reason_code", "") or "")
+    assert preparation_module._submission_refusal_reason(error, code) == expected
+
+
+def test_a_needs_user_input_finish_logs_the_refusal_message(harness: Harness, caplog) -> None:
+    import logging
+
+    _received(harness)
+    harness.submit_error = Refused("BEAT CUDA solves CAD returns only in Accurate. Choose Accurate, or Metal / AUTO.")
+    with caplog.at_level(logging.INFO, logger="server.cadlink.preparation"):
+        harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="metal")))
+
+    finished = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "server.cadlink.preparation" and "finished needs_user_input" in record.getMessage()
+    ]
+    assert len(finished) == 1
+    assert "engine_cannot_solve_return" in finished[0]
+    assert "Choose Accurate, or Metal / AUTO" in finished[0]

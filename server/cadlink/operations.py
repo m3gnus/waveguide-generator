@@ -102,6 +102,8 @@ REASON_CODES: Mapping[str, str] = {
     "frame_confirmation_required": NEEDS_USER_INPUT,
     "preparation_failed": NEEDS_USER_INPUT,
     "engine_unavailable": NEEDS_USER_INPUT,
+    # The engine the setup names is present but cannot solve this return.
+    "engine_cannot_solve_return": NEEDS_USER_INPUT,
     "submission_refused": NEEDS_USER_INPUT,
     "interrupted": NEEDS_USER_INPUT,
     # Held by an approved update restart; re-queued once the latch is down.

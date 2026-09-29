@@ -118,8 +118,9 @@ _BEAT_BACKEND_KEYWORDS: dict[str, tuple[str, ...]] = {
 def beat_geometry_sources(backend: str) -> tuple[str, ...]:
     """What one BEAT backend's adapter solves (``EngineInfo.geometry_sources``).
 
-    Fast keeps the established CPU-only imported declaration. Accurate may
-    select a ready accelerator through the request-specific imported planner.
+    Fast AUTO keeps the established CPU-only imported declaration. Accurate, or
+    an explicitly named beat-metal, may select a ready accelerator through the
+    request-specific imported planner.
     """
 
     return ("parametric", "imported") if backend == BEAT_CPU_BACKEND else ("parametric",)
@@ -869,12 +870,15 @@ class BeatEngine:
         return imported_beat_preflight(record, msh_text)
 
     def _imported_refusal(self, accuracy: str) -> str | None:
-        if self.backend == BEAT_CPU_BACKEND or accuracy == "accurate":
+        # BEAT never sees accuracy, so Fast and Accurate are the same solve.
+        # Metal is the qualified accelerator; CUDA and ROCm wait for a run on
+        # that hardware and stay Accurate-only.
+        if self.backend in (BEAT_CPU_BACKEND, "metal") or accuracy == "accurate":
             return None
         label = BEAT_BACKEND_LABELS.get(self.backend or "", self.name)
         return (
-            f"{label} does not solve imported CAD geometry in Fast mode: "
-            "select BEAT CPU or Accurate."
+            f"{label} solves CAD returns only in Accurate. "
+            "Choose Accurate, or Metal / AUTO."
         )
 
     async def _run_imported(

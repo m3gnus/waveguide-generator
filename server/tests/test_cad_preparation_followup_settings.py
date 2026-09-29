@@ -78,13 +78,13 @@ def test_an_engine_chosen_after_engine_unavailable_is_the_one_submitted(real) ->
     harness.submit_error = Refused("the selected engine cannot take this record; pick one of: bempp")
 
     refused = _prepare(harness, setup_revision_id=None)
-    assert (refused["state"], refused["reason"]) == ("needs_user_input", "engine_unavailable"), refused
+    assert (refused["state"], refused["reason"]) == ("needs_user_input", "engine_cannot_solve_return"), refused
     assert harness.submitted[-1].options.engine == "metal"
 
     # A plain retry is a continuation: it keeps the operation's settings.
     harness.submit_error = Refused("the selected engine cannot take this record; pick one of: bempp")
     again = _prepare(harness, setup_revision_id=None)
-    assert (again["state"], again["reason"]) == ("needs_user_input", "engine_unavailable"), again
+    assert (again["state"], again["reason"]) == ("needs_user_input", "engine_cannot_solve_return"), again
     assert harness.submitted[-1].options.engine == "metal"
 
     # Choosing another engine sends it: an explicit revision wins.

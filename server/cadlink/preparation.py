@@ -668,15 +668,43 @@ def _finish(
     if row is None:
         raise _Fenced()
     logger.info(
-        "CAD operation %s, attempt %d: finished %s%s%s.",
+        "CAD operation %s, attempt %d: finished %s%s%s%s.",
         operation_id,
         generation,
         row["state"],
         f" ({row['reason']})" if row.get("reason") else "",
         f", job {row['job_id']}" if row.get("job_id") else "",
+        # A needs_user_input refusal is overwritten by the next attempt, so the
+        # log is the only place its message survives.
+        f": {message}" if message and row["state"] == NEEDS_USER_INPUT else "",
     )
     _publish(ctx, row)
     return row
+
+
+#: ImportedSolveRefusal codes that mean "the engine the setup names cannot take
+#: this return". Matched exactly, never by substring: an unrelated code that
+#: happens to contain "engine" must not read as an engine problem. (The
+#: exception class is not imported here, so the exact code is the key.)
+_ENGINE_CANNOT_SOLVE_CODES = frozenset(
+    {
+        "imported_engine_unsupported",
+        "imported_return_unsupported_by_engine",
+        "imported_no_engine_solves_return",
+    }
+)
+
+
+def _submission_refusal_reason(exc: BaseException, code: str) -> str:
+    """The operation reason for a request the jobs system refused."""
+
+    if code == FRAME_CONFIRMATION_REQUIRED:
+        return FRAME_CONFIRMATION_REQUIRED
+    if type(exc).__name__ == "EngineUnavailableError":
+        return "engine_unavailable"
+    if code in _ENGINE_CANNOT_SOLVE_CODES:
+        return "engine_cannot_solve_return"
+    return "submission_refused"
 
 
 def _advance(ctx: PreparationContext, operation_id: str, generation: int, **fields: Any) -> dict[str, Any]:
@@ -1412,13 +1440,7 @@ async def _submit(
         # The jobs system refused this exact request -- nothing was created --
         # so the binding is released and the user can change what they chose.
         code = str(getattr(exc, "reason_code", "") or getattr(exc, "code", "") or "")
-        reason = (
-            FRAME_CONFIRMATION_REQUIRED
-            if code == FRAME_CONFIRMATION_REQUIRED
-            else "engine_unavailable"
-            if "engine" in code or type(exc).__name__ == "EngineUnavailableError"
-            else "submission_refused"
-        )
+        reason = _submission_refusal_reason(exc, code)
         return await asyncio.to_thread(
             _finish, ctx, operation_id, generation, NEEDS_USER_INPUT, reason=reason,
             message=str(exc), release_binding=True,

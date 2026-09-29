@@ -305,12 +305,18 @@ def engine_adapter(name: str) -> Any:
     return create_engine(name)
 
 
+#: The engines the harness can put on the same mesh, in comparison order.
+#: beat-metal runs the request in Fast, the mode a user's explicit BEAT-Metal
+#: pick sends; BEAT does not see accuracy, so this is also what Accurate runs.
+QUALIFIED_ENGINES = ("metal", "beat-cpu", "beat-metal", "bempp")
+
+
 def available_engines() -> dict[str, str]:
     """Which of the qualified engines can run here, with the reason if not."""
 
     from server.engines.registry import detect_engines
 
-    wanted = {"metal", "beat-cpu", "bempp"}
+    wanted = set(QUALIFIED_ENGINES)
     status: dict[str, str] = {}
     for info in detect_engines():
         if info.name not in wanted:
@@ -818,7 +824,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     status = available_engines()
-    engines = [name for name in ("metal", "beat-cpu", "bempp") if status.get(name) == "available"]
+    engines = [name for name in QUALIFIED_ENGINES if status.get(name) == "available"]
     print("engines:", json.dumps(status, indent=2))
     missing = [name for name in ("metal", "beat-cpu") if name not in engines]
     if missing:

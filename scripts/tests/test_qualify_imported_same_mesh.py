@@ -633,3 +633,18 @@ def test_the_landed_record_passes_the_fixed_bounds_chosen_from_it() -> None:
     assert len(ladder) == 2
     for row in ladder:
         assert row["worst"] <= ingest.HORN_LADDER_CEILING, row["engine"]
+
+
+def test_beat_metal_is_a_qualified_engine_and_reported_when_detected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from server.engines import registry
+
+    names = ("metal", "beat-cpu", "beat-metal", "beat-cuda")
+    detected = [SimpleNamespace(name=name, available=name != "beat-metal", reason="no GPU") for name in names]
+    monkeypatch.setattr(registry, "detect_engines", lambda: detected)
+    status = qual.available_engines()
+    assert status["beat-metal"] == "unavailable: no GPU"
+    # An engine the harness has no qualification for is never reported.
+    assert "beat-cuda" not in status
+    assert "beat-metal" in qual.QUALIFIED_ENGINES
