@@ -7,7 +7,7 @@ import { accuracyEngine, useCapabilities } from '../jobs/useCapabilities';
 import {
   activeBackendCapability,
   backendLimitation,
-  declaresImportedGeometry,
+  choosableForImportedGeometry,
   plannedBackendCapabilities,
 } from './backendSupport';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
@@ -265,7 +265,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
         <option value="auto">Automatic — follow accuracy</option>
         {backendEngines.map((engine) => {
           const verdict = verdicts.get(engine.name.toLowerCase());
-          const imported = declaresImportedGeometry(engine);
+          const imported = choosableForImportedGeometry(engine);
           const version = engine.version ? ` · ${engine.version}` : '';
           const refused = verdict ? !verdict.solves : !engine.available || !imported;
           const note = verdict

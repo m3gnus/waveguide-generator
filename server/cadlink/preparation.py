@@ -686,11 +686,12 @@ def _finish(
 #: this return". Matched exactly, never by substring: an unrelated code that
 #: happens to contain "engine" must not read as an engine problem. (The
 #: exception class is not imported here, so the exact code is the key.)
+#: ``imported_no_engine_solves_return`` is AUTO's: no engine was selected, so it
+#: stays ``submission_refused`` rather than blaming "the selected engine".
 _ENGINE_CANNOT_SOLVE_CODES = frozenset(
     {
         "imported_engine_unsupported",
         "imported_return_unsupported_by_engine",
-        "imported_no_engine_solves_return",
     }
 )
 

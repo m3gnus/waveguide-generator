@@ -19,7 +19,14 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from scripts import imported_ingest_fixtures as fixtures
-from scripts.qualify_imported_same_mesh import EXACT_TOLERANCE, Row, Solved, relative_error, verified
+from scripts.qualify_imported_same_mesh import (
+    EXACT_TOLERANCE,
+    Row,
+    Solved,
+    pair_tolerance,
+    relative_error,
+    verified,
+)
 from scripts.qualify_installed_cpu import QualificationError, check_imported_result
 
 HORN_FREQUENCIES_HZ = (300.0, 1000.0, 3000.0)
@@ -202,7 +209,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     solved = {engine: ladder[engine]["reference"] for engine in engines}
     for a, b in pairs:
         errors = relative_error(solved[a].observations(), solved[b].observations())
-        record_row(Row("same mesh: horn quarter return, normal", a, b, "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE))
+        record_row(Row("same mesh: horn quarter return, normal", a, b, "complex, all points", errors.tolist(), tolerance=pair_tolerance(a, b, HORN_TOLERANCE)))
 
     # Fixture 6 on a real return: WG's quarter against the forced full domain.
     full = fixtures.ingest(bundle, root / "data-round", symmetry_mode="full")
@@ -288,6 +295,16 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     facts["y_only_auto_engine"] = plan["engine"]
     refused = "beat-cpu" in verdicts and not verdicts["beat-cpu"]["solves"] and verdicts["beat-cpu"]["code"] == "imported_symmetry_unsupported_by_engine"
     record_row(Row("y-only half: BEAT-CPU refused at submission with the reason", "beat-cpu", "plan", "verdict", [0.0 if refused else 1.0], tolerance=0.5, note=str(verdicts.get("beat-cpu", {}).get("reason"))))
+
+    if "beat-metal" in engines:
+        # An explicit BEAT Metal pick is judged "if picked": the same y0-only
+        # refusal as BEAT CPU, with the reason, not a bare declaration verdict.
+        metal_refused = (
+            "beat-metal" in verdicts
+            and not verdicts["beat-metal"]["solves"]
+            and verdicts["beat-metal"]["code"] == "imported_symmetry_unsupported_by_engine"
+        )
+        record_row(Row("y-only half: BEAT-Metal refused at submission with the reason", "beat-metal", "plan", "verdict", [0.0 if metal_refused else 1.0], tolerance=0.5, note=str(verdicts.get("beat-metal", {}).get("reason"))))
 
     # The end-to-end fixture: a linked return copied from another machine into
     # a fresh app data directory (no design registry, no export records, no

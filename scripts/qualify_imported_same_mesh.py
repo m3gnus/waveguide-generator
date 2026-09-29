@@ -1,4 +1,4 @@
-"""Same-mesh qualification of imported CAD solving on the CPU engines.
+"""Same-mesh qualification of imported CAD solving across the engines.
 
 One verified record -- the same mesh, source tags, anchor frame, excitation and
 frequencies -- goes to every engine that can run here, and the complex
@@ -12,6 +12,11 @@ what the engines under test return.
 Run it on a host with Metal and a provisioned BEAT CPU runtime:
 
     python scripts/qualify_imported_same_mesh.py --json results.json --markdown report.md
+
+Metal and BEAT CPU are the minimum pair; a run that must also cover another
+engine names it with ``--require`` (repeatable) and fails if it is unavailable:
+
+    python scripts/qualify_imported_same_mesh.py --require beat-metal
 
 BEMPP joins every fixture only on an OpenCL device; its numba backend is
 never used here.
@@ -92,6 +97,24 @@ MINIMUM_ORDER = 1.0
 #: rigid axial motion that has been removed, and dropping that body must not
 #: tighten what was qualified against it.
 SAME_MESH_TOLERANCE: tuple[float, ...] = (2.2e-1, 5.4e-2, 1.7e-2)
+
+#: BEAT Metal against BEAT CPU on one record. They run the same Julia solver
+#: and formulation in Float32, so unlike two different solvers they differ only
+#: by single-precision noise, and the bound is far tighter than the analytic
+#: ceilings. Measured at af6c05d6 on an Apple Silicon host: worst relative
+#: error 8.3e-5 (hemispheres, per channel and sum), 9.2e-5 (off-axis cap),
+#: 3.55e-4 (cap impedance) and 6.26e-4 (horn quarter return). 2e-3 keeps about
+#: three times the headroom over the worst and is 25 times tighter than
+#: ``SAME_MESH_TOLERANCE[1]``, so a GPU-specific error at the 1e-2 level fails.
+BEAT_METAL_VS_CPU_TOLERANCE = 2.0e-3
+
+
+def pair_tolerance(a: str, b: str, default: float) -> float:
+    """The same-mesh bound for one engine pair: tighter for BEAT Metal vs CPU."""
+
+    if {a, b} == {"beat-metal", "beat-cpu"}:
+        return BEAT_METAL_VS_CPU_TOLERANCE
+    return default
 
 
 # ---------------------------------------------------------------- geometry
@@ -646,10 +669,10 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         for a, b in pairs:
             for channel in solved[a].channel_ids:
                 errors = relative_error(solved[a].observations(channel), solved[b].observations(channel))
-                record_row(Row(f"same mesh: hemispheres, normal, {label}, {channel}", a, b, "complex per channel", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
+                record_row(Row(f"same mesh: hemispheres, normal, {label}, {channel}", a, b, "complex per channel", errors.tolist(), tolerance=pair_tolerance(a, b, SAME_MESH_TOLERANCE[level])))
             if len(solved[a].channel_ids) > 1:
                 errors = relative_error(solved[a].observations(), solved[b].observations())
-                record_row(Row(f"same mesh: hemispheres, normal, {label}, channel sum", a, b, "complex channel sum", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
+                record_row(Row(f"same mesh: hemispheres, normal, {label}, channel sum", a, b, "complex channel sum", errors.tolist(), tolerance=pair_tolerance(a, b, SAME_MESH_TOLERANCE[level])))
 
     rotation = rotation_matrix([1.0, -0.4, 0.7], 131.0)
     offset = np.asarray([0.21, -0.37, 0.52])
@@ -692,10 +715,10 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
         record_row(Row("off-axis cap: vertical cut differs from its mirror", engine, "mirrored", "complex, polar", handedness.tolist(), minimum=10.0 * EXACT_TOLERANCE, note="non-vacuity: a v mirror (handedness) changes the field"))
     for a, b in pairs:
         errors = relative_error(turned_by_engine[a].observations(), turned_by_engine[b].observations())
-        record_row(Row("rotated + translated off-axis cap", a, b, "complex, all points", errors.tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
+        record_row(Row("rotated + translated off-axis cap", a, b, "complex, all points", errors.tolist(), tolerance=pair_tolerance(a, b, SAME_MESH_TOLERANCE[level])))
         za, zb = turned_by_engine[a].impedance["cap"], turned_by_engine[b].impedance["cap"]
         if za is not None and zb is not None:
-            record_row(Row("off-axis cap: source-average pressure (impedance)", a, b, "complex impedance", (np.abs(za - zb) / np.abs(zb)).tolist(), tolerance=SAME_MESH_TOLERANCE[level]))
+            record_row(Row("off-axis cap: source-average pressure (impedance)", a, b, "complex impedance", (np.abs(za - zb) / np.abs(zb)).tolist(), tolerance=pair_tolerance(a, b, SAME_MESH_TOLERANCE[level])))
 
     # Fixture 5: two instances of one body, apart, sources on one channel and
     # then on two. Normal motion, per the fixture's own caveat. The two-channel
@@ -748,7 +771,7 @@ def run(engines: Sequence[str], report: Callable[[str], None] = print) -> dict[s
 
 def write_markdown(path: Path, result: Mapping[str, Any], status: Mapping[str, str], environment: Mapping[str, Any]) -> None:
     lines = [
-        "# Imported CAD on the CPU engines: same-mesh qualification",
+        "# Imported CAD solving: same-mesh qualification",
         "",
         f"Generated by `scripts/qualify_imported_same_mesh.py` on {environment['generated_at']}.",
         "",
@@ -822,6 +845,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="run only the record-level fixtures, not the real CAD returns",
     )
+    parser.add_argument(
+        "--require",
+        action="append",
+        default=[],
+        choices=list(QUALIFIED_ENGINES),
+        metavar="ENGINE",
+        help="fail unless this engine is available (repeatable), e.g. --require beat-metal",
+    )
     args = parser.parse_args(argv)
     status = available_engines()
     engines = [name for name in QUALIFIED_ENGINES if status.get(name) == "available"]
@@ -832,6 +863,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         # and every tolerance one engine's alone, and a run that compared
         # nothing must not report success.
         print(f"Not available here: {', '.join(missing)}. The qualification needs Metal and BEAT-CPU together.")
+        return 2
+    absent = [name for name in args.require if name not in engines]
+    if absent:
+        # A run that silently skipped a named engine would read as qualifying it.
+        print(f"Required engine not available here: {', '.join(absent)}.")
         return 2
     environment = environment_facts()
     result = run(engines)

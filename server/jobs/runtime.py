@@ -1341,6 +1341,15 @@ def _imported_capabilities(
     }
 
 
+def _imported_capable_if_picked(
+    capabilities: tuple[EngineInfo, ...] | list[EngineInfo], accuracy: str, name: str
+) -> bool:
+    """Whether ``name`` would declare imported geometry if it were the pick."""
+
+    info = _imported_capabilities(capabilities, accuracy, name).get(name)
+    return info is not None and _IMPORTED_GEOMETRY in info.geometry_sources
+
+
 def _imported_accuracy(request: SolveRequest) -> str:
     """The choice relevant to imported capability declarations, after explicit precedence."""
 
@@ -1416,9 +1425,8 @@ async def resolve_imported_submission(
     if requested not in SELECTABLE_ENGINE_NAMES:
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
-    declared = _imported_capabilities(
-        await engine_registry.capabilities(), _imported_accuracy(request), request.options.engine
-    )
+    detected = await engine_registry.capabilities()
+    declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine)
     order = full3d_engine_order()
     capable = [
         name
@@ -1441,21 +1449,42 @@ async def resolve_imported_submission(
         candidates = (requested,)
         reason = f"explicit engine={requested!r} declares imported geometry"
     if requested != "auto" and not any(name in capable for name in candidates):
-        # Name only engines this host can actually run: a capable engine that
-        # is not provisioned here is no way forward.
-        usable = [name for name in capable if declared[name].available]
-        if requested in _BEAT_ACCELERATORS and request.options.accuracy != "accurate":
-            label = declared[requested].display_label() if requested in declared else requested
-            others = [declared[name].display_label() for name in usable if name != requested]
-            message = (
-                f"{label} solves CAD returns only in Accurate. "
-                f"Choose Accurate, or {' / '.join([*others, 'AUTO'])}."
+        if requested not in declared and requested in _BEAT_FAST_IMPORTED_EXPLICIT:
+            # Not detected on this host at all: say so, not that the engine
+            # cannot take CAD returns.
+            raise EngineUnavailableError(
+                f"Solve engine '{requested}' is unavailable: this host does not "
+                "detect it."
             )
+        # Name only engines this host can actually run, each judged as if it
+        # were the one picked (an explicit BEAT Metal takes a return in Fast).
+        usable = [
+            name
+            for name in order
+            if name != requested
+            and _imported_capable_if_picked(detected, request.options.accuracy, name)
+            and next(item for item in detected if item.name == name).available
+        ]
+        if (
+            requested in _BEAT_ACCELERATORS
+            and requested not in _BEAT_FAST_IMPORTED_EXPLICIT
+            and request.options.accuracy != "accurate"
+        ):
+            label = declared[requested].display_label()
+            others = [
+                next(item for item in detected if item.name == name).display_label()
+                for name in usable
+            ]
+            # AUTO is a way forward only where it can resolve in Fast.
+            if any(name in capable and declared[name].available for name in order):
+                others.append("AUTO")
+            message = f"{label} solves CAD returns only in Accurate. Choose Accurate"
+            message += f", or {' / '.join(others)}." if others else "."
         else:
             offer = ", ".join(usable) if usable else "none on this host"
             message = (
                 f"engine {requested!r} does not declare imported geometry; "
-                f"engines that do: {offer}"
+                f"engines that do and are available here: {offer}"
             )
         raise ImportedSolveRefusal(
             "imported_engine_unsupported",
@@ -1594,15 +1623,16 @@ async def plan_imported_submission(
     if not isinstance(request.geometry, ImportedGeometrySource):
         raise ValueError("the imported plan resolves imported geometry only")
     _refuse_removed_solver(request)
-    declared = _imported_capabilities(
-        await engine_registry.capabilities(), _imported_accuracy(request), request.options.engine
-    )
+    detected = await engine_registry.capabilities()
     resolved_quadrants = (symmetry_metadata or {}).get("resolved_quadrants")
     needed_features = _imported_features_needed(request.geometry)
     request_refusal = _imported_request_refusal(request, imported_record, imported_msh_text)
     verdicts: list[ImportedEngineVerdict] = []
     for name in full3d_engine_order():
-        info = declared.get(name)
+        # Each engine's verdict answers "if this engine were picked", which is
+        # what the selector offers; the resolution below stays keyed on the
+        # request, so AUTO is unchanged.
+        info = _imported_capabilities(detected, request.options.accuracy, name).get(name)
         if info is None:
             continue
         if request_refusal is not None:

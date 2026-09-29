@@ -183,14 +183,15 @@ device when it finds one and otherwise falls back to numba.
 Imported CAD geometry follows the same order with two differences: AUTO does
 not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
 Accurate), and BEMPP offers it only where it assembles on OpenCL. On such a
-machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return too, although BEMPP's imported path is not yet qualified against Metal; BEAT ·
-CPU's is. Without an OpenCL device, AUTO passes BEMPP over for imported geometry
+machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return too, although
+BEMPP's imported path is not yet qualified against Metal; BEAT · CPU's is. Without an OpenCL device, AUTO passes BEMPP over for imported geometry
 and takes BEAT · CPU, which it can only reach on a machine where that 1 kHz
 solve has already run. Choosing an engine yourself always overrides AUTO: an
 explicit BEMPP stays BEMPP, an explicit BEAT · CPU stays BEAT · CPU, and an
 explicit BEAT · Metal stays BEAT · Metal, in Fast as well as Accurate. BEAT ·
 CUDA and BEAT · ROCm take a CAD return only in Accurate; picking one in Fast is
-refused with the engines that can take the return on your machine.
+refused, naming the available engines that declare CAD geometry (one of them may
+still refuse this particular return, for example on its cut planes).
 
 The infinite-baffle setting is design physics, not a solver choice. Metal full 3D and current BEMPP full 3D both implement the coupled interior plus
 Rayleigh-aperture formulation. BEMPP currently uses a validated full-domain mesh

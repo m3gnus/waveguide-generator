@@ -878,7 +878,7 @@ class BeatEngine:
         label = BEAT_BACKEND_LABELS.get(self.backend or "", self.name)
         return (
             f"{label} solves CAD returns only in Accurate. "
-            "Choose Accurate, or Metal / AUTO."
+            "Choose Accurate or another engine."
         )
 
     async def _run_imported(

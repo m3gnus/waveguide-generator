@@ -296,6 +296,24 @@ describe('solve and directivity control help', () => {
     expect(host.textContent).toContain('Metal — Apple GPU · full 3-D · free space');
   });
 
+  it('lets BEAT · Metal be chosen in CAD mode before a return is prepared', () => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [
+        { name: 'metal', label: 'Metal — Apple GPU', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: ['parametric', 'imported'] },
+        // BEAT · Metal declares parametric only (AUTO must not choose it in
+        // Fast), yet an explicit pick solves imported geometry.
+        { name: 'beat-metal', label: 'BEAT · Metal — Apple GPU', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: ['parametric'] },
+        { name: 'bempp', label: 'BEMPP — CPU', available: true, reason: null, version: 'test', fast_paths: [], geometry_sources: ['parametric'] },
+      ],
+    });
+    render(<SolveOptionsControls mode="cad" ingestRecord={null} />);
+    const options = new Map(
+      [...host.querySelector<HTMLSelectElement>('#cad-solve-engine')!.options].map((option) => [option.value, option]),
+    );
+    expect(options.get('beat-metal')!.disabled).toBe(false);
+    expect(options.get('bempp')!.disabled).toBe(true);
+  });
+
   it('reports widened and unchanged effective display grids through the submission derivation', () => {
     const widened = effectiveGridView(
       { ...structuredClone(defaultPolarUi), angleEnd: 90, enabledAxes: ['horizontal'] },

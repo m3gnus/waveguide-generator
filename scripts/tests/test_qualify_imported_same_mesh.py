@@ -648,3 +648,27 @@ def test_beat_metal_is_a_qualified_engine_and_reported_when_detected(
     # An engine the harness has no qualification for is never reported.
     assert "beat-cuda" not in status
     assert "beat-metal" in qual.QUALIFIED_ENGINES
+
+
+def test_a_required_engine_that_is_unavailable_fails_the_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    def must_not_run(*_args, **_kwargs):
+        raise AssertionError("the run started without a required engine")
+
+    monkeypatch.setattr(
+        qual, "available_engines",
+        lambda: {"metal": "available", "beat-cpu": "available", "beat-metal": "unavailable: no GPU"},
+    )
+    monkeypatch.setattr(qual, "run", must_not_run)
+
+    assert qual.main(["--require", "beat-metal"]) == 2
+    with pytest.raises(SystemExit):
+        qual.main(["--require", "no-such-engine"])
+
+
+def test_beat_metal_against_beat_cpu_is_held_to_a_float32_bound() -> None:
+    bound = qual.BEAT_METAL_VS_CPU_TOLERANCE
+    assert qual.pair_tolerance("beat-metal", "beat-cpu", 5.4e-2) == bound
+    assert qual.pair_tolerance("beat-cpu", "beat-metal", 5.4e-2) == bound
+    assert qual.pair_tolerance("metal", "beat-cpu", 5.4e-2) == 5.4e-2
+    # Above the measured Float32 noise (6.3e-4), far below the analytic ceiling.
+    assert 6.3e-4 < bound <= qual.SAME_MESH_TOLERANCE[1] / 25.0

@@ -2339,7 +2339,8 @@ def _coded(code: str) -> BaseException:
         (EngineUnavailableError("Solve engine 'x' is unavailable."), "engine_unavailable"),
         (_coded("imported_engine_unsupported"), "engine_cannot_solve_return"),
         (_coded("imported_return_unsupported_by_engine"), "engine_cannot_solve_return"),
-        (_coded("imported_no_engine_solves_return"), "engine_cannot_solve_return"),
+        # AUTO selected no engine, so this is not "the selected engine".
+        (_coded("imported_no_engine_solves_return"), "submission_refused"),
         (_coded("frame_confirmation_required"), "frame_confirmation_required"),
         # Codes that merely contain "engine" are not engine problems.
         (_coded("imported_engine_frame_mismatch"), "submission_refused"),

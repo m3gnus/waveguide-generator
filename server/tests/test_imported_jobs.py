@@ -3210,6 +3210,14 @@ def test_fast_auto_imported_resolution_keeps_legacy_platform_table(
     assert resolved.request.options.accuracy == "fast"
 
 
+class _AlwaysDeclaredRegistry(_DeclaredRegistry):
+    """A declared registry that hands out its engines on every call."""
+
+    async def get_engine(self, name: str) -> Any:
+        info = next((item for item in self.engines if item.name == name), None)
+        return SimpleNamespace(name=name) if info is not None and info.available else None
+
+
 def _fast_gpu(name: str, *, available: bool = True) -> EngineInfo:
     """A BEAT accelerator as the production detector declares it in Fast."""
 
@@ -3232,6 +3240,54 @@ def test_explicit_beat_metal_takes_imported_geometry_in_fast() -> None:
     assert resolved.request.options.accuracy == "fast"
     plan = resolved.symmetry_metadata["solver_plan"]
     assert plan["requested"] == "beat-metal"
+
+
+@pytest.mark.parametrize("requested", ["auto", "metal", "beat-cpu"])
+def test_the_fast_plan_offers_beat_metal_without_resolving_to_it(requested: str) -> None:
+    """The selector's verdict is "if picked"; AUTO's resolution is unchanged."""
+
+    from server.jobs.runtime import plan_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = requested
+    engines = _AlwaysDeclaredRegistry(_metal(), _fast_gpu("beat-metal"), _beat_cpu())
+    plan = asyncio.run(plan_imported_submission(request, engines))
+    verdicts = {entry["name"]: entry for entry in plan["engines"]}
+    assert verdicts["beat-metal"]["solves"] is True
+    assert plan["engine"] == ("beat-cpu" if requested == "beat-cpu" else "metal")
+
+
+def test_beat_cuda_fast_refusal_offers_beat_metal_and_never_an_empty_auto() -> None:
+    from server.jobs.runtime import resolve_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "beat-cuda"
+    with_metal = _DeclaredRegistry(
+        _metal(available=False), _fast_gpu("beat-cuda"), _fast_gpu("beat-metal"),
+        _beat_cpu(available=False),
+    )
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(resolve_imported_submission(request, with_metal))
+    assert "BEAT \u00b7 Metal" in str(caught.value) or "beat-metal" in str(caught.value)
+    assert caught.value.details["capable_engines"] == ["beat-metal"]
+
+    nothing = _DeclaredRegistry(
+        _metal(available=False), _fast_gpu("beat-cuda"), _beat_cpu(available=False)
+    )
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(resolve_imported_submission(request, nothing))
+    message = str(caught.value)
+    assert message.endswith("Choose Accurate.")
+    assert "AUTO" not in message
+
+
+def test_explicit_beat_metal_not_detected_says_it_is_unavailable() -> None:
+    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "beat-metal"
+    with pytest.raises(EngineUnavailableError, match="unavailable"):
+        asyncio.run(resolve_imported_submission(request, _DeclaredRegistry(_metal(), _beat_cpu())))
 
 
 def test_explicit_beat_metal_fast_is_capable_in_the_imported_plan() -> None:
@@ -3267,7 +3323,7 @@ def test_explicit_beat_cuda_or_rocm_fast_is_refused_with_the_real_way_forward(gp
     assert "CPU" not in message
     assert caught.value.reason_code == "imported_engine_unsupported"
     assert "beat-cpu" not in caught.value.details["capable_engines"]
-    assert caught.value.details["capable_engines"] == ["metal"]
+    assert caught.value.details["capable_engines"] == ["metal", "beat-metal"]
 
 
 def test_explicit_beat_cuda_accurate_is_still_accepted() -> None:

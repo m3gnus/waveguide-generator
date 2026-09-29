@@ -49,6 +49,16 @@ export function declaresImportedGeometry(engine: EngineCapability): boolean {
 }
 
 /**
+ * Whether the CAD engine select may offer an engine, before a return has been
+ * prepared and the server's per-engine verdicts exist. Beyond what an engine
+ * declares, an explicitly picked BEAT · Metal solves imported geometry in Fast
+ * (AUTO does not choose it); the server's verdict still decides once prepared.
+ */
+export function choosableForImportedGeometry(engine: EngineCapability): boolean {
+  return declaresImportedGeometry(engine) || engine.name.toLowerCase() === 'beat-metal';
+}
+
+/**
  * The backend a solve would actually use, or null when none is available.
  *
  * Deliberately total where ``resolveEngine`` throws: this drives which controls
