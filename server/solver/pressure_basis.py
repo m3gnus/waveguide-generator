@@ -143,11 +143,14 @@ def export_pressure_basis(
         # version: it moved sources along the observation frame's axis with a
         # sign vote, which is a different excitation.
         arrays["axial_contract"] = np.asarray(
-            str(stored.get("axial_contract") or LEGACY_AXIAL_CONTRACT)
+            str(
+                stored.get("axial_contract")
+                or public_metadata.get("axial_contract")
+                or LEGACY_AXIAL_CONTRACT
+            )
         )
-        source_axes = [
-            item for item in stored.get("source_axes", []) if isinstance(item, Mapping)
-        ]
+        recorded_axes = stored.get("source_axes") or public_metadata.get("source_axes") or []
+        source_axes = [item for item in recorded_axes if isinstance(item, Mapping)]
         if source_axes:
             arrays["source_axes"] = np.asarray(
                 [item["axis"] for item in source_axes], dtype=np.float64

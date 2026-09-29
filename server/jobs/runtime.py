@@ -460,23 +460,27 @@ def _recorded_resolved_quadrants(metadata: Mapping[str, Any]) -> int | None:
     return int(recorded)
 
 
-def _solved_under_legacy_axial(results_text: str | None) -> bool:
-    """Whether stored results hold an axial channel from before per-source axes."""
+def _solved_under_legacy_axial(results_text: str | None, axial_ids: Sequence[str]) -> bool:
+    """Whether stored results do not show every axial channel solved per source axis.
+
+    Retry is allowed only when each axial channel's stored result records
+    ``axial_contract == "per-source-axis-v2"``. A missing channel, missing
+    motion metadata, a missing contract or the earlier rule all count as
+    legacy. No stored result at all is not a legacy result.
+    """
 
     if not results_text:
         return False
     try:
         results = json.loads(results_text)
     except json.JSONDecodeError:
-        return False
+        return True
     channels = results.get("channels") if isinstance(results, Mapping) else None
-    for channel in (channels or {}).values() if isinstance(channels, Mapping) else ():
+    channels = channels if isinstance(channels, Mapping) else {}
+    for channel_id in axial_ids:
+        channel = channels.get(channel_id)
         metadata = channel.get("metadata") if isinstance(channel, Mapping) else None
-        if (
-            isinstance(metadata, Mapping)
-            and metadata.get("source_motion") == "axial"
-            and not metadata.get("axial_contract")
-        ):
+        if not isinstance(metadata, Mapping) or metadata.get("axial_contract") != "per-source-axis-v2":
             return True
     return False
 
@@ -3539,7 +3543,10 @@ class JobRuntime:
             channel.motion == "axial" for channel in request.geometry.drive_channels
         ):
             results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
-            if _solved_under_legacy_axial(results_text):
+            axial_ids = [
+                channel.id for channel in request.geometry.drive_channels if channel.motion == "axial"
+            ]
+            if _solved_under_legacy_axial(results_text, axial_ids):
                 # A retry promises the same solve again. Axial drive now runs
                 # per source axis, so replaying this request would silently
                 # answer a different question than the run it repeats.

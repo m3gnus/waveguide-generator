@@ -4411,6 +4411,18 @@ def test_retry_refuses_a_run_whose_axial_sources_were_solved_under_the_frame_axi
             assert caught.value.reason_code == "imported_axial_legacy_retry"
             assert "new solve" in str(caught.value)
 
+            # Explicitly legacy, or no motion metadata at all, or the channel
+            # missing: none shows a per-source-axis solve, so none may retry.
+            for text in (
+                results(axial_contract="legacy-frame-axis-v1"),
+                json.dumps({"channels": {"left": {"metadata": {}}}}),
+                json.dumps({"channels": {}}),
+            ):
+                monkeypatch.setattr(runtime.store, "get_results_text", lambda _job, text=text: text)
+                with pytest.raises(ImportedSolveRefusal) as legacy:
+                    await runtime.retry(source_id)
+                assert legacy.value.reason_code == "imported_axial_legacy_retry"
+
             monkeypatch.setattr(
                 runtime.store, "get_results_text",
                 lambda _job: results(axial_contract="per-source-axis-v2"),

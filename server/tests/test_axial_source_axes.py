@@ -244,3 +244,26 @@ def test_a_basis_with_no_stored_motion_recovers_it_from_the_request_or_is_refuse
     # Nothing establishes it: refuse, never guess normal.
     with pytest.raises(ValueError, match="cannot be established"):
         export_pressure_basis(npz, {}, "c")
+
+
+def test_a_v2_result_whose_basis_lost_its_metadata_exports_as_v2_with_its_axes() -> None:
+    from server.solver.pressure_basis import export_pressure_basis
+
+    npz, _ = _bases_with(
+        {"source_ids": ["a"], "source_tags": [101], "source_normalization": "unit_normal_acceleration"}
+    )
+    results = {
+        "channels": {
+            "c": {
+                "metadata": {
+                    "source_motion": "axial",
+                    "axial_contract": AXIAL_CONTRACT_VERSION,
+                    "source_axes": [{"tag": 101, "axis": [0.0, 0.0, -1.0], "raw_axis": [0.001, 0.0, -1.0]}],
+                }
+            }
+        }
+    }
+    archive = np.load(io.BytesIO(export_pressure_basis(npz, results, "c").content))
+    assert str(archive["axial_contract"]) == AXIAL_CONTRACT_VERSION
+    np.testing.assert_array_equal(archive["source_axes"], [[0.0, 0.0, -1.0]])
+    np.testing.assert_array_equal(archive["source_axes_raw"], [[0.001, 0.0, -1.0]])
