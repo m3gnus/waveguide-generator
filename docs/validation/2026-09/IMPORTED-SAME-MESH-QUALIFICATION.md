@@ -143,10 +143,29 @@ numbers, as the same sphere should):
 | beat-cpu | 6.71e-02 | 1.72e-02 | 4.33e-03 | 2.01 |
 
 Fixed ceilings, 1.5x the Metal ladder rounded up to two significant figures:
-L0 1.1e-01, L1 2.7e-02, L2 8.0e-03. Engine against engine on the same axial mesh:
-3.2e-03 on a single hemisphere and 2.3e-03 on `front - back`, so the axial
-same-mesh tolerance is 5.0e-03 (1.5x the larger). The existing normal-motion
-same-mesh tolerance (5.4e-02) is unchanged. At L1 the breathing sphere reads
+L0 1.1e-01, L1 2.7e-02, L2 8.0e-03. The axial same-mesh tolerance of 5.0e-03
+is an **EMPIRICAL regression threshold**: Metal vs BEAT CPU measured 3.2e-03 on
+a single hemisphere and 2.3e-03 on `front - back`, giving 1.5x headroom over
+the larger disagreement, rounded up. BEAT Metal vs CPU measured <= 7.2e-05.
+The independent **DERIVED bound** follows from the triangle inequality: two
+engines that each meet the analytic ceiling at the reference level differ by
+at most twice that ceiling, 2 x 2.7e-02 = 5.4e-02, using the same convention
+as the existing normal-motion `SAME_MESH_TOLERANCE`. The empirical 5.0e-03 is
+deliberately tighter than that guarantee to catch regressions. The existing
+normal-motion same-mesh tolerance (5.4e-02) is unchanged.
+
+Engine availability alone does not qualify axial motion. Before any axial
+solve, the harness uses WG's `config_supports_source_axes` check for Metal and
+BEMPP; BEAT remains eligible because its axial drive does not use that option.
+An unsupported engine gets one `axial rows` skip row with the note
+`pinned module lacks SolveConfig.source_axes` and is excluded from solves and
+pairs. With fewer than two eligible engines, the axial section is **skipped**,
+reports are still written, and the run exits 2 (the existing “Not available
+here” convention); a judged failure takes precedence and exits 1. Solve errors
+on eligible engines still propagate. A skipped section does not qualify axial
+motion.
+
+At L1 the breathing sphere reads
 1.24e-02 (Metal) and 1.35e-02 (BEAT) on the same mesh and frequencies, so the
 dipole's relative error is about 1.3 to 1.4 times the monopole's: a
 `front - back` of two half-strength patches with a pattern that vanishes on the

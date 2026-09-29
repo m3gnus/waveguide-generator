@@ -22,6 +22,7 @@ import json
 import math
 import os
 from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -704,6 +705,141 @@ def test_the_axial_tolerances_are_fixed_values_and_never_looser_than_the_normal_
     assert 0.0 < qual.AXIAL_SAME_MESH_TOLERANCE <= qual.SAME_MESH_TOLERANCE[qual.REFERENCE_LEVEL]
 
 
+@pytest.mark.parametrize("engine", ["metal", "bempp"])
+def test_axial_eligibility_uses_the_shared_solve_config_capability(
+    monkeypatch: pytest.MonkeyPatch, engine: str
+) -> None:
+    @dataclasses.dataclass
+    class PinnedConfig:
+        frequency: float
+
+    @dataclasses.dataclass
+    class AxialConfig:
+        source_axes: dict
+
+    module = SimpleNamespace(SolveConfig=PinnedConfig)
+    monkeypatch.setitem(sys.modules, {"metal": "hornlab_metal_bem", "bempp": "hornlab_bempp_bem"}[engine], module)
+    assert qual.engine_supports_axial(engine) is False
+    module.SolveConfig = AxialConfig
+    assert qual.engine_supports_axial(engine) is True
+
+
+def test_beat_axial_eligibility_does_not_need_source_axes(monkeypatch: pytest.MonkeyPatch) -> None:
+    def must_not_check(_config):
+        raise AssertionError("BEAT does not use SolveConfig.source_axes")
+
+    monkeypatch.setattr(qual, "config_supports_source_axes", must_not_check)
+    assert qual.engine_supports_axial("beat-cpu") is True
+    assert qual.engine_supports_axial("beat-metal") is True
+
+
+@pytest.mark.parametrize(
+    ("mode", "normal_fails", "exit_code"),
+    [("--axial-only", False, 2), ("--skip-ingest", False, 2), ("--skip-ingest", True, 1)],
+)
+def test_ineligible_axial_engines_are_skipped_without_solving_and_reports_are_written(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    mode: str, normal_fails: bool, exit_code: int,
+) -> None:
+    @dataclasses.dataclass
+    class PinnedConfig:
+        frequency: float
+
+    for module in ("hornlab_metal_bem", "hornlab_bempp_bem"):
+        monkeypatch.setitem(sys.modules, module, SimpleNamespace(SolveConfig=PinnedConfig))
+
+    def must_not_solve(*_args, **_kwargs):
+        raise AssertionError("no axial solve should run without an eligible pair")
+
+    monkeypatch.setattr(qual, "solve", must_not_solve)
+    monkeypatch.setattr(qual, "available_engines", lambda: dict.fromkeys(("metal", "beat-cpu", "bempp"), "available"))
+    monkeypatch.setattr(qual, "environment_facts", lambda: {"generated_at": "now"})
+    monkeypatch.setattr(qual, "run", lambda _engines: {
+        "rows": [qual.Row("normal row", "metal", "beat-cpu", "complex", [0.3 if normal_fails else 0.0], tolerance=0.05)],
+        "timings": {}, "level_errors": {}, "same_mesh_tolerance": {}, "reference_edge_m": 0.0,
+    })
+    json_path, markdown_path = tmp_path / "result.json", tmp_path / "result.md"
+
+    assert qual.main([mode, "--json", str(json_path), "--markdown", str(markdown_path)]) == exit_code
+
+    printed = capsys.readouterr().out
+    result = json.loads(json_path.read_text())
+    markdown = markdown_path.read_text()
+    assert result["axial_verdict"] == "skipped"
+    assert "Axial verdict: skipped" in printed
+    assert "Axial verdict: **skipped**" in markdown
+    assert result["axial_errors"] == {}
+    for engine in ("metal", "bempp"):
+        rows = [row for row in result["rows"] if row["engine"] == engine and row["skipped"]]
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["fixture"] == "axial rows"
+        assert row["passed"] is None and row["worst"] is None
+        assert row["tolerance"] is None and row["minimum"] is None
+        assert row["note"] == "pinned module lacks SolveConfig.source_axes"
+        assert f"{engine:9s} SKIP: {row['note']}" in printed
+        assert f"| axial rows | {engine} |" in markdown
+        assert f"skip: {row['note']}" in markdown
+    assert any(row["engine"] == "beat-cpu" and row["skipped"] for row in result["rows"])
+
+
+def test_ineligible_axial_engine_is_excluded_from_solves_and_pairs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    solved_engines = []
+
+    def fake_solve(engine, _record, channels):
+        solved_engines.append(engine)
+        assert engine != "metal"
+        return qual.Solved(
+            engine=engine, channel_ids=[channel["id"] for channel in channels],
+            frequencies_hz=np.asarray([100.0]), angles_deg=np.asarray([0.0, 180.0]),
+            planes=["horizontal"], pressure={"front": np.full((1, 1, 2), 2.0), "back": np.ones((1, 1, 2))},
+            sphere={"front": None, "back": None}, sphere_theta_deg=None, sphere_phi_deg=None,
+            wall_seconds=0.0,
+        )
+
+    monkeypatch.setattr(qual, "engine_supports_axial", lambda engine: engine != "metal")
+    monkeypatch.setattr(qual, "solve", fake_solve)
+    monkeypatch.setattr(qual, "analytic_observations", lambda *_args, **_kwargs: np.ones((1, 2)))
+    monkeypatch.setattr(qual, "axial_axes_row", lambda fixture, engine, *_args: qual.Row(fixture, engine, "axes", "axis", [0.0], tolerance=0.0))
+    monkeypatch.setattr(qual, "beat_refusal_row", lambda fixture, engine, *_args: qual.Row(fixture, engine, "refusal", "refused", [0.0], tolerance=0.0))
+
+    result = qual.run_axial(["metal", "beat-cpu", "beat-metal"], report=lambda _line: None)
+
+    assert set(solved_engines) == {"beat-cpu", "beat-metal"}
+    metal_rows = [row for row in result["rows"] if row.engine == "metal"]
+    assert len(metal_rows) == 1 and metal_rows[0].skipped and metal_rows[0].passed is None
+    pairs = [row for row in result["rows"] if row.fixture.startswith("same mesh:")]
+    assert len(pairs) == 5
+    assert all({row.engine, row.compared_with} == {"beat-cpu", "beat-metal"} for row in pairs)
+
+
+@pytest.mark.parametrize("engine", ["metal", "bempp"])
+def test_eligible_axial_engine_solve_error_still_fails_the_run(
+    monkeypatch: pytest.MonkeyPatch, engine: str,
+) -> None:
+    from server.solver.bempp import BemppUnavailable
+    from server.solver.metal import MetalUnavailable
+
+    error_type = {"metal": MetalUnavailable, "bempp": BemppUnavailable}[engine]
+
+    def failed_solve(actual_engine, *_args, **_kwargs):
+        assert actual_engine == engine
+        raise error_type("genuine axial assembly failure")
+
+    monkeypatch.setattr(qual, "available_engines", lambda: dict.fromkeys(("metal", "beat-cpu", "bempp"), "available"))
+    monkeypatch.setattr(qual, "environment_facts", lambda: {"generated_at": "now"})
+    # Put the engine under test first, so its error is reached before another
+    # eligible engine needs a synthetic answer.
+    monkeypatch.setattr(qual, "QUALIFIED_ENGINES", (engine, "beat-cpu", "bempp" if engine == "metal" else "metal"))
+    monkeypatch.setattr(qual, "engine_supports_axial", lambda name: name in (engine, "beat-cpu"))
+    monkeypatch.setattr(qual, "solve", failed_solve)
+
+    with pytest.raises(error_type, match="genuine axial assembly failure"):
+        qual.main(["--axial-only", "--skip-ingest"])
+
+
 class _Adapter:
     """An engine adapter that answers with *answer*'s engine, channels and frequencies."""
 
@@ -763,7 +899,7 @@ def test_a_failing_row_of_either_kind_is_reported_and_fails_the_run(
     monkeypatch.setattr(qual, "available_engines", lambda: {"metal": "available", "beat-cpu": "available"})
     monkeypatch.setattr(qual, "environment_facts", lambda: {"generated_at": "now"})
     monkeypatch.setattr(qual, "run", lambda _engines, report=print: {"rows": rows, "timings": {}})
-    monkeypatch.setattr(qual, "run_axial", lambda _engines, report=print: {"rows": [], "timings": {}, "level_errors": {}})
+    monkeypatch.setattr(qual, "run_axial", lambda _engines, report=print: {"rows": [], "timings": {}, "level_errors": {}, "verdict": "skipped"})
 
     assert qual.main(["--skip-ingest"]) == 1
 

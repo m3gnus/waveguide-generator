@@ -6,8 +6,9 @@ per-channel responses and channel sums are compared at every observation point
 (the horizontal, vertical and diagonal polar cuts and the DI sphere), never
 magnitudes alone. Every engine is judged against analytic references at fixed
 ceilings, chosen from a recorded Metal refinement ladder, and must converge at
-a least order; the same-mesh tolerance follows from those ceilings, never from
-what the engines under test return.
+a least order. Normal-motion same-mesh tolerances follow from those ceilings;
+the axial threshold is an explicitly empirical regression threshold. All are
+fixed independently of what the engines under test return in the current run.
 
 Run it on a host with Metal and a provisioned BEAT CPU runtime:
 
@@ -43,7 +44,7 @@ if str(ROOT) not in sys.path:
 from server.jobs.models import SolveRequest  # noqa: E402
 from server.mesh.imported import polar_grid_from_symmetry  # noqa: E402
 from server.solver.combine import deserialize_channel_bases  # noqa: E402
-from server.solver.imported import mesh_text_sha256  # noqa: E402
+from server.solver.imported import config_supports_source_axes, mesh_text_sha256  # noqa: E402
 
 #: The air every engine here solves in (hornlab-metal-bem and hornlab-beat-bem
 #: publish the same two constants).
@@ -380,6 +381,21 @@ def available_engines() -> dict[str, str]:
     return status
 
 
+def engine_supports_axial(engine: str) -> bool:
+    """Check the same SolveConfig capability as WG's imported preflights.
+
+    BEAT implements its axial drive without ``source_axes``. Metal and BEMPP
+    need that option even when their engines are otherwise available here.
+    """
+
+    if engine in ("beat-cpu", "beat-metal"):
+        return True
+    from importlib import import_module
+
+    module = import_module({"metal": "hornlab_metal_bem", "bempp": "hornlab_bempp_bem"}[engine])
+    return config_supports_source_axes(getattr(module, "SolveConfig", None))
+
+
 @dataclass
 class Solved:
     engine: str
@@ -648,6 +664,7 @@ class Row:
     #: this much difference at every frequency, or the rows it guards pass
     #: without testing anything.
     minimum: float | None = None
+    skipped: bool = False
 
     @property
     def worst(self) -> float:
@@ -659,6 +676,8 @@ class Row:
 
     @property
     def passed(self) -> bool | None:
+        if self.skipped:
+            return None
         if self.tolerance is None and self.minimum is None:
             return None
         return (self.tolerance is None or self.worst <= self.tolerance) and (
@@ -891,9 +910,8 @@ OSCILLATION_ALONG_Z = {"front": 1.0, "back": -1.0}
 AXIAL_CONTRACT = "per-source-axis-v2"
 
 #: Fixed ceilings on the complex error of ``front - back`` against the analytic
-#: oscillating sphere, per ladder level (224, 960 and 3,968 triangles), and the
-#: same-mesh tolerance between engines on each axial quantity at the reference
-#: level: 1.5x the worst error measured on this Mac (Metal and BEAT CPU; BEMPP
+#: oscillating sphere, per ladder level (224, 960 and 3,968 triangles): 1.5x
+#: the worst analytic error measured on this Mac (Metal and BEAT CPU; BEMPP
 #: joins only on an OpenCL device, so its axial rows are owed), rounded up to two
 #: significant figures -- the convention of :data:`ANALYTIC_CEILINGS`. The
 #: worst error over every point and frequency, full domain:
@@ -901,11 +919,16 @@ AXIAL_CONTRACT = "per-source-axis-v2"
 #:     Metal oscillating  6.81e-02  1.76e-02  5.27e-03  ->  1.1e-01  2.7e-02  8.0e-03
 #:     BEAT  oscillating  6.71e-02  1.72e-02  4.33e-03     (0.98, 0.98, 0.82 of it)
 #:
-#: The same two-hemisphere drive measured 3.2e-03 between Metal and BEAT on a
-#: single hemisphere (front or back) and 2.3e-03 on ``front - back``, whole or
-#: reduced, so 1.5x the larger is 5.0e-03. These match the ceilings the removed
-#: one-tag oscillating row recorded, which is what the same sphere should read.
 AXIAL_ANALYTIC_CEILINGS: tuple[float, ...] = (1.1e-1, 2.7e-2, 8.0e-3)
+
+#: EMPIRICAL regression threshold: Metal vs BEAT CPU measured 3.2e-3 on a
+#: single hemisphere and 2.3e-3 on ``front - back``, whole or reduced; BEAT
+#: Metal vs CPU measured <= 7.2e-5. The fixed 5.0e-3 gives 1.5x headroom over
+#: the larger Metal-vs-BEAT disagreement, rounded up.
+#: DERIVED bound, independently: by the triangle inequality, two engines each
+#: meeting the reference-level analytic ceiling differ by at most twice that
+#: ceiling, 2 x 2.7e-2 = 5.4e-2, using the SAME_MESH_TOLERANCE convention.
+#: The empirical threshold is deliberately tighter to catch regressions.
 AXIAL_SAME_MESH_TOLERANCE = 5.0e-3
 
 #: Angle and axis of the tilted fixture: the two-hemisphere sphere turned so
@@ -934,11 +957,28 @@ def run_axial(engines: Sequence[str], report: Callable[[str], None] = print) -> 
 
     def record_row(row: Row) -> Row:
         rows.append(row)
+        if row.skipped:
+            report(f"{row.fixture:52s} {row.engine:9s} SKIP: {row.note}")
+            return row
         report(
             f"{row.fixture:52s} {row.engine:9s} vs {row.compared_with:12s} {row.quantity:20s} worst {row.worst:.3e}"
             + (f"  tol {row.tolerance:.2e} {'PASS' if row.passed else 'FAIL'}" if row.tolerance is not None else (f"  least {row.least:.3e} >= {row.minimum:.2e} {'PASS' if row.passed else 'FAIL'}" if row.minimum is not None else ""))
         )
         return row
+
+    eligible: list[str] = []
+    for engine in engines:
+        if engine_supports_axial(engine):
+            eligible.append(engine)
+        else:
+            record_row(Row("axial rows", engine, "", "capability", [0.0], skipped=True, note="pinned module lacks SolveConfig.source_axes"))
+    if len(eligible) < 2:
+        # No same-mesh pair can be qualified. Report before returning, and do
+        # not solve even the lone eligible engine or claim an axial pass.
+        for engine in eligible:
+            record_row(Row("axial rows", engine, "", "availability", [0.0], skipped=True, note="fewer than two axial-capable engines available here"))
+        return {"rows": rows, "timings": timings, "level_errors": errors_by_level, "verdict": "skipped"}
+    engines = eligible
 
     def solve_axial(engine: str, record: Mapping[str, Any], tag: str) -> Solved:
         solved = solve(engine, record, AXIAL_CHANNELS)
@@ -1016,7 +1056,7 @@ def run_axial(engines: Sequence[str], report: Callable[[str], None] = print) -> 
     for a, b in tilted_pairs:
         errors = relative_error(tilted_solved[a].combined(OSCILLATION_ALONG_Z), tilted_solved[b].combined(OSCILLATION_ALONG_Z))
         record_row(Row("same mesh: tilted axial hemispheres, front - back", a, b, "complex channel difference", errors.tolist(), tolerance=pair_tolerance(a, b, AXIAL_SAME_MESH_TOLERANCE)))
-    return {"rows": rows, "timings": timings, "level_errors": errors_by_level}
+    return {"rows": rows, "timings": timings, "level_errors": errors_by_level, "verdict": "failed" if any(row.passed is False for row in rows) else "passed"}
 
 
 def beat_refusal_row(fixture: str, engine: str, record: Mapping[str, Any], channels: Sequence[Mapping[str, Any]]) -> Row:
@@ -1066,16 +1106,20 @@ def write_markdown(path: Path, result: Mapping[str, Any], status: Mapping[str, s
         lines.append(f"| {engine} | oscillating (front - back) | " + " | ".join(f"{value:.2e}" for value in values) + " |")
     lines += ["", "Fixed analytic ceilings, from the recorded Metal ladder: " + "; ".join(f"{kind} " + ", ".join(f"L{level} {value:.1e}" for level, value in enumerate(values)) for kind, values in ANALYTIC_CEILINGS.items()) + f". Least observed order across the ladder: {MINIMUM_ORDER:g}."]
     lines += ["", "Same-mesh tolerance per level (twice the larger ceiling): " + ", ".join(f"L{level} {value:.2e}" for level, value in result["same_mesh_tolerance"].items()) + f"; exact-equivalence tolerance {EXACT_TOLERANCE:.0e}."]
-    lines += ["", "## Results", "", "| Fixture | Engine | Against | Quantity | Worst | Tolerance | Verdict |", "| --- | --- | --- | --- | --- | --- | --- |"]
+    lines += ["", "## Results"]
+    if "axial_verdict" in result:
+        lines += ["", f"Axial verdict: **{result['axial_verdict']}**."]
+    lines += ["", "| Fixture | Engine | Against | Quantity | Worst | Tolerance | Verdict |", "| --- | --- | --- | --- | --- | --- | --- |"]
     for row in result["rows"]:
-        verdict = "" if row.passed is None else ("pass" if row.passed else "**FAIL**")
+        verdict = f"skip: {row.note}" if row.skipped else ("" if row.passed is None else ("pass" if row.passed else "**FAIL**"))
         if row.tolerance is not None:
             tolerance = f"{row.tolerance:.2e}"
         elif row.minimum is not None:
             tolerance = f"≥ {row.minimum:.2e} (least {row.least:.2e})"
         else:
             tolerance = ""
-        lines.append(f"| {row.fixture} | {row.engine} | {row.compared_with} | {row.quantity} | {row.worst:.2e} | {tolerance} | {verdict} |")
+        worst = "—" if row.skipped else f"{row.worst:.2e}"
+        lines.append(f"| {row.fixture} | {row.engine} | {row.compared_with} | {row.quantity} | {worst} | {tolerance} | {verdict} |")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -1160,6 +1204,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     result["rows"] += axial["rows"]
     result["timings"].update(axial["timings"])
     result["axial_errors"] = axial["level_errors"]
+    result["axial_verdict"] = axial["verdict"]
+    print(f"Axial verdict: {result['axial_verdict']}")
     result["ingest_facts"] = {}
     if not args.skip_ingest and not args.axial_only:
         import tempfile
@@ -1191,6 +1237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     },
                     "axial_analytic_ceilings": list(AXIAL_ANALYTIC_CEILINGS),
                     "axial_same_mesh_tolerance": AXIAL_SAME_MESH_TOLERANCE,
+                    "axial_verdict": result["axial_verdict"],
                     "minimum_order": MINIMUM_ORDER,
                     "same_mesh_tolerance": result["same_mesh_tolerance"],
                     "exact_tolerance": EXACT_TOLERANCE,
@@ -1203,10 +1250,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "compared_with": row.compared_with,
                             "quantity": row.quantity,
                             "errors": row.errors,
-                            "worst": row.worst,
+                            "worst": None if row.skipped else row.worst,
                             "tolerance": row.tolerance,
                             "minimum": row.minimum,
                             "passed": row.passed,
+                            "skipped": row.skipped,
                             "note": row.note,
                         }
                         for row in result["rows"]
@@ -1230,7 +1278,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if row.minimum is not None and not row.least >= row.minimum:
             missed.append(f"least {row.least:.3e} < {row.minimum:.3e}")
         print(f"FAIL: {row.fixture} ({row.engine} vs {row.compared_with}): {'; '.join(missed)}")
-    return 1 if failed else 0
+    if failed:
+        return 1
+    if result["axial_verdict"] == "skipped":
+        # Match the engine-availability exit code, after writing reports so
+        # skipped axial qualification cannot look like a successful run.
+        print("Not available here: fewer than two axial-capable engines. Axial qualification skipped.")
+        return 2
+    return 0
 
 
 if __name__ == "__main__":
