@@ -1,0 +1,117 @@
+{
+  "release_wave": "0.3.4",
+  "date": "2026-09-29",
+  "shas": {
+    "waveguide-generator": "6f122917ed790445054a9dca51a64825e3eeabae",
+    "hornlab-waveguide-mesher": "873b0fda082707391da8252ce630985566d14002",
+    "hornlab-metal-bem": "5765b21ee3e651e192305caef348f7fb4b74e536",
+    "hornlab-bempp-bem": "5c13ac4526d4ade287696f6e19aa29434eaff095",
+    "hornlab-beat-bem": "74da18cdbb12844729a154005a26110511864aa0"
+  },
+  "machine": {
+    "cpu": "Apple M1 Max",
+    "ram_gib": 64,
+    "os": "macOS 26.6.2 (25G83)",
+    "arch": "arm64",
+    "python": "3.13.1"
+  },
+  "gates": [
+    {
+      "gate": "wg-live-metal-full-pipeline",
+      "result": "PASSED",
+      "counts": "1 passed"
+    },
+    {
+      "gate": "wg-server-suite",
+      "result": "PASSED",
+      "counts": "4954 passed, 45 skipped, 0 failed"
+    },
+    {
+      "gate": "same-mesh-and-ingest-level",
+      "result": "PASSED",
+      "counts": "60 rows: 58 pass, 0 fail, 2 informational (no verdict)"
+    },
+    {
+      "gate": "metal-bem-module-suite",
+      "result": "PASSED",
+      "counts": "624 passed, 0 skipped"
+    },
+    {
+      "gate": "beat-bem-module-suite",
+      "result": "PASSED",
+      "counts": "292 passed, 0 skipped"
+    },
+    {
+      "gate": "mesher-module-suite",
+      "result": "PASSED",
+      "counts": "1740 passed, 35 skipped"
+    },
+    {
+      "gate": "mesher-ath-parity-required",
+      "result": "PASSED",
+      "counts": "33 passed"
+    },
+    {
+      "gate": "bempp-bem-module-suite",
+      "result": "PASSED",
+      "counts": "476 passed, 20 skipped, 0 failed (first pass at 57b1260: 1 failed, resolved by 5c13ac45)"
+    },
+    {
+      "gate": "bempp-opencl",
+      "result": "NOT RUN"
+    },
+    {
+      "gate": "beat-cuda",
+      "result": "NOT RUN"
+    },
+    {
+      "gate": "beat-rocm",
+      "result": "NOT RUN"
+    },
+    {
+      "gate": "windows-linux-runners",
+      "result": "NOT RUN"
+    },
+    {
+      "gate": "installed-payload-cpu-and-quit",
+      "result": "NOT RUN"
+    }
+  ],
+  "stop_latency": [
+    {
+      "engine": "metal",
+      "stage_at_stop": "solve @ 35%",
+      "stop_call_s": 0.001,
+      "stop_to_terminal_s": 0.138,
+      "next_solve": "complete"
+    },
+    {
+      "engine": "beat-cpu",
+      "stage_at_stop": "solve @ 36%",
+      "stop_call_s": 0.001,
+      "stop_to_terminal_s": 6.31,
+      "next_solve": "complete"
+    },
+    {
+      "engine": "beat-metal",
+      "stage_at_stop": "solve @ 36%",
+      "stop_call_s": 0.001,
+      "stop_to_terminal_s": 1.353,
+      "next_solve": "complete"
+    },
+    {
+      "engine": "bempp (numba fallback, informational)",
+      "stage_at_stop": "solve @ 35%",
+      "stop_call_s": 0.001,
+      "stop_to_terminal_s": 0.081,
+      "next_solve": "complete"
+    }
+  ],
+  "resolved_during_qualification": [
+    {
+      "finding": "bempp-bem stale CircSym comparison test and unshipped validation subpackage",
+      "found_at": "57b1260",
+      "resolved_by": "5c13ac45 (bempp-bem), adopted in WG 6f122917"
+    }
+  ]
+}

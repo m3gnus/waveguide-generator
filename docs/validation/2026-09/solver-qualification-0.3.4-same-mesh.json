@@ -1,0 +1,1283 @@
+{
+  "environment": {
+    "generated_at": "2026-09-29T03:01:48+00:00",
+    "platform": "Darwin arm64",
+    "python": "3.13.1",
+    "waveguide-generator": "488c3a97",
+    "hornlab-metal-bem": "0.2.0 @ 5765b21",
+    "hornlab-beat-bem": "0.1.0 @ 74da18c",
+    "hornlab-bempp-bem": "0.1.1 @ 5c13ac4"
+  },
+  "engines": {
+    "metal": "available",
+    "bempp": "not qualified here: assembly backend numba is not OpenCL",
+    "beat-cpu": "available"
+  },
+  "discretisation_errors": {
+    "metal/pulsating/L0": [
+      0.03113931223121613,
+      0.027138127987865815,
+      0.02730790206089175,
+      0.043474313119930545,
+      0.05081637859687502
+    ],
+    "beat-cpu/pulsating/L0": [
+      0.031148149727599713,
+      0.027231835966218424,
+      0.02571548388553888,
+      0.04282003307751224,
+      0.05410643943193885
+    ],
+    "metal/pulsating/L1": [
+      0.0078326751334721,
+      0.006745229176155345,
+      0.008236415672763744,
+      0.012442495148284731,
+      0.011920658772615616
+    ],
+    "beat-cpu/pulsating/L1": [
+      0.00784165218587309,
+      0.006835239756252845,
+      0.006469287430254073,
+      0.010782894267600995,
+      0.013517150017485786
+    ],
+    "metal/pulsating/L2": [
+      0.00195534011457069,
+      0.0016289938701595547,
+      0.0034195440581891103,
+      0.005612981434144668,
+      0.004593245085241513
+    ],
+    "beat-cpu/pulsating/L2": [
+      0.0019640583343900407,
+      0.0017093397383043957,
+      0.0016156350420134182,
+      0.0027032050223852223,
+      0.0033645286194141483
+    ]
+  },
+  "analytic_ceilings": {
+    "pulsating": [
+      0.077,
+      0.019,
+      0.0085
+    ]
+  },
+  "minimum_order": 1.0,
+  "same_mesh_tolerance": {
+    "0": 0.22,
+    "1": 0.054,
+    "2": 0.017
+  },
+  "exact_tolerance": 0.001,
+  "reference_edge_m": 0.027589937928294336,
+  "frequencies_hz": [
+    100.0,
+    300.0,
+    700.0,
+    1200.0,
+    1500.0
+  ],
+  "rows": [
+    {
+      "fixture": "pulsating sphere L0 (224 tri), one channel",
+      "engine": "metal",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.031139372397848218,
+        0.027138201827076363,
+        0.027307969490146293,
+        0.04347404768115831,
+        0.05081627078087397
+      ],
+      "worst": 0.05081627078087397,
+      "tolerance": 0.077,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L0 (224 tri), two channels",
+      "engine": "metal",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.03113931223121613,
+        0.027138127987865815,
+        0.02730790206089175,
+        0.043474313119930545,
+        0.05081637859687502
+      ],
+      "worst": 0.05081637859687502,
+      "tolerance": 0.077,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L0, two-channel sum",
+      "engine": "metal",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        8.436373955677612e-07,
+        8.860558752555167e-07,
+        9.091428974247367e-07,
+        9.962682870527273e-07,
+        1.2989462632128223e-06
+      ],
+      "worst": 1.2989462632128223e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "linearity: the bases of two tags sum to their merged tag"
+    },
+    {
+      "fixture": "pulsating sphere L0 (224 tri), one channel",
+      "engine": "beat-cpu",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.031148153534586998,
+        0.027231921749454914,
+        0.025715411499993027,
+        0.04281997468877858,
+        0.05410650270623008
+      ],
+      "worst": 0.05410650270623008,
+      "tolerance": 0.077,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L0 (224 tri), two channels",
+      "engine": "beat-cpu",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.031148149727599713,
+        0.027231835966218424,
+        0.02571548388553888,
+        0.04282003307751224,
+        0.05410643943193885
+      ],
+      "worst": 0.05410643943193885,
+      "tolerance": 0.077,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L0, two-channel sum",
+      "engine": "beat-cpu",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        5.045207103899242e-07,
+        6.285465735225762e-07,
+        7.755753085022582e-07,
+        8.425412087465146e-07,
+        6.701362678676089e-07
+      ],
+      "worst": 8.425412087465146e-07,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "linearity: the bases of two tags sum to their merged tag"
+    },
+    {
+      "fixture": "pulsating sphere L1 (960 tri), one channel",
+      "engine": "metal",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.007832254912700473,
+        0.006745592374201681,
+        0.008236451468831524,
+        0.012441917778807998,
+        0.011921259170116336
+      ],
+      "worst": 0.012441917778807998,
+      "tolerance": 0.019,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L1 (960 tri), two channels",
+      "engine": "metal",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0078326751334721,
+        0.006745229176155345,
+        0.008236415672763744,
+        0.012442495148284731,
+        0.011920658772615616
+      ],
+      "worst": 0.012442495148284731,
+      "tolerance": 0.019,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L1, two-channel sum",
+      "engine": "metal",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        2.733602666999227e-06,
+        3.0243820700714504e-06,
+        2.040789359708119e-06,
+        3.5593766708528555e-06,
+        5.1973227634250884e-06
+      ],
+      "worst": 5.1973227634250884e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "linearity: the bases of two tags sum to their merged tag"
+    },
+    {
+      "fixture": "pulsating sphere L1 (960 tri), one channel",
+      "engine": "beat-cpu",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.007841531507212956,
+        0.0068346216280531676,
+        0.006469518079651286,
+        0.01078312440504484,
+        0.013517241518809838
+      ],
+      "worst": 0.013517241518809838,
+      "tolerance": 0.019,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L1 (960 tri), two channels",
+      "engine": "beat-cpu",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.00784165218587309,
+        0.006835239756252845,
+        0.006469287430254073,
+        0.010782894267600995,
+        0.013517150017485786
+      ],
+      "worst": 0.013517150017485786,
+      "tolerance": 0.019,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L1, two-channel sum",
+      "engine": "beat-cpu",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        1.3033357432748993e-06,
+        3.0198824365291016e-06,
+        1.94204624923523e-06,
+        2.3105902843694947e-06,
+        1.5926544656776726e-06
+      ],
+      "worst": 3.0198824365291016e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "linearity: the bases of two tags sum to their merged tag"
+    },
+    {
+      "fixture": "pulsating sphere L2 (3968 tri), one channel",
+      "engine": "metal",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0019541966779633617,
+        0.0016306699877843029,
+        0.0034206697477498073,
+        0.00561166942382188,
+        0.004593855859009793
+      ],
+      "worst": 0.00561166942382188,
+      "tolerance": 0.0085,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L2 (3968 tri), two channels",
+      "engine": "metal",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.00195534011457069,
+        0.0016289938701595547,
+        0.0034195440581891103,
+        0.005612981434144668,
+        0.004593245085241513
+      ],
+      "worst": 0.005612981434144668,
+      "tolerance": 0.0085,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L2, two-channel sum",
+      "engine": "metal",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        6.084249580268406e-06,
+        7.051548231195259e-06,
+        8.810019501091624e-06,
+        1.0695775201803328e-05,
+        1.1511613687746339e-05
+      ],
+      "worst": 1.1511613687746339e-05,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "linearity: the bases of two tags sum to their merged tag"
+    },
+    {
+      "fixture": "pulsating sphere L2 (3968 tri), one channel",
+      "engine": "beat-cpu",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.001964191898830252,
+        0.0017098505020755762,
+        0.0016149936021932286,
+        0.0027026017752902836,
+        0.0033635453475444658
+      ],
+      "worst": 0.0033635453475444658,
+      "tolerance": 0.0085,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L2 (3968 tri), two channels",
+      "engine": "beat-cpu",
+      "compared_with": "analytic",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0019640583343900407,
+        0.0017093397383043957,
+        0.0016156350420134182,
+        0.0027032050223852223,
+        0.0033645286194141483
+      ],
+      "worst": 0.0033645286194141483,
+      "tolerance": 0.0085,
+      "minimum": null,
+      "passed": true,
+      "note": "fixed ceiling, from the recorded Metal ladder"
+    },
+    {
+      "fixture": "pulsating sphere L2, two-channel sum",
+      "engine": "beat-cpu",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        4.278875550857107e-06,
+        3.125640985682345e-06,
+        4.565301910744276e-06,
+        9.921019726751654e-06,
+        6.240038049090749e-06
+      ],
+      "worst": 9.921019726751654e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "linearity: the bases of two tags sum to their merged tag"
+    },
+    {
+      "fixture": "pulsating sphere: observed order, L0 to L2",
+      "engine": "metal",
+      "compared_with": "refinement",
+      "quantity": "order in element size",
+      "errors": [
+        1.6174965939302608
+      ],
+      "worst": 1.6174965939302608,
+      "tolerance": null,
+      "minimum": 1.0,
+      "passed": true,
+      "note": "worst errors 5.082e-02, 1.244e-02, 5.613e-03"
+    },
+    {
+      "fixture": "pulsating sphere: observed order, L0 to L2",
+      "engine": "beat-cpu",
+      "compared_with": "refinement",
+      "quantity": "order in element size",
+      "errors": [
+        2.0393034382184805
+      ],
+      "worst": 2.0393034382184805,
+      "tolerance": null,
+      "minimum": 1.0,
+      "passed": true,
+      "note": "worst errors 5.411e-02, 1.352e-02, 3.365e-03"
+    },
+    {
+      "fixture": "same mesh: hemispheres, normal, one channel, both",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex per channel",
+      "errors": [
+        1.1747573512538776e-05,
+        0.0002391996337427626,
+        0.0018167862909115257,
+        0.004263915815360354,
+        0.004801611460123725
+      ],
+      "worst": 0.004801611460123725,
+      "tolerance": 0.054,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "same mesh: hemispheres, normal, two channels, top",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex per channel",
+      "errors": [
+        2.2636409696817895e-05,
+        0.00028158645431533347,
+        0.001644224061721738,
+        0.0027862744841199625,
+        0.0035112946961215704
+      ],
+      "worst": 0.0035112946961215704,
+      "tolerance": 0.054,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "same mesh: hemispheres, normal, two channels, bottom",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex per channel",
+      "errors": [
+        2.3017727785859583e-05,
+        0.00028218170134490533,
+        0.001645483189360925,
+        0.002782739157004049,
+        0.003506227722373761
+      ],
+      "worst": 0.003506227722373761,
+      "tolerance": 0.054,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "same mesh: hemispheres, normal, two channels, channel sum",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex channel sum",
+      "errors": [
+        1.1496207983226364e-05,
+        0.00023988759128939038,
+        0.001816904926864764,
+        0.004264309482411243,
+        0.004802221080819999
+      ],
+      "worst": 0.004802221080819999,
+      "tolerance": 0.054,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "rotated + translated off-axis cap",
+      "engine": "metal",
+      "compared_with": "unmoved",
+      "quantity": "complex, all points",
+      "errors": [
+        1.6675874808106648e-07,
+        3.7532842158620043e-07,
+        8.886974823359132e-07,
+        1.6291230820901094e-06,
+        2.12885951541092e-06
+      ],
+      "worst": 2.12885951541092e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 4: u and v must map as well as the axis"
+    },
+    {
+      "fixture": "off-axis cap: horizontal differs from vertical",
+      "engine": "metal",
+      "compared_with": "vertical cut",
+      "quantity": "complex, polar",
+      "errors": [
+        0.06102326647697149,
+        0.18943279274874258,
+        0.4239479672092604,
+        0.6651532542370022,
+        0.8077695737774664
+      ],
+      "worst": 0.8077695737774664,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a u/v swap changes the field"
+    },
+    {
+      "fixture": "off-axis cap: vertical cut differs from its mirror",
+      "engine": "metal",
+      "compared_with": "mirrored",
+      "quantity": "complex, polar",
+      "errors": [
+        0.15824824014018354,
+        0.4860228876414902,
+        1.0006375758333512,
+        1.1815168156704026,
+        1.354769705884534
+      ],
+      "worst": 1.354769705884534,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a v mirror (handedness) changes the field"
+    },
+    {
+      "fixture": "rotated + translated off-axis cap",
+      "engine": "beat-cpu",
+      "compared_with": "unmoved",
+      "quantity": "complex, all points",
+      "errors": [
+        2.420059988119695e-07,
+        2.5902946571295904e-07,
+        3.2711909669759504e-07,
+        4.909323942334218e-07,
+        6.158901421887338e-07
+      ],
+      "worst": 6.158901421887338e-07,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 4: u and v must map as well as the axis"
+    },
+    {
+      "fixture": "off-axis cap: horizontal differs from vertical",
+      "engine": "beat-cpu",
+      "compared_with": "vertical cut",
+      "quantity": "complex, polar",
+      "errors": [
+        0.06103833843875268,
+        0.189543239017284,
+        0.4240096639490884,
+        0.6648219392608393,
+        0.8062496608773672
+      ],
+      "worst": 0.8062496608773672,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a u/v swap changes the field"
+    },
+    {
+      "fixture": "off-axis cap: vertical cut differs from its mirror",
+      "engine": "beat-cpu",
+      "compared_with": "mirrored",
+      "quantity": "complex, polar",
+      "errors": [
+        0.15828409474179636,
+        0.4863040576433493,
+        1.0008049079416526,
+        1.179154067168215,
+        1.3542345029203298
+      ],
+      "worst": 1.3542345029203298,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: a v mirror (handedness) changes the field"
+    },
+    {
+      "fixture": "rotated + translated off-axis cap",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex, all points",
+      "errors": [
+        2.8844722320082728e-05,
+        0.0002984406131082138,
+        0.0016307567340676412,
+        0.0026652284402029908,
+        0.0030023287971360836
+      ],
+      "worst": 0.0030023287971360836,
+      "tolerance": 0.054,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "off-axis cap: source-average pressure (impedance)",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex impedance",
+      "errors": [
+        0.0003081156507172744,
+        0.0006525907961327605,
+        0.0025674445578321562,
+        0.004267942608092532,
+        0.0050885919453589595
+      ],
+      "worst": 0.0050885919453589595,
+      "tolerance": 0.054,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "repeated HF: two bodies, two-channel sum",
+      "engine": "metal",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        9.824831912502112e-07,
+        1.1956748162006381e-06,
+        1.153924213562853e-06,
+        1.4161666937030436e-06,
+        1.2999089239819101e-06
+      ],
+      "worst": 1.4161666937030436e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "identities kept: ['hf-left', 'hf-right']"
+    },
+    {
+      "fixture": "repeated HF: hf-left is its own instance",
+      "engine": "metal",
+      "compared_with": "that instance alone",
+      "quantity": "complex, all points",
+      "errors": [
+        3.508257479847359e-08,
+        5.704698876208617e-08,
+        9.466762716779242e-08,
+        1.4491231695504977e-07,
+        1.556474337669636e-07
+      ],
+      "worst": 1.556474337669636e-07,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "the other instance rigid; a swapped identity reads as the difference below"
+    },
+    {
+      "fixture": "repeated HF: hf-right is its own instance",
+      "engine": "metal",
+      "compared_with": "that instance alone",
+      "quantity": "complex, all points",
+      "errors": [
+        2.9560033568116732e-08,
+        5.069895586232947e-08,
+        8.630210269817252e-08,
+        1.2591288304981443e-07,
+        1.3757689028375682e-07
+      ],
+      "worst": 1.3757689028375682e-07,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "the other instance rigid; a swapped identity reads as the difference below"
+    },
+    {
+      "fixture": "repeated HF: the two instances differ",
+      "engine": "metal",
+      "compared_with": "each other",
+      "quantity": "complex, all points",
+      "errors": [
+        0.5817478226432861,
+        1.3082526842181534,
+        1.3877784098552983,
+        1.519656427494027,
+        1.3921892519134107
+      ],
+      "worst": 1.519656427494027,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: the identity rows can see a swap"
+    },
+    {
+      "fixture": "repeated HF: two bodies, two-channel sum",
+      "engine": "beat-cpu",
+      "compared_with": "one channel",
+      "quantity": "complex, all points",
+      "errors": [
+        7.0052543702409e-07,
+        8.65521415273641e-07,
+        8.20798516540125e-07,
+        9.83433143233779e-07,
+        9.951076995144888e-07
+      ],
+      "worst": 9.951076995144888e-07,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "identities kept: ['hf-left', 'hf-right']"
+    },
+    {
+      "fixture": "repeated HF: hf-left is its own instance",
+      "engine": "beat-cpu",
+      "compared_with": "that instance alone",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "worst": 0.0,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "the other instance rigid; a swapped identity reads as the difference below"
+    },
+    {
+      "fixture": "repeated HF: hf-right is its own instance",
+      "engine": "beat-cpu",
+      "compared_with": "that instance alone",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "worst": 0.0,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "the other instance rigid; a swapped identity reads as the difference below"
+    },
+    {
+      "fixture": "repeated HF: the two instances differ",
+      "engine": "beat-cpu",
+      "compared_with": "each other",
+      "quantity": "complex, all points",
+      "errors": [
+        0.581763942629052,
+        1.307942973160622,
+        1.3877721186479106,
+        1.5232611632559059,
+        1.3877685408647054
+      ],
+      "worst": 1.5232611632559059,
+      "tolerance": null,
+      "minimum": 0.01,
+      "passed": true,
+      "note": "non-vacuity: the identity rows can see a swap"
+    },
+    {
+      "fixture": "x0 return vs whole, normal",
+      "engine": "metal",
+      "compared_with": "whole",
+      "quantity": "complex, all points",
+      "errors": [
+        1.1023906591879567e-06,
+        1.2867428636826203e-06,
+        1.9833575405278435e-06,
+        3.816190868123613e-06,
+        4.567623404849656e-06
+      ],
+      "worst": 4.567623404849656e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 6: reduced domain executed natively"
+    },
+    {
+      "fixture": "x0 return vs whole, normal",
+      "engine": "beat-cpu",
+      "compared_with": "whole",
+      "quantity": "complex, all points",
+      "errors": [
+        9.159651284167223e-07,
+        3.6610415794152934e-06,
+        2.2685544845291524e-05,
+        4.364213779706431e-05,
+        3.1125989710049684e-05
+      ],
+      "worst": 4.364213779706431e-05,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 6: reduced domain executed natively"
+    },
+    {
+      "fixture": "x0+y0 return vs whole, normal",
+      "engine": "metal",
+      "compared_with": "whole",
+      "quantity": "complex, all points",
+      "errors": [
+        1.1577004967102086e-06,
+        1.3038400261395358e-06,
+        1.7812796742135547e-06,
+        4.615586332238627e-06,
+        7.726735864942167e-06
+      ],
+      "worst": 7.726735864942167e-06,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 6: reduced domain executed natively"
+    },
+    {
+      "fixture": "x0+y0 return vs whole, normal",
+      "engine": "beat-cpu",
+      "compared_with": "whole",
+      "quantity": "complex, all points",
+      "errors": [
+        8.939838257396471e-07,
+        1.253914336968334e-06,
+        8.378826435719779e-06,
+        4.31977987063592e-05,
+        6.983982618501513e-05
+      ],
+      "worst": 6.983982618501513e-05,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 6: reduced domain executed natively"
+    },
+    {
+      "fixture": "horn return, coarse vs fine density",
+      "engine": "metal",
+      "compared_with": "fine",
+      "quantity": "complex, all points",
+      "errors": [
+        0.021199081181957936,
+        0.03349563238258179,
+        0.04238766241465379
+      ],
+      "worst": 0.04238766241465379,
+      "tolerance": null,
+      "minimum": null,
+      "passed": null,
+      "note": "fixture 3 on a real return; recorded"
+    },
+    {
+      "fixture": "horn return, reference vs fine density",
+      "engine": "metal",
+      "compared_with": "fine",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0017596598134708994,
+        0.01029519132539195,
+        0.0199964473853123
+      ],
+      "worst": 0.0199964473853123,
+      "tolerance": 0.03,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 3 on a real return: the default density against the finest"
+    },
+    {
+      "fixture": "horn return, coarse vs fine density",
+      "engine": "beat-cpu",
+      "compared_with": "fine",
+      "quantity": "complex, all points",
+      "errors": [
+        0.020851027826450083,
+        0.028263705855022764,
+        0.029477706391010848
+      ],
+      "worst": 0.029477706391010848,
+      "tolerance": null,
+      "minimum": null,
+      "passed": null,
+      "note": "fixture 3 on a real return; recorded"
+    },
+    {
+      "fixture": "horn return, reference vs fine density",
+      "engine": "beat-cpu",
+      "compared_with": "fine",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0002972573795646692,
+        0.0018145978883162218,
+        0.003500417075254182
+      ],
+      "worst": 0.003500417075254182,
+      "tolerance": 0.03,
+      "minimum": null,
+      "passed": true,
+      "note": "fixture 3 on a real return: the default density against the finest"
+    },
+    {
+      "fixture": "same mesh: horn quarter return, normal",
+      "engine": "metal",
+      "compared_with": "beat-cpu",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0005745088894684883,
+        0.006903699861460527,
+        0.01819972859317731
+      ],
+      "worst": 0.01819972859317731,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": ""
+    },
+    {
+      "fixture": "horn: quarter return vs forced full domain",
+      "engine": "metal",
+      "compared_with": "full",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0010720514689803477,
+        0.005920514199000596,
+        0.011293920827032145
+      ],
+      "worst": 0.011293920827032145,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": "two meshes of one body on one engine"
+    },
+    {
+      "fixture": "horn: quarter return vs forced full domain",
+      "engine": "beat-cpu",
+      "compared_with": "full",
+      "quantity": "complex, all points",
+      "errors": [
+        0.00014145870841783463,
+        0.0003266339461883628,
+        0.001190813413803281
+      ],
+      "worst": 0.001190813413803281,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": "two meshes of one body on one engine"
+    },
+    {
+      "fixture": "source on the plug's rear: WG's quarter vs its full domain",
+      "engine": "metal",
+      "compared_with": "full",
+      "quantity": "complex, all points",
+      "errors": [
+        8.245518926947648e-05,
+        0.00045499001546705337,
+        0.0016139498364321446
+      ],
+      "worst": 0.0016139498364321446,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": "flipped_global=0 of 472 triangles; orientation_valid=True; warnings=[\"1 symmetry-reduced component(s) were wound like the full model they mirror, which their tagged source alone would have inverted; the solve uses the full model's winding, and no action is needed\"]; findings=['freshness', 'source-paint-missing', 'stale-detection-unavailable']"
+    },
+    {
+      "fixture": "source on the plug's rear: WG's quarter vs its full domain",
+      "engine": "beat-cpu",
+      "compared_with": "full",
+      "quantity": "complex, all points",
+      "errors": [
+        2.39158468010189e-05,
+        9.297815489875447e-05,
+        0.0003378303681269095
+      ],
+      "worst": 0.0003378303681269095,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": "flipped_global=0 of 472 triangles; orientation_valid=True; warnings=[\"1 symmetry-reduced component(s) were wound like the full model they mirror, which their tagged source alone would have inverted; the solve uses the full model's winding, and no action is needed\"]; findings=['freshness', 'source-paint-missing', 'stale-detection-unavailable']"
+    },
+    {
+      "fixture": "horn: placed in CAD (rotated + translated) vs unplaced",
+      "engine": "metal",
+      "compared_with": "unplaced",
+      "quantity": "complex, all points",
+      "errors": [
+        0.00017372670969552104,
+        0.0009482740191099897,
+        0.0015706679247279743
+      ],
+      "worst": 0.0015706679247279743,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": "normalisation undoes the placement; OCC re-meshes the placed body"
+    },
+    {
+      "fixture": "horn: placed in CAD (rotated + translated) vs unplaced",
+      "engine": "beat-cpu",
+      "compared_with": "unplaced",
+      "quantity": "complex, all points",
+      "errors": [
+        1.9955029326998605e-05,
+        0.00012913691788976898,
+        0.00026462111909155914
+      ],
+      "worst": 0.00026462111909155914,
+      "tolerance": 0.06,
+      "minimum": null,
+      "passed": true,
+      "note": "normalisation undoes the placement; OCC re-meshes the placed body"
+    },
+    {
+      "fixture": "y-only half: BEAT-CPU refused at submission with the reason",
+      "engine": "beat-cpu",
+      "compared_with": "plan",
+      "quantity": "verdict",
+      "errors": [
+        0.0
+      ],
+      "worst": 0.0,
+      "tolerance": 0.5,
+      "minimum": null,
+      "passed": true,
+      "note": "it cannot mirror this return's y-only half (mirrored on y = 0); it solves full, half-yz, quarter"
+    },
+    {
+      "fixture": "fresh app data dir: import, prepare, solve, store, reopen",
+      "engine": "metal",
+      "compared_with": "end to end",
+      "quantity": "job",
+      "errors": [
+        0.0
+      ],
+      "worst": 0.0,
+      "tolerance": 0.5,
+      "minimum": null,
+      "passed": true,
+      "note": "{'status': 'complete', 'error': None, 'engine': {'engine': 'metal', 'package': 'hornlab-metal-bem', 'package_version': '0.2.0', 'device': 'metal', 'formulation': 'complex_k', 'complex_k_shift': 0.005}, 'reopened_equal': True, 'data': {'drive-hf': 647}}"
+    },
+    {
+      "fixture": "fresh app data dir: import, prepare, solve, store, reopen",
+      "engine": "beat-cpu",
+      "compared_with": "end to end",
+      "quantity": "job",
+      "errors": [
+        0.0
+      ],
+      "worst": 0.0,
+      "tolerance": 0.5,
+      "minimum": null,
+      "passed": true,
+      "note": "{'status': 'complete', 'error': None, 'engine': {'engine': 'beat-cpu', 'package': 'hornlab-beat-bem', 'package_version': '0.1.0', 'device': 'cpu', 'formulation': 'burton_miller', 'precision': 'single'}, 'reopened_equal': True, 'data': {'drive-hf': 649}}"
+    },
+    {
+      "fixture": "return edited in CAD (acknowledged) vs the unedited return",
+      "engine": "metal",
+      "compared_with": "unedited",
+      "quantity": "complex, all points",
+      "errors": [
+        4.5170387568499954e-08,
+        1.5966789522711538e-07,
+        2.3021153227607336e-07
+      ],
+      "worst": 2.3021153227607336e-07,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "unedited STEP, edited body evidence: the acknowledgement must not change the solve"
+    },
+    {
+      "fixture": "return edited in CAD (acknowledged) vs the unedited return",
+      "engine": "beat-cpu",
+      "compared_with": "unedited",
+      "quantity": "complex, all points",
+      "errors": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "worst": 0.0,
+      "tolerance": 0.001,
+      "minimum": null,
+      "passed": true,
+      "note": "unedited STEP, edited body evidence: the acknowledgement must not change the solve"
+    }
+  ],
+  "timings_s": {
+    "pulsating-L0-one channel-metal": 0.3105004579992965,
+    "pulsating-L0-two channels-metal": 0.27248245797818527,
+    "pulsating-L0-one channel-beat-cpu": 2.682864749978762,
+    "pulsating-L0-two channels-beat-cpu": 0.35359691601479426,
+    "pulsating-L1-one channel-metal": 1.3716613330179825,
+    "pulsating-L1-two channels-metal": 1.3974017910077237,
+    "pulsating-L1-one channel-beat-cpu": 0.8038033749908209,
+    "pulsating-L1-two channels-beat-cpu": 1.5474534580134787,
+    "pulsating-L2-one channel-metal": 10.973580249992665,
+    "pulsating-L2-two channels-metal": 10.907482209033333,
+    "pulsating-L2-one channel-beat-cpu": 6.0553885829867795,
+    "pulsating-L2-two channels-beat-cpu": 12.215895416971762
+  },
+  "ingest_facts": {
+    "horn_triangles": {
+      "coarse": 248,
+      "reference": 470,
+      "fine": 628
+    },
+    "horn_domain": [
+      "x0",
+      "y0"
+    ],
+    "horn_ladder_ceiling": 0.03,
+    "horn_coarse_over_reference": {
+      "metal": 2.1197596551969617,
+      "beat-cpu": 8.421198319308944
+    },
+    "horn_same_mesh_tolerance": 0.06,
+    "horn_full_triangles": 1856,
+    "rear_cap_quarter": {
+      "cut_planes": [
+        "x0",
+        "y0"
+      ],
+      "triangles": 472,
+      "flipped_global": 0,
+      "full_flipped_global": 0,
+      "orientation_valid": true,
+      "warnings": [
+        "1 symmetry-reduced component(s) were wound like the full model they mirror, which their tagged source alone would have inverted; the solve uses the full model's winding, and no action is needed"
+      ],
+      "findings": [
+        "freshness",
+        "source-paint-missing",
+        "stale-detection-unavailable"
+      ]
+    },
+    "placed_frame": {
+      "axis": [
+        -2.7755575615628907e-17,
+        2.7755575615628907e-17,
+        1.0
+      ],
+      "mouth_center_m": [
+        1.154045983484132e-15,
+        1.1471420236449036e-15,
+        2.8421709430403983e-17
+      ],
+      "origin_m": [
+        1.154045983484132e-15,
+        1.1471420236449036e-15,
+        2.8421709430403983e-17
+      ],
+      "source_center_m": [
+        1.154045983484132e-15,
+        1.1471420236449036e-15,
+        2.8421709430403983e-17
+      ],
+      "u": [
+        1.0,
+        7.70371977754894e-34,
+        2.7755575615628907e-17
+      ],
+      "v": [
+        0.0,
+        1.0,
+        -2.7755575615628907e-17
+      ]
+    },
+    "y_only_plan": {
+      "metal": {
+        "solves": true,
+        "stage": null,
+        "code": null,
+        "reason": null
+      },
+      "beat-cpu": {
+        "solves": false,
+        "stage": "capability",
+        "code": "imported_symmetry_unsupported_by_engine",
+        "reason": "it cannot mirror this return's y-only half (mirrored on y = 0); it solves full, half-yz, quarter"
+      }
+    },
+    "y_only_auto_engine": "metal",
+    "fresh_findings": [
+      [
+        "freshness",
+        "missing_design",
+        true
+      ],
+      [
+        "stale-detection-unavailable",
+        null,
+        false
+      ],
+      [
+        "source-paint-missing",
+        null,
+        true
+      ]
+    ],
+    "fresh_jobs": {
+      "metal": {
+        "status": "complete",
+        "error": null,
+        "engine": {
+          "engine": "metal",
+          "package": "hornlab-metal-bem",
+          "package_version": "0.2.0",
+          "device": "metal",
+          "formulation": "complex_k",
+          "complex_k_shift": 0.005
+        },
+        "reopened_equal": true,
+        "data": {
+          "drive-hf": 647
+        }
+      },
+      "beat-cpu": {
+        "status": "complete",
+        "error": null,
+        "engine": {
+          "engine": "beat-cpu",
+          "package": "hornlab-beat-bem",
+          "package_version": "0.1.0",
+          "device": "cpu",
+          "formulation": "burton_miller",
+          "precision": "single"
+        },
+        "reopened_equal": true,
+        "data": {
+          "drive-hf": 649
+        }
+      }
+    },
+    "edited_findings": [
+      [
+        "freshness",
+        "body_modified",
+        true
+      ],
+      [
+        "stale-detection-unavailable",
+        null,
+        false
+      ],
+      [
+        "source-paint-missing",
+        null,
+        true
+      ]
+    ]
+  }
+}
