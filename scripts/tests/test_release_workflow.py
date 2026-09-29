@@ -34,8 +34,8 @@ def test_release_workflow_requires_main_ancestry_and_source_qualification() -> N
     assert "contents: write" in WORKFLOW
     assert "fetch-depth: 0" in WORKFLOW
     assert 'git merge-base --is-ancestor "$release_commit" origin/main' in WORKFLOW
-    # CI no longer runs on push, so a push-triggered run of the release commit
-    # never exists. A guard that looked one up could only refuse every release,
+    # CI runs on dev pushes only, so a push-triggered run of the release commit
+    # (on main) never exists. A guard that looked one up could only refuse every release,
     # or be loosened into one that passes without CI. The release runs ci.yml
     # itself instead; the structure is asserted in the section at the end.
     assert "uses: ./.github/workflows/ci.yml" in WORKFLOW
@@ -839,8 +839,9 @@ def test_the_flag_the_guard_prints_is_what_the_publisher_would_set(
 # --- Source qualification -----------------------------------------------------
 #
 # Hosted CI stopped running on every push and pull request: routine integration
-# is gated by the full local suite, once per landed batch. ci.yml still runs on
-# demand, and release.yml and rc-build.yml call it on the commit they build.
+# is gated by the full local suite, once per landed batch. ci.yml runs on every
+# push to `dev` as a diagnostic, on demand, and release.yml and rc-build.yml call
+# it on the commit they build.
 # That call is the only hosted CI a release gets, so what these pin is that
 # nothing is built, attested, uploaded or published without it.
 
@@ -894,17 +895,39 @@ def _produces(job: dict) -> bool:
     return False
 
 
-def test_hosted_ci_runs_only_on_demand_or_when_a_release_workflow_calls_it() -> None:
+def test_hosted_ci_runs_on_dev_pushes_on_demand_or_when_a_release_workflow_calls_it() -> None:
     workflow = yaml.safe_load(CI_WORKFLOW)
 
-    assert set(_triggers(workflow)) == {"workflow_dispatch", "workflow_call"}
-    keys = _keys_only(CI_WORKFLOW)
-    assert "push:" not in keys
-    assert "pull_request" not in keys
-    # It existed to cancel superseded push runs. Under workflow_call
-    # `github.workflow` names the caller, so a workflow-level group here would
-    # share, or cancel, the calling release run's.
-    assert "concurrency" not in workflow
+    triggers = _triggers(workflow)
+    assert set(triggers) == {"push", "workflow_dispatch", "workflow_call"}
+    # Only dev: a push to main or a topic branch, or a pull request, runs nothing.
+    assert triggers["push"] == {"branches": ["dev"]}
+    assert "pull_request" not in _keys_only(CI_WORKFLOW)
+
+
+def test_only_a_dev_push_is_ever_cancelled_and_never_a_release_qualification() -> None:
+    """Under workflow_call `github.workflow` names the caller.
+
+    A group keyed on it, or a cancel-in-progress that applied to a dispatch or a
+    called run, could cancel a release qualification. Only push runs share a
+    group, and only they cancel.
+    """
+
+    concurrency = yaml.safe_load(CI_WORKFLOW)["concurrency"]
+    assert concurrency["cancel-in-progress"] == "${{ github.event_name == 'push' }}"
+    group = concurrency["group"]
+    assert "github.workflow" not in group
+    assert "github.run_id" in group
+    assert "github.ref" in group
+
+
+def test_a_dev_push_runs_linux_and_windows_and_every_other_run_keeps_macos() -> None:
+    matrix = yaml.safe_load(CI_WORKFLOW)["jobs"]["server"]["strategy"]["matrix"]
+    expression = matrix["os"]
+    assert "github.event_name == 'push'" in expression
+    push_leg, full_leg = re.findall(r"'(\[[^']*\])'", expression)
+    assert json.loads(push_leg) == ["ubuntu-latest", "windows-latest"]
+    assert json.loads(full_leg) == ["ubuntu-latest", "macos-latest", "windows-latest"]
 
 
 def test_hosted_ci_needs_nothing_a_release_caller_does_not_grant() -> None:

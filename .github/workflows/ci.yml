@@ -5,24 +5,38 @@ name: CI
 # gates link to. What runs here is everything that is deterministic on a hosted
 # runner -- suites, build, and the drift gates that keep generated files honest.
 
-# Nothing starts this workflow on its own: a push to `main` or a pull request
-# runs nothing here. Routine integration is gated by the full local suite, run
-# once per landed batch under the workspace landing policy. This runs in two
-# ways only:
+# Routine integration is gated by the full local suite, run once per landed
+# batch under the workspace landing policy, so this is never a landing gate. It
+# runs in three ways:
 #
-# - on demand, as a diagnostic on any ref: `gh workflow run ci.yml --ref <ref>`;
+# - on every push to `dev`, which is where a landed batch arrives one step
+#   before `main`: a diagnostic on the integration candidate. A push runs Linux
+#   and Windows only (below); a pull request or a push to any other branch
+#   still runs nothing;
+# - on demand, on any ref: `gh workflow run ci.yml --ref <ref>`, which runs
+#   the full matrix including macOS;
 # - as source qualification, when release.yml or rc-build.yml calls it on the
-#   exact commit it is about to build. Their build jobs need the calling job,
-#   so a red qualification builds, attests and publishes nothing.
+#   exact commit it is about to build, again the full matrix. Their build jobs
+#   need the calling job, so a red qualification builds, attests and publishes
+#   nothing.
 #
 # A called run uses this file as it stands at the caller's commit, and its
 # token holds only what the calling job grants, `contents: read` -- all that any
 # job here needs. It publishes no release artifacts either way.
 on:
+  push:
+    branches: [dev]
   workflow_dispatch:
   workflow_call:
 
-# No concurrency group: under workflow_call github.workflow is the caller's, so one here could cancel the calling run.
+# Only a push is ever cancelled, and only by a newer push to the same ref: a
+# superseded dev candidate is not worth a runner. Under workflow_call
+# `github.workflow` is the caller's, so the group never uses it, and every
+# non-push run gets a group of its own (its run id), so a dispatch or a release
+# qualification is never cancelled by, and never cancels, another run.
+concurrency:
+  group: ${{ github.event_name == 'push' && format('ci-push-{0}', github.ref) || format('ci-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
   frontend:
@@ -209,7 +223,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # A push to dev skips macOS. It is the slowest leg (its harness suite
+        # runs 12-17x slower, see above) and the only macOS-only check is the
+        # committed launcher icon; dispatch and release qualification keep
+        # all three platforms.
+        os: ${{ fromJSON(github.event_name == 'push' && '["ubuntu-latest","windows-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
         suite: [server, harness]
         include:
           - suite: server

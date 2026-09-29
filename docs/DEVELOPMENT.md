@@ -74,6 +74,10 @@ Geometry, solver, platform, or release work may also require the pinned sibling 
 constellation checks, a real browser, or owned qualification hardware. Hosted CI never
 runs real Metal or BEMPP solves.
 
+Hosted CI runs Linux and Windows on every push to `dev` (a diagnostic after landing,
+not a landing gate), and the full three-platform matrix when dispatched or called by
+a release workflow. Pushes to other branches and pull requests run nothing.
+
 ### Running targeted tests
 
 Run a subset with the launcher, not with a hand-built `pytest` line:

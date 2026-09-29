@@ -58,7 +58,7 @@ def test_release_docs_distinguish_current_workflow_from_dated_evidence() -> None
 
     assert "workspace-local" in documentation_index
     assert "Maintainer backlogs" in documentation_index
-    assert "os: [ubuntu-latest, macos-latest, windows-latest]" in workflow
+    assert '"ubuntu-latest","macos-latest","windows-latest"' in workflow
     assert "Current gates are maintained in the workspace-local" in validation
     assert "Windows CI leg is written but unexecuted" in validation
 
