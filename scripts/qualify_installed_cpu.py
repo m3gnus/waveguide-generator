@@ -108,6 +108,11 @@ SOLVE_TIMEOUT_S = 1800.0
 PROVISION_TIMEOUT_S = 2700.0
 SHUTDOWN_TIMEOUT_S = 90.0
 PROBE_TIMEOUT_S = 300.0
+#: How long one poll of a local server may wait, connecting or reading. A poll
+#: (``/health``, a job's status) is answered at once by a live server, so a
+#: server that accepts and never answers is a finding to report inside the
+#: wait's own deadline, not a call to sit in for the long-request default.
+POLL_HTTP_TIMEOUT_S = 10.0
 #: Ingestion meshes the return in a child process before it answers. A cold
 #: runner importing gmsh and OCC for the first time spends most of this.
 INGEST_TIMEOUT_S = 900.0
@@ -448,8 +453,17 @@ def http(base: str, path: str, body: Any = None, *, timeout: float = 120.0) -> A
     if data is not None:
         headers["Content-Type"] = "application/json"
     request = Request(f"{base}{path}", data=data, headers=headers)  # noqa: S310 - loopback
-    with urlopen(request, timeout=timeout) as response:  # noqa: S310 - loopback
-        payload = response.read()
+    try:
+        with urlopen(request, timeout=timeout) as response:  # noqa: S310 - loopback
+            payload = response.read()
+    except (TimeoutError, URLError) as exc:
+        # ``timeout`` bounds the connect and each read. Say which request gave
+        # up and after how long: a bare "timed out" names neither.
+        if isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError):
+            raise TimeoutError(
+                f"{'POST' if data is not None else 'GET'} {path} got no answer within {timeout:g}s"
+            ) from exc
+        raise
     if not payload:
         return None
     try:
@@ -555,7 +569,7 @@ class Server:
     def __enter__(self) -> Server:
         try:
             wait_for(
-                lambda: http(self.base, "/health"),
+                lambda: http(self.base, "/health", timeout=POLL_HTTP_TIMEOUT_S),
                 STARTUP_TIMEOUT_S,
                 f"the packaged server to answer /health (log: {self.log_path.name})",
             )
@@ -622,7 +636,7 @@ class Server:
 
     def await_complete(self, job: str) -> Any:
         def check() -> Any:
-            status = http(self.base, f"/api/status/{job}")
+            status = http(self.base, f"/api/status/{job}", timeout=POLL_HTTP_TIMEOUT_S)
             state = str(status.get("status"))
             if state in ("error", "cancelled"):
                 raise QualificationError(

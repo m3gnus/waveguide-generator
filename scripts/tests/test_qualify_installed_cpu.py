@@ -15,12 +15,14 @@ recorded as owed rather than simulated.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import inspect
 import io
 import json
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -2506,3 +2508,67 @@ def test_a_copy_that_differs_from_the_fixture_is_refused_before_it_is_ingested(
     assert "bytes" in failure
     assert "ingest" not in section
     assert not (tmp_path / "work" / gate.IMPORTED_DATA_DIR_NAME / "ingest-request.json").exists()
+
+
+@pytest.fixture
+def silent_server():
+    """A local server that accepts connections and never answers one."""
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(8)
+    held: list[socket.socket] = []
+    stop = threading.Event()
+
+    def accept() -> None:
+        listener.settimeout(0.05)
+        while not stop.is_set():
+            try:
+                held.append(listener.accept()[0])
+            except OSError:
+                continue
+
+    thread = threading.Thread(target=accept, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{listener.getsockname()[1]}"
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+        for connection in held:
+            connection.close()
+        listener.close()
+
+
+def test_a_server_that_accepts_and_never_answers_fails_fast_with_evidence(silent_server: str) -> None:
+    started = time.monotonic()
+    with pytest.raises(TimeoutError, match=r"GET /health got no answer within 0\.5s"):
+        gate.http(silent_server, "/health", timeout=0.5)
+    assert time.monotonic() - started < 10.0
+
+
+def test_a_wait_on_a_silent_server_ends_inside_its_deadline_naming_the_silence(
+    silent_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gate, "POLL_HTTP_TIMEOUT_S", 0.3)
+    started = time.monotonic()
+    with pytest.raises(gate.QualificationError, match=r"got no answer within 0\.3s"):
+        gate.wait_for(
+            lambda: gate.http(silent_server, "/health", timeout=gate.POLL_HTTP_TIMEOUT_S),
+            1.0,
+            "the server to answer /health",
+            interval=0.05,
+        )
+    assert time.monotonic() - started < 10.0
+
+
+def test_the_polling_waits_use_the_short_timeout_not_the_long_request_default() -> None:
+    quit_gate = importlib.util.spec_from_file_location(
+        "qualify_installed_quit_poll_under_test",
+        Path(gate.__file__).with_name("qualify_installed_quit.py"),
+    )
+    assert quit_gate is not None
+    source = Path(quit_gate.origin).read_text(encoding="utf-8")
+    assert "timeout=POLL_HTTP_TIMEOUT_S" in source
+    assert 'timeout=10.0' not in source
+    assert gate.POLL_HTTP_TIMEOUT_S < 30.0 < 120.0

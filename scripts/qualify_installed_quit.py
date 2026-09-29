@@ -47,6 +47,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a package
     DESIGN,
+    POLL_HTTP_TIMEOUT_S,
     QualificationError,
     http,
     isolated_environment,
@@ -339,7 +340,7 @@ class Run:
 
         def serving() -> bool:
             run.fail_if_exited("starting")
-            return http(run.base, "/api/jobs", timeout=10.0) is not None
+            return http(run.base, "/api/jobs", timeout=POLL_HTTP_TIMEOUT_S) is not None
 
         wait_for(serving, START_TIMEOUT_S, f"the server to answer (log: {output})", interval=0.5)
         return run
@@ -475,7 +476,7 @@ def run_gate(
 
         second = Run.start(interpreter, app, base_environment, data_dir, work / "second")
         runs.append(second)
-        status = http(second.base, f"/api/status/{job}")
+        status = http(second.base, f"/api/status/{job}", timeout=POLL_HTTP_TIMEOUT_S)
         report["next_start_job"] = {
             key: status.get(key) for key in ("status", "stage_message", "error_message")
         }
