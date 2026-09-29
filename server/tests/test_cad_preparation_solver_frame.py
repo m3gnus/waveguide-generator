@@ -22,10 +22,11 @@ import pytest
 
 from server.cadlink import ingest as ingest_module
 from server.cadlink import preparation, solve_command
-from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation, run_delivery_pass
+from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation
 from server.cadlink.solver_frame import CONTRACT, confirm_frame
 
-from test_cad_preparation import Harness, _accept, _manifest, _revision, _setup
+from cad_backends import Harness, backend_fixture, old_only
+from test_cad_preparation import _accept, _manifest, _revision, _setup
 from test_cad_preparation_design_gate import MesherStandIn
 
 
@@ -63,21 +64,40 @@ class Recording(MesherStandIn):
         return result
 
 
+BACKEND_FIXTURES = ("real",)
+
+
 @pytest.fixture
-def real(tmp_path, monkeypatch) -> tuple[Harness, Recording]:
-    harness = Harness(tmp_path)
+def real(request, tmp_path, monkeypatch):
+    """The CAD-solve backend under test (cad_backends.py), meshing through the real ingest."""
+
+    backend = backend_fixture(request, tmp_path)
+    harness = next(backend)
     mesher = Recording()
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
-    return harness, mesher
+    yield harness, mesher
+    backend.close()
 
 
 def _context(harness: Harness):
+    """The operations backend's context with the production ingest (operations-only scenarios)."""
+
     return dataclasses.replace(harness.context(), ingest=ingest_module.ingest_bundle)
 
 
 def _prepare(harness: Harness, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
     kwargs.setdefault("setup_revision_id", _revision(harness.store, _setup()))
-    return asyncio.run(prepare_operation(_context(harness), operation_id, PreparationInput(**kwargs)))
+    return harness.prepare(operation_id, ingest=ingest_module.ingest_bundle, **kwargs)
+
+
+def _patch_everywhere(monkeypatch: pytest.MonkeyPatch, name: str, replacement: Any) -> None:
+    """Replace a helper the preparation calls, in whichever module the backend calls it from."""
+
+    from server.jobs import cad_preparation
+
+    for module in (preparation, cad_preparation):
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, replacement)
 
 
 def _received(harness: Harness, name: str, manifest: dict[str, Any], step: bytes, command: str = "cmd-1") -> None:
@@ -151,13 +171,11 @@ def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(rea
     _received(harness, "authored", _with_degraded_skip(_authored(step)), step)
     revision = _revision(harness.store, _setup())
 
-    waiting = asyncio.run(prepare_operation(
-        _context(harness), "cmd-1", PreparationInput(setup_revision_id=revision)
-    ))
+    waiting = _prepare(harness, setup_revision_id=revision)
     assert _waiting_for_frame(waiting), waiting
     confirm_frame(harness.store, _record(harness, waiting), "+z")
 
-    review = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+    review = harness.prepare("cmd-1", ingest=ingest_module.ingest_bundle)
     assert (review["state"], review["reason"]) == (
         "needs_user_input", "findings_need_review"
     ), review
@@ -168,14 +186,12 @@ def test_revisionless_manual_solve_followups_reuse_the_preparations_settings(rea
         if finding.get("blocking")
     ]
 
-    solved = asyncio.run(prepare_operation(
-        _context(harness),
+    solved = harness.prepare(
         "cmd-1",
-        PreparationInput(
-            approve_preparation_id=review["preparationId"],
-            approve_finding_ids=tuple(blocking),
-        ),
-    ))
+        ingest=ingest_module.ingest_bundle,
+        approve_preparation_id=review["preparationId"],
+        approve_finding_ids=tuple(blocking),
+    )
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert solved["preparationId"] == waiting["preparationId"]
@@ -194,7 +210,7 @@ def test_preparation_surveys_the_frame_inside_its_command(real, monkeypatch) -> 
         surveyed.append(str(record["ingest_id"]))
         return None
 
-    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
+    _patch_everywhere(monkeypatch, "ensure_frame_suggestion", survey)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     summary = _prepare(harness)
@@ -208,7 +224,7 @@ def test_a_failing_survey_never_fails_the_preparation(real, monkeypatch) -> None
     def survey(store, record):
         raise RuntimeError("survey exploded")
 
-    monkeypatch.setattr(preparation, "ensure_frame_suggestion", survey)
+    _patch_everywhere(monkeypatch, "ensure_frame_suggestion", survey)
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     assert _waiting_for_frame(_prepare(harness))
@@ -271,16 +287,21 @@ def test_an_automatic_continuation_after_the_update_restart_keeps_the_axis_shown
     assert harness.submitted == []
 
     confirm_frame(harness.store, _record(harness, parked), "+x")
-    harness.blocked = None
-    assert preparation.requeue_restart_parked(_context(harness)) == ["cmd-1"]
-    # The loop's continuation: an empty request, as run_delivery_pass sends.
-    continued = asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput()))
+    # The restart is called off. What the latch held continues by itself with no
+    # axis of its own (the delivery loop's continuation, or the lane's).
+    harness.ingest = ingest_module.ingest_bundle
+    harness.release_latch()
+    continued = harness.summary()
 
     assert _waiting_for_frame(continued), continued
     assert "+x now, not the +z WG showed" in continued["message"]
     assert harness.submitted == []
 
 
+@old_only(
+    "the HTTP handler's admission write and the operation's generation",
+    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
+)
 def test_a_press_admitted_then_overtaken_by_the_update_restart_keeps_its_axis(real, monkeypatch) -> None:
     """The reviewer's round-3 reproduction, through the HTTP handler: a +z press
     passes the route's restart check, the restart is approved while the press
@@ -340,6 +361,10 @@ def test_a_press_admitted_then_overtaken_by_the_update_restart_keeps_its_axis(re
     assert harness.submitted == []
 
 
+@old_only(
+    "the route's admission write on the operation",
+    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
+)
 def test_the_route_keeps_an_admitted_press_axis_before_anything_starts(real, monkeypatch) -> None:
     """Kept at admission, by the handler itself: even an attempt that never
     runs (WG stopped right after answering) leaves the axis on the operation."""
@@ -372,6 +397,10 @@ def test_the_route_keeps_an_admitted_press_axis_before_anything_starts(real, mon
     assert harness.store.get_operation("cmd-1")["frame_axis"] == "-y"
 
 
+@old_only(
+    "an attempt claim and the axis written before it",
+    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
+)
 def test_a_press_the_restart_overtakes_before_its_claim_keeps_its_axis(real) -> None:
     """The same, for any caller of prepare_operation: kept before the early return."""
 
@@ -440,6 +469,10 @@ def _stale_press_interleaving(harness: Harness, monkeypatch, stale_write_from: s
 
 
 @pytest.mark.parametrize("stale_write_from", ["route", "prepare"])
+@old_only(
+    "a stale press's generation-fenced write",
+    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
+)
 def test_a_superseded_press_never_replaces_the_newer_axis(real, monkeypatch, stale_write_from: str) -> None:
     """The reviewer's round-4 interleaving, through the handler: the older
     press's write lands after the newer press prepared along +x."""
@@ -464,6 +497,10 @@ def test_a_superseded_press_never_replaces_the_newer_axis(real, monkeypatch, sta
     assert harness.submitted == []
 
 
+@old_only(
+    "presses replacing the axis of one operation; a job's press is a new job",
+    "test_job_cad_lane.py::test_a_job_keeps_the_axis_its_press_showed_across_a_restart_and_solve_again",
+)
 def test_a_genuinely_newer_press_replaces_the_axis(real) -> None:
     """The control: presses in order, the later one wins -- also when the
     first was only admitted (held by the update restart, still received)."""
@@ -484,15 +521,14 @@ def test_a_genuinely_newer_press_replaces_the_axis(real) -> None:
 
 
 def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_another(real) -> None:
-    from server.cadlink.store import CadLinkStore
-
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     waiting = _prepare(harness, expected_frame_axis="+z")
     assert _waiting_for_frame(waiting)
-    # Kept by the store: a restarted WG reads it back.
-    assert CadLinkStore(harness.store.db_path).get_operation("cmd-1")["frame_axis"] == "+z"
+    # Kept durably: a restarted WG reads it back.
+    harness.restart()
+    assert harness.held_axis() == "+z"
 
     # Another window confirms +x; a retry that names no axis is held to +z.
     confirm_frame(harness.store, _record(harness, waiting), "+x")
@@ -503,7 +539,7 @@ def test_the_axis_shown_holds_across_retries_and_a_restart_until_a_press_names_a
     # A press naming the axis now shown replaces it, and solves along it.
     solved = _prepare(harness, expected_frame_axis="+x")
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
-    assert harness.store.get_operation("cmd-1")["frame_axis"] == "+x"
+    assert harness.held_axis() == "+x"
     assert _record(harness, solved)["normalisation"]["solver_frame"]["axis"] == "+x"
 
 
@@ -516,7 +552,7 @@ def test_a_request_no_one_named_an_axis_for_is_held_to_none(real) -> None:
     confirm_frame(harness.store, _record(harness, _prepare(harness)), "+y")
     solved = _prepare(harness)
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
-    assert harness.store.get_operation("cmd-1")["frame_axis"] is None
+    assert harness.held_axis() is None
 
 
 def _stated(document_up: str | None) -> dict[str, Any]:
@@ -574,7 +610,17 @@ def test_a_preparation_resumes_only_in_the_same_complete_frame_not_the_same_axis
     same = preparation.resolution_identity(resolution(None))
     other = preparation.resolution_identity(resolution("+y"))
     assert same["axis"] == other["axis"] == "+x" and same != other
-    resume = preparation._resumable
+    def resume_by_row(store, row, *args):
+        return preparation._resumable(store, row, *args)
+
+    def resume_by_record(store, _row, *args):
+        return preparation.resumable_record(store, store.get_preparation("wgp_1"), *args)
+
+    for resume in (resume_by_row, resume_by_record):
+        _resumes_only_in_the_same_frame(resume, row, z_up, y_up, same, other)
+
+
+def _resumes_only_in_the_same_frame(resume, row, z_up, y_up, same, other) -> None:
     # The same complete frame resumes (the control)...
     assert resume(_PreparedStore(z_up), row, "wgs_1", "sha256:s", "semantics", same) == z_up
     assert resume(_PreparedStore(y_up), row, "wgs_1", "sha256:s", "semantics", other) == y_up
@@ -690,13 +736,11 @@ def test_a_jobs_refusal_for_the_frame_keeps_that_reason_and_releases_the_binding
         reason_code = "frame_confirmation_required"
 
     harness.submit_error = FrameRefused("frame_confirmation_required: confirm it again")
-    context = dataclasses.replace(_context(harness), submission_refusals=(FrameRefused,))
-    summary = asyncio.run(prepare_operation(
-        context, "cmd-1", PreparationInput(setup_revision_id=_revision(harness.store, _setup()))
-    ))
+    harness.refusals.append(FrameRefused)
+    summary = _prepare(harness, setup_revision_id=_revision(harness.store, _setup()))
 
     assert _waiting_for_frame(summary), summary
-    assert harness.row()["request_json"] is None
+    assert harness.bound_request() is None
 
 
 def test_the_delivery_loop_reaches_the_frame_gate(real, monkeypatch) -> None:
@@ -713,25 +757,19 @@ def test_the_delivery_loop_reaches_the_frame_gate(real, monkeypatch) -> None:
             preparation.validate_setup(_setup()), _revision(store, _setup())
         ),
     )
-    context = _context(harness)
-    tasks: list[Any] = []
-
-    async def one_pass() -> list[str]:
-        started = await run_delivery_pass(
-            context, spawn=lambda _operation_id, coroutine: tasks.append(asyncio.ensure_future(coroutine))
-        )
-        await asyncio.gather(*tasks)
-        return started
-
-    assert asyncio.run(one_pass()) == ["cmd-1"]
-    summary = preparation.operation_summary(harness.row())
+    harness.ingest = ingest_module.ingest_bundle  # the loop meshes through the production ingest
+    assert harness.delivery_pass() == ["cmd-1"]
+    summary = harness.summary()
     assert _waiting_for_frame(summary), summary
     assert harness.submitted == []
     # Waiting for the user is never retried unasked.
-    tasks.clear()
-    assert asyncio.run(one_pass()) == []
+    assert harness.delivery_pass() == []
 
 
+@old_only(
+    "the live HTTP delivery route (removed in Stage 5)",
+    "S4-F1 (the live path is deleted in Stage 5)",
+)
 def test_a_live_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
     """The HTTP delivery route (CADLINK-LIVE-PROTOCOL.md section 8) meets the same gate."""
 
@@ -810,7 +848,7 @@ def test_the_record_is_gated_even_when_the_manifest_resolution_says_linked(real,
     harness, _mesher = real
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
-    monkeypatch.setattr(preparation, "resolve_solver_frame", lambda *_args, **_kwargs: None)
+    _patch_everywhere(monkeypatch, "resolve_solver_frame", lambda *_args, **_kwargs: None)
 
     summary = _prepare(harness)
 
@@ -836,7 +874,7 @@ def test_an_unreadable_retained_manifest_is_replaced_and_still_never_read_as_lin
     _received(harness, "authored", _authored(step), step)
     first = _prepare(harness)
     assert _waiting_for_frame(first)
-    manifest_sha = json.loads(harness.row()["snapshot_json"])["manifest_sha256"]
+    manifest_sha = harness.snapshot()["manifest_sha256"]
     copy = retained_snapshot_path(harness.data_dir, manifest_sha)
     (copy / "wgreturn.json").write_text("{not json", encoding="utf-8")
 
@@ -859,7 +897,7 @@ def test_an_unreadable_retained_manifest_with_the_return_gone_waits(real) -> Non
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
     assert _waiting_for_frame(_prepare(harness))
-    manifest_sha = json.loads(harness.row()["snapshot_json"])["manifest_sha256"]
+    manifest_sha = harness.snapshot()["manifest_sha256"]
     (retained_snapshot_path(harness.data_dir, manifest_sha) / "wgreturn.json").write_text(
         "{not json", encoding="utf-8"
     )

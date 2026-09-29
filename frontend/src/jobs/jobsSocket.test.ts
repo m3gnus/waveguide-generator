@@ -85,6 +85,32 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('accepts a solve that has no run number yet, and refuses a number that cannot be one', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    // Being prepared, or refused: it was never a run, so it has no number (the server
+    // assigns one when the solve is queued).
+    socket.message({
+      v: 1, kind: 'snapshot', epoch: 4, cursor: 3,
+      jobs: [
+        job({ id: 'prep', status: 'preparing', stage: 'validating', run_number: null }),
+        job({ id: 'refused', status: 'error', run_number: null }),
+        job({ id: 'run', status: 'queued', run_number: 7 }),
+      ],
+    });
+    expect(manager.getSnapshot().jobs.map((item) => [item.id, item.run_number])).toEqual(
+      expect.arrayContaining([['prep', null], ['refused', null], ['run', 7]]),
+    );
+    // Anything else that is not a positive integer is still refused.
+    for (const bad of [0, -1, 1.5, '3', undefined]) {
+      socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 4, jobs: [job({ id: 'bad', run_number: bad as unknown as number })] });
+      expect(manager.getSnapshot().jobs.map((item) => item.id)).not.toContain('bad');
+    }
+    manager.stop();
+  });
+
   it('routes an add-in session/declaration change as an explicit CAD event', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

@@ -2496,7 +2496,7 @@ export function ResultsPanel() {
   // both are needed because two runs can share a timestamp to the second.
   const newRun = useMemo(() => {
     if (!latest || !primaryJob || latest.id === selection.primary || latest.id === dismissedNewRun) return null;
-    const newer = latest.run_number > primaryJob.run_number
+    const newer = (latest.run_number ?? 0) > (primaryJob.run_number ?? 0)
       || Date.parse(latest.created_at) > Date.parse(primaryJob.created_at);
     return newer ? latest : null;
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);

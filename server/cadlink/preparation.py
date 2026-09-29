@@ -32,7 +32,7 @@ through its submission key, never by submitting a changed request.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -865,7 +865,33 @@ def _resumable(
     preparation_id = row.get("preparation_id")
     if not preparation_id:
         return None
-    preparation = store.get_preparation(str(preparation_id))
+    return resumable_record(
+        store,
+        store.get_preparation(str(preparation_id)),
+        revision_id,
+        manifest_sha256,
+        semantics,
+        frame,
+        domain,
+    )
+
+
+def resumable_record(
+    store: CadLinkStore,
+    preparation: Mapping[str, Any] | None,
+    revision_id: str,
+    manifest_sha256: str,
+    semantics: str,
+    frame: Mapping[str, Any] | None = None,
+    domain: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """``_resumable``'s test, for a preparation however it was recorded.
+
+    ``preparation`` names its ``setup_revision_id``, ``snapshot_sha256``,
+    ``meshing_semantics`` and ``ingest_id``: the operation's row, or the job's
+    ``task_metadata.cad.preparation`` (server/jobs/cad_preparation.py).
+    """
+
     if (
         preparation is None
         or preparation["setup_revision_id"] != revision_id
@@ -1497,6 +1523,42 @@ def _cad_provenance(
     ``record_solved_frame_provenance``.
     """
 
+    preparation_id = bound.get("preparation_id")
+    row = store.get_preparation(str(preparation_id)) if preparation_id else None
+    return cad_provenance_record(
+        store,
+        operation_id,
+        solve_request,
+        revision_id,
+        preparation=(
+            {
+                "preparation_id": row["preparation_id"],
+                "report_sha256": row["report_sha256"],
+                "blocking_finding_ids": json.loads(row["blocking_findings_json"]),
+                "meshing_semantics": row["meshing_semantics"],
+            }
+            if row is not None
+            else None
+        ),
+        approvals=json.loads(bound["approvals_json"]) if bound.get("approvals_json") else [],
+    )
+
+
+def cad_provenance_record(
+    store: CadLinkStore,
+    operation_id: str,
+    solve_request: SolveRequest,
+    revision_id: str | None,
+    *,
+    preparation: Mapping[str, Any] | None,
+    approvals: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """The record ``_cad_provenance`` builds, from the parts of one preparation.
+
+    Shared with the job-owned preparation (server/jobs/cad_preparation.py), so a
+    job made either way keeps the same ``task_metadata.cad``.
+    """
+
     provenance: dict[str, Any] = {"operation_id": operation_id}
     revision = store.get_setup_revision(revision_id) if revision_id else None
     if revision is not None:
@@ -1512,14 +1574,11 @@ def _cad_provenance(
             store, record,
             automatic=record_solved_frame_provenance(store, record) == "automatic",
         )
-    preparation_id = bound.get("preparation_id")
-    preparation = store.get_preparation(str(preparation_id)) if preparation_id else None
     if preparation is not None:
-        approvals = json.loads(bound["approvals_json"]) if bound.get("approvals_json") else []
         provenance["preparation"] = {
             "preparation_id": preparation["preparation_id"],
             "report_sha256": preparation["report_sha256"],
-            "blocking_finding_ids": json.loads(preparation["blocking_findings_json"]),
+            "blocking_finding_ids": list(preparation["blocking_finding_ids"]),
             "approvals": [
                 item for item in approvals
                 if isinstance(item, Mapping)

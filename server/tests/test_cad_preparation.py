@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import closing
-import dataclasses
 import hashlib
 import json
 import math
@@ -22,7 +21,7 @@ import sqlite3
 import stat
 import time
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any
 
 import pytest
 
@@ -36,7 +35,6 @@ from server.cadlink.operations import (
     request_digest,
 )
 from server.cadlink.preparation import (
-    PreparationContext,
     PreparationInput,
     operation_summary,
     prepare_operation,
@@ -47,6 +45,15 @@ from server.cadlink.setup import setup_content, setup_digest, validate_setup
 from server.cadlink.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import WgReturnError, read_wgreturn
+
+from cad_backends import (
+    FakeIngest,  # noqa: F401 - the other CAD-solve scenario modules import it from here
+    Harness,
+    Refused,
+    backend_fixture,
+    backend_free,
+    old_only,
+)
 
 
 def _manifest(
@@ -137,120 +144,14 @@ def _revision(store: CadLinkStore, setup: dict[str, Any]) -> str:
     return str(store.create_setup_revision(setup_content(parsed), setup_digest(parsed))["revision_id"])
 
 
-class FakeIngest:
-    """``ingest_bundle`` without the mesher: it commits a real record, fenced."""
-
-    def __init__(self, *, findings: list[dict[str, Any]] | None = None) -> None:
-        self.calls: list[dict[str, Any]] = []
-        self.findings = findings or []
-        self.during: Callable[[], object] | None = None
-        self.error: BaseException | None = None
-        self.polar_grid_derivation: dict[str, Any] | None = None
-        self.symmetry: dict[str, Any] | None = None
-
-    def __call__(
-        self, bundle_path, mesh, skipped, store, data_dir, *, prep_options, commit_guard,
-        retained_copy=False, defer_viewport=False, expected_design_id=None,
-        expected_instance_id=None,
-    ):
-        self.calls.append(
-            {
-                "bundle_path": str(bundle_path),
-                "mesh": dict(mesh),
-                "retained_copy": retained_copy,
-                "defer_viewport": defer_viewport,
-                "expected_design_id": expected_design_id,
-                "expected_instance_id": expected_instance_id,
-            }
-        )
-        # Stage 1 exactly as ingest_bundle reads it.
-        bundle = ingest_module.read_snapshot(bundle_path, retained=retained_copy)
-        if self.during is not None:
-            self.during()
-        if self.error is not None:
-            raise self.error
-
-        def record(ingest_id: str, now: str) -> str:
-            payload = {
-                "ingest_id": ingest_id,
-                "manifest_sha256": bundle.manifest_sha256,
-                "artifact_sha256": bundle.artifact_sha256,
-                "findings": self.findings,
-                "created_at": now,
-                "document": {"return_state_hash": "sha256:" + "5" * 64},
-            }
-            if self.polar_grid_derivation is not None:
-                payload["polar_grid_derivation"] = self.polar_grid_derivation
-            if self.symmetry is not None:
-                payload["symmetry"] = self.symmetry
-            payload["report_sha256"] = "sha256:" + hashlib.sha256(
-                json.dumps(payload, sort_keys=True).encode()
-            ).hexdigest()
-            return json.dumps(payload)
-
-        row = store.allocate_ingest(
-            manifest_sha256=bundle.manifest_sha256,
-            artifact_sha256=bundle.artifact_sha256,
-            record_builder=record,
-            commit_guard=commit_guard,
-        )
-        return json.loads(row["record_json"])
-
-
-class Refused(ValueError):
-    """Stands in for the jobs system refusing a request it cannot take."""
-
-    reason_code = "imported_engine_unsupported"
-
-
-class Harness:
-    def __init__(self, tmp_path: Path) -> None:
-        self.data_dir = tmp_path / "data"
-        self.workspace = tmp_path / "workspace"
-        self.store = CadLinkStore(tmp_path / "cadlink.db")
-        self.ingest = FakeIngest()
-        self.jobs: dict[str, str] = {}
-        self.submitted: list[Any] = []
-        self.provenance: list[Any] = []
-        self.submit_error: BaseException | None = None
-        self.published: list[dict[str, Any]] = []
-        self.blocked: str | None = None
-
-    async def _submit(self, request, cad_provenance=None) -> str:
-        self.submitted.append(request)
-        self.provenance.append(cad_provenance)
-        if self.submit_error is not None:
-            error, self.submit_error = self.submit_error, None
-            raise error
-        job_id = f"job-{len(self.submitted)}"
-        self.jobs[str(request.client_request_id)] = job_id
-        return job_id
-
-    def context(self) -> PreparationContext:
-        return PreparationContext(
-            store=self.store,
-            data_dir=self.data_dir,
-            workspace_root=self.workspace.resolve() if self.workspace.exists() else None,
-            submit=self._submit,
-            job_for_submission=self.jobs.get,
-            publish=self.published.append,
-            submission_refusals=(Refused,),
-            submission_blocked=lambda: self.blocked,
-            ingest=self.ingest,
-        )
-
-    def prepare(self, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
-        return asyncio.run(prepare_operation(self.context(), operation_id, PreparationInput(**kwargs)))
-
-    def row(self, operation_id: str = "cmd-1") -> dict[str, Any]:
-        row = self.store.get_operation(operation_id)
-        assert row is not None
-        return row
+BACKEND_FIXTURES = ("harness",)
 
 
 @pytest.fixture
-def harness(tmp_path: Path) -> Harness:
-    return Harness(tmp_path)
+def harness(request, tmp_path: Path):
+    """The CAD-solve backend under test: the operations, then the jobs (cad_backends.py)."""
+
+    yield from backend_fixture(request, tmp_path)
 
 
 def _received(
@@ -276,6 +177,7 @@ def _collect(harness: Harness) -> Any:
 # -- setup revisions ---------------------------------------------------------------
 
 
+@backend_free
 def test_a_setup_revision_is_immutable_and_named_by_its_content(harness: Harness) -> None:
     first = _revision(harness.store, _setup())
     again = _revision(harness.store, _setup())
@@ -311,11 +213,10 @@ def test_a_solve_is_prepared_from_the_retained_snapshot_and_submitted_once(harne
     request = harness.submitted[0]
     assert request.client_request_id == "cad-solve:cmd-1"
     assert request.geometry.ingest_id == summary["preparationId"]
-    row = harness.row()
-    assert json.loads(row["request_json"])["client_request_id"] == "cad-solve:cmd-1"
-    assert row["setup_revision_id"] == revision
+    assert harness.bound_request()["client_request_id"] == "cad-solve:cmd-1"
+    assert harness.bound_setup_revision() == revision
     # Every committed stage was published, in order.
-    stages = [item["stage"] for item in harness.published]
+    stages = harness.stage_log()
     for expected in ("validating", "preparing-mesh", "ready", "submitted"):
         assert expected in stages
     assert stages.index("validating") < stages.index("preparing-mesh") < stages.index("ready") < stages.index("submitted")
@@ -341,8 +242,7 @@ def test_a_first_cad_authored_model_is_solved_with_wg_default_settings(harness: 
     assert request.geometry.mesh.source_size_mm == {"source-hf": 4.0}
     assert [channel.id for channel in request.geometry.drive_channels] == ["drive-hf"]
     # The revision it solved with is bound to the operation and says it is WG's defaults.
-    row = harness.row()
-    assert row["setup_revision_id"] == summary["setupRevisionId"]
+    assert harness.bound_setup_revision() == summary["setupRevisionId"]
     revision = json.loads(harness.store.get_setup_revision(summary["setupRevisionId"])["setup_json"])
     assert revision["origin"] == "wg_defaults"
 
@@ -372,6 +272,7 @@ def test_a_named_setup_revision_that_is_gone_still_waits(harness: Harness) -> No
     summary = harness.prepare(setup_revision_id="wgs_gone")
 
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "setup_required")
+    assert summary["message"] == "Choose the solve settings for Tritonia speaker in WG, then solve it."
     assert harness.ingest.calls == [] and harness.submitted == []
 
 
@@ -391,8 +292,7 @@ def test_an_accepted_return_still_prepares_after_its_folder_is_removed_and_wg_re
     _received(harness, sized=False)
     assert harness.prepare()["reason"] == "setup_required"  # retained, then waits
     shutil.rmtree(harness.workspace)
-    harness.store.close()
-    harness.store = CadLinkStore(tmp_path / "cadlink.db")  # the restart
+    harness.restart()
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
@@ -415,11 +315,11 @@ def test_a_delivered_return_is_retained_before_its_delivery_is_acknowledged(
     _collect(harness)
 
     assert list(requests.iterdir()) == []  # acknowledged
-    assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest
+    assert harness.store.get_operation("cmd-1") is not None
+    assert json.loads(harness.store.get_operation("cmd-1")["snapshot_json"])["manifest_sha256"] == manifest
     # Nothing prepared it before its folder went and WG restarted.
     shutil.rmtree(harness.workspace)
-    harness.store.close()
-    harness.store = CadLinkStore(tmp_path / "cadlink.db")
+    harness.restart()
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
 
@@ -504,6 +404,10 @@ def test_a_domain_mirrored_on_a_plane_holding_the_radiation_axis_is_solved(
 # -- fencing -------------------------------------------------------------------------
 
 
+@old_only(
+    "an attempt generation and a takeover; the job has no takeover",
+    "test_job_cad_lane.py::test_a_lane_that_lost_its_job_commits_and_writes_nothing",
+)
 def test_an_old_attempt_finishing_after_a_takeover_changes_nothing(harness: Harness) -> None:
     _received(harness)
     revision = _revision(harness.store, _setup())
@@ -526,7 +430,7 @@ def test_an_old_attempt_finishing_after_a_takeover_changes_nothing(harness: Harn
 
 def test_a_dismissal_during_preparation_stops_the_attempt(harness: Harness) -> None:
     _received(harness)
-    harness.ingest.during = lambda: harness.store.request_cancel("cmd-1")
+    harness.ingest.during = lambda: harness.dismiss()
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
@@ -536,6 +440,10 @@ def test_a_dismissal_during_preparation_stops_the_attempt(harness: Harness) -> N
         assert conn.execute("SELECT COUNT(*) FROM ingests").fetchone()[0] == 0
 
 
+@old_only(
+    "an operation no attempt holds is dismissed on the ledger",
+    "test_job_cad_lane.py::test_a_job_stopped_before_its_lane_takes_it_is_never_prepared",
+)
 def test_an_idle_operation_is_dismissed_at_once(harness: Harness) -> None:
     _received(harness)
 
@@ -545,7 +453,7 @@ def test_an_idle_operation_is_dismissed_at_once(harness: Harness) -> None:
 
 def test_a_dismissal_stands_when_the_fenced_attempt_then_fails(harness: Harness) -> None:
     _received(harness)
-    harness.ingest.during = lambda: harness.store.request_cancel("cmd-1")
+    harness.ingest.during = lambda: harness.dismiss()
     harness.ingest.error = ChildRefusal("mesh", "the isolated CAD child crashed")
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
@@ -558,7 +466,7 @@ def test_a_dismissal_during_a_refused_submission_stands(harness: Harness) -> Non
     original = harness._submit
 
     async def dismissed_then_refused(request, **kw):
-        harness.store.request_cancel("cmd-1")
+        await harness.adismiss()
         harness.submitted.append(request)
         raise Refused("the selected engine cannot take this record; pick one of: bempp")
 
@@ -571,6 +479,10 @@ def test_a_dismissal_during_a_refused_submission_stands(harness: Harness) -> Non
     assert again["state"] == "cancelled" and len(harness.submitted) == 1
 
 
+@old_only(
+    "a dismissal racing the submission, decided by the generation",
+    "test_job_cad_binding.py::test_a_stop_and_the_binding_race_and_exactly_one_wins",
+)
 def test_a_job_created_as_the_user_dismisses_is_still_recorded(harness: Harness) -> None:
     _received(harness)
     original = harness._submit
@@ -593,6 +505,10 @@ class _ProcessStopped(BaseException):
     """The backend stopping mid-submission: nothing after it runs."""
 
 
+@old_only(
+    "a bound request left behind by a crash",
+    "test_job_cad_binding.py::test_binding_is_one_transaction_a_kill_before_commit_leaves_preparing",
+)
 def test_a_setup_change_after_binding_does_not_alter_the_recovery(harness: Harness) -> None:
     _received(harness)
     harness.submit_error = _ProcessStopped()
@@ -620,7 +536,7 @@ def test_a_failed_submission_that_created_nothing_releases_the_binding(harness: 
     failed = harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="metal")))
 
     assert (failed["state"], failed["reason"]) == ("needs_user_input", "submission_refused")
-    assert harness.row()["request_json"] is None
+    assert harness.bound_request() is None
     accepted = harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="bempp")))
     assert accepted["state"] == "accepted" and harness.submitted[-1].options.engine == "bempp"
 
@@ -639,6 +555,10 @@ def test_a_revisionless_retry_reuses_the_failed_preparations_settings(harness: H
     assert harness.submitted[-1].options.engine == "metal"
 
 
+@old_only(
+    "reconcile-by-key after a lost submission",
+    "test_job_cad_lane.py::test_accepting_the_same_delivery_twice_is_the_job_it_made",
+)
 def test_a_submission_key_conflict_is_the_job_that_key_made(harness: Harness) -> None:
     from server.jobs.store import SubmissionConflictError
 
@@ -658,6 +578,10 @@ def test_a_submission_key_conflict_is_the_job_that_key_made(harness: Harness) ->
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-browser")
 
 
+@old_only(
+    "a job created and its answer lost",
+    "test_job_cad_binding.py::test_binding_is_one_transaction_a_kill_after_commit_leaves_queued_with_the_mesh",
+)
 def test_wg_stopping_after_the_job_exists_recovers_that_job(harness: Harness) -> None:
     _received(harness)
     revision = _revision(harness.store, _setup())
@@ -676,6 +600,10 @@ def test_wg_stopping_after_the_job_exists_recovers_that_job(harness: Harness) ->
     assert len(harness.submitted) == 1
 
 
+@old_only(
+    "recovery of an operation that never recorded its job",
+    "test_job_cad_lane.py::test_accepting_the_same_delivery_twice_is_the_job_it_made",
+)
 def test_startup_recovers_a_job_created_before_the_acknowledgement(harness: Harness) -> None:
     _received(harness)
     row = harness.row()
@@ -687,6 +615,10 @@ def test_startup_recovers_a_job_created_before_the_acknowledgement(harness: Harn
     assert (harness.row()["state"], harness.row()["job_id"]) == ("accepted", "job-9")
 
 
+@old_only(
+    "start-up takes over a held attempt by its generation",
+    "test_job_cad_lane.py::test_a_preparation_a_lane_held_when_wg_stopped_ends_refused_interrupted",
+)
 def test_startup_takes_over_an_attempt_the_stopped_backend_held(harness: Harness) -> None:
     _received(harness)
     row = harness.row()
@@ -716,6 +648,10 @@ def _app(harness: Harness, job_for_submission_key) -> SimpleNamespace:
     ))
 
 
+@old_only(
+    "the operations sweep at start-up (the ledger sweep is S4-F1)",
+    "test_job_cad_lane.py::test_a_job_no_lane_held_is_prepared_by_the_next_start",
+)
 def test_the_startup_handler_recovers_through_the_jobs_database_alone(harness: Harness) -> None:
     from server.cadlink.api import _preparation_context, _recover_on_startup
     from server.jobs.store import SubmissionConflictError
@@ -736,6 +672,10 @@ def test_the_startup_handler_recovers_through_the_jobs_database_alone(harness: H
     assert SubmissionConflictError not in asyncio.run(context()).submission_refusals
 
 
+@old_only(
+    "the operations sweep at start-up (the ledger sweep is S4-F1)",
+    "test_job_cad_lane.py::test_a_job_no_lane_held_is_prepared_by_the_next_start",
+)
 def test_a_jobs_database_not_created_yet_holds_no_job(harness: Harness) -> None:
     from server.cadlink.api import _recover_on_startup
 
@@ -758,7 +698,7 @@ def test_a_refused_submission_releases_the_binding_for_a_new_choice(harness: Har
 
     assert (refused["state"], refused["reason"]) == ("needs_user_input", "engine_cannot_solve_return")
     assert "pick one of" in refused["message"]
-    assert harness.row()["request_json"] is None
+    assert harness.bound_request() is None
     accepted = harness.prepare(setup_revision_id=_revision(harness.store, _setup(engine="bempp")))
     assert accepted["state"] == "accepted"
     assert harness.submitted[-1].options.engine == "bempp"
@@ -783,7 +723,7 @@ def test_no_solve_is_submitted_while_an_update_restart_is_pending(harness: Harne
     # Its own reason, so it is re-queued after the restart rather than left waiting.
     assert (summary["state"], summary["reason"]) == ("needs_user_input", "update_restart_pending")
     assert summary["message"] == "An update restart is pending."
-    assert harness.submitted == [] and harness.row()["request_json"] is None
+    assert harness.submitted == [] and harness.bound_request() is None
 
 
 def test_a_worker_crash_is_a_recoverable_outcome(harness: Harness) -> None:
@@ -809,7 +749,7 @@ def test_a_waiver_on_one_preparation_does_not_carry_to_the_next(harness: Harness
     harness.ingest.findings = [{"id": "healing-1", "kind": "healing-performed", "blocking": True}]
     first = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
     assert (first["state"], first["reason"]) == ("needs_user_input", "findings_need_review")
-    harness.store.add_approvals("cmd-1", first["preparationId"], ["healing-1"])
+    harness.approve(first["preparationId"], ["healing-1"])
 
     # A different setup makes a different preparation: the waiver stays behind,
     # also when it is sent along with the request.
@@ -837,6 +777,32 @@ def test_a_waiver_on_one_preparation_does_not_carry_to_the_next(harness: Harness
     assert harness.submitted[-1].geometry.acknowledged_findings == [f"{report}:healing-1"]
 
 
+def test_an_approval_given_on_a_preparation_survives_a_refused_submission(harness: Harness) -> None:
+    """Approvals are the preparation's, not the press's: the next press need not repeat them."""
+
+    _received(harness)
+    harness.ingest.findings = [{"id": "healing-1", "kind": "healing-performed", "blocking": True}]
+    revision = _revision(harness.store, _setup())
+    review = harness.prepare(setup_revision_id=revision)
+    assert review["reason"] == "findings_need_review"
+    harness.submit_error = RuntimeError("database is locked")
+    approved = harness.prepare(
+        approve_preparation_id=review["preparationId"], approve_finding_ids=("healing-1",)
+    )
+    assert (approved["state"], approved["reason"]) == ("needs_user_input", "submission_refused")
+
+    solved = harness.prepare()  # names no approval and no setup
+
+    assert (solved["state"], solved["preparationId"]) == ("accepted", review["preparationId"])
+    assert len(harness.ingest.calls) == 1
+    report = json.loads(harness.store.get_ingest(review["preparationId"])["record_json"])["report_sha256"]
+    assert harness.submitted[-1].geometry.acknowledged_findings == [f"{report}:healing-1"]
+
+
+@old_only(
+    "the approvals route records on the operation (its shim is S4-F1)",
+    "test_job_cad_lane.py::test_an_approval_given_with_solve_again_applies_to_the_resumed_preparation",
+)
 def test_an_approval_through_the_route_applies_to_the_resumed_preparation(
     harness: Harness,
 ) -> None:
@@ -878,19 +844,28 @@ def test_a_reloaded_ui_reads_the_same_stage(harness: Harness) -> None:
     _received(harness)
     harness.ingest.findings = [{"id": "healing-1", "kind": "healing-performed", "blocking": True}]
     harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
 
-    detail = asyncio.run(get_cad_operation("cmd-1", request))
-    listed = asyncio.run(list_cad_operations(request, pending=True, limit=100))
-
+    # What the UI reads, from whichever lifecycle owns the solve.
+    detail = harness.summary()
     assert (detail["state"], detail["stage"], detail["reason"]) == (
         "needs_user_input", "ready", "findings_need_review",
     )
-    assert detail["preparation"]["blockingFindingIds"] == ["healing-1"]
-    assert [item["operationId"] for item in listed["operations"]] == ["cmd-1"]
-    assert listed["operations"][0]["stage"] == "ready"
+    if harness.backend == "operations":
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
+        routed = asyncio.run(get_cad_operation("cmd-1", request))
+        listed = asyncio.run(list_cad_operations(request, pending=True, limit=100))
+        assert (routed["state"], routed["stage"], routed["reason"]) == (
+            detail["state"], detail["stage"], detail["reason"],
+        )
+        assert routed["preparation"]["blockingFindingIds"] == ["healing-1"]
+        assert [item["operationId"] for item in listed["operations"]] == ["cmd-1"]
+        assert listed["operations"][0]["stage"] == "ready"
 
 
+@old_only(
+    "route validation of the prepare request (its shim is S4-F1)",
+    "test_job_cad_lane.py::test_solve_again_names_the_setup_revision_it_was_given",
+)
 def test_a_preparation_names_a_setup_revision_that_exists(harness: Harness) -> None:
     from fastapi import HTTPException
 
@@ -1020,14 +995,17 @@ def test_cleanup_keeps_what_a_pending_operation_still_references(
     """Captured-document pruning retains the model state a pending preparation names."""
 
     from server.cadlink import api
-    from server.cadlink.api import _retained_return_states, pending_operation_return_states
+    from server.cadlink.api import _retained_return_states
 
     _received(harness)
     harness.ingest.findings = [{"id": "healing-1", "kind": "healing-performed", "blocking": True}]
     harness.prepare(setup_revision_id=_revision(harness.store, _setup()))  # waits on findings
 
-    assert pending_operation_return_states(harness.store) == ["sha256:" + "5" * 64]
-    assert asyncio.run(_retained_return_states(None, "Tritonia", harness.store)) == [
+    # The operation names its preparation's state; a job that ended refused
+    # names it in its own record (``task_metadata.cad.return_state_hash``).
+    jobs = getattr(harness, "runtime", None)
+    assert harness.held_return_states() == ["sha256:" + "5" * 64]
+    assert asyncio.run(_retained_return_states(jobs, "Tritonia", harness.store)) == [
         "sha256:" + "5" * 64
     ]
     # The cleanup a placed run document triggers holds it back too.
@@ -1037,12 +1015,14 @@ def test_cleanup_keeps_what_a_pending_operation_still_references(
         "reclaim_captured_documents",
         lambda _root, stem, retained: reclaimed.append((stem, list(retained))),
     )
-    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=harness.store, jobs_runtime=jobs,
+    )))
     asyncio.run(api._reclaim_captured_documents(request, tmp_path / "runs", "Tritonia"))
     assert reclaimed == [("Tritonia", ["sha256:" + "5" * 64])]
     # Once the operation is finished, nothing of it is held back any more.
-    harness.store.request_cancel("cmd-1")
-    assert pending_operation_return_states(harness.store) == []
+    harness.dismiss()
+    assert harness.held_return_states() == []
     # The retained snapshot itself is never pruned.
     assert list((harness.data_dir / "imports" / "bundles").iterdir())
 
@@ -1078,6 +1058,7 @@ def _retained_copy(harness: Harness) -> Path:
     return copies[0]
 
 
+@backend_free
 def test_a_retained_copy_whose_bytes_were_damaged_is_replaced_not_handed_out(
     harness: Harness,
 ) -> None:
@@ -1094,6 +1075,7 @@ def test_a_retained_copy_whose_bytes_were_damaged_is_replaced_not_handed_out(
     assert _staging_roots(harness) == []
 
 
+@backend_free
 def test_a_retained_copy_whose_manifest_is_unreadable_is_replaced(harness: Harness) -> None:
     source, retained = _write_and_retain(harness)
     copy = Path(retained["retained_path"])
@@ -1110,6 +1092,7 @@ def test_a_retained_copy_whose_manifest_is_unreadable_is_replaced(harness: Harne
     assert [p.name for p in _bundles(harness).iterdir()] == [copy.name]
 
 
+@backend_free
 def test_an_unchanged_return_is_copied_once(harness: Harness, monkeypatch) -> None:
     """Content addressing still means one copy: an intact one is kept, not remade."""
 
@@ -1128,6 +1111,7 @@ def test_an_unchanged_return_is_copied_once(harness: Harness, monkeypatch) -> No
     assert made == []
 
 
+@backend_free
 def test_a_copy_another_attempt_published_first_is_the_one_that_stands(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1160,6 +1144,7 @@ def test_a_copy_another_attempt_published_first_is_the_one_that_stands(
     assert _staging_roots(harness) == []
 
 
+@backend_free
 def test_staging_that_fails_before_publication_leaves_nothing_and_retries(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1189,6 +1174,7 @@ def test_staging_that_fails_before_publication_leaves_nothing_and_retries(
     )
 
 
+@backend_free
 def test_a_staging_directory_a_kill_left_behind_is_never_adopted(harness: Harness) -> None:
     """A restart copies again; the half-written tree a kill left is not a copy."""
 
@@ -1208,6 +1194,7 @@ def test_a_staging_directory_a_kill_left_behind_is_never_adopted(harness: Harnes
     assert (abandoned / "assembly.step").read_bytes() == b"ST"  # still only staging
 
 
+@backend_free
 def test_cleanup_removes_only_staging_directories_nothing_can_still_be_using(
     harness: Harness,
 ) -> None:
@@ -1233,6 +1220,7 @@ def test_cleanup_removes_only_staging_directories_nothing_can_still_be_using(
     assert retained_copy.is_dir()  # a retained copy is never staging rubbish
 
 
+@backend_free
 def test_staged_bytes_reach_the_disk_before_the_copy_is_published(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1358,7 +1346,7 @@ def test_a_different_valid_bundle_under_another_digest_is_never_solved(
 
     assert summary["state"] != "accepted", summary
     assert harness.ingest.calls == [] and harness.submitted == []
-    assert json.loads(harness.row()["snapshot_json"])["manifest_sha256"] == manifest_a
+    assert harness.snapshot()["manifest_sha256"] == manifest_a
 
 
 def test_a_different_valid_bundle_under_another_digest_is_replaced_by_the_right_one(
@@ -1380,6 +1368,7 @@ def test_a_different_valid_bundle_under_another_digest_is_replaced_by_the_right_
     assert (copy / "assembly.step").read_bytes() == b"STEP"  # A's geometry, not B's
 
 
+@backend_free
 def test_retaining_again_does_not_accept_a_copy_that_is_not_the_return_it_names(
     harness: Harness,
 ) -> None:
@@ -1454,6 +1443,7 @@ def test_a_damaged_copy_that_cannot_be_replaced_waits_rather_than_rejects(
     assert harness.ingest.calls == [] and harness.submitted == []
 
 
+@backend_free
 def test_a_read_only_member_is_flushed_like_any_other(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1479,6 +1469,7 @@ def test_a_read_only_member_is_flushed_like_any_other(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX directory flushing is unavailable on Windows")
+@backend_free
 def test_every_directory_of_the_staged_tree_is_flushed_before_publication(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1518,6 +1509,7 @@ def test_every_directory_of_the_staged_tree_is_flushed_before_publication(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows directory flushing is unavailable off Windows")
+@backend_free
 def test_on_windows_the_staged_file_is_flushed_and_no_directory_flush_is_claimed(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1555,6 +1547,7 @@ def test_on_windows_the_staged_file_is_flushed_and_no_directory_flush_is_claimed
     assert directories.isdisjoint(flushed)
 
 
+@backend_free
 def test_a_flush_the_filesystem_refuses_does_not_break_retaining(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1578,6 +1571,7 @@ def test_a_flush_the_filesystem_refuses_does_not_break_retaining(
     )
 
 
+@backend_free
 def test_the_copy_a_failed_replacement_moved_aside_is_not_destroyed_with_the_staging(
     harness: Harness, monkeypatch
 ) -> None:
@@ -1616,6 +1610,7 @@ def test_the_copy_a_failed_replacement_moved_aside_is_not_destroyed_with_the_sta
 # -- faults --------------------------------------------------------------------------
 
 
+@backend_free
 def test_a_malformed_return_never_blocks_the_deliveries_behind_it(harness: Harness) -> None:
     nested = harness.workspace / "wgreturn" / "nested.wgreturn"
     nested.mkdir(parents=True)
@@ -1669,7 +1664,7 @@ def test_a_setup_this_build_cannot_read_asks_for_the_settings_again(harness: Har
 
 def test_a_dismissal_stands_when_the_attempt_then_fails_unexpectedly(harness: Harness) -> None:
     _received(harness)
-    harness.ingest.during = lambda: harness.store.request_cancel("cmd-1")
+    harness.ingest.during = lambda: harness.dismiss()
     harness.ingest.error = KeyError("an unexpected failure")
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
@@ -1690,6 +1685,7 @@ def _update_link(store: CadLinkStore, operation_id: str) -> None:
     )
 
 
+@backend_free
 def test_a_cad_mutation_under_way_is_not_dismissed(harness: Harness) -> None:
     _update_link(harness.store, "upd-1")
     assert harness.store.claim("upd-1", 0) == 1
@@ -1701,6 +1697,7 @@ def test_a_cad_mutation_under_way_is_not_dismissed(harness: Harness) -> None:
     assert harness.store.request_cancel("upd-2")["state"] == "cancelled"
 
 
+@backend_free
 def test_preparing_an_operation_that_is_not_a_solve_is_refused(harness: Harness) -> None:
     from fastapi import HTTPException
 
@@ -1745,6 +1742,7 @@ def _deliver_file(harness: Harness, bundle_path: str, manifest: str, command_id:
     return requests
 
 
+@backend_free
 def test_the_legacy_poll_collects_nothing_and_hands_nothing_out(harness: Harness) -> None:
     from server.cadlink.api import get_solve_command
 
@@ -1774,6 +1772,10 @@ def test_a_legacy_poll_never_rejects_a_retained_operation(harness: Harness) -> N
     assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
 
 
+@old_only(
+    "an attempt's bound request on the ledger",
+    "test_job_cad_binding.py::test_binding_is_one_transaction_a_kill_before_commit_leaves_preparing",
+)
 def test_a_legacy_poll_never_ends_an_operation_an_attempt_holds(harness: Harness) -> None:
     from server.cadlink.api import get_solve_command
 
@@ -1794,6 +1796,7 @@ def test_a_legacy_poll_never_ends_an_operation_an_attempt_holds(harness: Harness
     assert recorded is not None and recorded["job_id"] == "job-9"
 
 
+@backend_free
 def test_the_legacy_outcome_route_records_nothing(harness: Harness) -> None:
     from server.cadlink.api import SolveCommandOutcome, post_solve_command_outcome
 
@@ -1894,6 +1897,7 @@ def test_a_return_that_can_never_be_retained_is_acknowledged_at_once(harness: Ha
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
 
 
+@backend_free
 def test_one_unreadable_claim_never_holds_the_deliveries_behind_it(harness: Harness) -> None:
     first_path, first_manifest = _write_return(harness.workspace, "first.wgreturn")
     second_path, second_manifest = _write_return(harness.workspace, "second.wgreturn", step=b"STEP 2")
@@ -1955,6 +1959,10 @@ def _interrupted_while_bound(harness: Harness) -> None:
     assert harness.row()["request_json"] is not None  # still bound: a job may exist
 
 
+@old_only(
+    "dismissal reconciled with the jobs store by key",
+    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
+)
 def test_a_dismissal_follows_a_job_the_operation_already_made(harness: Harness) -> None:
     _interrupted_while_bound(harness)
     harness.jobs["cad-solve:cmd-1"] = "job-1"  # it did
@@ -1977,18 +1985,15 @@ def test_preparation_always_defers_the_viewport(harness: Harness) -> None:
         calls.append(kwargs)
         return ingest(*args, **kwargs)
 
-    context = dataclasses.replace(harness.context(), ingest=recording_ingest)
-    asyncio.run(
-        prepare_operation(
-            context,
-            "cmd-1",
-            PreparationInput(setup_revision_id=revision, submit=False),
-        )
-    )
+    harness.prepare(ingest=recording_ingest, setup_revision_id=revision, submit=False)
 
     assert calls and calls[0]["defer_viewport"] is True
 
 
+@old_only(
+    "dismissal reconciled with the jobs store by key",
+    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
+)
 def test_a_dismissal_waits_while_wg_cannot_tell_whether_a_job_exists(harness: Harness) -> None:
     from fastapi import HTTPException
 
@@ -2008,6 +2013,10 @@ def test_a_dismissal_waits_while_wg_cannot_tell_whether_a_job_exists(harness: Ha
     assert _cancel(harness, jobs)["state"] == "cancelled"
 
 
+@old_only(
+    "dismissal reconciled with the jobs store by key",
+    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
+)
 def test_a_request_that_was_never_bound_is_dismissed_without_the_jobs_store(
     harness: Harness,
 ) -> None:
@@ -2021,6 +2030,10 @@ def test_a_request_that_was_never_bound_is_dismissed_without_the_jobs_store(
 # -- correlation in WG's logs --------------------------------------------------------
 
 
+@old_only(
+    "log lines naming an attempt generation",
+    "test_job_cad_lane.py::test_each_step_logs_its_job_and_operation",
+)
 def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog) -> None:
     import logging
 
@@ -2048,6 +2061,10 @@ def test_each_attempt_logs_its_operation_and_generation(harness: Harness, caplog
     assert logged("cmd-1", "attempt 2", "finished accepted", "job-1")
 
 
+@old_only(
+    "dismissal reconciled with the jobs store by key",
+    "test_job_cad_lane.py::test_a_preparing_job_is_stopped_where_it_is",
+)
 def test_a_dismissal_waits_while_a_bound_attempt_runs_and_wg_cannot_read_the_jobs(
     harness: Harness,
 ) -> None:
@@ -2094,6 +2111,10 @@ def _latched_state(harness: Harness, approval: Any) -> SimpleNamespace:
     )
 
 
+@old_only(
+    "the prepare route's latch envelope (its shim is S4-F1)",
+    "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched",
+)
 def test_the_prepare_route_refuses_while_an_update_restart_is_pending(
     harness: Harness, monkeypatch
 ) -> None:
@@ -2165,6 +2186,10 @@ def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
     assert one_pass() == ["cmd-1", "cmd-2"]
 
 
+@old_only(
+    "an attempt claim and its generation",
+    "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched",
+)
 def test_a_preparation_an_update_restart_overtakes_before_its_claim_changes_nothing(
     harness: Harness,
 ) -> None:
@@ -2200,21 +2225,17 @@ def test_an_update_restart_approved_while_a_pass_collects_starts_nothing(
 
     monkeypatch.setattr(preparation, "collect_solve_deliveries", collect_then_approve)
 
-    async def one_pass() -> list[str]:
-        started: list[asyncio.Future[Any]] = []
-        ids = await preparation.run_delivery_pass(
-            harness.context(),
-            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-        )
-        await asyncio.gather(*started)
-        return ids
-
-    assert asyncio.run(one_pass()) == []
+    assert harness.delivery_pass() == []
+    # Collected and retained, and nothing started: the operation is still received.
     row = harness.row()
     assert (row["state"], row["attempt_generation"]) == ("received", 0)
     assert harness.ingest.calls == []
 
 
+@old_only(
+    "requeue by generation and reason",
+    "test_job_cad_lane.py::test_a_solve_the_restart_held_is_taken_up_again_when_the_latch_comes_down",
+)
 def test_a_requeue_after_an_update_restart_changes_only_what_it_read(harness: Harness) -> None:
     from server.cadlink.operations import REASON_UPDATE_RESTART_PENDING as HELD
 
@@ -2241,6 +2262,10 @@ def test_a_requeue_after_an_update_restart_changes_only_what_it_read(harness: Ha
     assert harness.row()["state"] == "cancelled"
 
 
+@old_only(
+    "requeue of a parked operation",
+    "test_job_cad_lane.py::test_a_stopped_job_the_restart_held_is_never_prepared_again",
+)
 def test_a_solve_dismissed_while_an_update_restart_held_it_is_never_queued_again(
     harness: Harness,
 ) -> None:
@@ -2270,7 +2295,7 @@ def test_the_job_carries_exactly_the_setup_revision_the_operation_bound(harness:
     assert summary["state"] == "accepted"
     cad = harness.provenance[0]
     stored = harness.store.get_setup_revision(revision)
-    assert harness.row()["setup_revision_id"] == revision
+    assert harness.bound_setup_revision() == revision
     assert cad["operation_id"] == "cmd-1"
     assert cad["setup"] == {
         "revision_id": revision,
@@ -2304,14 +2329,8 @@ def test_a_defaults_solve_is_labelled_from_the_job(harness: Harness) -> None:
 def test_a_failure_collecting_provenance_is_not_reported_as_a_failed_submission(
     harness: Harness, monkeypatch
 ) -> None:
-    from server.cadlink import preparation
-
     _received(harness)
-
-    def broken(*_args, **_kwargs):
-        raise ValueError("approvals unreadable")
-
-    monkeypatch.setattr(preparation, "_cad_provenance", broken)
+    harness.break_provenance(monkeypatch, ValueError("approvals unreadable"))
 
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
@@ -2320,7 +2339,7 @@ def test_a_failure_collecting_provenance_is_not_reported_as_a_failed_submission(
     assert "approvals unreadable" in summary["message"]
     # Fail closed: nothing was submitted, and the binding is released.
     assert harness.submitted == []
-    assert harness.row()["request_json"] is None
+    assert harness.bound_request() is None
 
 
 class EngineUnavailableError(RuntimeError):
@@ -2354,6 +2373,10 @@ def test_a_submission_refusal_is_named_by_type_and_exact_code(error: BaseExcepti
     assert preparation_module._submission_refusal_reason(error, code) == expected
 
 
+@old_only(
+    "the operation's finish log line",
+    "test_job_cad_lane.py::test_each_step_logs_its_job_and_operation",
+)
 def test_a_needs_user_input_finish_logs_the_refusal_message(harness: Harness, caplog) -> None:
     import logging
 

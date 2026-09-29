@@ -41,6 +41,7 @@ from server.cadlink.domain_interpretation import (
     observe_record_mesh,
     open_half_refusal_message,
 )
+from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
 from server.cadlink.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED, record_frame_refusal
 from server.cadlink.store import CadLinkStore
 from server.design.schema import DesignConfig, Expr
@@ -53,6 +54,18 @@ from server.engines.registry import (
     engine_supports_symmetry,
     full3d_engine_order,
     resolve_legacy_beat_engine,
+)
+from server.jobs.cad_intent import (
+    BIND_BLOCKED,
+    BIND_STOPPED,
+    BOUND,
+    CAD_INTENT,
+    INTERRUPTED_MESSAGE as CAD_INTERRUPTED_MESSAGE,
+    STAGE_WAITING_FOR_RESTART,
+    CadSolveIntent,
+    carried_record,
+    intent_of,
+    solve_again_intent,
 )
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.models import (
@@ -91,6 +104,7 @@ from server.solver.metal_permit import MetalPermit, process_metal_permit
 from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
 
 if TYPE_CHECKING:
+    from server.jobs.cad_preparation import CadPreparationHost
     from server.updates.restart import RestartApproval
 
 
@@ -120,6 +134,9 @@ UPDATE_RESTART_MESSAGE = (
 RESTART_RECOVERY_MESSAGE = "Server restarted during execution"
 RUNTIME_PERSIST_INTERVAL_SECONDS = 0.15
 SHUTDOWN_TASK_TIMEOUT_SECONDS = 10.0
+#: How many CAD solves are prepared (retained, meshed) at once. A separate lane
+#: from the solve scheduler, so meshing never waits behind a running solve.
+CAD_PREPARATION_LANE_WIDTH = 2
 BEMPP_DEFAULT_WALL_THICKNESS_MM = 5.0
 BEMPP_WALL_ADJUSTMENT_KIND = "bempp_wall_default"
 BEMPP_WALL_REASON_CODE = "bempp_free_standing_requires_closed_wall"
@@ -446,14 +463,17 @@ def _recorded_resolved_quadrants(metadata: Mapping[str, Any]) -> int | None:
 def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     """Build the faithful request represented by a native or imported row."""
 
-    if row.get("status") == "preparing":
-        # A preparing job holds a CAD intent, not a SolveRequest; the request
-        # exists only once the job is bound and queued.
-        raise JobConflictError(
-            "This solve is still being prepared and has no solve request yet"
-        )
     config = row.get("config_json")
     config = config if isinstance(config, Mapping) else {}
+    if config.get("type") == CAD_INTENT:
+        # A CAD solve that was never bound holds its intent, not a SolveRequest;
+        # the request exists only once the job is bound and queued.
+        raise JobConflictError(
+            "This solve is still being prepared and has no solve request yet"
+            if row.get("status") == "preparing"
+            else "This solve ended before it had a solve request. Solve it again "
+            "from CAD Link."
+        )
     if isinstance(config.get("design"), Mapping) or isinstance(
         config.get("geometry"), Mapping
     ):
@@ -1760,6 +1780,65 @@ class _ImportedSubmission:
     anchor_snapshot: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class _ComposedJob:
+    """A request that passed every submission check, with what its job stores of it."""
+
+    #: The request after engine resolution: what the job's ``config_json`` holds.
+    request: SolveRequest
+    config_summary: dict[str, Any]
+    script_snapshot: dict[str, Any] | None
+    task_metadata: dict[str, Any]
+    mesh_stats: dict[str, Any] | None
+    mesh_artifact: str | None
+    imported: _ImportedSubmission | None
+
+
+class _CadLanePort:
+    """The runtime as the CAD preparation lane sees it (``cad_preparation.CadJobPort``)."""
+
+    def __init__(self, runtime: "JobRuntime") -> None:
+        self._runtime = runtime
+
+    @property
+    def job_store(self) -> JobStore:
+        return self._runtime.store
+
+    @property
+    def binding_refusals(self) -> tuple[type[BaseException], ...]:
+        # A submission-key conflict is not among them: binding uses no key.
+        return (
+            UnknownEngineError,
+            SymmetryValidationError,
+            ImportedSolveRefusal,
+            EngineUnavailableError,
+            # A stale stored setup that still says axial motion: the message
+            # names the removal, and solving the same request again cannot help.
+            RemovedSolverError,
+        )
+
+    def restart_refusal(self) -> str | None:
+        approval = self._runtime.restart_approval
+        return approval.refusal() if approval is not None else None
+
+    def publish(self, event: Mapping[str, Any] | None) -> None:
+        """Publish an event from any thread: the lane's writes run in worker threads."""
+
+        runtime = self._runtime
+        loop = runtime._loop
+        if event is None or loop is None or loop.is_closed():
+            return
+        try:
+            loop.call_soon_threadsafe(runtime.events.publish, event)
+        except RuntimeError:  # the loop closed in between
+            pass
+
+    async def bind_cad_job(
+        self, job_id: str, request: SolveRequest, cad_provenance: Mapping[str, Any]
+    ) -> str:
+        return await self._runtime._bind_cad_job(job_id, request, cad_provenance)
+
+
 async def _cad_authored_project(
     store: Any, record: Mapping[str, Any]
 ) -> tuple[str | None, str | None]:
@@ -2248,6 +2327,14 @@ class JobRuntime:
         self.events = EventBroker()
         self._queue: deque[str] = deque()
         self._running: set[str] = set()
+        #: The CAD preparation lane: accepted CAD solves waiting for a worker,
+        #: the ones being prepared now, and what prepares them
+        #: (``configure_cad_preparation``). Separate from ``_queue`` and
+        #: ``_running``: a solve that is still being prepared is not queued.
+        self._prep_queue: deque[str] = deque()
+        self._prep_running: set[str] = set()
+        self._cad_host: CadPreparationHost | None = None
+        self._cad_port = _CadLanePort(self)
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._scheduler_task: asyncio.Task[Any] | None = None
         self._pending_updates: dict[str, _PendingRuntimeUpdate] = {}
@@ -2300,9 +2387,15 @@ class JobRuntime:
         if loop is None or loop.is_closed():
             return
         try:
-            loop.call_soon_threadsafe(self._ensure_scheduler)
+            loop.call_soon_threadsafe(self._wake)
         except RuntimeError:  # the loop closed in between
             pass
+
+    def _wake(self) -> None:
+        """Start whatever an approved restart was holding: queued solves and preparations."""
+
+        self._ensure_scheduler()
+        self._ensure_prep_lane()
 
     def _check_again_when_the_approval_expires(self) -> None:
         # The latch expires only when something reads it (§4.2). A held queue
@@ -2315,7 +2408,7 @@ class JobRuntime:
             return
         if self._expiry_timer is not None:
             self._expiry_timer.cancel()
-        self._expiry_timer = loop.call_later(remaining + 0.05, self._ensure_scheduler)
+        self._expiry_timer = loop.call_later(remaining + 0.05, self._wake)
 
     def _mark_running(
         self, job_id: str, fields: Mapping[str, Any], payload: Mapping[str, Any]
@@ -2366,6 +2459,10 @@ class JobRuntime:
                     quit_error_message=QUIT_INTERRUPTED_MESSAGE,
                     update_restart_stage_message=UPDATE_RESTART_STAGE_MESSAGE,
                     update_restart_error_message=UPDATE_RESTART_MESSAGE,
+                    preparing_error_message=CAD_INTERRUPTED_MESSAGE,
+                )
+                unheld_preparations = await asyncio.to_thread(
+                    self.store.unheld_preparing_job_ids
                 )
                 await asyncio.to_thread(
                     self.store.prune_terminal_jobs,
@@ -2376,10 +2473,13 @@ class JobRuntime:
                 await asyncio.to_thread(self._ownership.release)
                 raise
             self._queue.extend(row["id"] for row in queued)
+            # A CAD solve accepted but not yet prepared when WG stopped is
+            # prepared now; one a lane was preparing ended as interrupted above.
+            self._prep_queue.extend(unheld_preparations)
             self._started = True
             for event in recovery_events:
                 self.events.publish(event)
-            self._ensure_scheduler()
+            self._wake()
 
     def mark_running_interrupted_by_quit(self, reason: str = "") -> list[str]:
         """Record, the moment a stop begins, that Quit interrupted every running job.
@@ -2485,6 +2585,8 @@ class JobRuntime:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         self._scheduler_task = None
+        self._prep_queue.clear()
+        self._prep_running.clear()
         self._background_tasks.clear()
         # Store connections are long-lived now. Windows will not let a test's
         # temporary directory be removed, nor the migration tool replace the
@@ -2523,6 +2625,71 @@ class JobRuntime:
             )
             if existing_job_id is not None:
                 return existing_job_id
+        composed = await self._compose_job(request, cad_provenance)
+        imported = composed.imported
+
+        job_id = str(uuid.uuid4())
+        now = _now_iso()
+        job_record = {
+            "id": job_id,
+            "parent_job_id": composed.request.parent_job_id,
+            "status": "queued",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "progress": 0.0,
+            "stage": "queued",
+            "stage_message": "Job queued",
+            "error_message": None,
+            "cancellation_requested": False,
+            "config_json": composed.request.model_dump(mode="json"),
+            "config_summary_json": composed.config_summary,
+            "has_results": False,
+            "has_mesh_artifact": imported is not None,
+            "mesh_stats": composed.mesh_stats,
+            "label": composed.request.label,
+            "script_snapshot": composed.script_snapshot,
+            "task_metadata": composed.task_metadata,
+        }
+        initial_event = ("queued", {"status": "queued", "progress": 0.0})
+        if submission_key is not None:
+            claimed_job_id, created, event = await asyncio.to_thread(
+                self.store.create_job_idempotent,
+                job_record,
+                submission_key=submission_key,
+                request_sha256=submission_request_sha256,
+                initial_event=initial_event,
+                mesh_artifact=composed.mesh_artifact,
+            )
+            if not created:
+                return claimed_job_id
+        elif imported is None:
+            event = self.store.create_job(job_record, initial_event=initial_event)
+        else:
+            event = await asyncio.to_thread(
+                self.store.create_job,
+                job_record,
+                initial_event=initial_event,
+                mesh_artifact=composed.mesh_artifact,
+            )
+        self._queue.append(job_id)
+        if event is not None:
+            self.events.publish(event)
+        self._ensure_scheduler()
+        return job_id
+
+    async def _compose_job(
+        self, request: SolveRequest, cad_provenance: Mapping[str, Any] | None
+    ) -> "_ComposedJob":
+        """Everything a job stores of one request, after every submission check.
+
+        The one place a request becomes a job's record: ``submit`` writes it as
+        a new queued job, and a CAD solve's binding writes it into the job that
+        was being prepared, so both meet the same checks (ingest lookup, hash
+        verification, frame, sources, mesh, engine choice, domain decision) and
+        store the same things.
+        """
+
         imported: _ImportedSubmission | None = None
         if isinstance(request.geometry, ImportedGeometrySource):
             imported = await self._prepare_imported_submission(request)
@@ -2538,9 +2705,6 @@ class JobRuntime:
         request = resolved.request
         symmetry_metadata = resolved.symmetry_metadata
 
-        job_id = str(uuid.uuid4())
-        now = _now_iso()
-        request_dump = request.model_dump(mode="json")
         summary = self._config_summary(request)
         summary["symmetry"] = symmetry_metadata
         polar_grid = effective_polar_grid(request)
@@ -2586,53 +2750,15 @@ class JobRuntime:
             }
         if imported is not None and cad_provenance:
             task_metadata["cad"] = json.loads(json.dumps(cad_provenance, default=str))
-        job_record = {
-            "id": job_id,
-            "parent_job_id": request.parent_job_id,
-            "status": "queued",
-            "created_at": now,
-            "updated_at": now,
-            "queued_at": now,
-            "progress": 0.0,
-            "stage": "queued",
-            "stage_message": "Job queued",
-            "error_message": None,
-            "cancellation_requested": False,
-            "config_json": request_dump,
-            "config_summary_json": summary,
-            "has_results": False,
-            "has_mesh_artifact": imported is not None,
-            "mesh_stats": imported.mesh_stats if imported is not None else None,
-            "label": request.label,
-            "script_snapshot": script_snapshot,
-            "task_metadata": task_metadata,
-        }
-        initial_event = ("queued", {"status": "queued", "progress": 0.0})
-        if submission_key is not None:
-            claimed_job_id, created, event = await asyncio.to_thread(
-                self.store.create_job_idempotent,
-                job_record,
-                submission_key=submission_key,
-                request_sha256=submission_request_sha256,
-                initial_event=initial_event,
-                mesh_artifact=imported.msh_text if imported is not None else None,
-            )
-            if not created:
-                return claimed_job_id
-        elif imported is None:
-            event = self.store.create_job(job_record, initial_event=initial_event)
-        else:
-            event = await asyncio.to_thread(
-                self.store.create_job,
-                job_record,
-                initial_event=initial_event,
-                mesh_artifact=imported.msh_text,
-            )
-        self._queue.append(job_id)
-        if event is not None:
-            self.events.publish(event)
-        self._ensure_scheduler()
-        return job_id
+        return _ComposedJob(
+            request=request,
+            config_summary=summary,
+            script_snapshot=script_snapshot,
+            task_metadata=task_metadata,
+            mesh_stats=imported.mesh_stats if imported is not None else None,
+            mesh_artifact=imported.msh_text if imported is not None else None,
+            imported=imported,
+        )
 
     async def plan_imported(self, request: SolveRequest) -> dict[str, Any]:
         """Every engine's verdict on one ingested CAD return, without a job.
@@ -2960,6 +3086,283 @@ class JobRuntime:
             anchor_snapshot=anchor_snapshot,
         )
 
+    # -- a CAD solve as a job (docs/architecture/CAD-OPERATIONS.md, "A CAD solve is a job") --
+    #
+    # WG accepts a CAD solve by creating a job in status ``preparing`` that holds
+    # a ``CadSolveIntent``; the preparation lane retains, meshes and checks it, and
+    # binding turns it into an ordinary queued job in one transaction. A solve
+    # that cannot go on ends as an ``error`` job carrying its refusal, and the
+    # user's remedy is Solve again, which is a new job. Nothing calls these yet
+    # (S4-E2): the delivery pass and the routes are switched in S4-F1.
+
+    def configure_cad_preparation(self, host: CadPreparationHost | None) -> None:
+        """Say where retained returns live and how a return is meshed.
+
+        Without it no CAD solve can be accepted. A ``preparing`` job found at
+        start-up waits for the host: nothing prepares it before then.
+        """
+
+        self._cad_host = host
+        self._ensure_prep_lane()
+
+    def _require_cad_host(self) -> CadPreparationHost:
+        if self._cad_host is None or self.cadlink_store is None:
+            raise JobConflictError("CAD solves cannot be prepared: no CAD preparation is configured")
+        return self._cad_host
+
+    def _preparing_record(self, intent: CadSolveIntent) -> dict[str, Any]:
+        now = _now_iso()
+        return {
+            "id": str(uuid.uuid4()),
+            "parent_job_id": intent.parent_job_id,
+            "status": "preparing",
+            "created_at": now,
+            "updated_at": now,
+            "queued_at": now,
+            "progress": 0.0,
+            "stage": "received",
+            "stage_message": "Waiting to prepare this solve",
+            "error_message": None,
+            "cancellation_requested": False,
+            "config_json": intent.to_config(),
+            "config_summary_json": {"formula_type": "cad-import"},
+            "has_results": False,
+            "has_mesh_artifact": False,
+            "mesh_stats": None,
+            "label": intent.label,
+            "script_snapshot": None,
+            "task_metadata": {"cad": {"operation_id": intent.operation_id}},
+        }
+
+    async def accept_cad_solve(self, intent: CadSolveIntent, submission_key: str) -> str:
+        """Accept a CAD solve: a ``preparing`` job, created once for its submission key.
+
+        Idempotent: the key names the delivery (``cad-solve:<operationId>``) and
+        the delivery's digest is the request hash, so accepting the same command
+        again returns the job it made, and the same key for another return is a
+        ``SubmissionConflictError``. Durable before it returns; the preparation
+        lane takes the job up by itself, and again after a restart if WG stopped
+        first.
+        """
+
+        self._require_cad_host()
+        await self.start()
+        intent = replace(intent, submission_key=submission_key)
+        digest = intent.delivery_digest()
+        existing = await asyncio.to_thread(
+            self.store.resolve_submission, submission_key, digest
+        )
+        if existing is not None:
+            return existing
+        record = self._preparing_record(intent)
+        job_id, created, event = await asyncio.to_thread(
+            self.store.create_job_idempotent,
+            record,
+            submission_key=submission_key,
+            request_sha256=digest,
+            initial_event=(
+                "stage",
+                {"stage": "received", "message": record["stage_message"], "progress": 0.0},
+            ),
+        )
+        if created:
+            self._offer_to_prep_lane(job_id, event)
+        return job_id
+
+    async def solve_cad_again(
+        self,
+        job_id: str,
+        *,
+        setup_revision_id: str | None = None,
+        frame_axis: str | None = None,
+        approve_preparation_id: str | None = None,
+        approve_finding_ids: tuple[str, ...] | list[str] = (),
+        submit: bool = True,
+    ) -> str:
+        """Solve again a CAD solve that ended before it had a request: a new job.
+
+        For a job WG refused (setup required, findings to review, the frame, a
+        failed preparation) or that was stopped. The new job continues it: same
+        return, the setup the first recorded unless a new one is named, the
+        frame axis it was held to, its approvals, and its preparation, which it
+        resumes when the same snapshot, setup, frame and domain make the same one,
+        so nothing is meshed again and approvals bound to it still hold. A
+        solve WG rejected as invalid is not retried: it is sent again from CAD.
+        """
+
+        await self.start()
+        row = self._require_job(job_id)
+        if intent_of(row) is None:
+            raise JobConflictError("This solve already has a solve request; retry it instead")
+        if row["status"] in ACTIVE_STATUSES:
+            raise JobConflictError("This solve is still being prepared and has no solve request yet")
+        self._require_cad_host()
+        cad = (row.get("task_metadata") or {}).get("cad") or {}
+        refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else None
+        if refusal is not None and CAD_REASON_STATES.get(str(refusal.get("code"))) == CAD_REJECTED:
+            raise JobConflictError(str(refusal.get("message") or "WG rejected this return"))
+        intent = solve_again_intent(
+            row,
+            setup_revision_id=setup_revision_id,
+            frame_axis=frame_axis,
+            approve_preparation_id=approve_preparation_id,
+            approve_finding_ids=approve_finding_ids,
+            submit=submit,
+        )
+        record = self._preparing_record(intent)
+        # What the solve has recorded travels with it: the retained snapshot (the
+        # return may have left the WGLink folder), the state cleanup keeps for it,
+        # its setup, and its preparation with the approvals given on it.
+        record["task_metadata"]["cad"].update(carried_record(row))
+        event = await asyncio.to_thread(
+            self.store.create_job,
+            record,
+            initial_event=(
+                "stage",
+                {"stage": "received", "message": record["stage_message"], "progress": 0.0},
+            ),
+        )
+        self._offer_to_prep_lane(str(record["id"]), event)
+        return str(record["id"])
+
+    def _offer_to_prep_lane(self, job_id: str, event: Mapping[str, Any] | None) -> None:
+        if event is not None:
+            self.events.publish(event)
+        self._prep_queue.append(job_id)
+        self._ensure_prep_lane()
+
+    def _ensure_prep_lane(self) -> None:
+        """Start preparing accepted CAD solves, a few at a time, while no restart is approved.
+
+        While an update restart is approved (contract §4.2) nothing is prepared and
+        nothing is written: the jobs stay as they are and are taken up when the latch
+        comes down (``_wake``), or by the next process.
+        """
+
+        if (
+            self._shutting_down
+            or self._stopping
+            or not self._started
+            or self._cad_host is None
+            or not self._prep_queue
+        ):
+            return
+        if self._restart_pending():
+            self._say_prep_waits_for_restart()
+            self._check_again_when_the_approval_expires()
+            return
+        while self._prep_queue and len(self._prep_running) < CAD_PREPARATION_LANE_WIDTH:
+            job_id = self._prep_queue.popleft()
+            if job_id in self._prep_running:
+                continue
+            self._prep_running.add(job_id)
+            self._keep_task(
+                asyncio.create_task(
+                    self._run_cad_preparation(job_id), name=f"wg2-cad-prepare-{job_id}"
+                )
+            )
+
+    def _say_prep_waits_for_restart(self) -> None:
+        """Mark the solves waiting for the lane as waiting for the update restart.
+
+        A stage and its words, nothing more: they are not claimed, so a restart
+        that is called off finds them exactly as they were.
+        """
+
+        message = self._cad_port.restart_refusal()
+        for job_id in tuple(self._prep_queue):
+            try:
+                event = self.store.mark_unheld_preparing_job(
+                    job_id, stage=STAGE_WAITING_FOR_RESTART, stage_message=message or ""
+                )
+            except Exception:
+                logger.exception("Could not mark CAD job %s as waiting for the restart", job_id)
+                continue
+            if event is not None:
+                self.events.publish(event)
+
+    async def _run_cad_preparation(self, job_id: str) -> None:
+        host = self._cad_host
+        try:
+            if host is None:
+                return
+            # Imported here: it reaches the CAD store's modules, which import
+            # this package, so the runtime cannot import it while it loads.
+            from server.jobs.cad_preparation import run_cad_preparation
+
+            outcome = await run_cad_preparation(self._cad_port, host, job_id)
+            if outcome == "waiting":
+                # Handed back for an approved restart: it is offered again the
+                # moment the latch is down.
+                self._prep_queue.appendleft(job_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("The CAD preparation lane failed on job %s", job_id)
+        finally:
+            self._prep_running.discard(job_id)
+            self._ensure_prep_lane()
+
+    async def wait_cad_preparations(self, timeout: float = 30.0) -> None:
+        """Wait until the preparation lane has nothing queued or running (tests wait on it).
+
+        A lane held by an approved update restart is settled too: what it holds waits
+        for the latch, not for this call.
+        """
+
+        async def settled() -> None:
+            while self._prep_running or (self._prep_queue and not self._restart_pending()):
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(settled(), timeout=timeout)
+
+    async def _bind_cad_job(
+        self, job_id: str, request: SolveRequest, cad_provenance: Mapping[str, Any]
+    ) -> str:
+        """Bind a prepared request to its job and queue it: one transaction.
+
+        Every submission check runs first, exactly as ``submit`` runs them
+        (``_compose_job``), so a request the jobs system would refuse ends the
+        job as refused. Then ``JobStore.bind_preparing_job`` writes the request,
+        the job's metadata and mesh artifact and its run number, and moves
+        ``preparing`` to ``queued``, all or nothing. Returns ``BOUND``;
+        ``BIND_STOPPED`` when the job was stopped meanwhile (nothing written);
+        ``BIND_BLOCKED`` when an update restart was approved first (nothing
+        written: the bind is ordered with the approval as a job start is).
+        """
+
+        _refuse_removed_solver(request)
+        composed = await self._compose_job(request, cad_provenance)
+        assert composed.imported is not None and composed.mesh_artifact is not None
+
+        def bind() -> dict[str, Any] | None:
+            return self.store.bind_preparing_job(
+                job_id,
+                config=composed.request.model_dump(mode="json"),
+                config_summary=composed.config_summary,
+                task_metadata=composed.task_metadata,
+                mesh_artifact=composed.mesh_artifact,
+                mesh_stats=composed.mesh_stats,
+                script_snapshot=composed.script_snapshot,
+                label=composed.request.label,
+                parent_job_id=composed.request.parent_job_id,
+                initial_event=("queued", {"status": "queued", "progress": 0.0}),
+            )
+
+        approval = self.restart_approval
+        if approval is None:
+            admitted, event = True, await asyncio.to_thread(bind)
+        else:
+            admitted, event = await asyncio.to_thread(approval.admit, bind)
+        if not admitted:
+            return BIND_BLOCKED
+        if event is None:
+            return BIND_STOPPED
+        self._queue.append(job_id)
+        self.events.publish(event)
+        self._ensure_scheduler()
+        return BOUND
+
     async def stop(self, job_id: str) -> dict[str, str]:
         await self.start()
         row = self._require_job(job_id)
@@ -2969,8 +3372,14 @@ class JobRuntime:
         if status in {"preparing", "queued"}:
             await self._flush_runtime_update(job_id, forget=True)
             self._remove_from_queue(job_id)
-            event = self._transition(
+            self._prep_queue = deque(item for item in self._prep_queue if item != job_id)
+            # Against the status just read: a preparing job races the binding
+            # that queues it, and a queued one races its start. One wins. A
+            # stop that lost reads the job again and answers for what it is now.
+            event = await asyncio.to_thread(
+                self.store.cancel_job_from,
                 job_id,
+                status,
                 {
                     "status": "cancelled",
                     "progress": 0.0,
@@ -2983,6 +3392,8 @@ class JobRuntime:
                 "cancelled",
                 {"message": CANCELLED_MESSAGE},
             )
+            if event is None:
+                return await self.stop(job_id)
             self.events.publish(event)
             return {"message": f"Job {job_id} has been cancelled", "status": "cancelled"}
 
@@ -3017,6 +3428,10 @@ class JobRuntime:
 
         await self.start()
         row = self._require_job(job_id)
+        if intent_of(row) is not None:
+            # Never bound to a request: there is nothing to replay. A new job
+            # continues it (``solve_cad_again``).
+            return await self.solve_cad_again(job_id)
         request = _replay_request(row)
         _refuse_removed_solver(request)
         if isinstance(request.geometry, ImportedGeometrySource) and self.cadlink_store is not None:
@@ -4907,8 +5322,11 @@ class JobRuntime:
             "id": row.get("id"),
             "client_request_id": stored_config.get("client_request_id"),
             "client_metadata": stored_config.get("client_metadata") or {},
+            # A CAD solve that is still being prepared, or ended refused, was
+            # never a run: it has no run number, and its lineage is in its intent.
             "run_number": row.get("run_number"),
-            "parent_job_id": row.get("parent_job_id"),
+            "parent_job_id": row.get("parent_job_id")
+            or (cad_intent.get("parent_job_id") if cad_intent is not None else None),
             "status": row.get("status"),
             "progress": float(row.get("progress", 0.0)),
             "stage": row.get("stage"),

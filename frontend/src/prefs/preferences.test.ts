@@ -369,6 +369,15 @@ describe('client preferences', () => {
     ];
     expect(applyJobPreferences(jobs, 'name_asc', 0).map(({ id }) => id)).toEqual(['b', 'a', 'd', 'c']);
   });
+  it('names a solve that has no run number by its title alone, and sorts it after the numbered runs', () => {
+    const unnumbered = { ...job('9f8e7d6c', 0, '2026-01-01T00:00:00Z'), run_number: null, label: 'CAD solve' };
+    expect(runDisplayName(unnumbered)).toBe('CAD solve');
+    expect(runDisplayName({ ...unnumbered, label: null })).toBe('osse-9f8e7d');
+    const numbered = { ...job('a', 0, '2026-01-01T00:00:00Z'), run_number: 3, label: 'same' };
+    const other = { ...job('b', 0, '2026-01-01T00:00:00Z'), run_number: null, label: 'Same' };
+    expect(applyJobPreferences([other, numbered], 'name_asc', 0).map(({ id }) => id)).toEqual(['b', 'a']);
+    expect(applyJobPreferences([numbered, other], 'created_desc', 0).map(({ id }) => id)).toEqual(['a', 'b']);
+  });
   it('uses the same untitled fallback in full and short run identities', () => {
     const untitled = { ...job('1a2b3c4d', 0, '2026-01-01T00:00:00Z'), run_number: 123, label: null };
     expect(runDisplayName(untitled)).toBe('#123 · osse-1a2b3c');

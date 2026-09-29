@@ -28,7 +28,8 @@ from server.cadlink.fusion_delivery import capabilities
 from server.cadlink.preparation import PreparationInput, prepare_operation
 from server.cadlink.solver_frame import AXES, allowed_axes, axes_in_planes, confirm_frame
 from server.cadlink.wgreturn import WgReturnValidationError, validate_manifest
-from test_cad_preparation import Harness, _revision, _setup
+from cad_backends import OperationsHarness as Harness
+from test_cad_preparation import _revision, _setup
 from test_cad_preparation_design_gate import MesherStandIn
 from test_cad_preparation_solver_frame import _authored, _received, _with_degraded_skip
 

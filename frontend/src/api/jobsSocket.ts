@@ -34,7 +34,7 @@ export interface JobItem {
   id: string;
   /** The submission key; `cad-solve:<operation id>` for a solve CAD Link submitted. */
   client_request_id?: string | null;
-  run_number: number;
+  run_number: number | null;
   parent_job_id: string | null;
   status: JobStatus;
   progress: number;
@@ -375,7 +375,8 @@ function isAutoExportFormats(value: unknown): value is JobItem['auto_export_form
 function isJobItem(value: unknown): value is JobItem {
   if (!isRecord(value) || !isSafeJson(value)) return false;
   if (typeof value.id !== 'string' || value.id.length === 0) return false;
-  if (!Number.isSafeInteger(value.run_number) || Number(value.run_number) < 1) return false;
+  // A CAD solve that is still being prepared, or ended refused, was never a run: no number yet.
+  if (value.run_number !== null && (!Number.isSafeInteger(value.run_number) || Number(value.run_number) < 1)) return false;
   if (!(value.parent_job_id === null || typeof value.parent_job_id === 'string')) return false;
   if (!(JOB_STATUSES as readonly string[]).includes(String(value.status))) return false;
   if (!isFiniteNumber(value.progress) || value.progress < 0 || value.progress > 1) return false;
@@ -1370,7 +1371,7 @@ export class JobsSocketManager {
     // rather than twice per comparison, which matters at the 200-job page size.
     return jobs
       .map((job) => ({ job, at: Date.parse(job.created_at) }))
-      .sort((a, b) => b.at - a.at || b.job.run_number - a.job.run_number)
+      .sort((a, b) => b.at - a.at || (b.job.run_number ?? 0) - (a.job.run_number ?? 0))
       .map((entry) => entry.job);
   }
 

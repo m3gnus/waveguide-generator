@@ -17,7 +17,8 @@ from server.cadlink.ingest import retain_snapshot
 from server.cadlink.operations import PREPARE_AND_SOLVE
 from server.cadlink.wgreturn import WgReturnIntegrityError
 
-from test_cad_preparation import Harness, _revision, _setup, _write_return
+from cad_backends import OperationsHarness as Harness
+from test_cad_preparation import _revision, _setup, _write_return
 
 
 @pytest.fixture

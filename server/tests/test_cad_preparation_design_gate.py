@@ -14,9 +14,7 @@ gate, which is how a solve of any WG design waited as ``preparation_failed``.
 
 from __future__ import annotations
 
-import asyncio
 import copy
-import dataclasses
 import hashlib
 import json
 from typing import Any
@@ -24,14 +22,14 @@ from typing import Any
 import pytest
 
 from server.cadlink import ingest as ingest_module
-from server.cadlink.preparation import PreparationInput, prepare_operation
 from server.cadlink.project_setup import snapshot_project
 from server.cadlink.solver_frame import confirm_frame
 from server.design.textcfg import parse
 from server.exports.geometry_identity import geometry_hash_for_design
 from server.mesh.imported import polar_grid_from_symmetry
 
-from test_cad_preparation import Harness, _accept, _manifest, _revision, _setup
+from cad_backends import Harness, backend_fixture
+from test_cad_preparation import _accept, _manifest, _revision, _setup
 from test_cad_project_setup import _project
 
 
@@ -75,18 +73,24 @@ class MesherStandIn:
         }
 
 
+BACKEND_FIXTURES = ("real",)
+
+
 @pytest.fixture
-def real(tmp_path, monkeypatch) -> tuple[Harness, MesherStandIn]:
-    harness = Harness(tmp_path)
+def real(request, tmp_path, monkeypatch):
+    """The CAD-solve backend under test (cad_backends.py), meshing through the real ingest."""
+
+    backend = backend_fixture(request, tmp_path)
+    harness = next(backend)
     mesher = MesherStandIn()
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
-    return harness, mesher
+    yield harness, mesher
+    backend.close()
 
 
 def _prepare(harness: Harness, operation_id: str = "cmd-1", **kwargs: Any) -> dict[str, Any]:
     # The production ingest, not the harness's FakeIngest.
-    context = dataclasses.replace(harness.context(), ingest=ingest_module.ingest_bundle)
-    return asyncio.run(prepare_operation(context, operation_id, PreparationInput(**kwargs)))
+    return harness.prepare(operation_id, ingest=ingest_module.ingest_bundle, **kwargs)
 
 
 def _write(harness: Harness, name: str, manifest: dict[str, Any], step: bytes) -> tuple[str, str]:

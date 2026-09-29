@@ -596,7 +596,8 @@ export type RunDisplayVariant = 'full' | 'short';
 /** The one user-facing identity for a run, shared by lists, charts, and search. */
 export function runDisplayName(job: Pick<JobItem, 'id' | 'run_number' | 'label'>, variant: RunDisplayVariant = 'full'): string {
   const title = job.label || `osse-${job.id.slice(0, 6)}`;
-  return variant === 'short' ? title : `#${job.run_number} · ${title}`;
+  // A solve that is still being prepared, or ended refused, has no run number yet.
+  return variant === 'short' || job.run_number === null ? title : `#${job.run_number} · ${title}`;
 }
 
 const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
@@ -609,6 +610,6 @@ export function applyJobPreferences(jobs: JobItem[], sort: JobSort, minimumRatin
     else if (sort === 'name_asc') order = naturalNameCollator.compare(runDisplayName(a, 'short'), runDisplayName(b, 'short'));
     else if (sort === 'created_desc') order = Date.parse(b.created_at) - Date.parse(a.created_at);
     else order = Date.parse(b.completed_at ?? b.created_at) - Date.parse(a.completed_at ?? a.created_at);
-    return order || (sort === 'name_asc' ? a.run_number - b.run_number : b.run_number - a.run_number);
+    return order || (sort === 'name_asc' ? (a.run_number ?? 0) - (b.run_number ?? 0) : (b.run_number ?? 0) - (a.run_number ?? 0));
   });
 }

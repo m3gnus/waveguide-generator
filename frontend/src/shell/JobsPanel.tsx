@@ -273,7 +273,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
         : <span className={`job-select${editing ? ' editing' : ''}`} title={job.error_message ?? job.status}>{heading}</span>}
       {editing ? <input
         className="job-title-input"
-        aria-label={`Title for run #${job.run_number}`}
+        aria-label={job.run_number === null ? `Title for ${displayName}` : `Title for run #${job.run_number}`}
         ref={titleInput}
         value={titleDraft}
         onChange={(event) => setTitleDraft(event.target.value)}
@@ -409,7 +409,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
     return preferenceJobs.filter((job) => {
       const formula = String(job.config_summary.formula_type ?? '').toLocaleLowerCase();
       const title = runDisplayName(job).toLocaleLowerCase();
-      const runNumberMatches = /^#?\d+$/.test(wanted) && String(job.run_number).includes(numberQuery);
+      const runNumberMatches = /^#?\d+$/.test(wanted) && job.run_number !== null && String(job.run_number).includes(numberQuery);
       return title.includes(wanted) || runNumberMatches || formula.includes(wanted);
     });
   }, [preferenceJobs, query]);

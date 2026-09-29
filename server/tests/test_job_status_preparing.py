@@ -22,6 +22,7 @@ import pytest
 from server.app import create_app
 from server.jobs import store as store_module
 from server.jobs.models import JobItem
+from server.jobs.cad_intent import INTERRUPTED_MESSAGE as CAD_INTERRUPTED_MESSAGE
 from server.jobs.runtime import JobConflictError, JobRuntime, RESTART_RECOVERY_MESSAGE
 from server.jobs.store import (
     ACTIVE_STATUSES,
@@ -63,6 +64,12 @@ def _job(job_id: str, status: str, *, config: dict[str, Any] | None = None) -> d
 
 def _preparing(job_id: str = "prep-1") -> dict[str, Any]:
     return _job(job_id, "preparing", config=dict(INTENT))
+
+
+def _held(job_id: str = "prep-1") -> dict[str, Any]:
+    """A preparing job a lane was holding (``started_at`` set) when its process ended."""
+
+    return {**_preparing(job_id), "started_at": datetime.now().isoformat()}
 
 
 def _store(path: Path) -> JobStore:
@@ -369,7 +376,8 @@ def test_a_preparing_row_left_at_startup_ends_as_a_named_error(tmp_path: Path) -
     store = _store(tmp_path)
     store.initialize()
     try:
-        store.create_job(_preparing("prep-1"))
+        store.create_job(_held("prep-1"))
+        store.create_job(_preparing("prep-waiting"))
         store.create_job(_job("queued-1", "queued"))
         store.create_job(_job("running-1", "running"))
         store.create_job(_job("done-1", "complete"))
@@ -383,10 +391,18 @@ def test_a_preparing_row_left_at_startup_ends_as_a_named_error(tmp_path: Path) -
         assert "restarted" in PREPARING_RECOVERY_MESSAGE and "Solve again" in PREPARING_RECOVERY_MESSAGE
         assert prepared["completed_at"]
         assert prepared["cancellation_requested"] in (0, False)
+        # Ended as a refusal the operations know: ``interrupted``.
+        assert prepared["task_metadata"]["cad"]["refusal"] == {
+            "code": "interrupted", "message": PREPARING_RECOVERY_MESSAGE,
+        }
+        # A job no lane was holding is not ended: the lane takes it up.
+        assert store.get_job_row("prep-waiting")["status"] == "preparing"
+        assert store.unheld_preparing_job_ids() == ["prep-waiting"]
         by_job = {event["job_id"] if "job_id" in event else event.get("jobId"): event for event in events}
         assert by_job["prep-1"]["type"] == "failed"
         assert by_job["prep-1"]["payload"]["recovered"] is True
         assert by_job["prep-1"]["payload"]["message"] == PREPARING_RECOVERY_MESSAGE
+        assert "prep-waiting" not in by_job
         # Nothing else changed: the running row reads as before, queued stays.
         assert store.get_job_row("running-1")["error_message"] == RESTART_RECOVERY_MESSAGE
         assert [row["id"] for row in queued] == ["queued-1"]
@@ -398,11 +414,11 @@ def test_a_preparing_row_left_at_startup_ends_as_a_named_error(tmp_path: Path) -
         store.close()
 
 
-def test_the_runtime_start_settles_a_preparing_row(tmp_path: Path) -> None:
+def test_the_runtime_start_settles_a_preparing_row_a_lane_held(tmp_path: Path) -> None:
     async def scenario() -> tuple[str, str | None]:
         seed = _store(tmp_path)
         seed.initialize()
-        seed.create_job(_preparing())
+        seed.create_job(_held())
         seed.close()
         runtime = JobRuntime(_store(tmp_path))
         try:
@@ -413,7 +429,8 @@ def test_the_runtime_start_settles_a_preparing_row(tmp_path: Path) -> None:
 
     status, message = asyncio.run(scenario())
     assert status == "error"
-    assert message == PREPARING_RECOVERY_MESSAGE
+    # The words the operations' own start-up recovery uses for the same thing.
+    assert message == CAD_INTERRUPTED_MESSAGE
 
 
 # --- runtime and HTTP consumers ---------------------------------------------------

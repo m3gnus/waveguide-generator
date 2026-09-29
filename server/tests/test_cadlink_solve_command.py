@@ -21,7 +21,8 @@ from server.cadlink.solve_command import (
 )
 from server.cadlink.store import CadLinkStore
 
-from test_cad_preparation import Harness, _write_return
+from cad_backends import OperationsHarness as Harness
+from test_cad_preparation import _write_return
 
 
 @pytest.fixture

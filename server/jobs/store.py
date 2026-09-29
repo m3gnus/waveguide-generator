@@ -18,6 +18,7 @@ import sqlite3
 import threading
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
+from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
 from server.jobs.result_contracts import RESULT_ENVELOPE_ADAPTER
 from server.platform.paths import DATA_DIR_ENV, app_root, data_paths
 from server.platform.sqlite import JournalModeStatus, configure_connection
@@ -712,10 +713,15 @@ class JobStore:
                 json.dumps(job.get("task_metadata") or {}),
             ),
         )
-        conn.execute(
-            "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
-            (job["id"], job.get("parent_job_id")),
-        )
+        if job["status"] != "preparing":
+            # A run number names a run. A CAD solve still being prepared has
+            # none, and one that is refused never gets one, so the numbers of
+            # the runs that did happen have no gaps. ``bind_preparing_job``
+            # assigns it, in the transaction that queues the job.
+            conn.execute(
+                "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
+                (job["id"], job.get("parent_job_id")),
+            )
         if mesh_artifact is not None:
             conn.execute(
                 "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
@@ -724,6 +730,309 @@ class JobStore:
         if initial_event is None:
             return None
         return self._append_event(conn, str(job["id"]), *initial_event)
+
+    # -- a CAD solve that is being prepared (status ``preparing``) --------------
+    #
+    # Every write below is a compare-and-set on the job's own row, so the only
+    # things that can move a preparing job are whoever holds it (the preparation
+    # lane), a stop, and the binding that queues it. A write that loses returns
+    # None and its caller stops having changed nothing. No attempt generation
+    # is read anywhere: the job is the one lifecycle of a CAD solve.
+
+    def claim_preparing_job(
+        self,
+        job_id: str,
+        *,
+        stage: str,
+        stage_message: str,
+        progress: float,
+        cad: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Take a job nobody is preparing: ``started_at`` goes from null to now.
+
+        A null ``started_at`` is what "no lane holds this job" means, for one
+        just accepted and for one an update restart handed back. Two claimants
+        cannot both win, and a stopped job cannot be claimed. Returns the stage
+        event, or None when the claim lost.
+        """
+
+        now = _now_iso()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                """SELECT task_metadata_json FROM simulation_jobs
+                   WHERE id = ? AND status = 'preparing' AND started_at IS NULL
+                     AND cancellation_requested = 0""",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            metadata = json.loads(row["task_metadata_json"] or "{}")
+            if cad:
+                metadata["cad"] = {**(metadata.get("cad") or {}), **dict(cad)}
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET started_at = ?, stage = ?, stage_message = ?, progress = ?,
+                       updated_at = ?, task_metadata_json = ?
+                   WHERE id = ?""",
+                (now, stage, stage_message, progress, now, json.dumps(metadata), job_id),
+            )
+            return self._append_event(
+                conn,
+                job_id,
+                "stage",
+                {"stage": stage, "message": stage_message, "progress": progress},
+            )
+
+    def advance_preparing_job(
+        self,
+        job_id: str,
+        *,
+        stage: str | None = None,
+        stage_message: str = "",
+        progress: float | None = None,
+        cad: Mapping[str, Any] | None = None,
+        intent: Mapping[str, Any] | None = None,
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Record what the lane has done, while it still holds the job.
+
+        ``cad`` is merged key by key into ``task_metadata.cad``; ``intent``
+        replaces the stored intent. Returns ``(True, event)`` -- the event is
+        None when no ``stage`` was given -- or ``(False, None)`` when the job is
+        no longer preparing, was stopped, or is not held: the caller was fenced
+        and stops without writing anything more.
+        """
+
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                """SELECT task_metadata_json FROM simulation_jobs
+                   WHERE id = ? AND status = 'preparing' AND started_at IS NOT NULL
+                     AND cancellation_requested = 0""",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return False, None
+            assignments = ["updated_at = ?"]
+            params: list[Any] = [_now_iso()]
+            if stage is not None:
+                assignments += ["stage = ?", "stage_message = ?"]
+                params += [stage, stage_message]
+            if progress is not None:
+                assignments.append("progress = ?")
+                params.append(float(progress))
+            if cad:
+                metadata = json.loads(row["task_metadata_json"] or "{}")
+                metadata["cad"] = {**(metadata.get("cad") or {}), **dict(cad)}
+                assignments.append("task_metadata_json = ?")
+                params.append(json.dumps(metadata))
+            if intent is not None:
+                assignments.append("config_json = ?")
+                params.append(json.dumps(dict(intent)))
+            conn.execute(
+                f"UPDATE simulation_jobs SET {', '.join(assignments)} WHERE id = ?",
+                [*params, job_id],
+            )
+            if stage is None:
+                return True, None
+            payload: dict[str, Any] = {"stage": stage, "message": stage_message}
+            if progress is not None:
+                payload["progress"] = float(progress)
+            return True, self._append_event(conn, job_id, "stage", payload)
+
+    def hand_back_preparing_job(
+        self, job_id: str, *, stage: str, stage_message: str
+    ) -> dict[str, Any] | None:
+        """Give a job up without ending it: no lane holds it, and it is waiting.
+
+        For an approved update restart (contract §4.2): the job stays
+        ``preparing`` with what it has prepared so far, and the lane takes it
+        again when the restart is called off or the next process starts.
+        """
+
+        with self._lock, self._transaction() as conn:
+            changed = conn.execute(
+                """UPDATE simulation_jobs
+                   SET started_at = NULL, stage = ?, stage_message = ?, updated_at = ?
+                   WHERE id = ? AND status = 'preparing' AND started_at IS NOT NULL
+                     AND cancellation_requested = 0""",
+                (stage, stage_message, _now_iso(), job_id),
+            ).rowcount
+            if changed <= 0:
+                return None
+            return self._append_event(
+                conn, job_id, "stage", {"stage": stage, "message": stage_message}
+            )
+
+    def mark_unheld_preparing_job(
+        self, job_id: str, *, stage: str, stage_message: str
+    ) -> dict[str, Any] | None:
+        """Say why a job no lane holds is not being prepared. Changes nothing else.
+
+        For an approved update restart: a solve accepted while it is pending
+        shows that it waits for the restart, as one handed back does. Only a job
+        that is preparing, unheld and not already saying so; None otherwise.
+        """
+
+        with self._lock, self._transaction() as conn:
+            changed = conn.execute(
+                """UPDATE simulation_jobs
+                   SET stage = ?, stage_message = ?, updated_at = ?
+                   WHERE id = ? AND status = 'preparing' AND started_at IS NULL
+                     AND cancellation_requested = 0
+                     AND (COALESCE(stage, '') != ? OR COALESCE(stage_message, '') != ?)""",
+                (stage, stage_message, _now_iso(), job_id, stage, stage_message),
+            ).rowcount
+            if changed <= 0:
+                return None
+            return self._append_event(
+                conn, job_id, "stage", {"stage": stage, "message": stage_message}
+            )
+
+    def refuse_preparing_job(
+        self,
+        job_id: str,
+        *,
+        code: str,
+        message: str,
+        cad: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """End a preparing job as refused: an ``error`` carrying its reason and message.
+
+        ``task_metadata.cad.refusal`` is ``{code, message}``, in the vocabulary
+        the CAD operations use (``operations.REASON_CODES``). Only a job that is
+        still preparing and not stopped is ended: a stop that landed first
+        stands. Returns the ``failed`` event, or None when the job had moved on.
+        """
+
+        now = _now_iso()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                """SELECT task_metadata_json FROM simulation_jobs
+                   WHERE id = ? AND status = 'preparing' AND cancellation_requested = 0""",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            metadata = json.loads(row["task_metadata_json"] or "{}")
+            metadata["cad"] = {
+                **(metadata.get("cad") or {}),
+                **dict(cad or {}),
+                "refusal": {"code": code, "message": message},
+            }
+            conn.execute(
+                """UPDATE simulation_jobs
+                   SET status = 'error', stage = 'error', stage_message = 'Not solved',
+                       error_message = ?, completed_at = ?, updated_at = ?,
+                       task_metadata_json = ?
+                   WHERE id = ?""",
+                (message, now, now, json.dumps(metadata), job_id),
+            )
+            return self._append_event(
+                conn, job_id, "failed", {"message": message, "reason": code}
+            )
+
+    def bind_preparing_job(
+        self,
+        job_id: str,
+        *,
+        config: Mapping[str, Any],
+        config_summary: Mapping[str, Any],
+        task_metadata: Mapping[str, Any],
+        mesh_artifact: str,
+        mesh_stats: Mapping[str, Any] | None,
+        script_snapshot: Mapping[str, Any] | None,
+        label: str | None,
+        parent_job_id: str | None,
+        initial_event: tuple[str, Mapping[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Bind a prepared CAD solve to its request, and queue it: one transaction.
+
+        This is the binding point. The job's ``config_json`` becomes the exact
+        ``SolveRequest`` (it was the CAD intent), its metadata and mesh artifact
+        are written, it takes the next run number, and it goes ``preparing`` ->
+        ``queued`` together. Either all of that is durable or none of it is: a
+        process that dies before the commit leaves a ``preparing`` job with no
+        run number, and one that dies after leaves a ``queued`` job that has its
+        mesh. Conditional on the job still preparing and not stopped; None when
+        it is not, and nothing was written.
+        """
+
+        now = _now_iso()
+        with self._lock, self._transaction() as conn:
+            changed = conn.execute(
+                """UPDATE simulation_jobs
+                   SET status = 'queued', queued_at = ?, updated_at = ?, started_at = NULL,
+                       progress = 0.0, stage = 'queued', stage_message = 'Job queued',
+                       error_message = NULL, config_json = ?, config_summary_json = ?,
+                       has_mesh_artifact = 1, mesh_stats_json = ?, label = ?,
+                       script_snapshot_json = ?, task_metadata_json = ?
+                   WHERE id = ? AND status = 'preparing' AND cancellation_requested = 0""",
+                (
+                    now,
+                    now,
+                    json.dumps(dict(config)),
+                    json.dumps(dict(config_summary)),
+                    json.dumps(dict(mesh_stats)) if mesh_stats is not None else None,
+                    label,
+                    json.dumps(dict(script_snapshot)) if script_snapshot is not None else None,
+                    json.dumps(dict(task_metadata)),
+                    job_id,
+                ),
+            ).rowcount
+            if changed <= 0:
+                return None
+            conn.execute(
+                "INSERT INTO job_identity (job_id, parent_job_id) VALUES (?, ?)",
+                (job_id, parent_job_id),
+            )
+            conn.execute(
+                "INSERT INTO simulation_artifacts (job_id, msh_text) VALUES (?, ?)",
+                (job_id, mesh_artifact),
+            )
+            return self._append_event(conn, job_id, *initial_event)
+
+    def cancel_job_from(
+        self,
+        job_id: str,
+        expected_status: str,
+        fields: Mapping[str, Any],
+        event_type: str,
+        payload: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        """End a job that has not started, only if it still has ``expected_status``.
+
+        A stop races the binding that moves ``preparing`` to ``queued``; the
+        stop names the status it saw, and one of the two wins. None when the job
+        had moved on, so the caller reads it again and answers for what it now is.
+        """
+
+        values = dict(fields)
+        unsupported = sorted(set(values) - ALLOWED_JOB_UPDATE_FIELDS)
+        if unsupported:
+            raise ValueError(f"Unsupported job update field(s): {', '.join(unsupported)}")
+        values["updated_at"] = _now_iso()
+        assignments = [f"{key} = ?" for key in values]
+        params = [self._db_value(key, value) for key, value in values.items()]
+        with self._lock, self._transaction() as conn:
+            changed = conn.execute(
+                f"""UPDATE simulation_jobs SET {', '.join(assignments)}
+                    WHERE id = ? AND status = ?""",
+                [*params, job_id, expected_status],
+            ).rowcount
+            if changed <= 0:
+                return None
+            return self._append_event(conn, job_id, event_type, payload)
+
+    def unheld_preparing_job_ids(self) -> list[str]:
+        """The preparing jobs no lane holds, oldest first: what the lane takes up."""
+
+        with self._lock, self._connection() as conn:
+            rows = conn.execute(
+                """SELECT id FROM simulation_jobs
+                   WHERE status = 'preparing' AND started_at IS NULL
+                     AND cancellation_requested = 0
+                   ORDER BY queued_at ASC, created_at ASC, id ASC"""
+            ).fetchall()
+        return [str(row["id"]) for row in rows]
 
     def update_job(self, job_id: str, **fields: Any) -> bool:
         """Update allowed job columns, matching v1 ``server/db.py:137-161``."""
@@ -1126,7 +1435,7 @@ class JobStore:
                 """SELECT simulation_jobs.*, job_identity.run_number,
                           job_identity.parent_job_id
                    FROM simulation_jobs
-                   JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                   LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
                    WHERE simulation_jobs.id = ?""",
                 (job_id,),
             ).fetchone()
@@ -1136,11 +1445,16 @@ class JobStore:
         """Which captured CAD model states runs still have to be archived from.
 
         A queued or running run has not written its archive folder yet, and a
-        complete run with results but no ``archived_at`` has not either. Both
-        still have to be handed the exact model they were solved from, so the
-        project-level capture of that model must survive a newer capture until
-        they have it. A failed or cancelled run is never archived and holds
-        nothing.
+        complete run with results but no ``archived_at`` has not either. A CAD
+        solve WG is still preparing holds the state its preparation named
+        (``task_metadata.cad.return_state_hash``), and so does one that was
+        refused in a way the user can answer (findings to review, a frame to
+        confirm) until another job continues it: that is a solve still waiting to
+        run, as an unfinished operation was. Such a state has no archive stem
+        yet, so it is kept for every project. Both still have to be handed the
+        exact model they were solved from, so the project-level capture of that
+        model must survive a newer capture until they have it. A failed or
+        cancelled run is never archived and holds nothing.
 
         Read straight out of the immutable submission metadata rather than
         through ``_row_to_job``: this is a retention decision on every row in
@@ -1153,6 +1467,9 @@ class JobStore:
         # rather than an error the advisory caller would have to swallow.
         if not self.db_path.is_file():
             return []
+        rejected = sorted(
+            code for code, state in CAD_REASON_STATES.items() if state == CAD_REJECTED
+        )
         with self._lock, self._connection() as conn:
             if conn.execute(
                 "SELECT name FROM sqlite_master "
@@ -1160,20 +1477,16 @@ class JobStore:
             ).fetchone() is None:
                 return []
             rows = conn.execute(
-                """
-                SELECT DISTINCT
-                    json_extract(
-                        task_metadata_json, '$.imported_geometry.archive_stem'
-                    ) AS archive_stem,
-                    json_extract(
-                        task_metadata_json,
-                        '$.imported_geometry.document.return_state_hash'
-                    ) AS return_state_hash
+                f"""
+                SELECT json_extract(
+                           task_metadata_json, '$.imported_geometry.archive_stem'
+                       ) AS archive_stem,
+                       json_extract(
+                           task_metadata_json,
+                           '$.imported_geometry.document.return_state_hash'
+                       ) AS return_state_hash
                 FROM simulation_jobs
-                WHERE json_extract(
-                        task_metadata_json,
-                        '$.imported_geometry.document.return_state_hash'
-                      ) IS NOT NULL
+                WHERE return_state_hash IS NOT NULL
                   AND (
                         status IN ('preparing', 'queued', 'running')
                         OR (
@@ -1184,7 +1497,29 @@ class JobStore:
                             ) IS NULL
                         )
                       )
-                """
+                UNION
+                SELECT '' AS archive_stem,
+                       json_extract(
+                           task_metadata_json, '$.cad.return_state_hash'
+                       ) AS return_state_hash
+                FROM simulation_jobs
+                WHERE return_state_hash IS NOT NULL
+                  AND (
+                        status = 'preparing'
+                        OR (
+                            status = 'error'
+                            AND json_extract(
+                                task_metadata_json, '$.cad.refusal.code'
+                            ) NOT IN ({",".join("?" for _ in rejected)})
+                            AND NOT EXISTS (
+                                SELECT 1 FROM simulation_jobs AS next
+                                WHERE json_extract(next.config_json, '$.parent_job_id')
+                                      = simulation_jobs.id
+                            )
+                        )
+                      )
+                """,
+                rejected,
             ).fetchall()
         return [
             {
@@ -1212,14 +1547,14 @@ class JobStore:
             where = f"WHERE simulation_jobs.status IN ({placeholders})"
             args.extend(statuses)
         with self._lock, self._connection() as conn:
-            # The join mirrors the row query below. Counting without it would
-            # let a job with no identity row inflate the total while never
-            # appearing in a page, which reads as a pagination bug.
+            # The join mirrors the row query below, so the total counts what a
+            # page can show. It is a LEFT join: a CAD solve that is still being
+            # prepared, or was refused, has no run number and no identity row.
             total = int(
                 conn.execute(
                     f"""SELECT COUNT(*) AS c
                         FROM simulation_jobs
-                        JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                        LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
                         {where}""",
                     args,
                 ).fetchone()["c"]
@@ -1229,7 +1564,7 @@ class JobStore:
                 SELECT simulation_jobs.*, job_identity.run_number,
                        job_identity.parent_job_id
                 FROM simulation_jobs
-                JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
                 {where}
                 ORDER BY simulation_jobs.created_at DESC, job_identity.run_number DESC
                 LIMIT ? OFFSET ?
@@ -1253,7 +1588,7 @@ class JobStore:
                     """SELECT simulation_jobs.*, job_identity.run_number,
                               job_identity.parent_job_id
                        FROM simulation_jobs
-                       JOIN job_identity ON job_identity.job_id = simulation_jobs.id
+                       LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
                        ORDER BY simulation_jobs.created_at DESC, job_identity.run_number DESC"""
                 ).fetchall()
             finally:
@@ -1822,10 +2157,12 @@ class JobStore:
         ever ended. None is requeued.
 
         A ``preparing`` row (a CAD solve accepted but not yet bound to a request)
-        also ends here, as ``error`` with ``preparing_error_message``: the
-        preparation that owned it died with the process, and until the
-        preparation lane exists nothing can resume it. The user's remedy is to
-        Solve again. It carries no solver artifacts, so none are removed.
+        that a preparation lane held (``started_at`` set) also ends here, as
+        ``error`` with ``preparing_error_message`` and the refusal code
+        ``interrupted``: the preparation that owned it died with the process.
+        The user's remedy is to Solve again. One no lane held is left preparing
+        for the lane to take up. It carries no solver artifacts, so none are
+        removed.
         """
 
         now = _now_iso()
@@ -2013,10 +2350,16 @@ class JobStore:
                         {"message": restart_error_message, "recovered": True},
                     )
                 )
+            # A preparing job no lane held (``started_at`` null: just accepted, or
+            # handed back by an update restart) keeps waiting: the lane takes it
+            # up again (``unheld_preparing_job_ids``). One a lane held died with
+            # its process, mid-preparation; it ends as refused, ``interrupted``,
+            # and the user's remedy is Solve again.
             preparing_ids = [
                 str(row["id"])
                 for row in conn.execute(
-                    "SELECT id FROM simulation_jobs WHERE status = 'preparing' "
+                    "SELECT id FROM simulation_jobs "
+                    "WHERE status = 'preparing' AND started_at IS NOT NULL "
                     "ORDER BY created_at ASC"
                 ).fetchall()
             ]
@@ -2026,10 +2369,15 @@ class JobStore:
                     UPDATE simulation_jobs
                     SET status = 'error', stage = 'error', stage_message = 'Preparation interrupted',
                         error_message = ?, cancellation_requested = 0,
-                        completed_at = COALESCE(completed_at, ?), updated_at = ?
+                        completed_at = COALESCE(completed_at, ?), updated_at = ?,
+                        task_metadata_json = json_patch(
+                            COALESCE(task_metadata_json, '{{}}'),
+                            json_object('cad', json_object('refusal',
+                                json_object('code', 'interrupted', 'message', ?)))
+                        )
                     WHERE id IN ({",".join("?" for _ in preparing_ids)})
                     """,
-                    (preparing_error_message, now, now, *preparing_ids),
+                    (preparing_error_message, now, now, preparing_error_message, *preparing_ids),
                 )
                 for job_id in preparing_ids:
                     recovery_events.append(
@@ -2046,7 +2394,7 @@ class JobStore:
                    FROM simulation_jobs
                    JOIN job_identity ON job_identity.job_id = simulation_jobs.id
                    WHERE simulation_jobs.status = 'queued'
-                   ORDER BY simulation_jobs.created_at ASC, job_identity.run_number ASC"""
+                   ORDER BY simulation_jobs.queued_at ASC, job_identity.run_number ASC"""
             ).fetchall()
             queued_jobs = [self._row_to_job(row) for row in queued]
         for row in trace_rows:
@@ -2714,6 +3062,9 @@ class JobStore:
                FROM simulation_jobs
                LEFT JOIN job_identity ON job_identity.job_id = simulation_jobs.id
                WHERE job_identity.job_id IS NULL
+                 AND simulation_jobs.status != 'preparing'
+                 AND COALESCE(json_extract(simulation_jobs.config_json, '$.type'), '')
+                     != 'cad_intent'
                ORDER BY simulation_jobs.created_at ASC, simulation_jobs.id ASC"""
         )
 
@@ -2724,7 +3075,9 @@ class JobStore:
         columns = set(row.keys())
         result: dict[str, Any] = {
             "id": row["id"],
-            "run_number": int(row["run_number"]),
+            "run_number": (
+                int(row["run_number"]) if row["run_number"] is not None else None
+            ),
             "parent_job_id": row["parent_job_id"],
             "status": row["status"],
             "created_at": row["created_at"],

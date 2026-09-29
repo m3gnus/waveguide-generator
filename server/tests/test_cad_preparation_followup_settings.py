@@ -17,7 +17,8 @@ import pytest
 from server.cadlink import ingest as ingest_module
 from server.cadlink.isolation import ChildRefusal
 
-from test_cad_preparation import Harness, Refused, _manifest, _revision, _setup
+from cad_backends import OperationsHarness as Harness
+from test_cad_preparation import Refused, _manifest, _revision, _setup
 from test_cad_preparation_design_gate import MesherStandIn, _current, _prepare, _received
 from test_cad_project_setup import _project, _record_setup
 

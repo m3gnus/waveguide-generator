@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from server.cadlink.identity import design_hash
-from server.cadlink.preparation import PreparationInput, prepare_operation, run_delivery_pass
+from server.cadlink.preparation import PreparationInput, prepare_operation
 from server.cadlink.project_setup import (
     inventory_sha256,
     snapshot_project,
@@ -31,7 +31,8 @@ from server.cadlink.wgreturn import read_wgreturn
 from server.design.schema import DesignConfig
 from server.design.textcfg import serialize
 
-from test_cad_preparation import Harness, _accept, _manifest, _setup
+from cad_backends import Harness, backend_fixture, backend_free, old_only
+from test_cad_preparation import _accept, _manifest, _setup
 
 
 SOURCES = [{"id": "source-hf", "role": "HF", "required": True}]
@@ -40,9 +41,14 @@ SOURCES = [{"id": "source-hf", "role": "HF", "required": True}]
 LEGACY_INVENTORY_SHA256 = "sha256:c38c167819ef5ba47ee8e8103ee1fe57629be18017a80ff2fc8d10df25a9bc36"
 
 
+BACKEND_FIXTURES = ("harness",)
+
+
 @pytest.fixture
-def harness(tmp_path: Path) -> Harness:
-    return Harness(tmp_path)
+def harness(request, tmp_path: Path):
+    """The CAD-solve backend under test: the operations, then the jobs (cad_backends.py)."""
+
+    yield from backend_fixture(request, tmp_path)
 
 
 def _project(harness: Harness, coverage: float) -> tuple[str, str]:
@@ -145,6 +151,7 @@ def _select_engine(harness: Harness, engine: str, accuracy: str = "fast") -> Non
 # -- project setups ------------------------------------------------------------------
 
 
+@backend_free
 def test_a_project_setup_is_recorded_for_its_project_and_sources(harness: Harness) -> None:
     _design_id, lineage = _project(harness, 45.0)
 
@@ -218,6 +225,7 @@ def test_a_reassigned_source_identity_does_not_inherit_the_project_setup(harness
     )["revision_id"] != summary["setupRevisionId"]
 
 
+@backend_free
 def test_a_legacy_source_inventory_digest_is_byte_stable(harness: Harness) -> None:
     design_id, lineage = _project(harness, 45.0)
     bundle_path, _manifest_sha = _project_return(harness, "legacy", design_id, lineage)
@@ -228,6 +236,7 @@ def test_a_legacy_source_inventory_digest_is_byte_stable(harness: Harness) -> No
     assert inventory_sha256(legacy["sources"]) == LEGACY_INVENTORY_SHA256
 
 
+@backend_free
 def test_the_project_of_a_snapshot_is_read_not_claimed(harness: Harness) -> None:
     design_id, lineage = _project(harness, 45.0)
     manifest = _manifest(b"STEP")
@@ -463,17 +472,7 @@ def _deliver(harness: Harness, command_id: str, bundle_path: str, manifest: str)
 def _pass(harness: Harness, running: set[str] | frozenset[str] = frozenset()) -> list[str]:
     """One pass of the backend's delivery loop, waiting for what it started."""
 
-    async def one_pass() -> list[str]:
-        started: list[asyncio.Future[Any]] = []
-        ids = await run_delivery_pass(
-            harness.context(),
-            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-            running=running,
-        )
-        await asyncio.gather(*started)
-        return ids
-
-    return asyncio.run(one_pass())
+    return harness.delivery_pass(running)
 
 
 def test_a_stored_snapshot_is_solvable_with_fusion_closed(harness: Harness) -> None:
@@ -481,7 +480,7 @@ def test_a_stored_snapshot_is_solvable_with_fusion_closed(harness: Harness) -> N
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage, sized=False)
     _deliver(harness, "cmd-b", bundle_path, manifest)
     assert _pass(harness) == ["cmd-b"]  # retained, then waits: no usable settings yet
-    assert harness.row("cmd-b")["reason"] == "setup_required"
+    assert harness.summary("cmd-b")["reason"] == "setup_required"
     # Fusion is closed: no heartbeat and no exchange folder.
     shutil.rmtree(harness.workspace)
     assert not (harness.data_dir / "ipc" / "wglink" / ".fusion-status.json").exists()
@@ -539,20 +538,11 @@ def test_the_backend_collects_and_prepares_solve_commands_itself(harness: Harnes
         "requestedAt": "2026-09-13T01:00:00Z",
     }))
 
-    async def one_pass() -> list[str]:
-        started: list[asyncio.Task[Any]] = []
-        ids = await run_delivery_pass(
-            harness.context(),
-            spawn=lambda _operation_id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-        )
-        await asyncio.gather(*started)
-        return ids
-
-    assert asyncio.run(one_pass()) == ["cmd-b"]
+    assert harness.delivery_pass() == ["cmd-b"]
     assert harness.row("cmd-b")["state"] == "accepted"
     assert list(requests.iterdir()) == []
     # Nothing is prepared twice, and a waiting operation is not retried unasked.
-    assert asyncio.run(one_pass()) == []
+    assert harness.delivery_pass() == []
     assert len(harness.submitted) == 1
 
 
@@ -562,7 +552,7 @@ def test_the_loop_never_retries_an_operation_waiting_for_the_user(harness: Harne
     _deliver(harness, "cmd-b", bundle_path, manifest)
 
     assert _pass(harness) == ["cmd-b"]
-    assert harness.row("cmd-b")["reason"] == "setup_required"
+    assert harness.summary("cmd-b")["reason"] == "setup_required"
     assert _pass(harness) == []  # it waits for the user, not for the next second
     assert harness.ingest.calls == []
 
@@ -577,6 +567,10 @@ def test_the_loop_skips_what_it_already_started(harness: Harness) -> None:
     assert harness.row("cmd-b")["state"] == "received"
 
 
+@old_only(
+    "the user's claim between the loop's listing and its start, by generation",
+    "S4-F1 (the loop's acceptance is idempotent by key: test_job_cad_lane.py::test_accepting_the_same_delivery_twice_is_the_job_it_made)",
+)
 def test_the_loop_never_takes_over_the_users_own_attempt(harness: Harness) -> None:
     b_design, b_lineage = _project(harness, 60.0)
     _record_setup(harness, b_lineage, _setup())
@@ -606,6 +600,7 @@ def test_without_a_wglink_folder_nothing_is_collected(harness: Harness) -> None:
     assert harness.store.get_operation("cmd-b") is None
 
 
+@backend_free
 def test_a_return_with_several_designs_belongs_to_its_solver_anchor_project(
     harness: Harness,
 ) -> None:
@@ -640,10 +635,11 @@ def test_the_request_the_backend_composes_is_widened_before_it_is_bound(harness:
     assert harness.prepare("cmd-b")["state"] == "accepted"
 
     assert harness.submitted[-1].options.polar_config.enabled_axes == ["horizontal", "vertical"]
-    bound = json.loads(harness.row("cmd-b")["request_json"])
+    bound = harness.bound_request("cmd-b")
     assert bound["options"]["polar_config"]["angle_range"][:2] == [-180.0, 180.0]
 
 
+@backend_free
 def test_the_routes_take_only_well_formed_settings(harness: Harness) -> None:
     from fastapi import HTTPException
     from pydantic import ValidationError
@@ -663,6 +659,7 @@ def test_the_routes_take_only_well_formed_settings(harness: Harness) -> None:
     assert refused.value.status_code == 422
 
 
+@backend_free
 def test_the_delivery_loop_runs_only_when_enabled_and_stops_at_shutdown(
     harness: Harness, monkeypatch
 ) -> None:
@@ -725,15 +722,13 @@ def test_a_manifest_role_is_matched_as_the_panel_names_it(harness: Harness) -> N
 
 
 def test_an_operation_names_its_document_and_project(harness: Harness) -> None:
-    from server.cadlink.preparation import operation_summary
-
     b_design, b_lineage = _project(harness, 60.0)
     bundle_path, manifest = _project_return(harness, "b", b_design, b_lineage)
     _deliver(harness, "cmd-b", bundle_path, manifest)
 
     _pass(harness)
 
-    assert operation_summary(harness.row("cmd-b"))["snapshot"] == {
+    assert harness.summary("cmd-b")["snapshot"] == {
         "manifestSha256": manifest,
         "documentName": "Tritonia speaker",
         "projectLineageId": b_lineage,
@@ -757,8 +752,8 @@ def test_the_loop_prepares_an_operation_once_its_return_is_retained(harness: Har
 
     assert _pass(harness) == ["cmd-b"]
 
-    row = harness.row("cmd-b")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    summary = harness.summary("cmd-b")
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
     assert list(requests.iterdir()) == []
 
 
@@ -821,6 +816,10 @@ def _failing(times: int, error: BaseException, then: Any) -> Any:
 
 
 @pytest.mark.parametrize("failure", ["wglink-folder", "store"])
+@old_only(
+    "the app's delivery loop, mounted on the operations (api._deliver_solve_commands)",
+    "S4-F1 (that loop is repointed at accept_cad_solve there; the ledger's collection it wraps is unchanged)",
+)
 def test_a_delivery_pass_that_fails_once_still_delivers_and_prepares(
     harness: Harness, monkeypatch, caplog, failure: str
 ) -> None:
@@ -857,6 +856,10 @@ def test_a_delivery_pass_that_fails_once_still_delivers_and_prepares(
     assert len(failures) == 1
 
 
+@old_only(
+    "the app's delivery loop, mounted on the operations (api._deliver_solve_commands)",
+    "S4-F1 (that loop is repointed at accept_cad_solve there; the ledger's collection it wraps is unchanged)",
+)
 def test_a_persisting_delivery_failure_is_logged_once_not_every_pass(
     harness: Harness, monkeypatch, caplog
 ) -> None:
@@ -906,8 +909,8 @@ def test_a_waiting_claim_holds_its_operation_when_a_pass_stops_early(harness: Ha
     assert harness.row("cmd-b")["state"] == "received"
     hidden.rename(bundle)
     assert _pass(harness) == ["cmd-b"]
-    row = harness.row("cmd-b")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    summary = harness.summary("cmd-b")
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
 
 
 # -- a solve the update restart latch parked -----------------------------------------
@@ -932,23 +935,17 @@ def _parked_by_the_latch(harness: Harness) -> None:
 
 
 def test_a_solve_parked_by_an_update_restart_runs_by_itself_after_the_restart(
-    harness: Harness, tmp_path: Path
+    harness: Harness,
 ) -> None:
-    from server.cadlink.preparation import recover_operations
-    from server.cadlink.store import CadLinkStore
-
     _parked_by_the_latch(harness)
     # The restart: a new process, and no latch.
-    harness.store.close()
-    harness.store = CadLinkStore(tmp_path / "cadlink.db")
+    harness.restart()
     harness.blocked = None
 
-    assert recover_operations(harness.context()) == 1
+    assert harness.resume_after_restart() == ["cmd-b"]
 
-    assert harness.row("cmd-b")["state"] == "received"
-    assert _pass(harness) == ["cmd-b"]
-    row = harness.row("cmd-b")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    summary = harness.summary("cmd-b")
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
     # It resumed the preparation it had made: one mesh, not two.
     assert len(harness.ingest.calls) == 1
 
@@ -957,17 +954,21 @@ def test_a_solve_parked_by_an_update_restart_proceeds_when_the_restart_is_called
     harness: Harness,
 ) -> None:
     _parked_by_the_latch(harness)
-    # Still latched: the loop leaves it parked.
+    # Still latched: nothing starts, and the solve says why it waits.
     assert _pass(harness) == []
-    assert harness.row("cmd-b")["reason"] == "update_restart_pending"
+    assert harness.summary("cmd-b")["reason"] == "update_restart_pending"
 
-    harness.blocked = None  # the approval expired, or the launcher discarded the request
+    # The approval expired, or the launcher discarded the request.
+    assert harness.release_latch() == ["cmd-b"]
 
-    assert _pass(harness) == ["cmd-b"]
-    row = harness.row("cmd-b")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    summary = harness.summary("cmd-b")
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
 
 
+@old_only(
+    "the operation is queued again as received, and the loop needs a WGLink folder to start it",
+    "test_job_cad_lane.py::test_a_solve_the_restart_held_is_taken_up_again_when_the_latch_comes_down",
+)
 def test_a_solve_the_update_restart_held_is_queued_again_without_a_wglink_folder(
     harness: Harness,
 ) -> None:
@@ -998,10 +999,10 @@ def test_a_solve_now_an_update_restart_overtakes_waits_for_it_and_then_runs(
     assert (held["state"], held["reason"]) == ("needs_user_input", "update_restart_pending")
     assert held["message"] == harness.blocked
     assert len(harness.ingest.calls) == 1 and harness.submitted == []
-    harness.blocked = None  # released, expired, or the restart happened
-    assert _pass(harness) == ["cmd-b"]
-    row = harness.row("cmd-b")
-    assert (row["state"], row["job_id"]) == ("accepted", "job-1")
+    # Released, expired, or the restart happened.
+    assert harness.release_latch() == ["cmd-b"]
+    summary = harness.summary("cmd-b")
+    assert (summary["state"], summary["jobId"]) == ("accepted", "job-1")
     assert len(harness.ingest.calls) == 1
 
 

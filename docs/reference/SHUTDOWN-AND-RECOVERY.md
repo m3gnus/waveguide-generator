@@ -70,8 +70,10 @@ skips is crash-safe by construction:
   failed / Server restarted during execution". Interrupted jobs are not
   requeued, because the user quit on purpose. Jobs that were still queued are
   requeued. A job left `preparing` (a CAD solve accepted but not yet bound to a
-  request) reads *failed*, "Preparation was interrupted because Waveguide
-  Generator restarted before the solve was ready. Press Solve again."
+  request) that a preparation lane was holding reads *failed* with the reason
+  `interrupted`, "WG stopped while preparing this request. Press Solve now to prepare
+  it again."; one no lane was holding is prepared by the next start. No production
+  code creates such a job yet (S4-F1 switches the delivery pass and the routes).
 - **Temporary files.** Each server process makes WG's own temporary files and
   directories -- mesh builds, the mesh each solver and the field plane read,
   STL and STEP exports, imported meshes -- inside one directory of its own,

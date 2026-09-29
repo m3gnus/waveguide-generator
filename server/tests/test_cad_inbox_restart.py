@@ -52,8 +52,9 @@ from server.cadlink.solve_command import CAD_SOLVE_SUBMISSION_PREFIX, CLAIM_PREF
 from server.cadlink.store import CadLinkStore
 from server.jobs.store import JobStore
 
+from cad_backends import FakeIngest, JobsHarness
 from test_cad_inbox_stall import V3_SOLVE, V4_SNAPSHOT, V4_SOLVE, drop, fixture
-from test_cad_preparation import FakeIngest, _setup
+from test_cad_preparation import _setup
 from test_cad_project_setup import _project, _project_return, _record_setup
 
 
@@ -77,8 +78,20 @@ def _fresh_process_state():
     _forget_process_state()
 
 
+BACKEND_FIXTURES = ("backend",)
+
+
+@pytest.fixture
+def backend(request) -> str:
+    """The CAD-solve backend that prepares what the inbox delivers (cad_backends.py)."""
+
+    return request.param
+
+
 class Wg:
-    """One WG process: its operation store and jobs store, opened from the files."""
+    """One WG process on the operations backend: its operation store and jobs store, from the files."""
+
+    backend = "operations"
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -149,15 +162,69 @@ class Wg:
         self.jobs.close()
 
 
-def _restart(old: Wg) -> Wg:
+class JobsWg:
+    """One WG process on the jobs backend, with the API of ``Wg``.
+
+    The delivery pass is what S4-F1 will run: the ledger's own collection and
+    retention, then one job accepted per received solve and prepared by the runtime's
+    lane. A crash is what the scenario says it is (``crash_after_job``, or an exception
+    that ends a preparation on the lane), and the process is dead from then on.
+    """
+
+    backend = "jobs"
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self.data_dir = root / "data"
+        self.workspace = root / "workspace"
+        self.workspace.mkdir(parents=True, exist_ok=True)
+        self.cadlink_db = root / "cadlink.db"
+        self.jobs_db = root / "jobs.db"
+        self.harness = JobsHarness(root)
+        self.store = self.harness.store
+        self.ingest = self.harness.ingest
+        #: Raised once the job exists, before the operation records it.
+        self.crash_after_job = False
+
+    @property
+    def submitted(self) -> list[Any]:
+        return self.harness.submitted
+
+    @submitted.setter
+    def submitted(self, value: list[Any]) -> None:
+        self.harness.submitted = value
+
+    def start(self) -> int:
+        self.harness.recover_ledger()
+        return 0
+
+    def run_pass(self) -> list[str]:
+        if self.crash_after_job:
+            self.crash_after_job = False
+
+            def die() -> None:
+                raise _Crash("stopped after the job was created")
+
+            self.harness.after_job = die
+        return self.harness.delivery_pass()
+
+    def stop(self) -> None:
+        self.harness.close()
+
+
+def new_wg(root: Path, backend: str) -> Wg | JobsWg:
+    return Wg(root) if backend == "operations" else JobsWg(root)
+
+
+def _restart(old: Wg | JobsWg) -> Wg | JobsWg:
     """A new process on the same files. The old one's objects are never used again."""
 
     old.stop()
     _forget_process_state()
-    return Wg(old.root)
+    return new_wg(old.root, old.backend)
 
 
-def _setup_project(wg: Wg) -> tuple[str, str]:
+def _setup_project(wg: Wg | JobsWg) -> tuple[str, str]:
     """A saved project with its solve setup, and a return Fusion exported from it."""
 
     design_id, lineage_id = _project(wg, 60.0)
@@ -178,19 +245,19 @@ def _request(name: str, bundle_path: str, manifest: str) -> dict[str, Any]:
     return fixture(REQUESTS[name], bundlePath=bundle_path, manifestSha256=manifest)
 
 
-def _inbox(wg: Wg) -> list[str]:
+def _inbox(wg: Wg | JobsWg) -> list[str]:
     folder = wg.data_dir / "ipc" / "wglink" / SOLVE_REQUESTS_DIRECTORY
     return sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
 
 
-def _operation_rows(wg: Wg) -> list[tuple[str, str]]:
+def _operation_rows(wg: Wg | JobsWg) -> list[tuple[str, str]]:
     """Read from the file, not through the store under test."""
 
     with closing(sqlite3.connect(wg.cadlink_db)) as conn:
         return conn.execute("SELECT operation_id, state FROM cad_operations").fetchall()
 
 
-def _jobs_for(wg: Wg, operation_id: str) -> list[str]:
+def _jobs_for(wg: Wg | JobsWg, operation_id: str) -> list[str]:
     with closing(sqlite3.connect(wg.jobs_db)) as conn:
         rows = conn.execute(
             "SELECT job_id FROM job_submissions WHERE submission_key = ?",
@@ -198,11 +265,16 @@ def _jobs_for(wg: Wg, operation_id: str) -> list[str]:
         ).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0]
         keyed = conn.execute("SELECT COUNT(*) FROM job_submissions").fetchone()[0]
-    assert total == keyed, "a job exists that no submission key names"
+        # A Solve again is a job of its own, continuing one: a new job, never keyed.
+        continuing = conn.execute(
+            "SELECT COUNT(*) FROM simulation_jobs "
+            "WHERE json_extract(config_json, '$.parent_job_id') IS NOT NULL"
+        ).fetchone()[0]
+    assert total == keyed + continuing, "a job exists that no submission key names"
     return [row[0] for row in rows]
 
 
-def _assert_exactly_once(wg: Wg, request: dict[str, Any], submissions: int) -> None:
+def _assert_exactly_once(wg: Wg | JobsWg, request: dict[str, Any], submissions: int) -> None:
     operation_id = request["operationId"]
     assert _operation_rows(wg) == [(operation_id, "accepted")]
     assert _inbox(wg) == []
@@ -224,7 +296,7 @@ def _assert_exactly_once(wg: Wg, request: dict[str, Any], submissions: int) -> N
         assert jobs == [] and submissions == 0
 
 
-def _run_to_rest(wg: Wg) -> None:
+def _run_to_rest(wg: Wg | JobsWg) -> None:
     """Start-up recovery, then passes until one starts nothing and the inbox is empty."""
 
     wg.start()
@@ -240,10 +312,10 @@ def _run_to_rest(wg: Wg) -> None:
 
 
 @pytest.mark.parametrize("name", list(REQUESTS))
-def test_a_request_with_no_stop_is_one_operation_and_at_most_one_job(tmp_path: Path, name: str) -> None:
+def test_a_request_with_no_stop_is_one_operation_and_at_most_one_job(tmp_path: Path, name: str, backend: str) -> None:
     """The positive control of every test below: the same measurements, no crash."""
 
-    wg = Wg(tmp_path)
+    wg = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(wg))
     drop(wg.data_dir, request)
     _run_to_rest(wg)
@@ -251,10 +323,10 @@ def test_a_request_with_no_stop_is_one_operation_and_at_most_one_job(tmp_path: P
     wg.stop()
 
 
-def test_two_commands_for_the_same_return_are_two_jobs(tmp_path: Path) -> None:
+def test_two_commands_for_the_same_return_are_two_jobs(tmp_path: Path, backend: str) -> None:
     """The job counter can count past one: a new id is a new command."""
 
-    wg = Wg(tmp_path)
+    wg = new_wg(tmp_path, backend)
     bundle_path, manifest = _setup_project(wg)
     first = _request("v4-solve", bundle_path, manifest)
     second = {**first, "commandId": "second-command", "operationId": "second-command"}
@@ -300,11 +372,11 @@ def _crash_after(target: Any, name: str, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(target, name, stopped)
 
 
-def _claims(wg: Wg) -> list[str]:
+def _claims(wg: Wg | JobsWg) -> list[str]:
     return [name for name in _inbox(wg) if name.startswith(CLAIM_PREFIX)]
 
 
-def _after_claim(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_claim(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_before(CadLinkStore, "accept_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -314,7 +386,7 @@ def _after_claim(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str,
     return check
 
 
-def _after_accept(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_accept(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_after(CadLinkStore, "accept_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -324,7 +396,7 @@ def _after_accept(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str
     return check
 
 
-def _after_retention(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_retention(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_after(preparation, "settle_snapshot_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -339,7 +411,7 @@ def _after_retention(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[
     return check
 
 
-def _after_claim_delete(wg: Wg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_claim_delete(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_after(solve_command, "_acknowledge", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -360,10 +432,8 @@ STOPS = {
 
 @pytest.mark.parametrize("stop", list(STOPS))
 @pytest.mark.parametrize("name", list(REQUESTS))
-def test_a_restart_at_any_step_leaves_one_operation_and_at_most_one_job(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, stop: str
-) -> None:
-    first = Wg(tmp_path)
+def test_a_restart_at_any_step_leaves_one_operation_and_at_most_one_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, stop: str, backend: str) -> None:
+    first = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(first))
     drop(first.data_dir, request)
     check = STOPS[stop](first, monkeypatch)
@@ -382,10 +452,10 @@ def test_a_restart_at_any_step_leaves_one_operation_and_at_most_one_job(
 
 
 @pytest.mark.parametrize("name", ["v4-solve", "v3-solve"])
-def test_a_restart_after_the_job_was_created_does_not_submit_again(tmp_path: Path, name: str) -> None:
+def test_a_restart_after_the_job_was_created_does_not_submit_again(tmp_path: Path, name: str, backend: str) -> None:
     """The job exists and the operation never recorded it: start-up takes the job."""
 
-    first = Wg(tmp_path)
+    first = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(first))
     drop(first.data_dir, request)
     first.crash_after_job = True
@@ -402,13 +472,11 @@ def test_a_restart_after_the_job_was_created_does_not_submit_again(tmp_path: Pat
 
 
 @pytest.mark.parametrize("name", ["v4-solve", "v3-solve"])
-def test_a_restart_mid_preparation_waits_visibly_and_solves_once_when_asked(
-    tmp_path: Path, name: str
-) -> None:
+def test_a_restart_mid_preparation_waits_visibly_and_solves_once_when_asked(tmp_path: Path, name: str, backend: str) -> None:
     """Stopped while meshing: never left ``received`` or ``processing``. Start-up
     says so (``interrupted``), and Solve now submits exactly one job."""
 
-    first = Wg(tmp_path)
+    first = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(first))
     drop(first.data_dir, request)
 
@@ -419,18 +487,28 @@ def test_a_restart_mid_preparation_waits_visibly_and_solves_once_when_asked(
     with pytest.raises(_Crash):
         first.start()
         first.run_pass()
-    assert _operation_rows(first) == [(request["operationId"], "processing")]
+    if backend == "operations":
+        assert _operation_rows(first) == [(request["operationId"], "processing")]
 
     second = _restart(first)
     _run_to_rest(second)
-    row = second.store.get_operation(request["operationId"])
-    assert (row["state"], row["reason"]) == ("needs_user_input", "interrupted")
-    assert "Press Solve now" in json.loads(row["outcome_json"])["message"]
+    if backend == "operations":
+        row = second.store.get_operation(request["operationId"])
+        assert (row["state"], row["reason"]) == ("needs_user_input", "interrupted")
+        assert "Press Solve now" in json.loads(row["outcome_json"])["message"]
+    else:
+        # The job the lane held ended as refused, with the words the operation used.
+        view = second.harness.summary(request["operationId"])
+        assert (view["state"], view["reason"]) == ("needs_user_input", "interrupted")
+        assert "Press Solve now" in view["message"]
     assert _inbox(second) == [] and second.submitted == []
 
-    summary = asyncio.run(preparation.prepare_operation(
-        second.context(), request["operationId"], preparation.PreparationInput()
-    ))
+    if backend == "operations":
+        summary = asyncio.run(preparation.prepare_operation(
+            second.context(), request["operationId"], preparation.PreparationInput()
+        ))
+    else:
+        summary = second.harness.prepare(request["operationId"])
     assert summary["state"] == "accepted"
     _assert_exactly_once(second, request, len(first.submitted) + len(second.submitted))
     second.stop()
@@ -447,7 +525,7 @@ from server.cadlink.store import CadLinkStore
 
 root, point = Path(sys.argv[1]), sys.argv[2]
 ready = root / "child-ready"
-wg = t.Wg(root)
+wg = t.new_wg(root, sys.argv[5])
 
 def hold_here():
     ready.write_text(point)
@@ -460,12 +538,14 @@ if point == "after-accept":
         result = original(self, *args, **kwargs)
         hold_here()
     CadLinkStore.accept_operation = accept
-elif point == "after-job":
+elif point == "after-job" and wg.backend == "operations":
     submit = wg._submit
     async def after_job(request, **kw):
         await submit(request)
         hold_here()
     wg._submit = after_job
+elif point == "after-job":
+    wg.harness.after_job = hold_here
 wg.start()
 wg.run_pass()
 sys.exit(3)  # never reached: the parent kills this process at the hold
@@ -476,17 +556,15 @@ sys.exit(3)  # never reached: the parent kills this process at the hold
     ("name", "point"),
     [("v4-solve", "after-accept"), ("v4-snapshot", "after-accept"), ("v4-solve", "after-job")],
 )
-def test_a_wg_process_killed_mid_pass_is_recovered_by_the_next_start(
-    tmp_path: Path, name: str, point: str
-) -> None:
-    setup = Wg(tmp_path)
+def test_a_wg_process_killed_mid_pass_is_recovered_by_the_next_start(tmp_path: Path, name: str, point: str, backend: str) -> None:
+    setup = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(setup))
     drop(setup.data_dir, request)
     setup.stop()
 
     tests = Path(__file__).resolve().parent
     child = subprocess.Popen(
-        [sys.executable, "-c", _CHILD, str(tmp_path), point, str(tests), str(tests.parents[1])],
+        [sys.executable, "-c", _CHILD, str(tmp_path), point, str(tests), str(tests.parents[1]), backend],
         cwd=str(tests.parents[1]),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -517,10 +595,12 @@ def test_a_wg_process_killed_mid_pass_is_recovered_by_the_next_start(
         assert _operation_rows(setup)[0][1] != "accepted"
 
     _forget_process_state()
-    wg = Wg(tmp_path)
+    wg = new_wg(tmp_path, backend)
     _run_to_rest(wg)
-    # The killed process submitted once when its hold was after the job.
-    _assert_exactly_once(wg, request, len(wg.submitted) + (1 if point == "after-job" else 0))
+    # The killed process submitted once when its hold was after the job; on the jobs
+    # backend the job it made was still being prepared, so only this process binds.
+    killed = 1 if point == "after-job" and backend == "operations" else 0
+    _assert_exactly_once(wg, request, len(wg.submitted) + killed)
     wg.stop()
 
 
@@ -530,16 +610,14 @@ def test_a_wg_process_killed_mid_pass_is_recovered_by_the_next_start(
 @pytest.mark.parametrize("restart", [True, False], ids=["after-restart", "same-process"])
 @pytest.mark.parametrize("as_claim", [False, True], ids=["request-file", "claim-file"])
 @pytest.mark.parametrize("name", list(REQUESTS))
-def test_a_request_file_that_survives_its_delete_is_safe_to_deliver_again(
-    tmp_path: Path, name: str, as_claim: bool, restart: bool
-) -> None:
+def test_a_request_file_that_survives_its_delete_is_safe_to_deliver_again(tmp_path: Path, name: str, as_claim: bool, restart: bool, backend: str) -> None:
     """The delete of a taken file is not flushed to its directory: after a power
     cut the request file, or its claim, can be back. It is the same id and digest,
     so it recovers the operation: no second operation, no second job (C5). The
     same holds without a restart: the add-in's retry of a write whose outcome it
     could not tell is this same file, again."""
 
-    first = Wg(tmp_path)
+    first = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(first))
     drop(first.data_dir, request)
     _run_to_rest(first)
@@ -557,15 +635,13 @@ def test_a_request_file_that_survives_its_delete_is_safe_to_deliver_again(
 
 
 @pytest.mark.parametrize("name", list(REQUESTS))
-def test_a_request_whose_acceptance_was_lost_is_taken_again_without_a_second_job(
-    tmp_path: Path, name: str
-) -> None:
+def test_a_request_whose_acceptance_was_lost_is_taken_again_without_a_second_job(tmp_path: Path, name: str, backend: str) -> None:
     """WAL with synchronous=NORMAL can lose the last commits on a power cut, and
     the delete can survive them or not. Where the file survived and the operation
     did not, the file is accepted again; a job its first life made is found by
     its submission key, and nothing is submitted twice."""
 
-    first = Wg(tmp_path)
+    first = new_wg(tmp_path, backend)
     request = _request(name, *_setup_project(first))
     drop(first.data_dir, request)
     _run_to_rest(first)
@@ -577,7 +653,7 @@ def test_a_request_whose_acceptance_was_lost_is_taken_again_without_a_second_job
         conn.execute("DELETE FROM cad_operations WHERE operation_id = ?", (request["operationId"],))
         conn.commit()
     _forget_process_state()
-    second = Wg(tmp_path)
+    second = new_wg(tmp_path, backend)
     assert _operation_rows(second) == []
     drop(second.data_dir, request)
     _run_to_rest(second)

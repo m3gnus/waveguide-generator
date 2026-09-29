@@ -1272,7 +1272,9 @@ class JobItem(JobModel):
     id: str
     client_request_id: str | None = None
     client_metadata: dict[str, Any] = Field(default_factory=dict)
-    run_number: int
+    #: Null for a CAD solve that is still being prepared or ended refused: a
+    #: run number names a run, and it is assigned when the solve is queued.
+    run_number: int | None
     parent_job_id: str | None
     status: JobStatusName
     progress: float

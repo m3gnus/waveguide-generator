@@ -15,7 +15,7 @@ export function exportTitleSlug(value: unknown): string {
 export function exportStemForJob(
   job: Pick<JobItem, 'run_number' | 'label' | 'config_summary'>,
 ): string {
-  const runNumber = Math.max(1, Math.floor(job.run_number));
+  const runNumber = Math.max(1, Math.floor(job.run_number ?? 1));
   const title = job.label?.trim() || job.config_summary.formula_type || 'design';
   return `${runNumber}_${exportTitleSlug(title)}`;
 }

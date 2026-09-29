@@ -4776,8 +4776,15 @@
             "title": "Results Discarded At"
           },
           "run_number": {
-            "title": "Run Number",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Number"
           },
           "script_snapshot": {
             "anyOf": [
@@ -5415,8 +5422,15 @@
             "title": "Results Discarded At"
           },
           "run_number": {
-            "title": "Run Number",
-            "type": "integer"
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Number"
           },
           "script_snapshot": {
             "anyOf": [

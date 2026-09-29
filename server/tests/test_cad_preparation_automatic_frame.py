@@ -25,7 +25,8 @@ from server.cadlink.solver_frame import (
 
 from server.cadlink import ingest as ingest_module
 
-from test_cad_preparation import Harness, _accept
+from cad_backends import OperationsHarness as Harness
+from test_cad_preparation import _accept
 from test_cad_preparation_solver_frame import (
     Recording,
     _authored,
