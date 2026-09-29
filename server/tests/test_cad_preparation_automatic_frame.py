@@ -90,6 +90,9 @@ def test_a_confident_never_confirmed_solve_solves_along_the_automatic_axis(real,
     # Not a confirmation: nothing was written, and the record says automatic.
     assert harness.store.get_frame_confirmation(_key(harness, summary)) is None
     assert record_solved_frame_provenance(harness.store, record) == "automatic"
+    # The job's own record says the same, from the same rule, before it existed.
+    frame = harness.provenance[0]["frame"]
+    assert (frame["axis"], frame["provenance"], frame["confirmed"]) == ("+x", "automatic", False)
 
 
 def test_a_second_solve_of_the_snapshot_reuses_the_mesh_along_the_automatic_axis(real, monkeypatch) -> None:
@@ -181,6 +184,8 @@ def test_a_later_change_is_solved_along_the_chosen_axis(real, monkeypatch) -> No
     assert second["frameAxisAutomatic"] is None
     assert _record(harness, second)["normalisation"]["solver_frame"]["axis"] == "+y"
     assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+y"
+    changed = harness.provenance[-1]["frame"]
+    assert (changed["axis"], changed["provenance"], changed["confirmed"]) == ("+y", "chosen", True)
     # The automatic record of the first solve is a confirmed-elsewhere frame now.
     assert record_solved_frame_provenance(harness.store, _record(harness, first)) is None
 

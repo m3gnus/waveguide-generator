@@ -937,12 +937,3 @@ def test_a_solved_job_records_a_chosen_frame_and_a_suggested_one(real) -> None:
     assert _prepare(harness, "cmd-2")["state"] == "accepted"
     assert harness.provenance[-1]["frame"]["provenance"] == "suggested"
     assert harness.provenance[-1]["operation_id"] == "cmd-2"
-
-
-def test_the_operations_own_automatic_statement_is_read_defensively() -> None:
-    assert preparation._frame_is_automatic({}) is False
-    assert preparation._frame_is_automatic({"outcome_json": None}) is False
-    assert preparation._frame_is_automatic({"outcome_json": "not json"}) is False
-    assert preparation._frame_is_automatic({"outcome_json": '{"message": "x"}'}) is False
-    assert preparation._frame_is_automatic({"outcome_json": '{"frame_axis_automatic": true}'}) is True
-    assert preparation._frame_is_automatic({"frame_axis_automatic": 1}) is True

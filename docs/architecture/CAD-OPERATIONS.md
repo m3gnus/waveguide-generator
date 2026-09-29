@@ -728,10 +728,11 @@ only when a person confirmed the axis:
 
 - `chosen`: a person picked the axis. `suggested`: a person confirmed the axis WG's
   survey had proposed. Both are `confirmed: true`.
-- `automatic`: WG solved in its own automatic axis and nobody confirmed it
-  (`confirmed: false`). It is set only from the operation's own statement
-  (`frame_axis_automatic`), read defensively; `frame_provenance` holds no rule of its own
-  for what makes a frame automatic, and a person's confirmation always wins.
+- `automatic`: WG solved along its own confident automatic axis and nobody confirmed
+  it (`confirmed: false`). The one rule is `record_solved_frame_provenance`; the
+  preparation evaluates it once before the job exists, and the job's record and the
+  operation's `frame_axis_automatic` both carry that value. `frame_provenance` holds no
+  rule of its own, and a person's confirmation always wins.
 - `carried`: an earlier contract's confirmation carried forward. `confirmed: false`.
 - `confirmed`: confirmed, by a row that predates the recorded provenance.
 - `linked`: a linked model, solved in its WG design's frame; there is nothing to choose.

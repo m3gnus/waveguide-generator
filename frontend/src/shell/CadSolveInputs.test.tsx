@@ -250,7 +250,11 @@ describe('CAD solve input identities', () => {
     />));
 
     await render('automatic', false);
-    expect(host.querySelector('[data-frame-provenance="automatic"]')?.textContent).toContain("WG's automatic axis");
+    // One line, with its Change: never the Frame row as well.
+    expect(host.querySelector('[data-frame-axis-automatic="+y"]')?.textContent)
+      .toContain('automatic axis +y');
+    expect(host.querySelector('[data-frame-axis-automatic]')?.textContent).toContain('Change it');
+    expect(host.querySelector('[data-frame-provenance]')).toBeNull();
     await render('suggested', true);
     expect(host.querySelector('[data-frame-provenance="suggested"]')?.textContent).toContain('confirmed by you');
     await render('chosen', true);

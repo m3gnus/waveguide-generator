@@ -129,6 +129,13 @@ export function CadSolveInputs({
   const loadingEngine = Boolean(operation && engineSource === 'setup-revision'
     && setupRevisionId && !engine && !setupError);
   const manifest = operation?.snapshot?.manifestSha256 ?? null;
+  // The frame is said once: the job's own record answers first, and only a
+  // job without one falls back to what the operation says. An automatic axis
+  // is the sentence with its Change; any other provenance is the Frame row.
+  const jobFrame = jobCad?.frame ?? null;
+  const automaticAxis = jobFrame
+    ? (jobFrame.provenance === 'automatic' ? jobFrame.axis : null)
+    : operation?.frameAxisAutomatic ?? null;
 
   return <details className={['cad-solve-inputs', className].filter(Boolean).join(' ')}>
     <summary>Solve inputs{engine ? ` · ${engine}` : ''}</summary>
@@ -140,7 +147,7 @@ export function CadSolveInputs({
       </dd></div>
       <div><dt>Preparation</dt><dd><code>{operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
       <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
-      {jobCad?.frame && <div><dt>Frame</dt><dd data-frame-provenance={jobCad.frame.provenance}>
+      {jobCad?.frame && !automaticAxis && <div><dt>Frame</dt><dd data-frame-provenance={jobCad.frame.provenance}>
         {jobCad.frame.axis && <code>{jobCad.frame.axis}</code>} {frameProvenanceText(jobCad.frame.provenance)}
       </dd></div>}
       <div><dt>Engine</dt><dd><code>{engine ?? (loadingOperation || loadingEngine ? 'reading…' : 'not recorded')}</code></dd></div>
@@ -159,9 +166,9 @@ export function CadSolveInputs({
       && <p className="cad-solve-inputs-defaults" data-setup-defaults="true">
         {defaultSettingsNote(operation?.message ?? null, jobStatus === 'complete')}
       </p>}
-    {operation?.frameAxisAutomatic
-      && <p className="cad-solve-inputs-frame" data-frame-axis-automatic={operation.frameAxisAutomatic}>
-        {automaticAxisNote(operation.frameAxisAutomatic, jobStatus)}. Change it in the CAD Link panel.
+    {automaticAxis
+      && <p className="cad-solve-inputs-frame" data-frame-axis-automatic={automaticAxis}>
+        {automaticAxisNote(automaticAxis, jobStatus)}. Change it in the CAD Link panel.
       </p>}
     {/* Verbatim, because it is evidence: whatever the adapter or the
         preparation reported is what a second report has to be compared with. */}

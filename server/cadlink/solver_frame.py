@@ -745,9 +745,9 @@ def frame_provenance(
     one nobody confirmed.
 
     ``automatic`` is the caller's statement that WG solved in its own
-    automatic axis. This module holds no rule for it: the definition of an
-    automatic frame is the operation's (``frame_axis_automatic``), and it
-    labels the frame ``automatic`` only when no person confirmed it.
+    automatic axis. This function holds no rule for it: the one definition is
+    ``record_solved_frame_provenance`` (the same value the operation records as
+    ``frame_axis_automatic``), and a person's confirmation always wins.
     """
 
     if not record_is_unlinked(record):
