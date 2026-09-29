@@ -916,6 +916,8 @@ class StubApplication:
 
         settings, state = self.settings, self.state
         if path == "/health":
+            # A slow runner: every /health answer takes this long.
+            time.sleep(float(settings.get("health_delay_s", 0.0)))
             return 200, {"status": "ok"}, {}
         if path == "/api/capabilities":
             return 200, self.capabilities(), {}
@@ -2552,12 +2554,13 @@ def test_a_wait_on_a_silent_server_ends_inside_its_deadline_naming_the_silence(
 ) -> None:
     monkeypatch.setattr(gate, "POLL_HTTP_TIMEOUT_S", 0.3)
     started = time.monotonic()
-    with pytest.raises(gate.QualificationError, match=r"got no answer within 0\.3s"):
+    with pytest.raises(gate.QualificationError, match=r"got no answer within [0-9.]+s"):
         gate.wait_for(
-            lambda: gate.http(silent_server, "/health", timeout=gate.POLL_HTTP_TIMEOUT_S),
+            lambda budget: gate.http(silent_server, "/health", timeout=budget),
             1.0,
             "the server to answer /health",
             interval=0.05,
+            budgeted=True,
         )
     assert time.monotonic() - started < 10.0
 
@@ -2569,6 +2572,53 @@ def test_the_polling_waits_use_the_short_timeout_not_the_long_request_default() 
     )
     assert quit_gate is not None
     source = Path(quit_gate.origin).read_text(encoding="utf-8")
-    assert "timeout=POLL_HTTP_TIMEOUT_S" in source
-    assert 'timeout=10.0' not in source
+    assert "budgeted=True" in source
+    assert "timeout=10.0" not in source
     assert gate.POLL_HTTP_TIMEOUT_S < 30.0 < 120.0
+
+
+def test_a_poll_timeout_is_retried_and_never_outlives_the_wait(
+    silent_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gate, "POLL_HTTP_TIMEOUT_S", 0.2)
+    budgets: list[float] = []
+
+    def call(budget: float) -> object:
+        budgets.append(budget)
+        return gate.http(silent_server, "/health", timeout=budget)
+
+    started = time.monotonic()
+    with pytest.raises(gate.QualificationError, match=r"got no answer within"):
+        gate.wait_for(call, 1.0, "the server to answer /health", interval=0.01, budgeted=True)
+    elapsed = time.monotonic() - started
+    assert len(budgets) >= 2, "a timed-out poll must be retried, not fatal"
+    assert budgets[0] == pytest.approx(0.2)
+    assert budgets[1] > budgets[0]
+    assert elapsed < 1.0 + 0.5, "the last request must end at the wait's deadline"
+
+
+def test_a_slow_health_answer_inside_the_wait_budget_is_not_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
+) -> None:
+    """The macOS runner failure: /health answers, but later than one per-request timeout."""
+
+    if sys.platform == "win32":
+        pytest.skip("the stub interpreter is a shebang script")
+    monkeypatch.setattr(gate, "POLL_HTTP_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 8.0)
+    payload = _stub_payload(tmp_path, ready_after_capability_polls=1, health_delay_s=1.0)
+    output = tmp_path / "out"
+
+    code = gate.main(
+        [
+            "--payload", str(payload),
+            "--payload-kind", "stub",
+            "--work", str(tmp_path / "work"),
+            "--output", str(output),
+            "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--expected-version", "0.3.1",
+            "--expected-tree-sha256", "b" * 64,
+        ]
+    )
+
+    assert code == 0, (output / "cpu-qualification.json").read_text(encoding="utf-8")

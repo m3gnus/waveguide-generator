@@ -47,7 +47,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a package
     DESIGN,
-    POLL_HTTP_TIMEOUT_S,
     QualificationError,
     http,
     isolated_environment,
@@ -57,6 +56,8 @@ from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a pack
 
 
 START_TIMEOUT_S = 300.0
+#: The wait for the next start's answer about the interrupted job.
+NEXT_START_READ_TIMEOUT_S = 60.0
 BLOCK_TIMEOUT_S = 180.0
 #: The server's owned children leave with it; this only covers the kernel
 #: reaping them after their parent went away.
@@ -338,11 +339,17 @@ class Run:
         wait_for(reserved, START_TIMEOUT_S, f"the server to reserve a port (log: {output})", interval=0.2)
         run.base = f"http://127.0.0.1:{int(json.loads(ready.read_text(encoding='utf-8'))['port'])}"
 
-        def serving() -> bool:
+        def serving(budget: float) -> bool:
             run.fail_if_exited("starting")
-            return http(run.base, "/api/jobs", timeout=POLL_HTTP_TIMEOUT_S) is not None
+            return http(run.base, "/api/jobs", timeout=budget) is not None
 
-        wait_for(serving, START_TIMEOUT_S, f"the server to answer (log: {output})", interval=0.5)
+        wait_for(
+            serving,
+            START_TIMEOUT_S,
+            f"the server to answer (log: {output})",
+            interval=0.5,
+            budgeted=True,
+        )
         return run
 
     def fail_if_exited(self, doing: str) -> None:
@@ -476,7 +483,13 @@ def run_gate(
 
         second = Run.start(interpreter, app, base_environment, data_dir, work / "second")
         runs.append(second)
-        status = http(second.base, f"/api/status/{job}", timeout=POLL_HTTP_TIMEOUT_S)
+        status = wait_for(
+            lambda budget: http(second.base, f"/api/status/{job}", timeout=budget),
+            NEXT_START_READ_TIMEOUT_S,
+            f"the next start to answer the status of job {job}",
+            interval=0.5,
+            budgeted=True,
+        )
         report["next_start_job"] = {
             key: status.get(key) for key in ("status", "stage_message", "error_message")
         }

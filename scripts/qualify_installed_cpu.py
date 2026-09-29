@@ -499,17 +499,45 @@ def api(base: str, path: str, body: Any = None, *, what: str, timeout: float = 1
         raise QualificationError(f"{what} failed: {type(exc).__name__}: {exc}") from exc
 
 
-def wait_for(call: Any, seconds: float, what: str, *, interval: float | None = None) -> Any:
-    """Poll until *call* returns something truthy, or fail saying what was awaited."""
+def poll_budget(deadline: float, attempt: int) -> float:
+    """The per-request timeout for poll number *attempt* of a wait ending at *deadline*.
+
+    A poll that gets no answer within the timeout is a miss to retry, not a
+    failure: the wait's own deadline is the only thing that ends it. The timeout
+    starts at ``POLL_HTTP_TIMEOUT_S`` and doubles on each miss, so a slow runner
+    whose server answers late still gets an answer through, and it never exceeds
+    what is left of the wait, so a server that never answers ends the wait at its
+    deadline rather than after it.
+    """
+
+    remaining = max(deadline - time.monotonic(), 0.05)
+    return min(POLL_HTTP_TIMEOUT_S * (2.0 ** min(attempt, 16)), remaining)
+
+
+def wait_for(
+    call: Any,
+    seconds: float,
+    what: str,
+    *,
+    interval: float | None = None,
+    budgeted: bool = False,
+) -> Any:
+    """Poll until *call* returns something truthy, or fail saying what was awaited.
+
+    With ``budgeted`` the call is given the per-request timeout to use (see
+    ``poll_budget``); a request that times out is retried until the deadline.
+    """
 
     interval = POLL_INTERVAL_S if interval is None else interval
     deadline = time.monotonic() + seconds
     last: str = "it never answered"
+    attempt = 0
     while time.monotonic() < deadline:
         try:
-            answer = call()
+            answer = call(poll_budget(deadline, attempt)) if budgeted else call()
         except (HTTPError, URLError, OSError, ValueError) as exc:
             last = f"{type(exc).__name__}: {exc}"
+            attempt += 1
         else:
             if answer:
                 return answer
@@ -569,9 +597,10 @@ class Server:
     def __enter__(self) -> Server:
         try:
             wait_for(
-                lambda: http(self.base, "/health", timeout=POLL_HTTP_TIMEOUT_S),
+                lambda budget: http(self.base, "/health", timeout=budget),
                 STARTUP_TIMEOUT_S,
                 f"the packaged server to answer /health (log: {self.log_path.name})",
+                budgeted=True,
             )
         except QualificationError:
             self.stop(force=True)
@@ -635,8 +664,8 @@ class Server:
         )["job_id"]
 
     def await_complete(self, job: str) -> Any:
-        def check() -> Any:
-            status = http(self.base, f"/api/status/{job}", timeout=POLL_HTTP_TIMEOUT_S)
+        def check(budget: float) -> Any:
+            status = http(self.base, f"/api/status/{job}", timeout=budget)
             state = str(status.get("status"))
             if state in ("error", "cancelled"):
                 raise QualificationError(
@@ -645,7 +674,11 @@ class Server:
             return status if state == "complete" else None
 
         return wait_for(
-            check, SOLVE_TIMEOUT_S, f"job {job} to complete", interval=2.0 * POLL_INTERVAL_S
+            check,
+            SOLVE_TIMEOUT_S,
+            f"job {job} to complete",
+            interval=2.0 * POLL_INTERVAL_S,
+            budgeted=True,
         )
 
     def completed(self, job: str) -> Any:
