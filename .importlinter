@@ -1,0 +1,120 @@
+[importlinter]
+root_package = server
+# Type-only dependencies are part of the architecture too.
+exclude_type_checking_imports = false
+
+[importlinter:contract:server-layers]
+name = Server layers (legacy edges are explicit)
+type = layers
+containers = server
+# Highest to lowest. Assembly and API ownership follow the current graph;
+# jobs/cadlink coordinate each other, while registry selects solver adapters.
+# Pipes require independent siblings; colons permit sibling collaboration.
+layers =
+    __main__
+    app : cli
+    updates
+    diagnostics
+    exports | design_io
+    jobs : cadlink
+    engines
+    solver
+    mesh
+    preview
+    integration
+    design
+    charts | drivers | settings | workspace | protocol
+    platform
+    contracts
+exhaustive = true
+exhaustive_ignores =
+    # Test modules are clients of production packages, not runtime layers.
+    tests
+unmatched_ignore_imports_alerting = error
+# Exact module edges only: never widen these to wildcard package exceptions.
+# Remove an edge when its dependency is extracted into a lower layer.
+ignore_imports =
+    # cadlink -> exports: existing upward dependency.
+    # Legacy use: normalize_json_value.
+    server.cadlink.domain_decision -> server.exports.geometry_identity
+    # Legacy use: geometry_hash_for_design.
+    server.cadlink.ingest -> server.exports.geometry_identity
+    # Legacy use: WgLinkExportRequest, _base_name, _export_wglink_sync.
+    server.cadlink.onshape.api -> server.exports.api
+    # cadlink -> updates: existing upward dependency.
+    # Legacy use: UPDATE_RESTART_PENDING.
+    server.cadlink.api -> server.updates.restart
+    # Legacy use: UPDATE_RESTART_PENDING.
+    server.cadlink.live.deliveries -> server.updates.restart
+    # design -> cadlink: existing upward dependency.
+    # Legacy use: CadLink.
+    server.design.textcfg -> server.cadlink.identity
+    # design -> jobs: existing upward dependency.
+    # Legacy use: SolveOptions.
+    server.design.solve_block -> server.jobs.models
+    # engines -> jobs: existing upward dependency.
+    # Legacy use: PolarConfig.
+    server.engines.dryrun -> server.jobs.models
+    # integration -> jobs: existing upward dependency.
+    # Legacy use: SolveRequest.
+    server.integration.provenance -> server.jobs.models
+    # jobs -> updates: existing upward dependency.
+    # Legacy use: RestartApproval, UPDATE_RESTART_PENDING.
+    server.jobs.api -> server.updates.restart
+    # Legacy use: RestartApproval.
+    server.jobs.runtime -> server.updates.restart
+    # mesh -> cadlink: existing upward dependency.
+    # Legacy use: AS_MODELLED, spec_axis, spec_matrix.
+    server.mesh.imported -> server.cadlink.solver_frame
+    # Legacy use: source_physical_name.
+    server.mesh.imported -> server.cadlink.wglink_protocol
+    # mesh -> solver: existing upward dependency.
+    # Legacy use: resolve_symmetry, validate_symmetry_mode.
+    server.mesh.api -> server.solver.symmetry
+    # Legacy use: FULL_DOMAIN_QUADRANTS, normalise_quadrants.
+    server.mesh.builder -> server.solver.quadrants
+    # Legacy use: imported_symmetry_from_cut_planes.
+    server.mesh.imported -> server.solver.imported
+    # solver -> cadlink: existing upward dependency.
+    # Legacy use: canonical_source_role.
+    server.solver.metal -> server.cadlink.roles
+    # solver -> engines: existing upward dependency.
+    # Legacy use: full3d_engine_order.
+    server.solver.warmup -> server.engines.registry
+    # solver -> jobs: existing upward dependency.
+    # Legacy use: SolveRequest.
+    server.solver.base -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, SolveRequest.
+    server.solver.beat -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, SolveRequest.
+    server.solver.beat_imported -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, SolveRequest.
+    server.solver.bempp -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, SolveRequest.
+    server.solver.bempp_imported -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
+    server.solver.context -> server.jobs.models
+    # Legacy use: DriverSpec.
+    server.solver.driver_lem -> server.jobs.models
+    # Legacy use: FieldPlaneRequest, FieldPlaneSpec.
+    server.solver.field_plane -> server.jobs.models
+    # Legacy use: JobStore.
+    server.solver.field_plane -> server.jobs.store
+    # Legacy use: ImportedGeometrySource, PORT_APERTURE_NAME_GROUPS, SolveRequest.
+    server.solver.metal -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, SolveRequest.
+    server.solver.official_beat -> server.jobs.models
+    # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
+    server.solver.polar_arc -> server.jobs.models
+    # Legacy use: ChannelCombineSpec, ImportedGeometrySource, SolveRequest.
+    server.solver.recombine -> server.jobs.models
+
+[importlinter:contract:contracts-leaf]
+name = Shared contracts import no other server package
+type = forbidden
+source_modules =
+    server.contracts
+# Wildcard is deliberate here: unlike legacy exceptions, this also covers
+# future server packages. Contracts may import their own descendants.
+forbidden_modules =
+    server.*

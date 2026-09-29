@@ -5,3 +5,5 @@ pytest==9.0.3
 # tree lint clean locally and still fail the gate. `ruff.toml` selects rules
 # explicitly, which is what stops a new ruff release from turning CI red.
 ruff
+# Architecture ratchet; the contracts and exact legacy edges live in .importlinter.
+import-linter

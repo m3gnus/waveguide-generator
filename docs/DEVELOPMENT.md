@@ -26,6 +26,7 @@ August rebuild and remain available in Git history.
 - `server/preview/` translates a design into the pinned mesher preview API.
 - `server/jobs/` owns durable jobs, snapshot/cursor events, retention, and recovery.
 - `server/solver/` builds solver requests and maps every backend to one result contract.
+- `server/contracts/` holds shared leaf types and never imports other server packages.
 - `server/exports/` owns authoritative geometry and CAD-link bundle exports.
 - `server/cadlink/` owns CAD identity, registries, return ingestion, and Onshape access.
 - `shared/` contains the cross-language binary-frame contract and fixtures.
@@ -54,6 +55,7 @@ Run checks in proportion to the change:
 
 ```bash
 .venv/bin/python -m ruff check server scripts shared launch launchers
+.venv/bin/lint-imports --no-cache
 .venv/bin/python -m pytest server/tests scripts/tests -q
 node --test shared/js/frame.test.mjs
 cd frontend && npm test && npm run build
@@ -62,7 +64,19 @@ cd frontend && npm test && npm run build
 The lint line is first because it is the cheapest and the easiest to forget: it
 is the same command the **Generated-file drift** job runs, and that job has
 turned `main` red for a single unused import. `ruff` is in
-`server/requirements-dev.txt` for exactly this reason. The other two checks that
+`server/requirements-dev.txt` for exactly this reason. `lint-imports` checks the
+server layers declared in `.importlinter`, including lazy and type-checking
+imports. Higher layers may import lower ones. Jobs and CAD Link share an
+orchestration layer; the engine registry sits above the solver adapters it
+selects. API routers stay with their owning packages, with app and CLI assembly
+above them. Tests are excluded from layer coverage, but a separate contract
+keeps `server/contracts/` independent of every other server package.
+
+Each current upward import is an exact, commented `ignore_imports` edge. New
+edges fail, and an exception whose import disappears fails too: remove it as
+part of the boundary cleanup. An exception covers all symbols on that module
+edge; adding another symbol on an existing edge is not detected. New server
+packages must be assigned a layer. The other two checks that
 job runs are worth the same habit before a release:
 
 ```bash

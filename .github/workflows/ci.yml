@@ -175,8 +175,10 @@ jobs:
       - name: Lint
         run: |
           python -m pip install --upgrade pip
-          pip install ruff
+          pip install -r server/requirements-dev.txt
           ruff check server scripts shared launch launchers
+      - name: Server import boundaries
+        run: lint-imports --no-cache
 
   server:
     name: ${{ matrix.label }} (${{ matrix.os }})
