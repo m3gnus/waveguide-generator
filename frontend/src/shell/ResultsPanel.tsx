@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
 import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
@@ -2199,7 +2199,7 @@ export function ResultsPanel() {
   // its first frequency arrives; before that, keep the last complete result.
   const displayable = useCallback((job: JobItem) => (
     (job.status === 'complete' && job.has_results)
-    || ((job.status === 'running' || job.status === 'queued') && Boolean(provisional.entries[job.id]))
+    || (isActiveJobStatus(job.status) && Boolean(provisional.entries[job.id]))
   ), [provisional]);
   const latest = useMemo(() => jobs.find((job) => (
     runDisplayVerdict(job, coherenceContext) === 'current' && displayable(job)

@@ -66,7 +66,7 @@ from server.jobs.models import (
     SolveOptions,
     SolveRequest,
 )
-from server.jobs.store import ALLOWED_STATUSES, JobStore
+from server.jobs.store import ACTIVE_STATUSES, ALLOWED_STATUSES, JobStore
 from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.platform.shutdown_backstop import shutdown_wait_limit
@@ -444,6 +444,12 @@ def _recorded_resolved_quadrants(metadata: Mapping[str, Any]) -> int | None:
 def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     """Build the faithful request represented by a native or imported row."""
 
+    if row.get("status") == "preparing":
+        # A preparing job holds a CAD intent, not a SolveRequest; the request
+        # exists only once the job is bound and queued.
+        raise JobConflictError(
+            "This solve is still being prepared and has no solve request yet"
+        )
     config = row.get("config_json")
     config = config if isinstance(config, Mapping) else {}
     if isinstance(config.get("design"), Mapping) or isinstance(
@@ -2826,9 +2832,9 @@ class JobRuntime:
         await self.start()
         row = self._require_job(job_id)
         status = row["status"]
-        if status not in {"queued", "running"}:
+        if status not in ACTIVE_STATUSES:
             raise JobConflictError(f"Cannot stop job with status: {status}")
-        if status == "queued":
+        if status in {"preparing", "queued"}:
             await self._flush_runtime_update(job_id, forget=True)
             self._remove_from_queue(job_id)
             event = self._transition(
@@ -3342,7 +3348,7 @@ class JobRuntime:
     async def delete(self, job_id: str) -> None:
         await self.start()
         row = self._require_job(job_id)
-        if row["status"] in {"queued", "running"}:
+        if row["status"] in ACTIVE_STATUSES:
             raise JobConflictError("Cannot delete active job")
         deleted, event = self.store.delete_job_with_event(job_id)
         if not deleted or event is None:
@@ -4612,13 +4618,34 @@ class JobRuntime:
         ):
             field_unavailable_reason = "solve_predates_traces"
         stored_config = row.get("config_json") or {}
+        cad_intent = (
+            dict(stored_config)
+            if isinstance(stored_config, Mapping)
+            and stored_config.get("type") == "cad_intent"
+            else None
+        )
         # An imported v1 job reaches the client already translated, so reopen,
         # rerun, compare and export need no legacy branch; one that cannot be
         # translated keeps its original bytes and carries the reason instead.
         geometry = stored_config.get("geometry")
         imported = isinstance(geometry, Mapping) and geometry.get("type") == "imported"
         design = resolve_job_design(row.get("script_snapshot"), row.get("config_json"))
-        if imported:
+        if cad_intent is not None:
+            design_availability = {
+                "reopenable": False,
+                "source": "cad-import",
+                "reason_code": "no_stored_design",
+                "reason": (
+                    "This solve is still being prepared from a CAD return, so it "
+                    "has no design to reopen yet."
+                    if row.get("status") == "preparing"
+                    else "This solve ended while it was being prepared from a CAD "
+                    "return, before it had a design to reopen. Solve it again "
+                    "from CAD Link."
+                ),
+                "note": None,
+            }
+        elif imported:
             imported_metadata = metadata.get("imported_geometry")
             imported_metadata = (
                 imported_metadata if isinstance(imported_metadata, Mapping) else {}
@@ -4817,6 +4844,7 @@ class JobRuntime:
             ),
             "cad_source": cad_source,
             "cad_setup": dict(geometry) if imported else None,
+            "cad_intent": cad_intent,
         }
         if detailed:
             item["updated_at"] = row.get("updated_at")

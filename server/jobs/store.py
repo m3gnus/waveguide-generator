@@ -39,7 +39,22 @@ from server.solver.power_qualification import (
 )
 
 
-ALLOWED_STATUSES = frozenset({"queued", "running", "complete", "error", "cancelled"})
+#: ``preparing`` is a CAD solve WG has accepted but not yet meshed and bound to a
+#: request: it holds a CAD intent in ``config_json``, not a ``SolveRequest``. It is
+#: an active status like ``queued`` and ``running`` (it can be stopped, not deleted).
+#: Nothing creates one yet; see ``docs/architecture/CAD-OPERATIONS.md``.
+ALLOWED_STATUSES = frozenset(
+    {"preparing", "queued", "running", "complete", "error", "cancelled"}
+)
+#: Statuses in which a job is still owed work, so it cannot be deleted.
+ACTIVE_STATUSES = frozenset({"preparing", "queued", "running"})
+#: What a ``preparing`` row reads as if the process ends before its preparation
+#: binds it to a request (the preparation lane does not exist yet, and a later
+#: one resumes from durable state, not from a row left by a dead process).
+PREPARING_RECOVERY_MESSAGE = (
+    "Preparation was interrupted because Waveguide Generator restarted before "
+    "the solve was ready. Press Solve again."
+)
 MESH_ARTIFACT_GRACE_MINUTES = 60
 #: ``task_metadata_json`` key a Quit's shutdown sets on a job it interrupts.
 QUIT_INTERRUPTION_KEY = "interrupted_by_quit"
@@ -137,7 +152,7 @@ _SAFE_LOG_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS simulation_jobs (
       id TEXT PRIMARY KEY,
-      status TEXT NOT NULL CHECK (status IN ('queued','running','complete','error','cancelled')),
+      status TEXT NOT NULL CHECK (status IN ('preparing','queued','running','complete','error','cancelled')),
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       queued_at TEXT NOT NULL,
@@ -385,6 +400,87 @@ class JobStore:
         """Create the v1 migration targets plus additive v2 tables and identities."""
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        # The table rebuild below drops ``simulation_jobs``, and every child
+        # table cascades on delete. SQLite ignores ``PRAGMA foreign_keys``
+        # inside a transaction, so the decision is made here, before ``BEGIN``,
+        # and the enforcement is restored afterwards.
+        rebuild_needs_foreign_keys_off = self._status_check_is_stale()
+        raw = self._connect()
+        if rebuild_needs_foreign_keys_off:
+            raw.execute("PRAGMA foreign_keys = OFF")
+        try:
+            self._initialize_schema()
+        finally:
+            if rebuild_needs_foreign_keys_off:
+                raw.execute("PRAGMA foreign_keys = ON")
+
+    def _status_check_is_stale(self) -> bool:
+        """True when an existing ``simulation_jobs`` predates the ``preparing`` status."""
+
+        with self._lock:
+            conn = self._connect()
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'simulation_jobs'"
+            ).fetchone()
+        return row is not None and "'preparing'" not in str(row["sql"])
+
+    def _rebuild_simulation_jobs(self, conn: sqlite3.Connection) -> None:
+        """Widen the status CHECK to admit ``preparing``, keeping every row.
+
+        SQLite cannot alter a CHECK constraint, so the table is rebuilt: create
+        the new shape, copy every row and column by name, drop the old table,
+        rename the new one into place, and recreate the indexes. Runs inside the
+        caller's transaction with foreign keys off, so a failure leaves the old
+        table exactly as it was and the cascade never touches a child row.
+
+        ``PRAGMA user_version`` is deliberately not raised. No row can hold the
+        new status until a later change creates one, so a release that a
+        rollback returns to still reads every row, and refusing to open the file
+        would leave that release unusable (``UPDATE-TRANSACTION-CONTRACT.md``
+        section 6, item 1). The change that first writes ``preparing`` owns
+        raising the version.
+        """
+
+        columns = [
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(simulation_jobs)").fetchall()
+        ]
+        create = _SCHEMA_STATEMENTS[0].replace(
+            "CREATE TABLE IF NOT EXISTS simulation_jobs",
+            "CREATE TABLE simulation_jobs_rebuild",
+            1,
+        )
+        conn.execute("DROP TABLE IF EXISTS simulation_jobs_rebuild")
+        conn.execute(create)
+        new_columns = {
+            str(row["name"])
+            for row in conn.execute("PRAGMA table_info(simulation_jobs_rebuild)").fetchall()
+        }
+        shared = ", ".join(name for name in columns if name in new_columns)
+        conn.execute(
+            f"INSERT INTO simulation_jobs_rebuild ({shared}) "
+            f"SELECT {shared} FROM simulation_jobs"
+        )
+        before = conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0]
+        after = conn.execute("SELECT COUNT(*) FROM simulation_jobs_rebuild").fetchone()[0]
+        if before != after:
+            raise RuntimeError(
+                f"Rebuilding the jobs table kept {after} of {before} rows; the "
+                "database was left unchanged."
+            )
+        conn.execute("DROP TABLE simulation_jobs")
+        conn.execute("ALTER TABLE simulation_jobs_rebuild RENAME TO simulation_jobs")
+        conn.execute("DROP INDEX IF EXISTS idx_simulation_jobs_status_created")
+        conn.execute("DROP INDEX IF EXISTS idx_simulation_jobs_created")
+        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+        if violations:
+            raise RuntimeError(
+                "Rebuilding the jobs table broke a reference; the database was "
+                "left unchanged."
+            )
+
+    def _initialize_schema(self) -> None:
         with self._lock, self._transaction() as conn:
             schema_version = int(conn.execute("PRAGMA user_version").fetchone()[0])
             if schema_version > SUPPORTED_SCHEMA_VERSION:
@@ -409,6 +505,15 @@ class JobStore:
             }
             if "results_sha256" not in result_columns:
                 conn.execute("ALTER TABLE simulation_results ADD COLUMN results_sha256 TEXT")
+            row = conn.execute(
+                "SELECT sql FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'simulation_jobs'"
+            ).fetchone()
+            if row is not None and "'preparing'" not in str(row["sql"]):
+                self._rebuild_simulation_jobs(conn)
+                for statement in _SCHEMA_STATEMENTS:
+                    if statement.lstrip().startswith("CREATE INDEX IF NOT EXISTS idx_simulation_jobs"):
+                        conn.execute(statement)
             self._backfill_job_identity(conn)
             conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
             # After the schema settles, so the row always describes the build
@@ -735,7 +840,7 @@ class JobStore:
             if row is None:
                 return False, []
 
-            active = row["status"] in {"queued", "running"}
+            active = row["status"] in ACTIVE_STATUSES
             cancellation_requested = bool(row["cancellation_requested"])
             if not active:
                 # A terminal transition owns the durable row and event cursor.
@@ -1022,7 +1127,7 @@ class JobStore:
                         '$.imported_geometry.document.return_state_hash'
                       ) IS NOT NULL
                   AND (
-                        status IN ('queued', 'running')
+                        status IN ('preparing', 'queued', 'running')
                         OR (
                             status = 'complete'
                             AND has_results = 1
@@ -1648,6 +1753,7 @@ class JobStore:
         update_restart_stage_message: str | None = None,
         update_restart_error_message: str | None = None,
         user_cancelled_message: str | None = RECOVERED_USER_CANCELLATION_MESSAGE,
+        preparing_error_message: str = PREPARING_RECOVERY_MESSAGE,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         """Settle running orphans and return queued rows in FIFO order.
 
@@ -1666,6 +1772,12 @@ class JobStore:
         default matches ``server.jobs.runtime.CANCELLED_MESSAGE``) instead of
         being read as a crash: the user chose to stop it before the process
         ever ended. None is requeued.
+
+        A ``preparing`` row (a CAD solve accepted but not yet bound to a request)
+        also ends here, as ``error`` with ``preparing_error_message``: the
+        preparation that owned it died with the process, and until the
+        preparation lane exists nothing can resume it. The user's remedy is to
+        Solve again. It carries no solver artifacts, so none are removed.
         """
 
         now = _now_iso()
@@ -1853,6 +1965,33 @@ class JobStore:
                         {"message": restart_error_message, "recovered": True},
                     )
                 )
+            preparing_ids = [
+                str(row["id"])
+                for row in conn.execute(
+                    "SELECT id FROM simulation_jobs WHERE status = 'preparing' "
+                    "ORDER BY created_at ASC"
+                ).fetchall()
+            ]
+            if preparing_ids:
+                conn.execute(
+                    f"""
+                    UPDATE simulation_jobs
+                    SET status = 'error', stage = 'error', stage_message = 'Preparation interrupted',
+                        error_message = ?, cancellation_requested = 0,
+                        completed_at = COALESCE(completed_at, ?), updated_at = ?
+                    WHERE id IN ({",".join("?" for _ in preparing_ids)})
+                    """,
+                    (preparing_error_message, now, now, *preparing_ids),
+                )
+                for job_id in preparing_ids:
+                    recovery_events.append(
+                        self._append_event(
+                            conn,
+                            job_id,
+                            "failed",
+                            {"message": preparing_error_message, "recovered": True},
+                        )
+                    )
             queued = conn.execute(
                 """SELECT simulation_jobs.*, job_identity.run_number,
                           job_identity.parent_job_id
@@ -2583,4 +2722,4 @@ class JobStore:
         }
 
 
-__all__ = ["ALLOWED_STATUSES", "JobStore"]
+__all__ = ["ACTIVE_STATUSES", "ALLOWED_STATUSES", "JobStore"]

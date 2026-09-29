@@ -349,6 +349,8 @@ describe('client preferences', () => {
       { ...job('active', 0, timestamp), run_number: 3, status: 'running' as const },
     ];
     expect(applyJobPreferences(jobs, 'created_desc', 5).map(({ id }) => id)).toEqual(['active']);
+    const preparing = [...jobs, { ...job('prep', 0, timestamp), run_number: 4, status: 'preparing' as const }];
+    expect(applyJobPreferences(preparing, 'created_desc', 5).map(({ id }) => id)).toEqual(['prep', 'active']);
     expect(applyJobPreferences(jobs.slice(0, 2), 'created_desc', 0).map(({ id }) => id)).toEqual(['new', 'old']);
   });
   it('sorts displayed names case-insensitively and naturally with run-number ties', () => {

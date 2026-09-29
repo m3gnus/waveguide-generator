@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from 'react';
-import type { JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, type JobItem } from '../api/jobsSocket';
 import type { RunNameDateFormat, RunNameDatePosition, RunNameNumberFormat, RunNameNumberPosition } from '../jobs/runNaming';
 import type { SmoothingMode } from '../results/smoothing';
 import { MAX_MEASUREMENT_ANGLES, POLAR_PLANES as MEASUREMENT_PLANE_IDS, type MeasurementPlane } from '../results/measurementAngle';
@@ -599,7 +599,7 @@ export function runDisplayName(job: Pick<JobItem, 'id' | 'run_number' | 'label'>
 const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 export function applyJobPreferences(jobs: JobItem[], sort: JobSort, minimumRating: number): JobItem[] {
-  const filtered = jobs.filter((job) => job.status === 'queued' || job.status === 'running' || (job.rating ?? 0) >= minimumRating);
+  const filtered = jobs.filter((job) => isActiveJobStatus(job.status) || (job.rating ?? 0) >= minimumRating);
   return [...filtered].sort((a, b) => {
     let order = 0;
     if (sort === 'rating_desc') order = (b.rating ?? 0) - (a.rating ?? 0) || Date.parse(b.created_at) - Date.parse(a.created_at);

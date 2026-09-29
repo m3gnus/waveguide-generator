@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import type { DecodedFrame } from '../api/frame';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { PREVIEW_FINE_IDLE_MS, previewSocket } from '../api/previewSocket';
 import { compareSelection } from '../api/results';
 import { runContext, runMatchesContext, useRunContext, type RunContext } from '../results/runCoherence';
@@ -373,7 +373,7 @@ export function Viewport() {
   const preferences = useViewerPreferences();
   const cadApplication = cadApplicationName(usePreferences().cadApplication);
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const solveRunningOrQueued = jobs.some((job) => job.status === 'running' || job.status === 'queued');
+  const solveRunningOrQueued = jobs.some((job) => isActiveJobStatus(job.status));
   const cadEmpty = cadViewportEmptyCopy({
     bundleName: cadName,
     bundleReadable: cadBundleReadable,
@@ -557,7 +557,7 @@ export function Viewport() {
         }
       },
       isSolveActive: () => jobsSocket.getSnapshot().jobs
-        .some((job) => job.status === 'running' || job.status === 'queued'),
+        .some((job) => isActiveJobStatus(job.status)),
       onState: setSolverMeshState,
     });
   }

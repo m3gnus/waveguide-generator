@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import {
   getWorkspaceFolder,
   openWorkspaceFolder,
@@ -180,14 +180,14 @@ export function jobCardPropsEqual(previous: JobCardProps, next: JobCardProps): b
     || previous.onRemove !== next.onRemove
     || previous.onOpenExportSettings !== next.onOpenExportSettings
   ) return false;
-  const active = (status: JobItem['status']) => status === 'running' || status === 'queued';
+  const active = (status: JobItem['status']) => isActiveJobStatus(status);
   // `now` only feeds the live elapsed clock. Finished cards use their stored
   // completion timestamp, so repainting all of them every second is pure work.
   return (!active(previous.job.status) && !active(next.job.status)) || previous.now === next.now;
 }
 
 const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, onRemove, onOpenExportSettings }: JobCardProps) {
-  const running = job.status === 'running' || job.status === 'queued';
+  const running = isActiveJobStatus(job.status);
   const failed = job.status === 'error';
   const cancelled = job.status === 'cancelled';
   const rating = job.rating ?? 0;
@@ -415,7 +415,7 @@ export function JobsPanel({ namingNow = new Date() }: { namingNow?: Date } = {})
   }, [preferenceJobs, query]);
   const visibleFailedCount = visibleJobs.filter((job) => job.status === 'error').length;
   const failedCount = snapshot.jobs.filter((job) => job.status === 'error').length;
-  const activeCount = snapshot.jobs.filter((job) => job.status === 'running' || job.status === 'queued').length;
+  const activeCount = snapshot.jobs.filter((job) => isActiveJobStatus(job.status)).length;
   const hiddenByFilter = snapshot.jobs.length - visibleJobs.length;
   const notConnected = snapshot.connection !== 'connected';
 

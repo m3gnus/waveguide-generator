@@ -16,7 +16,7 @@ import {
 import { listReturns } from '../api/cadlink';
 import { compareSelection } from '../api/results';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
-import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import {
   assertDesignOpenCurrent,
   openCadLinkedProject,
@@ -314,7 +314,7 @@ function RunRow({ job, selected, current, onRemove }: {
   const overlaid = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot)
     .overlays.includes(job.id);
   const name = runDisplayName(job);
-  const running = job.status === 'running' || job.status === 'queued';
+  const running = isActiveJobStatus(job.status);
   return <article role="listitem" className={`cad-run-row${selected ? ' selected' : ''}`}>
     <button
       className="cad-run-open"

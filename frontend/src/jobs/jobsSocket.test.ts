@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
+import { isActiveJobStatus, JobsSocketManager, type JobItem, type JobsWebSocketLike } from '../api/jobsSocket';
 import { compareSelection, provisionalResults } from '../api/results';
 
 class MockSocket implements JobsWebSocketLike {
@@ -63,6 +63,25 @@ describe('jobs websocket state machine', () => {
     // microtasks, so poll for the recovered snapshot instead of counting them.
     await vi.waitFor(() => expect(provisionalResults.get('job-1')).toMatchObject({ revision: 3, result: { frequencies: [200, 400, 800] } }));
     expect(jobNotifications).toBe(0);
+    manager.stop();
+  });
+
+  it('accepts a preparing job, keeps it through a snapshot, and treats it as active', () => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({
+      v: 1, kind: 'snapshot', epoch: 4, cursor: 3,
+      jobs: [job({ status: 'preparing', stage: 'preparing', cad_intent: { type: 'cad_intent', operation_id: 'op_1' } })],
+    });
+    expect(manager.getSnapshot().jobs.map((item) => item.status)).toEqual(['preparing']);
+    expect(isActiveJobStatus('preparing')).toBe(true);
+    expect(isActiveJobStatus('queued')).toBe(true);
+    expect(isActiveJobStatus('complete')).toBe(false);
+    // A status the client does not know is still refused, so a snapshot cannot smuggle one in.
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 4, jobs: [job({ status: 'waiting' as JobItem['status'] })] });
+    expect(manager.getSnapshot().jobs.map((item) => item.status)).toEqual(['preparing']);
     manager.stop();
   });
 

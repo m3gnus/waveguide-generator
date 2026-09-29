@@ -116,6 +116,23 @@ describe('jobs panel run list', () => {
     expect(jobCardPropsEqual(props, { ...props, job: { ...completed } })).toBe(false);
   });
 
+  it('shows a preparing run as an active card that can be stopped and not removed', async () => {
+    const stop = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue(undefined);
+    const preparing: JobItem = {
+      ...job(5, 'Preparing'), status: 'preparing', stage: 'preparing', completed_at: null,
+      has_results: false, progress: 0, cad_intent: { type: 'cad_intent', operation_id: 'op_1' },
+    };
+    await act(async () => { root.render(<JobsPanel/>); });
+    await act(async () => publishJobs([preparing]));
+    expect(host.querySelector('.job-card.running')).not.toBeNull();
+    expect(host.textContent).toContain('Preparing mesh');
+    expect(host.querySelector('.job-remove')).toBeNull();
+    const stopButton = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Stop');
+    expect(stopButton).toBeDefined();
+    await act(async () => { stopButton?.click(); });
+    expect(stop).toHaveBeenCalledWith(preparing.id);
+  });
+
   it('runs the one-second elapsed ticker only while a run is counting', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-08T00:00:10Z'));

@@ -762,6 +762,44 @@ read, but:
 - the reconcile path records `accepted` without `setup_defaults` and
   `frame_axis_automatic`, which only the job then holds.
 
+## The `preparing` job status
+
+Stage 4 of the CAD Link simplification makes the job the one lifecycle of a CAD solve.
+Its first step is only the schema: a job status `preparing`, meaning a CAD solve WG has
+accepted but not yet meshed and bound to a request. **Nothing creates a `preparing` job
+yet**; a later change does, and the CAD operation rows still own every solve today.
+
+- **Storage.** `simulation_jobs.status` allows `preparing`. The CHECK constraint was
+  widened by rebuilding the table on the next start of an older database
+  (`JobStore._rebuild_simulation_jobs`: every row and column is copied by name, foreign
+  keys are off for the rebuild and checked before it commits, and a failure leaves the
+  old table). `PRAGMA user_version` stays 5: no row can hold the new status yet, so a
+  release a rollback returns to still opens the file (`UPDATE-TRANSACTION-CONTRACT.md`
+  section 6, item 1; `server/tests/test_job_status_preparing.py` runs v0.3.2 and
+  v0.3.3-rc.1 against an upgraded database). **The change that first writes a
+  `preparing` row owns the compatibility decision** for a release that would meet one
+  (it does not know the status): raise the schema version, or keep such rows out of the
+  file a rollback reads.
+- **Shape.** A `preparing` job holds a CAD intent in `config_json`, not a
+  `SolveRequest`: `{type: "cad_intent", operation_id, bundle_path, manifest_sha256,
+  return_id, ...}`. The jobs API shows it as `cad_intent` and the job has no design to
+  reopen. `retry`, the effective and execution request, and every other reader that
+  needs a `SolveRequest` refuse a `preparing` job (HTTP 409 on retry); only a `queued`
+  or later job has a request.
+- **Active.** `preparing` is active with `queued` and `running`: the jobs panel shows it
+  as a running card labelled "Preparing mesh" with Stop, it cannot be deleted or
+  cleared until it is stopped, and it is exempt from retention. `POST /api/stop` on it
+  ends it `cancelled` at once (no preparation lane exists yet to check between steps).
+  Run numbers are still assigned when a row is created; deferring them to binding is
+  left to the change that creates `preparing` rows.
+- **Restart.** A `preparing` row found at startup ends as `error` with stage
+  "Preparation interrupted" and the message "Preparation was interrupted because
+  Waveguide Generator restarted before the solve was ready. Press Solve again.", with a
+  recovered `failed` event, in the same transaction that settles `running` rows
+  (`JobStore.recover_on_startup`). The preparation that owned it died with the process.
+  The plan for the preparation lane refines this (a job whose preparation had not
+  started is prepared again); that change replaces the rule.
+
 ## Retention
 
 Cleanup never removes what a pending operation references. Retained snapshots and meshes

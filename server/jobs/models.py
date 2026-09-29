@@ -1213,7 +1213,9 @@ class StopResponse(JobModel):
     status: Literal["cancelled", "cancelling"]
 
 
-JobStatusName = Literal["queued", "running", "complete", "error", "cancelled"]
+#: ``preparing`` is a CAD solve WG has accepted but not yet bound to a request;
+#: its stored config is a ``cad_intent``, not a ``SolveRequest``.
+JobStatusName = Literal["preparing", "queued", "running", "complete", "error", "cancelled"]
 
 
 class CadIdentityInstance(JobModel):
@@ -1343,6 +1345,10 @@ class JobItem(JobModel):
     #: ``provenance``, ``confirmed``, ``requirement``) and ``preparation``. Null
     #: for a run made without one.
     cad_provenance: dict[str, Any] | None = None
+    #: The CAD intent a ``preparing`` job holds instead of a request (``type`` is
+    #: ``cad_intent``, with the operation, return and setup it was accepted
+    #: with). Null for every job that has a request.
+    cad_intent: dict[str, Any] | None = None
 
 
 class JobStatusResponse(JobItem):

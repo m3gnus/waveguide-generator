@@ -69,7 +69,9 @@ skips is crash-safe by construction:
   process ended with no stop at all (a crash, a power cut) reads "Simulation
   failed / Server restarted during execution". Interrupted jobs are not
   requeued, because the user quit on purpose. Jobs that were still queued are
-  requeued.
+  requeued. A job left `preparing` (a CAD solve accepted but not yet bound to a
+  request) reads *failed*, "Preparation was interrupted because Waveguide
+  Generator restarted before the solve was ready. Press Solve again."
 - **Temporary files.** Each server process makes WG's own temporary files and
   directories -- mesh builds, the mesh each solver and the field plane read,
   STL and STEP exports, imported meshes -- inside one directory of its own,

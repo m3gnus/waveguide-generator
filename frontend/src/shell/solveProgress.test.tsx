@@ -23,6 +23,7 @@ function partial(overrides: Partial<JobItem>): Pick<JobItem, 'status' | 'stage'>
 describe('solveStageWord', () => {
   it('names every stage transition the requirement lists', () => {
     expect(solveStageWord(partial({ status: 'queued', stage: null }))).toBe('Preparing mesh');
+    expect(solveStageWord(partial({ status: 'preparing', stage: 'preparing' }))).toBe('Preparing mesh');
     expect(solveStageWord(partial({ status: 'running', stage: null }))).toBe('Preparing mesh');
     expect(solveStageWord(partial({ status: 'running', stage: 'initializing' }))).toBe('Preparing mesh');
     expect(solveStageWord(partial({ status: 'running', stage: 'mesh' }))).toBe('Preparing mesh');

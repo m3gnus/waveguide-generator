@@ -579,6 +579,9 @@ def create_jobs_router(
             return SolveAccepted(job_id=await runtime.retry(job_id))
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            # A job with no solve request to replay: one still being prepared.
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         except RemovedSolverError as exc:
             return _error_response(
                 422,

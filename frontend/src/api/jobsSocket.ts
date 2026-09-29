@@ -14,7 +14,15 @@ function shallowEqual(a: object, b: object): boolean {
   return keys.every((key) => Object.is(a[key], (b as typeof a)[key]));
 }
 
-export type JobStatus = 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+/** `preparing` is a CAD solve WG has accepted but not yet meshed and bound to a
+ * request: it is active and stoppable, has no results, and cannot be retried
+ * or reopened. Nothing creates one yet. */
+export type JobStatus = 'preparing' | 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+export const JOB_STATUSES: readonly JobStatus[] = ['preparing', 'queued', 'running', 'complete', 'error', 'cancelled'];
+/** A job that is still owed work: preparing, queued or running. */
+export function isActiveJobStatus(status: JobStatus): boolean {
+  return status === 'preparing' || status === 'queued' || status === 'running';
+}
 export type JobsConnection = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 export interface AutoExportFormatStatus {
   status: 'complete' | 'failed';
@@ -100,6 +108,8 @@ export interface JobItem {
   cad_setup?: CadSetup | null;
   /** What the CAD operation that made this run resolved, kept on the job. */
   cad_provenance?: CadProvenance | null;
+  /** What a `preparing` job holds instead of a request (`type: 'cad_intent'`). Null for every job with a request. */
+  cad_intent?: Record<string, unknown> | null;
 }
 
 /** Whether a run's frame was confirmed by a person, and how it came to be. */
@@ -367,7 +377,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (typeof value.id !== 'string' || value.id.length === 0) return false;
   if (!Number.isSafeInteger(value.run_number) || Number(value.run_number) < 1) return false;
   if (!(value.parent_job_id === null || typeof value.parent_job_id === 'string')) return false;
-  if (!['queued', 'running', 'complete', 'error', 'cancelled'].includes(String(value.status))) return false;
+  if (!(JOB_STATUSES as readonly string[]).includes(String(value.status))) return false;
   if (!isFiniteNumber(value.progress) || value.progress < 0 || value.progress > 1) return false;
   if (!isNullableString(value.stage) || !isNullableString(value.stage_message)) return false;
   if (!isTimestamp(value.created_at) || !isTimestamp(value.queued_at)) return false;
@@ -416,6 +426,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (hasOwn(value, 'cad_source') && !(value.cad_source === null || isCadSource(value.cad_source))) return false;
   if (hasOwn(value, 'cad_setup') && !(value.cad_setup === null || isCadSetup(value.cad_setup))) return false;
   if (hasOwn(value, 'cad_provenance') && !(value.cad_provenance === null || isRecord(value.cad_provenance))) return false;
+  if (hasOwn(value, 'cad_intent') && !(value.cad_intent === null || isRecord(value.cad_intent))) return false;
   return true;
 }
 
@@ -964,7 +975,7 @@ export class JobsSocketManager {
       new Set([...this.snapshot.jobs.map((job) => job.id), ...incoming.jobs.map((job) => job.id)])
         .forEach((jobId) => this.markJobMutation(jobId));
       provisionalResults.prune(new Set(incoming.jobs
-        .filter((job) => job.status === 'running' || job.status === 'queued')
+        .filter((job) => isActiveJobStatus(job.status))
         .map((job) => job.id)));
       this.update({ cursor: incoming.cursor, jobs: this.sortJobs(incoming.jobs), error: null });
       return;

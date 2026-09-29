@@ -173,6 +173,7 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
   } else {
     const job: JobItem | undefined = jobs.find((item) => item.id === latest.jobId);
     switch (job?.status) {
+      case 'preparing':
       case 'queued':
         body = <SolveProgressView job={job} variant="compact"/>;
         break;

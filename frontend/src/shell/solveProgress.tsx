@@ -1,5 +1,5 @@
 import { useCallback, useSyncExternalStore } from 'react';
-import type { JobItem } from '../api/jobsSocket';
+import { isActiveJobStatus, type JobItem } from '../api/jobsSocket';
 
 let clockNow = Date.now();
 let clockTimer: ReturnType<typeof setInterval> | null = null;
@@ -69,6 +69,7 @@ export function solveStageWord(job: Pick<JobItem, 'status' | 'stage'>): SolveSta
     case 'complete': return 'Done';
     case 'error': return 'Failed';
     case 'cancelled': return 'Cancelled';
+    case 'preparing':
     case 'queued': return 'Preparing mesh';
     default: return (job.stage && RUNNING_STAGE_WORDS[job.stage]) || 'Preparing mesh';
   }
@@ -439,7 +440,7 @@ export function SolveProgressView({
   now?: number;
   variant?: 'full' | 'compact';
 }) {
-  const tick = useSolveClock(Boolean(job && (job.status === 'running' || job.status === 'queued')));
+  const tick = useSolveClock(Boolean(job && isActiveJobStatus(job.status)));
   const time = now ?? tick;
   if (!job) {
     if (!operation) return null;
