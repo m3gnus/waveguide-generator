@@ -19,6 +19,7 @@
       "drive_channels": [
         {
           "id": "drive-hf",
+          "motion": "normal",
           "source_ids": [
             "source-hf"
           ]

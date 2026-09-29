@@ -204,8 +204,8 @@ describe('results dock view switch', () => {
     useCadReturnStore.setState({
       ingestRecord: { ingest_id: 'wgi_return' } as never,
       driveChannels: [
-        { id: 'drive-mf', source_ids: ['source-mf'] },
-        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       ] as never,
     });
     importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_return' } as never);

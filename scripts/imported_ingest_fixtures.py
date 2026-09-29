@@ -357,6 +357,7 @@ def request_for_record(
     ingested: Ingested,
     *,
     engine: str,
+    motion: str = "normal",
     frequencies: Sequence[float],
 ) -> Any:
     from server.jobs.models import SolveRequest
@@ -371,7 +372,7 @@ def request_for_record(
                 "ingest_id": record["ingest_id"],
                 "manifest_sha256": record["manifest_sha256"],
                 "artifact_sha256": record["artifact_sha256"],
-                "drive_channels": [{"id": "drive-hf", "source_ids": ["source-hf"]}],
+                "drive_channels": [{"id": "drive-hf", "source_ids": ["source-hf"], "motion": motion}],
                 "mesh": ingested.sizes,
                 "acknowledged_findings": acknowledgements(record),
             },

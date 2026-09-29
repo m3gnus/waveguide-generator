@@ -70,7 +70,6 @@ from server.jobs.cad_intent import (
 )
 from server.jobs.design_availability import resolve_job_design
 from server.jobs.models import (
-    AXIAL_SOURCE_REMOVED_MESSAGE,
     PORT_APERTURE_NAME_GROUPS,
     CadIdentityProvenance,
     ChannelCombineSpec,
@@ -823,12 +822,6 @@ class RemovedSolverError(ValueError):
     code = "removed_solver_mode"
 
 
-class RemovedSourceMotionError(RemovedSolverError):
-    """A request names the removed axial source motion."""
-
-    code = "removed_source_motion"
-
-
 def _refuse_removed_solver(request: SolveRequest) -> None:
     """Keep historical requests decodable, but never start their removed solver."""
 
@@ -836,11 +829,6 @@ def _refuse_removed_solver(request: SolveRequest) -> None:
         raise RemovedSolverError(
             "Axisymmetric solving has been removed. Choose Full 3D and a supported engine to run a new solve."
         )
-    geometry = request.geometry
-    if isinstance(geometry, ImportedGeometrySource) and any(
-        channel.motion == "axial" for channel in geometry.drive_channels
-    ):
-        raise RemovedSourceMotionError(AXIAL_SOURCE_REMOVED_MESSAGE)
 
 
 async def _accuracy_engine(request: SolveRequest, registry: EngineRegistry) -> tuple[SolveRequest, str | None]:

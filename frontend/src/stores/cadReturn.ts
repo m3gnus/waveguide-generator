@@ -27,6 +27,7 @@ import {
 export interface CadDriveChannel {
   id: string;
   source_ids: string[];
+  motion: 'normal' | 'axial';
 }
 
 /**
@@ -214,6 +215,7 @@ interface CadReturnState {
   setTransition: (value: number) => void;
   setSkipped: (sourceId: string, skipped: boolean) => void;
   setSourceChannel: (sourceId: string, channelId: string) => void;
+  setChannelMotion: (channelId: string, motion: 'normal' | 'axial') => void;
   setAreaDriftOverride: (sourceId: string, enabled: boolean) => void;
   flagAreaDrift: (sourceId: string) => void;
   setExteriorOnly: (enabled: boolean) => void;
@@ -311,7 +313,7 @@ function initialFromBundle(bundle: CadReturnBundle | null) {
     rigidSizeMm: coarsest,
     transitionMm: coarsest,
     skippedSourceIds: [] as string[],
-    driveChannels: groupChannels(sources.map((source) => ({ sourceId: source.id, channelId: source.defaultDriveChannelId }))),
+    driveChannels: groupChannels(sources.map((source) => ({ sourceId: source.id, channelId: source.defaultDriveChannelId, motion: 'normal' as const }))),
     areaDriftOverrides: [] as string[],
   };
 }
@@ -428,13 +430,12 @@ function parseDriveChannels(value: unknown, inventory: SourceInventoryEntry[], s
   const skipped = new Set(skippedSourceIds);
   const assigned = new Set<string>();
   const channels = value.flatMap((item): CadDriveChannel[] => {
-    // A saved channel may still carry the removed `motion` field (`axial`
-    // included); it is ignored, so an old setup loads as normal motion.
-    if (!isObject(item) || typeof item.id !== 'string' || !item.id) return [];
+    if (!isObject(item) || typeof item.id !== 'string' || !item.id
+      || (item.motion !== 'normal' && item.motion !== 'axial')) return [];
     const ids = stringArray(item.source_ids);
     if (!ids?.length || ids.some((id) => !sourceIds.has(id) || skipped.has(id) || assigned.has(id))) return [];
     ids.forEach((id) => assigned.add(id));
-    return [{ id: item.id, source_ids: ids }];
+    return [{ id: item.id, source_ids: ids, motion: item.motion }];
   });
   return channels.length === value.length ? channels : null;
 }
@@ -857,6 +858,7 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
       return {
         sourceId: source.id,
         channelId: existing?.id ?? source.defaultDriveChannelId,
+        motion: existing?.motion ?? 'normal' as const,
       };
     });
   const driveChannels = groupChannels(rows);
@@ -873,13 +875,13 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
 /**
  * Whether a channel can carry a driver model at all.
  *
- * The server refuses one on a multi-source channel -- see
+ * The server refuses one on an axial or multi-source channel -- see
  * `DriveChannel.validate_driver_applicability` -- because the radiating area
  * and surface pressure belong to exactly one source patch. `CadDriveChannels`
  * hides the driver controls by the same rule.
  */
 export function channelAcceptsDriver(channel: CadDriveChannel): boolean {
-  return channel.source_ids.length === 1;
+  return channel.source_ids.length === 1 && channel.motion === 'normal';
 }
 
 /**
@@ -887,7 +889,7 @@ export function channelAcceptsDriver(channel: CadDriveChannel): boolean {
  *
  * A completed form used to survive the channel changing underneath it. The
  * submission builder serializes drivers by channel id alone, so a channel that
- * had since become multi-source was still submitted with one and the
+ * had since become axial or multi-source was still submitted with one and the
  * server rejected the entire solve. The quieter failure is worse: a channel id
  * is reusable, and reassigning sources can rebuild the same id around a
  * *different* source, at which point the old driver would have been applied to
@@ -923,12 +925,12 @@ export function driversForChannels(
   return retainedChannelDrivers({ channelDrivers: drivers, driveChannels: [] }, channels);
 }
 
-function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: string }>): CadDriveChannel[] {
+function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: string; motion: 'normal' | 'axial' }>): CadDriveChannel[] {
   const grouped = new Map<string, CadDriveChannel>();
-  sourceChannels.forEach(({ sourceId, channelId }) => {
+  sourceChannels.forEach(({ sourceId, channelId, motion }) => {
     const id = channelId.trim();
     if (!id) return;
-    const channel = grouped.get(id) ?? { id, source_ids: [] };
+    const channel = grouped.get(id) ?? { id, source_ids: [], motion };
     channel.source_ids.push(sourceId);
     grouped.set(id, channel);
   });
@@ -938,7 +940,7 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 /** The setters a person drives. Selections, ingestions and restores change the
  * same state without anyone choosing it, and say nothing. */
 const CAD_RETURN_EDITS: ReadonlyArray<keyof CadReturnState> = [
-  'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel',
+  'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel', 'setChannelMotion',
   'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec', 'updateCombineSpec',
   'setCombineCrossover', 'setCombineSpecFromResult', 'setChannelDriverField', 'setChannelDriverPreset',
   'clearChannelDriverOverrides', 'setDriveVoltage', 'setMaxDriveVoltage', 'setPassiveCardioid', 'setSweep',
@@ -1158,7 +1160,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       let driveChannels = state.driveChannels.map((channel) => ({ ...channel, source_ids: channel.source_ids.filter((id) => id !== sourceId) })).filter((channel) => channel.source_ids.length);
       if (!skipped && !driveChannels.some((channel) => channel.source_ids.includes(sourceId))) {
         const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
-        if (source) driveChannels = [...driveChannels, { id: source.defaultDriveChannelId, source_ids: [sourceId] }];
+        if (source) driveChannels = [...driveChannels, { id: source.defaultDriveChannelId, source_ids: [sourceId], motion: 'normal' }];
       }
       const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
       const sourceSizesMm = !skipped && source && state.sourceSizesMm[sourceId] === undefined
@@ -1179,9 +1181,16 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       const activeIds = (state.selectedBundle?.sources ?? []).map((source) => source.id).filter((id) => !state.skippedSourceIds.includes(id));
       const rows = activeIds.map((id) => {
         const existing = state.driveChannels.find((channel) => channel.source_ids.includes(id));
-        return { sourceId: id, channelId: id === sourceId ? channelId : existing?.id ?? id };
+        return { sourceId: id, channelId: id === sourceId ? channelId : existing?.id ?? id, motion: existing?.motion ?? 'normal' as const };
       });
       const driveChannels = groupChannels(rows);
+      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
+    });
+    saveSolveProfile(get());
+  },
+  setChannelMotion: (channelId, motion) => {
+    set((state) => {
+      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? { ...channel, motion } : channel);
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
     saveSolveProfile(get());

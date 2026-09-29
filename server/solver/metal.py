@@ -95,6 +95,8 @@ from .result_mapping import (
 
 try:
     from hornlab_metal_bem import (
+        AxialProfile,
+        NormalProfile,
         ObservationConfig,
         ObservationFrame,
         native_config,
@@ -106,6 +108,8 @@ try:
     from hornlab_metal_bem.metal.native import discover_native_runtime
 except (ImportError, OSError):  # clean capability absence or native loader failure
     ObservationConfig = None  # type: ignore[assignment]
+    AxialProfile = None  # type: ignore[assignment]
+    NormalProfile = None  # type: ignore[assignment]
     ObservationFrame = None  # type: ignore[assignment]
     native_config = None  # type: ignore[assignment]
     native_solve = None  # type: ignore[assignment]
@@ -144,6 +148,10 @@ def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
         return native_config(**dict(kwargs))
     except TypeError as exc:
         feature = str(exc)
+        if "source_velocity_profiles" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support mixed per-channel source motion."
+            ) from exc
         if "source_motion" in feature:
             raise MetalUnavailable(
                 "Installed hornlab-metal-bem does not support axial source motion."
@@ -976,6 +984,7 @@ def _channel_basis_metadata(
         entry: dict[str, Any] = {
             "source_ids": source_ids,
             "source_tags": [int(source_tags[source_id]) for source_id in source_ids],
+            "source_motion": str(channel.motion),
             "source_normalization": (
                 "voltage_driven_driver_lem"
                 if channel.id in driver_payloads
@@ -1232,6 +1241,7 @@ def _run_passive_cardioid_campaign(
         config,
         progress_callback=campaign_progress,
         on_frequency_result=None,
+        source_velocity_profiles={},
     )
     result = radiation_impedance.solve_aperture_matrix(
         mesh_path,
@@ -1592,6 +1602,7 @@ def _combined_channel_response(
     request: SolveRequest,
     quadrants: int,
     config: Any,
+    config_motion: str,
     started: float,
     status: Mapping[str, Any],
     kwargs: Mapping[str, Any],
@@ -1676,7 +1687,9 @@ def _combined_channel_response(
             ),
         },
     }
-    context = SolverContext.from_imported_request(request, quadrants=quadrants)
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion
+    )
     response = build_solver_response(
         result=combined_result,
         config=config,
@@ -1732,7 +1745,11 @@ def solve_imported_metal_from_msh_text(
     if stage_callback:
         stage_callback("setup", 0.0, "Configuring imported multi-source Metal BEM solve")
 
-    context = SolverContext.from_imported_request(request, quadrants=quadrants)
+    motions = {channel.motion for channel in geometry.drive_channels}
+    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion
+    )
     context.validate()
     mesh_record = record.get("mesh")
     mesh_record = mesh_record if isinstance(mesh_record, Mapping) else {}
@@ -1758,6 +1775,7 @@ def solve_imported_metal_from_msh_text(
     channel_identity = _channel_source_identity(geometry, record)
 
     source_specs: list[dict[int, complex]] = []
+    source_profiles: dict[int, Any] = {}
     for channel in geometry.drive_channels:
         spec: dict[int, complex] = {}
         for source_id in channel.source_ids:
@@ -1767,6 +1785,13 @@ def solve_imported_metal_from_msh_text(
                 )
             tag = int(source_tags[source_id])
             spec[tag] = 1.0 + 0.0j
+            if len(motions) > 1:
+                profile_cls = AxialProfile if channel.motion == "axial" else NormalProfile
+                if profile_cls is None:
+                    raise MetalUnavailable(
+                        "Installed hornlab-metal-bem does not support mixed per-channel source motion."
+                    )
+                source_profiles[tag] = profile_cls()
         source_specs.append(spec)
 
     def progress(index: int, total: int, frequency_hz: float) -> None:
@@ -1804,7 +1829,7 @@ def solve_imported_metal_from_msh_text(
             if not isinstance(source_entry, dict):
                 raise ValueError("streamed imported Metal source result is invalid")
             channel_context = SolverContext.from_imported_request(
-                request, quadrants=quadrants
+                request, quadrants=quadrants, source_motion=channel.motion
             )
             channel_response = build_provisional_frequency_response(
                 index=index,
@@ -1860,10 +1885,13 @@ def solve_imported_metal_from_msh_text(
         "native_check_open_edges": _imported_check_open_edges(record),
         "mesh_validate": context.mesh_validation_mode != "off",
         "frame_override": frame_override,
+        "source_motion": config_motion,
         "return_surface_traces": retain_traces,
     }
     if result_callback is not None:
         kwargs["on_frequency_result"] = on_frequency_result
+    if source_profiles:
+        kwargs["source_velocity_profiles"] = source_profiles
     config = _native_config_or_unavailable(kwargs)
 
     path: Path | None = None
@@ -1971,7 +1999,7 @@ def solve_imported_metal_from_msh_text(
                     rg_ohm=geometry.rg_ohm,
                 )
             channel_context = SolverContext.from_imported_request(
-                request, quadrants=quadrants
+                request, quadrants=quadrants, source_motion=channel.motion
             )
             channel_metadata = {
                 "solver_backend": "metal",
@@ -2183,6 +2211,7 @@ def solve_imported_metal_from_msh_text(
             request=request,
             quadrants=quadrants,
             config=config,
+            config_motion=config_motion,
             started=started,
             status=status,
             kwargs=kwargs,

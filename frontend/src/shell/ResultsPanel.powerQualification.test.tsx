@@ -147,8 +147,8 @@ describe('results power qualification', () => {
       useCadReturnStore.setState({
         ingestRecord: { ingest_id: 'wgi_speaker2' } as never,
         driveChannels: [
-          { id: 'drive-lf', source_ids: ['wgs-QBQ26C6122140K1H0555'] },
-          { id: 'drive-hf', source_ids: ['wgs-NMG2W9KB8N7JXDGM8JQQ'] },
+          { id: 'drive-lf', source_ids: ['wgs-QBQ26C6122140K1H0555'], motion: 'normal' },
+          { id: 'drive-hf', source_ids: ['wgs-NMG2W9KB8N7JXDGM8JQQ'], motion: 'normal' },
         ] as never,
       });
       importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_speaker2' } as never);

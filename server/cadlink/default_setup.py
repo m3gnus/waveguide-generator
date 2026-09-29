@@ -158,7 +158,7 @@ def _drive_channels(sources: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]
         if not channel_id:
             continue
         channel = channels.setdefault(
-            channel_id, {"id": channel_id, "source_ids": []}
+            channel_id, {"id": channel_id, "source_ids": [], "motion": "normal"}
         )
         channel["source_ids"].append(str(source["id"]))
     return list(channels.values())

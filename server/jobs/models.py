@@ -371,17 +371,9 @@ class DriverSpec(JobModel):
         return self
 
 
-AXIAL_SOURCE_REMOVED_MESSAGE = (
-    "Axial source motion has been removed. Use normal source motion, where each "
-    "surface patch moves along its own normal, to run a new solve."
-)
-
-
 class DriveChannel(JobModel):
     id: str = Field(min_length=1)
     source_ids: list[str] = Field(min_length=1)
-    # ``axial`` is removed. It still decodes so a stored request replays and a
-    # saved setup loads; submission refuses it (``removed_source_motion``).
     motion: Literal["normal", "axial"] = "normal"
     driver: DriverSpec | None = None
 
@@ -389,6 +381,11 @@ class DriveChannel(JobModel):
     def validate_driver_applicability(self) -> "DriveChannel":
         if self.driver is None:
             return self
+        if self.motion != "normal":
+            raise ValueError(
+                "a driver model requires normal source motion; axial channels "
+                "cannot carry one yet"
+            )
         if len(self.source_ids) != 1:
             raise ValueError(
                 "a driver model requires a single-source channel: the radiating "

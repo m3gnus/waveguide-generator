@@ -131,7 +131,7 @@ describe('preferences surfaces', () => {
         requestId: null, sourceCount: 1, instanceCount: 1, sources: [],
       },
       ingestRecord: readyCadRecord('wgi_first'), needsIngest: false,
-      driveChannels: [{ id: 'drive', source_ids: ['source'] }],
+      driveChannels: [{ id: 'drive', source_ids: ['source'], motion: 'normal' }],
       sourceSizesMm: { source: 2 }, rigidSizeMm: 5, transitionMm: 5,
     });
     workspaceModeStore.setMode('cad');

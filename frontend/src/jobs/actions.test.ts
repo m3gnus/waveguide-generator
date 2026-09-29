@@ -101,7 +101,7 @@ describe('solve submission', () => {
     await submitImported({
       geometry: {
         type: 'imported', ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
-        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
+        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
         mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-hf': 4 } },
         acknowledged_findings: ['sha256:r:finding-a'], skipped_source_ids: [],
       },
@@ -128,7 +128,7 @@ describe('solve submission', () => {
     const submission = {
       geometry: {
         type: 'imported' as const, ingest_id: 'wgi_example', manifest_sha256: 'sha256:m', artifact_sha256: 'sha256:a',
-        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
+        drive_channels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' as const }],
         mesh: { rigid_size_mm: 8, transition_mm: 8, source_size_mm: { 'source-hf': 4 } },
         acknowledged_findings: [], skipped_source_ids: [],
       },

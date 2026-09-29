@@ -632,4 +632,4 @@ def test_imported_cad_geometry_refuses_a_ground_plane():
     )
 
     with pytest.raises(ValueError, match="not available for imported CAD"):
-        SolverContext.from_imported_request(request, quadrants=1234)
+        SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")

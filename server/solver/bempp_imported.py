@@ -10,7 +10,8 @@ this module is only the adapter half:
   exactly as Metal reads it (:func:`server.solver.imported.imported_anchor_frame`).
 * **Channels.** The package has no multi-right-hand-side solve, so each drive
   channel is its own sweep, driving that channel's source tags at unit weight
-  -- the drive Metal gives them.
+  -- the drive Metal gives them -- with the channel's own motion. The package
+  flips an axial tag that faces back along the axis, as Metal does.
 * **Reduced domains.** ``yz``, ``xz`` and ``yz+xz`` all execute natively, from
   the record's domain planes; BEMPP mirrors the y-only half BEAT cannot.
 * **Open shells.** BEMPP's P1 space pins the pressure to zero on a free edge,
@@ -129,6 +130,7 @@ def _bempp_section(
     native_plane: str | None,
     config: Any,
     tags: list[int] | None,
+    motion: str | None,
     result: Any,
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
@@ -144,6 +146,8 @@ def _bempp_section(
     }
     if tags is not None:
         section["velocity_source_tags"] = tags
+    if motion is not None:
+        section["source_motion"] = motion
     return section
 
 
@@ -154,6 +158,7 @@ def _combined_channel_response(
     request: SolveRequest,
     quadrants: int,
     config: Any,
+    config_motion: str,
     started: float,
     status: Mapping[str, Any],
     backend: str,
@@ -233,10 +238,13 @@ def _combined_channel_response(
             native_plane=native_plane,
             config=config,
             tags=None,
+            motion=None,
             result=combined_result,
         ),
     }
-    context = SolverContext.from_imported_request(request, quadrants=quadrants)
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion
+    )
     response = build_solver_response(
         result=combined_result,
         config=config,
@@ -259,6 +267,7 @@ def _solve_config(config_kwargs: dict[str, Any]) -> Any:
         message = str(exc)
         for option, feature in (
             ("velocity_sources", "per-tag velocity sources"),
+            ("source_motion", "axial source motion"),
             ("frame_override", "an explicit observation frame"),
             ("on_frequency_result", "streamed frequency results"),
             ("return_surface_traces", "retained surface traces"),
@@ -336,7 +345,11 @@ def solve_imported_bempp_from_msh_text(
     if stage_callback:
         stage_callback("setup", 0.0, f"Configuring imported BEMPP BEM solve ({backend})")
 
-    context = SolverContext.from_imported_request(request, quadrants=quadrants)
+    motions = {channel.motion for channel in geometry.drive_channels}
+    config_motion = next(iter(motions)) if len(motions) == 1 else "normal"
+    context = SolverContext.from_imported_request(
+        request, quadrants=quadrants, source_motion=config_motion
+    )
     context.validate()
     mesh_record = record.get("mesh")
     mesh_record = mesh_record if isinstance(mesh_record, Mapping) else {}
@@ -399,7 +412,7 @@ def solve_imported_bempp_from_msh_text(
             handle.write(msh_text)
         for channel_index, channel in enumerate(geometry.drive_channels):
             channel_context = SolverContext.from_imported_request(
-                request, quadrants=quadrants
+                request, quadrants=quadrants, source_motion=channel.motion
             )
             holder: dict[str, Any] = {}
 
@@ -491,6 +504,7 @@ def solve_imported_bempp_from_msh_text(
                 "observation": observation,
                 "frame_override": frame_override,
                 "velocity_sources": {tag: 1.0 for tag in channel_tags[channel.id]},
+                "source_motion": channel.motion,
                 "progress_callback": progress,
                 "mesh_scale": 1.0,
                 "native_symmetry_plane": native_plane,
@@ -557,7 +571,7 @@ def solve_imported_bempp_from_msh_text(
     for channel in geometry.drive_channels:
         result = sorted_results[channel.id]
         channel_context = SolverContext.from_imported_request(
-            request, quadrants=quadrants
+            request, quadrants=quadrants, source_motion=channel.motion
         )
         channel_metadata = {
             "solver_backend": "bempp",
@@ -589,6 +603,7 @@ def solve_imported_bempp_from_msh_text(
                 native_plane=native_plane,
                 config=configs[channel.id],
                 tags=channel_tags[channel.id],
+                motion=channel.motion,
                 result=result,
             ),
         }
@@ -643,6 +658,7 @@ def solve_imported_bempp_from_msh_text(
             request=request,
             quadrants=quadrants,
             config=first_config,
+            config_motion=config_motion,
             started=started,
             status=status,
             backend=backend,

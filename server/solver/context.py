@@ -175,6 +175,7 @@ class SolverContext:
         request: SolveRequest,
         *,
         quadrants: int,
+        source_motion: str,
     ) -> "SolverContext":
         """Build a design-free context for an immutable imported mesh."""
 
@@ -223,8 +224,7 @@ class SolverContext:
             solver_mode="full_3d",
             quadrants=int(quadrants),
             sim_type=2,
-            # Axial source motion was removed: an imported drive is always normal.
-            source_motion="normal",
+            source_motion=source_motion,
             ground_plane=_ground_plane(request),
             polar_config=polar_config,
         )

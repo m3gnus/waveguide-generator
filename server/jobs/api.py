@@ -394,14 +394,6 @@ def create_jobs_router(
                 details=exc.details,
                 client_request_id=body.client_request_id,
             )
-        except RemovedSolverError as exc:
-            return _error_response(
-                422,
-                code=exc.code,
-                stage="planning",
-                message=str(exc),
-                client_request_id=body.client_request_id,
-            )
         except ValueError as exc:
             return _error_response(
                 422,

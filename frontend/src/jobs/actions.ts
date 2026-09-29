@@ -82,6 +82,7 @@ export interface ImportedGeometrySubmission {
   drive_channels: Array<{
     id: string;
     source_ids: string[];
+    motion: 'normal' | 'axial';
     /** Thiele-Small numbers in `DriverSpec`'s wire units, plus the optional
      * `label` naming the driver they came from. */
     driver?: Record<string, number | string>;

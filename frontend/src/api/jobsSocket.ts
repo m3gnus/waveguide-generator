@@ -147,6 +147,7 @@ export interface CadSetup {
   drive_channels?: Array<{
     id: string;
     source_ids: string[];
+    motion?: 'normal' | 'axial';
     driver?: Record<string, number> | null;
   }>;
   /** Both crossover generations: the per-channel v2 form every new submission

@@ -155,7 +155,7 @@ describe('CAD return store', () => {
     useCadReturnStore.getState().selectBundle(bundle);
     useCadReturnStore.getState().setSourceChannel('source-hf', 'drive-mf');
     expect(useCadReturnStore.getState().driveChannels).toEqual([
-      { id: 'drive-mf', source_ids: ['source-mf', 'source-hf'] },
+      { id: 'drive-mf', source_ids: ['source-mf', 'source-hf'], motion: 'normal' },
     ]);
     useCadReturnStore.getState().setSkipped('source-hf', true);
     expect(useCadReturnStore.getState().driveChannels[0].source_ids).toEqual(['source-mf']);
@@ -185,7 +185,7 @@ describe('CAD return store', () => {
     expect(state.selectedBundle?.documentName).toBe('Speaker v2');
     expect(state.sourceSizesMm['source-hf']).toBe(2.25);
     expect(state.driveChannels).toEqual([
-      { id: 'drive-mf', source_ids: ['source-mf', 'source-hf'] },
+      { id: 'drive-mf', source_ids: ['source-mf', 'source-hf'], motion: 'normal' },
     ]);
     expect(state.exteriorOnly).toBe(true);
     expect(state.combineEnabled).toBe(true);
@@ -207,6 +207,17 @@ describe('CAD return store', () => {
     expect(driver?.fields.sd_cm2).toBe(8);
   });
 
+  it('drops a channel driver when the channel turns axial', () => {
+    const store = useCadReturnStore.getState();
+    store.selectBundle(bundle);
+    store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
+
+    // A driver models a piston, so the server refuses one on axial motion.
+    store.setChannelMotion('drive-mf', 'axial');
+
+    expect(useCadReturnStore.getState().channelDrivers['drive-mf']).toBeUndefined();
+  });
+
   it('drops a channel driver when a second source joins the channel', () => {
     const store = useCadReturnStore.getState();
     store.selectBundle(bundle);
@@ -216,7 +227,7 @@ describe('CAD return store', () => {
     store.setSourceChannel('source-mf', 'drive-hf');
 
     expect(useCadReturnStore.getState().driveChannels).toEqual([
-      { id: 'drive-hf', source_ids: ['source-mf', 'source-hf'] },
+      { id: 'drive-hf', source_ids: ['source-mf', 'source-hf'], motion: 'normal' },
     ]);
     expect(useCadReturnStore.getState().channelDrivers['drive-hf']).toBeUndefined();
   });
@@ -239,7 +250,7 @@ describe('CAD return store', () => {
     const stale = {
       ...complete,
       driveChannels: complete.driveChannels.map((channel) => (
-        channel.id === 'drive-hf' ? { ...channel, source_ids: [...channel.source_ids, 'source-mf'] } : channel
+        channel.id === 'drive-hf' ? { ...channel, motion: 'axial' as const } : channel
       )),
     };
     const submitted = buildImportedSubmission(stale);
@@ -328,34 +339,6 @@ describe('CAD return store', () => {
     );
   });
 
-  it('loads a profile saved with the removed axial motion as ordinary normal channels', () => {
-    useDocumentStore.getState().setCadLink({
-      designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
-    }, 'current');
-    const store = useCadReturnStore.getState();
-    store.selectBundle(bundle);
-    store.setSourceSize('source-hf', 2.25);
-
-    // A profile written before the removal stores a motion on every channel,
-    // and a person may have saved `axial` on one.
-    const raw = JSON.parse(localStorage.getItem(solveProfileStorageKey)!);
-    raw.profiles[0].settings.driveChannels = raw.profiles[0].settings.driveChannels
-      .map((channel: Record<string, unknown>, index: number) => ({ ...channel, motion: index === 0 ? 'axial' : 'normal' }));
-    localStorage.setItem(solveProfileStorageKey, JSON.stringify(raw));
-
-    resetCadReturnStore();
-    useCadReturnStore.getState().selectBundle(bundle);
-
-    const state = useCadReturnStore.getState();
-    expect(state.sourceSizesMm['source-hf']).toBe(2.25);
-    expect(state.driveChannels).toEqual([
-      { id: 'drive-mf', source_ids: ['source-mf'] },
-      { id: 'drive-hf', source_ids: ['source-hf'] },
-    ]);
-    expect(buildImportedSubmission({ ...state, ingestRecord: record(), needsIngest: false })
-      .geometry.drive_channels.every((channel) => !('motion' in channel))).toBe(true);
-  });
-
   it('restores a compatible persisted solve profile across sessions', () => {
     useDocumentStore.getState().setCadLink({
       designId: 'wgd_speaker', lineageId: 'wgl_speaker', baseEditVersion: 3,
@@ -373,6 +356,7 @@ describe('CAD return store', () => {
     store.setCombineCrossover('drive-mf→drive-hf', 1_350);
     store.updateCombineSpec((spec) => withDelayMode(withGainMode(spec, 'manual'), 'manual'));
     store.setSkipped('source-hf', true);
+    store.setChannelMotion('drive-mf', 'axial');
     store.setExteriorOnly(true);
     store.setChannelDriverField('drive-mf', 'sd_cm2', 135);
     store.setDriveVoltage(4);
@@ -395,7 +379,7 @@ describe('CAD return store', () => {
       rigidSizeMm: 9.5,
       transitionMm: 4.5,
       skippedSourceIds: ['source-hf'],
-      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'] }],
+      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'axial' }],
       exteriorOnly: true,
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [1_350], false, false),
@@ -1025,7 +1009,7 @@ describe('the CAD project owns its solve settings', () => {
       selectedBundle: { ...bundle, readable: false, bundlePath: '' },
       ingestRecord: record(),
       projectLineageId: 'wgl_party',
-      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'] }],
+      driveChannels: [{ id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' }],
       needsIngest: false,
     });
     useCadReturnStore.getState().setChannelDriverPreset('drive-mf', PRESET_12RS430);
@@ -1044,7 +1028,7 @@ describe('the CAD project owns its solve settings', () => {
     const drivers = projectChannelDrivers(bundle, 'wgl_party')!;
     expect(drivers['drive-mf'].preset).toMatchObject({ id: 'Faital Pro::12RS430::8' });
     // A channel the recalled run does not have keeps nothing.
-    expect(driversForChannels(drivers, [{ id: 'drive-hf', source_ids: ['source-hf'] }]))
+    expect(driversForChannels(drivers, [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }]))
       .toEqual({});
     expect(projectChannelDrivers(bundle, 'wgl_other')).toBeNull();
   });
@@ -1273,7 +1257,7 @@ describe('combined output: band roles', () => {
     };
     useCadReturnStore.setState({
       selectedBundle: mixed,
-      driveChannels: [{ id: 'mixed', source_ids: ['source-hf', 'source-lf'] }],
+      driveChannels: [{ id: 'mixed', source_ids: ['source-hf', 'source-lf'], motion: 'normal' }],
     });
 
     expect(combineChannelRole(useCadReturnStore.getState(), 'mixed')).toBe('LF');
@@ -1290,8 +1274,8 @@ describe('combined output: band roles', () => {
     useCadReturnStore.setState({
       selectedBundle: mixedCase,
       driveChannels: [
-        { id: 'high', source_ids: ['source-hf'] },
-        { id: 'low', source_ids: ['source-lf'] },
+        { id: 'high', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'low', source_ids: ['source-lf'], motion: 'normal' },
       ],
     });
 

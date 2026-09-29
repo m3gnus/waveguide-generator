@@ -864,7 +864,7 @@ export function channelHeadingText(channel: Pick<CadDriveChannel, 'id' | 'source
 /**
  * Per-channel driver setup.
  *
- * One card per drive channel, each carrying its driver picker.
+ * One card per drive channel, each carrying its motion and its driver picker.
  * There is no driver on/off switch and no source-to-channel assignment UI any
  * more: every source drives its own default channel, and a channel is
  * voltage-driven exactly when a driver is present on it — picked from the
@@ -892,7 +892,7 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary"><span>{channelHeadingText(channel)}</span></div>
+          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channelHeadingText(channel)}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal motion</option><option value="axial">Axial motion</option></select></div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
             .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
@@ -1251,7 +1251,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           {tab === 'simulation' && ingestRecord && <>
             {cadSectionMatches(CAD_CONTROLS.frequencySweep.section) && <Section title={CAD_CONTROLS.frequencySweep.section} description="The explicit range submitted with this imported CAD geometry." forceOpen={searching} revealId={CAD_CONTROLS.frequencySweep.reveal.id}><CadFrequencySweep/></Section>}
             {cadSectionMatches(CAD_CONTROLS.directivityMap.section) && <Section title={CAD_CONTROLS.directivityMap.section} description="Display-plane and angular sampling controls, including the effective imported-CAD grid." forceOpen={searching} revealId={CAD_CONTROLS.directivityMap.reveal.id}><DirectivityMapControls effectiveDerivation={ingestRecord.polar_grid_derivation}/></Section>}
-            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Per-channel driver setup: which sources each channel drives, voltage drive, and Thiele-Small data. Assign two sources to the same channel to drive them together." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
+            {cadSectionMatches(CAD_CONTROLS.driveChannels.section) && <Section title={CAD_CONTROLS.driveChannels.section} description="Per-channel driver setup: which sources each channel drives, its motion, voltage drive, and Thiele-Small data. Assign two sources to the same channel to drive them together." forceOpen={searching} revealId={CAD_CONTROLS.driveChannels.reveal.id}><CadDriveChannels/></Section>}
             {cadSectionMatches(CAD_CONTROLS.crossover.section) && <Section title={CAD_CONTROLS.crossover.section} description="Optional combined output of adjacent drive channels: a filter family and slope per pair, with automatic or manual level, delay and polarity per channel." forceOpen={searching} revealId={CAD_CONTROLS.crossover.reveal.id}><CadCrossover/></Section>}
             {cardioidSurface && cadSectionMatches(CAD_CONTROLS.passiveCardioid.section) && <Section title={CAD_CONTROLS.passiveCardioid.section} description="Sealed rear chamber vented through a damped port, and the extra radiation-impedance campaign it needs." forceOpen={searching} revealId={CAD_CONTROLS.passiveCardioid.reveal.id}><CadPassiveCardioid/></Section>}
             {cadSectionMatches(CAD_CONTROLS.solveOptions.section) && <Section title={CAD_CONTROLS.solveOptions.section} description="Imported-CAD validation, frequency selection, and diagnostic controls. Geometry fixes the backend and domain." forceOpen={searching} revealId={CAD_CONTROLS.solveOptions.reveal.id}><SolveOptionsControls mode="cad" ingestRecord={ingestRecord}/></Section>}

@@ -54,8 +54,8 @@ function seedReturn(passiveCardioid: PassiveCardioidForm = { ...PASSIVE_CARDIOID
     rigidSizeMm: 5,
     transitionMm: 3,
     driveChannels: [
-      { id: 'drive-mf', source_ids: ['MF'] },
-      { id: 'drive-port', source_ids: ['PORT_EXIT'] },
+      { id: 'drive-mf', source_ids: ['MF'], motion: 'normal' },
+      { id: 'drive-port', source_ids: ['PORT_EXIT'], motion: 'normal' },
     ],
     passiveCardioid,
     needsIngest: false,
@@ -130,7 +130,7 @@ describe('passive cardioid opt-in boundary', () => {
         ...bundle,
         sources: [{ id: 'MF', role: 'MF', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-mf' }],
       },
-      driveChannels: [{ id: 'drive-mf', source_ids: ['MF'] }],
+      driveChannels: [{ id: 'drive-mf', source_ids: ['MF'], motion: 'normal' }],
     });
     expect(useCadReturnStore.getState().passiveCardioid.enabled).toBe(true);
     expect(importedSubmissionBlocker(useCadReturnStore.getState())).toBeNull();
@@ -234,8 +234,8 @@ describe('passive cardioid reserved channel id', () => {
     seedReturn({ ...complete, coupled: true });
     useCadReturnStore.setState({
       driveChannels: [
-        { id: PASSIVE_CARDIOID_CHANNEL_ID, source_ids: ['MF'] },
-        { id: 'drive-port', source_ids: ['PORT_EXIT'] },
+        { id: PASSIVE_CARDIOID_CHANNEL_ID, source_ids: ['MF'], motion: 'normal' },
+        { id: 'drive-port', source_ids: ['PORT_EXIT'], motion: 'normal' },
       ],
     });
     const blocker = importedSubmissionBlocker(useCadReturnStore.getState());
@@ -248,8 +248,8 @@ describe('passive cardioid reserved channel id', () => {
     seedReturn({ ...complete, coupled: false });
     useCadReturnStore.setState({
       driveChannels: [
-        { id: PASSIVE_CARDIOID_CHANNEL_ID, source_ids: ['MF'] },
-        { id: 'drive-port', source_ids: ['PORT_EXIT'] },
+        { id: PASSIVE_CARDIOID_CHANNEL_ID, source_ids: ['MF'], motion: 'normal' },
+        { id: 'drive-port', source_ids: ['PORT_EXIT'], motion: 'normal' },
       ],
     });
     expect(importedSubmissionBlocker(useCadReturnStore.getState())).toBeNull();
@@ -258,7 +258,7 @@ describe('passive cardioid reserved channel id', () => {
   it('reports no blocker while the section is off', () => {
     expect(passiveCardioidBlocker({
       passiveCardioid: { ...PASSIVE_CARDIOID_DEFAULTS },
-      driveChannels: [{ id: PASSIVE_CARDIOID_CHANNEL_ID, source_ids: ['MF'] }],
+      driveChannels: [{ id: PASSIVE_CARDIOID_CHANNEL_ID, source_ids: ['MF'], motion: 'normal' }],
     })).toBeNull();
   });
 });

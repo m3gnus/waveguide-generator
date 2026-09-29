@@ -92,7 +92,19 @@ def test_the_pulsating_reference_meets_its_boundary_condition(frequency: float) 
     assert slope == pytest.approx(-qual.AIR_DENSITY, rel=1e-5)
 
 
-def test_the_reference_radiates_outgoing_waves_for_e_minus_i_omega_t() -> None:
+@pytest.mark.parametrize("cos_theta", [1.0, 0.5, -0.8])
+def test_the_oscillating_reference_meets_its_boundary_condition(cos_theta: float) -> None:
+    pytest.importorskip("scipy")
+    a = qual.SPHERE_RADIUS_M
+
+    slope = _radial_derivative(
+        lambda r: complex(qual.oscillating_sphere(a, 700.0, r, np.asarray(cos_theta))), a
+    )
+
+    assert slope == pytest.approx(-qual.AIR_DENSITY * cos_theta, rel=1e-5)
+
+
+def test_both_references_radiate_outgoing_waves_for_e_minus_i_omega_t() -> None:
     pytest.importorskip("scipy")
     a, frequency = qual.SPHERE_RADIUS_M, 3000.0
     k = 2.0 * math.pi * frequency / qual.SOUND_SPEED
@@ -103,6 +115,17 @@ def test_the_reference_radiates_outgoing_waves_for_e_minus_i_omega_t() -> None:
 
     expected = float(np.angle(np.exp(1j * k * (far - near))))
     assert phase_advance(lambda r: qual.pulsating_sphere(a, frequency, r)) == pytest.approx(expected, abs=1e-9)
+    oscillating = phase_advance(lambda r: complex(qual.oscillating_sphere(a, frequency, r, np.asarray(1.0))))
+    assert oscillating == pytest.approx(expected, abs=2e-3)
+
+
+def test_the_oscillating_reference_reduces_to_the_incompressible_dipole() -> None:
+    pytest.importorskip("scipy")
+    a, r, cos_theta = qual.SPHERE_RADIUS_M, 0.2, 0.6
+
+    low = complex(qual.oscillating_sphere(a, 1.0, r, np.asarray(cos_theta)))
+
+    assert low == pytest.approx(qual.AIR_DENSITY * a**3 * cos_theta / (2.0 * r**2), rel=1e-3)
 
 
 def test_the_error_measure_sees_a_sign_flip_and_nothing_else() -> None:
@@ -155,7 +178,7 @@ def test_the_markdown_record_marks_each_verdict_and_carries_no_local_path(tmp_pa
             qual.Row("bounded row", "metal", "mirror", "complex", [0.2, 1.9], minimum=0.01),
         ],
         "level_errors": {
-            (kind, "metal", level): np.asarray([0.01]) for kind in ("pulsating",) for level in levels
+            (kind, "metal", level): np.asarray([0.01]) for kind in ("pulsating", "oscillating") for level in levels
         },
         "same_mesh_tolerance": {level: 0.05 for level in levels},
     }
@@ -291,20 +314,24 @@ def _mesh(text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return points, rows[:, 5:8] - 1, rows[:, 3]
 
 
-def _radiation(frequency: float) -> complex:
+def _radiation(motion: str, frequency: float) -> complex:
     """The factor that makes a continuous layer on the 0.1 m sphere radiate the analytic field.
 
-    A uniform layer radiates ``a^2 j0(ka) e^{ikr}/r`` (the addition theorem
-    keeps one term), so dividing the analytic answer by that leaves one factor
+    A uniform layer radiates ``a^2 j0(ka) e^{ikr}/r`` and a ``cos(theta)``
+    layer ``ik a^2 j1(ka) h1(kr) cos(theta)`` (the addition theorem keeps one
+    term of each), so dividing the analytic answers by those leaves one factor
     per frequency. On the sphere only the quadrature then errs: second order in
     the element size, as a boundary-element solve does.
     """
 
-    from scipy.special import spherical_jn
+    from scipy.special import spherical_jn, spherical_yn
 
     k = 2.0 * math.pi * frequency / qual.SOUND_SPEED
     ka = k * qual.SPHERE_RADIUS_M
-    return qual.AIR_DENSITY * np.exp(-1j * ka) / ((1.0 - 1j * ka) * spherical_jn(0, ka))
+    if motion == "normal":
+        return qual.AIR_DENSITY * np.exp(-1j * ka) / ((1.0 - 1j * ka) * spherical_jn(0, ka))
+    slope = spherical_jn(1, ka, derivative=True) + 1j * spherical_yn(1, ka, derivative=True)
+    return 1j * qual.AIR_DENSITY / (k**2 * qual.SPHERE_RADIUS_M**2 * spherical_jn(1, ka) * slope)
 
 
 _BASES: dict[str, dict[str, np.ndarray]] = {}
@@ -345,11 +372,12 @@ def _synthetic_pressure(record: dict, channels: list[dict], frequencies: tuple[f
     pressure: dict[str, np.ndarray] = {}
     for channel in channels:
         driven = np.isin(tags, [record["source_tags"][source] for source in channel["source_ids"]])
-        strength = weights[driven]
+        motion = channel.get("motion", "normal")
+        strength = weights[driven] * (1.0 if motion == "normal" else normals[driven] @ axis)
         distance = np.linalg.norm(targets[:, :, None, :] - nodes[driven][None, None], axis=-1)
         pressure[str(channel["id"])] = np.stack(
             [
-                _radiation(frequency)
+                _radiation(motion, frequency)
                 * np.sum(strength * np.exp(2j * math.pi * frequency / qual.SOUND_SPEED * distance) / (4.0 * math.pi * distance), axis=-1)
                 for frequency in frequencies
             ]
@@ -425,9 +453,9 @@ def test_engines_that_agree_and_converge_pass_every_analytic_order_and_cross_eng
 
     rows = _synthetic_run("agree")["rows"]
 
-    assert sum(row.compared_with == "analytic" for row in rows) >= 2 * 2 * len(qual.LADDER)
-    assert sum(row.compared_with == "refinement" for row in rows) == len(ENGINES)
-    assert sum(_cross_engine(row) for row in rows) == 6
+    assert sum(row.compared_with == "analytic" for row in rows) >= 2 * 3 * len(qual.LADDER)
+    assert sum(row.compared_with == "refinement" for row in rows) == 2 * len(ENGINES)
+    assert sum(_cross_engine(row) for row in rows) == 10
     # Every row is judged and passes, except the reduced domains against the
     # whole: the synthetic solver sums quadrature points, and a mirrored half
     # splits each quad along the other diagonal. The engines do not.
@@ -449,11 +477,11 @@ def test_a_beat_that_disagrees_with_metal_fails_the_same_mesh_rows(variant: str)
 
     # Every comparison of the two engines, not just one of them.
     cross = [row for row in rows if _cross_engine(row)]
-    assert len(cross) == 6
+    assert len(cross) == 10
     assert all(row.passed is False for row in cross), [row.fixture for row in cross if row.passed is not False]
     # And every ladder row of the wrong engine, at every level; Metal's pass.
     ladder = _ladder_rows(rows, "beat-cpu")
-    assert len(ladder) == 2 * len(qual.LADDER)
+    assert len(ladder) == 3 * len(qual.LADDER)
     assert all(row.passed is False for row in ladder), [row.fixture for row in ladder if row.passed is not False]
     assert all(row.passed is True for row in _ladder_rows(rows, "metal"))
 
@@ -466,9 +494,16 @@ def test_engines_wrong_alike_fail_their_analytic_and_order_rows() -> None:
 
     for engine in ENGINES:
         ladder = _ladder_rows(rows, engine)
-        assert len(ladder) == 2 * len(qual.LADDER)
+        assert len(ladder) == 3 * len(qual.LADDER)
         assert all(row.passed is False for row in ladder), [row.fixture for row in ladder if row.passed is not False]
         assert any(row.engine == engine and row.compared_with == "refinement" for row in failed), engine
+        # Moving the body leaves its error alone, so only the ceiling can fail
+        # the moved copy against the analytic answer.
+        assert any(
+            row.engine == engine and row.fixture == "rotated + translated oscillating sphere"
+            and row.compared_with == "analytic"
+            for row in failed
+        ), engine
     assert not any(_cross_engine(row) for row in failed)
 
 
@@ -485,8 +520,8 @@ def test_every_engine_pair_is_compared_on_every_same_mesh_fixture() -> None:
     rows = _synthetic_run("agree")["rows"]
 
     same_mesh = [row for row in rows if row.fixture.startswith("same mesh") and (row.engine, row.compared_with) == tuple(ENGINES)]
-    # One channel, then two channels and their sum.
-    assert len(same_mesh) == 4
+    # Normal and axial motion; one channel, then two channels and their sum.
+    assert len(same_mesh) == 8
     assert any(row.fixture == "rotated + translated off-axis cap" and _cross_engine(row) for row in rows)
 
 
@@ -613,8 +648,7 @@ def test_the_landed_record_passes_the_fixed_bounds_chosen_from_it() -> None:
         worst[(engine, kind, int(level.removeprefix("L")))] = max(errors)
     assert sorted({engine for engine, _kind, _level in worst}) == ["beat-cpu", "metal"]
     for (engine, kind, level), value in worst.items():
-        if kind in qual.ANALYTIC_CEILINGS:  # the recorded run also measured the removed oscillating body
-            assert value <= qual.ANALYTIC_CEILINGS[kind][level], (engine, kind, level, value)
+        assert value <= qual.ANALYTIC_CEILINGS[kind][level], (engine, kind, level, value)
     for engine in ("metal", "beat-cpu"):
         for kind in qual.ANALYTIC_CEILINGS:
             order = qual.observed_order([worst[(engine, kind, level)] for level in range(len(qual.LADDER))])
@@ -625,6 +659,9 @@ def test_the_landed_record_passes_the_fixed_bounds_chosen_from_it() -> None:
     assert len(spheres) == 10
     for row in spheres:
         assert row["worst"] <= qual.SAME_MESH_TOLERANCE[qual.REFERENCE_LEVEL], row["fixture"]
+    for row in rows:
+        if row["fixture"] == "rotated + translated oscillating sphere" and row["compared_with"] == "analytic":
+            assert row["worst"] <= qual.ANALYTIC_CEILINGS["oscillating"][qual.REFERENCE_LEVEL]
     horn = [row for row in rows if row["fixture"].startswith(("same mesh: horn", "horn: quarter return"))]
     assert len(horn) == 4
     for row in horn:

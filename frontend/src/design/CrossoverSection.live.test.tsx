@@ -79,8 +79,8 @@ describe('live recombine from the rail', () => {
     useCadReturnStore.setState({
       selectedBundle: bundle,
       driveChannels: [
-        { id: 'drive-mf', source_ids: ['source-mf'] },
-        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       ],
       combineEnabled: null,
     });

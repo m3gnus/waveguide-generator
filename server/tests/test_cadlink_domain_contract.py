@@ -409,10 +409,8 @@ def test_the_tolerance_is_the_meshers_cut_tolerance() -> None:
 def test_a_mirrored_domain_takes_only_a_reflection_invariant_excitation() -> None:
     reduced = {"symmetry": {"domain_planes": ["x0"]}}
     normal = SimpleNamespace(id="lf", source_ids=["lf"], motion="normal")
-    assert di.excitation_problem(reduced, [normal]) is None
-    # Axial motion is removed: it is no longer a known-invariant motion.
     axial = SimpleNamespace(id="hf", source_ids=["hf"], motion="axial")
-    assert "axial source motion, which has been removed" in di.excitation_problem(reduced, [normal, axial])
+    assert di.excitation_problem(reduced, [normal, axial]) is None
     twisted = SimpleNamespace(id="mf", source_ids=["mf"], motion="tangential")
     assert "not the same under the mirror" in di.excitation_problem(reduced, [normal, twisted])
     doubled = SimpleNamespace(id="lf2", source_ids=["lf"], motion="normal")

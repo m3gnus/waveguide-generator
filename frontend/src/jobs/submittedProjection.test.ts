@@ -14,7 +14,7 @@ function imported(ingestId: string): ImportedSolveSubmission {
   return {
     geometry: {
       type: 'imported', ingest_id: ingestId, manifest_sha256: `manifest:${ingestId}`, artifact_sha256: `artifact:${ingestId}`,
-      drive_channels: [{ id: 'hf', source_ids: ['source-hf'], driver: { sd_cm2: 80, bl_t_m: 7 } }],
+      drive_channels: [{ id: 'hf', source_ids: ['source-hf'], motion: 'normal', driver: { sd_cm2: 80, bl_t_m: 7 } }],
       drive_voltage_v: 2.83,
       mesh: { rigid_size_mm: 5, transition_mm: 4, source_size_mm: { 'source-hf': 2 } },
       acknowledged_findings: ['report:finding'], skipped_source_ids: [], exterior_only: false,

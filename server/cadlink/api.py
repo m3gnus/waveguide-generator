@@ -1803,7 +1803,6 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
     from server.jobs.runtime import (
         EngineUnavailableError,
         ImportedSolveRefusal,
-        RemovedSolverError,
         SymmetryValidationError,
         UnknownEngineError,
     )
@@ -1861,9 +1860,6 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
             SymmetryValidationError,
             ImportedSolveRefusal,
             EngineUnavailableError,
-            # A stale stored setup that still says axial motion: the message
-            # names the removal, and retrying the same request cannot help.
-            RemovedSolverError,
         ),
         submission_blocked=restart.refusal if restart is not None else None,
         refuse=refuse,

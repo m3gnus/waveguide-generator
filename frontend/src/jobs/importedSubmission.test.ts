@@ -30,8 +30,8 @@ describe('imported solve submission wire', () => {
     useCadReturnStore.setState({
       selectedBundle: bundle, ingestRecord: record, needsIngest: false, exteriorOnly: true,
       driveChannels: [
-        { id: 'drive-mf', source_ids: ['source-mf'] },
-        { id: 'drive-hf', source_ids: ['source-hf'] },
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
       ],
       combineEnabled: true,
       combineSpec: expandLegacy(['drive-mf', 'drive-hf'], [199]),
@@ -66,8 +66,8 @@ describe('imported solve submission wire', () => {
       transitionMm: 2.5,
       skippedSourceIds: ['source-lf'],
       driveChannels: [
-        { id: 'drive-hf', source_ids: ['source-hf'] },
-        { id: 'drive-mf', source_ids: ['source-mf'] },
+        { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+        { id: 'drive-mf', source_ids: ['source-mf'], motion: 'axial' },
       ],
       exteriorOnly: true,
       combineEnabled: true,
@@ -95,7 +95,7 @@ describe('imported solve submission wire', () => {
       geometry: { ...submission.geometry, combine: undefined },
     });
 
-    expect(legacyBytes).toMatchInlineSnapshot(`"{"geometry":{"type":"imported","ingest_id":"wgi_wire_fixture","manifest_sha256":"sha256:manifest","artifact_sha256":"sha256:artifact","drive_channels":[{"id":"drive-hf","source_ids":["source-hf"],"driver":{"sd_cm2":80,"bl_t_m":7.2,"re_ohm":5.8,"le_mh":0.4,"mmd_g":12,"cms_m_per_n":0.0003}},{"id":"drive-mf","source_ids":["source-mf"]}],"drive_voltage_v":4,"mesh":{"rigid_size_mm":4.5,"transition_mm":2.5,"source_size_mm":{"source-hf":1.75,"source-mf":3.5}},"acknowledged_findings":["sha256:report:accepted-area-drift"],"skipped_source_ids":["source-lf"],"exterior_only":true},"options":{"engine":"auto","solver_mode":"full_3d","symmetry":"auto","mesh_validation_mode":"warn","verbose":true,"frequency_spacing":"log","polar_config":{"angle_range":[0,180,37],"angle_step":5,"distance":2,"norm_angle":5,"inclination":45,"enabled_axes":["horizontal","vertical","diagonal"],"observation_origin":"mouth","spherical_sampling":false,"field_plane":true},"frequency_range":[180,18000],"num_frequencies":37}}"`);
+    expect(legacyBytes).toMatchInlineSnapshot(`"{"geometry":{"type":"imported","ingest_id":"wgi_wire_fixture","manifest_sha256":"sha256:manifest","artifact_sha256":"sha256:artifact","drive_channels":[{"id":"drive-hf","source_ids":["source-hf"],"motion":"normal","driver":{"sd_cm2":80,"bl_t_m":7.2,"re_ohm":5.8,"le_mh":0.4,"mmd_g":12,"cms_m_per_n":0.0003}},{"id":"drive-mf","source_ids":["source-mf"],"motion":"axial"}],"drive_voltage_v":4,"mesh":{"rigid_size_mm":4.5,"transition_mm":2.5,"source_size_mm":{"source-hf":1.75,"source-mf":3.5}},"acknowledged_findings":["sha256:report:accepted-area-drift"],"skipped_source_ids":["source-lf"],"exterior_only":true},"options":{"engine":"auto","solver_mode":"full_3d","symmetry":"auto","mesh_validation_mode":"warn","verbose":true,"frequency_spacing":"log","polar_config":{"angle_range":[0,180,37],"angle_step":5,"distance":2,"norm_angle":5,"inclination":45,"enabled_axes":["horizontal","vertical","diagonal"],"observation_origin":"mouth","spherical_sampling":false,"field_plane":true},"frequency_range":[180,18000],"num_frequencies":37}}"`);
     expect(submission.geometry.combine).toEqual(
       toWire(expandLegacy(['drive-mf', 'drive-hf'], [1_250], false, true)),
     );
@@ -113,7 +113,7 @@ describe('imported solve submission wire', () => {
       selectedBundle: bundle,
       ingestRecord: record,
       sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
-      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       needsIngest: false,
     });
     useSolveOptionsStore.getState().setEngine('beat-cpu');
@@ -130,7 +130,7 @@ describe('imported solve submission wire', () => {
       selectedBundle: bundle,
       ingestRecord: record,
       sourceSizesMm: { 'source-hf': 2, 'source-mf': 4 },
-      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
+      driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
       channelDrivers: {
         'drive-hf': {
           fields: { bl_t_m: 11.9, count: 2 },
@@ -200,8 +200,8 @@ describe('an unfinished driver is refused, not dropped', () => {
     ingestRecord: record,
     skippedSourceIds: ['source-lf'],
     driveChannels: [
-      { id: 'drive-hf', source_ids: ['source-hf'] },
-      { id: 'drive-mf', source_ids: ['source-mf'] },
+      { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+      { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
     ],
     channelDrivers: driver as never,
     needsIngest: false,
@@ -261,9 +261,9 @@ describe('an undriven channel is announced, not refused', () => {
     ingestRecord: record,
     skippedSourceIds: [],
     driveChannels: [
-      { id: 'drive-hf', source_ids: ['source-hf'] },
-      { id: 'drive-mf', source_ids: ['source-mf'] },
-      { id: 'drive-lf', source_ids: ['source-lf'] },
+      { id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' },
+      { id: 'drive-mf', source_ids: ['source-mf'], motion: 'normal' },
+      { id: 'drive-lf', source_ids: ['source-lf'], motion: 'normal' },
     ],
     channelDrivers: drivers as never,
     combineEnabled,

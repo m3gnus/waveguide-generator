@@ -145,7 +145,7 @@ function readyCad(ingestId: string): void {
       designIds: [], sources: [{ id: 'source-hf', role: 'source', required: true, suggestedResolutionMm: 4, defaultDriveChannelId: 'drive-hf' }],
     },
     projectLineageId: 'wgl_test', ingestRecord: record, needsIngest: false,
-    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'] }],
+    driveChannels: [{ id: 'drive-hf', source_ids: ['source-hf'], motion: 'normal' }],
     sourceSizesMm: { 'source-hf': 4 }, rigidSizeMm: 8, transitionMm: 12, skippedSourceIds: [],
   });
   importedMeshStore.setCad({ name: 'Fusion speaker', source: 'cad', ingestId } as ImportedMeshScene);

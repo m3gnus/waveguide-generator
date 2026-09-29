@@ -4,7 +4,8 @@ The production ``ingest_bundle`` meshes generated models; the suggestion is
 computed from the record exactly as preparation computes it
 (``solver_frame.ensure_frame_suggestion``). This covers what the synthetic
 arrays cannot: WG's own symmetry cut and the mirror-back of its reduced mesh,
-and the frame inverse after a confirmed non-+z preparation.
+the frame inverse after a confirmed non-+z preparation, and an axial drive
+channel in a frame whose forward axis is not CAD +Z.
 """
 
 from __future__ import annotations
@@ -29,6 +30,12 @@ from server.cadlink.solver_frame import (
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.gmsh_worker import _run_in_gmsh_session
+from server.solver.beat_imported import _drive_groups, _Gmsh22Mesh, beat_imported_frame
+from server.solver.imported import (
+    imported_anchor_frame,
+    imported_domain_planes,
+    imported_symmetry_from_cut_planes,
+)
 
 import cad_frame_fixtures as fx
 from test_cadlink_wgreturn import _manifest as wgreturn_manifest
@@ -39,6 +46,10 @@ pytest.importorskip("meshio")
 
 def _party() -> list:
     return fx.party_meh_like(0.25)
+
+
+def _rear_horn() -> list:
+    return fx.horn_box(rear_lf=True)
 
 
 def _meh_horn() -> list:
@@ -185,3 +196,54 @@ def test_a_model_facing_x_is_found_and_confirming_it_meshes_the_v2_frame(tmp_pat
     # that frame), the prepared record says the same.
     again = infer_record_frame(solved, read_verified_import_mesh(solved))
     assert again.status == "automatic" and again.axis == "+x"
+
+
+def test_an_axial_channel_follows_the_chosen_forward_axis(tmp_path: Path) -> None:
+    """Model facing +x with a rear-facing source: axial drive is along CAD +x.
+
+    Metal and BEAT drive an axial source at ``n . axis`` in the record's frame
+    and flip a tag facing back along it (``beat_imported._drive_groups``). In a
+    +x preparation that axis is solver +Z, which is CAD +x: the throat is
+    driven forward and the rear source flipped to drive outward, as they would
+    be for the same model modelled along +z.
+    """
+
+    bundle, manifest = _bundle(tmp_path, "rear-facing-x", _rear_horn, "+x")
+    data_dir = tmp_path / "data"
+    record = _ingest(bundle, manifest, data_dir, solver_frame="+x")
+    assert record["normalisation"]["solver_frame"]["axis"] == "+x"
+
+    observation = imported_anchor_frame(record)
+    solver_from_assembly = np.asarray(record["normalisation"]["matrix"], dtype=float)
+    assert np.allclose(observation["axis"], [0.0, 0.0, 1.0])
+    assert np.allclose(solver_from_assembly[:3, :3].T @ observation["axis"], [1.0, 0.0, 0.0], atol=1e-9)
+
+    beat = beat_imported_frame(record, beat_native_plane(record))
+    mesh = _Gmsh22Mesh.parse(read_verified_import_mesh(record)).rotated(beat.rotation)
+    orientation = mesh.axial_orientation()
+    tags = record["source_tags"]
+    hf, lf = int(tags["hf"]), int(tags["lf"])
+    assert orientation[hf][0] > 0.9 * orientation[hf][1]
+    assert orientation[lf][0] < -0.9 * orientation[lf][1]
+    groups = _drive_groups(frozenset({hf, lf}), "axial", orientation)
+    assert groups == [(1.0, frozenset({hf})), (-1.0, frozenset({lf}))]
+
+    # The same model modelled along +z and solved as modelled drives the same way.
+    modelled_bundle, modelled_manifest = _bundle(tmp_path, "rear-facing-z", _rear_horn, "+z")
+    modelled = _ingest(modelled_bundle, modelled_manifest, tmp_path / "data-z")
+    modelled_beat = beat_imported_frame(modelled, beat_native_plane(modelled))
+    modelled_mesh = _Gmsh22Mesh.parse(read_verified_import_mesh(modelled)).rotated(modelled_beat.rotation)
+    modelled_tags = modelled["source_tags"]
+    modelled_groups = _drive_groups(
+        frozenset({int(modelled_tags["hf"]), int(modelled_tags["lf"])}),
+        "axial",
+        modelled_mesh.axial_orientation(),
+    )
+    assert modelled_groups == [
+        (1.0, frozenset({int(modelled_tags["hf"])})),
+        (-1.0, frozenset({int(modelled_tags["lf"])})),
+    ]
+
+
+def beat_native_plane(record: dict[str, Any]) -> str | None:
+    return imported_symmetry_from_cut_planes(imported_domain_planes(record)).native_plane

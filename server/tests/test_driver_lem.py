@@ -109,12 +109,21 @@ def test_spec_requires_exactly_one_mass_and_one_stiffness() -> None:
         _spec(cms_m_per_n=None)
 
 
-def test_driver_requires_single_source_channel() -> None:
+def test_driver_requires_single_source_normal_channel() -> None:
     with pytest.raises(ValidationError, match="single-source channel"):
         DriveChannel.model_validate(
             {
                 "id": "pair",
                 "source_ids": ["a", "b"],
+                "driver": _spec().model_dump(mode="json", exclude_none=True),
+            }
+        )
+    with pytest.raises(ValidationError, match="normal source motion"):
+        DriveChannel.model_validate(
+            {
+                "id": "ax",
+                "source_ids": ["a"],
+                "motion": "axial",
                 "driver": _spec().model_dump(mode="json", exclude_none=True),
             }
         )

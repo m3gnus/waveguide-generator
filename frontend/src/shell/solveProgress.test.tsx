@@ -117,7 +117,8 @@ describe('parseFrequencyProgress', () => {
   });
 
   it('keeps an imported message as a channel count, never a false overall count', () => {
-    // Each channel restarts i/N. Overall work comes from the job progress field.
+    // A rear-facing axial channel can solve two tag groups, each restarting
+    // i/N. Overall work comes from the job progress field.
     expect(parseFrequencyProgress('Solving frequency 2/8 of drive channel 1/3 (hf) with BEAT Engine'))
       .toEqual({ completed: 2, total: 8, channel: { index: 1, count: 3 } });
     expect(parseFrequencyProgress('Solving frequency 3/8 of drive channel 2/3 (mf) with BEMPP BEM'))

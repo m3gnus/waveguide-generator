@@ -463,15 +463,9 @@ press at all when WG is confident.
   and the run details say the same. When WG is not confident (`ask`, `unavailable`, an
   axis the snapshot does not allow) the solve still stops at `frame_confirmation_required`
   with the frame card's question.
-- **Source motion.** Every source patch moves along its own surface normal. The former
-  per-channel `axial` motion (a rigid piston along the observation axis) was removed on
-  2026-09-29. A stored setup or archived request that still says `axial` decodes, and the
-  CAD rail opens a saved setup or a history rerun as an ordinary normal channel. A request
-  that still carries `axial` (an API client, a stored job retried on the server, a queued
-  job) is refused with the stable code `removed_source_motion` (HTTP 422) at planning,
-  submission, retry and queued execution, and never solved as normal motion; a CAD
-  operation holding such a stale setup stops with the same message. The parametric
-  design's ATH velocity convention is not part of this removal.
+- **Axial drive.** An `axial` channel is driven along the record's observation axis,
+  solver +Z, which is the chosen CAD forward direction; a source facing back along it is
+  flipped to drive outward, as for a model modelled along +z.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
   frame is neither the confirmed one under the same requirement nor, while nothing is
   confirmed, WG's confident automatic axis the record was meshed in

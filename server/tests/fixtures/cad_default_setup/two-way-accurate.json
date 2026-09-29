@@ -65,12 +65,14 @@
       "drive_channels": [
         {
           "id": "drive-hf",
+          "motion": "normal",
           "source_ids": [
             "source-hf"
           ]
         },
         {
           "id": "drive-lf",
+          "motion": "normal",
           "source_ids": [
             "source-lf"
           ]

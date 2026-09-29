@@ -426,7 +426,7 @@ def test_beat_advertises_the_reduced_domains_and_di_sphere_it_really_has(
 ) -> None:
     """The registry must not under-report BEAT, nor promise the xz half.
 
-    BEAT gained theta-major sphere grids, diagonal cuts and more, but
+    BEAT gained theta-major sphere grids, diagonal cuts and axial motion, but
     the registry still answered ``di_sphere=False`` and offered only the full
     domain. It mirrors across x, or x and y, so ATH quadrants 1234, 14 and 1
     are solvable; quadrants 12 is refused by the package itself, and a bare
