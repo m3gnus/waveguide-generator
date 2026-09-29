@@ -84,7 +84,7 @@ def test_review_repros_exit_with_usage_error(argv, message):
 
 
 @pytest.mark.parametrize("option", [
-    "-p", "-k", "-m", "-c", "-o", "-W", "-n", "-r",
+    "-p", "-k", "-m", "-c", "-o", "-W", "-r",
     "--ignore", "--ignore-glob", "--deselect", "--confcutdir", "--rootdir",
     "--basetemp", "--maxfail", "--durations", "--junitxml", "--junit-xml",
     "--log-file", "--log-level", "--tb", "--timeout", "--dist", "--import-mode",
@@ -180,3 +180,121 @@ def test_launcher_collects_only_the_named_real_test_file():
         f"{target}::test_windows_tag_checkout_requests_a_fresh_staged_copy",
     ], output
     assert "2 tests collected" in output, output
+
+
+@pytest.mark.parametrize("args", [["-n", "auto"], ["-n7"], ["--numprocesses=logical"], ["-n", "-1"]])
+def test_worker_count_cannot_expand_to_the_shared_machine(args):
+    with pytest.raises(SystemExit) as refused:
+        run_tests.build_command(["scripts/tests/test_run_tests.py", *args])
+    assert refused.value.code == 2
+
+
+@pytest.mark.parametrize("args", [["-n", "4"], ["-n4"], ["--numprocesses=4"], ["--numprocesses", "4"]])
+def test_parallel_options_use_loadgroup(args):
+    command = run_tests.build_command(["scripts/tests/test_run_tests.py", *args])
+    assert "--dist=loadgroup" in command
+
+
+def test_parallel_cannot_bypass_serial_groups():
+    with pytest.raises(SystemExit):
+        run_tests.build_command(["scripts/tests/test_run_tests.py", "-n4", "--dist=load"])
+
+
+def test_full_has_bounded_configurable_default_and_explicit_override(monkeypatch):
+    monkeypatch.delenv("WG_TEST_WORKERS", raising=False)
+    command = run_tests.build_command(["--full", "-q"])
+    assert command[3:7] == ["-q", "-n", "4", "--dist=loadgroup"]
+    assert command[-2:] == [str(run_tests.REPO_ROOT / path) for path in run_tests.FULL_SUITE]
+    monkeypatch.setenv("WG_TEST_WORKERS", "6")
+    assert "6" in run_tests.build_command(["--full"])
+    assert "-n0" in run_tests.build_command(["--full", "-n0"])
+    monkeypatch.setenv("WG_TEST_WORKERS", "auto")
+    with pytest.raises(SystemExit):
+        run_tests.build_command(["--full"])
+
+
+def test_full_collection_does_not_start_workers():
+    assert "-n" not in run_tests.build_command(["--full", "--co"])
+
+
+@pytest.mark.parametrize("path", [
+    "conftest.py", "server/tests/conftest.py", "server/requirements-dev.txt",
+    "server/requirements-lock.txt", "shared/js/frame.mjs", "server/app.py", "unknown/file.py",
+    "server/tests/test_deleted.py", "scripts/test_map.toml", "scripts/run_tests.py", "pytest.ini",
+])
+def test_shared_unknown_or_deleted_tests_fall_back_to_full(path):
+    assert run_tests.tests_for_changes([path]) == run_tests.FULL_SUITE
+
+
+@pytest.mark.parametrize("area", [
+    "server/cadlink", "server/jobs", "server/solver", "server/mesh", "server/updates",
+    "frontend", "launch", "launchers", "installers", "scripts",
+])
+def test_every_mapped_area_resolves_to_existing_tests(area):
+    targets = run_tests.tests_for_changes([f"{area}/source.py"])
+    assert targets and targets != run_tests.FULL_SUITE
+    for target in targets:
+        assert run_tests.resolve_target(target), target
+
+
+def test_changed_tests_select_themselves_and_union_areas():
+    path = "scripts/tests/test_run_tests.py"
+    assert run_tests.tests_for_changes([path]) == [path]
+    assert set(run_tests.tests_for_changes(["server/jobs/a.py", "server/mesh/a.py"])) == (
+        set(run_tests.tests_for_changes(["server/jobs/a.py"]))
+        | set(run_tests.tests_for_changes(["server/mesh/a.py"]))
+    )
+
+
+@pytest.mark.parametrize("area", ["cadlink", "jobs", "solver", "mesh", "updates"])
+def test_map_covers_tests_that_directly_reference_each_server_area(area):
+    targets = run_tests.tests_for_changes([f"server/{area}/source.py"])
+    covered = {Path(path) for target in targets for path in run_tests.resolve_target(target)}
+    tests = [* (run_tests.REPO_ROOT / "server/tests").glob("test_*.py"),
+             * (run_tests.REPO_ROOT / "scripts/tests").glob("test_*.py")]
+    missing = [str(test.relative_to(run_tests.REPO_ROOT)) for test in tests
+               if f"server.{area}" in test.read_text() and test not in covered]
+    assert not missing, f"add these tests to the {area} map: {missing}"
+
+
+def test_changed_empty_diff_is_refused(monkeypatch):
+    monkeypatch.setattr(run_tests, "changed_paths", lambda base: [])
+    with pytest.raises(SystemExit):
+        run_tests.build_command(["--changed"])
+
+
+def test_changed_base_and_pytest_options(monkeypatch):
+    bases = []
+
+    def changed(base):
+        bases.append(base)
+        return ["scripts/tests/test_run_tests.py"]
+
+    monkeypatch.setattr(run_tests, "changed_paths", changed)
+    for args in (["--changed", "main", "-m", "not slow"], ["--changed=main", "-q"], ["--changed", "-q"]):
+        assert run_tests.build_command(args)[-1].endswith("test_run_tests.py")
+    assert bases == ["main", "main", "HEAD"]
+
+
+def test_changed_git_includes_branch_staged_unstaged_and_untracked(tmp_path, monkeypatch):
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
+
+    git("init", "-q")
+    git("config", "user.name", "test")
+    git("config", "user.email", "test@example.invalid")
+    (tmp_path / "base.py").write_text("base")
+    git("add", "base.py")
+    git("commit", "-qm", "Base")
+    base = git("rev-parse", "HEAD")
+    (tmp_path / "branch.py").write_text("branch")
+    git("add", "branch.py")
+    git("commit", "-qm", "Branch")
+    (tmp_path / "staged.py").write_text("staged")
+    git("add", "staged.py")
+    (tmp_path / "base.py").write_text("working")
+    (tmp_path / "untracked name.py").write_text("untracked")
+    monkeypatch.setattr(run_tests, "REPO_ROOT", tmp_path)
+    assert run_tests.changed_paths(base) == ["base.py", "branch.py", "staged.py", "untracked name.py"]
+    with pytest.raises(SystemExit):
+        run_tests.changed_paths("missing-revision")

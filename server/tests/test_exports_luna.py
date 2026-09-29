@@ -100,6 +100,7 @@ def test_base_name_only_strips_known_design_extensions() -> None:
     importlib.util.find_spec("hornlab_mesher") is None,
     reason="hornlab-waveguide-mesher is not installed",
 )
+@pytest.mark.slow
 def test_scale_two_doubles_step_grid_and_stl_mesh_bounds() -> None:
     unit = _design(scale=1.0)
     doubled = _design(scale=2.0)

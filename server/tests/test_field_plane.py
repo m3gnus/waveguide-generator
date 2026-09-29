@@ -1078,6 +1078,7 @@ def test_evaluation_timeout_returns_504_but_holds_permit_until_thread_finishes(
     asyncio.run(scenario())
 
 
+@pytest.mark.slow
 def test_real_bempp_engine_traces_round_trip_through_field_plane_pipeline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -380,32 +380,36 @@ def test_slow_export_builder_does_not_block_registry_reads(tmp_path: Path) -> No
     saved = _save(store)
     design_id = saved["identity"].design_id  # type: ignore[union-attr]
     building = threading.Event()
+    release = threading.Event()
 
     def build(facts):
         building.set()
-        time.sleep(0.25)
+        assert release.wait(timeout=30), "the test must release its export builder"
         return {
             "manifest_json": json.dumps(facts),
             "geometry_hash": "sha256:geometry",
             "artifact_sha256": "sha256:artifact",
         }
 
-    with ThreadPoolExecutor(max_workers=1) as pool:
+    with ThreadPoolExecutor(max_workers=2) as pool:
         future = pool.submit(
             store.allocate_export,
             design_id=design_id,
             idempotency_key="slow-build",
             export_builder=build,
         )
-        assert building.wait(timeout=1)
-        started = time.monotonic()
-        design = store.get_design(design_id)
-        read_elapsed = time.monotonic() - started
-        exported = future.result(timeout=1)
+        try:
+            assert building.wait(timeout=5)
+            # Prove the read completes while the builder is still blocked,
+            # rather than comparing two tiny wall-clock windows on a busy host.
+            design = pool.submit(store.get_design, design_id).result(timeout=5)
+            assert not future.done()
+        finally:
+            release.set()
+        exported = future.result(timeout=5)
 
     assert design is not None
     assert exported["sequence"] == 1
-    assert read_elapsed < 0.1
 
 
 def test_failed_export_build_keeps_the_same_retryable_reservation(tmp_path: Path) -> None:

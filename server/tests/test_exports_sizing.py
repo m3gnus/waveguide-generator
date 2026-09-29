@@ -302,6 +302,7 @@ def test_the_written_spline_is_measured_because_the_chord_does_not_bound_it() ->
     assert written.axial_linear == pytest.approx(chord.axial_linear)
 
 
+@pytest.mark.slow
 def test_the_surface_plan_for_a_corner_design_is_measured_and_inside_target() -> None:
     """Defect 1 and 2 together, at the planner.
 
@@ -319,6 +320,7 @@ def test_the_surface_plan_for_a_corner_design_is_measured_and_inside_target() ->
     assert plan.triangles < STL_TRIANGLE_CEILING
 
 
+@pytest.mark.slow
 def test_a_plan_names_the_grid_the_builder_resolves_it_to() -> None:
     """A plan's counts are requests, so a reading describes what is written.
 
@@ -392,6 +394,7 @@ def test_the_solid_step_still_falls_back_rather_than_read_a_chord_as_a_fit() -> 
     assert plan.resolution_mm <= _FALLBACK_CAD_RESOLUTION_MM
 
 
+@pytest.mark.slow
 def test_corner_design_exports_ignore_the_solver_mesh_too() -> None:
     """Independence has to survive the new reading, on the new design."""
 
@@ -793,6 +796,7 @@ def _chord_sagitta(face, u_star: float, step: float) -> float:
         "rounded-rectangle-morph",
     ],
 )
+@pytest.mark.slow
 def test_written_surface_step_meets_its_chord_target_after_occ_round_trip(
     tmp_path, payload: dict,
 ) -> None:
@@ -1279,6 +1283,7 @@ def test_the_reported_stl_refusal_now_exports() -> None:
     assert int((tags == 1).sum()) < STL_TRIANGLE_CEILING
 
 
+@pytest.mark.slow
 def test_stl_output_does_not_follow_the_solver_mesh() -> None:
     """Those extra triangles were free: identical geometry, four times the file."""
 

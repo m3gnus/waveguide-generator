@@ -9,6 +9,14 @@ resolved target list is empty or any single argument resolves to nothing.
 
     python scripts/run_tests.py server/tests/test_design_*.py
     python scripts/run_tests.py server/tests/test_x.py::test_one -q -x
+    python scripts/run_tests.py --changed main -m "not slow" -q
+    python scripts/run_tests.py --full -q
+
+``--changed [base]`` selects the checked-in area map plus working-tree changes;
+unknown/shared paths fall back to the full suite. An empty diff is refused.
+``--full`` explicitly selects server/tests and scripts/tests, including slow
+tests, with WG_TEST_WORKERS (default 4, range 0-6). Named targets stay serial
+unless given -n. Parallel runs always use --dist=loadgroup.
 
 Known pytest value options accept a separate value or an attached value
 (``--ignore=path``, ``-kEXPR``). Values must be nonempty and must not start with
@@ -23,11 +31,86 @@ command always puts ``--`` before the resolved targets. Refusals exit with 2.
 from __future__ import annotations
 
 import glob
+import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+FULL_SUITE = ["server/tests", "scripts/tests"]
+TEST_MAP = Path(__file__).with_name("test_map.toml")
+
+
+def changed_paths(base: str = "HEAD") -> list[str]:
+    """Include branch changes, staged/unstaged changes, and untracked files."""
+    paths: set[str] = set()
+    for args in (
+        ["diff", "--name-only", "--no-renames", "-z", f"{base}...HEAD", "--"],
+        ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"],
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+    ):
+        try:
+            output = subprocess.check_output(["git", *args], cwd=REPO_ROOT)
+        except subprocess.CalledProcessError:
+            refuse(f"cannot resolve changed files against {base!r}.")
+        paths.update(os.fsdecode(path) for path in output.split(b"\0") if path)
+    return sorted(paths)
+
+
+def tests_for_changes(paths: list[str]) -> list[str]:
+    areas = tomllib.loads(TEST_MAP.read_text(encoding="utf-8"))["areas"]
+    selected: set[str] = set()
+    for path in paths:
+        if (
+            Path(path).name == "conftest.py"
+            or "requirements" in Path(path).name
+            or path.startswith("shared/")
+            or path in {"pytest.ini", "scripts/test_map.toml", "scripts/run_tests.py"}
+        ):
+            return FULL_SUITE.copy()
+        if path.startswith(("server/tests/", "scripts/tests/")):
+            if Path(path).name.startswith("test_") and (REPO_ROOT / path).is_file():
+                selected.add(path)
+                continue
+            return FULL_SUITE.copy()
+        matches = [prefix for prefix in areas if path.startswith(prefix)]
+        if not matches:
+            return FULL_SUITE.copy()
+        selected.update(areas[max(matches, key=len)])
+    return sorted(selected)
+
+
+def launcher_targets(argv: list[str]) -> tuple[list[str], bool]:
+    """Resolve explicit suite modes before the existing strict pytest parser."""
+    args = list(argv)
+    mode: str | None = None
+    base = "HEAD"
+    for index, arg in enumerate(args):
+        if arg == "--":
+            break
+        if arg == "--full" or arg == "--changed" or arg.startswith("--changed="):
+            mode = arg
+            del args[index]
+            if arg == "--changed" and index < len(args) and not args[index].startswith("-"):
+                base = args.pop(index)
+            elif arg.startswith("--changed="):
+                base = arg.split("=", 1)[1]
+                check_value("--changed", base)
+            break
+    if mode is None:
+        return args, False
+    # The parser below still rejects mixing a mode with another mode or bad options.
+    targets = FULL_SUITE if mode == "--full" else tests_for_changes(changed_paths(base))
+    if not targets:
+        refuse("no changed files; no test targets selected.")
+    return [*args, *targets], mode == "--full"
+
+
+def bounded_workers(value: str) -> str:
+    if not value.isascii() or not value.isdecimal() or not 0 <= int(value) <= 6:
+        refuse("worker count must be an integer from 0 to 6; never use -n auto.")
+    return str(int(value))
 
 
 #: pytest options whose next argument is their value, not a target.
@@ -36,7 +119,7 @@ _VALUE_OPTIONS = frozenset({
     "--ignore", "--ignore-glob", "--deselect", "--confcutdir", "--rootdir",
     "--basetemp", "--maxfail", "--durations", "--junitxml", "--junit-xml",
     "--log-file", "--log-level", "--tb", "--timeout", "--dist", "--import-mode",
-    "--override-ini", "--capture", "--cov", "--cov-report",
+    "--override-ini", "--capture", "--cov", "--cov-report", "--numprocesses",
 })
 _SHORT_VALUE_OPTIONS = frozenset(opt for opt in _VALUE_OPTIONS if len(opt) == 2)
 _FLAGS = frozenset({
@@ -81,6 +164,7 @@ def resolve_target(arg: str) -> list[str]:
 def build_command(argv: list[str]) -> list[str]:
     """Return the pytest command, or raise SystemExit(2) with the reason."""
 
+    argv, full = launcher_targets(argv)
     options: list[str] = []
     targets: list[str] = []
     args = iter(argv)
@@ -113,13 +197,34 @@ def build_command(argv: list[str]) -> list[str]:
             "no test targets given. Refusing to run, because pytest with "
             "no paths runs the whole default suite. Name files, directories or globs."
         )
+    worker_count: str | None = None
+    dist: str | None = None
+    for index, option in enumerate(options):
+        if option in {"-n", "--numprocesses"}:
+            worker_count = bounded_workers(options[index + 1])
+        elif option.startswith("-n") and len(option) > 2:
+            worker_count = bounded_workers(option[2:])
+        elif option.startswith("--numprocesses="):
+            worker_count = bounded_workers(option.split("=", 1)[1])
+        elif option == "--dist":
+            dist = options[index + 1]
+        elif option.startswith("--dist="):
+            dist = option.split("=", 1)[1]
+    if full and worker_count is None and not {"--co", "--collect-only"}.intersection(options):
+        worker_count = bounded_workers(os.environ.get("WG_TEST_WORKERS", "4"))
+        options.extend(["-n", worker_count])
+    if worker_count is not None and int(worker_count):
+        if dist is not None and dist != "loadgroup":
+            refuse("parallel tests require --dist=loadgroup to honour serial groups.")
+        if dist is None:
+            options.append("--dist=loadgroup")
     paths: list[str] = []
     for target in targets:
         matched = resolve_target(target)
         if not matched:
             refuse(f"{target!r} resolves to no test files. Refusing to run.")
         paths.extend(matched)
-    return [sys.executable, "-m", "pytest", *options, "--", *paths]
+    return [sys.executable, "-m", "pytest", *options, "--", *dict.fromkeys(paths)]
 
 
 def main(argv: list[str] | None = None) -> int:

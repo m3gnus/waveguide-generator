@@ -65,6 +65,7 @@ def test_the_process_table_sees_this_process_and_its_parent() -> None:
     assert os.getpid() in gate.descendants(os.getppid(), table)
 
 
+@pytest.mark.slow
 def test_the_gate_passes_against_this_checkout(tmp_path: Path) -> None:
     gate = _gate()
     # What the suite's own WG2_* settings say describes this process, not the

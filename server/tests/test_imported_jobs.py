@@ -1121,6 +1121,7 @@ def test_submission_refuses_a_contradictory_cad_source_owner(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
+@pytest.mark.slow
 def test_current_report_acknowledgement_and_imported_retry(tmp_path: Path) -> None:
     class HoldingEngine:
         name = "metal"
@@ -1259,6 +1260,7 @@ def test_a_legacy_unlinked_record_is_refused_even_when_the_project_confirmed(
     asyncio.run(scenario())
 
 
+@pytest.mark.slow
 def test_retrying_an_unlinked_job_after_the_frame_changed_is_refused(tmp_path: Path) -> None:
     from server.cadlink.solver_frame import confirm_frame
 

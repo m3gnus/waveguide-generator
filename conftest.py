@@ -34,7 +34,12 @@ import tempfile
 
 import pytest
 
-from server.platform.paths import DATA_DIR_ENV
+# A worker is a process, not a core budget: native libraries otherwise start
+# their own full-machine thread pools in every worker (and in both broker lanes).
+for _thread_env in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+    os.environ[_thread_env] = "1"
+
+from server.platform.paths import DATA_DIR_ENV  # noqa: E402 - bound native pools before application imports
 
 # Deliberately unconditional. An ambient WG2_DATA_DIR is as likely to be the
 # developer's real directory as a scratch one, and the suite cannot tell the
@@ -49,6 +54,29 @@ os.environ["WG2_WGLINK_REFRESH"] = "0"
 # Nor may it collect the solve commands a real Fusion delivered: the backend's
 # consumer loop is off here; tests drive one delivery pass at a time instead.
 os.environ["WG2_CAD_DELIVERY"] = "0"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    workers = config.getoption("numprocesses", default=0)
+    if workers not in (None, 0) and (
+        not isinstance(workers, int) or not 1 <= workers <= 6
+    ):
+        raise pytest.UsageError("Use a bounded worker count: -n 0 through -n 6; never -n auto.")
+    if workers and config.getoption("dist", default="no") != "loadgroup":
+        raise pytest.UsageError("Parallel tests require --dist=loadgroup to honour serial groups.")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    for item in items:
+        if item.get_closest_marker("serial") is not None:
+            item.add_marker(pytest.mark.xdist_group("serial"))
+
+
+def pytest_unconfigure(config: pytest.Config) -> None:
+    # The xdist controller collects no tests, so its session fixture never runs.
+    # Clean its import-time sandbox as well as the workers' sandboxes.
+    shutil.rmtree(SANDBOX_DATA_DIR, ignore_errors=True)
 
 
 # -- The WGLink add-in installed on this machine ------------------------------

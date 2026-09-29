@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from hornlab_mesher.preview.api import build_preview_geometry
 
@@ -55,6 +56,7 @@ def _stl_source_bounds(design: DesignConfig) -> np.ndarray:
     return np.ptp(points, axis=0)
 
 
+@pytest.mark.slow
 def test_scale_two_doubles_preview_step_and_stl_geometry_bounds_once() -> None:
     unscaled = _design(1)
     scaled = _design(2)

@@ -56,7 +56,7 @@ Run checks in proportion to the change:
 ```bash
 .venv/bin/python -m ruff check server scripts shared launch launchers
 .venv/bin/lint-imports --no-cache
-.venv/bin/python -m pytest server/tests scripts/tests -q
+.venv/bin/python scripts/run_tests.py --full -q -p no:cacheprovider
 node --test shared/js/frame.test.mjs
 cd frontend && npm test && npm run build
 ```
@@ -113,6 +113,7 @@ Run a subset with the launcher, not with a hand-built `pytest` line:
 ```bash
 .venv/bin/python scripts/run_tests.py server/tests/test_design_*.py -q
 .venv/bin/python scripts/run_tests.py server/tests/test_x.py::test_one -x
+.venv/bin/python scripts/run_tests.py --changed main -m "not slow" -q
 ```
 
 `scripts/run_tests.py` expands its globs itself and **refuses to run** when no target
@@ -126,6 +127,87 @@ the launcher cannot safely distinguish their values from targets; bare `--flag`
 options must be in its known flags set. Use `--` to end launcher option parsing if
 needed. Pytest always receives `--` before the resolved paths, so it cannot consume
 a target as an option value. All launcher refusals exit with code 2.
+
+`--changed [base]` uses `git diff --name-only <base>...HEAD` (default `HEAD`),
+plus staged, unstaged, and untracked files. `scripts/test_map.toml` maps source
+prefixes to conservative Python test globs. Changes to existing test files select
+those files. Unknown paths, deleted test files, shared code, conftests, requirements,
+and the test launcher/map select the full Python suite. An empty diff is refused.
+This is an inner-loop aid: frontend changes still require Node 20 frontend checks,
+and it does not replace the full gate.
+
+### Parallel suite gate and landing
+
+Development requirements are maintained in `server/requirements-dev.txt`; the
+resolved versions also belong in `server/requirements-lock.txt`. Only
+`requirements-pins.txt` is generated (`scripts/gen_requirements.py`). When changing
+dependencies, create a fresh Python 3.13 venv and install the lock, then the pins
+with `--no-deps`, then the dev requirements. Do not modify another session's venv.
+
+`--full` selects `server/tests scripts/tests`, including all `slow` tests, and
+defaults to four xdist workers. Set `WG_TEST_WORKERS` or pass `-n` to override it;
+the supported range is 0–6. Explicit targeted runs remain serial unless given `-n`.
+Collection-only runs omit the default worker count. Never use `-n auto` on the shared Mac.
+Two broker lanes may be active together, so four workers per lane can already mean
+eight workers. The suite also limits BLAS, OpenMP, and Numba pools to one thread per
+process so the native libraries do not multiply that budget again.
+
+Run heavy gates through the workspace compute broker, with an honest expected
+duration, and wait for their exit status. For example, after configuring `broker`:
+
+```bash
+broker submit --lane suite --priority 2 --expected 12 \
+  --requester "<session>" --purpose "<branch>: full Python gate" --cwd "$PWD" \
+  --shell '.venv/bin/python scripts/run_tests.py --full --durations=30 -q -p no:cacheprovider'
+broker wait <id> --timeout 540
+```
+
+For the inner loop, use targeted paths or `--changed`, optionally with
+`-m "not slow"`. The marker excludes expensive geometry, real solver, and process
+integration tests only when explicitly requested. It never changes the default
+full gate.
+
+Parallel execution requires `--dist=loadgroup` (the launcher adds it for `-n`).
+Prefer isolation: each worker has its own import-time data/add-in sandbox and
+process globals, `tmp_path` is worker-specific, and shutdown harness servers use
+a test-local port-0 reservation and publish the kernel-assigned port. The
+production CLI still validates ports 1–65535. The session-claim guard restores its global
+after each test, and native gmsh calls remain on the owning process's worker
+thread. A `serial` marker groups tests onto one worker; it does **not** pause other
+workers or the other broker lane. Use it only when those tests share a resource,
+not to claim an idle machine for a wall-clock assertion.
+
+The lander's landing gate remains the full suite on the exact landing tree.
+Parallel landing is permitted only with identical pass/skip counts from serial
+and parallel runs on that tree; a fast inner-loop run is never landing evidence.
+Use `--full -n0` for landing until that tree has parity evidence.
+
+S1-full qualification on the shared ten-logical-CPU Mac used a fresh Python 3.13
+environment and both complete Python suites, with slow tests included:
+
+| Execution | Wall time | Passed / skipped | Mean CPU cores | Broker job |
+| --- | ---: | ---: | ---: | --- |
+| Serial (`-n0`) | 18m 39s | 5695 / 51 | 0.89 | `260929-233140-suite-827e` |
+| Four workers | 5m 16s | 5695 / 51 | 3.34 | `260929-234149-suite-f480` |
+| Six workers | 3m 39s | 5695 / 51 | 4.97 | `260929-233223-suite-935d` |
+
+Wall and aggregate user/system CPU time come from `/usr/bin/time -l`; mean
+cores are CPU seconds divided by wall seconds. The serial/four-worker pair used
+the same frozen tree. The six-worker run differed only by an unused test constant
+removed after startup. Its other broker lane was held idle. A separate
+`-n1` run was submitted and rejected by broker triage as duplicating the approved
+serial baseline; it was not executed.
+
+Four workers give a measured 3.54× speedup and remain the default. Six reduced
+wall time by another 31% and used 49% more mean CPU cores. Two six-worker lanes
+would consume about all ten cores on average; two four-worker lanes leave
+capacity for foreground work. These are individual broker runs on the shared
+Mac; their logs record host load before and after execution.
+
+`--durations=30` identified the largest export calls at about 104, 54, and 52
+seconds, alongside real BEMPP, scale, and shutdown integrations. The `slow`
+selection covers 21 of 5746 tests. Refresh the duration evidence when changing
+expensive tests; keep all of them in the full gate.
 
 The server suite does not need `frontend/dist` as a whole: only the tests that build the
 real app (which serves the built SPA) do. Those fail with the build instruction

@@ -532,7 +532,9 @@ def test_the_bempp_worker_prewarm_takes_auto_from_the_registrys_one_snapshot(
     assert probes == 1
 
 
-def test_the_bempp_worker_prewarm_never_blocks_startup(tmp_path: Path) -> None:
+def test_the_bempp_worker_prewarm_never_blocks_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The handler only schedules; the registry probe it needs is not awaited here."""
 
     application = create_app(data_dir=tmp_path)
@@ -542,19 +544,27 @@ def test_the_bempp_worker_prewarm_never_blocks_startup(tmp_path: Path) -> None:
         if item.__name__ == "prewarm_bempp_worker"
     )
 
-    async def exercise() -> float:
-        started = time.perf_counter()
-        await handler()
-        elapsed = time.perf_counter() - started
-        task = application.state.bempp_prewarm_task
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        return elapsed
+    async def exercise() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
 
-    assert asyncio.run(exercise()) < 0.05
+        async def blocked_prewarm(*_args):
+            entered.set()
+            await release.wait()
+
+        monkeypatch.setattr("server.app.bempp_worker_prewarm", blocked_prewarm)
+        task = None
+        try:
+            await asyncio.wait_for(handler(), timeout=5)
+            task = application.state.bempp_prewarm_task
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            assert not task.done(), "startup must return while the prewarm is blocked"
+        finally:
+            release.set()
+            if task is not None:
+                await task
+
+    asyncio.run(exercise())
 
 
 def test_the_bempp_warmup_targets_the_process_that_actually_solves(

@@ -24,7 +24,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import socket
 import subprocess
 import sys
 import threading
@@ -38,9 +37,23 @@ import pytest
 from launchers.statusapp.controller import StatusController
 from server.platform.paths import data_paths
 
+pytestmark = pytest.mark.slow
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SERVE = REPO_ROOT / "launch" / "serve.py"
+# CLI ports deliberately exclude zero. Inject only the reservation policy in
+# this child: retain the real kernel-assigned socket through Uvicorn startup,
+# and publish its actual port through the ordinary lock/ready-file path. No
+# free-port probe is released before the server binds, and no production CLI
+# validation needs to change for a test's ephemeral listener.
+_EPHEMERAL_SERVER_MAIN = """
+from launch import serve
+reserve = serve.reserve_port
+def reserve_ephemeral(_preferred, **kwargs):
+    listener, _ = reserve(0, **kwargs)
+    return listener, int(listener.getsockname()[1])
+serve.reserve_port = reserve_ephemeral
+raise SystemExit(serve.main())
+"""
 
 #: How long the status window waits for its server before killing the tree.
 #: Read from the controller rather than restated, so the bound these tests hold
@@ -119,12 +132,6 @@ class _Server:
             lines.append("--- stacks.txt (native stacks of the unresponsive server) ---")
             lines.extend(stacks.read_text(encoding="utf-8", errors="replace").splitlines()[:150])
         return "\n".join(lines)
-
-
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        probe.bind(("127.0.0.1", 0))
-        return int(probe.getsockname()[1])
 
 
 def _http(
@@ -308,10 +315,9 @@ def _launch(
     output = root / "server.out"
     command = [
         sys.executable,
-        str(SERVE),
+        "-c",
+        _EPHEMERAL_SERVER_MAIN,
         "--no-browser",
-        "--port",
-        str(_free_port()),
         "--status-control",
         str(control_dir / "stop"),
         "--parent-pid",
