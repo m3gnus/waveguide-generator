@@ -475,6 +475,15 @@ async def solve_path(
     )
     protocol = JobsProtocol(runtime)
     protocol_task = asyncio.create_task(protocol.run(transport))
+
+    async def final_outcome(**fields: Any) -> None:
+        # The outcome must be stdout's last line. Stop the event stream and let
+        # any message already in flight print first; otherwise a slow host can
+        # print a jobs-protocol message after the outcome.
+        await transport.close(1000)
+        await asyncio.gather(protocol_task, return_exceptions=True)
+        write_outcome(stdout, **fields)
+
     interrupted = asyncio.Event()
     shutdown_done = False
     try:
@@ -484,8 +493,7 @@ async def solve_path(
         except EngineUnavailableError as exc:
             print(f"Solve refused: {exc}", file=stderr)
             if ndjson:
-                write_outcome(
-                    stdout,
+                await final_outcome(
                     status="refused",
                     client_request_id=request.client_request_id,
                     error_code="engine_unavailable",
@@ -496,8 +504,7 @@ async def solve_path(
         except ImportedSolveRefusal as exc:
             print(f"Solve refused: {exc}", file=stderr)
             if ndjson:
-                write_outcome(
-                    stdout,
+                await final_outcome(
                     status="refused",
                     client_request_id=request.client_request_id,
                     error_code=exc.reason_code,
@@ -513,8 +520,7 @@ async def solve_path(
             )
             print(f"Solve refused: {message}", file=stderr)
             if ndjson:
-                write_outcome(
-                    stdout,
+                await final_outcome(
                     status="refused",
                     client_request_id=request.client_request_id,
                     error_code="submission_conflict",
@@ -531,8 +537,7 @@ async def solve_path(
             else:
                 code = "invalid_request"
             if ndjson:
-                write_outcome(
-                    stdout,
+                await final_outcome(
                     status="refused",
                     client_request_id=request.client_request_id,
                     error_code=code,
@@ -554,8 +559,7 @@ async def solve_path(
                 await runtime.shutdown()
                 shutdown_done = True
                 if ndjson:
-                    write_outcome(
-                        stdout,
+                    await final_outcome(
                         status="interrupted",
                         job_id=job_id,
                         client_request_id=request.client_request_id,
@@ -577,8 +581,7 @@ async def solve_path(
             except (JobConflictError, JobResourceUnavailableError) as exc:
                 print(f"Could not fetch solve results: {exc}", file=stderr)
                 if ndjson:
-                    write_outcome(
-                        stdout,
+                    await final_outcome(
                         status="failed",
                         job_id=job_id,
                         client_request_id=request.client_request_id,
@@ -604,8 +607,7 @@ async def solve_path(
                     file=stderr,
                 )
                 if ndjson:
-                    write_outcome(
-                        stdout,
+                    await final_outcome(
                         status="failed",
                         job_id=job_id,
                         client_request_id=request.client_request_id,
@@ -618,8 +620,7 @@ async def solve_path(
             except (OSError, ValueError) as exc:
                 print(f"Could not write solve output: {exc}", file=stderr)
                 if ndjson:
-                    write_outcome(
-                        stdout,
+                    await final_outcome(
                         status="failed",
                         job_id=job_id,
                         client_request_id=request.client_request_id,
@@ -638,8 +639,7 @@ async def solve_path(
             print(f"Solve failed: {message}", file=stderr)
             if ndjson:
                 cancelled = job["status"] == "cancelled"
-                write_outcome(
-                    stdout,
+                await final_outcome(
                     status="cancelled" if cancelled else "failed",
                     job_id=job_id,
                     client_request_id=request.client_request_id,
@@ -651,8 +651,7 @@ async def solve_path(
         if args.output is None:
             print(_DATABASE_ONLY_WARNING, file=stderr, flush=True)
         if ndjson:
-            write_outcome(
-                stdout,
+            await final_outcome(
                 status="complete",
                 job_id=job_id,
                 client_request_id=request.client_request_id,

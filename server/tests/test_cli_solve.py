@@ -595,3 +595,56 @@ def test_solve_reused_client_request_id_is_a_refusal_not_a_traceback(
     assert outcome["error"]["code"] == "submission_conflict"
     assert outcome["error"]["stage"] == "submission"
     assert outcome["client_request_id"] == "reused-key"
+
+
+def test_a_refusal_outcome_is_the_last_line_even_with_a_message_in_flight(
+    tmp_path: Path, capsys, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ubuntu CI printed a jobs-protocol message after the outcome line."""
+
+    data_dir = tmp_path / "data"
+
+    def write(name: str, frequency: float) -> Path:
+        path = tmp_path / name
+        path.write_text(
+            json.dumps(
+                {
+                    "design": parse(VALID_MWG).semantic_data(),
+                    "options": {"engine": "bempp", "frequencies_hz": [frequency]},
+                    "client_request_id": "reused-key",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    assert main(
+        ["solve", "--request", str(write("a.json", 500.0)), "--data-dir", str(data_dir),
+         "--output", str(tmp_path / "out-a")],
+        engine_registry=_registry(engines=("bempp",)),
+    ) == 0
+    capsys.readouterr()
+
+    class SlowStreamProtocol:
+        """Says hello, then finishes one more send only after submission."""
+
+        def __init__(self, runtime: JobRuntime) -> None:
+            del runtime
+
+        async def run(self, transport) -> None:
+            await transport.send_json({"kind": "hello"})
+            await asyncio.sleep(0.05)
+            await transport.send_json({"kind": "event", "type": "in-flight"})
+            await transport.receive()
+
+    monkeypatch.setattr(solve_module, "JobsProtocol", SlowStreamProtocol)
+    second = main(
+        ["solve", "--request", str(write("b.json", 800.0)), "--data-dir", str(data_dir),
+         "--json-events"],
+        engine_registry=_registry(engines=("bempp",)),
+    )
+    lines = capsys.readouterr().out.strip().splitlines()
+
+    assert second == 1
+    assert json.loads(lines[-1])["status"] == "refused"
+    assert any(json.loads(line).get("type") == "in-flight" for line in lines[:-1])
