@@ -8,50 +8,18 @@ from typing import Any, Iterable, Mapping
 
 import numpy as np
 
+from server.contracts.geometry import (
+    ImportedSymmetry as ImportedSymmetry,
+    ImportedSymmetryUnsupportedError as ImportedSymmetryUnsupportedError,
+    SYMMETRY_PLANE_AXIS as _PLANE_NORMAL_INDEX,
+    imported_symmetry_from_cut_planes as imported_symmetry_from_cut_planes,
+)
 from server.mesh.artifact import (
     ImportedMeshArtifactError,
     mesh_text_sha256,
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
-
-
-class ImportedSymmetryUnsupportedError(ValueError):
-    """The ingestion artifact uses cut planes the native solver cannot mirror."""
-
-    def __init__(self, cut_planes: Iterable[str]) -> None:
-        self.cut_planes = tuple(str(plane) for plane in cut_planes)
-        super().__init__(
-            "unsupported imported symmetry cut-plane set: "
-            + repr(list(self.cut_planes))
-            + "; Phase 2 supports only no cuts, x0, y0, or x0+y0"
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class ImportedSymmetry:
-    mode: str
-    quadrants: int
-    native_plane: str | None
-    cut_planes: tuple[str, ...]
-
-
-def imported_symmetry_from_cut_planes(cut_planes: Iterable[Any]) -> ImportedSymmetry:
-    """Map actual CAD cuts to the one native symmetry vocabulary used everywhere."""
-
-    ordered = tuple(str(plane) for plane in cut_planes)
-    cuts = frozenset(ordered)
-    if len(cuts) != len(ordered) or not cuts.issubset({"x0", "y0"}):
-        raise ImportedSymmetryUnsupportedError(ordered)
-    if cuts == {"x0", "y0"}:
-        return ImportedSymmetry("quarter", 1, "yz+xz", ordered)
-    if cuts == {"x0"}:
-        return ImportedSymmetry("half_yz", 14, "yz", ordered)
-    if cuts == {"y0"}:
-        return ImportedSymmetry("half_xz", 12, "xz", ordered)
-    if cuts:
-        raise ImportedSymmetryUnsupportedError(ordered)
-    return ImportedSymmetry("full", 1234, None, ordered)
 
 
 def imported_domain_planes(record: Mapping[str, Any]) -> tuple[str, ...]:
@@ -173,7 +141,6 @@ AXIAL_PLANE_TOLERANCE_M = 1.0e-6
 #: axis to lie in the symmetry subspace.
 AXIAL_SUBSPACE_TOLERANCE = 1.0e-9
 
-_PLANE_NORMAL_INDEX = {"x0": 0, "y0": 1}
 _SNAP_TARGETS = tuple(
     (name, np.asarray(vector, dtype=float))
     for name, vector in (

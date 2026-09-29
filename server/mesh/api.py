@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 
 from pydantic import BaseModel
 
+from server.contracts.geometry import CUT_PLANES_BY_QUADRANTS as CUT_PLANES_BY_QUADRANTS
 from server.design.schema import DesignConfig, Expr
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
@@ -26,16 +27,6 @@ from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 #: purpose: the cooperative cancel checkpoints inside the builder are sparse,
 #: so a finer poll would not cancel any sooner.
 DISCONNECT_POLL_SECONDS = 0.25
-
-#: The positive-side domain retained for each ATH quadrant mask, expressed as
-#: the origin cut planes the frontend mirrors across (``symmetryScene.ts``).
-#: Matches ``server.mesh.builder._symmetry_plane_axes`` (axis 0 = x, 1 = y).
-CUT_PLANES_BY_QUADRANTS: dict[int, tuple[str, ...]] = {
-    1: ("x0", "y0"),
-    12: ("y0",),
-    14: ("x0",),
-    1234: (),
-}
 
 SymmetryMode = Literal["auto", "full", "half_xz", "half_yz", "quarter"]
 

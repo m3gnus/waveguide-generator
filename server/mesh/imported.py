@@ -20,6 +20,14 @@ from typing import Any
 import numpy as np
 
 from server.cadlink.wglink_protocol import source_physical_name
+from server.contracts.geometry import (
+    CUT_PLANE_AXIS,
+    FIRST_SOURCE_TAG as FIRST_SOURCE_TAG,
+    SUPPORTED_CUT_PLANES as SUPPORTED_CUT_PLANES,
+    SYMMETRY_PLANE_AXIS as REFLECTION_AXIS,
+    SYMMETRY_PLANE_AXIS as DOMAIN_PLANE_AXIS,
+    imported_symmetry_from_cut_planes,
+)
 
 from server.mesh.builder import (
     MAX_SOLVER_MESH_ARTIFACT_TRIANGLES,
@@ -34,20 +42,16 @@ from server.mesh.integrity import (
     mesh_self_intersection_report,
 )
 from server.platform.temp_session import temporary_directory_root
-from server.solver.imported import imported_symmetry_from_cut_planes
 
 
 TAG_NAMESPACE = "wg-import-v1"
 RIGID_TAG = 1
-FIRST_SOURCE_TAG = 101
+# Tag values match hornlab_mesher.tags; server/tests/test_geometry_contract.py
+# checks that, so importing here does not load the mesher at startup.
+
 AREA_REL_TOLERANCE = 0.01
 PLANE_DISTANCE_MM = 0.05
 NORMAL_ANGLE_DEG = 0.1
-# The native solvers mirror across YZ and XZ only (``server/solver/imported.py``
-# refuses anything else), so a z0 cut would halve the geometry here and be
-# refused three stages later, with the cached mesh, the viewport and the polar
-# derivation all disagreeing about the domain in between.
-SUPPORTED_CUT_PLANES = ("x0", "y0")
 # Cut-plane vertices are snapped exactly onto the plane by ``postprocess_mesh``
 # (``symmetry_snap_tolerance`` below), so the free-edge detector only needs a
 # band wide enough to absorb float noise.
@@ -556,8 +560,6 @@ def apply_rigid_normalisation(gmsh: Any, dim_tags: Any, matrix: Any) -> np.ndarr
     return applied
 
 
-#: The solver planes a mesh may be reflected across: the planes WG mirrors.
-REFLECTION_AXIS = {"x0": 0, "y0": 1}
 #: How far a reflected triangle's normal may differ from the reflected normal
 #: (unit normals, so an absolute bound); anything more is a wrong winding.
 REFLECTION_NORMAL_TOLERANCE = 1.0e-9
@@ -787,9 +789,6 @@ class DeclaredDiscReduction:
     cut_directions: tuple[tuple[float, float, float], ...]
     clear_axes: tuple[int, ...]
     centroid_offset_mm: tuple[float, float, float] = (0.0, 0.0, 0.0)
-
-
-DOMAIN_PLANE_AXIS = {"x0": 0, "y0": 1}
 
 
 def declared_disc_reduction(
@@ -3442,7 +3441,7 @@ def build_imported_mesh(
             for face in resolutions[source_id]["surfaces"]:
                 face_fraction = 1.0
                 for plane in cut.planes:
-                    axis = {"x0": 0, "y0": 1, "z0": 2}[plane]
+                    axis = CUT_PLANE_AXIS[plane]
                     bbox = source_bboxes[source_id][int(face)]
                     coincident = (
                         max(abs(float(bbox[axis])), abs(float(bbox[axis + 3])))
@@ -3691,7 +3690,7 @@ def build_imported_mesh(
             imported_symmetry.quadrants,
             tags=tags,
         )
-        integrity = mesh_integrity_report(points_mm * 1.0e-3, triangles, symmetry_plane_axes=tuple({"x0": 0, "y0": 1}[plane] for plane in domain_planes if plane in {"x0", "y0"}))
+        integrity = mesh_integrity_report(points_mm * 1.0e-3, triangles, symmetry_plane_axes=tuple(DOMAIN_PLANE_AXIS[plane] for plane in domain_planes if plane in DOMAIN_PLANE_AXIS))
         if not integrity.get("valid"):
             raise ImportedMeshError(
                 "meshing: postprocessed imported mesh failed topology integrity checks: "

@@ -12,6 +12,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from server.contracts.geometry import (
+    PLANE_BY_QUADRANTS,
+    SYMMETRY_MODE_QUADRANTS as SYMMETRY_MODE_QUADRANTS,
+    quadrants_for_symmetry_planes,
+)
 from server.design.schema import DesignConfig, Expr
 from server.preview.translate import design_to_mesher_config
 
@@ -20,14 +25,6 @@ SYMMETRY_RELATIVE_TOLERANCE = 2.0e-4
 SYMMETRY_ABSOLUTE_TOLERANCE_MM = 1.0e-7
 SYMMETRY_ANGULAR_SEGMENTS = 128
 SYMMETRY_LENGTH_SEGMENTS = 16
-
-SYMMETRY_MODE_QUADRANTS: dict[str, int] = {
-    "auto": 1234,
-    "full": 1234,
-    "half_xz": 12,
-    "half_yz": 14,
-    "quarter": 1,
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,7 +279,7 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
 
     xz = not reasons["xz"]
     yz = not reasons["yz"]
-    quadrants = 1 if xz and yz else 12 if xz else 14 if yz else 1234
+    quadrants = quadrants_for_symmetry_planes(xz=xz, yz=yz)
     return SymmetryResolution(
         quadrants=quadrants,
         xz=xz,
@@ -332,7 +329,7 @@ def restrict_for_ground_plane(
     xz = resolution.xz and blocked != "xz"
     yz = resolution.yz and blocked != "yz"
     return SymmetryResolution(
-        quadrants=1 if xz and yz else 12 if xz else 14 if yz else 1234,
+        quadrants=quadrants_for_symmetry_planes(xz=xz, yz=yz),
         xz=xz,
         yz=yz,
         reasons=reasons,
@@ -351,11 +348,9 @@ def validate_symmetry_mode(mode: str, resolution: SymmetryResolution) -> int:
         )
     if normalized == "auto":
         return resolution.quadrants
-    required = {
-        "half_xz": ("xz",),
-        "half_yz": ("yz",),
-        "quarter": ("xz", "yz"),
-    }.get(normalized, ())
+    native_plane = PLANE_BY_QUADRANTS[SYMMETRY_MODE_QUADRANTS[normalized]]
+    # Preserve the xz-before-yz ordering in forced-quarter refusal messages.
+    required = tuple(sorted(native_plane.split("+"))) if native_plane is not None else ()
     missing = [plane for plane in required if not getattr(resolution, plane)]
     if missing:
         details = "; ".join(

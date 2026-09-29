@@ -28,7 +28,14 @@ from server.design.schema import DesignConfig, Expr
 from server.platform.memory import PhysicalMemory, physical_memory
 from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import design_to_mesher_config
-from server.solver.quadrants import FULL_DOMAIN_QUADRANTS, normalise_quadrants
+
+from server.contracts.geometry import (
+    CUT_PLANES_BY_QUADRANTS,
+    FULL_DOMAIN_QUADRANTS as FULL_DOMAIN_QUADRANTS,
+    native_symmetry_plane_for_quadrants,
+    normalise_quadrants,
+    symmetry_plane_axes_for_quadrants,
+)
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .gmsh_worker import run_on_gmsh_worker
@@ -48,6 +55,9 @@ logger = logging.getLogger(__name__)
 
 CANONICAL_SURFACE_TAGS = {1, 2, 3, 4, 12}
 MOUTH_APERTURE_SURFACE_TAG = 12
+# Tag values match hornlab_mesher.tags; server/tests/test_geometry_contract.py
+# checks that, so importing here does not load the mesher at startup.
+
 LARGE_MESH_WARNING_FULL_DOMAIN_TRIANGLES = 18_000
 # The mesher can estimate and count triangles, but it cannot know the P1
 # vertex/DOF count that governs the dense solver's memory. Keep this loose
@@ -430,12 +440,11 @@ def _resolve_quadrants(design: DesignConfig) -> tuple[int, str | None]:
     # normalise_quadrants truncates before matching, so a declared 12.5 lands on
     # the half-domain 12 rather than the quarter-domain fallback. Name the domain
     # actually solved instead of assuming the fallback.
-    domain = {
-        1: "a quarter-domain",
-        12: "a half-domain (xz)",
-        14: "a half-domain (yz)",
-        FULL_DOMAIN_QUADRANTS: "a full-domain",
-    }[resolved]
+    plane = native_symmetry_plane_for_quadrants(resolved)
+    domain = (
+        "a full-domain" if plane is None else "a quarter-domain" if "+" in plane
+        else f"a half-domain ({plane})"
+    )
     return resolved, (
         f"mesh.quadrants was declared as {declared_expr.text()!r}, which ATH "
         f"compatibility resolves to {resolved}; the solver used {domain} mesh. "
@@ -444,7 +453,7 @@ def _resolve_quadrants(design: DesignConfig) -> tuple[int, str | None]:
 
 
 def _domain_multiplier_for_quadrants(quadrants: int) -> int:
-    return {1: 4, 12: 2, 14: 2, FULL_DOMAIN_QUADRANTS: 1}[quadrants]
+    return 2 ** len(CUT_PLANES_BY_QUADRANTS[quadrants])
 
 
 def _mesh_policy(
@@ -764,7 +773,7 @@ def _symmetry_plane_axes(config: Mapping[str, Any]) -> tuple[int, ...]:
     """
 
     quadrants = normalise_quadrants((config.get("mesh") or {}).get("quadrants"))
-    return {1: (0, 1), 12: (1,), 14: (0,), FULL_DOMAIN_QUADRANTS: ()}[quadrants]
+    return symmetry_plane_axes_for_quadrants(quadrants)
 
 
 @functools.lru_cache(maxsize=None)

@@ -16,6 +16,7 @@ import os
 import threading
 from typing import Any, Callable, Mapping, Sequence
 
+from server.contracts.geometry import SYMMETRY_DOMAINS_BY_QUADRANTS
 from server.platform.warmup import BackgroundWarmup
 
 
@@ -506,12 +507,7 @@ def engine_supports_symmetry(info: EngineInfo, resolved_quadrants: int) -> bool:
     # filtering and are used by embedders and focused tests.
     if not info.symmetry_domains:
         return True
-    required = {
-        1234: ("full",),
-        12: ("half", "half-xz"),
-        14: ("half", "half-yz"),
-        1: ("quarter",),
-    }.get(resolved_quadrants, ())
+    required = SYMMETRY_DOMAINS_BY_QUADRANTS.get(resolved_quadrants, ())
     return bool(set(required) & set(info.symmetry_domains))
 
 

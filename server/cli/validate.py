@@ -11,6 +11,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from server.contracts.geometry import MODE_BY_QUADRANTS
 from server.design.schema import Expr
 from server.design.solve_block import has_solve_blocks
 from server.design.textcfg import TextConfigError, parse
@@ -129,12 +130,7 @@ def _frequency_summary(request: SolveRequest) -> dict[str, Any]:
 
 def _symmetry_summary(metadata: dict[str, Any]) -> dict[str, Any]:
     quadrants = int(metadata["resolved_quadrants"])
-    resolved_mode = {
-        1: "quarter",
-        12: "half_xz",
-        14: "half_yz",
-        1234: "full",
-    }.get(quadrants, str(quadrants))
+    resolved_mode = MODE_BY_QUADRANTS.get(quadrants, str(quadrants))
     automatic = dict(metadata["auto_resolution"])
     return {
         "requested": metadata["requested"],

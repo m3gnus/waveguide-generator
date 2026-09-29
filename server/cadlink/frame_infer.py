@@ -50,6 +50,8 @@ from typing import Any
 
 import numpy as np
 
+from server.contracts.geometry import SYMMETRY_PLANE_AXIS as _PLANE_AXIS
+
 ALGORITHM_VERSION = "frame-infer-v1"
 
 AXES: tuple[str, ...] = ("+z", "-z", "+x", "-x", "+y", "-y")
@@ -693,10 +695,6 @@ def parse_tagged_msh(msh_text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray,
         np.asarray(tags, dtype=np.int64),
         names,
     )
-
-
-_PLANE_AXIS = {"x0": 0, "y0": 1}
-
 
 def mirror_back(
     points: np.ndarray, triangles: np.ndarray, tags: np.ndarray, planes: Iterable[str]

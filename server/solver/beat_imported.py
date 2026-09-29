@@ -53,6 +53,7 @@ from server.contracts.conventions import (
     ENGINEERING_PHASE_CONVENTION,
     PHASE_TIME_CONVENTION,
 )
+from server.contracts.geometry import CUT_PLANES_BY_QUADRANTS, PLANE_BY_QUADRANTS, symmetry_plane_axes_for_quadrants
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import temporary_directory_root
 
@@ -102,6 +103,9 @@ logger = logging.getLogger(__name__)
 #: record can collide with the driven tag.
 VELOCITY_TAG = 2
 RIGID_TAG = 1
+# Tag values match hornlab_mesher.tags; server/tests/test_geometry_contract.py
+# checks that, so importing here does not load the mesher at startup.
+
 
 #: How far the anchor frame may depart from a right-handed orthonormal basis,
 #: and how far a rotated mirror plane may tilt, before BEAT refuses the return.
@@ -120,9 +124,9 @@ PASSIVE_CARDIOID_REFUSAL = (
 
 #: Which of BEAT's own axes each representable native plane mirrors across.
 _MIRROR_AXES: dict[str | None, tuple[int, ...]] = {
-    None: (),
-    "yz": (0,),
-    "yz+xz": (0, 1),
+    PLANE_BY_QUADRANTS[quadrants]: symmetry_plane_axes_for_quadrants(quadrants)
+    for quadrants, planes in CUT_PLANES_BY_QUADRANTS.items()
+    if planes != ("y0",)  # BEAT cannot represent a y-only half.
 }
 _AXIS_NAMES = ("x", "y", "z")
 _DRIVE_CONVENTION = (
