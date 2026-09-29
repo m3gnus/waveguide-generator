@@ -646,6 +646,7 @@ interface DirectivityComparisonOverlay {
   primaryLabel: string;
   references: DirectivityContourReference[];
   showLegend?: boolean;
+  showContourNames?: boolean;
 }
 
 export function heatmapOption(
@@ -728,7 +729,7 @@ export function heatmapOption(
         const points = polylines[Number(api.value(0))].map((point) => contourPointToPixels(point, contourGrid, params.coordSys!));
         const middle = points[Math.floor(points.length / 2)];
         const children: Array<Record<string, unknown>> = [{ type: 'polyline', shape: smoothContourShape(points), style: { fill: null, stroke: color, lineWidth: level === mapReference ? 1.6 : 1.05, opacity: .92, lineCap: 'round', lineJoin: 'round', lineDash: level <= -12 ? [4, 3] : undefined } }];
-        if (Number(api.value(1)) && (density !== 'compact' || level === -6 || isComparisonContour)) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 14) : `${level} dB`, fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
+        if (Number(api.value(1)) && (density !== 'compact' || level === -6 || isComparisonContour) && (!isComparisonContour || comparison?.showContourNames)) children.push({ type: 'text', style: { x: middle[0] + 3, y: middle[1] - 3, text: isComparisonContour ? middleEllipsis(comparison!.primaryLabel, 14) : `${level} dB`, fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 } });
         return { type: 'group', children };
       },
     }];
@@ -759,7 +760,7 @@ export function heatmapOption(
           shape: smoothContourShape(points),
           style: { fill: null, stroke: color, lineWidth: 1.7, opacity: .96, lineCap: 'round', lineJoin: 'round', lineDash: [6, 4] },
         }];
-        if (Number(api.value(1))) children.push({
+        if (comparison.showContourNames && Number(api.value(1))) children.push({
           type: 'text',
           style: { x: middle[0] + 3, y: middle[1] - 3, text: middleEllipsis(reference.label, density === 'compact' ? 12 : 18), fill: color, font: '11px ui-monospace, monospace', backgroundColor: tokens.background, padding: [1, 2], borderRadius: 2 },
         });
@@ -1343,13 +1344,14 @@ export function directivityMapPanels(items: NamedResult[], chartType: Directivit
   });
 }
 
-function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, normAngle, angleGuideInterval, density, live }: {
+function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, normAngle, angleGuideInterval, showContourNames, density, live }: {
   chartType: DirectivityMapChartType;
   items: NamedResult[];
   tokens: ChartTokens;
   mapReference: number;
   normAngle: number;
   angleGuideInterval: number;
+  showContourNames: boolean;
   density: ChartDensity;
   live: boolean;
 }) {
@@ -1371,6 +1373,7 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, nor
     return <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live, angleGuideInterval, {
       primaryLabel: panel.primaryLabel,
       references: panel.references,
+      showContourNames,
     })} label={`Interactive HornLab ${panel.plane} directivity heatmap with comparison contours`} live={live}/>;
   }
   const legendPanelIndex = panels.findIndex(({ references }) => references.length > 0);
@@ -1381,6 +1384,7 @@ function DirectivityComparisonMaps({ chartType, items, tokens, mapReference, nor
         ? <EChart option={heatmapOption(panel.result, tokens, panel.plane, mapReference, density, live, angleGuideInterval, {
           primaryLabel: panel.primaryLabel,
           references: panel.references,
+          showContourNames,
           showLegend: index === legendPanelIndex,
         })} label={`Interactive ${panel.label} directivity heatmap with comparison contours`} live={live}/>
         : <div className="directivity-comparison-missing">No {panel.plane} data</div>}
@@ -1795,7 +1799,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         })}/>
       </div>
       : <ChartStub reason="Frequency Response needs spl_on_axis data from a completed solve."/>;
-    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} density={density} live={live}/>;
+    if (chartType === 'directivity_map_h' || chartType === 'directivity_map_v' || chartType === 'directivity_map_d' || chartType === 'directivity_map') return <DirectivityComparisonMaps chartType={chartType} items={overlays} tokens={tokens} mapReference={preferences.mapReference} normAngle={normAngle} angleGuideInterval={preferences.directivityGuideInterval} showContourNames={preferences.showContourNames} density={density} live={live}/>;
     if (chartType === 'directivity_index') {
       const option = mark(directivityIndexOption(overlays, tokens, preferences.smoothing, density));
       return Array.isArray(option.series) && option.series.length ? <EChart option={option} label="Interactive HornLab directivity index by frequency" live={live}/> : <ChartStub reason="Directivity Index needs a complete spherical field from a supported solve backend."/>;
@@ -1892,7 +1896,7 @@ function ResultChart({ chartType, result, named, tokens, density, live, beamShap
         : <ChartStub reason="The retained radiation matrix has no finite reduced load curves."/>;
     }
     return null;
-  }, [angled, beamShapeAction, chartType, density, live, measured, measurementSelection, normAngle, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, unqualified, wrapper]);
+  }, [angled, beamShapeAction, chartType, density, live, measured, measurementSelection, normAngle, overlays, preferences.directivityGuideInterval, preferences.groupDelayUnit, preferences.impedanceDisplay, preferences.mapReference, preferences.showContourNames, preferences.smoothing, preferences.splPhase, radiationArtifact, result, tokens, unqualified, wrapper]);
   return plot ?? <Summary result={result} wrapper={wrapper} job={job} channelId={channelId} density={density}/>;
 }
 

@@ -121,6 +121,7 @@ export interface Preferences {
   mapReference: MapReference;
   /** Angular spacing of the horizontal graticule on directivity maps. */
   directivityGuideInterval: number;
+  showContourNames: boolean;
   chartTypes: ChartType[];
   chartTheme: string;
   /**
@@ -221,6 +222,7 @@ const defaults: Preferences = {
   smoothing: 'none',
   mapReference: -6,
   directivityGuideInterval: 0,
+  showContourNames: false,
   // Every default panel must populate from a default solve. 3D Balloon and
   // Forward Beam Map both need spherical sampling, which is off by default, so
   // defaulting to them left two of six panels permanently showing their stub.
@@ -284,6 +286,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     smoothing: smoothingIds.has(String(raw.smoothing)) ? raw.smoothing as SmoothingMode : defaults.smoothing,
     mapReference,
     directivityGuideInterval,
+    showContourNames: raw.showContourNames === true,
     chartTypes: charts,
     // The theme list is open -- the backend supplies it and a profile may hold
     // one this build has never heard of -- so only the type is checked. It used

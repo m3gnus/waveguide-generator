@@ -100,6 +100,39 @@ describe('result comparison charts', () => {
     ]);
   });
 
+  it('keeps level labels and legends while hiding comparison names across chart sizes, planes and exported options', () => {
+    const labels = ['A very long primary run name', 'Reference one with a long name', 'Reference two with a long name', 'Reference three with a long name'];
+    const map = (edge: number): ResultPayload => ({
+      frequencies: [500, 1_000],
+      directivity: Object.fromEntries(['horizontal', 'vertical', 'diagonal'].map((plane) => [plane, [
+        [[0, 0], [90, edge]], [[0, 0], [90, edge - 2]],
+      ]])),
+    });
+    const comparison = {
+      primaryLabel: labels[0],
+      references: labels.slice(1).map((label, index) => ({ label, result: map(-10 - index) })),
+    };
+    const renderedText = (entry: { data: number[][]; renderItem: (params: { coordSys: { x: number; y: number; width: number; height: number } }, api: { value: (index: number) => number }) => { children: Array<{ type: string; style?: { text?: string } }> } }) =>
+      entry.data.flatMap((datum) => entry.renderItem({ coordSys: { x: 0, y: 0, width: 400, height: 300 } }, { value: (index) => datum[index] }).children.filter(({ type }) => type === 'text').map(({ style }) => style?.text));
+    for (const density of ['compact', 'regular', 'full'] as const) {
+      for (const plane of ['horizontal', 'vertical', 'diagonal']) {
+        for (const showContourNames of [false, true]) {
+          // PNG export captures this same chart option after ECharts draws it.
+          const option = heatmapOption(map(-12), comparisonTokens, plane, -9, density, false, 10, { ...comparison, showContourNames });
+          const series = option.series as unknown as Array<Parameters<typeof renderedText>[0] & { name?: string }>;
+          expect((option.legend as { data: string[] }).data).toEqual(labels);
+          for (const label of labels) {
+            const text = renderedText(series.find(({ name }) => name === label)!);
+            expect(text.length > 0).toBe(showContourNames);
+          }
+          const level = renderedText(series.find(({ name }) => name === '-3 dB contour')!);
+          expect(level).toEqual(density === 'compact' ? [] : ['-3 dB']);
+          expect(renderedText(series.find(({ name }) => name === '-6 dB contour')!)).toEqual(['-6 dB']);
+        }
+      }
+    }
+  });
+
   it('projects a comparison contour by physical frequency instead of stretching its range', () => {
     const display = { frequencies: [100, 1_000, 10_000], angles: [0, 45, 90], values: [], factor: 1 };
     const source = { frequencies: [1_000, 10_000], angles: [0, 90], values: [], factor: 1 };

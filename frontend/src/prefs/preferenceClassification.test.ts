@@ -54,6 +54,7 @@ describe('the classification says what it is meant to say', () => {
     expect(preferenceEffect('smoothing')).toBe('render-refreshing');
     expect(preferenceEffect('chartTypes')).toBe('render-refreshing');
     expect(preferenceEffect('directivityGuideInterval')).toBe('render-refreshing');
+    expect(preferenceEffect('showContourNames')).toBe('render-refreshing');
     expect(preferenceEffect('mapReference')).toBe('render-refreshing');
     expect(preferenceEffect('jobSort')).toBe('render-refreshing');
     expect(VIEWER_PREFERENCE_EFFECTS.fieldPlaneDisplayMode).toBe('render-refreshing');

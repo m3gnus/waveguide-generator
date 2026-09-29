@@ -75,6 +75,7 @@ function ResultsPreferencesContent() {
           with this off, the chart on screen and the chart in the file are not
           the same picture. */}
       <label className="ui-check"><input type="checkbox" checked={preferences.splPhase} onChange={(event) => preferencesStore.update({ splPhase: event.target.checked })}/>Show phase on the SPL chart</label>
+      <label className="ui-check"><input type="checkbox" checked={preferences.showContourNames} onChange={(event) => preferencesStore.update({ showContourNames: event.target.checked })}/>Show contour names</label>
       {/* The crossover-sum plot: the sum drawn over the branches it is made of.
           Off leaves the sum alone on the chart, which is the right reading when
           comparing runs rather than tuning a crossover. */}

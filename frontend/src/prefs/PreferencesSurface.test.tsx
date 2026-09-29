@@ -50,6 +50,11 @@ describe('preferences surfaces', () => {
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
     expect(host.textContent).toContain('Auto-save solve mesh to Workspace');
+    const contourNames = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+      .find((input) => input.parentElement?.textContent?.includes('Show contour names'))!;
+    expect(contourNames.checked).toBe(false);
+    act(() => contourNames.click());
+    expect(preferencesStore.getSnapshot().showContourNames).toBe(true);
 
     const guideInterval = host.querySelector<HTMLInputElement>('[aria-label="Directivity angular guide interval"]')!;
     act(() => {

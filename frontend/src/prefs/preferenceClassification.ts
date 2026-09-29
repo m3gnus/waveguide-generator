@@ -34,6 +34,7 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   smoothing: 'render-refreshing',
   mapReference: 'render-refreshing',
   directivityGuideInterval: 'render-refreshing',
+  showContourNames: 'render-refreshing',
   chartTypes: 'render-refreshing',
   chartTheme: 'render-refreshing',
   splPhase: 'render-refreshing',

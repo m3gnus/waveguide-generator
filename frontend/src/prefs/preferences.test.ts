@@ -41,6 +41,13 @@ describe('client preferences', () => {
     preferencesStore.update({ showReverseNull: true });
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showReverseNull).toBe(true);
   });
+  it('keeps contour names off until requested and persists the choice', () => {
+    expect(loadPreferences(null).showContourNames).toBe(false);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).showContourNames).toBe(false);
+    preferencesStore.update({ showContourNames: true });
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showContourNames).toBe(true);
+    expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { showContourNames: 'true' } })).showContourNames).toBe(false);
+  });
   it('reads group delay in milliseconds until cycles is asked for', () => {
     expect(loadPreferences(null).groupDelayUnit).toBe('ms');
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).groupDelayUnit).toBe('ms');
