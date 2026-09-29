@@ -16,6 +16,7 @@ import pytest
 
 from server.cadlink import preparation, solver_frame
 from server.jobs import cad_preparation as job_preparation
+from server.jobs.cad_intent import intent_of
 from server.cadlink.frame_infer import ALGORITHM_VERSION
 from server.cadlink.solver_frame import (
     confirm_frame,
@@ -219,7 +220,7 @@ def _record_meshed_in(harness, record: dict[str, Any], axis: str) -> dict[str, A
     return changed
 
 
-@old_only("operation attempt stage instrumentation", "test_a_confident_never_confirmed_solve_solves_along_the_automatic_axis")
+@old_only("operation attempt stage instrumentation", "test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree")
 def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(real, monkeypatch) -> None:
     """A drift between the manifest side and the record side must not loop."""
 
@@ -258,6 +259,46 @@ def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(rea
     assert harness.submitted == []
     # A stage only moves forward: validating is entered once.
     assert stages.count("validating") == 1
+
+
+def test_the_jobs_second_mesh_is_bounded_when_the_two_sides_disagree(tmp_path, monkeypatch) -> None:
+    """The job lane's M1e second pass stops even if the record keeps disagreeing."""
+
+    from cad_backends import JobsHarness
+
+    harness = JobsHarness(tmp_path)
+    try:
+        mesher = Recording()
+        monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
+        _verdict(monkeypatch, status="automatic", axis="+x")
+        monkeypatch.setattr(job_preparation, "record_automatic_axis", lambda store, record: "-y")
+        monkeypatch.setattr(solver_frame, "record_automatic_axis", lambda store, record: "-y")
+        passes: list[bool] = []
+        real_prepare = job_preparation.prepare_job_sync
+
+        def counted(*args, **kwargs):
+            passes.append(bool(kwargs.get("automatic_retry")))
+            assert len(passes) <= 2, "automatic-axis disagreement recursed beyond the second pass"
+            return real_prepare(*args, **kwargs)
+
+        monkeypatch.setattr(job_preparation, "prepare_job_sync", counted)
+        step = b"STEP authored"
+        _received(harness, "authored", _authored(step), step)
+
+        summary = _prepare(harness)
+
+        assert passes == [False, True]
+        assert len(mesher.calls) == 2
+        assert mesher.calls[-1]["options"]["solver_frame"]["axis"] == "+x"
+        assert _waiting_for_frame(summary), summary
+        assert harness.submitted == []
+        row = harness.latest_job()
+        assert row["status"] == "error" and intent_of(row) is not None
+        events = harness.jobs_store.replay_events(0)
+        assert events is not None
+        assert sum(event["payload"].get("stage") == "validating" for event in events) == 1
+    finally:
+        harness.close()
 
 
 @old_only("operation summary reads its bound job", "test_a_confident_never_confirmed_solve_solves_along_the_automatic_axis")

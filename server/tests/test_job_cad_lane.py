@@ -385,6 +385,99 @@ def test_each_continuation_has_its_own_client_request_id(h: JobsHarness) -> None
     assert len(set(keys)) == 3
 
 
+def test_a_changed_parent_press_continues_the_newest_refused_child(h: JobsHarness) -> None:
+    _received(h)
+    first_revision = _revision(h.store, _setup(rigid=20.0))
+    h.submit_error = RuntimeError("parent bind refused")
+    assert h.prepare(setup_revision_id=first_revision)["reason"] == "submission_refused"
+    parent = h.latest_job()["id"]
+    h.submit_error = RuntimeError("child bind refused")
+    child = h._loop.run(h.runtime.solve_cad_again(parent))
+    _settle(h)
+    assert intent_of(_row(h, child)) is not None
+    assert _row(h, child)["status"] == "error"
+
+    revision = _revision(h.store, _setup(rigid=12.0))
+    h.blocked = "An update restart is pending."
+    settings = dict(
+        setup_revision_id=revision, frame_axis="+x",
+        approve_preparation_id="wgi_reviewed", approve_finding_ids=("healing-1",),
+    )
+    grandchild = h._loop.run(h.runtime.solve_cad_again(parent, **settings))
+    repeated = h._loop.run(h.runtime.solve_cad_again(parent, **settings))
+    assert repeated == grandchild and grandchild not in {parent, child}
+    intent = intent_of(_row(h, grandchild))
+    assert intent is not None
+    assert (intent.parent_job_id, intent.setup_revision_id, intent.frame_axis) == (child, revision, "+x")
+    assert intent.approvals == {"preparation_id": "wgi_reviewed", "finding_ids": ["healing-1"]}
+    assert h.jobs_store.list_jobs(limit=50)[1] == 3
+    with pytest.raises(JobConflictError, match="continuing job"):
+        h._loop.run(h.runtime.solve_cad_again(parent, setup_revision_id=first_revision))
+    h.release_latch()
+    _settle(h)
+    assert _row(h, grandchild)["status"] == "queued"
+    assert _cad(_row(h, grandchild))["setup"]["revision_id"] == revision
+    assert h.submitted[-1].geometry.mesh.rigid_size_mm == 12.0
+    with pytest.raises(JobConflictError, match="continuing job"):
+        h._loop.run(h.runtime.solve_cad_again(parent, **settings))
+
+
+def test_a_double_parent_press_after_the_new_child_is_refused_is_still_one_child(
+    h: JobsHarness,
+) -> None:
+    _received(h)
+    h.submit_error = RuntimeError("parent bind refused")
+    assert h.prepare(setup_revision_id=_revision(h.store, _setup()))["reason"] == "submission_refused"
+    parent = h.latest_job()["id"]
+    h.submit_error = RuntimeError("child bind refused")
+    child = h._loop.run(h.runtime.solve_cad_again(parent))
+    _settle(h)
+    revision = _revision(h.store, _setup(rigid=12.0))
+    h.submit_error = RuntimeError("grandchild bind refused")
+
+    async def double_press() -> tuple[str, str]:
+        first, second = await asyncio.gather(
+            h.runtime.solve_cad_again(parent, setup_revision_id=revision),
+            h.runtime.solve_cad_again(parent, setup_revision_id=revision),
+        )
+        return first, second
+
+    grandchild, repeated = h._loop.run(double_press())
+    assert grandchild == repeated
+    _settle(h)
+    assert _row(h, grandchild)["status"] == "error"
+    assert _cad(_row(h, grandchild))["setup"]["revision_id"] == revision
+    assert h._loop.run(h.runtime.solve_cad_again(parent, setup_revision_id=revision)) == grandchild
+    assert h.jobs_store.list_jobs(limit=50)[1] == 3
+    assert intent_of(_row(h, grandchild)).parent_job_id == child
+    # The replay identity survives a runtime/store reopen too.
+    h.restart()
+    assert h._loop.run(h.runtime.solve_cad_again(parent, setup_revision_id=revision)) == grandchild
+
+
+@pytest.mark.parametrize("lost_lookup", [False, True])
+def test_a_bound_child_whose_solver_failed_is_an_existing_child_conflict(
+    h: JobsHarness, monkeypatch: pytest.MonkeyPatch, lost_lookup: bool,
+) -> None:
+    _received(h)
+    h.submit_error = RuntimeError("parent bind refused")
+    assert h.prepare(setup_revision_id=_revision(h.store, _setup()))["reason"] == "submission_refused"
+    parent = h.latest_job()["id"]
+    child = h._loop.run(h.runtime.solve_cad_again(parent))
+    _settle(h)
+    assert _row(h, child)["status"] == "queued"
+    assert intent_of(_row(h, child)) is None
+    assert h.jobs_store.update_job(child, status="error", error_message="solver failed")
+    if lost_lookup:
+        # A competing call can bind and fail its child between lookup and create.
+        # Exercise the idempotent-create loser as well as the early lookup.
+        monkeypatch.setattr(h.jobs_store, "job_for_submission_key", lambda key: None)
+    # CAD-OPERATIONS: once the child has a request, use that job, even after failure.
+    with pytest.raises(JobConflictError, match="already has a continuing job; use that job instead"):
+        h._loop.run(h.runtime.solve_cad_again(parent))
+    assert h.jobs_store.list_jobs(limit=50)[1] == 2
+
+
 def test_solve_again_names_the_setup_revision_it_was_given(h: JobsHarness) -> None:
     _received(h)
     refused = h.prepare(setup_revision_id="wgs_gone")

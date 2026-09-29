@@ -3193,53 +3193,71 @@ class JobRuntime:
 
         await self.start()
         row = self._require_job(job_id)
-        if intent_of(row) is None:
-            raise JobConflictError("This solve already has a solve request; retry it instead")
-        if row["status"] in ACTIVE_STATUSES:
-            raise JobConflictError("This solve is still being prepared and has no solve request yet")
-        self._require_cad_host()
-        cad = (row.get("task_metadata") or {}).get("cad") or {}
-        refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else None
-        if refusal is not None and CAD_REASON_STATES.get(str(refusal.get("code"))) == CAD_REJECTED:
-            raise JobConflictError(str(refusal.get("message") or "WG rejected this return"))
-        continuation_key = f"cad-solve-again:{job_id}"
-        existing = await asyncio.to_thread(self.store.job_for_submission_key, continuation_key)
-        if existing is not None:
+        # The press is distinct from the parent we eventually continue: a changed
+        # press on an ancestor follows refused descendants, while the same press
+        # returns its child even if that preparation has already been refused.
+        press_sha256 = hashlib.sha256(json.dumps({
+            "parent_job_id": job_id,
+            "setup_revision_id": setup_revision_id,
+            "frame_axis": frame_axis,
+            "approve_preparation_id": approve_preparation_id,
+            "approve_finding_ids": sorted(approve_finding_ids),
+            "submit": submit,
+        }, sort_keys=True).encode()).hexdigest()
+        existing_child_message = "This solve already has a continuing job; use that job instead"
+        while True:
+            if intent_of(row) is None:
+                raise JobConflictError("This solve already has a solve request; retry it instead")
+            if row["status"] in ACTIVE_STATUSES:
+                raise JobConflictError("This solve is still being prepared and has no solve request yet")
+            self._require_cad_host()
+            cad = (row.get("task_metadata") or {}).get("cad") or {}
+            refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else None
+            if refusal is not None and CAD_REASON_STATES.get(str(refusal.get("code"))) == CAD_REJECTED:
+                raise JobConflictError(str(refusal.get("message") or "WG rejected this return"))
+            continuation_key = f"cad-solve-again:{row['id']}"
+            existing = await asyncio.to_thread(self.store.job_for_submission_key, continuation_key)
+            if existing is None:
+                if cad.get("solve_again_press_sha256") == press_sha256:
+                    return str(row["id"])
+                intent = solve_again_intent(
+                    row,
+                    setup_revision_id=setup_revision_id,
+                    frame_axis=frame_axis,
+                    approve_preparation_id=approve_preparation_id,
+                    approve_finding_ids=approve_finding_ids,
+                    submit=submit,
+                )
+                intent = replace(intent, submission_key=continuation_key)
+                record = self._preparing_record(intent)
+                # Carry the newest refused job's record, exactly as a press on it
+                # would: retained snapshot, setup, preparation and its approvals.
+                record["task_metadata"]["cad"].update(carried_record(row))
+                record["task_metadata"]["cad"]["solve_again_press_sha256"] = press_sha256
+                existing, created, event = await asyncio.to_thread(
+                    self.store.create_job_idempotent,
+                    record,
+                    submission_key=continuation_key,
+                    request_sha256=hashlib.sha256(str(row["id"]).encode()).hexdigest(),
+                    initial_event=(
+                        "stage",
+                        {"stage": "received", "message": record["stage_message"], "progress": 0.0},
+                    ),
+                )
+                if created:
+                    self._offer_to_prep_lane(existing, event)
+                    return existing
+            # Check the durable intent both after lookup and after a competing
+            # create. An error from a bound solver is not a refused preparation.
             child = self._require_job(existing)
-            if child["status"] not in {"preparing", "error"}:
-                raise JobConflictError("This solve already has a continuing job; use that job instead")
-            return existing
-        intent = solve_again_intent(
-            row,
-            setup_revision_id=setup_revision_id,
-            frame_axis=frame_axis,
-            approve_preparation_id=approve_preparation_id,
-            approve_finding_ids=approve_finding_ids,
-            submit=submit,
-        )
-        intent = replace(intent, submission_key=continuation_key)
-        record = self._preparing_record(intent)
-        # What the solve has recorded travels with it: the retained snapshot (the
-        # return may have left the WGLink folder), the state cleanup keeps for it,
-        # its setup, and its preparation with the approvals given on it.
-        record["task_metadata"]["cad"].update(carried_record(row))
-        child_id, created, event = await asyncio.to_thread(
-            self.store.create_job_idempotent,
-            record,
-            submission_key=continuation_key,
-            request_sha256=hashlib.sha256(job_id.encode()).hexdigest(),
-            initial_event=(
-                "stage",
-                {"stage": "received", "message": record["stage_message"], "progress": 0.0},
-            ),
-        )
-        if created:
-            self._offer_to_prep_lane(child_id, event)
-        else:
-            child = self._require_job(child_id)
-            if child["status"] not in {"preparing", "error"}:
-                raise JobConflictError("This solve already has a continuing job; use that job instead")
-        return child_id
+            if intent_of(child) is None or child["status"] not in {"preparing", "error"}:
+                raise JobConflictError(existing_child_message)
+            if child["status"] == "preparing":
+                child_cad = (child.get("task_metadata") or {}).get("cad") or {}
+                if child_cad.get("solve_again_press_sha256") == press_sha256:
+                    return existing
+                raise JobConflictError(existing_child_message)
+            row = child
 
     def _offer_to_prep_lane(self, job_id: str, event: Mapping[str, Any] | None) -> None:
         if event is not None:
