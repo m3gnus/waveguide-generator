@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.design.schema import DesignConfig
 from server.solver.context import SolverContext
 from server.solver import bempp, metal
@@ -370,6 +371,7 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
     assert captured["frame_override"].origin.tolist() == pytest.approx([0.0, 0.04, 0.05])
     assert getattr(captured["observation"], "custom_points", None) is None
     assert response["metadata"]["solver_backend"] == "bempp"
+    assert response["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
     assert response["metadata"]["bempp"]["adaptive_quadrature"] is True
     assert response["metadata"]["field_trace_retention"] == {
         "estimated_bytes": 384,

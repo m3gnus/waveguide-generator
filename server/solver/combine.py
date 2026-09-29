@@ -10,7 +10,7 @@ that per-channel form, so the two paths are one code path.
 Because every channel of one job shares a single observation grid, the
 legacy app's grid harmonisation stage has no equivalent here.
 
-Convention boundary (the only one): weights are defined in the engineering
+Weight convention boundary: weights are defined in the engineering
 ``e^{+jωt}`` convention, where a filter transfer function and a delay
 ``e^{-jωτ}`` mean what filter theory says they mean. Raw solver fields are
 ``e^{-iωt}`` (``exp(+ikr)``), so a weight is applied to a raw field as its
@@ -27,6 +27,12 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 import numpy as np
+
+from server.contracts.conventions import (
+    SOLVER_PHASE_CONVENTION,
+    engineering_to_solver,
+    solver_to_engineering,
+)
 
 from .driver_limits import MemberLimits, gain_ceiling_db, headroom
 from .filters import Filter, channel_weight, pair_inverts
@@ -46,7 +52,7 @@ _REVERSE_NULL_FLOOR_DB = -300.0
 # crossover can recombine in milliseconds without re-solving. The fields stay
 # in the solver's exp(+ikr) convention and the file says so.
 CHANNEL_BASES_VERSION = 1
-_BASES_PHASE_CONVENTION = "solver_exp_plus_ikr"
+_BASES_PHASE_CONVENTION = SOLVER_PHASE_CONVENTION
 
 
 def serialize_channel_bases(
@@ -298,7 +304,7 @@ def raw_channel_weights(
 
     Crossover filters, gains, delays and polarity are defined in the
     engineering ``e^{+jωt}`` convention. Raw solver fields use ``e^{-iωt}``,
-    so this is the single convention boundary where every engineering weight
+    so this is the weight convention boundary where every engineering weight
     is complex conjugated before it is applied to pressure or Neumann traces.
 
     Pass ``channels`` (the resolved per-member sections) for anything other
@@ -326,7 +332,7 @@ def raw_channel_weights(
         * (-1.0 if polarity.get(name) else 1.0)
         for name in members
     }
-    return {name: np.conjugate(weights_eng[name]) for name in members}
+    return {name: engineering_to_solver(weights_eng[name]) for name in members}
 
 
 def _interp_complex(freqs: np.ndarray, values: np.ndarray, target_hz: float) -> complex:
@@ -892,7 +898,7 @@ def combine_drive_channels(
 
     # Engineering-domain on-axis pressures drive every weight decision.
     pressures_eng = {
-        name: np.conjugate(fields[name][:, 0, on_axis]) for name in members
+        name: solver_to_engineering(fields[name][:, 0, on_axis]) for name in members
     }
     bands = chain_weights(freqs, list(members), settings)
     filtered = {name: pressures_eng[name] * bands[name] for name in members}
@@ -1085,7 +1091,7 @@ def combine_drive_channels(
             "points": pair_fits[index].points,
         }
 
-    # The single convention boundary: engineering weight -> raw-field factor.
+    # The weight convention boundary: engineering weight -> raw-field factor.
     weights_raw = raw_channel_weights(
         freqs,
         list(members),

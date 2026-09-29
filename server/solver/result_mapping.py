@@ -18,6 +18,8 @@ from typing import Any
 
 import numpy as np
 
+from server.contracts.conventions import solver_to_engineering
+
 from .acoustics import reference_air_density_kg_per_m3, reference_sound_speed_m_per_s
 from .beam_shape import beam_shape_summary
 from .context import SolverContext
@@ -730,7 +732,7 @@ def specific_impedance_z_over_rho_c(
         if index >= raw_pressure.size:
             output.append(None)
             continue
-        mapped = np.conjugate(-1j * 2.0 * np.pi * frequency * raw_pressure[index]) / rho_c
+        mapped = solver_to_engineering(-1j * 2.0 * np.pi * frequency * raw_pressure[index]) / rho_c
         output.append(
             complex(mapped)
             if math.isfinite(float(mapped.real)) and math.isfinite(float(mapped.imag))

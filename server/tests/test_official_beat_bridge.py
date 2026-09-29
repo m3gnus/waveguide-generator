@@ -12,6 +12,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.solver import official_beat as bridge
 from server.solver.context import SolverContext
 from server.solver.result_mapping import _gmsh22_observation_frame
@@ -249,6 +250,7 @@ def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch) -> No
     assert calls.index("negotiate") < calls.index("submit")
     assert len(provisional) == 3
     assert final["metadata"]["solver_backend"] == "beat"
+    assert final["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
     frame = final["metadata"]["observation_frame_basis"]
     first_point = requests[0]["outputs"][0]["options"]["points_m"][0]
     np.testing.assert_allclose(

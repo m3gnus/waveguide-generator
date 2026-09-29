@@ -24,6 +24,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION, SOLVER_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
 from server.platform.temp_session import temporary_directory_root
@@ -48,7 +49,7 @@ from .result_mapping import (
 )
 
 
-PHASOR = "exp(-i omega t)"
+PHASOR = SOLVER_TIME_CONVENTION
 SOURCE_ID = "excitation:source"
 PRESSURE_ID = "pressure"
 IMPEDANCE_ID = "impedance"
@@ -459,7 +460,7 @@ def solve_official_beat_from_msh_text(
         response = build_solver_response(
             result=native, config=config, context=context, start_time=started,
             metadata={"solver_backend": "beat", "solver_mode": "full_3d", "engine": "official-beat-engine",
-                      "phase_time_convention": "exp(+ikr)", "phasor_convention": PHASOR,
+                      "phase_time_convention": PHASE_TIME_CONVENTION, "phasor_convention": PHASOR,
                       "beat_backend": backend,
                       "performance": {"total_time_seconds": time.time() - started}},
             sound_speed_m_per_s=SOUND_SPEED_M_PER_S,

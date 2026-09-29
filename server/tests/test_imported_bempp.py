@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.engines import registry
 from server.jobs.models import SolveRequest
 from server.mesh.artifact import ImportedMeshArtifactError
@@ -238,6 +239,10 @@ def test_each_channel_is_one_sweep_driving_its_own_tags_in_the_records_frame(
     assert recording_bempp.solves[0]["text"] == MESH
 
     assert envelope["result_kind"] == "multi_channel"
+    assert all(
+        channel["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
+        for channel in envelope["channels"].values()
+    )
     assert envelope["channel_order"] == ["left", "right"]
     engine = envelope["metadata"]["solver_engine"]
     assert (engine["engine"], engine["assembly_backend"]) == ("bempp", "opencl")

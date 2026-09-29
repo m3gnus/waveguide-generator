@@ -26,6 +26,7 @@ from pathlib import Path
 import tempfile
 from typing import Any, Mapping, Sequence
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
 from server.platform.temp_session import temporary_directory_root
@@ -724,7 +725,7 @@ def solve_beat_from_msh_text(
         "solver_backend": "beat",
         "solver_mode": "full_3d",
         "engine": "hornlab-beat-bem",
-        "phase_time_convention": "exp(+ikr)",
+        "phase_time_convention": PHASE_TIME_CONVENTION,
         "beat_backend": backend,
         "device_interface": {
             "selected": f"beat-{backend}",

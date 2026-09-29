@@ -21,12 +21,17 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from server.contracts.conventions import (
+    ENGINEERING_PHASE_CONVENTION,
+    solver_to_engineering,
+)
+
 from .combine import deserialize_channel_bases
 from .imported import LEGACY_AXIAL_CONTRACT
 
 
 PRESSURE_BASIS_VERSION = 1
-PRESSURE_PHASE_CONVENTION = "engineering_exp_plus_jwt"
+PRESSURE_PHASE_CONVENTION = ENGINEERING_PHASE_CONVENTION
 
 
 @dataclass(frozen=True)
@@ -120,7 +125,7 @@ def export_pressure_basis(
             result.observation_angles_deg, dtype=np.float64
         ),
         "observation_planes": np.asarray(result.observation_planes, dtype=str),
-        "pressure_complex": np.conjugate(
+        "pressure_complex": solver_to_engineering(
             np.asarray(result.pressure_complex, dtype=np.complex128)
         ),
         "phase_convention": np.asarray(PRESSURE_PHASE_CONVENTION),
@@ -164,7 +169,7 @@ def export_pressure_basis(
     if sphere is not None:
         arrays.update(
             {
-                "sphere_pressure_complex": np.conjugate(
+                "sphere_pressure_complex": solver_to_engineering(
                     np.asarray(sphere, dtype=np.complex128)
                 ),
                 "sphere_theta_deg": np.asarray(result.sphere_theta_deg, dtype=np.float64),

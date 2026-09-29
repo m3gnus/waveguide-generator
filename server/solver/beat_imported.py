@@ -49,6 +49,10 @@ from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from server.contracts.conventions import (
+    ENGINEERING_PHASE_CONVENTION,
+    PHASE_TIME_CONVENTION,
+)
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import temporary_directory_root
 
@@ -590,7 +594,7 @@ def _combined_channel_response(
             beat_engine_name(backend): dict(status),
         },
         "engine": "hornlab-beat-bem",
-        "phase_time_convention": "exp(+ikr)",
+        "phase_time_convention": PHASE_TIME_CONVENTION,
         "combine": combine_payload,
         "mesh_validation": {
             "mode": request.options.mesh_validation_mode,
@@ -980,7 +984,7 @@ def solve_imported_beat_from_msh_text(
                 beat_engine_name(backend): status,
             },
             "engine": "hornlab-beat-bem",
-            "phase_time_convention": "exp(+ikr)",
+            "phase_time_convention": PHASE_TIME_CONVENTION,
             "mesh_validation": {
                 "mode": context.mesh_validation_mode,
                 "backend": "hornlab-beat-bem",
@@ -1031,7 +1035,7 @@ def solve_imported_beat_from_msh_text(
             response_metadata = channel_response["metadata"]
             response_metadata["impedance_units"] = "ohms"
             response_metadata["impedance_quantity"] = "electrical_input_impedance"
-            response_metadata["impedance_phase_convention"] = "engineering_exp_plus_jwt"
+            response_metadata["impedance_phase_convention"] = ENGINEERING_PHASE_CONVENTION
             response_metadata["impedance_drive"] = "voltage"
             response_metadata["driver"] = driver_payload
             response_metadata["drive"] = {

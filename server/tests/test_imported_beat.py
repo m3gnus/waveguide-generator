@@ -21,6 +21,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.engines import registry
 from server.jobs.models import SolveRequest
 from server.mesh.builder import _dense_solver_memory_requirements
@@ -362,6 +363,10 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     assert left["config"].native_symmetry_plane is None
 
     response = outcome.results
+    assert all(
+        channel["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
+        for channel in response["channels"].values()
+    )
     assert response["result_kind"] == "multi_channel"
     assert response["channel_order"] == ["left", "right"]
     # The run reports the record's own frame, not BEAT's rotated one.
@@ -747,3 +752,15 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     assert engines["beat-cpu"].symmetry_domains == ("full", "half-yz", "quarter")
     assert engines["metal"].imported_features == ("passive-cardioid",)
     assert engines["beat-cpu"].imported_features == ()
+
+
+def test_parametric_beat_envelope_uses_the_shared_phase_tag(recording_beat, monkeypatch) -> None:
+    from server.solver import beat
+    from server.solver.context import SolverContext
+
+    monkeypatch.setattr(beat, "_load_api", lambda: recording_beat)
+    monkeypatch.setattr(beat, "beat_backend_statuses", beat_imported.beat_backend_statuses)
+    context = SolverContext(design=None, frequency_range=(100.0, 1000.0), num_frequencies=3)
+    msh = Path(beat.__file__).with_name("warmup_mesh.msh").read_text()
+    response = beat.solve_beat_from_msh_text(msh, context, backend="cpu")
+    assert response["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION

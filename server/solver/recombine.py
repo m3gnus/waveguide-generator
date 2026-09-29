@@ -12,6 +12,7 @@ import time
 from types import SimpleNamespace
 from typing import Any, Mapping
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import (
     ChannelCombineSpec,
     ImportedGeometrySource,
@@ -161,7 +162,7 @@ def recombine_stored_results(
         "derived_from_channels": list(spec.members),
         "source_ids": source_ids,
         "engine": member_metadata.get("engine", "hornlab-metal-bem"),
-        "phase_time_convention": "exp(+ikr)",
+        "phase_time_convention": PHASE_TIME_CONVENTION,
         "combine": combine_payload,
         "recombined": True,
         "performance": {},

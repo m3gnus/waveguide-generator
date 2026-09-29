@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
 from server.platform.temp_session import temporary_directory_root
@@ -1032,7 +1033,7 @@ def solve_bempp_from_msh_text(
         "solver_backend": "bempp",
         "solver_mode": "full_3d",
         "engine": "hornlab-bempp-bem",
-        "phase_time_convention": "exp(+ikr)",
+        "phase_time_convention": PHASE_TIME_CONVENTION,
         "assembly_backend": backend,
         "assemblyBackend": backend,
         "assembly_backend_warning": status.get("warning"),

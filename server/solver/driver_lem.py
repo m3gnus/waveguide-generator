@@ -28,6 +28,7 @@ import numpy as np
 
 from hornlab_sim.methods import bandpass, driver_coupling
 
+from server.contracts.conventions import engineering_to_solver, solver_to_engineering
 from server.jobs.models import DriverSpec
 
 _TWO_PI = 2.0 * np.pi
@@ -63,7 +64,7 @@ def self_impedance_from_surface_average(
 
     omega = _TWO_PI * np.asarray(frequencies_hz, dtype=np.float64)
     raw = np.asarray(surface_pressure_avg_raw, dtype=np.complex128).reshape(-1)
-    return np.conjugate(-1j * omega * raw) / float(area_m2)
+    return solver_to_engineering(-1j * omega * raw) / float(area_m2)
 
 
 def one_way_peak_excursion_mm(cone_excursion_m: np.ndarray) -> np.ndarray:
@@ -158,7 +159,7 @@ def channel_drive_scaling(
     omega = _TWO_PI * frequencies
     # Cone acceleration per the applied voltage; conjugated onto raw fields.
     scale_eng = 1j * omega * coupled.cone_volume_velocity / float(area_m2)
-    scale_raw = np.conjugate(scale_eng)
+    scale_raw = engineering_to_solver(scale_eng)
 
     excursion_mm = one_way_peak_excursion_mm(coupled.cone_excursion_m)
     peak_excursion_mm = float(np.max(excursion_mm)) if excursion_mm.size else 0.0
