@@ -213,7 +213,7 @@ const common = {
     // ATH defaults omitted WallThickness to 5 mm, verified against ath.exe;
     // see hornlab_mesher/config_parser.py's ATH-defaults note.
     vertical_offset: 0, quadrants: 1234, wall_thickness: 5, rear_resolution: 40,
-    aperture_resolution_scale: 1.5, max_triangles: 50_000, allow_large_mesh: 0,
+    aperture_resolution_scale: 1, max_triangles: 50_000, allow_large_mesh: 0,
   },
   simulation: {
     f1: 400, f2: 16_000, num_frequencies: 20,

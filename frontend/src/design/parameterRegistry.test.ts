@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { designForFamily } from '../stores/design';
+import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
 import {
   PARAMETER_REGISTRY,
   PARAMETER_SECTION_DEFINITIONS,
@@ -246,5 +246,31 @@ describe('complete parameter registry', () => {
     expect(description('rosse.a0')).toContain('does not guarantee a tangent join');
     expect(description('common.throat_ext_angle')).toContain('independent of a0');
     expect(description('common.throat_ext_length')).toContain('does not change the computed OS-SE or R-OSSE flare');
+  });
+
+  describe('aperture mesh scale', () => {
+    const field = () => PARAMETER_REGISTRY.find((item) => item.id === 'mesh.aperture_resolution_scale')!;
+
+    it('defaults to 1, the cap using Mouth mesh resolution', () => {
+      expect(designForFamily('OSSE').mesh.aperture_resolution_scale).toBe(1);
+      resetDesignStore();
+      expect(useDesignStore.getState().design.mesh.aperture_resolution_scale).toBe(1);
+    });
+
+    it('cannot be set below 1, and says a value below 1 is refused rather than clamped', () => {
+      expect(field().min).toBe(1);
+      const text = field().description ?? '';
+      expect(text).not.toMatch(/clamped/i);
+      expect(text).toContain('Values below 1 are refused');
+      expect(text).toMatch(/6.8 kHz/);
+    });
+
+    it('keeps a saved 1.5 as its own setting', () => {
+      resetDesignStore();
+      const saved = JSON.parse(JSON.stringify(useDesignStore.getState().design));
+      saved.mesh.aperture_resolution_scale = 1.5;
+      useDesignStore.getState().loadDesign(saved);
+      expect(useDesignStore.getState().design.mesh.aperture_resolution_scale).toBe(1.5);
+    });
   });
 });
