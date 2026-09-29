@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .domain_interpretation import DomainReadingError, interpretation_view, record_reading
-from .solver_frame_api import snapshot_record
+from .solver_frame_api import jobs_for_preview, snapshot_record
 from .store import CadLinkStore
 
 
@@ -48,8 +48,9 @@ async def get_domain_interpretation(
 
     store: CadLinkStore = request.app.state.cadlink_store
 
+    jobs = await jobs_for_preview(request, operationId)
     def load() -> dict[str, Any]:
-        record = snapshot_record(store, operation_id=operationId, ingest_id=ingestId)
+        record = snapshot_record(store, operation_id=operationId, ingest_id=ingestId, job_store=jobs)
         return interpretation_view(store, record)
 
     return await asyncio.to_thread(load)
@@ -63,9 +64,11 @@ async def put_domain_interpretation(
 
     store: CadLinkStore = request.app.state.cadlink_store
 
+    jobs = await jobs_for_preview(request, payload.operation_id)
     def change() -> dict[str, Any]:
         record = snapshot_record(
-            store, operation_id=payload.operation_id, ingest_id=payload.ingest_id
+            store, operation_id=payload.operation_id, ingest_id=payload.ingest_id,
+            job_store=jobs
         )
         reading: dict[str, Any] = {"reading": payload.reading}
         if payload.reading == "reduced":

@@ -649,28 +649,28 @@ def _app(harness: Harness, job_for_submission_key) -> SimpleNamespace:
     ))
 
 
-@old_only(
-    "the operations sweep at start-up (the ledger sweep is S4-F1)",
-    "test_job_cad_lane.py::test_a_job_no_lane_held_is_prepared_by_the_next_start",
-)
 def test_the_startup_handler_recovers_through_the_jobs_database_alone(harness: Harness) -> None:
-    from server.cadlink.api import _preparation_context, _recover_on_startup
-    from server.jobs.store import SubmissionConflictError
+    from types import SimpleNamespace
+    from server.cadlink.api import _recover_on_startup
 
     _received(harness)
-    harness.store.claim("cmd-1", 0)
-    harness.jobs["cad-solve:cmd-1"] = "job-7"
-    app = _app(harness, harness.jobs.get)
-
-    asyncio.run(_recover_on_startup(app)())
-
-    assert (harness.row()["state"], harness.row()["job_id"]) == ("accepted", "job-7")
-
-    async def context():
-        return _preparation_context(app.state)
-
-    # A key conflict means the key made a job: it is reconciled, never refused.
-    assert SubmissionConflictError not in asyncio.run(context()).submission_refusals
+    # The keyed job is durable; the ledger acceptance has not committed yet.
+    harness.runtime._ensure_prep_lane = lambda: None
+    from server.cadlink.job_shims import accept_operation_solve
+    original = harness.store.record_outcome
+    harness.store.record_outcome = lambda *args, **kw: (_ for _ in ()).throw(RuntimeError("cut"))
+    with pytest.raises(RuntimeError, match="cut"):
+        harness._loop.run(accept_operation_solve(harness.context(), "cmd-1"))
+    harness.store.record_outcome = original
+    job_id = harness.jobs_store.latest_cad_job("cmd-1")["id"]
+    app = SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=harness.store, data_dir=str(harness.data_dir), jobs_runtime=harness.runtime,
+        cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),
+        cad_job_shims=True, update_restart=None,
+    ))
+    harness._loop.run(_recover_on_startup(app)())
+    assert (harness.row()["state"], harness.row()["job_id"]) == ("accepted", job_id)
+    assert harness.jobs_store.list_jobs()[1] == 1
 
 
 @old_only(
@@ -852,16 +852,21 @@ def test_a_reloaded_ui_reads_the_same_stage(harness: Harness) -> None:
         "needs_user_input", "ready", "findings_need_review",
     )
     assert detail["message"] == "Review the preparation's findings before solving: healing-1"
-    if harness.backend == "operations":
-        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
-        routed = asyncio.run(get_cad_operation("cmd-1", request))
-        listed = asyncio.run(list_cad_operations(request, pending=True, limit=100))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
+        cadlink_store=harness.store, jobs_runtime=harness.runtime, data_dir=str(harness.data_dir),
+        cad_workspace=SimpleNamespace(selected_path=lambda: harness.workspace),
+        cad_job_shims=True, update_restart=None,
+    )))
+    async def read():
+        routed = await get_cad_operation("cmd-1", request)
+        listed = await list_cad_operations(request, pending=True, limit=100)
         assert (routed["state"], routed["stage"], routed["reason"]) == (
             detail["state"], detail["stage"], detail["reason"],
         )
         assert routed["preparation"]["blockingFindingIds"] == ["healing-1"]
         assert [item["operationId"] for item in listed["operations"]] == ["cmd-1"]
         assert listed["operations"][0]["stage"] == "ready"
+    harness._loop.run(read())
 
 
 @old_only(
@@ -1024,10 +1029,7 @@ def test_cleanup_keeps_what_a_pending_operation_still_references(
     assert reclaimed == [("Tritonia", ["sha256:" + "5" * 64])]
     # Dismissal keeps a cancelled ledger row but deletes a refused job.
     harness.dismiss()
-    if harness.backend == "operations":
-        assert harness.row()["state"] == "cancelled"
-    else:
-        assert harness.jobs_store.get_job_row(harness._latest["cmd-1"]) is None
+    assert harness.jobs_store.get_job_row(harness._latest["cmd-1"]) is None
     assert harness.held_return_states() == []
     # The retained snapshot itself is never pruned.
     assert list((harness.data_dir / "imports" / "bundles").iterdir())
@@ -2196,22 +2198,14 @@ def test_a_press_while_an_update_restart_is_approved_reports_each_lifecycle(
     harness: Harness,
 ) -> None:
     _received(harness)
-    before = harness.row()
     # Approved after the loop listed it, or after the route let it through.
     harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
 
-    if harness.backend == "operations":
-        summary = asyncio.run(prepare_operation(
-            harness.context(), "cmd-1", PreparationInput(), expected_generation=0
-        ))
-        assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
-        assert harness.row() == before
-    else:
-        summary = harness.prepare()
-        assert (summary["state"], summary["reason"]) == (
-            "needs_user_input", "update_restart_pending",
-        )
-        assert harness.latest_job()["status"] == "preparing"
+    summary = harness.prepare()
+    assert (summary["state"], summary["reason"]) == (
+        "needs_user_input", "update_restart_pending",
+    )
+    assert harness.latest_job()["status"] == "preparing"
     assert harness.ingest.calls == [] and harness.submitted == []
     harness.blocked = None
     assert harness.prepare(setup_revision_id=_revision(harness.store, _setup()))["state"] == "accepted"
@@ -2234,9 +2228,10 @@ def test_an_update_restart_approved_while_a_pass_collects_starts_nothing(
     monkeypatch.setattr(preparation, "collect_solve_deliveries", collect_then_approve)
 
     assert harness.delivery_pass() == []
-    # Collected and retained, and nothing started: the operation is still received.
+    # The ledger acknowledges the durable job; the restart latch holds its lane.
     row = harness.row()
-    assert (row["state"], row["attempt_generation"]) == ("received", 0)
+    assert (row["state"], row["attempt_generation"]) == ("accepted", 0)
+    assert harness.latest_job()["status"] == "preparing"
     assert harness.ingest.calls == []
 
 

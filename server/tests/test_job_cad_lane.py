@@ -116,28 +116,6 @@ def test_the_intent_round_trips_and_names_the_delivery_it_came_from() -> None:
     assert intent_of({"config_json": {"design": {}}}) is None
 
 
-def test_nothing_in_production_creates_a_preparing_job_yet() -> None:
-    """S4-E2 is the new path, not yet called: S4-F1 owns the first production write.
-
-    Until then no ``preparing`` row exists outside tests, so a release a rollback
-    returns to never meets one (the compatibility decision lives with the change that
-    first writes it: docs/architecture/CAD-OPERATIONS.md, "What the preparation-lane
-    change must decide").
-    """
-
-    root = Path(__file__).resolve().parents[1]
-    callers = {"accept_cad_solve", "solve_cad_again", "configure_cad_preparation", "CadSolveIntent("}
-    homes = {"jobs/runtime.py", "jobs/cad_intent.py", "jobs/cad_preparation.py"}
-    offenders = [
-        f"{path.relative_to(root)}: {name}"
-        for path in root.rglob("*.py")
-        if "tests" not in path.parts and path.relative_to(root).as_posix() not in homes
-        for name in callers
-        if name in path.read_text(encoding="utf-8")
-    ]
-    assert offenders == []
-
-
 # -- acceptance is idempotent by key -----------------------------------------------------
 
 

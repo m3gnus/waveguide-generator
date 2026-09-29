@@ -258,14 +258,7 @@ def _modal_dialogs_fail_instead_of_blocking():
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
-    """Give the CAD-solve scenarios their backends: both, or only the first when they need no backend.
-
-    ``cad_backends.py``: a module lists its backend fixtures in ``BACKEND_FIXTURES``
-    (each takes the backend name from ``request.param``), and each scenario in it runs on
-    the operations backend and on the jobs backend. One marked ``backend_free`` never
-    touches a backend (it retains a copy, reads a store), so it would only repeat
-    itself: it runs once, on the operations backend. Nothing is deselected.
-    """
+    """Run CAD scenarios on the jobs backend only (S4-F1)."""
 
     for name in getattr(metafunc.module, "BACKEND_FIXTURES", ()):
         if name in metafunc.fixturenames:

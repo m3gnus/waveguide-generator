@@ -88,18 +88,19 @@ from .manual_solve import (
 # routes and their credentials stay in ``server/cadlink/onshape/``.
 from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
-from .operations import CANCELLED, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
+from .operations import CANCELLED, KINDS, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
 from .preparation import (
     DismissalUnconfirmed,
     PreparationContext,
     PreparationInput,
     dismiss_operation,
     operation_summary,
-    prepare_operation,
     recover_operations,
     DeliveryPassReporter,
     run_delivery_pass,
+    settle_received_snapshots,
 )
+from .job_shims import accept_operation_solve, operation_detail, sweep_pending_solves
 from .project_setup import SOLVER_SELECTION, inventory_sha256
 from .setup import setup_content, setup_digest, validate_setup
 from .roles import canonical_source_role
@@ -1827,6 +1828,35 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
         workspace_root = _selected_workspace_root(state)
     runtime = getattr(state, "jobs_runtime", None)
     job_store = getattr(runtime, "store", None)
+    if runtime is not None and hasattr(runtime, "configure_cad_preparation") and not getattr(state, "cad_job_shims", False):
+        from server.jobs.cad_preparation import CadPreparationHost
+        runtime.configure_cad_preparation(CadPreparationHost(
+            store=state.cadlink_store, data_dir=Path(state.data_dir),
+            workspace_root=lambda: _selected_workspace_root(state),
+            ingest=lambda *args, **kwargs: ingest_bundle(*args, **kwargs),
+        ))
+        state.cad_job_shims = True
+        queue = runtime.events.subscribe()
+
+        async def forward() -> None:
+            try:
+                while True:
+                    event = await queue.get()
+                    job_id = event.get("jobId")
+                    if not job_id or event.get("kind") != "event":
+                        continue
+                    job = await asyncio.to_thread(job_store.get_job_row, job_id)
+                    cad = (job.get("task_metadata") or {}).get("cad") if job else None
+                    if not cad:
+                        continue
+                    row = await asyncio.to_thread(state.cadlink_store.get_operation, cad.get("operation_id"))
+                    if row:
+                        summary = await asyncio.to_thread(operation_summary, row, job_store)
+                        runtime.events.publish({"v": 1, "kind": "cadOperation", "operation": summary})
+            finally:
+                runtime.events.unsubscribe(queue)
+
+        _track(state, asyncio.create_task(forward(), name="wg-cad-operation-events"))
     restart = getattr(state, "update_restart", None)
     loop = asyncio.get_running_loop()
 
@@ -1879,10 +1909,14 @@ def _preparation_context(state: Any, *, workspace_root: Any = _UNRESOLVED) -> Pr
         ),
         submission_blocked=restart.refusal if restart is not None else None,
         refuse=refuse,
+        runtime=runtime if hasattr(runtime, "accept_cad_solve") else None,
+        job_store=job_store,
     )
 
 
-def _operation_detail(store: CadLinkStore, row: Mapping[str, Any]) -> dict[str, Any]:
+def _operation_detail(store: CadLinkStore, row: Mapping[str, Any], ctx: Any = None) -> dict[str, Any]:
+    if ctx is not None and ctx.runtime is not None and row["kind"] == PREPARE_AND_SOLVE:
+        return operation_detail(ctx, row)
     detail = operation_summary(row)
     approvals = json.loads(row["approvals_json"]) if row.get("approvals_json") else []
     detail["approvals"] = approvals
@@ -1944,13 +1978,25 @@ async def list_cad_operations(
     pending: bool = Query(default=True),
     limit: int = Query(default=100, ge=1, le=1000),
 ) -> dict[str, Any]:
-    """CAD operations, the unfinished ones by default: the authoritative state."""
+    """Unfinished operations, deriving solve state from their authoritative jobs."""
 
-    store: CadLinkStore = request.app.state.cadlink_store
-    rows = await asyncio.to_thread(
-        store.list_operations, states=_PENDING_STATES if pending else None, limit=limit
-    )
-    return {"operations": [operation_summary(row) for row in rows]}
+    ctx = _preparation_context(request.app.state)
+    if ctx.runtime is not None:
+        await ctx.runtime.start()
+    def load() -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        for kind in KINDS:
+            cursor = 0
+            while True:
+                page = ctx.store.operation_page(kind=kind, states=STATES, after_rowid=cursor, limit=100)
+                if not page:
+                    break
+                for cursor, row in page:
+                    summary = operation_summary(row, ctx.job_store)
+                    if not pending or summary["state"] in _PENDING_STATES:
+                        result.append(summary)
+        return sorted(result, key=lambda item: item["acceptedSeq"] or 0, reverse=True)[:limit]
+    return {"operations": await asyncio.to_thread(load)}
 
 
 @router.post(
@@ -2000,7 +2046,11 @@ async def post_cad_operation(
             ),
         )
     if recovered is not None:
-        return ManualSolveOperationResponse(operation=operation_summary(recovered))
+        ctx = _preparation_context(state)
+        if ctx.runtime is not None:
+            await accept_operation_solve(ctx, payload.operation_id, manual=True)
+        recovered = await asyncio.to_thread(state.cadlink_store.get_operation, payload.operation_id)
+        return ManualSolveOperationResponse(operation=operation_summary(recovered, ctx.job_store))
 
     restart = getattr(state, "update_restart", None)
     refusal = restart.refusal() if restart is not None else None
@@ -2052,7 +2102,11 @@ async def post_cad_operation(
                 retryable=False,
             ),
         )
-    return ManualSolveOperationResponse(operation=operation_summary(row))
+    ctx = _preparation_context(state)
+    if ctx.runtime is not None:
+        await accept_operation_solve(ctx, payload.operation_id, manual=True)
+    row = await asyncio.to_thread(state.cadlink_store.get_operation, payload.operation_id)
+    return ManualSolveOperationResponse(operation=operation_summary(row, ctx.job_store))
 
 
 @router.get("/operations/{operation_id}")
@@ -2061,7 +2115,10 @@ async def get_cad_operation(operation_id: str, request: Request) -> dict[str, An
     row = await asyncio.to_thread(store.get_operation, operation_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
-    return await asyncio.to_thread(_operation_detail, store, row)
+    ctx = _preparation_context(request.app.state)
+    if ctx.runtime is not None:
+        await ctx.runtime.start()
+    return await asyncio.to_thread(_operation_detail, store, row, ctx)
 
 
 @router.post(
@@ -2144,66 +2201,42 @@ def _track(state: Any, task: asyncio.Task[Any]) -> None:
 async def post_prepare_cad_operation(
     operation_id: str, payload: PrepareOperationRequest, request: Request
 ) -> dict[str, Any]:
-    """Prepare a solve operation from its retained snapshot, and submit it when asked.
+    """Compatibility Solve: create the first intent, or continue its refused job."""
 
-    A preparation already running for the operation is taken over: its next
-    write is refused, and this one's result stands. While an update restart is
-    approved nothing starts: 409 ``update_restart_pending``, with the envelope
-    every latched route uses, and the operation stays as it is.
-    """
-
-    store: CadLinkStore = request.app.state.cadlink_store
+    from server.jobs.runtime import JobConflictError
+    store = request.app.state.cadlink_store
     row = await asyncio.to_thread(store.get_operation, operation_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
     if row["kind"] != PREPARE_AND_SOLVE:
         raise HTTPException(status_code=409, detail=f"CAD operation {operation_id} is not a solve")
-    if payload.setup_revision_id is not None and (
-        await asyncio.to_thread(store.get_setup_revision, payload.setup_revision_id)
-    ) is None:
-        raise HTTPException(
-            status_code=404, detail=f"Unknown setup revision {payload.setup_revision_id}"
-        )
+    ctx = _preparation_context(request.app.state)
+    if payload.setup_revision_id and await asyncio.to_thread(ctx.store.get_setup_revision, payload.setup_revision_id) is None:
+        raise HTTPException(status_code=404, detail=f"Unknown setup revision {payload.setup_revision_id}")
     approvals = payload.approvals
-    context = _preparation_context(request.app.state)
-    refusal = context.submission_blocked() if context.submission_blocked is not None else None
-    if refusal is not None:
-        return JSONResponse(
-            status_code=409,
-            content=error_envelope(
-                code=UPDATE_RESTART_PENDING,
-                stage="submission",
-                message=refusal,
-                retryable=True,
-            ),
-        )
-    if payload.frame_axis is not None:
-        # Admitted: the axis this press showed is the operation's before
-        # anything is started, so no early return and no later continuation
-        # of the attempt can lose it.
-        await asyncio.to_thread(
-            store.admit_frame_axis, operation_id, payload.frame_axis, int(row["attempt_generation"])
-        )
-    task = asyncio.create_task(
-        prepare_operation(
-            context,
-            operation_id,
-            PreparationInput(
-                setup_revision_id=payload.setup_revision_id,
-                submit=payload.submit,
-                approve_preparation_id=approvals.preparation_id if approvals else None,
-                approve_finding_ids=tuple(approvals.finding_ids) if approvals else (),
-                expected_frame_axis=payload.frame_axis,
-            ),
-        )
+    press = PreparationInput(
+        setup_revision_id=payload.setup_revision_id, submit=payload.submit,
+        expected_frame_axis=payload.frame_axis,
+        approve_preparation_id=approvals.preparation_id if approvals else None,
+        approve_finding_ids=tuple(approvals.finding_ids) if approvals else (),
     )
-    _track(request.app.state, task)
-    if payload.wait:
-        try:
-            return {"operation": await asyncio.shield(task)}
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"operation": operation_summary(row)}
+    try:
+        await ctx.runtime.start()
+        job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id, row.get("job_id"))
+        if job is None:
+            await accept_operation_solve(ctx, operation_id, press)
+        else:
+            await ctx.runtime.prepare_cad_solve(
+                job["id"], setup_revision_id=payload.setup_revision_id, frame_axis=payload.frame_axis,
+                approve_preparation_id=press.approve_preparation_id,
+                approve_finding_ids=press.approve_finding_ids, submit=payload.submit,
+            )
+        if payload.wait:
+            await ctx.runtime.wait_cad_preparations()
+    except (JobConflictError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    row = await asyncio.to_thread(ctx.store.get_operation, operation_id)
+    return {"operation": await asyncio.to_thread(operation_summary, row, ctx.job_store)}
 
 
 @router.post("/operations/{operation_id}/approvals")
@@ -2220,6 +2253,19 @@ async def post_cad_operation_approvals(
     row = await asyncio.to_thread(store.get_operation, operation_id)
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+    ctx = _preparation_context(request.app.state)
+    if ctx.runtime is not None and row["kind"] == PREPARE_AND_SOLVE:
+        await ctx.runtime.start()
+        job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id, row.get("job_id"))
+        if job is None:
+            raise HTTPException(status_code=409, detail="This CAD solve has no job.")
+        try:
+            await asyncio.to_thread(ctx.job_store.approve_cad_preparation, job["id"], payload.preparation_id, payload.finding_ids)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        detail = await asyncio.to_thread(operation_detail, ctx, row)
+        ctx.publish(detail)
+        return detail
     try:
         updated = await asyncio.to_thread(
             store.add_approvals, operation_id, payload.preparation_id, payload.finding_ids
@@ -2241,6 +2287,37 @@ async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict
     """
 
     context = _preparation_context(request.app.state)
+    ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
+    if ledger is not None and ledger["kind"] == PREPARE_AND_SOLVE and context.runtime is not None:
+        await context.runtime.start()
+        job = await asyncio.to_thread(context.job_store.latest_cad_job, operation_id, ledger.get("job_id"))
+        if job:
+            if ledger["state"] not in TERMINAL_STATES:
+                # A failed startup may have committed the job/key but not its
+                # receipt. Make that join durable before deleting the intent;
+                # otherwise a restart could accept the dismissed delivery again.
+                try:
+                    await accept_operation_solve(context, operation_id, schedule=False)
+                    await asyncio.to_thread(context.store.make_durable)
+                except sqlite3.Error as exc:
+                    raise HTTPException(status_code=409, detail="WG could not durably record this solve's acceptance. Try dismissing it again.") from exc
+                ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
+            from server.jobs.cad_intent import intent_of
+            if intent_of(job) is None:
+                return operation_summary(ledger, context.job_store)
+            summary = operation_summary(ledger, context.job_store)
+            if job["status"] in {"preparing", "queued", "running"}:
+                await context.runtime.stop(job["id"])
+                summary = operation_summary(ledger, context.job_store)
+            else:
+                from server.jobs.runtime import JobConflictError
+                try:
+                    await context.runtime.dismiss_cad_solve(operation_id)
+                except JobConflictError as exc:
+                    raise HTTPException(status_code=409, detail=str(exc)) from exc
+                summary = operation_summary(ledger, context.job_store)
+            context.publish(summary)
+            return summary
     try:
         row = await asyncio.to_thread(dismiss_operation, context, operation_id)
     except DismissalUnconfirmed as exc:
@@ -2463,12 +2540,16 @@ def _deliver_solve_commands(application: FastAPI):
 
 def _recover_on_startup(application: FastAPI):
     async def recover_cad_operations_on_startup() -> None:
-        # Settles what a backend that stopped left: a job its submission key
-        # made is the outcome; an attempt it held waits for the user. It only
-        # reads the jobs database; starting the jobs runtime stays its own.
+        # Start job recovery, then replay the ledger-to-job acceptance join.
+        # Job/key commits first; an interrupted legacy preparation is refused.
         state = application.state
         try:
-            changed = await asyncio.to_thread(recover_operations, _preparation_context(state))
+            ctx = _preparation_context(state)
+            if ctx.runtime is not None:
+                changed = await sweep_pending_solves(ctx)
+                await asyncio.to_thread(settle_received_snapshots, ctx)
+            else:
+                changed = await asyncio.to_thread(recover_operations, ctx)
         except Exception:  # noqa: BLE001 - recovery must never stop the app starting
             logger.warning("Could not recover CAD operations at startup.", exc_info=True)
             return

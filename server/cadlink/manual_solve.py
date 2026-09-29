@@ -1,4 +1,4 @@
-"""Create backend-owned solve operations from retained ingestion records."""
+"""Retain the manual Solve delivery ledger; the compatibility route creates its job."""
 
 from __future__ import annotations
 
@@ -71,7 +71,11 @@ def recover_manual_solve(
 def create_manual_solve(
     store: CadLinkStore, data_dir: str | Path, operation_id: str, ingest_id: str
 ) -> tuple[dict[str, Any], str]:
-    """Accept or recover one solve bound to an existing retained ingest."""
+    """Accept or recover the ledger envelope of a retained ingest.
+
+    This does not prepare or submit. The route hands this delivery to
+    JobRuntime.accept_cad_solve before returning acceptance to the caller.
+    """
 
     existing, ingest, record, inputs = recover_manual_solve(store, operation_id, ingest_id)
     if existing is not None:

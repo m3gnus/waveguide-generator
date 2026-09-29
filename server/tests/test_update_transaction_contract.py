@@ -3215,20 +3215,12 @@ def test_a_cad_return_ingested_after_restart_approval_is_refused(tmp_path: Path)
     assert error["retryable"] is True
 
 
-def test_a_cad_preparation_requested_after_restart_approval_is_refused(tmp_path: Path) -> None:
-    """Contract §4.2: a CAD preparation copies and meshes a return, so it refuses too.
+def test_a_cad_preparation_requested_after_restart_approval_is_held(tmp_path: Path) -> None:
+    """The latch allows durable acceptance, while the job lane copies and meshes nothing."""
 
-    It is refused through the app before anything starts, with the envelope
-    the other latched routes use, and the operation stays as it was.
-    """
+    from server.cadlink.operations import PREPARE_AND_SOLVE, prepare_and_solve_request, request_digest
 
-    from server.cadlink.operations import (
-        PREPARE_AND_SOLVE,
-        prepare_and_solve_request,
-        request_digest,
-    )
-
-    async def scenario() -> tuple[int, bytes, dict[str, Any]]:
+    async def scenario():
         app = create_app(data_dir=tmp_path / "data")
         store = app.state.cadlink_store
         target, inputs = prepare_and_solve_request(
@@ -3238,16 +3230,28 @@ def test_a_cad_preparation_requested_after_restart_approval_is_refused(tmp_path:
             "cmd-1", PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs), target, inputs
         )
         app.state.update_restart.approve("v2.0.1")
-        status, raw = await _post(app, "/api/cadlink/operations/cmd-1/prepare", {})
-        return status, raw, store.get_operation("cmd-1")
-
-    status, raw, row = asyncio.run(scenario())
-
-    assert status == 409, raw[:200]
-    body = json.loads(raw)
-    assert (body["error"]["code"], body["error"]["retryable"]) == ("update_restart_pending", True)
-    assert "v2.0.1" in body["detail"]
-    assert (row["state"], row["attempt_generation"]) == ("received", 0)
+        try:
+            status, raw = await _post(app, "/api/cadlink/operations/cmd-1/prepare", {"frameAxis": "+z"})
+            body = json.loads(raw)
+            assert status == 200, raw[:200]
+            assert (body["operation"]["state"], body["operation"]["reason"]) == (
+                "needs_user_input", "update_restart_pending",
+            )
+            assert "v2.0.1" in body["operation"]["message"]
+            row = store.get_operation("cmd-1")
+            job = app.state.jobs_runtime.store.latest_cad_job("cmd-1")
+            assert (row["state"], row["attempt_generation"]) == ("accepted", 0)
+            assert job["status"] == "preparing" and job["started_at"] is None
+            assert job["config_json"]["frame_axis"] == "+z"
+            assert job["task_metadata"]["cad"].get("preparation") is None
+            assert job["run_number"] is None
+        finally:
+            for task in list(app.state.cad_preparations):
+                task.cancel()
+            await asyncio.gather(*list(app.state.cad_preparations), return_exceptions=True)
+            await app.state.jobs_runtime.shutdown()
+            store.close()
+    asyncio.run(scenario())
 
 
 # ---------------------------------------------------------------------------

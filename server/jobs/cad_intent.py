@@ -107,7 +107,7 @@ class CadSolveIntent:
             name: config.get(name)
             for name in ("operation_id", "bundle_path", "manifest_sha256", "return_id")
         }
-        missing = sorted(name for name, value in required.items() if not isinstance(value, str) or not value)
+        missing = sorted(name for name, value in required.items() if not isinstance(value, str) or (not value and name != "return_id"))
         if missing:
             raise ValueError(f"a CAD intent names {', '.join(missing)}")
         approvals = config.get("approvals")

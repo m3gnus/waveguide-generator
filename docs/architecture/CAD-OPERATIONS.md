@@ -21,9 +21,9 @@ delivery version 3 for the heartbeat and Fusion-bound requests; WG's separate
 version"). Every request is its own file, and there is no single-slot marker and no twin.
 The adapter follows the order
 in "Fusion-bound mutations", marks an operation as applying before it writes, and
-settles what an interrupted session left. The backend owns a solve operation end to end
-(see "Setup revisions" and "Preparation"): its retained snapshot, its setup revision,
-its fenced preparation stages, its approvals and its bound request. A later step adds a
+settles what an interrupted session left. Since S4-F1 the job owns a solve from
+acceptance through preparation and execution. The operation is its acceptance ledger;
+its UI state, stage, reason and preparation are derived from the job (see "Preparation"). A later step adds a
 field to a request only under a new digest version.
 WG-produced return and handoff files are now accepted into this store before
 publication. Fresh version-3 heartbeats now settle their document evidence,
@@ -544,189 +544,71 @@ press at all when WG is confident.
 
 ## Preparation
 
-A solve operation is prepared by the backend, in stages. The UI issues
-`POST /api/cadlink/operations/{id}/prepare` (a setup revision; whether to submit; the
-blocking findings the user reviewed, and on which preparation) and observes.
+A CAD Solve is a job from acceptance. The delivery pass retains the snapshot,
+then calls `JobRuntime.accept_cad_solve` under `cad-solve:<operationId>`, records
+ledger acceptance with its job id, writes the acknowledgement and deletes the
+claim. The jobs acceptance is checkpointed before the ledger names it, and the
+ledger is checkpointed before the acknowledgement. A retained delivery cannot
+be acknowledged while either acceptance cannot be made durable. A claim whose
+snapshot is unreadable waits for the existing bounded number of passes; at the
+bound the job is accepted and its preparation explains the unavailable return.
+The same id with different inputs remains a ledger conflict. Send, Insert and
+Update keep their existing paths.
 
-A manual Solve starts with `POST /api/cadlink/operations` and
-`{operationId, ingestId}`. The backend resolves that immutable ingestion record to its
-content-addressed `.wgreturn`, refuses `snapshot_not_retained` when the copy is gone,
-and accepts a `prepare_and_solve` operation with its snapshot recorded immediately.
-The request's internal `bundle_path` is `ingest/<ingestId>`: it binds the digest to the
-exact ingest rather than naming an exchange folder that can disappear. Repeating the
-same pair recovers the operation; reusing the id for another ingest is
-`operation_conflict`. A UI then stores its setup revision and prepares the operation
-through the same route and stages as a solve requested by Fusion.
+The job's separate two-wide lane performs the same retain, setup, ingest,
+frame/domain, findings and composition steps. Binding freezes the request, mesh,
+metadata and run number in one jobs transaction (`preparing` → `queued`). A
+refused preparation is an unnumbered `error` job with the same reason and message.
+Per-project setup, frame and domain memory is unchanged. Approvals belong to the
+exact preparation and resume only when its complete identity matches.
 
-| Stage | What is done | Committed as |
-| --- | --- | --- |
-| `received` | Accepted. The snapshot is retained in WG's storage before the delivery is acknowledged; a return that cannot be read yet keeps its delivery for a while (see "Consuming a delivery") | the operation row, `snapshot_json` |
-| `validating` | The retained copy is found, or made now for an operation received before retention | `snapshot_json` |
-| `preparing-mesh` | The retained snapshot is ingested and meshed with the setup's options | an ingestion record, published under the attempt's fence |
-| `ready` | The preparation is recorded, with its blocking findings | `cad_preparations`, `preparation_id` |
-| `submitted` | The request is bound, then submitted under `cad-solve:<id>` | `request_json`, then `accepted` with the job |
+The unchanged frontend uses compatibility shims:
 
-- **One attempt at a time.** Each preparation claims the operation (a new generation).
-  Every stage write, the ingestion record's publication, the approvals an attempt
-  records and the outcome are conditional on that generation. A later preparation takes
-  the operation over; the earlier attempt's next write is refused and it stops without
-  committing a stage, a record or an outcome. (Ingestion claims a project lineage and an
-  archive name before it publishes; an obsolete attempt can leave such a claim, which
-  the next preparation of the same return reuses.)
-- **Dismissal.** `POST .../cancel` first reconciles a solve with the jobs store.
-  - If its submission key already made a job, the operation follows the job: it is
-    `accepted` with it, and the user cancels the job in the jobs list.
-  - If its request is bound, so a job may exist, and the jobs store cannot be read, the
-    route answers 409 and dismisses nothing: WG cannot confirm yet whether a job exists.
-    That holds whether the operation is idle or an attempt is submitting it. A cancelled
-    operation is never reconciled later, so dismissing it then could leave a job running
-    under an operation that reads "cancelled".
-  - Otherwise it cancels an idle operation at once, and fences a running attempt, which
-    then records `cancelled` whatever it found. The one exception is a job the attempt
-    had already created: the job exists, the operation is `accepted` with it, and the
-    user cancels the job in the jobs list.
+- `POST /operations` resolves a retained ingest and creates an unstarted manual
+  intent. It meshes nothing until the next Prepare press supplies the displayed
+  settings. Repeating the operation id and ingest recovers its job, even if the
+  retained file has since gone; another ingest under that id conflicts.
+- `POST /operations/{id}/prepare` captures that first press, or calls Solve again
+  on its latest refused job. A running preparation is never taken over. An
+  approved update restart leaves the job waiting for the lane, with the press's
+  settings and displayed axis captured.
+- `GET /operations` filters by **derived** state, so accepted ledger rows whose
+  jobs need user input remain in the pending listing. Detail, events, approvals,
+  solver-frame and domain preview read the latest job's preparation. Bound jobs
+  always read `accepted/submitted`, including a solver failure or cancellation;
+  their execution status is shown by the jobs UI.
+- `/approvals` records only the blocking findings on that refused job's exact
+  preparation. `/cancel` stops an active intent or deletes a refused intent. A
+  bound request remains an accepted operation and is stopped from the jobs UI.
+  Dismissing a refused child deletes its refused ancestors atomically, so a
+  reconnect cannot revive its parent. The accepted delivery ledger stays intact;
+  the missing job derives a cancelled compatibility summary.
 
-  A CAD mutation under way is not dismissed; it may need recovery from the document
-  instead. An attempt that fails unexpectedly leaves its operation waiting
-  (`preparation_failed`), never held.
-- **Retained snapshot.** The snapshot a solve command names is retained when the command
-  is received, before its delivery is acknowledged, under
-  `<data>/imports/bundles/<manifest hash>.wgreturn`. The operation stores the hashes, and
-  the copy's place follows from them. Preparation reads that copy, never the exchange
-  folder, so a return accepted before its folder was removed still prepares after a
-  restart. The copy leaves out the captured CAD document, which is not geometry. An
-  operation whose return has no copy and is not in the folder waits
-  (`preparation_failed`).
-- **The snapshot's own project.** The backend prepares into the project the snapshot
-  belongs to, never a model that is open, so the ingest's project gate is given the
-  solver anchor instance's WG design and that exact instance, resolved as
-  `snapshot_project` resolves them (see "Project setups"). A snapshot whose anchor names
-  no design, authored in CAD, names none, as before.
-- **Approvals.** A blocking finding is approved on one preparation
-  (`POST .../approvals`, `{preparationId, findingIds}`, or `approvals` on the prepare
-  request), and submitted as `<report_sha256>:<finding_id>`. Only findings that
-  preparation reported as blocking can be approved. A preparation of the same snapshot,
-  setup revision and meshing semantics is resumed, not made again, so approvals given on
-  it apply. Anything else is a new preparation, and a waiver never carries to it.
-- **The binding point.** The exact solve request is bound immediately before it is
-  submitted, and from then on never changes. A recovery submits exactly the bound
-  request, whatever setup was chosen since. Only a submission that created nothing
-  releases the binding, so the user can change the setup: a refusal by the jobs system,
-  or a failure after which the submission key names no job (the jobs system writes the
-  key with the job). A request that may have a job -- a crash, a jobs database that
-  cannot be read -- stays bound.
-- **Recovery.** At startup, and before every preparation, an operation whose submission
-  key already made a job is `accepted` with that job; a submission-key conflict is
-  settled the same way. An operation an attempt held when the backend stopped is taken
-  over and waits (`interrupted`). Startup recovery only reads the jobs database; the
-  jobs runtime starts on its own.
-- **Delivery.** The backend is the one consumer of Fusion's solve commands. About once a
-  second it collects the delivered commands (retaining each snapshot before the delivery
-  is acknowledged) and starts preparing every operation no attempt has touched, from its
-  project's setup, submitting when it is ready. An operation whose delivery is kept,
-  because its return cannot be read yet, is started once it is retained or once its
-  delivery is given up. It starts only an operation still
-  untouched at the generation it listed, so it never takes over the user's own attempt,
-  and an operation waiting for the user is not retried unasked; the UI issues `prepare`,
-  `approvals` and `cancel` and observes. Without a WGLink folder nothing is collected,
-  because nothing could be retained. A failing pass is logged once per distinct error and
-  the loop backs off to half a minute while it persists. Operations an older build left
-  untouched are prepared at the first start after the upgrade, as the user asked when
-  sending them. Nothing else consumes them: `GET /api/cadlink/solve-command` answers that
-  nothing is pending (see "Solve-command compatibility"). `WG2_CAD_DELIVERY=0` turns the
-  loop off (the test suite does).
-- **The WG request inbox (schema 4).** `.wg-solve-requests/<operationId>.json` carries a
-  Send (`kind: receive_snapshot`) as well as a Solve (`kind: prepare_and_solve`);
-  schema 3 is a Solve and stays current, schemas 1 and 2 are refused as outdated. WG
-  advertises `solveCommandDelivery: 4` on its own (the heartbeat and Fusion-bound
-  delivery stay 3), and advertises nothing while the consumer is off. A file WG can
-  identify as a request but cannot accept is claimed, refused with its reason and
-  deleted; one it cannot identify is left alone (a field it cannot even compare, such as
-  a list, included); a claim whose bytes were read and are not a request ends. A file WG
-  could not *read* (another process holds it, a drive went away) is never refused for
-  it: the read is retried briefly, the claim is kept and read again each pass, and after
-  30 passes it is reported once, still kept. A refused claim WG cannot delete is
-  reported once and its delete retried quietly. A schema-3 file naming a kind other than
-  `prepare_and_solve` is refused, not read as a Solve. A
-  Send taken by file is settled as the live route settles one, and the page displays it
-  from its `cadOperation` event. Every row the inbox creates, recovers or refuses is
-  published on `/ws/jobs`; a refusal with no row of its own is published as
-  `cadInboxRefusal` and kept (the last 20) for `GET /api/cadlink/delivery`, which also
-  says whether the consumer runs, why its last pass started nothing, and when a pass last
-  completed. The loop pushes that state (`cadDeliveryStatus`) when its declined reason
-  changes or a pass runs past 15 s, so the panel needs no clock to hear of either. A
-  page's first connection also recovers Sends accepted or refused in the previous ten
-  minutes (or since the tab's last successful recovery, across a reload), and never shows
-  one twice. Every connection also recovers the terminal outcome of exactly the
-  operations the page was waiting for, so a solve that finished while disconnected still
-  takes its result slot and a refused one still says so; unrelated history is not
-  applied. The recovery boundary moves only after a recovery succeeds; a failure is shown
-  and retried three times. Displays of recovered Sends are ordered by when each was sent
-  and never replace a newer one or a return the user picked meanwhile.
-- **Status the page holds.** Each running Fusion status carries when it was observed
-  (`updatedAt`), how long it counts as current (`statusTtlSeconds`), how the add-in
-  publishes (`observationPolicy`) and whether it sends through the request inbox
-  (`addinInboxTransfer`). With the gate off, the page ages a held status past its window
-  into "Fusion last reported <time>, not observed since" by itself, with no request. With
-  the gate off the returns listing still runs as before for an add-in that does not
-  declare the inbox transfer (an add-in without `diagnostics.activation` publishes a
-  plain Send only as a return in the folder); the shipped pin `1887491` declares it and
-  sends every Send through the inbox regardless of the gate, and the CAD Link panel says
-  so. While
-  the consumer is off the live delivery route answers a retryable 409
-  `delivery_consumer_disabled` instead of accepting what nothing would run.
-- **Coordination gate.** Unset or unrecognized `WG2_CAD_COORDINATION` values default to
-  `off`; explicit `on`, `1`, `true`, or `yes` enables clock-driven checks. The gate is
-  read once at start-up and reported on the "application initialized" log line and
-  `GET /api/cadlink/returns`; the CAD Link panel shows when it is off. The off setting
-  stops the frontend's clock-driven CAD returns listing and Fusion-status read unless
-  CAD work is in flight: an unfinished operation, or a
-  Send or pull the user started. They still run on explicit events (start-up, window
-  focus, entering CAD mode, choosing a folder), a Send reads Fusion's status when it is
-  pressed, and operation changes arrive as `cadOperation` messages on `/ws/jobs`. The
-  explicit `on` setting retains the behaviour before the gate existed. The gate never
-  stops the delivery loop above: that is the transfer path, not coordination. An operation parked
-  on the user (`needs_user_input`, `recovery_required`) is not work in flight: neither
-  read can move it, so it keeps no clock running. A design edit still reads Fusion's
-  status once, as the event it is (it compares the edited design with the linked one;
-  WG reads its own copy of the heartbeat and WGLink does no work for it); no clock
-  follows it.
-- **Send never becomes an unbound create.** When the Fusion status gives no action --
-  the add-in offline or outdated, an update under recovery, or Fusion already holding
-  the design -- Send is refused with that reason rather than written as a create with no
-  expected document, which would put a second Fusion document over a linked one.
-- **Update restart.** Once an update restart is approved, WG starts no new CAD
-  preparation until it happens (docs/reference/UPDATE-TRANSACTION-CONTRACT.md §4.2). The
-  latch is the one the solve, retry, install and ingest routes read.
-  - `POST .../prepare` answers 409 `update_restart_pending`, with the envelope those
-    routes use, and starts nothing. The operation stays as it is.
-  - The delivery loop does nothing while it is set: it starts no preparation, and
-    collects no delivered file, so a received operation stays `received` and a
-    delivered file stays on disk as it was.
-  - A preparation asked for before the approval but not yet started starts nothing
-    either: it reads the latch again before it claims the operation. An operation still
-    `received` stays so, for the delivery loop's next pass. Any other, such as a Solve
-    now on a solve that waits for the user, waits as `update_restart_pending`, so it is
-    queued again like the others instead of being dropped. The request itself is not
-    kept: the queued attempt prepares and submits from the project's setup, as the
-    delivery loop does, and approvals sent with it are asked for again.
-  - A preparation already running when the restart is approved stops at submission and
-    waits as `update_restart_pending`, if it gets there before WG stops. One the shutdown
-    ends first is taken over at the next start and waits as `interrupted`, as any
-    interrupted attempt does.
-  - A solve waiting as `update_restart_pending` is queued again (`received`, at its own
-    generation) by the next start's recovery, or by this process's delivery loop once the
-    latch comes down without a restart (released, or expired), whether or not a WGLink
-    folder is selected. The loop prepares it, as any received operation, while a folder is
-    selected. It resumes the preparation it had made, with the approvals given on it. A
-    request an earlier attempt already bound is submitted exactly. Otherwise nothing was
-    bound, so the setup is the project's current one: a setup changed meanwhile is picked
-    up, as the binding-point rule says.
-- **Events.** Every committed change is published on the jobs channel as
-  `{"v": 1, "kind": "cadOperation", "operation": {...}}`, after it is stored. It carries
-  no cursor: a client that misses one reads `GET /api/cadlink/operations` (the unfinished
-  operations) or `GET /api/cadlink/operations/{id}` (one operation, with its preparation
-  and approvals), which are authoritative.
+Startup sweeps all pending legacy `prepare_and_solve` rows, page by page:
+
+| Legacy row | Job after upgrade |
+| --- | --- |
+| `received` | `preparing`; the lane takes it up |
+| `needs_user_input` | refused intent with the same reason/message, setup, preparation and approvals |
+| `processing`, with no bound request | refused `interrupted`; Solve again continues it |
+| `cancel_requested`, with no bound request | stopped intent |
+| any pending row with a bound request | the exact request queued through its existing key; no changed setup is read |
+| a key already made by an older build | recover that job without comparing a delivery digest to its old SolveRequest hash |
+
+If runtime admission refuses a pending bound request (for example, its engine
+is unavailable on this host), migration records the existing refusal reason and
+message as an intent job. It keeps its setup/preparation and continues the sweep;
+no inadmissible solve is queued and no old processing row is stranded.
+
+The job/key commits before ledger acceptance, so a crash between databases is
+recovered through the same key. Only this acceptance join remains; there is no
+operation-owned preparation or submission reconciliation in production. The
+old preparation implementation and unused solve columns stay until Stage 5.
+
+Received snapshots are retained and settled by the ledger, never prepared.
+The delivery loop still reports a missing folder, restart latch, failed or hung
+pass; live delivery holds and bounded retention are unchanged. The consumer-off
+switch still declines intake and advertises no solve-delivery capability.
 
 ## Preparation identity
 
@@ -796,22 +678,14 @@ read, but:
 
 Stage 4 of the CAD Link simplification makes the job the one lifecycle of a CAD solve.
 A job status `preparing` means a CAD solve WG has accepted but not yet meshed and bound
-to a request. **Nothing in production creates a `preparing` job yet.** The status and its
-schema landed first (S4-E1); the code that accepts, prepares, refuses and binds a solve as
-a job (S4-E2, below) is not called by any route or delivery pass, and S4-F1 switches
-those over. The CAD operation rows still own every solve today.
+to a request. S4-E1 added the status, S4-E2 added its runtime lane, and S4-F1
+switched production intake and operation shims to that lane.
 
-- **Storage.** `simulation_jobs.status` allows `preparing`. The CHECK constraint was
-  widened by rebuilding the table on the next start of an older database
-  (`JobStore._rebuild_simulation_jobs`: every row and column is copied by name, foreign
-  keys are off for the rebuild and checked before it commits, and a failure leaves the
-  old table). `PRAGMA user_version` stays 5: no row can hold the new status yet, so a
-  release a rollback returns to still opens the file (`UPDATE-TRANSACTION-CONTRACT.md`
-  section 6, item 1; `server/tests/test_job_status_preparing.py` runs v0.3.2 and
-  v0.3.3-rc.1 against an upgraded database). **The change that first writes a
-  `preparing` row in production (S4-F1) owns the compatibility decision** for a release
-  that would meet one (it does not know the status): raise the schema version, or keep
-  such rows out of the file a rollback reads. See "What S4-F1 must decide" below.
+- **Storage.** `simulation_jobs.status` allows `preparing`. The status CHECK is
+  widened by a transactional table rebuild on older databases. S4-F1 raises
+  `PRAGMA user_version` from 5 to **6**, before writing production intents, and
+  initialization takes a standalone SQLite backup first. Older releases refuse
+  the upgraded file with the existing install-provenance message. See rollback below.
 - **Shape.** A `preparing` job holds a CAD intent in `config_json`, not a
   `SolveRequest`: `{type: "cad_intent", operation_id, bundle_path, manifest_sha256,
   return_id, setup_revision_id?, frame_axis?, approvals?, label?, parent_job_id?,
@@ -858,8 +732,8 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   `findings_need_review`, `frame_confirmation_required`, `preparation_failed`,
   `engine_unavailable`, `engine_cannot_solve_return`, `submission_refused`, `interrupted`,
   `ready_to_solve`, and `snapshot_invalid` for a return WG rejects). `job_operation_view`
-  reads a job in the operations' `state`, `stage`, `reason` and `message` (a read model
-  for S4-F1's routes; nothing serves it yet).
+  reads a job in the operations' `state`, `stage`, `reason` and `message` (the read model
+  used by the compatibility routes).
 - **Solve again.** `JobRuntime.solve_cad_again(job_id, ...)` (and `retry` for a job that
   holds an intent) makes a new `preparing` job that continues a refused or stopped one: the
   same return, the setup and preparation the first recorded (copied into the new job's
@@ -888,31 +762,38 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
 - **Retention.** `unreleased_cad_return_states` also holds the captured-document state of a
   `preparing` job, and of a refused job the user can answer until another job continues it.
 
-### What S4-F1 must decide
+### S4-F1 compatibility and rollback
 
-- **Old releases and an intent or unnumbered row.** Measured against v0.3.2 and v0.3.3-rc.1 with
-  one `preparing` row on disk: the jobs list and status routes return HTTP 500 (the
-  status is not a valid value for them), startup recovery never settles the row, stop is
-  refused, and retry returns 500. So the change that first writes `preparing` in
-  production must handle **every** row whose config is a `cad_intent` or that has no run
-  number, including refused and cancelled rows. Main's identity backfill has no intent
-  filter and would number a refused intent row on rollback, spending a run number without
-  a run. Older retry code would parse a refused intent as a `SolveRequest` and fail.
-  Settling `preparing` rows alone does not cure either problem. S4-F1 must either migrate
-  all such rows to a form older releases understand before rollback, or raise the jobs
-  schema with a restorable snapshot and a rollback path. Test rollback with both a
-  `preparing` row and a refused intent row. S4-E2 writes no production row.
+- **Schema 6 is the rollback boundary.** v0.3.2 and v0.3.3-rc.1 both refuse
+  the upgraded jobs file clearly, before reading either a `preparing` row or
+  a refused intent. This avoids the measured HTTP 500s and unintended numbering
+  that opening those rows under schema 5 caused. The tag-based test writes both
+  rows on disk and checks the refusal, unchanged rows, and restored snapshot.
+- **Snapshot.** Before any jobs schema migration, an existing jobs database is
+  backed up next to itself as `simulations.db.pre-schema-6.bak` (or the database's
+  own filename with `.pre-schema-6.bak` appended). SQLite backup includes WAL
+  commits; integrity is checked and the file is flushed before publication.
+  A failed snapshot stops the upgrade, and later starts never overwrite it.
+  A fresh installation has no older jobs database to snapshot.
+- **Rollback procedure.** Stop WG and every installation using this data directory.
+  Keep the upgraded database and its `-wal`/`-shm` sidecars together as recovery
+  material. Replace `db/simulations.db` with its pre-schema-6 snapshot, remove
+  the upgraded sidecars from the active database path, **then start the older
+  release**. Never copy just an active main database file or restore under a
+  running process. Restoring returns jobs to the moment before the upgrade;
+  jobs created since then remain only in the preserved upgraded database.
+  CAD retention and per-project memory stay in `cadlink.db`; older releases
+  still ignore the newer acceptance ledger, as documented below.
 - **Deliberate lifecycle differences.** Dismissing a refused operation keeps a cancelled
   ledger row; dismissing a refused job deletes it and releases its captured state. If
   Solve is pressed while an update restart is approved, the operation stays `received`,
   whereas the job reports `needs_user_input` / `update_restart_pending`. S4-F1 derives
-  operation summaries from the job, so this vocabulary change becomes visible then.
+  operation summaries from the job, so the unchanged frontend now sees this difference.
 - **Creation event.** A `queued` event makes the client patch the status to `queued`; the
   lane's events are `stage` events, which keep `preparing`, and the bind's `queued` event
   is the one the client reads as the job being queued.
 - **The operation routes.** `operation_summary` for a solve is derived from its job
-  (`job_operation_view`), and the frontend's "Press Solve now" wording becomes "Solve again"
-  there.
+  (`job_operation_view`).
 
 ## Retention
 
@@ -1121,7 +1002,7 @@ before it deletes the request. It changes nothing about what is accepted or refu
 
 **Crash and power-cut positions.** If WG stops between any two of the steps above, or
 before or during preparation, the next start still gives each request exactly one
-operation and at most one job. `server/tests/test_cad_inbox_restart.py` checks this for
+operation and one initial keyed job. An explicit Solve again creates a child job. `server/tests/test_cad_inbox_restart.py` checks this for
 both kinds, for schema 4 and schema 3 files, and for a real process killed mid-pass. What
 the next start finds:
 
@@ -1129,11 +1010,11 @@ the next start finds:
 |---|---|---|
 | after the claim, before acceptance | a claim, no operation | reads the claim and accepts it |
 | after acceptance, before retention | a claim, operation `received` | recovers the operation from the claim, retains, deletes the claim |
-| after retention, before the delete | a claim, snapshot retained | recovers, deletes the claim |
-| after acceptance, before the acknowledgement | a claim, operation `received`, no acknowledgement | redelivers the same request: same operation, no second job, writes the acknowledgement, deletes the claim |
+| after retention, before job acceptance | a claim, snapshot retained | creates the keyed job, records acceptance, acknowledges and deletes the claim |
+| after job acceptance, before the acknowledgement | a claim, keyed job, possibly uncommitted ledger acceptance | recovers the same key, commits the ledger, writes the acknowledgement and deletes the claim |
 | after the acknowledgement, before the delete | a claim and an acknowledgement | recovers, writes the same acknowledgement again, deletes the claim |
-| after the delete, before preparation | no file, operation `received` | the delivery pass prepares it |
-| while preparing | no file, operation `processing` | `needs_user_input` (`interrupted`); Solve now submits one job |
+| after the delete, before preparation | no file, accepted ledger, unheld `preparing` job | the job lane resumes it |
+| while preparing | no file, accepted ledger, held `preparing` job | refused `interrupted`; compatibility view says `needs_user_input`; Solve again creates one child |
 | after the job was created | job under `cad-solve:<id>`, not yet recorded | start-up recovery records `accepted` with that job |
 
 A received snapshot ends `accepted`, with no job, from every position.

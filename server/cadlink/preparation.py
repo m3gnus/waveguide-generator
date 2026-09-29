@@ -176,6 +176,8 @@ class PreparationContext:
     #: Called with each refusal of a taken inbox file that has no operation
     #: row of its own (``solve_command.inbox_refusal``).
     refuse: Callable[[Mapping[str, Any]], None] | None = None
+    runtime: Any = None
+    job_store: Any = None
 
 
 class _Fenced(Exception):
@@ -224,7 +226,7 @@ def submission_key(operation_id: str) -> str:
     return f"{CAD_SOLVE_SUBMISSION_PREFIX}{operation_id}"
 
 
-def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
+def operation_summary(row: Mapping[str, Any], job_store: Any = None) -> dict[str, Any]:
     """An operation as the UI and the events channel see it."""
 
     outcome = json.loads(row["outcome_json"]) if row.get("outcome_json") else {}
@@ -234,7 +236,7 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
     if stage is None:
         # Written before stages existed, or by an older build.
         stage = "submitted" if row.get("job_id") else ("received" if state == RECEIVED else None)
-    return {
+    summary = {
         "operationId": row["operation_id"],
         "acceptedSeq": int(row["accepted_seq"]) if row.get("accepted_seq") is not None else None,
         "kind": row["kind"],
@@ -274,13 +276,27 @@ def operation_summary(row: Mapping[str, Any]) -> dict[str, Any]:
         "createdAt": row.get("created_at"),
         "updatedAt": row.get("updated_at"),
     }
+    if job_store is not None and row["kind"] == PREPARE_AND_SOLVE:
+        from server.jobs.cad_preparation import job_operation_view
+        job = job_store.latest_cad_job(str(row["operation_id"]), row.get("job_id"))
+        if job is not None and (job.get("task_metadata") or {}).get("cad"):
+            view = job_operation_view(job)
+            # Pre-cutover bound jobs may have no retained-snapshot provenance.
+            if view.get("snapshot") is None:
+                view.pop("snapshot", None)
+            summary.update(view)
+            summary["updatedAt"] = job["updated_at"]
+        elif job is None and row.get("job_id"):
+            # A deleted job is a durable dismissal, including after reconnect.
+            summary.update(state="cancelled", stage=None, reason=None, message=None, jobId=None)
+    return summary
 
 
 def _publish(ctx: PreparationContext, row: Mapping[str, Any] | None) -> None:
     if row is None or ctx.publish is None:
         return
     try:
-        ctx.publish(operation_summary(row))
+        ctx.publish(operation_summary(row, ctx.job_store))
     except Exception:  # noqa: BLE001 - a notification never fails the work
         logger.debug("Could not publish a CAD operation update.", exc_info=True)
 
@@ -1819,6 +1835,9 @@ async def run_delivery_pass(
     live holds read after them. Returns the operations this pass started.
     """
 
+    if ctx.runtime is not None:
+        return await _job_delivery_pass(ctx, running=running, note=note)
+
     def _note(reason: str | None) -> None:
         # Exactly once per pass, and outside every handler that swallows: a
         # pass that starts nothing must say whether that is idleness or a
@@ -1877,6 +1896,62 @@ async def run_delivery_pass(
         )
     _note(None)
     return started
+
+
+async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any) -> list[str]:
+    from .job_shims import accept_operation_solve
+
+    blocked = _restart_pending(ctx)
+    if blocked or ctx.workspace_root is None:
+        if note:
+            note(blocked or NO_WORKSPACE_REASON)
+        return []
+    await asyncio.to_thread(settle_received_snapshots, ctx)
+    accepted: list[str] = []
+    loop = asyncio.get_running_loop()
+
+    def accept(operation_id: str) -> None:
+        row = ctx.store.get_operation(operation_id)
+        if row and row["kind"] == PREPARE_AND_SOLVE and not row.get("legacy") and operation_id not in running:
+            was_pending = row["state"] not in TERMINAL_STATES
+            asyncio.run_coroutine_threadsafe(accept_operation_solve(ctx, operation_id, schedule=False), loop).result()
+            if was_pending:
+                accepted.append(operation_id)
+
+    held: set[str] = set()
+    await asyncio.to_thread(
+        collect_solve_deliveries, ctx.data_dir, ctx.store,
+        retain=lambda op: settle_snapshot_operation(ctx.store, ctx.data_dir, ctx.workspace_root, op),
+        accept_solve=accept, held=held, publish=lambda row: _publish(ctx, row), refuse=ctx.refuse,
+    )
+    # Acceptance is durable before acknowledgement, but the lane starts only
+    # after collection has finished and can see a restart approved during it.
+    for operation_id in accepted:
+        job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id)
+        if job:
+            ctx.runtime.schedule_cad_solve(job["id"])
+    blocked = _restart_pending(ctx)
+    if blocked:
+        if note:
+            note(blocked)
+        return []
+    # The remaining join is acceptance recovery. It never prepares or takes over
+    # an operation attempt, and never retries a refused job.
+    cursor = 0
+    while True:
+        page = await asyncio.to_thread(ctx.store.operation_page, kind=PREPARE_AND_SOLVE,
+                                      states={RECEIVED}, after_rowid=cursor, limit=100)
+        if not page:
+            break
+        held |= live_held_operation_ids()
+        for cursor, row in page:
+            op = str(row["operation_id"])
+            if not row.get("legacy") and op not in held and op not in running:
+                await accept_operation_solve(ctx, op)
+                accepted.append(op)
+    if note:
+        note(None)
+    return accepted
 
 
 def recover_operations(ctx: PreparationContext) -> int:

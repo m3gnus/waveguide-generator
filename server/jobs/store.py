@@ -16,6 +16,7 @@ from pathlib import Path
 import re
 import sqlite3
 import threading
+import tempfile
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
@@ -43,7 +44,7 @@ from server.solver.power_qualification import (
 #: ``preparing`` is a CAD solve WG has accepted but not yet meshed and bound to a
 #: request: it holds a CAD intent in ``config_json``, not a ``SolveRequest``. It is
 #: an active status like ``queued`` and ``running`` (it can be stopped, not deleted).
-#: Nothing creates one yet; see ``docs/architecture/CAD-OPERATIONS.md``.
+#: Delivery and compatibility routes accept these through JobRuntime.
 ALLOWED_STATUSES = frozenset(
     {"preparing", "queued", "running", "complete", "error", "cancelled"}
 )
@@ -70,7 +71,7 @@ UPDATE_RESTART_INTERRUPTION_KEY = "interrupted_by_update_restart"
 #: ``error_message``; kept as a literal here rather than imported, because
 #: ``runtime`` imports this module and the reverse would cycle.
 RECOVERED_USER_CANCELLATION_MESSAGE = "Simulation cancelled by user"
-SUPPORTED_SCHEMA_VERSION = 5
+SUPPORTED_SCHEMA_VERSION = 6
 ALLOWED_JOB_UPDATE_FIELDS = frozenset(
     {
         "status",
@@ -405,6 +406,7 @@ class JobStore:
         # table cascades on delete. SQLite ignores ``PRAGMA foreign_keys``
         # inside a transaction, so the decision is made here, before ``BEGIN``,
         # and the enforcement is restored afterwards.
+        self._snapshot_before_upgrade()
         rebuild_needs_foreign_keys_off = self._status_check_is_stale()
         raw = self._connect()
         if rebuild_needs_foreign_keys_off:
@@ -414,6 +416,53 @@ class JobStore:
         finally:
             if rebuild_needs_foreign_keys_off:
                 raw.execute("PRAGMA foreign_keys = ON")
+
+    @property
+    def rollback_snapshot_path(self) -> Path:
+        return self.db_path.with_name(self.db_path.name + ".pre-schema-6.bak")
+
+    def _snapshot_before_upgrade(self) -> None:
+        """Keep a standalone, restorable SQLite snapshot before the first v6 write.
+
+        SQLite backup includes committed WAL pages. Publish only a complete,
+        flushed file; a failed snapshot aborts initialization before migration.
+        A retry never replaces the original rollback material.
+        """
+
+        with self._lock:
+            conn = self._connect()
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'"
+            ).fetchone()
+            if version >= 6 or exists is None:
+                return
+            if self.rollback_snapshot_path.exists():
+                with sqlite3.connect(self.rollback_snapshot_path.resolve().as_uri() + "?mode=ro", uri=True) as snapshot:
+                    if (snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok"
+                            or snapshot.execute("PRAGMA user_version").fetchone()[0] >= 6
+                            or snapshot.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone() is None):
+                        raise RuntimeError("The existing jobs rollback snapshot is not restorable by the older release")
+                return
+            fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=self.db_path.parent)
+            os.close(fd)
+            temporary = Path(name)
+            try:
+                with sqlite3.connect(temporary) as snapshot:
+                    conn.backup(snapshot)
+                    if snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                        raise RuntimeError("The jobs rollback snapshot failed its integrity check")
+                with temporary.open("rb") as stream:
+                    os.fsync(stream.fileno())
+                os.replace(temporary, self.rollback_snapshot_path)
+                if os.name != "nt":
+                    directory = os.open(self.db_path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory)
+                    finally:
+                        os.close(directory)
+            finally:
+                temporary.unlink(missing_ok=True)
 
     def _status_check_is_stale(self) -> bool:
         """True when an existing ``simulation_jobs`` predates the ``preparing`` status."""
@@ -435,12 +484,8 @@ class JobStore:
         caller's transaction with foreign keys off, so a failure leaves the old
         table exactly as it was and the cascade never touches a child row.
 
-        ``PRAGMA user_version`` is deliberately not raised. No row can hold the
-        new status until a later change creates one, so a release that a
-        rollback returns to still reads every row, and refusing to open the file
-        would leave that release unusable (``UPDATE-TRANSACTION-CONTRACT.md``
-        section 6, item 1). The change that first writes ``preparing`` owns
-        raising the version.
+        Schema 6 protects every intent row from older readers. Initialization
+        snapshots the database before this rebuild or any other upgrade write.
         """
 
         # Dropping the parent with enforcement on would cascade-delete every
@@ -713,7 +758,7 @@ class JobStore:
                 json.dumps(job.get("task_metadata") or {}),
             ),
         )
-        if job["status"] != "preparing":
+        if job["status"] != "preparing" and job["config_json"].get("type") != "cad_intent":
             # A run number names a run. A CAD solve still being prepared has
             # none, and one that is refused never gets one, so the numbers of
             # the runs that did happen have no gaps. ``bind_preparing_job``
@@ -739,6 +784,76 @@ class JobStore:
     # None and its caller stops having changed nothing. No attempt generation
     # is read anywhere: the job is the one lifecycle of a CAD solve.
 
+    def admit_cad_press(self, job_id: str, intent: Mapping[str, Any]) -> bool:
+        """Capture a manual press before the lane has claimed its waiting job."""
+
+        with self._lock, self._transaction() as conn:
+            return conn.execute(
+                "UPDATE simulation_jobs SET config_json = ?, updated_at = ?, "
+                "task_metadata_json = json_remove(task_metadata_json, '$.cad.manual_waiting') "
+                "WHERE id = ? AND status = 'preparing' AND started_at IS NULL "
+                "AND cancellation_requested = 0 "
+                "AND json_extract(task_metadata_json, '$.cad.manual_waiting') = 1",
+                (json.dumps(intent), _now_iso(), job_id),
+            ).rowcount == 1
+
+    def latest_cad_job(self, operation_id: str, job_id: str | None = None) -> dict[str, Any] | None:
+        """Follow the durable Solve-again keys, including unnumbered children."""
+
+        job_id = self.job_for_submission_key(f"cad-solve:{operation_id}") or job_id
+        seen: set[str] = set()
+        while job_id and job_id not in seen:
+            seen.add(job_id)
+            child = self.job_for_submission_key(f"cad-solve-again:{job_id}")
+            if child is None:
+                return self.get_job_row(job_id)
+            job_id = child
+        return None
+
+    def dismiss_cad_intents(self, operation_id: str) -> tuple[list[str], list[dict[str, Any]]]:
+        """Dismiss the refused Solve chain atomically, without reviving its parent."""
+
+        with self._lock, self._transaction() as conn:
+            rows = conn.execute(
+                "SELECT id, status FROM simulation_jobs "
+                "WHERE json_extract(config_json, '$.type') = 'cad_intent' "
+                "AND json_extract(task_metadata_json, '$.cad.operation_id') = ?",
+                (operation_id,),
+            ).fetchall()
+            if any(row["status"] in ACTIVE_STATUSES for row in rows):
+                raise ValueError("This solve is still preparing; stop it before dismissing it.")
+            ids = [str(row["id"]) for row in rows]
+            events = []
+            for job_id in ids:
+                conn.execute("DELETE FROM simulation_jobs WHERE id = ?", (job_id,))
+                events.append(self._append_event(conn, job_id, "deleted", {}))
+        self._delete_job_logs(ids)
+        return ids, events
+
+    def approve_cad_preparation(self, job_id: str, preparation_id: str, finding_ids: Sequence[str]) -> None:
+        """Record approvals on the refused job's exact preparation, without solving."""
+
+        with self._lock, self._transaction() as conn:
+            row = conn.execute(
+                "SELECT config_json, task_metadata_json FROM simulation_jobs "
+                "WHERE id = ? AND status = 'error'", (job_id,),
+            ).fetchone()
+            if row is None or json.loads(row["config_json"]).get("type") != "cad_intent":
+                raise ValueError("This solve is not waiting for preparation approvals.")
+            metadata = json.loads(row["task_metadata_json"])
+            prep = metadata.get("cad", {}).get("preparation", {})
+            if prep.get("preparation_id") != preparation_id:
+                raise ValueError("These approvals name another preparation.")
+            if not set(finding_ids) <= set(prep.get("blocking_finding_ids") or []):
+                raise ValueError("Only blocking findings of this preparation may be approved.")
+            approved = {(a["preparation_id"], a["finding_id"]) for a in prep.get("approvals") or []}
+            approved.update((preparation_id, finding) for finding in finding_ids)
+            prep["approvals"] = [dict(preparation_id=p, finding_id=f) for p, f in sorted(approved)]
+            conn.execute(
+                "UPDATE simulation_jobs SET task_metadata_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(metadata), _now_iso(), job_id),
+            )
+
     def claim_preparing_job(
         self,
         job_id: str,
@@ -761,7 +876,8 @@ class JobStore:
             row = conn.execute(
                 """SELECT task_metadata_json FROM simulation_jobs
                    WHERE id = ? AND status = 'preparing' AND started_at IS NULL
-                     AND cancellation_requested = 0""",
+                     AND cancellation_requested = 0
+                     AND COALESCE(json_extract(task_metadata_json, '$.cad.manual_waiting'), 0) = 0""",
                 (job_id,),
             ).fetchone()
             if row is None:
@@ -1030,6 +1146,7 @@ class JobStore:
             rows = conn.execute(
                 """SELECT id FROM simulation_jobs
                    WHERE status = 'preparing' AND started_at IS NULL
+                     AND COALESCE(json_extract(task_metadata_json, '$.cad.manual_waiting'), 0) = 0
                      AND cancellation_requested = 0
                    ORDER BY queued_at ASC, created_at ASC, id ASC"""
             ).fetchall()
@@ -2938,6 +3055,20 @@ class JobStore:
                 except sqlite3.Error:  # pragma: no cover - closing twice is harmless
                     pass
             self._local = threading.local()
+
+    def make_durable(self) -> None:
+        """Flush accepted jobs before the ledger/acknowledgement names them."""
+
+        with self._lock:
+            conn = self._connect()
+            timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            conn.execute("PRAGMA busy_timeout = 100")
+            try:
+                busy, frames, copied = conn.execute("PRAGMA wal_checkpoint(FULL)").fetchone()
+            finally:
+                conn.execute(f"PRAGMA busy_timeout = {timeout}")
+        if busy or (frames >= 0 and copied < frames):
+            raise sqlite3.OperationalError("The jobs acceptance could not be made durable; a reader held the log")
 
     def checkpoint(self) -> None:
         """Fold the WAL back into the database file.

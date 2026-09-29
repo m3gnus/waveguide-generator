@@ -128,9 +128,8 @@ _STAGE_WORDS = {
 def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     """A CAD job as ``operation_summary`` shows an operation: state, stage, reason, message.
 
-    A read model and nothing else: it changes no state, and nothing serves it
-    yet (S4-F1 derives the operation routes' summary from the job, so the
-    frontend reads the same vocabulary). The state is derived, never stored:
+    The compatibility operation routes serve this read model to the unchanged
+    frontend. It changes no state: the state is derived, never stored:
 
     - bound (``queued`` and later): ``accepted``, stage ``submitted``;
     - ``error`` with a refusal: the state its reason belongs to
@@ -152,13 +151,14 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     message: str | None = None
     stage: str | None = str(row.get("stage") or "") or None
     job_id: str | None = None
-    if status in {"queued", "running", "complete"}:
+    config = row.get("config_json")
+    if status in {"queued", "running", "complete"} or (isinstance(config, Mapping) and config.get("type") != "cad_intent"):
         state, stage = "accepted", STAGE_SUBMITTED
         job_id = str(row["id"])
         if setup and setup.get("origin") == DEFAULTS_ORIGIN:
             message = DEFAULT_SETTINGS_NOTE
     elif status == "error" and refusal is not None:
-        reason, message = str(refusal["code"]), str(refusal["message"])
+        reason, message = refusal.get("code"), refusal.get("message")
         state = REASON_CODES.get(reason, "needs_user_input")
         stage = _last_stage(cad)
     elif status == "cancelled":
@@ -178,7 +178,7 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
         "stage": stage,
         "reason": reason,
         "message": message,
-        "setupDefaults": bool(setup and setup.get("origin") == DEFAULTS_ORIGIN and status in {"queued", "running", "complete"}),
+        "setupDefaults": bool(setup and setup.get("origin") == DEFAULTS_ORIGIN and state == "accepted"),
         "frameAxisAutomatic": (
             frame.get("axis") if isinstance(frame, Mapping) and frame.get("provenance") == "automatic" else None
         ),

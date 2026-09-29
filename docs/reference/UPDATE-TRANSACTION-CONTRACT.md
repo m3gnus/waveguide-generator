@@ -486,24 +486,29 @@ process (`application.state.update_restart`):
 
 - The bundle installer and the checkout install set it just before they write the
   request, and release it if the write fails for any reason.
-- Five routes refuse while it is set: `POST /api/solve`, `POST /api/jobs/{job_id}/retry`,
-  `POST /api/updates/install`, `POST /api/cadlink/ingest` and
-  `POST /api/cadlink/operations/{operation_id}/prepare`. The ingest is refused by a
+- Four work-starting routes refuse while it is set: `POST /api/solve`,
+  `POST /api/jobs/{job_id}/retry`, `POST /api/updates/install` and
+  `POST /api/cadlink/ingest`. The ingest is refused by a
   middleware in `server/app.py` (`RESTART_GATED_POSTS`) before its handler runs. It
   schedules a deferred viewport and a capture of the CAD document, which copies tens of
-  megabytes, and both outlive the request. The prepare route refuses in its own handler,
-  before it starts anything.
+  megabytes, and both outlive the request.
+- Since S4-F1, the CAD compatibility Prepare route accepts a durable intent (or
+  Solve-again child) while the latch is set. It captures the press's settings and
+  displayed axis, but the lane copies and meshes nothing and assigns no run number.
+  Its derived operation reads `needs_user_input` / `update_restart_pending`, with
+  the pending restart's message. This is the declared job-lifecycle difference;
+  it does not start installation-owned work. New manual `POST /operations` still
+  refuses while latched; a replay of an already accepted delivery stays readable.
 - **What stays open.** A route that does bounded work inside its request and persists no
   job stays open: every read, `POST /api/solve/plan`, the field plane,
   `/api/solver-mesh`, the STEP, STL and WGLink exports, and the job routes that act on a
   job that already exists (stop, delete, metadata, recombine). The graceful stop gives
   them time to finish.
 - The CAD Link solve command does not go through `/api/solve`: the backend prepares it and
-  submits it to the job runtime directly (`submit=runtime.submit` in
-  `server/cadlink/api.py`), so `/api/solve`'s refusal does not apply to it. Its preparation
-  reads the same latch instead. The Fusion delivery loop starts no preparation and collects
+  accepts it through `JobRuntime.accept_cad_solve`, so `/api/solve`'s refusal does
+  not apply to it. Its preparation lane reads the same latch instead. The Fusion delivery loop starts no preparation and collects
   no delivered file while the latch is set. A preparation asked for before the approval
-  reads the latch again before it claims its operation. One that reaches submission under
+  reads the latch again before it claims its job. One that reaches submission under
   an approved restart submits nothing and waits as `update_restart_pending`; it is queued
   again at the next start, or once the latch comes down without a restart. The job runtime
   still marks no job running under an approved restart (§4.3).

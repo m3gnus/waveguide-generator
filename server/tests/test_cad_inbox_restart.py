@@ -31,11 +31,8 @@ hide a second submission.
 
 from __future__ import annotations
 
-import asyncio
 from contextlib import closing
-import hashlib
 import json
-import os
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -47,12 +44,10 @@ import pytest
 
 from server.cadlink import preparation, solve_command
 from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
-from server.cadlink.preparation import PreparationContext, recover_operations, run_delivery_pass
 from server.cadlink.solve_command import CAD_SOLVE_SUBMISSION_PREFIX, CLAIM_PREFIX, SOLVE_REQUESTS_DIRECTORY
 from server.cadlink.store import CadLinkStore
-from server.jobs.store import JobStore
 
-from cad_backends import FakeIngest, JobsHarness
+from cad_backends import JobsHarness
 from test_cad_inbox_stall import V3_SOLVE, V4_SNAPSHOT, V4_SOLVE, drop, fixture
 from test_cad_preparation import _setup
 from test_cad_project_setup import _project, _project_return, _record_setup
@@ -86,80 +81,6 @@ def backend(request) -> str:
     """The CAD-solve backend that prepares what the inbox delivers (cad_backends.py)."""
 
     return request.param
-
-
-class Wg:
-    """One WG process on the operations backend: its operation store and jobs store, from the files."""
-
-    backend = "operations"
-
-    def __init__(self, root: Path) -> None:
-        self.root = root
-        self.data_dir = root / "data"
-        self.workspace = root / "workspace"
-        self.workspace.mkdir(parents=True, exist_ok=True)
-        self.cadlink_db = root / "cadlink.db"
-        self.jobs_db = root / "jobs.db"
-        self.store = CadLinkStore(self.cadlink_db)
-        self.jobs = JobStore(self.jobs_db)
-        self.jobs.initialize()
-        self.ingest = FakeIngest()
-        #: Every request this process handed to the jobs system.
-        self.submitted: list[Any] = []
-        #: Raised once the job exists, before the operation records it.
-        self.crash_after_job: bool = False
-
-    async def _submit(self, request, cad_provenance=None) -> str:
-        self.submitted.append(request)
-        now = "2026-09-21T12:00:00"
-        job_id, _created, _event = self.jobs.create_job_idempotent(
-            {
-                "id": f"job-{len(self.submitted)}-{os.getpid()}", "status": "queued",
-                "created_at": now, "updated_at": now, "queued_at": now, "progress": 0.0,
-                "stage": "queued", "stage_message": "queued", "config_json": {},
-                "config_summary_json": {}, "task_metadata": {},
-            },
-            submission_key=str(request.client_request_id),
-            request_sha256=hashlib.sha256(request.model_dump_json().encode()).hexdigest(),
-            initial_event=("queued", {}),
-        )
-        if self.crash_after_job:
-            self.crash_after_job = False
-            raise _Crash("stopped after the job was created")
-        return job_id
-
-    def context(self) -> PreparationContext:
-        return PreparationContext(
-            store=self.store,
-            data_dir=self.data_dir,
-            workspace_root=self.workspace.resolve(),
-            submit=self._submit,
-            job_for_submission=self.jobs.job_for_submission_key,
-            ingest=self.ingest,
-        )
-
-    def start(self) -> int:
-        """What WG does at start-up before its first delivery pass."""
-
-        return recover_operations(self.context())
-
-    def run_pass(self) -> list[str]:
-        """One delivery pass, running every preparation it starts to its end."""
-
-        async def one() -> list[str]:
-            started: list[asyncio.Future[Any]] = []
-            ids = await run_delivery_pass(
-                self.context(),
-                spawn=lambda _id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-            )
-            await asyncio.gather(*started)
-            return ids
-
-        return asyncio.run(one())
-
-    def stop(self) -> None:
-        self.store.close()
-        self.jobs.close()
 
 
 class JobsWg:
@@ -212,11 +133,11 @@ class JobsWg:
         self.harness.close()
 
 
-def new_wg(root: Path, backend: str) -> Wg | JobsWg:
-    return Wg(root) if backend == "operations" else JobsWg(root)
+def new_wg(root: Path, backend: str) -> JobsWg:
+    return JobsWg(root)
 
 
-def _restart(old: Wg | JobsWg) -> Wg | JobsWg:
+def _restart(old: JobsWg) -> JobsWg:
     """A new process on the same files. The old one's objects are never used again."""
 
     old.stop()
@@ -224,7 +145,7 @@ def _restart(old: Wg | JobsWg) -> Wg | JobsWg:
     return new_wg(old.root, old.backend)
 
 
-def _setup_project(wg: Wg | JobsWg) -> tuple[str, str]:
+def _setup_project(wg: JobsWg) -> tuple[str, str]:
     """A saved project with its solve setup, and a return Fusion exported from it."""
 
     design_id, lineage_id = _project(wg, 60.0)
@@ -245,19 +166,19 @@ def _request(name: str, bundle_path: str, manifest: str) -> dict[str, Any]:
     return fixture(REQUESTS[name], bundlePath=bundle_path, manifestSha256=manifest)
 
 
-def _inbox(wg: Wg | JobsWg) -> list[str]:
+def _inbox(wg: JobsWg) -> list[str]:
     folder = wg.data_dir / "ipc" / "wglink" / SOLVE_REQUESTS_DIRECTORY
     return sorted(path.name for path in folder.iterdir()) if folder.is_dir() else []
 
 
-def _operation_rows(wg: Wg | JobsWg) -> list[tuple[str, str]]:
+def _operation_rows(wg: JobsWg) -> list[tuple[str, str]]:
     """Read from the file, not through the store under test."""
 
     with closing(sqlite3.connect(wg.cadlink_db)) as conn:
         return conn.execute("SELECT operation_id, state FROM cad_operations").fetchall()
 
 
-def _jobs_for(wg: Wg | JobsWg, operation_id: str) -> list[str]:
+def _jobs_for(wg: JobsWg, operation_id: str) -> list[str]:
     with closing(sqlite3.connect(wg.jobs_db)) as conn:
         rows = conn.execute(
             "SELECT job_id FROM job_submissions WHERE submission_key = ?",
@@ -270,7 +191,7 @@ def _jobs_for(wg: Wg | JobsWg, operation_id: str) -> list[str]:
     return [row[0] for row in rows]
 
 
-def _assert_exactly_once(wg: Wg | JobsWg, request: dict[str, Any], submissions: int) -> None:
+def _assert_exactly_once(wg: JobsWg, request: dict[str, Any], submissions: int) -> None:
     operation_id = request["operationId"]
     assert _operation_rows(wg) == [(operation_id, "accepted")]
     assert _inbox(wg) == []
@@ -292,7 +213,7 @@ def _assert_exactly_once(wg: Wg | JobsWg, request: dict[str, Any], submissions: 
         assert jobs == [] and submissions == 0
 
 
-def _run_to_rest(wg: Wg | JobsWg) -> None:
+def _run_to_rest(wg: JobsWg) -> None:
     """Start-up recovery, then passes until one starts nothing and the inbox is empty."""
 
     wg.start()
@@ -368,11 +289,11 @@ def _crash_after(target: Any, name: str, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(target, name, stopped)
 
 
-def _claims(wg: Wg | JobsWg) -> list[str]:
+def _claims(wg: JobsWg) -> list[str]:
     return [name for name in _inbox(wg) if name.startswith(CLAIM_PREFIX)]
 
 
-def _after_claim(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_claim(wg: JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_before(CadLinkStore, "accept_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -382,7 +303,7 @@ def _after_claim(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[
     return check
 
 
-def _after_accept(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_accept(wg: JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_after(CadLinkStore, "accept_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -392,7 +313,7 @@ def _after_accept(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[
     return check
 
 
-def _after_retention(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_retention(wg: JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
     _crash_after(preparation, "settle_snapshot_operation", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
@@ -407,13 +328,17 @@ def _after_retention(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callab
     return check
 
 
-def _after_claim_delete(wg: Wg | JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+def _after_claim_delete(wg: JobsWg, monkeypatch: pytest.MonkeyPatch) -> Callable[[dict[str, Any]], None]:
+    # Stop at acknowledgement before the separate preparation lane claims it.
+    wg.harness.runtime._ensure_prep_lane = lambda: None
     _crash_after(solve_command, "_acknowledge", monkeypatch)
 
     def check(request: dict[str, Any]) -> None:
         assert _inbox(wg) == []
         assert len(_operation_rows(wg)) == 1
-        assert wg.submitted == [] and _jobs_for(wg, request["operationId"]) == []
+        assert wg.submitted == []
+        jobs = _jobs_for(wg, request["operationId"])
+        assert len(jobs) == (1 if request.get("kind", PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE else 0)
 
     return check
 
@@ -483,28 +408,16 @@ def test_a_restart_mid_preparation_waits_visibly_and_solves_once_when_asked(tmp_
     with pytest.raises(_Crash):
         first.start()
         first.run_pass()
-    if backend == "operations":
-        assert _operation_rows(first) == [(request["operationId"], "processing")]
+    assert _operation_rows(first) == [(request["operationId"], "accepted")]
 
     second = _restart(first)
     _run_to_rest(second)
-    if backend == "operations":
-        row = second.store.get_operation(request["operationId"])
-        assert (row["state"], row["reason"]) == ("needs_user_input", "interrupted")
-        assert "Press Solve now" in json.loads(row["outcome_json"])["message"]
-    else:
-        # The job the lane held ended as refused, with the words the operation used.
-        view = second.harness.summary(request["operationId"])
-        assert (view["state"], view["reason"]) == ("needs_user_input", "interrupted")
-        assert "Press Solve now" in view["message"]
+    view = second.harness.summary(request["operationId"])
+    assert (view["state"], view["reason"]) == ("needs_user_input", "interrupted")
+    assert "Press Solve now" in view["message"]
     assert _inbox(second) == [] and second.submitted == []
 
-    if backend == "operations":
-        summary = asyncio.run(preparation.prepare_operation(
-            second.context(), request["operationId"], preparation.PreparationInput()
-        ))
-    else:
-        summary = second.harness.prepare(request["operationId"])
+    summary = second.harness.prepare(request["operationId"])
     assert summary["state"] == "accepted"
     _assert_exactly_once(second, request, len(first.submitted) + len(second.submitted))
     second.stop()
@@ -534,12 +447,6 @@ if point == "after-accept":
         result = original(self, *args, **kwargs)
         hold_here()
     CadLinkStore.accept_operation = accept
-elif point == "after-job" and wg.backend == "operations":
-    submit = wg._submit
-    async def after_job(request, **kw):
-        await submit(request)
-        hold_here()
-    wg._submit = after_job
 elif point == "after-job":
     wg.harness.after_job = hold_here
 wg.start()
@@ -593,10 +500,8 @@ def test_a_wg_process_killed_mid_pass_is_recovered_by_the_next_start(tmp_path: P
     _forget_process_state()
     wg = new_wg(tmp_path, backend)
     _run_to_rest(wg)
-    # The killed process submitted once when its hold was after the job; on the jobs
-    # backend the job it made was still being prepared, so only this process binds.
-    killed = 1 if point == "after-job" and backend == "operations" else 0
-    _assert_exactly_once(wg, request, len(wg.submitted) + killed)
+    # The killed process made an unbound intent; only this process binds it.
+    _assert_exactly_once(wg, request, len(wg.submitted))
     wg.stop()
 
 

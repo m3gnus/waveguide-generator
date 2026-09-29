@@ -38,8 +38,17 @@ class SolverFrameConfirmationRequest(BaseModel):
         return self
 
 
+async def jobs_for_preview(request: Request, operation_id: str | None) -> Any:
+    """Initialize the job read model even for an embedder without startup handlers."""
+
+    runtime = getattr(request.app.state, "jobs_runtime", None)
+    if operation_id is not None and hasattr(runtime, "accept_cad_solve"):
+        await runtime.start()
+    return getattr(runtime, "store", None)
+
+
 def snapshot_record(
-    store: CadLinkStore, *, operation_id: str | None, ingest_id: str | None
+    store: CadLinkStore, *, operation_id: str | None, ingest_id: str | None, job_store: Any = None
 ) -> Mapping[str, Any]:
     """The ingestion record a request names, directly or through an operation."""
 
@@ -49,6 +58,11 @@ def snapshot_record(
         operation = store.get_operation(operation_id)
         if operation is None:
             raise HTTPException(status_code=404, detail=f"Unknown CAD operation {operation_id}")
+        job = job_store.latest_cad_job(operation_id, operation.get("job_id")) if job_store else None
+        cad = (job.get("task_metadata") or {}).get("cad") if job else None
+        job_prep = cad.get("preparation") if cad else None
+        if job_prep:
+            return snapshot_record(store, operation_id=None, ingest_id=str(job_prep.get("ingest_id") or job_prep["preparation_id"]))
         preparation_id = operation.get("preparation_id")
         preparation = store.get_preparation(str(preparation_id)) if preparation_id else None
         if preparation is None:
@@ -72,8 +86,9 @@ async def get_solver_frame(
 
     store: CadLinkStore = request.app.state.cadlink_store
 
+    jobs = await jobs_for_preview(request, operationId)
     def load() -> dict[str, Any]:
-        record = snapshot_record(store, operation_id=operationId, ingest_id=ingestId)
+        record = snapshot_record(store, operation_id=operationId, ingest_id=ingestId, job_store=jobs)
         return frame_preview(store, record)
 
     return await asyncio.to_thread(load)
@@ -87,9 +102,11 @@ async def put_solver_frame(
 
     store: CadLinkStore = request.app.state.cadlink_store
 
+    jobs = await jobs_for_preview(request, payload.operation_id)
     def confirm() -> dict[str, Any]:
         record = snapshot_record(
-            store, operation_id=payload.operation_id, ingest_id=payload.ingest_id
+            store, operation_id=payload.operation_id, ingest_id=payload.ingest_id,
+            job_store=jobs
         )
         try:
             confirm_frame(store, record, payload.axis)

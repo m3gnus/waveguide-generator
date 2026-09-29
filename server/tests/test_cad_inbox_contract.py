@@ -150,6 +150,7 @@ def test_a_pass_pushes_arrivals_and_keeps_refusals_for_the_panel(tmp_path: Path)
     bundle_path, manifest = _write_return(workspace)
     drop(data_dir, _solve_request(bundle_path, manifest))
     drop(data_dir, fixture(V4_NO_KIND))
+    application.state.jobs_runtime._ensure_prep_lane = lambda: None
     events = application.state.jobs_runtime.events
     pushed: list[dict[str, Any]] = []
 

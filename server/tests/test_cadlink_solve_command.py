@@ -21,7 +21,7 @@ from server.cadlink.solve_command import (
 )
 from server.cadlink.store import CadLinkStore
 
-from cad_backends import OperationsHarness as Harness
+from cad_backends import JobsHarness as Harness
 from test_cad_preparation import _write_return
 
 
@@ -124,8 +124,8 @@ def test_a_matching_command_is_accepted_as_an_operation(tmp_path, data_dir, stor
     assert _held(data_dir) is None
 
 
-def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(tmp_path) -> None:
-    harness = Harness(tmp_path)
+def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(solve_harness) -> None:
+    harness = solve_harness
     bundle_path, manifest = _write_return(harness.workspace)
     _write_command(harness.data_dir, bundle_path, manifest)
     # Fusion published, then something rewrote the evidence underneath it.
@@ -137,15 +137,16 @@ def test_a_bundle_that_changed_after_the_command_is_refused_when_prepared(tmp_pa
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
     assert "changed after Fusion asked" in summary["message"]
     # The delivery is one-shot, while the store keeps the terminal answer.
-    assert ledger_entry(harness.store, "cmd-1")["state"] == "refused"
+    assert ledger_entry(harness.store, "cmd-1")["state"] == "accepted"
+    assert harness.summary()["state"] == "rejected"
     assert _held(harness.data_dir) is None
     assert harness.submitted == []
 
 
-def test_a_request_naming_a_bundle_with_a_torn_step_is_never_ingested(tmp_path) -> None:
+def test_a_request_naming_a_bundle_with_a_torn_step_is_never_ingested(solve_harness) -> None:
     """Fusion died mid-export: the manifest is whole, the STEP it lists is cut short."""
 
-    harness = Harness(tmp_path)
+    harness = solve_harness
     bundle_path, manifest = _write_return(harness.workspace, step=b"STEP-DATA" * 200)
     step = harness.workspace / bundle_path / "assembly.step"
     step.write_bytes(step.read_bytes()[:100])
@@ -156,7 +157,8 @@ def test_a_request_naming_a_bundle_with_a_torn_step_is_never_ingested(tmp_path) 
 
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
     assert harness.ingest.calls == [] and harness.submitted == []
-    assert ledger_entry(harness.store, "cmd-1")["state"] == "refused"
+    assert ledger_entry(harness.store, "cmd-1")["state"] == "accepted"
+    assert harness.summary()["state"] == "rejected"
     assert _held(harness.data_dir) is None
 
 
@@ -212,8 +214,8 @@ def test_queued_commands_for_two_returns_are_each_kept_in_turn(
     assert ledger_entry(store, "cmd-a")["state"] == "accepted"
 
 
-def test_a_command_pointing_outside_the_workspace_is_refused_when_prepared(tmp_path) -> None:
-    harness = Harness(tmp_path)
+def test_a_command_pointing_outside_the_workspace_is_refused_when_prepared(solve_harness) -> None:
+    harness = solve_harness
     (harness.workspace / "wgreturn").mkdir(parents=True)
     _write_command(harness.data_dir, "../../elsewhere/evil.wgreturn", "sha256:whatever")
 
@@ -273,8 +275,8 @@ def test_repeating_the_same_outcome_is_idempotent(data_dir, store) -> None:
     assert _raw(data_dir, "cmd-1") == before
 
 
-def test_an_outcome_recorded_for_a_delivered_request_keeps_its_identity(tmp_path) -> None:
-    harness = Harness(tmp_path)
+def test_an_outcome_recorded_for_a_delivered_request_keeps_its_identity(solve_harness) -> None:
+    harness = solve_harness
     bundle_path, manifest = _write_return(harness.workspace)
     _write_command(harness.data_dir, bundle_path, manifest)
     _rewrite_manifest(harness, bundle_path)
@@ -284,7 +286,7 @@ def test_an_outcome_recorded_for_a_delivered_request_keeps_its_identity(tmp_path
     harness.prepare()
 
     row = harness.row()
-    assert (row["kind"], row["state"], row["legacy"]) == ("prepare_and_solve", "rejected", 0)
+    assert (row["kind"], row["state"], row["legacy"]) == ("prepare_and_solve", "accepted", 0)
     assert row["request_digest"] == request_digest(
         "prepare_and_solve", *solve_command_request(command)
     )
@@ -444,3 +446,10 @@ def test_a_delivered_commands_first_outcome_stands_and_keeps_its_identity(
         record_outcome(store, "cmd-1", state="refused", reason="Dismissed.")
     assert (late.value.existing["state"], late.value.existing["jobId"]) == ("accepted", "job-7")
     assert ledger_entry(store, "cmd-1")["jobId"] == "job-7"
+
+
+@pytest.fixture
+def solve_harness(tmp_path):
+    harness = Harness(tmp_path)
+    yield harness
+    harness.close()

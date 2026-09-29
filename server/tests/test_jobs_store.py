@@ -129,21 +129,21 @@ def test_v1_schema_columns_are_exact_and_live_under_wg2_data_dir(tmp_path: Path)
         "simulation_field_traces",
         "job_identity",
     } <= tables
-    assert version == 5
+    assert version == 6
 
 
 def test_newer_database_schema_is_refused_without_downgrading(tmp_path: Path) -> None:
     database = tmp_path / "newer.db"
     with sqlite3.connect(database) as conn:
-        conn.execute("PRAGMA user_version = 6")
+        conn.execute("PRAGMA user_version = 7")
 
     store = JobStore(database)
-    with pytest.raises(RuntimeError, match="created by a newer version.*schema 6"):
+    with pytest.raises(RuntimeError, match="created by a newer version.*schema 7"):
         store.initialize()
     store.close()
 
     with sqlite3.connect(database) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
         assert conn.execute(
             "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
         ).fetchone()[0] == 0

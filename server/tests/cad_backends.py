@@ -1,45 +1,14 @@
-"""Both backends of one CAD solve behind one interface: the S4-E2 parity harness.
+"""CAD solve scenarios on the production jobs backend.
 
-A CAD solve is prepared by one of two lifecycles today:
-
-- ``operations``: a ``cad_operations`` row owns it (``server/cadlink/preparation.py``),
-  fenced by an attempt generation, and hands a request to the jobs system;
-- ``jobs``: the job is the one lifecycle (``server/jobs/cad_preparation.py``): WG
-  accepts a ``preparing`` job, the runtime's preparation lane meshes it, and
-  binding queues it in one transaction. Nothing in production calls it yet.
-
-The scenario tests of ``test_cad_preparation.py``, ``test_cad_project_setup.py``,
-``test_cad_preparation_solver_frame.py``, ``test_cad_inbox_restart.py`` and
-``test_cad_preparation_design_gate.py`` are written once against ``Harness`` and run
-on both, and must see the same ``state``, ``reason`` and ``message`` from each: that
-is the guarantee that the move changed the bookkeeping and nothing else.
-
-``Harness.prepare`` is what a person or the delivery loop asking for a solve does:
-the first time it accepts and prepares, and again after a refusal it is "Solve
-again". Its answer is a summary in the operations' vocabulary
-(``operation_summary``), derived for the jobs backend from the job by
-``cad_preparation.job_operation_view``.
-
-Three things a scenario can say about itself:
-
-- nothing: it runs on both backends and the outcomes must match;
-- ``@old_only(why, replacement)``: it is about a mechanism only the operations have
-  (an attempt generation, a claim, a bound request that a crash left behind, the
-  reconcile-by-key recovery). It is skipped on the jobs backend, with the reason,
-  and the ``replacement`` names the job test that pins the same guarantee;
-- ``@backend_free``: it does not touch the backend at all (retention of a copy,
-  the store's rows). It runs once, on the operations backend.
-
-One deliberate divergence: dismissing a refused operation retains a cancelled
-ledger row, while dismissing a refused job deletes that job and releases its
-captured state. Scenarios that dismiss after refusal assert each backend's row.
+The operations backend was retired at S4-F1. Mechanism-specific old scenarios
+remain marked with the replacement job test until Stage 5 removes them; no
+scenario executes the old lifecycle. Ledger and retention tests execute once.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable, Mapping
-import dataclasses
 import hashlib
 import json
 from pathlib import Path
@@ -50,24 +19,18 @@ from typing import Any
 import pytest
 
 from server.cadlink import ingest as ingest_module
-from server.cadlink.operations import RECEIVED
 from server.cadlink.preparation import (
     PreparationContext,
-    PreparationInput,
-    operation_summary,
-    prepare_operation,
-    recover_operations,
     run_delivery_pass,
 )
-from server.cadlink import preparation as preparation_module
-from server.cadlink.solve_command import live_held_operation_ids, record_outcome
+from server.cadlink.solve_command import record_outcome
 from server.cadlink.store import CadLinkStore
 from server.jobs.cad_intent import CadSolveIntent
 from server.jobs.cad_preparation import CadPreparationHost, job_operation_view
 from server.jobs.runtime import JobConflictError, JobRuntime, _CadLanePort, _ComposedJob
 from server.jobs.store import JobStore
 
-BACKENDS = ("operations", "jobs")
+BACKENDS = ("jobs",)
 
 
 def old_only(why: str, replacement: str):
@@ -252,96 +215,6 @@ class Harness:
         """``dismiss`` for a seam that runs on the event loop."""
 
         self.dismiss(operation_id)
-
-
-# -- the operations backend ---------------------------------------------------------
-
-
-class OperationsHarness(Harness):
-    backend = "operations"
-
-    def context(self) -> PreparationContext:
-        return PreparationContext(
-            store=self.store,
-            data_dir=self.data_dir,
-            workspace_root=self.workspace.resolve() if self.workspace.exists() else None,
-            submit=self._submit,
-            job_for_submission=self.jobs.get,
-            publish=self.published.append,
-            submission_refusals=(Refused, *self.refusals),
-            submission_blocked=lambda: self.blocked,
-            ingest=self.ingest,
-        )
-
-    def prepare(self, operation_id: str = "cmd-1", *, ingest: Any = None, **kwargs: Any) -> dict[str, Any]:
-        context = self.context()
-        if ingest is not None:
-            context = dataclasses.replace(context, ingest=ingest)
-        return asyncio.run(prepare_operation(context, operation_id, PreparationInput(**kwargs)))
-
-    def summary(self, operation_id: str = "cmd-1") -> dict[str, Any]:
-        return operation_summary(self.row(operation_id))
-
-    def delivery_pass(self, running: set[str] | frozenset[str] = frozenset()) -> list[str]:
-        async def one_pass() -> list[str]:
-            started: list[asyncio.Future[Any]] = []
-            ids = await run_delivery_pass(
-                self.context(),
-                spawn=lambda _id, coroutine: started.append(asyncio.ensure_future(coroutine)),
-                running=running,
-            )
-            await asyncio.gather(*started)
-            return ids
-
-        return asyncio.run(one_pass())
-
-    def dismiss(self, operation_id: str = "cmd-1") -> None:
-        self.store.request_cancel(operation_id)
-
-    def bound_request(self, operation_id: str = "cmd-1") -> dict[str, Any] | None:
-        raw = self.row(operation_id).get("request_json")
-        return json.loads(raw) if raw else None
-
-    def bound_setup_revision(self, operation_id: str = "cmd-1") -> str | None:
-        return self.row(operation_id).get("setup_revision_id")
-
-    def approve(self, preparation_id: str, finding_ids: list[str], operation_id: str = "cmd-1") -> None:
-        self.store.add_approvals(operation_id, preparation_id, finding_ids)
-
-    def held_return_states(self) -> list[str]:
-        from server.cadlink.api import pending_operation_return_states
-
-        return pending_operation_return_states(self.store)
-
-    def held_axis(self, operation_id: str = "cmd-1") -> str | None:
-        return self.row(operation_id).get("frame_axis")
-
-    def restart(self) -> None:
-        self.store.close()
-        self.store = CadLinkStore(self.tmp_path / "cadlink.db")
-
-    def recover(self) -> int:
-        return recover_operations(self.context())
-
-    def release_latch(self) -> list[str]:
-        """The update restart is called off: whatever it held proceeds. Returns the solves it started."""
-
-        self.blocked = None
-        return self.delivery_pass()
-
-    def resume_after_restart(self) -> list[str]:
-        """WG has started again: start-up recovery, then what the delivery loop starts."""
-
-        self.recover()
-        return self.delivery_pass()
-
-    def break_provenance(self, monkeypatch: pytest.MonkeyPatch, error: BaseException) -> None:
-        from server.cadlink import preparation
-
-        def broken(*_args: Any, **_kwargs: Any) -> Any:
-            raise error
-
-        monkeypatch.setattr(preparation, "_cad_provenance", broken)
 
 
 # -- the jobs backend -----------------------------------------------------------------
@@ -543,13 +416,8 @@ class JobsHarness(Harness):
         self._loop.run(self._recover_ledger())
 
     async def _recover_ledger(self) -> None:
-        rows = await asyncio.to_thread(
-            self.store.list_operations,
-            kind="prepare_and_solve", states={RECEIVED}, oldest_first=True, limit=1000,
-        )
-        for row in rows:
-            if not row.get("legacy"):
-                await self._prepare(str(row["operation_id"]), {})
+        from server.cadlink.job_shims import sweep_pending_solves
+        await sweep_pending_solves(self.context())
         await self.runtime.wait_cad_preparations()
 
     def release_latch(self) -> list[str]:
@@ -612,7 +480,10 @@ class JobsHarness(Harness):
         if operation_id in self._approved and not kwargs.get("approve_preparation_id"):
             # Approvals the user gave ahead of this press ride with it.
             kwargs["approve_preparation_id"], kwargs["approve_finding_ids"] = self._approved[operation_id]
-        latest = self._latest.get(operation_id)
+        known = self.jobs_store.latest_cad_job(operation_id)
+        latest = known["id"] if known else self._latest.get(operation_id)
+        if latest:
+            self._latest[operation_id] = latest
         row = await asyncio.to_thread(self.jobs_store.get_job_row, latest) if latest else None
         if row is None:
             job_id = await runtime.accept_cad_solve(
@@ -626,6 +497,9 @@ class JobsHarness(Harness):
             await asyncio.to_thread(
                 record_outcome, self.store, operation_id, state="accepted", job_id=job_id
             )
+        elif row["status"] == "preparing" and row.get("started_at") is None:
+            await runtime.prepare_cad_solve(latest, setup_revision_id=kwargs.get("setup_revision_id"),
+                                            frame_axis=kwargs.get("expected_frame_axis"), submit=kwargs.get("submit", True))
         elif row["status"] == "error":
             try:
                 self._latest[operation_id] = await runtime.solve_cad_again(
@@ -677,45 +551,32 @@ class JobsHarness(Harness):
     def delivery_pass(self, running: set[str] | frozenset[str] = frozenset()) -> list[str]:
         return self._loop.run(self._delivery_pass(running))
 
+    def context(self) -> PreparationContext:
+        return PreparationContext(store=self.store, data_dir=self.data_dir,
+                                  workspace_root=self.workspace.resolve() if self.workspace.exists() else None,
+                                  runtime=self.runtime, job_store=self.jobs_store,
+                                  submission_blocked=lambda: self.blocked)
+
     async def _delivery_pass(self, running: set[str] | frozenset[str]) -> list[str]:
-        """``run_delivery_pass`` with the jobs lifecycle: what S4-F1 will call.
-
-        Collect and retain the deliveries as the ledger always has, then accept
-        each received solve as a job. Nothing is collected or started while a
-        restart is approved, or without a WGLink folder.
-        """
-
-        if self.blocked or not self.workspace.exists():
-            return []
-        context = PreparationContext(
-            store=self.store, data_dir=self.data_dir, workspace_root=self.workspace.resolve(),
-        )
-        await asyncio.to_thread(preparation_module.settle_received_snapshots, context)
-        held: set[str] = set()
-        await asyncio.to_thread(
-            preparation_module.collect_solve_deliveries,
-            self.data_dir,
-            self.store,
-            retain=lambda operation_id: preparation_module.settle_snapshot_operation(
-                self.store, self.data_dir, self.workspace.resolve(), operation_id
-            ),
-            held=held,
-            publish=lambda _row: None,
-        )
-        if self.blocked:
-            return []
-        rows = await asyncio.to_thread(
-            self.store.list_operations,
-            kind="prepare_and_solve", states={RECEIVED}, oldest_first=True, limit=100,
-        )
-        held |= live_held_operation_ids()
-        started: list[str] = []
-        for row in rows:
-            operation_id = str(row["operation_id"])
-            if row.get("legacy") or operation_id in running or operation_id in held:
-                continue
-            started.append(operation_id)
-            await self._prepare(operation_id, {})
+        # The crash hook lives at the durable cross-database join.
+        real_accept_runtime = self.runtime.accept_cad_solve
+        async def accepted(*args, **kwargs):
+            job_id = await real_accept_runtime(*args, **kwargs)
+            if self.after_job is not None:
+                self._dead = True
+                hook, self.after_job = self.after_job, None
+                hook()
+            return job_id
+        self.runtime.accept_cad_solve = accepted
+        try:
+            started = await run_delivery_pass(self.context(), spawn=lambda *_args: None, running=running)
+            for op in started:
+                job = self.jobs_store.latest_cad_job(op)
+                if job:
+                    self._latest[op] = job["id"]
+            await self.runtime.wait_cad_preparations()
+        finally:
+            self.runtime.accept_cad_solve = real_accept_runtime
         if self.crashed is not None:
             crash, self.crashed = self.crashed, None
             raise crash
@@ -788,7 +649,8 @@ class JobsHarness(Harness):
 
 
 def make_harness(tmp_path: Path, backend: str) -> Harness:
-    return OperationsHarness(tmp_path) if backend == "operations" else JobsHarness(tmp_path)
+    assert backend == "jobs"
+    return JobsHarness(tmp_path)
 
 
 def backend_fixture(request: pytest.FixtureRequest, tmp_path: Path):
@@ -810,7 +672,6 @@ __all__ = [
     "FakeIngest",
     "Harness",
     "JobsHarness",
-    "OperationsHarness",
     "Refused",
     "backend_fixture",
     "backend_free",

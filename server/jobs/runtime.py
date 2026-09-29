@@ -65,6 +65,7 @@ from server.jobs.cad_intent import (
     INTERRUPTED_MESSAGE as CAD_INTERRUPTED_MESSAGE,
     STAGE_WAITING_FOR_RESTART,
     CadSolveIntent,
+    cad_of,
     carried_record,
     intent_of,
     solve_again_intent,
@@ -3198,8 +3199,8 @@ class JobRuntime:
     # a ``CadSolveIntent``; the preparation lane retains, meshes and checks it, and
     # binding turns it into an ordinary queued job in one transaction. A solve
     # that cannot go on ends as an ``error`` job carrying its refusal, and the
-    # user's remedy is Solve again, which is a new job. Nothing calls these yet
-    # (S4-E2): the delivery pass and the routes are switched in S4-F1.
+    # user's remedy is Solve again, which is a new job. Delivery, startup recovery
+    # and the compatibility routes all enter through this runtime.
 
     def configure_cad_preparation(self, host: CadPreparationHost | None) -> None:
         """Say where retained returns live and how a return is meshed.
@@ -3240,7 +3241,11 @@ class JobRuntime:
             "task_metadata": {"cad": {"operation_id": intent.operation_id}},
         }
 
-    async def accept_cad_solve(self, intent: CadSolveIntent, submission_key: str) -> str:
+    async def accept_cad_solve(
+        self, intent: CadSolveIntent, submission_key: str, *,
+        prepare: bool = True, cad_record: Mapping[str, Any] | None = None,
+        refusal: Mapping[str, str | None] | None = None,
+    ) -> str:
         """Accept a CAD solve: a ``preparing`` job, created once for its submission key.
 
         Idempotent: the key names the delivery (``cad-solve:<operationId>``) and
@@ -3261,18 +3266,66 @@ class JobRuntime:
         if existing is not None:
             return existing
         record = self._preparing_record(intent)
+        record["task_metadata"]["cad"].update(dict(cad_record or {}))
+        if refusal:
+            record.update(status="error", stage="error", stage_message=refusal["message"] or "Preparation stopped",
+                          error_message=refusal["message"], completed_at=_now_iso())
+            record["task_metadata"]["cad"]["refusal"] = dict(refusal)
         job_id, created, event = await asyncio.to_thread(
             self.store.create_job_idempotent,
             record,
             submission_key=submission_key,
             request_sha256=digest,
             initial_event=(
-                "stage",
-                {"stage": "received", "message": record["stage_message"], "progress": 0.0},
+                ("error", {"code": refusal["code"], "message": record["stage_message"]})
+                if refusal else
+                ("stage", {"stage": "received", "message": record["stage_message"], "progress": 0.0})
             ),
         )
         if created:
-            self._offer_to_prep_lane(job_id, event)
+            if prepare and not refusal:
+                self._offer_to_prep_lane(job_id, event)
+            elif event is not None:
+                self.events.publish(event)
+        return job_id
+
+    async def dismiss_cad_solve(self, operation_id: str) -> None:
+        """Delete a refused intent and its refused ancestors as one dismissal."""
+
+        await self.start()
+        try:
+            ids, events = await asyncio.to_thread(self.store.dismiss_cad_intents, operation_id)
+        except ValueError as exc:
+            raise JobConflictError(str(exc)) from exc
+        for job_id in ids:
+            self._prep_queue = deque(item for item in self._prep_queue if item != job_id)
+        for event in events:
+            self.events.publish(event)
+
+    async def prepare_cad_solve(self, job_id: str, **press: Any) -> str:
+        """Compatibility Prepare: capture the first manual press, or Solve again."""
+
+        row = self._require_job(job_id)
+        intent = intent_of(row)
+        if intent is not None and row["status"] == "preparing":
+            if row.get("started_at") is None and cad_of(row).get("manual_waiting"):
+                updated = replace(
+                    intent, setup_revision_id=press.get("setup_revision_id"),
+                    frame_axis=press.get("frame_axis") or intent.frame_axis,
+                    submit=press.get("submit", True),
+                    approvals=(
+                        {"preparation_id": press["approve_preparation_id"],
+                         "finding_ids": list(press.get("approve_finding_ids") or ())}
+                        if press.get("approve_preparation_id") else None
+                    ),
+                )
+                if await asyncio.to_thread(self.store.admit_cad_press, job_id, updated.to_config()):
+                    self.schedule_cad_solve(job_id)
+            else:
+                self.schedule_cad_solve(job_id)
+            return job_id
+        if intent is not None:
+            return await self.solve_cad_again(job_id, **press)
         return job_id
 
     async def solve_cad_again(
@@ -3363,6 +3416,14 @@ class JobRuntime:
                     return existing
                 raise JobConflictError(existing_child_message)
             row = child
+
+    def schedule_cad_solve(self, job_id: str) -> None:
+        """Offer a durable intent after its delivery has finished collection."""
+
+        row = self._require_job(job_id)
+        if (row["status"] == "preparing" and not cad_of(row).get("manual_waiting")
+                and job_id not in self._prep_queue and job_id not in self._prep_running):
+            self._offer_to_prep_lane(job_id, None)
 
     def _offer_to_prep_lane(self, job_id: str, event: Mapping[str, Any] | None) -> None:
         if event is not None:

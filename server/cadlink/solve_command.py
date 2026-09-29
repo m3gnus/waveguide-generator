@@ -1251,6 +1251,7 @@ def collect_solve_deliveries(
     *,
     retain: Callable[[str], object] | None = None,
     held: set[str] | None = None,
+    accept_solve: Callable[[str], object] | None = None,
     publish: Callable[[Mapping[str, Any]], None] | None = None,
     refuse: Callable[[Mapping[str, Any]], None] | None = None,
 ) -> dict[str, Any] | None:
@@ -1445,6 +1446,8 @@ def collect_solve_deliveries(
             if _retention_waits.pop(claim.name, None) is not None and held is not None:
                 # It waits no more: retained, never retainable, or at the bound.
                 held.discard(command.command_id)
+            if accept_solve is not None:
+                accept_solve(command.command_id)
             # The outcome is published before the request is deleted. If it
             # cannot be written the claim stays, and the next poll recovers the
             # same operation and publishes then.

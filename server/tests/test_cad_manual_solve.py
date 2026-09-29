@@ -17,13 +17,15 @@ from server.cadlink.ingest import retain_snapshot
 from server.cadlink.operations import PREPARE_AND_SOLVE
 from server.cadlink.wgreturn import WgReturnIntegrityError
 
-from cad_backends import OperationsHarness as Harness
+from cad_backends import JobsHarness as Harness
 from test_cad_preparation import _revision, _setup, _write_return
 
 
 @pytest.fixture
 def harness(tmp_path: Path) -> Harness:
-    return Harness(tmp_path)
+    h = Harness(tmp_path)
+    yield h
+    h.close()
 
 
 def _ingest(harness: Harness, *, name: str = "speaker.wgreturn") -> tuple[str, Path]:
@@ -58,13 +60,15 @@ def _request(harness: Harness) -> SimpleNamespace:
                 cadlink_store=harness.store,
                 data_dir=str(harness.data_dir),
                 update_restart=None,
+                jobs_runtime=harness.runtime,
+                cad_job_shims=True,
             )
         )
     )
 
 
 def _create(harness: Harness, ingest_id: str, operation_id: str = "manual-1"):
-    return asyncio.run(
+    return harness._loop.run(
         api.post_cad_operation(
             api.ManualSolveOperationRequest(operationId=operation_id, ingestId=ingest_id),
             _request(harness),
@@ -248,3 +252,22 @@ def test_a_manual_solve_whose_only_copy_is_damaged_waits_rather_than_rejects(
     assert "bundlePath" not in summary["message"]
     assert summary["message"] == preparation_module.DAMAGED_COPY_MESSAGE
     assert harness.ingest.calls == [] and harness.submitted == []
+
+
+def test_a_manual_intent_waits_for_its_first_press_across_restart(harness):
+    ingest_id, _copy = _ingest(harness)
+    result = _create(harness, ingest_id)
+    assert result.operation.state == "received"
+    job = harness.jobs_store.latest_cad_job("manual-1")
+    assert job["task_metadata"]["cad"]["manual_waiting"] is True
+    assert job["id"] not in harness.jobs_store.unheld_preparing_job_ids()
+    assert harness.jobs_store.claim_preparing_job(
+        job["id"], stage="validating", stage_message="Validating", progress=0.0,
+    ) is None
+    assert harness.ingest.calls == [] and harness.submitted == []
+    harness.restart()
+    recovered = harness.jobs_store.latest_cad_job("manual-1")
+    assert recovered["id"] == job["id"] and recovered["status"] == "preparing"
+    assert harness.ingest.calls == [] and harness.submitted == []
+    solved = harness.prepare("manual-1", setup_revision_id=_revision(harness.store, _setup(engine="beat-cpu")))
+    assert solved["state"] == "accepted" and len(harness.submitted) == 1

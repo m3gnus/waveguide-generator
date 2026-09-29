@@ -168,11 +168,17 @@ async def post_live_delivery(
                 retryable=True,
             )
         )
+    if ctx.runtime is not None and item.kind == "prepare_and_solve":
+        from server.cadlink.job_shims import accept_operation_solve
+        await accept_operation_solve(ctx, item.operation_id)
+        current = await asyncio.to_thread(ctx.store.get_operation, item.operation_id)
+    else:
+        current = answer.row
     logger.info(
         "Live CAD Link delivery %r (%s): %s.", item.operation_id, item.kind, answer.result
     )
-    preparation._publish(ctx, answer.row)
-    return {"result": answer.result, "operation": preparation.operation_summary(answer.row)}
+    preparation._publish(ctx, current)
+    return {"result": answer.result, "operation": preparation.operation_summary(current, ctx.job_store)}
 
 
 __all__ = ["DeliveryRequest", "post_live_delivery"]

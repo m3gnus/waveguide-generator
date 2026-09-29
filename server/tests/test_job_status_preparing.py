@@ -1,8 +1,8 @@
 """The ``preparing`` job status: schema, consumers and restart recovery.
 
 ``preparing`` is a CAD solve WG has accepted but not yet bound to a request.
-Nothing creates one yet, so every test here writes the row directly and checks
-that the status is read, listed, stopped, deleted and recovered safely, and
+Production accepts CAD intents in this status. These storage probes write rows
+directly and check that they are read, listed, stopped and recovered safely, and
 that no reader treats its intent as a ``SolveRequest``.
 """
 
@@ -14,6 +14,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import sqlite3
+import shutil
 import textwrap
 from typing import Any
 
@@ -83,7 +84,7 @@ def _old_shaped_database(db_path: Path) -> None:
     with closing(sqlite3.connect(db_path)) as conn:
         for statement in store_module._SCHEMA_STATEMENTS:
             conn.execute(statement.replace("'preparing',", ""))
-        conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
+        conn.execute("PRAGMA user_version = 5")
         conn.commit()
 
 
@@ -276,8 +277,8 @@ def test_the_rebuild_replays_every_index_and_trigger_the_old_table_had(tmp_path:
     assert {"odd_name", "odd_trigger", "idx_simulation_jobs_created"} <= names
 
 
-def test_the_upgrade_does_not_raise_the_schema_version(tmp_path: Path) -> None:
-    """A release a rollback returns to still opens the file (contract section 6.1)."""
+def test_the_upgrade_raises_the_schema_version_with_a_snapshot(tmp_path: Path) -> None:
+    """The older release opens the snapshot and clearly refuses the upgraded file."""
 
     db_path = tmp_path / "db" / "simulations.db"
     _old_shaped_database(db_path)
@@ -285,8 +286,9 @@ def test_the_upgrade_does_not_raise_the_schema_version(tmp_path: Path) -> None:
     store.initialize()
     store.close()
     with closing(sqlite3.connect(db_path)) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
-    assert SUPPORTED_SCHEMA_VERSION == 5
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    assert SUPPORTED_SCHEMA_VERSION == 6
+    assert store.rollback_snapshot_path.is_file()
 
 
 _RELEASED_JOB_STORE_DRIVER = textwrap.dedent(
@@ -314,30 +316,55 @@ _RELEASED_JOB_STORE_DRIVER = textwrap.dedent(
 
 
 @pytest.mark.parametrize("tag", CADLINK_ROLLBACK_TAGS)
-def test_a_release_a_rollback_returns_to_still_opens_the_upgraded_database(
-    tmp_path: Path, tag: str
-) -> None:
+def test_older_releases_refuse_intents_clearly_and_the_snapshot_restores(tmp_path: Path, tag: str) -> None:
     tree = _released_server(tag, tmp_path / f"release-{tag}")
     driver = tmp_path / "driver.py"
     driver.write_text(_RELEASED_JOB_STORE_DRIVER, encoding="utf-8")
+    refusal_driver = tmp_path / "refusal.py"
+    refusal_driver.write_text(textwrap.dedent("""\
+        import json
+        import sys
+        sys.path.insert(0, sys.argv[1])
+        import server
+        from server.jobs.store import JobStore
+        store = JobStore(sys.argv[2])
+        try:
+            store.initialize()
+        except RuntimeError as exc:
+            print(json.dumps({"refusal": str(exc), "server": server.__file__}))
+        else:
+            raise AssertionError("Older release opened schema 6")
+        finally:
+            store.close()
+        """), encoding="utf-8")
     db_path = tmp_path / "db" / "simulations.db"
     _old_shaped_database(db_path)
     _fill_old_database(db_path)
+    before = _snapshot(db_path)
     store = _store(tmp_path)
     store.initialize()
+    snapshot = store.rollback_snapshot_path
+    assert _snapshot(snapshot) == before
+    store.create_job(_preparing())
+    store.create_job(_job("refused-intent", "error", config=dict(INTENT)))
+    assert store.get_job_row("refused-intent")["run_number"] is None
+    store.checkpoint()
     store.close()
-
+    upgraded = _snapshot(db_path)
+    result = _run_released(tree, refusal_driver, str(db_path))
+    assert "created by a newer version" in result["refusal"]
+    assert "schema 6" in result["refusal"] and "supports schemas up to 5" in result["refusal"]
+    assert "last opened by" in result["refusal"]
+    assert _snapshot(db_path) == upgraded
+    # With every connection closed, replace the main file and discard the newer
+    # WAL/SHM. The pre-upgrade snapshot is standalone rollback material.
+    for suffix in ("-wal", "-shm"):
+        Path(str(db_path) + suffix).unlink(missing_ok=True)
+    shutil.copy2(snapshot, db_path)
     result = _run_released(tree, driver, str(db_path))
-
     assert result["ids"] == ["a", "b", "c", "d"]
     assert result["label"] == "label a"
-    # Rolling forward again finds everything.
-    again = _store(tmp_path)
-    again.initialize()
-    try:
-        assert again.list_jobs()[1] == 4
-    finally:
-        again.close()
+    assert _snapshot(db_path) == before
 
 
 # --- every store consumer accepts the status --------------------------------------
@@ -504,3 +531,35 @@ def test_a_preparing_row_streams_in_the_jobs_snapshot(tmp_path: Path) -> None:
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_a_failed_snapshot_aborts_the_upgrade_without_changing_the_database(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    before = _snapshot(store.db_path)
+    def fail_publish(*args):
+        raise OSError("snapshot publish failed")
+    with monkeypatch.context() as patch:
+        patch.setattr(store_module.os, "replace", fail_publish)
+        with pytest.raises(OSError, match="snapshot publish failed"):
+            store.initialize()
+    assert _snapshot(store.db_path) == before
+    with closing(sqlite3.connect(store.db_path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert not store.rollback_snapshot_path.exists()
+    store.initialize()
+    assert _snapshot(store.rollback_snapshot_path) == before
+    store.close()
+
+
+def test_an_invalid_existing_snapshot_aborts_the_upgrade(tmp_path):
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    before = _snapshot(store.db_path)
+    store.rollback_snapshot_path.touch()
+    with pytest.raises(RuntimeError, match="not restorable"):
+        store.initialize()
+    assert _snapshot(store.db_path) == before
+    store.close()

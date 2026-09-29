@@ -72,8 +72,8 @@ skips is crash-safe by construction:
   requeued. A job left `preparing` (a CAD solve accepted but not yet bound to a
   request) that a preparation lane was holding reads *failed* with the reason
   `interrupted`, "WG stopped while preparing this request. Press Solve now to prepare
-  it again."; one no lane was holding is prepared by the next start. No production
-  code creates such a job yet (S4-F1 switches the delivery pass and the routes).
+  it again."; one no lane was holding is prepared by the next start. Since S4-F1
+  the delivery pass and manual Solve shims create these jobs in production.
 - **Temporary files.** Each server process makes WG's own temporary files and
   directories -- mesh builds, the mesh each solver and the field plane read,
   STL and STEP exports, imported meshes -- inside one directory of its own,
@@ -153,3 +153,26 @@ itself, and it runs no BEAT solve. Before a stable release, on each platform:
 5. Windows: the server log line `Dense-solver memory ceiling: ...` names half of
    the installed memory (Settings > System > About) and the probe
    `GlobalMemoryStatusEx`.
+
+## Returning to a release before CAD intent jobs
+
+S4-F1 raises the jobs schema from 5 to 6 and snapshots every existing jobs
+file before the upgrade. v0.3.2 and v0.3.3-rc.1 refuse schema 6 with the
+install-provenance message; they never try to serialize or number its preparing,
+refused or cancelled intents. Settling preparations does not make schema 6
+readable by those releases.
+
+To roll back, stop every WG installation using the data directory. Preserve
+`db/simulations.db` and any `-wal`/`-shm` sidecars together. Restore the adjacent
+`simulations.db.pre-schema-6.bak` over the active jobs database and remove the
+upgraded sidecars from that active path. **Restore first, then start the older
+release.** SQLite backup includes pre-upgrade WAL commits, so the snapshot is
+standalone and opens cleanly under both tags. Never restore while a runtime is
+open. Later starts do not replace the snapshot; a failed backup aborts the
+upgrade. A fresh data directory has no older database to restore.
+
+The restored jobs are exactly the pre-upgrade jobs. Keep the preserved upgraded
+file if runs accepted since the upgrade are needed later. CAD retained bundles
+and project/frame/domain memory remain in `cadlink.db`; the older releases do
+not read its newer acceptance ledger. See `CAD-OPERATIONS.md`, "S4-F1
+compatibility and rollback", for the legacy pending-row migration.

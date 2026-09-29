@@ -7,9 +7,7 @@ The geometry fixtures (real gmsh, real ingest) are
 
 from __future__ import annotations
 
-import asyncio
 import copy
-import dataclasses
 import importlib.util
 import json
 import subprocess
@@ -23,12 +21,10 @@ import pytest
 
 from server.cadlink import domain_interpretation as di
 from server.cadlink import ingest as ingest_module
-from server.cadlink import preparation
 from server.cadlink.fusion_delivery import capabilities
-from server.cadlink.preparation import PreparationInput, prepare_operation
 from server.cadlink.solver_frame import AXES, allowed_axes, axes_in_planes, confirm_frame
 from server.cadlink.wgreturn import WgReturnValidationError, validate_manifest
-from cad_backends import OperationsHarness as Harness
+from cad_backends import JobsHarness as Harness
 from test_cad_preparation import _revision, _setup
 from test_cad_preparation_design_gate import MesherStandIn
 from test_cad_preparation_solver_frame import _authored, _received, _with_degraded_skip
@@ -452,16 +448,14 @@ def real(tmp_path, monkeypatch):
     harness = Harness(tmp_path)
     mesher = MesherStandIn()
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
-    return harness, mesher
-
-
-def _context(harness):
-    return dataclasses.replace(harness.context(), ingest=ingest_module.ingest_bundle)
+    harness.ingest = ingest_module.ingest_bundle
+    yield harness, mesher
+    harness.close()
 
 
 def _prepare(harness, **kwargs):
     kwargs.setdefault("setup_revision_id", _revision(harness.store, _setup()))
-    return asyncio.run(prepare_operation(_context(harness), "cmd-1", PreparationInput(**kwargs)))
+    return harness.prepare(**kwargs)
 
 
 def _record(harness, summary):
@@ -533,7 +527,8 @@ def test_a_known_excitation_incompatibility_stops_the_solve(real, monkeypatch) -
         seen.append([channel.id for channel in channels])
         return "Drive channel mf moves its sources 'tangential', which is not the same under the mirror."
 
-    monkeypatch.setattr(preparation, "excitation_problem", incompatible)
+    from server.jobs import cad_preparation
+    monkeypatch.setattr(cad_preparation, "excitation_problem", incompatible)
     stopped = _prepare(harness)
 
     assert (stopped["state"], stopped["reason"]) == ("needs_user_input", "submission_refused"), stopped

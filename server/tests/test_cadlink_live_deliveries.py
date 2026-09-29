@@ -32,7 +32,7 @@ from server.cadlink.operations import (
     normalize_request,
     request_digest,
 )
-from server.cadlink.solve_command import collect_solve_deliveries, record_outcome
+from server.cadlink.solve_command import collect_solve_deliveries
 from server.cadlink.store import CadLinkStore
 from server.tests.test_cad_preparation import _write_return
 from server.tests.test_cad_solve_delivery import _delivery_files, _file
@@ -81,6 +81,7 @@ class Wg:
         self.data_dir = data_dir
         self.workspace = workspace
         self.client = Recorder(application)
+        self._observed_jobs: set[str] = set()
 
     @property
     def store(self) -> CadLinkStore:
@@ -124,7 +125,18 @@ class Wg:
             )
 
         started = asyncio.run(one())
-        assert started == spawned
+        # Live acceptance now creates its job before returning. Count each job
+        # seen by these intake scenarios once; the production pass itself starts
+        # no second lifecycle and no operation coroutine is spawned.
+        assert spawned == []
+        jobs = self.app.state.jobs_runtime.store
+        for row in self.store.list_operations(kind=PREPARE_AND_SOLVE):
+            job_id = row.get("job_id")
+            if job_id and job_id not in self._observed_jobs:
+                self._observed_jobs.add(job_id)
+                job = jobs.get_job_row(job_id)
+                if job and job["status"] == "preparing" and row["operation_id"] not in started:
+                    started.append(row["operation_id"])
         return started
 
     def settle(self) -> list[str]:
@@ -156,6 +168,10 @@ def wg(
     data_dir.mkdir(exist_ok=True)
     workspace.mkdir(exist_ok=True)
     application = create_app(data_dir=data_dir, advertised_port=3100)
+    # Intake scenarios count durable jobs without running a mesh or solver.
+    # The jobs lane/binding and shim scenarios qualify preparation separately.
+    application.state.jobs_runtime._ensure_prep_lane = lambda: None
+    application.state.jobs_runtime._ensure_scheduler = lambda: None
     if select:
         application.state.cad_workspace.select(workspace)
     if consumer:
@@ -168,6 +184,7 @@ def wg(
         yield Wg(application, data_dir, workspace)
     finally:
         _run_handlers(application, "shutdown", SHUTDOWN)
+        asyncio.run(application.state.jobs_runtime.shutdown())
         application.state.cadlink_store.close()
 
 
@@ -366,7 +383,10 @@ def test_a_conflict_on_a_finished_operation_is_409_and_leaves_it(tmp_path: Path)
         bundle_path, manifest = _write_return(app.workspace)
         token = app.token()
         assert app.deliver(token, _item(bundle_path, manifest)).status_code == 200
-        record_outcome(app.store, "op-1", state="accepted", job_id="job-1")
+        job_id = app.row()["job_id"]
+        jobs = app.app.state.jobs_runtime.store
+        with jobs._transaction() as conn:
+            conn.execute("UPDATE simulation_jobs SET status = 'queued', config_json = '{}' WHERE id = ?", (job_id,))
         before = app.row()
 
         other_kind = app.deliver(token, _item(bundle_path, manifest, kind=RECEIVE_SNAPSHOT))
@@ -382,14 +402,17 @@ def test_a_terminal_operation_redelivered_replays_its_outcome(tmp_path: Path) ->
         bundle_path, manifest = _write_return(app.workspace)
         token = app.token()
         assert app.deliver(token, _item(bundle_path, manifest)).status_code == 200
-        record_outcome(app.store, "op-1", state="accepted", job_id="job-1")
+        job_id = app.row()["job_id"]
+        jobs = app.app.state.jobs_runtime.store
+        with jobs._transaction() as conn:
+            conn.execute("UPDATE simulation_jobs SET status = 'queued', config_json = '{}' WHERE id = ?", (job_id,))
 
         response = app.deliver(token, _item(bundle_path, manifest))
 
         assert response.status_code == 200
         body = response.json()
         assert body["result"] == "recovered"
-        assert (body["operation"]["state"], body["operation"]["jobId"]) == ("accepted", "job-1")
+        assert (body["operation"]["state"], body["operation"]["jobId"]) == ("accepted", job_id)
         assert app.run_pass() == []
 
 
@@ -407,12 +430,13 @@ def test_an_invalid_or_changed_return_is_acknowledged_and_preparation_rejects_it
             assert response.json()["operation"]["snapshot"] is None
         assert solve_command.live_held_operation_ids() == frozenset()
 
-        from server.cadlink.api import _preparation_context
 
         async def prepare(operation_id: str) -> dict[str, Any]:
-            return await preparation.prepare_operation(
-                _preparation_context(app.app.state), operation_id, preparation.PreparationInput()
-            )
+            from server.jobs.cad_preparation import run_cad_preparation
+            runtime = app.app.state.jobs_runtime
+            job = runtime.store.latest_cad_job(operation_id)
+            await run_cad_preparation(runtime._cad_port, runtime._cad_host, job["id"])
+            return preparation.operation_summary(app.row(operation_id), runtime.store)
 
         for operation_id in ("op-1", "op-2"):
             summary = asyncio.run(prepare(operation_id))
@@ -577,7 +601,7 @@ def test_a_slow_retention_racing_a_delivery_pass_starts_nothing(
         token = app.token()
         gate = Gate(monkeypatch)
         listing = threading.Event()
-        real_list = CadLinkStore.list_operations
+        real_list = CadLinkStore.operation_page
         visible: list[str] = []
 
         def list_while_retaining(self, **kwargs: Any):
@@ -585,11 +609,11 @@ def test_a_slow_retention_racing_a_delivery_pass_starts_nothing(
                 listing.set()
                 assert gate.entered.wait(WAIT)
                 rows = real_list(self, **kwargs)
-                visible.extend(str(row["operation_id"]) for row in rows)
+                visible.extend(str(row["operation_id"]) for _cursor, row in rows)
                 return rows
             return real_list(self, **kwargs)
 
-        monkeypatch.setattr(CadLinkStore, "list_operations", list_while_retaining)
+        monkeypatch.setattr(CadLinkStore, "operation_page", list_while_retaining)
         pass_thread, pass_box = _in_thread(app.run_pass)
         assert listing.wait(WAIT)
         live_thread, live_box = _in_thread(lambda: app.deliver(token, _item(bundle_path, manifest)))
@@ -602,7 +626,7 @@ def test_a_slow_retention_racing_a_delivery_pass_starts_nothing(
         gate.release.set()
         response = _joined(live_thread, live_box)
         assert response.status_code == 200 and response.json()["result"] == "created"
-        monkeypatch.setattr(CadLinkStore, "list_operations", real_list)
+        monkeypatch.setattr(CadLinkStore, "operation_page", real_list)
         assert app.run_pass() == ["op-1"]
 
 
@@ -618,7 +642,7 @@ def test_the_accept_commit_racing_a_pass_listing_starts_nothing(
         listing = threading.Event()
         committed = threading.Event()
         pass_done = threading.Event()
-        real_list = CadLinkStore.list_operations
+        real_list = CadLinkStore.operation_page
         real_accept = CadLinkStore.accept_operation
 
         def gated_list(self, **kwargs: Any):
@@ -633,7 +657,7 @@ def test_the_accept_commit_racing_a_pass_listing_starts_nothing(
             pass_done.wait(WAIT)
             return result
 
-        monkeypatch.setattr(CadLinkStore, "list_operations", gated_list)
+        monkeypatch.setattr(CadLinkStore, "operation_page", gated_list)
         monkeypatch.setattr(CadLinkStore, "accept_operation", gated_accept)
 
         def one_pass() -> list[str]:

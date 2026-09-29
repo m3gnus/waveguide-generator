@@ -766,10 +766,6 @@ def test_the_delivery_loop_reaches_the_frame_gate(real, monkeypatch) -> None:
     assert harness.delivery_pass() == []
 
 
-@old_only(
-    "the live HTTP delivery route (removed in Stage 5)",
-    "S4-F1 (the live path is deleted in Stage 5)",
-)
 def test_a_live_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
     """The HTTP delivery route (CADLINK-LIVE-PROTOCOL.md section 8) meets the same gate."""
 
@@ -788,10 +784,15 @@ def test_a_live_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
         revision = _revision(app.store, _setup())
 
         async def prepare(submit: bool) -> dict[str, Any]:
-            return await preparation.prepare_operation(
-                _preparation_context(app.app.state), "op-1",
-                PreparationInput(setup_revision_id=revision, submit=submit),
+            from server.jobs.cad_preparation import run_cad_preparation
+            runtime = app.app.state.jobs_runtime
+            context = _preparation_context(app.app.state)
+            job = runtime.store.latest_cad_job("op-1")
+            job_id = await runtime.prepare_cad_solve(
+                job["id"], setup_revision_id=revision, submit=submit,
             )
+            await run_cad_preparation(runtime._cad_port, runtime._cad_host, job_id)
+            return preparation.operation_summary(context.store.get_operation("op-1"), runtime.store)
 
         waiting = asyncio.run(prepare(True))
         assert _waiting_for_frame(waiting), waiting
