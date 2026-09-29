@@ -401,4 +401,15 @@ describe('angular graticule retirement', () => {
     expect(readPreferences(JSON.stringify({ version: 13, preferences: { directivityGuideInterval: 0 } })).value.directivityGuideInterval).toBe(0);
     expect(readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { directivityGuideInterval: 10 } })).value.directivityGuideInterval).toBe(10);
   });
+
+  it('reads a stored Onshape choice as Fusion while the server does not offer Onshape', () => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    expect(preferencesStore.getSnapshot().cadApplication).toBe('onshape');
+    preferencesStore.setOnshapeAvailable(false);
+    expect(preferencesStore.getSnapshot().cadApplication).toBe('fusion360');
+    // The stored choice survives, and a stable snapshot is returned until something changes.
+    expect(preferencesStore.getSnapshot()).toBe(preferencesStore.getSnapshot());
+    preferencesStore.setOnshapeAvailable(true);
+    expect(preferencesStore.getSnapshot().cadApplication).toBe('onshape');
+  });
 });

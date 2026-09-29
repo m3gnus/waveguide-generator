@@ -26,6 +26,7 @@ from server.diagnostics import mount_diagnostics
 from server.diagnostics.api import CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES
 from server.diagnostics.capabilities import capabilities_payload
 from server.cadlink import mount_cadlink, mount_onshape
+from server.cadlink.build_flags import onshape_enabled
 from server.cadlink.coordination import CAD_COORDINATION_ENV, read_cad_coordination
 from server.design_io import mount_design_io
 from server.drivers import mount_drivers
@@ -876,7 +877,9 @@ def create_app(
     async def acl_repair_status() -> dict[str, object]:
         return application.state.acl_repair_feedback
     mount_cadlink(application)
-    mount_onshape(application)
+    # Parked behind a build flag: absent, not merely hidden, when off.
+    if onshape_enabled():
+        mount_onshape(application)
     mount_charts(application)
     settings_store = mount_settings(application)
     mount_drivers(application)

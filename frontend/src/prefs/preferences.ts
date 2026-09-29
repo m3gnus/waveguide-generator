@@ -523,7 +523,32 @@ function load(): Preferences {
 class PreferenceStore {
   private value = load();
   private readonly listeners = new Set<() => void>();
-  getSnapshot = (): Preferences => this.value;
+  /**
+   * Whether the server offers Onshape (`/api/capabilities` `onshape`). Onshape is
+   * parked behind a build flag, so until the server says so it is unavailable and
+   * a stored `cadApplication: 'onshape'` reads as Fusion. The stored value is
+   * left alone, so it comes back if a dev build turns the flag on.
+   */
+  private onshapeAvailable = false;
+  private view: Preferences = this.value;
+  private viewSource: Preferences | null = null;
+  private viewAvailable = false;
+  getSnapshot = (): Preferences => {
+    if (this.viewSource !== this.value || this.viewAvailable !== this.onshapeAvailable) {
+      this.viewSource = this.value;
+      this.viewAvailable = this.onshapeAvailable;
+      this.view = this.onshapeAvailable || this.value.cadApplication !== 'onshape'
+        ? this.value
+        : { ...this.value, cadApplication: 'fusion360' };
+    }
+    return this.view;
+  };
+  isOnshapeAvailable = (): boolean => this.onshapeAvailable;
+  setOnshapeAvailable(available: boolean): void {
+    if (this.onshapeAvailable === available) return;
+    this.onshapeAvailable = available;
+    this.listeners.forEach((listener) => listener());
+  }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   update(patch: Partial<Preferences>): void {
     this.value = normalize({ ...this.value, ...patch });
@@ -576,6 +601,8 @@ class PreferenceStore {
     this.update({ autoExportFormats });
   }
   resetForTests(): void {
+    // Tests exercise both CAD applications; the flag-off cases opt out explicitly.
+    this.onshapeAvailable = true;
     this.value = {
       ...defaults,
       chartTypes: [...defaults.chartTypes],
@@ -616,4 +643,9 @@ export function applyJobPreferences(jobs: JobItem[], sort: JobSort, minimumRatin
     else order = Date.parse(b.completed_at ?? b.created_at) - Date.parse(a.completed_at ?? a.created_at);
     return order || (sort === 'name_asc' ? (a.run_number ?? 0) - (b.run_number ?? 0) : (b.run_number ?? 0) - (a.run_number ?? 0));
   });
+}
+
+/** Whether the server offers Onshape at all; every Onshape control hides on false. */
+export function useOnshapeAvailable(): boolean {
+  return useSyncExternalStore(preferencesStore.subscribe, preferencesStore.isOnshapeAvailable, preferencesStore.isOnshapeAvailable);
 }

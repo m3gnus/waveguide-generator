@@ -2,6 +2,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { preferencesStore } from '../prefs/preferences';
 import { AppQueryProvider, appQueryClient } from '../queryClient';
 import { CAPABILITIES_STALE_MS, useCapabilities, useCapabilityRefreshOnReconnect } from './useCapabilities';
 
@@ -86,6 +87,18 @@ describe('useCapabilities', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(textOf('options')).toBe('metal,bempp');
   });
+
+  it.each([[{ onshape: true }, true], [{ onshape: false }, false], [{}, false]])(
+    'reports the Onshape build flag to the preferences store (%j)', async (extra, offered) => {
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify({ ...CAPABILITIES, ...extra }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+      preferencesStore.setOnshapeAvailable(!offered);
+      await render(<Consumer tag="status"/>);
+      expect(preferencesStore.isOnshapeAvailable()).toBe(offered);
+    },
+  );
 
   it('surfaces a failure as a message rather than an empty engine list', async () => {
     fetchMock.mockImplementation(async () => new Response('{"detail":"probe exploded"}', { status: 500 }));

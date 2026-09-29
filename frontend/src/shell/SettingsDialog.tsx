@@ -10,7 +10,7 @@ import {
 } from '../api/cadWorkspace';
 import { driverCountText, driverKindCounts } from '../design/driverLibraryCounts';
 import { JobsPreferencesSurface, ResultsPreferencesSurface } from '../prefs/PreferencesSurface';
-import { preferencesStore, usePreferences, type CadApplication } from '../prefs/preferences';
+import { preferencesStore, usePreferences, useOnshapeAvailable, type CadApplication } from '../prefs/preferences';
 import { useDriverLibraryStore } from '../stores/driverLibrary';
 import { Icon } from './icons';
 import { WorkspaceFolderControls } from './WorkspaceFolderControls';
@@ -333,18 +333,19 @@ function CadProjectFolderSettings() {
 function CadSettings() {
   const preferences = usePreferences();
   const onshape = preferences.cadApplication === 'onshape';
+  const onshapeOffered = useOnshapeAvailable();
   const [onshapeSetup, setOnshapeSetup] = useState<OnshapeConnection | null>(null);
   const rememberOnshapeConnection = useCallback((connection: OnshapeConnection) => setOnshapeSetup(connection), []);
   return <section id="settings-cad" className="settings-theme cad-settings" aria-labelledby="settings-cad-title" tabIndex={-1}>
     <h3 id="settings-cad-title">CAD Link</h3>
-    <label className="ui-field">CAD application<select
+    {onshapeOffered && <label className="ui-field">CAD application<select
       aria-label="CAD application"
       value={preferences.cadApplication}
       onChange={(event) => preferencesStore.update({ cadApplication: event.target.value as CadApplication })}
     >
       <option value="fusion360">Autodesk Fusion 360</option>
       <option value="onshape">Onshape</option>
-    </select></label>
+    </select></label>}
     <p className="cad-settings-note">{onshape
       ? 'WG connects directly to your Onshape account. No local exchange folder or add-in is needed.'
       : 'Fusion uses the WGLink add-in and one local exchange folder. Complete these steps once; WGLink then opens and updates designs from the CAD Link panel.'}</p>

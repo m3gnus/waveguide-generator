@@ -12,6 +12,7 @@ import asyncio
 from dataclasses import asdict
 from typing import Any, Protocol
 
+from server.cadlink.build_flags import onshape_enabled
 from server.engines.registry import full3d_engine_order
 from server.integration.installed import measure_installed_stack
 from server.integration.provenance import pinned_dependency_shas
@@ -64,6 +65,8 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
         # A store whose filesystem refused write-ahead logging still works, just
         # slowly, so it is reported here rather than refused at boot.
         "storage": journal_mode_statuses(),
+        # The one advertisement the interface reads to show or hide Onshape.
+        "onshape": onshape_enabled(),
     }
 
 

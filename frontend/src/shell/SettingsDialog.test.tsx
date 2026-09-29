@@ -164,6 +164,16 @@ describe('SettingsDialog', () => {
     expect(host.querySelector('#settings-cad')?.textContent).toContain('Choose the WGLink folder');
   });
 
+  it('hides the CAD application choice and every Onshape control when the server does not offer Onshape', async () => {
+    preferencesStore.update({ cadApplication: 'onshape' });
+    act(() => preferencesStore.setOnshapeAvailable(false));
+    await act(async () => host.querySelector<HTMLButtonElement>('#open-settings')!.click());
+    expect(host.querySelector('[aria-label="CAD application"]')).toBeNull();
+    const section = host.querySelector('#settings-cad')!;
+    expect(section.textContent).not.toContain('Onshape');
+    expect(section.textContent).toContain('Choose the WGLink folder');
+  });
+
   it('shows and changes the dedicated WGLink folder without changing the output workspace', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);

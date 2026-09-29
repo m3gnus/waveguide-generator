@@ -86,6 +86,7 @@ from .manual_solve import (
 # than a user-chosen WGLink folder, so re-ingesting one has to be anchored to
 # that directory. Only the location constant is needed here; the Onshape
 # routes and their credentials stay in ``server/cadlink/onshape/``.
+from .build_flags import onshape_enabled
 from .onshape.return_leg import RETURN_SUBDIRECTORY as ONSHAPE_RETURN_SUBDIRECTORY
 from .operations import CANCELLED, PREPARE_AND_SOLVE, STATES, TERMINAL_STATES
 from .preparation import (
@@ -1120,6 +1121,8 @@ def _resolve_ingest_bundle(payload: CadReturnIngestRequest, request: Request) ->
     """
 
     if payload.bundle_origin == "onshape":
+        if not onshape_enabled():
+            raise HTTPException(status_code=404, detail="Onshape is not available in this build.")
         # No WGLink folder is involved: the Onshape leg writes into WG's data
         # directory, so requiring a selected folder here would refuse a valid
         # Onshape-only setup outright.

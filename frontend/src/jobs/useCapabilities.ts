@@ -10,6 +10,7 @@ import {
   migratedLegacyBeatEngine,
   plannedBackendCapabilities,
 } from '../design/backendSupport';
+import { preferencesStore } from '../prefs/preferences';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
 /**
@@ -65,6 +66,10 @@ export function useCapabilities(): CapabilitiesSnapshot {
     // Terminal ready, failed and skipped answers all stop the timer.
     refetchInterval: (query) => query.state.data?.cpuPreparationInFlight ? 1000 : false,
   });
+  const onshapeOffered = data === undefined ? null : data.onshape === true;
+  useEffect(() => {
+    if (onshapeOffered !== null) preferencesStore.setOnshapeAvailable(onshapeOffered);
+  }, [onshapeOffered]);
   const plannerSupport = data
     ? `${data.engineSelection?.resolvedDefault ?? ''}|${(data.engines ?? NO_ENGINES)
       .map((engine) => `${engine.name}:${engine.available ? 1 : 0}`)

@@ -37,6 +37,8 @@ export interface Capabilities {
   engineSelection: EngineSelection;
   /** True only while this server is deciding or preparing the BEAT CPU runtime. */
   cpuPreparationInFlight: boolean;
+  /** Build flag: false in a packaged build. Absent on an older server, which means off. */
+  onshape?: boolean;
 }
 /**
  * What the server ran instead of the engine the request named, and why.

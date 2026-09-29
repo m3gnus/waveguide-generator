@@ -1266,6 +1266,13 @@ describe('CadLinkPanel', () => {
     ...overrides,
   });
 
+  it('shows no Onshape UI and never calls its routes when the server does not offer Onshape', async () => {
+    preferencesStore.setOnshapeAvailable(false);
+    const calls = await renderOnshape(onshapeStatus());
+    expect(host.textContent).not.toContain('Onshape');
+    expect(calls.filter((path) => path.includes('/onshape'))).toEqual([]);
+  });
+
   it('offers to create an Onshape document and states the public-plan consequence', async () => {
     const calls = await renderOnshape(onshapeStatus());
     expect(host.querySelector('.cad-connection')?.textContent).toContain('Not in Onshape yet');
