@@ -196,7 +196,9 @@ still refuse this particular return, for example on its cut planes).
 The infinite-baffle setting is design physics, not a solver choice. Metal full 3D and current BEMPP full 3D both implement the coupled interior plus
 Rayleigh-aperture formulation. BEMPP currently uses a validated full-domain mesh
 for that formulation; Metal can also use half/quarter domains. BEAT does not yet
-support coupled infinite baffle. No backend substitutes an image/double-horn
+support coupled infinite baffle, so choosing it, or a BEMPP without coupled
+support, for an infinite-baffle design refuses the solve before it starts and never
+switches engine or mounting silently. No backend substitutes an image/double-horn
 approximation for a flush-mounted waveguide.
 
 The **ground plane** in Solve options is a different boundary, not another name

@@ -854,6 +854,35 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+#: Substring shared by the mesher's refusals of a mouth that cannot sit flush
+#: in an infinite baffle (non-planar ring; ring not the front-most station).
+_BAFFLE_GEOMETRY_MARKER = "infinite-baffle coupled aperture mesh requires"
+
+
+def _infinite_baffle_geometry_refusal(
+    config: Mapping[str, Any], detail: str
+) -> str | None:
+    """Turn the mesher's flush-mouth refusal into an actionable message.
+
+    Whether a mouth is planar is known only once the mesher has evaluated the
+    point grid, so it cannot be judged before a build without duplicating the
+    geometry system. What can be done is to make the refusal readable: say what
+    was wrong with the design and what to change, instead of surfacing the
+    mesher's internal wording alone.
+    """
+
+    if str(config.get("mode", "")).strip().lower() != "infinite-baffle":
+        return None
+    if _BAFFLE_GEOMETRY_MARKER not in detail:
+        return None
+    return (
+        "This horn cannot be mounted in an infinite baffle: its mouth is not a "
+        "flat rim lying in the baffle plane, with the whole horn behind it. "
+        "Use a planar, front-most mouth, or set the simulation type to "
+        f"free-standing. Mesher detail: {detail}"
+    )
+
+
 def _build_sync(
     design_dump: dict[str, Any],
     cancel_cb: CancelCallback | None,
@@ -900,6 +929,9 @@ def _build_sync(
                     f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} triangles. "
                     "Coarsen the relevant mm mesh resolution before solving."
                 ) from exc
+            baffle_refusal = _infinite_baffle_geometry_refusal(config, detail)
+            if baffle_refusal is not None:
+                raise RuntimeError(baffle_refusal) from exc
             raise
         _check_cancel(cancel_cb)
         msh_text = mesh_path.read_text(encoding="utf-8", errors="replace")

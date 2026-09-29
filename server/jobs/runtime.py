@@ -555,6 +555,21 @@ def _requested_mounting(request: SolveRequest) -> str | None:
     return request.design.root.simulation.sim_type
 
 
+_INFINITE_BAFFLE_ENGINES = "Metal, or BEMPP with coupled infinite-baffle support"
+
+
+def _engine_remedy(mounting: str | None) -> str:
+    """The install/enable advice for a request with no engine to run it.
+
+    A coupled infinite baffle is solved only by Metal and by a BEMPP whose
+    probe reports coupled support; BEAT cannot, so it is not offered as a remedy.
+    """
+
+    if mounting == "infinite-baffle":
+        return f"Install/enable {_INFINITE_BAFFLE_ENGINES}."
+    return "Install/enable Metal, BEAT, or BEMPP."
+
+
 class SymmetryValidationError(ValueError):
     """The requested solve domain requires a mirror plane the geometry lacks."""
 
@@ -912,8 +927,9 @@ async def resolve_submission(
             }.get(mounting or "", "")
             raise EngineUnavailableError(
                 f"AUTO could not resolve a compatible solve engine{unsupported} from "
-                "this host's capabilities. Install/enable Metal, BEAT, "
-                "or BEMPP; explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+                "this host's capabilities. "
+                + _engine_remedy(mounting)
+                + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
                 "synthetic development solves."
             )
         request = request.model_copy(deep=True)
@@ -985,8 +1001,9 @@ async def resolve_submission(
                     f"Solve engine '{engine_name}' is unavailable, and no other "
                     f"engine on this host{unsupported} can take its place. "
                     + (unavailable_reason or "No capability reason was reported.")
-                    + " Install/enable Metal, BEAT, or BEMPP; "
-                    "explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
+                    + " "
+                    + _engine_remedy(mounting)
+                    + " Explicitly enable dry-run with WG2_ENABLE_DRYRUN=1 for "
                     "synthetic development solves."
                 )
             request = request.model_copy(deep=True)
@@ -1047,6 +1064,26 @@ async def resolve_submission(
                 f"plane; it would silently return a free-standing result. "
                 f"Engines that can: {offer}. Choose one, or turn the ground "
                 "plane off."
+            )
+    if request.design.root.simulation.sim_type == "infinite-baffle":
+        # Every path that picks an engine converges here, exactly as for the
+        # ground plane above: an explicit engine skips the AUTO gate, and so do
+        # a stored preference, an imported ATH SimType=1 and a retry. Refused
+        # before the job exists rather than after the adapter rejects it, and
+        # the engine and mounting are never changed silently.
+        #
+        # Advertising is the contract, and it is the same one AUTO filters on:
+        # Metal by name, BEMPP only when its probe reports coupled support.
+        #
+        # An engine the host does not list at all (a disabled dry run) is left
+        # to the unavailable-engine refusal below, which says why.
+        listed = {info.name: info for info in await engine_registry.capabilities()}
+        info = listed.get(engine_name)
+        if info is not None and "infinite-baffle" not in info.mountings:
+            raise SymmetryValidationError(
+                f"Solve engine '{engine_name}' cannot solve a coupled infinite "
+                f"baffle. Choose {_INFINITE_BAFFLE_ENGINES}, or set the "
+                "simulation type to free-standing."
             )
     if (
         engine_name != "dryrun"

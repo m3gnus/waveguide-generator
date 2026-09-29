@@ -1,9 +1,9 @@
 """Coupled infinite-baffle validation for full-3D engines.
 
-V1 rejects the tempting but incorrect free-field/image shortcut: full 3-D uses
-Metal/BEMPP use the mesher's aperture physical tag and native Rayleigh coupling. See v1
-``metal_solver.py:310-359,396-405`` and
-``metal_solver.py:477-500,550-558``.
+A free-field/image shortcut is incorrect for a flush-mounted waveguide, so the
+coupled formulation is the only one offered. Metal, and BEMPP where its probe
+reports coupled support, use the mesher's aperture physical tag and native
+Rayleigh coupling. BEAT cannot solve it and refuses.
 """
 
 from __future__ import annotations
@@ -30,18 +30,6 @@ def aperture_tag_from_metadata(metadata: Any) -> int | None:
     return None
 
 
-def require_full_3d_aperture_tag(context: SolverContext, metadata: Any) -> int | None:
-    if context.sim_type != 1:
-        return None
-    tag = aperture_tag_from_metadata(metadata)
-    if tag is None:
-        raise RuntimeError(
-            "Full-3D infinite-baffle Metal solve requires the coupled aperture tag, "
-            "but hornlab-waveguide-mesher did not report apertureTag/aperture_tag."
-        )
-    return tag
-
-
 def require_coupled_aperture_tag(
     context: SolverContext,
     metadata: Any,
@@ -61,27 +49,16 @@ def require_coupled_aperture_tag(
     return tag
 
 
-def reject_bempp_infinite_baffle(context: SolverContext) -> None:
-    """Compatibility guard for callers pinned to a pre-coupling BEMPP package."""
-    if context.sim_type == 1:
-        raise ValueError(
-            "The installed BEMPP adapter has not enabled coupled infinite-baffle "
-            "support. Upgrade hornlab-bempp-bem or use Metal."
-        )
-
-
 def reject_beat_infinite_baffle(context: SolverContext) -> None:
     if context.sim_type == 1:
         raise ValueError(
             "The BEAT backend cannot solve coupled infinite-baffle requests. "
-            "Use Metal full 3D or BEMPP full 3D."
+            "Use Metal, or BEMPP with coupled infinite-baffle support."
         )
 
 
 __all__ = [
     "aperture_tag_from_metadata",
     "reject_beat_infinite_baffle",
-    "reject_bempp_infinite_baffle",
     "require_coupled_aperture_tag",
-    "require_full_3d_aperture_tag",
 ]

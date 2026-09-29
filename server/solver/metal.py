@@ -69,7 +69,7 @@ from .field_traces_store import (
     field_trace_retention_plan,
 )
 from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
-from .infinite_baffle import require_full_3d_aperture_tag
+from .infinite_baffle import require_coupled_aperture_tag
 from .imported import (
     imported_anchor_frame,
     imported_domain_planes,
@@ -594,7 +594,9 @@ def solve_metal_from_msh_text(
             )
         return True
 
-    aperture_tag = require_full_3d_aperture_tag(context, mesh_metadata)
+    aperture_tag = require_coupled_aperture_tag(
+        context, mesh_metadata, backend="Metal"
+    )
     field_plane_enabled = (
         getattr(context, "polar_config", {}).get("field_plane", True) is True
     )

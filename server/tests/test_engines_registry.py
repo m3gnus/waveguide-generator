@@ -839,7 +839,12 @@ def test_unavailable_engine_substitution_skips_incompatible_beat_backend() -> No
 
 def test_bempp_coupled_infinite_baffle_planner_requires_full_domain() -> None:
     engine_registry = registry.EngineRegistry(
-        detector=lambda: [registry.EngineInfo("bempp", True, "CPU", "1")],
+        detector=lambda: [
+            registry.EngineInfo(
+                "bempp", True, "CPU", "1",
+                mountings=("free-standing", "infinite-baffle"),
+            )
+        ],
         factory=lambda name: object() if name == "bempp" else None,
     )
 
@@ -1534,7 +1539,11 @@ def test_an_available_engine_reports_no_substitution() -> None:
 def _plan_endpoint(tmp_path: Path, *engines: str) -> Any:
     engine_registry = registry.EngineRegistry(
         detector=lambda: [
-            registry.EngineInfo(name, True, "CPU", "1") for name in engines
+            registry.EngineInfo(
+                name, True, "CPU", "1",
+                mountings=("free-standing", "infinite-baffle"),
+            )
+            for name in engines
         ],
         factory=lambda name: object() if name in engines else None,
     )
