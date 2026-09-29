@@ -3,6 +3,7 @@
 [areas]
 "server/cadlink/" = [
     "server/tests/test_cad*.py",
+    "server/tests/test_job_cad*.py",
     "server/tests/test_fusion*.py",
     "server/tests/test_onshape*.py",
     "server/tests/test_wglink*.py",
@@ -19,6 +20,7 @@
 ]
 "server/jobs/" = [
     "server/tests/test_jobs*.py",
+    "server/tests/test_design_availability.py",
     "server/tests/test_job_*.py",
     "server/tests/test_imported*.py",
     "server/tests/test_cad*.py",
@@ -36,7 +38,6 @@
     "server/tests/test_ib_real_k_live.py",
     "server/tests/test_ib_real_k_reuse.py",
     "server/tests/test_mesh_ladder.py",
-    "server/tests/test_migrate_v1.py",
     "server/tests/test_power_qualification.py",
     "server/tests/test_radiation_impedance_presentation.py",
     "server/tests/test_radiation_package.py",
@@ -50,6 +51,8 @@
     "server/tests/test_update_transaction_contract.py",
 ]
 "server/solver/" = [
+    "server/tests/test_axial_source_axes.py",
+    "server/tests/test_cad_frame_infer_real.py",
     "server/tests/test_solver*.py",
     "server/tests/test_bempp*.py",
     "server/tests/test_imported*.py",
