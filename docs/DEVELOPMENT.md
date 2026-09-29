@@ -85,8 +85,15 @@ job runs are worth the same habit before a release:
 ```
 
 Geometry, solver, platform, or release work may also require the pinned sibling suites,
-constellation checks, a real browser, or owned qualification hardware. Hosted CI never
-runs real Metal or BEMPP solves.
+constellation checks, a real browser, or owned qualification hardware. Hosted CI is not
+solver qualification; its only real solves are the two tiny ones below.
+
+`server/tests/test_real_pipeline.py` is the one default test with nothing faked: a tiny
+OSSE through `/api/solve` on the pinned mesher and BEMPP, and a committed `.wgreturn`
+through ingest, backend preparation and solve (on BEMPP-OpenCL or Metal, skipped with the
+registry's reasons on a host offering neither), holding the results and the installed
+module commits to `pins.json`. It must be green, in an environment installed from the
+pins, before any pin move.
 
 Hosted CI runs Linux and Windows on every push to `dev` (a diagnostic after landing,
 not a landing gate), and the full three-platform matrix when dispatched or called by

@@ -1,9 +1,12 @@
 name: CI
 
-# Hosted CI never runs real solvers (WG-REBUILD-PLAN R2-P1.3): Metal and bempp
-# parity live on the owned qualification runners, whose archived evidence the
-# gates link to. What runs here is everything that is deterministic on a hosted
-# runner -- suites, build, and the drift gates that keep generated files honest.
+# Hosted CI runs no solver qualification (WG-REBUILD-PLAN R2-P1.3): Metal and
+# bempp parity live on the owned qualification runners, whose archived evidence
+# the gates link to. What runs here is everything that is deterministic on a
+# hosted runner -- suites, build, and the drift gates that keep generated files
+# honest. The only real solves are server/tests/test_real_pipeline.py: a
+# two-frequency BEMPP smoke test of the whole pipeline on the pinned modules,
+# and a CAD-return variant that runs only where an imported engine is offered.
 
 # Routine integration is gated by the full local suite, run once per landed
 # batch under the workspace landing policy, so this is never a landing gate. It
