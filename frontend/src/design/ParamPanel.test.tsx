@@ -449,7 +449,10 @@ describe('ParamPanel inventory UX', () => {
     }
     // The grouping select is gone: each source drives its default channel.
     expect(host.querySelector('[aria-label^="Drive channel for"]')).toBeNull();
-    expect(host.querySelector('[aria-label="Motion for drive-hf"]')).not.toBeNull();
+    const motion = host.querySelector<HTMLSelectElement>('[aria-label="Motion for drive-hf"]');
+    expect(motion).not.toBeNull();
+    expect([...motion!.options].map((option) => option.textContent)).toEqual(['Normal', 'Axial (pistonic)']);
+    expect(host.textContent).toContain('Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.');
     expect(host.textContent).toContain('Cabinet & waveguide');
     expect(host.textContent).toContain('Size transition');
     expect(host.textContent).toContain('HF source');

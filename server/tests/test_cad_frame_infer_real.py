@@ -30,7 +30,7 @@ from server.cadlink.solver_frame import (
 from server.cadlink.store import CadLinkStore
 from server.mesh.artifact import read_verified_import_mesh
 from server.mesh.gmsh_worker import _run_in_gmsh_session
-from server.solver.beat_imported import _drive_groups, _Gmsh22Mesh, beat_imported_frame
+from server.solver.beat_imported import _drive_groups, beat_axial_signs, beat_imported_frame
 from server.solver.imported import (
     imported_anchor_frame,
     imported_domain_planes,
@@ -201,11 +201,10 @@ def test_a_model_facing_x_is_found_and_confirming_it_meshes_the_v2_frame(tmp_pat
 def test_an_axial_channel_follows_the_chosen_forward_axis(tmp_path: Path) -> None:
     """Model facing +x with a rear-facing source: axial drive is along CAD +x.
 
-    Metal and BEAT drive an axial source at ``n . axis`` in the record's frame
-    and flip a tag facing back along it (``beat_imported._drive_groups``). In a
-    +x preparation that axis is solver +Z, which is CAD +x: the throat is
-    driven forward and the rear source flipped to drive outward, as they would
-    be for the same model modelled along +z.
+    Each axial source moves along its own resolved axis (its outward net area
+    vector). In a +x preparation the throat's is solver +Z, which is CAD +x,
+    and the rear source's is -Z: BEAT solves them as a +z and a -z group, as it
+    would for the same model modelled along +z.
     """
 
     bundle, manifest = _bundle(tmp_path, "rear-facing-x", _rear_horn, "+x")
@@ -219,30 +218,26 @@ def test_an_axial_channel_follows_the_chosen_forward_axis(tmp_path: Path) -> Non
     assert np.allclose(solver_from_assembly[:3, :3].T @ observation["axis"], [1.0, 0.0, 0.0], atol=1e-9)
 
     beat = beat_imported_frame(record, beat_native_plane(record))
-    mesh = _Gmsh22Mesh.parse(read_verified_import_mesh(record)).rotated(beat.rotation)
-    orientation = mesh.axial_orientation()
     tags = record["source_tags"]
     hf, lf = int(tags["hf"]), int(tags["lf"])
-    assert orientation[hf][0] > 0.9 * orientation[hf][1]
-    assert orientation[lf][0] < -0.9 * orientation[lf][1]
-    groups = _drive_groups(frozenset({hf, lf}), "axial", orientation)
+    channels = [{"id": "both", "source_ids": ["hf", "lf"], "motion": "axial"}]
+    # Each source's own axis is its outward net area vector: the throat faces
+    # solver +Z (CAD +x) and the rear source -Z, whatever the frame chosen.
+    signs, identity = beat_axial_signs(record, read_verified_import_mesh(record), channels, beat.rotation)
+    assert signs == {hf: 1.0, lf: -1.0}
+    assert identity["both"]["axial_contract"] == "per-source-axis-v2"
+    groups = _drive_groups(frozenset({hf, lf}), "axial", signs)
     assert groups == [(1.0, frozenset({hf})), (-1.0, frozenset({lf}))]
 
     # The same model modelled along +z and solved as modelled drives the same way.
     modelled_bundle, modelled_manifest = _bundle(tmp_path, "rear-facing-z", _rear_horn, "+z")
     modelled = _ingest(modelled_bundle, modelled_manifest, tmp_path / "data-z")
     modelled_beat = beat_imported_frame(modelled, beat_native_plane(modelled))
-    modelled_mesh = _Gmsh22Mesh.parse(read_verified_import_mesh(modelled)).rotated(modelled_beat.rotation)
     modelled_tags = modelled["source_tags"]
-    modelled_groups = _drive_groups(
-        frozenset({int(modelled_tags["hf"]), int(modelled_tags["lf"])}),
-        "axial",
-        modelled_mesh.axial_orientation(),
+    modelled_signs, _ = beat_axial_signs(
+        modelled, read_verified_import_mesh(modelled), channels, modelled_beat.rotation
     )
-    assert modelled_groups == [
-        (1.0, frozenset({int(modelled_tags["hf"])})),
-        (-1.0, frozenset({int(modelled_tags["lf"])})),
-    ]
+    assert modelled_signs == {int(modelled_tags["hf"]): 1.0, int(modelled_tags["lf"]): -1.0}
 
 
 def beat_native_plane(record: dict[str, Any]) -> str | None:

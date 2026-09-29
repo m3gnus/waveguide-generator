@@ -62,6 +62,7 @@ from .imported import (
     imported_anchor_frame,
     imported_domain_planes,
     imported_symmetry_from_cut_planes,
+    prepare_axial_drive,
 )
 from .metal import (
     _apply_channel_driver,
@@ -267,6 +268,7 @@ def _solve_config(config_kwargs: dict[str, Any]) -> Any:
         message = str(exc)
         for option, feature in (
             ("velocity_sources", "per-tag velocity sources"),
+            ("source_axes", "per-source axial axes"),
             ("source_motion", "axial source motion"),
             ("frame_override", "an explicit observation frame"),
             ("on_frequency_result", "streamed frequency results"),
@@ -372,7 +374,13 @@ def solve_imported_bempp_from_msh_text(
             cap_bytes=field_trace_cap_bytes,
         )
     )
-    channel_identity = _channel_source_identity(geometry, record)
+    try:
+        source_axes, axial_identity = prepare_axial_drive(
+            record, msh_text, geometry.drive_channels
+        )
+    except ValueError as exc:
+        raise ValueError(f"axial source motion cannot be solved: {exc}") from exc
+    channel_identity = _channel_source_identity(geometry, record, axial_identity)
     anchor = imported_anchor_frame(record)
     frame_override = bempp.ObservationFrame(**anchor)
     frame_basis = {
@@ -519,6 +527,11 @@ def solve_imported_bempp_from_msh_text(
             }
             if result_callback is not None:
                 config_kwargs["on_frequency_result"] = on_frequency_result
+            if channel.motion == "axial":
+                # Explicit per-source axes, never the observation-frame axis.
+                config_kwargs["source_axes"] = {
+                    tag: source_axes[tag].axis for tag in channel_tags[channel.id]
+                }
             config = _solve_config(config_kwargs)
             holder["config"] = config
             # The record says no open edge lies off a mirror plane; this checks
@@ -647,7 +660,7 @@ def solve_imported_bempp_from_msh_text(
     channel_bases_npz = serialize_channel_bases(
         sorted_results,
         metadata_by_id=_channel_basis_metadata(
-            geometry, record, source_tags, driver_payloads
+            geometry, record, source_tags, driver_payloads, axial_identity
         ),
     )
     first_config = configs[geometry.drive_channels[0].id]

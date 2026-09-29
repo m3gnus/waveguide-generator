@@ -22,6 +22,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from .combine import deserialize_channel_bases
+from .imported import LEGACY_AXIAL_CONTRACT
 
 
 PRESSURE_BASIS_VERSION = 1
@@ -121,6 +122,24 @@ def export_pressure_basis(
         "source_motion": np.asarray(str(stored.get("source_motion") or "normal")),
         "surface_pressure_avg_available": np.asarray(False),
     }
+    motion = str(stored.get("source_motion") or "normal")
+    if motion == "axial":
+        # A basis solved before the per-source-axis contract recorded no
+        # version: it moved sources along the observation frame's axis with a
+        # sign vote, which is a different excitation.
+        arrays["axial_contract"] = np.asarray(
+            str(stored.get("axial_contract") or LEGACY_AXIAL_CONTRACT)
+        )
+        source_axes = [
+            item for item in stored.get("source_axes", []) if isinstance(item, Mapping)
+        ]
+        if source_axes:
+            arrays["source_axes"] = np.asarray(
+                [item["axis"] for item in source_axes], dtype=np.float64
+            )
+            arrays["source_axes_raw"] = np.asarray(
+                [item["raw_axis"] for item in source_axes], dtype=np.float64
+            )
     if len(source_areas) == 1:
         arrays["source_area_m2"] = np.asarray(source_areas[0], dtype=np.float64)
     sphere = getattr(result, "sphere_pressure_complex", None)

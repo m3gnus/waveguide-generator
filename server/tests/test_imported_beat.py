@@ -11,6 +11,8 @@ qualification suite's job.
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import math
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +63,44 @@ $Elements
 4 2 2 103 4 1 3 4
 $EndElements
 """
+
+def _mesh(nodes: list[tuple[float, float, float]], triangles: list[tuple[int, tuple[int, int, int]]]) -> str:
+    """A Gmsh 2.2 surface of ``(tag, (node, node, node))`` triangles.
+
+    The winding is the outward normal: (b - a) x (c - a).
+    """
+
+    rows = [
+        "$MeshFormat", "2.2 0 8", "$EndMeshFormat",
+        "$PhysicalNames", "4",
+        '2 1 "wg-import-v1|rigid"',
+        '2 101 "wg-import-v1|tag=101|source_id=source-a|instance_id=i|role=HF"',
+        '2 102 "wg-import-v1|tag=102|source_id=source-b|instance_id=i|role=MF"',
+        '2 103 "wg-import-v1|tag=103|source_id=source-c|instance_id=null|role=LF"',
+        "$EndPhysicalNames", "$Nodes", str(len(nodes)),
+        *(f"{index} {x} {y} {z}" for index, (x, y, z) in enumerate(nodes, start=1)),
+        "$EndNodes", "$Elements", str(len(triangles)),
+        *(
+            f"{index} 2 2 {tag} {tag} {a} {b} {c}"
+            for index, (tag, (a, b, c)) in enumerate(triangles, start=1)
+        ),
+        "$EndElements",
+    ]
+    return "\n".join(rows) + "\n"
+
+
+#: Sources whose faces are square to BEAT's z: tag 101 faces -z, 102 and 103
+#: face +z. Flat, so each tag's axis is exactly +-z of the solver frame.
+MESH_Z = _mesh(
+    [(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0), (0, 0, 0.02), (0.01, 0, 0.02), (0, 0.01, 0.02)],
+    [(1, (1, 2, 4)), (101, (4, 6, 5)), (102, (1, 2, 3)), (103, (4, 5, 6))],
+)
+
+#: The same, along x: tag 103 faces -x, so in SIDEWAYS_FRAME (axis +x) it is -z.
+MESH_X = _mesh(
+    [(0.01, 0, 0), (0, 0.02, 0), (0, 0, 0.03), (0.01, 0.02, 0.03), (0.01, 0, 0), (0.01, 0.02, 0), (0.01, 0, 0.03)],
+    [(1, (1, 2, 3)), (101, (1, 2, 4)), (102, (2, 3, 4)), (103, (5, 7, 6))],
+)
 
 IDENTITY_FRAME = {
     "axis": [0.0, 0.0, 1.0],
@@ -148,7 +188,7 @@ def _request(**geometry_changes: Any) -> SolveRequest:
         "artifact_sha256": ARTIFACT_SHA,
         "drive_channels": [
             {"id": "left", "source_ids": ["source-a", "source-b"]},
-            {"id": "right", "source_ids": ["source-c"], "motion": "axial"},
+            {"id": "right", "source_ids": ["source-c"]},
         ],
         "mesh": {
             "rigid_size_mm": 8.0,
@@ -285,9 +325,15 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     recording_beat: _RecordingBeat,
 ) -> None:
     streamed: list[Any] = []
-    record = _record(frame=SIDEWAYS_FRAME)
+    record = _record(frame=SIDEWAYS_FRAME, msh_text=MESH_X)
+    request = _request(
+        drive_channels=[
+            {"id": "left", "source_ids": ["source-a", "source-b"]},
+            {"id": "right", "source_ids": ["source-c"], "motion": "axial"},
+        ]
+    )
 
-    outcome = _run(_request(), record, streamed)
+    outcome = _run(request, record, streamed)
 
     # One BEAT solve per drive channel. The channel's member tags become the
     # one driven tag; every other tag, including the other channel's, is rigid.
@@ -306,7 +352,7 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     rotation = np.asarray(
         [SIDEWAYS_FRAME["u"], SIDEWAYS_FRAME["v"], SIDEWAYS_FRAME["axis"]]
     )
-    original = _nodes(MESH)
+    original = _nodes(MESH_X)
     np.testing.assert_allclose(_nodes(left["text"]), original @ rotation.T, atol=1e-15)
     frame = left["config"].frame_override
     np.testing.assert_array_equal(frame.axis, [0.0, 0.0, 1.0])
@@ -341,9 +387,8 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     assert "impedance" in response["channels"]["right"]
 
     # Each channel keeps its own complex basis for recombination. The stand-in
-    # returns 1x and 2x a unit field; tag 103 faces back along the sideways
-    # axis, so its axial channel is driven outward, as Metal drives it, and
-    # comes back negated.
+    # returns 1x and 2x a unit field; tag 103's resolved axis is -x, which is
+    # -z of BEAT's frame, so its axial channel is the -z group, negated.
     bases = deserialize_channel_bases(outcome.channel_bases)
     assert bases["channel_ids"] == ["left", "right"]
     left_basis = bases["results_by_id"]["left"].pressure_complex
@@ -374,23 +419,27 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
         for channel in payload["channels"]
     )
     # The job stores the mesh as ingested, not the rotated copy.
-    assert outcome.msh_text == MESH
+    assert outcome.msh_text == MESH_X
+    # The channel records its motion, the contract and each tag's axis.
+    right_metadata = response["channels"]["right"]["metadata"]
+    assert right_metadata["source_motion"] == "axial"
+    assert right_metadata["axial_contract"] == "per-source-axis-v2"
+    assert right_metadata["source_axes"][0]["tag"] == 103
+    assert right_metadata["source_axes"][0]["axis"] == [-1.0, 0.0, 0.0]
+    assert right_metadata["source_axes"][0]["snapped_to"] == "-x"
+    assert "source_axes" not in response["channels"]["left"]["metadata"]
+    stored = json.loads(str(np.load(io.BytesIO(outcome.channel_bases))["metadata::right"].item()))
+    assert stored["axial_contract"] == "per-source-axis-v2"
+    assert stored["source_axes"][0]["axis"] == [-1.0, 0.0, 0.0]
 
 
-def test_an_axial_tag_facing_backwards_is_driven_outward_as_metal_drives_it(
+def test_an_axial_source_along_minus_z_is_the_negated_plus_z_group(
     recording_beat: _RecordingBeat,
 ) -> None:
-    """Metal orients each axial source tag outward, by its area-weighted normal.
+    """BEAT drives ``n . z`` on its one tag and carries no sign.
 
-    hornlab-metal-bem scales each axial face by ``n . axis`` and flips a whole
-    tag whose area-weighted projection is negative (``bie.py``,
-    ``_build_axial_face_scale``), so a tag facing back along the axis is pushed
-    outward, not along +axis. BEAT drives ``n . z`` on its one tag and flips
-    nothing. The same excitation on both engines therefore needs the backward
-    tags solved as their own group and subtracted, by linearity.
-
-    In the identity frame MESH's tag 101 faces backwards (its normal has a
-    negative z), tag 102 forwards.
+    A source whose resolved axis is -z is therefore its own group, subtracted,
+    by linearity. In MESH_Z tag 101 faces -z (its outward axis is -z), 102 +z.
     """
 
     request = _request(
@@ -400,10 +449,10 @@ def test_an_axial_tag_facing_backwards_is_driven_outward_as_metal_drives_it(
         ]
     )
 
-    outcome = _run(request, _record())
+    outcome = _run(request, _record(msh_text=MESH_Z))
 
-    # Two BEAT solves for the axial channel -- forward tags, then the
-    # backward-facing one -- and one for the normal channel.
+    # Two BEAT solves for the axial channel -- the +z tags, then the -z one --
+    # and one for the normal channel.
     assert len(recording_beat.solves) == 3
     forward, backward, normal = recording_beat.solves
     assert _elements(forward["text"]) == {1: 1, 2: 1, 3: 2, 4: 1}
@@ -416,26 +465,84 @@ def test_an_axial_tag_facing_backwards_is_driven_outward_as_metal_drives_it(
     left = bases["results_by_id"]["left"].pressure_complex
     right = bases["results_by_id"]["right"].pressure_complex
     np.testing.assert_allclose(left, -1.0 * right / 3.0)
-    assert outcome.results["channels"]["left"]["metadata"]["beat"]["axially_reversed_source_tags"] == [101]
+    metadata = outcome.results["channels"]["left"]["metadata"]
+    assert metadata["beat"]["axially_reversed_source_tags"] == [101]
+    assert [item["axis"] for item in metadata["source_axes"]] == [[0.0, 0.0, -1.0], [0.0, 0.0, 1.0]]
 
 
-def test_a_closed_axial_tag_is_never_reversed_by_rounding() -> None:
-    """A closed tag's faces cancel, so its projection's sign is only rounding.
-
-    The whole sphere of the oscillating-sphere fixture is such a tag: rotating
-    its mesh moved the residue from +1e-18 to -1e-18 and flipped the entire
-    field. Below the tolerance a tag drives ``n . axis`` unflipped.
-    """
-
+def test_drive_groups_follow_the_signs_and_never_a_rounding_residue() -> None:
     tags = frozenset({101, 102})
-    closed = {101: (-3.0e-19, 0.5), 102: (0.4, 0.5)}
-    assert beat_imported._drive_groups(tags, "axial", closed) == [(1.0, tags)]
-    facing_back = {101: (-0.1, 0.5), 102: (0.4, 0.5)}
-    assert beat_imported._drive_groups(tags, "axial", facing_back) == [
+    signs = {101: -1.0, 102: 1.0}
+    assert beat_imported._drive_groups(tags, "axial", signs) == [
         (1.0, frozenset({102})),
         (-1.0, frozenset({101})),
     ]
-    assert beat_imported._drive_groups(tags, "normal", facing_back) == [(1.0, tags)]
+    assert beat_imported._drive_groups(tags, "normal", signs) == [(1.0, tags)]
+    assert beat_imported._drive_groups(tags, "axial", {101: 1.0, 102: 1.0}) == [(1.0, tags)]
+
+
+def _axial_request(*source_ids: str) -> SolveRequest:
+    rest = [name for name in ("source-a", "source-b", "source-c") if name not in source_ids]
+    channels: list[dict[str, Any]] = [
+        {"id": "axial", "source_ids": list(source_ids), "motion": "axial"}
+    ]
+    if rest:
+        channels.append({"id": "rest", "source_ids": rest})
+    return _request(drive_channels=channels)
+
+
+def test_an_axial_source_along_another_axis_is_refused_by_name(
+    recording_beat: _RecordingBeat,
+) -> None:
+    """MESH's tag 103 is a tilted face: its axis is not +-z, so BEAT refuses."""
+
+    record = _record()
+    request = _axial_request("source-c")
+
+    refusal = beat.BeatEngine("cpu").imported_preflight(
+        record, MESH, drive_channels=request.geometry.drive_channels
+    )
+    assert refusal is not None
+    assert "tag 103" in refusal and "z axis only" in refusal
+    with pytest.raises(beat.BeatUnavailable, match="tag 103"):
+        _run(request, record)
+    assert recording_beat.solves == []
+    # Without axial motion the same record is fine, and so is asking without channels.
+    assert beat.BeatEngine("cpu").imported_preflight(record, MESH) is None
+
+
+def test_a_tilted_source_within_half_a_degree_of_z_snaps_and_beyond_it_is_refused() -> None:
+    def cap(tilt_degrees: float) -> str:
+        tilt = math.radians(tilt_degrees)
+        # A triangle whose normal is tilted about y by ``tilt``.
+        base = np.asarray([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [0.0, 0.01, 0.0]])
+        rotation = np.asarray(
+            [[math.cos(tilt), 0.0, math.sin(tilt)], [0.0, 1.0, 0.0], [-math.sin(tilt), 0.0, math.cos(tilt)]]
+        )
+        nodes = [tuple(float(v) for v in row) for row in base @ rotation.T]
+        nodes += [(0.0, 0.0, 0.05), (0.01, 0.0, 0.05), (0.0, 0.01, 0.05)]
+        return _mesh(nodes, [(1, (4, 5, 6)), (101, (1, 2, 3)), (102, (4, 5, 6)), (103, (4, 5, 6))])
+
+    request = _axial_request("source-a")
+    channels = request.geometry.drive_channels
+    near = cap(0.3)
+    assert beat.BeatEngine("cpu").imported_preflight(_record(msh_text=near), near, drive_channels=channels) is None
+    far = cap(0.8)
+    refusal = beat.BeatEngine("cpu").imported_preflight(_record(msh_text=far), far, drive_channels=channels)
+    assert refusal is not None and "tag 101" in refusal
+
+
+def test_a_closed_source_cannot_be_driven_axially() -> None:
+    """A source whose faces cancel has no outward axis."""
+
+    tetra = _mesh(
+        [(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0), (0, 0, 0.01)],
+        [(1, (1, 2, 3)), (101, (1, 3, 2)), (101, (1, 2, 4)), (101, (2, 3, 4)), (101, (3, 1, 4))],
+    )
+    refusal = beat.BeatEngine("cpu").imported_preflight(
+        _record(msh_text=tetra), tetra, drive_channels=_axial_request("source-a").geometry.drive_channels
+    )
+    assert refusal is not None and "tag 101" in refusal
 
 
 @pytest.mark.parametrize(

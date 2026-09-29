@@ -18,7 +18,7 @@ import platform
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
@@ -1146,10 +1146,15 @@ def solve_bempp_from_msh_text(
 class BemppEngine:
     name = "bempp"
 
-    def imported_preflight(self, record: Mapping[str, Any], msh_text: str) -> str | None:
+    def imported_preflight(
+        self,
+        record: Mapping[str, Any],
+        msh_text: str,
+        drive_channels: Sequence[Any] | None = None,
+    ) -> str | None:
         """Why BEMPP cannot solve this imported record, answered before a job exists."""
 
-        del msh_text
+        del msh_text, drive_channels
         from .bempp_imported import imported_bempp_preflight
 
         return imported_bempp_preflight(record)

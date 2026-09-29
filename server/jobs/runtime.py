@@ -24,7 +24,7 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
@@ -1218,14 +1218,28 @@ def _imported_capability_blocker(
 
 
 async def _imported_preflight_refusal(
-    adapter: Any, record: Mapping[str, Any] | None, msh_text: str | None
+    adapter: Any,
+    record: Mapping[str, Any] | None,
+    msh_text: str | None,
+    drive_channels: Sequence[Any] | None = None,
 ) -> str | None:
-    """An adapter's own verdict on the record and mesh, when it has one."""
+    """An adapter's own verdict on the record and mesh, when it has one.
+
+    An adapter is told the drive channels only when one is axial: whether an
+    engine can take an axial source depends on its resolved axis.
+    """
 
     preflight = getattr(adapter, "imported_preflight", None)
     if not callable(preflight) or record is None or msh_text is None:
         return None
-    refusal = await asyncio.to_thread(preflight, record, msh_text)
+    if drive_channels and any(
+        getattr(channel, "motion", "normal") == "axial" for channel in drive_channels
+    ):
+        refusal = await asyncio.to_thread(
+            preflight, record, msh_text, drive_channels=list(drive_channels)
+        )
+    else:
+        refusal = await asyncio.to_thread(preflight, record, msh_text)
     return refusal if isinstance(refusal, str) and refusal else None
 
 
@@ -1239,6 +1253,7 @@ async def _engines_able_to_take(
     engine_registry: EngineRegistry,
     imported_record: Mapping[str, Any] | None,
     imported_msh_text: str | None,
+    drive_channels: Sequence[Any] | None = None,
 ) -> list[str]:
     """The engines, other than ``exclude``, that would take this return here.
 
@@ -1260,10 +1275,33 @@ async def _engines_able_to_take(
             engine_registry=engine_registry,
             imported_record=imported_record,
             imported_msh_text=imported_msh_text,
+            drive_channels=drive_channels,
         )
         if verdict.solves:
             able.append(name)
     return able
+
+
+def _imported_axial_refusal(
+    request: SolveRequest, record: Mapping[str, Any] | None, msh_text: str | None
+) -> tuple[str, str] | None:
+    """An axial source no engine can drive: no outward axis, or off the mirror."""
+
+    geometry = request.geometry
+    if (
+        record is None
+        or msh_text is None
+        or not isinstance(geometry, ImportedGeometrySource)
+        or not any(channel.motion == "axial" for channel in geometry.drive_channels)
+    ):
+        return None
+    from server.solver.imported import prepare_axial_drive
+
+    try:
+        prepare_axial_drive(record, msh_text, geometry.drive_channels)
+    except ValueError as exc:
+        return "imported_axial_source_unresolvable", str(exc)
+    return None
 
 
 def _imported_request_refusal(
@@ -1281,6 +1319,9 @@ def _imported_request_refusal(
     open_half = _imported_open_half_refusal(record, msh_text)
     if open_half is not None:
         return open_half
+    axial = _imported_axial_refusal(request, record, msh_text)
+    if axial is not None:
+        return axial
     if request.options.ground_plane.enabled:
         return (
             "imported_ground_plane_unsupported",
@@ -1320,6 +1361,7 @@ async def imported_engine_verdict(
     engine_registry: EngineRegistry,
     imported_record: Mapping[str, Any] | None,
     imported_msh_text: str | None,
+    drive_channels: Sequence[Any] | None = None,
 ) -> ImportedEngineVerdict:
     """One engine's verdict on one imported request: the one capability function.
 
@@ -1363,7 +1405,7 @@ async def imported_engine_verdict(
             unavailable_reason or "No capability reason was reported.",
         )
     refusal = await _imported_preflight_refusal(
-        adapter, imported_record, imported_msh_text
+        adapter, imported_record, imported_msh_text, drive_channels
     )
     if refusal is not None:
         return ImportedEngineVerdict(
@@ -1581,6 +1623,7 @@ async def resolve_imported_submission(
             engine_registry=engine_registry,
             imported_record=imported_record,
             imported_msh_text=imported_msh_text,
+            drive_channels=request.geometry.drive_channels,
         )
         if verdict.solves:
             selected = name
@@ -1609,6 +1652,7 @@ async def resolve_imported_submission(
                 engine_registry=engine_registry,
                 imported_record=imported_record,
                 imported_msh_text=imported_msh_text,
+                drive_channels=request.geometry.drive_channels,
             )
             raise ImportedSolveRefusal(
                 "imported_engine_unsupported",
@@ -1720,6 +1764,7 @@ async def plan_imported_submission(
                 engine_registry=engine_registry,
                 imported_record=imported_record,
                 imported_msh_text=imported_msh_text,
+                drive_channels=request.geometry.drive_channels,
             )
         )
     engine: str | None = None

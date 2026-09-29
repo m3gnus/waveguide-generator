@@ -79,6 +79,7 @@ from .imported import (
     imported_domain_planes,
     imported_symmetry_from_cut_planes,
     mesh_frequency_validation,
+    prepare_axial_drive,
     read_verified_import_mesh,
     verify_record_mesh_text,
 )
@@ -148,6 +149,10 @@ def _native_config_or_unavailable(kwargs: Mapping[str, Any]) -> Any:
         return native_config(**dict(kwargs))
     except TypeError as exc:
         feature = str(exc)
+        if "source_axes" in feature:
+            raise MetalUnavailable(
+                "Installed hornlab-metal-bem does not support per-source axial axes."
+            ) from exc
         if "source_velocity_profiles" in feature:
             raise MetalUnavailable(
                 "Installed hornlab-metal-bem does not support mixed per-channel source motion."
@@ -928,7 +933,9 @@ def _record_source_area_m2(record: Mapping[str, Any], source_id: str) -> float:
 
 
 def _channel_source_identity(
-    geometry: ImportedGeometrySource, record: Mapping[str, Any]
+    geometry: ImportedGeometrySource,
+    record: Mapping[str, Any],
+    axial_identity: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Name each drive channel's driver band and sources from the record.
 
@@ -966,6 +973,8 @@ def _channel_source_identity(
             entry["source_labels"] = [
                 labels.get(source_id, source_id) for source_id in source_ids
             ]
+        if axial_identity and channel.id in axial_identity:
+            entry.update(axial_identity[channel.id])
         identity[channel.id] = entry
     return identity
 
@@ -975,8 +984,14 @@ def _channel_basis_metadata(
     record: Mapping[str, Any],
     source_tags: Mapping[str, Any],
     driver_payloads: Mapping[str, Any],
+    axial_identity: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, dict[str, Any]]:
-    """Describe the drive domain retained beside each complex channel basis."""
+    """Describe the drive domain retained beside each complex channel basis.
+
+    An axial channel also records its contract version and per-tag axes
+    (``axial_identity``): a basis solved under another axial contract is a
+    different excitation and must not be mistaken for this one.
+    """
 
     metadata: dict[str, dict[str, Any]] = {}
     for channel in geometry.drive_channels:
@@ -991,6 +1006,8 @@ def _channel_basis_metadata(
                 else "unit_normal_acceleration"
             ),
         }
+        if axial_identity and channel.id in axial_identity:
+            entry.update(axial_identity[channel.id])
         try:
             entry["source_areas_m2"] = [
                 _record_source_area_m2(record, source_id) for source_id in source_ids
@@ -1772,7 +1789,13 @@ def solve_imported_metal_from_msh_text(
         )
     )
 
-    channel_identity = _channel_source_identity(geometry, record)
+    try:
+        source_axes, axial_identity = prepare_axial_drive(
+            record, msh_text, geometry.drive_channels
+        )
+    except ValueError as exc:
+        raise ValueError(f"axial source motion cannot be solved: {exc}") from exc
+    channel_identity = _channel_source_identity(geometry, record, axial_identity)
 
     source_specs: list[dict[int, complex]] = []
     source_profiles: dict[int, Any] = {}
@@ -1892,6 +1915,10 @@ def solve_imported_metal_from_msh_text(
         kwargs["on_frequency_result"] = on_frequency_result
     if source_profiles:
         kwargs["source_velocity_profiles"] = source_profiles
+    if source_axes:
+        # Explicit per-source axes, never the observation-frame axis: a module
+        # without them must refuse, not fall back to the legacy sign vote.
+        kwargs["source_axes"] = {tag: found.axis for tag, found in source_axes.items()}
     config = _native_config_or_unavailable(kwargs)
 
     path: Path | None = None
@@ -2201,7 +2228,7 @@ def solve_imported_metal_from_msh_text(
     channel_bases_npz = serialize_channel_bases(
         sorted_results,
         metadata_by_id=_channel_basis_metadata(
-            geometry, record, source_tags, driver_payloads
+            geometry, record, source_tags, driver_payloads, axial_identity
         ),
     )
     if geometry.combine is not None:

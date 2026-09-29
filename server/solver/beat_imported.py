@@ -17,13 +17,14 @@ package change:
   (+x, +y, +z). Polar cuts and the DI sphere are frame-relative and the surface
   traces are per vertex, so every result maps back unchanged; the run records
   the record's own frame, not BEAT's.
-* **Axial drive.** Metal drives each axial source face at ``n . axis`` and flips
-  a whole tag whose area-weighted projection is negative, so a tag facing back
-  along the axis is pushed outward (``hornlab_metal_bem.bie``,
-  ``_build_axial_face_scale``). BEAT drives ``n . z`` and flips nothing, and
-  its one driven tag cannot carry a sign. An axial channel is therefore solved
-  as up to two groups -- its forward tags, and its backward-facing tags -- and
-  the channel is their difference, by linearity.
+* **Axial drive.** Each axial source moves along its own resolved axis
+  (``server.solver.imported.prepare_axial_drive``: the source's outward net
+  area vector, snapped to a solver-frame axis within half a degree). BEAT drives
+  ``n . z`` at unit real amplitude and nothing else, so it takes an axial
+  source only when that axis is exactly +z or -z of its frame; any other axis
+  is refused by name (:func:`beat_axial_signs`) and AUTO selection passes BEAT
+  over. +z sources are one group and -z sources another, and the channel is
+  the first minus the second, by linearity.
 * **Reduced domains.** BEAT mirrors across its own x = 0, or x = 0 and y = 0,
   with the mesh on the positive side. An x0 half and an x0+y0 quarter execute
   when the rotation leaves those planes, and that side, where they are. A
@@ -73,6 +74,7 @@ from .imported import (
     imported_anchor_frame,
     imported_domain_planes,
     imported_symmetry_from_cut_planes,
+    prepare_axial_drive,
 )
 from .metal import (
     _apply_channel_driver,
@@ -292,27 +294,6 @@ class _Gmsh22Mesh:
     def triangle_tags(self) -> set[int]:
         return {int(tag) for tag in self.triangles()[1]}
 
-    def axial_orientation(self) -> dict[int, tuple[float, float]]:
-        """Each physical tag's area-weighted ``n . z`` and its total area.
-
-        A triangle's raw cross product is twice its area times its unit normal,
-        so summing its z components gives Metal's area-weighted projection
-        (``_build_axial_face_scale``) up to the same positive factor as the
-        summed magnitudes -- the scale the projection's sign is judged on. The
-        mesh is already in BEAT's frame, where the axis is +z.
-        """
-
-        corners, tags = self.triangles()
-        if not len(tags):
-            return {}
-        points = self.coordinates[corners]
-        cross = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0])
-        areas = np.linalg.norm(cross, axis=1)
-        return {
-            int(tag): (float(cross[tags == tag, 2].sum()), float(areas[tags == tag].sum()))
-            for tag in np.unique(tags)
-        }
-
     def text(self, velocity_tags: frozenset[int]) -> str:
         """The mesh with ``velocity_tags`` driven and every other tag rigid."""
 
@@ -345,36 +326,60 @@ class _Gmsh22Mesh:
         return "\n".join(rows) + "\n"
 
 
-#: How negative a tag's area-weighted ``n . axis`` must be, as a fraction of its
-#: area, before it counts as facing backwards. A closed tag projects to zero,
-#: and rounding alone must not decide its sign.
-AXIAL_ORIENTATION_TOLERANCE = 1.0e-9
+#: How far, as a perpendicular component of the unit axis, an axial source's
+#: axis may sit from BEAT's z (after the frame rotation) and still count as
+#: along it. The rotation is only orthonormal to ``FRAME_TOLERANCE``.
+AXIAL_Z_TOLERANCE = 1.0e-6
+
+
+def beat_axial_signs(
+    record: Mapping[str, Any],
+    msh_text: str,
+    drive_channels: Sequence[Any],
+    rotation: np.ndarray,
+) -> tuple[dict[int, float], dict[str, dict[str, Any]]]:
+    """Each axial source tag's sign along BEAT's z, and the axial identity.
+
+    hornlab-beat-bem drives an axial source along global +z at unit real
+    amplitude and nothing else, so it can take an axial source only when the
+    source's resolved axis (:func:`server.solver.imported.prepare_axial_drive`,
+    in solver coordinates, snapped) is exactly +-z of BEAT's frame. +z is
+    solved directly; -z is the same drive negated. Any other axis raises
+    :class:`ImportedBeatRefusal` naming the tag and axis.
+    """
+
+    try:
+        axes, identity = prepare_axial_drive(record, msh_text, drive_channels)
+    except ValueError as exc:
+        raise ImportedBeatRefusal(f"axial source motion cannot be solved: {exc}") from exc
+    signs: dict[int, float] = {}
+    for tag, found in axes.items():
+        in_beat = np.asarray(rotation, dtype=float) @ np.asarray(found.axis, dtype=float)
+        if float(np.hypot(in_beat[0], in_beat[1])) > AXIAL_Z_TOLERANCE:
+            raise ImportedBeatRefusal(
+                f"Axial source tag {tag} moves along ({found.axis[0]:.4g}, "
+                f"{found.axis[1]:.4g}, {found.axis[2]:.4g}) in the solver frame, which is "
+                "not along the radiation axis. BEAT drives axial sources along its z axis "
+                "only. Solve it with Metal or BEMPP."
+            )
+        signs[tag] = 1.0 if in_beat[2] > 0.0 else -1.0
+    return signs, identity
 
 
 def _drive_groups(
-    tags: frozenset[int], motion: str, orientation: Mapping[int, tuple[float, float]]
+    tags: frozenset[int], motion: str, signs: Mapping[int, float]
 ) -> list[tuple[float, frozenset[int]]]:
     """The signed tag groups one channel is solved as.
 
-    A normal drive is one group. An axial drive is Metal's: a tag whose
-    area-weighted ``n . axis`` is negative is flipped whole so it drives
-    outward. BEAT's one driven tag cannot carry that sign, so the flipped tags
-    are solved as their own group and subtracted.
-
-    A tag whose projection is zero to rounding -- a closed body's, whose
-    faces cancel -- has no outward direction along the axis and is driven
-    ``n . axis`` unflipped. Metal decides that case by the sign of its rounding
-    residue, so the two engines can disagree only for a closed axial tag.
+    A normal drive is one group. An axial drive moves each source along its
+    resolved axis, which BEAT can take only as +z or -z. BEAT's one driven tag
+    cannot carry a sign, so the -z sources are solved as their own group and
+    subtracted, by linearity.
     """
 
     if motion != "axial":
         return [(1.0, tags)]
-    backward = frozenset(
-        tag
-        for tag in tags
-        if orientation.get(tag, (0.0, 0.0))[0]
-        < -AXIAL_ORIENTATION_TOLERANCE * orientation.get(tag, (0.0, 0.0))[1]
-    )
+    backward = frozenset(tag for tag in tags if signs.get(tag, 1.0) < 0.0)
     return [
         (sign, group)
         for sign, group in ((1.0, tags - backward), (-1.0, backward))
@@ -441,11 +446,16 @@ def _check_kept_side(mesh: _Gmsh22Mesh, native_plane: str | None) -> None:
             )
 
 
-def imported_beat_preflight(record: Mapping[str, Any], msh_text: str) -> str | None:
+def imported_beat_preflight(
+    record: Mapping[str, Any],
+    msh_text: str,
+    drive_channels: Sequence[Any] | None = None,
+) -> str | None:
     """Why BEAT cannot solve this return as prepared, or ``None``.
 
     Read-only and Julia-free, so submission can ask it before a job exists:
-    the same frame and positive-side checks the solve makes.
+    the same frame and positive-side checks the solve makes, and, given the
+    request's drive channels, whether every axial source lies along +-z.
     """
 
     try:
@@ -453,6 +463,8 @@ def imported_beat_preflight(record: Mapping[str, Any], msh_text: str) -> str | N
         frame = beat_imported_frame(record, symmetry.native_plane)
         mesh = _Gmsh22Mesh.parse(msh_text).rotated(frame.rotation)
         _check_kept_side(mesh, symmetry.native_plane)
+        if drive_channels:
+            beat_axial_signs(record, msh_text, drive_channels, frame.rotation)
     except ImportedBeatRefusal as exc:
         return str(exc)
     except ValueError as exc:
@@ -662,6 +674,12 @@ def solve_imported_beat_from_msh_text(
         _check_kept_side(mesh, native_plane)
     except ImportedBeatRefusal as exc:
         raise BeatUnavailable(str(exc)) from exc
+    try:
+        axial_signs, axial_identity = beat_axial_signs(
+            record, msh_text, geometry.drive_channels, frame.rotation
+        )
+    except ImportedBeatRefusal as exc:
+        raise BeatUnavailable(str(exc)) from exc
     present_tags = mesh.triangle_tags()
     channel_tags: dict[str, frozenset[int]] = {}
     for channel in geometry.drive_channels:
@@ -714,7 +732,7 @@ def solve_imported_beat_from_msh_text(
             unsupported_reason="unsupported_solver_version",
         )
     )
-    channel_identity = _channel_source_identity(geometry, record)
+    channel_identity = _channel_source_identity(geometry, record, axial_identity)
     frame_basis = _frame_basis(frame)
     observation = observation_config(
         context, package.ObservationConfig, BeatUnavailable, "hornlab-beat-bem"
@@ -727,13 +745,8 @@ def solve_imported_beat_from_msh_text(
         mouth_center=np.asarray(frame.mouth_center, dtype=float),
         source_center=np.asarray(frame.source_center, dtype=float),
     )
-    orientation = (
-        mesh.axial_orientation()
-        if any(channel.motion == "axial" for channel in geometry.drive_channels)
-        else {}
-    )
     channel_groups = {
-        channel.id: _drive_groups(channel_tags[channel.id], channel.motion, orientation)
+        channel.id: _drive_groups(channel_tags[channel.id], channel.motion, axial_signs)
         for channel in geometry.drive_channels
     }
     frequency_count = len(frequencies)
@@ -1034,7 +1047,7 @@ def solve_imported_beat_from_msh_text(
     channel_bases_npz = serialize_channel_bases(
         sorted_results,
         metadata_by_id=_channel_basis_metadata(
-            geometry, record, source_tags, driver_payloads
+            geometry, record, source_tags, driver_payloads, axial_identity
         ),
     )
     first_config = configs[geometry.drive_channels[0].id]

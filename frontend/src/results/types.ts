@@ -139,6 +139,17 @@ export interface ResultMetadata extends Record<string, unknown> {
    * parametric runs and on derived channels such as the combined sum. */
   role?: string | null;
   source_labels?: string[];
+  /** How this channel's sources moved: along their own normals or as an axial piston. */
+  source_motion?: 'normal' | 'axial' | string;
+  /** Absent on an axial run solved before per-source axes: it used the frame axis. */
+  axial_contract?: string;
+  /** Each axial source's resolved axis in solver coordinates, snapped and raw. */
+  source_axes?: Array<{
+    tag: number;
+    axis: [number, number, number];
+    raw_axis?: [number, number, number];
+    snapped_to?: string | null;
+  }>;
   per_source_frequency_validity?: Record<string, {
     effective_max_valid_frequency_hz?: number;
     [key: string]: unknown;

@@ -463,9 +463,38 @@ press at all when WG is confident.
   and the run details say the same. When WG is not confident (`ask`, `unavailable`, an
   axis the snapshot does not allow) the solve still stops at `frame_confirmation_required`
   with the frame card's question.
-- **Axial drive.** An `axial` channel is driven along the record's observation axis,
-  solver +Z, which is the chosen CAD forward direction; a source facing back along it is
-  flipped to drive outward, as for a model modelled along +z.
+- **Axial drive (`per-source-axis-v2`).** An `axial` channel moves each of its sources
+  as a rigid piston along that source's own axis, resolved once from the solve mesh in
+  solver coordinates (`server/solver/imported.py`, `resolve_source_axes`), never from the
+  observation frame and never by a sign vote:
+  - `axis = normalize(P_sym(sum of n dA over the source's faces))`, with the mesh's
+    outward winding, so the axis is outward-positive by construction. `P_sym` zeroes the
+    component across each active mirror plane, and only for a source that plane cuts (a
+    half or quarter of a source is completed by its image). A source whose net area
+    vector is below 0.1 % of its area (closed or two-sided) has no outward axis and is
+    refused at submission (`imported_axial_source_unresolvable`); use normal motion.
+  - An axis within 0.5 degrees of +-X, +-Y or +-Z of the solver frame snaps to it
+    exactly, so engines agree and reduced domains stay valid. The run records both the
+    snapped and the raw axis.
+  - A source the mirror does not cut, with an axis across the mirror plane, is not
+    projected: the CAD reduction is refused for that excitation
+    (`excitation_problem`) and the model is solved whole ("Solve it as shown").
+  - Metal and BEMPP receive `source_axes={tag: axis}` (module contract
+    `SolveConfig.source_axes`). A module without it makes the adapter unavailable
+    ("Installed hornlab-<x>-bem does not support per-source axial axes"); an imported
+    solve never falls back to the module's frame-axis path.
+  - BEAT drives `n . z` at unit real amplitude only, so it takes an axial source only
+    when the rotated axis is exactly +-z of its frame: +z sources are one solve, -z
+    sources a second, subtracted by linearity. Any other axis is refused by name in the
+    adapter's preflight, so AUTO passes BEAT over before any preparation; an explicit
+    BEAT is refused with the engines that can. Official BEAT refuses axial.
+  - A channel with a driver model must use normal motion.
+  - Every axial channel's result and pressure basis record `source_motion`, the contract
+    version `per-source-axis-v2` and each tag's axes. A pressure basis or result with
+    axial motion and no contract version was solved under the earlier rule (the
+    observation-frame axis with a per-tag sign vote); it still displays and exports, and
+    is labelled `legacy-frame-axis-v1`. Re-solving a stored axial request always runs
+    under v2 and records it; it is never presented as the older result.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
   frame is neither the confirmed one under the same requirement nor, while nothing is
   confirmed, WG's confident automatic axis the record was meshed in

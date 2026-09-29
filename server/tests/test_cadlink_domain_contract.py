@@ -406,17 +406,42 @@ def test_the_tolerance_is_the_meshers_cut_tolerance() -> None:
 # -- acoustic compatibility ----------------------------------------------------------------------
 
 
+def _msh(nodes, triangles) -> str:
+    rows = ["$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$Nodes", str(len(nodes))]
+    rows += [f"{i} {x} {y} {z}" for i, (x, y, z) in enumerate(nodes, start=1)]
+    rows += ["$EndNodes", "$Elements", str(len(triangles))]
+    rows += [f"{i} 2 2 {t} {t} {a} {b} {c}" for i, (t, (a, b, c)) in enumerate(triangles, start=1)]
+    return "\n".join([*rows, "$EndElements", ""])
+
+
 def test_a_mirrored_domain_takes_only_a_reflection_invariant_excitation() -> None:
     reduced = {"symmetry": {"domain_planes": ["x0"]}}
     normal = SimpleNamespace(id="lf", source_ids=["lf"], motion="normal")
     axial = SimpleNamespace(id="hf", source_ids=["hf"], motion="axial")
-    assert di.excitation_problem(reduced, [normal, axial]) is None
+    reduced["source_tags"] = {"lf": 101, "hf": 102}
+    # The axial source is cut by x = 0 and faces +z: its axis is in the symmetry.
+    cut_flat = _msh([(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0)], [(102, (1, 2, 3)), (101, (1, 2, 3))])
+    assert di.excitation_problem(reduced, [normal, axial], cut_flat) is None
+    # The same source wholly off the plane and tilted across it is not: the
+    # reduction is refused, never projected.
+    off_plane = _msh([(0.01, 0, 0), (0.02, 0, 0.005), (0.01, 0.01, 0)], [(102, (1, 2, 3)), (101, (1, 2, 3))])
+    problem = di.excitation_problem(reduced, [normal, axial], off_plane)
+    assert problem is not None and "not in the symmetry" in problem and "Solve it as shown" in problem
+    # A closed source has no axis at all.
+    closed = _msh(
+        [(0, 0, 0), (0.01, 0, 0), (0, 0.01, 0), (0, 0, 0.01)],
+        [(102, (1, 3, 2)), (102, (1, 2, 4)), (102, (2, 3, 4)), (102, (3, 1, 4)), (101, (1, 2, 3))],
+    )
+    assert "no outward axis" in di.excitation_problem(reduced, [normal, axial], closed)
+    # And the mesh must be readable.
+    assert "needs the solve mesh" in di.excitation_problem(reduced, [normal, axial])
     twisted = SimpleNamespace(id="mf", source_ids=["mf"], motion="tangential")
     assert "not the same under the mirror" in di.excitation_problem(reduced, [normal, twisted])
     doubled = SimpleNamespace(id="lf2", source_ids=["lf"], motion="normal")
     assert "driven by two channels" in di.excitation_problem(reduced, [normal, doubled])
     # A full domain has no mirror to be incompatible with.
     assert di.excitation_problem({"symmetry": {"domain_planes": []}}, [twisted]) is None
+    assert di.excitation_problem({"symmetry": {"domain_planes": []}}, [axial]) is None
 
 
 # -- preparation: approvals and the excitation gate ----------------------------------------------

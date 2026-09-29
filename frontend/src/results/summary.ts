@@ -119,6 +119,38 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   if (metadata('mesh_cache_hit') === true || metadataMesh?.mesh_cache_hit === true) row(solve, 'Mesh cache', 'reused');
   group(groups, 'Solve', solve);
 
+  // How the sources moved. An axial drive is a rigid piston along one axis per
+  // source, resolved from the mesh; the axis is read-only here.
+  const motion: SummaryRow[] = [];
+  if (string(metadata('source_motion')) === 'axial') {
+    const contract = string(metadata('axial_contract'));
+    row(
+      motion,
+      'Motion',
+      contract ? 'Axial piston, one axis per source' : 'Axial piston, observation-frame axis (earlier run)',
+      contract ? undefined : 'Solved before per-source axes: the axis was the observation frame\'s, with a sign vote.',
+    );
+    const axes = metadata('source_axes');
+    if (Array.isArray(axes)) {
+      axes.forEach((entry) => {
+        const item = object(entry);
+        const axis = array(item?.axis);
+        if (!item || !axis || axis.length !== 3 || !axis.every(isFiniteNumber)) return;
+        const raw = array(item.raw_axis);
+        const snapped = string(item.snapped_to);
+        row(
+          motion,
+          `Source tag ${String(item.tag)}`,
+          `(${axis.map((value) => Number((value as number).toFixed(4))).join(', ')})${snapped ? ` · snapped to ${snapped}` : ''}`,
+          raw && raw.length === 3 && raw.every(isFiniteNumber)
+            ? `Resolved axis before snapping: (${raw.map((value) => Number((value as number).toFixed(4))).join(', ')})`
+            : undefined,
+        );
+      });
+    }
+  }
+  group(groups, 'Source motion', motion);
+
   const meshStats = metadataMesh ?? object(job?.mesh_stats);
   const mesh: SummaryRow[] = [];
   const triangleCount = finite(meshStats?.triangle_count);

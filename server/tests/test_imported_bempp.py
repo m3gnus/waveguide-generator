@@ -12,6 +12,8 @@ OpenCL exists.
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -127,7 +129,7 @@ def _request(**geometry_changes: Any) -> SolveRequest:
         "artifact_sha256": ARTIFACT_SHA,
         "drive_channels": [
             {"id": "left", "source_ids": ["source-a", "source-b"]},
-            {"id": "right", "source_ids": ["source-c"], "motion": "axial"},
+            {"id": "right", "source_ids": ["source-c"]},
         ],
         "mesh": {
             "rigid_size_mm": 8.0,
@@ -222,7 +224,8 @@ def test_each_channel_is_one_sweep_driving_its_own_tags_in_the_records_frame(
     assert first.velocity_sources == {101: 1.0, 102: 1.0}
     assert second.velocity_sources == {103: 1.0}
     assert getattr(first, "source_motion", "normal") == "normal"
-    assert second.source_motion == "axial"
+    assert getattr(second, "source_motion", "normal") == "normal"
+    assert getattr(second, "source_axes", None) is None
     for config in (first, second):
         assert list(config.frame_override.axis) == pytest.approx([1.0, 0.0, 0.0])
         assert list(config.frame_override.origin) == pytest.approx([0.05, 0.02, 0.03])
@@ -249,6 +252,137 @@ def test_each_channel_is_one_sweep_driving_its_own_tags_in_the_records_frame(
     assert np.asarray(bases["results_by_id"]["right"].pressure_complex) == pytest.approx(
         2.0 * np.asarray(bases["results_by_id"]["left"].pressure_complex)
     )
+
+
+def _axial_request() -> SolveRequest:
+    return _request(
+        drive_channels=[
+            {"id": "left", "source_ids": ["source-a", "source-b"]},
+            {"id": "right", "source_ids": ["source-c"], "motion": "axial"},
+        ]
+    )
+
+
+def _real_config_has_source_axes() -> bool:
+    import dataclasses
+
+    config = getattr(bempp, "SolveConfig", None)
+    if config is None:
+        try:
+            bempp._load_api()
+        except Exception:  # noqa: BLE001 - only a probe
+            return False
+        config = getattr(bempp, "SolveConfig", None)
+    try:
+        return "source_axes" in {field.name for field in dataclasses.fields(config)}
+    except TypeError:
+        return False
+
+
+@pytest.mark.skipif(
+    not _real_config_has_source_axes(),
+    reason="installed hornlab-bempp-bem lacks SolveConfig.source_axes",
+)
+def test_an_axial_channel_hands_the_package_its_explicit_axes_on_the_real_config(
+    recording_bempp: _RecordingBempp,
+) -> None:
+    _solve(_axial_request(), _record())
+
+    first, second = (solve["config"] for solve in recording_bempp.solves)
+    assert getattr(first, "source_axes", None) is None
+    assert second.source_motion == "axial"
+    assert set(second.source_axes) == {103}
+
+
+def _stub_config(monkeypatch: pytest.MonkeyPatch, *, accepts_axes: bool = True) -> None:
+    """A permissive SolveConfig, for what the adapter passes, not what the module allows."""
+
+    def config(**kwargs: Any) -> SimpleNamespace:
+        if not accepts_axes and "source_axes" in kwargs:
+            raise TypeError("SolveConfig.__init__() got an unexpected keyword argument 'source_axes'")
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(bempp, "SolveConfig", config)
+
+
+def test_an_axial_channel_passes_one_explicit_snapped_axis_per_source_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _RecordingBempp()
+    _install(monkeypatch, package)
+    _stub_config(monkeypatch)
+
+    envelope = _solve(_axial_request(), _record())
+
+    first, second = (solve["config"] for solve in package.solves)
+    assert not hasattr(first, "source_axes")
+    assert second.source_motion == "axial"
+    (tag,) = second.source_axes
+    assert tag == 103
+    axis = np.asarray(second.source_axes[103])
+    # MESH's tag 103 is a tilted face: its axis is its unit net area vector,
+    # not a frame axis, and needs no sign vote.
+    net = np.asarray([-0.0004, -0.0002, 0.0002]) * 0 + _net_area_vector(MESH, 103)
+    np.testing.assert_allclose(axis, net / np.linalg.norm(net), atol=1e-12)
+    right = envelope["channels"]["right"]["metadata"]
+    assert right["source_motion"] == "axial"
+    assert right["axial_contract"] == "per-source-axis-v2"
+    assert right["source_axes"][0]["tag"] == 103
+    assert right["source_axes"][0]["axis"] == pytest.approx(list(axis))
+    assert "axial_contract" not in envelope["channels"]["left"]["metadata"]
+    stored = json.loads(str(np.load(io.BytesIO(envelope["_channel_bases_npz"]))["metadata::right"].item()))
+    assert stored["axial_contract"] == "per-source-axis-v2" and stored["source_motion"] == "axial"
+
+
+def _net_area_vector(msh_text: str, tag: int) -> np.ndarray:
+    from server.solver.imported import _msh_triangles
+
+    coordinates, corners, tags = _msh_triangles(msh_text)
+    points = coordinates[corners[tags == tag]]
+    return 0.5 * np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]).sum(axis=0)
+
+
+def test_a_module_without_source_axes_refuses_and_never_falls_back_to_the_frame_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _RecordingBempp()
+    _install(monkeypatch, package)
+    _stub_config(monkeypatch, accepts_axes=False)
+
+    with pytest.raises(BemppUnavailable, match="does not support per-source axial axes"):
+        _solve(_axial_request(), _record())
+
+    # Only the normal channel ran; nothing was driven along a frame axis.
+    assert all(getattr(solve["config"], "source_motion", "normal") == "normal" for solve in package.solves)
+    package.solves.clear()
+    # A drive with no axial channel does not need the option at all.
+    _solve(_request(), _record())
+    assert len(package.solves) == 2
+
+
+def test_a_mirror_cut_source_axis_is_projected_and_an_uncut_tilted_one_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _RecordingBempp()
+    _install(monkeypatch, package)
+    _stub_config(monkeypatch)
+
+    # Tag 103 has a node on x = 0, so the x0 mirror cuts it: its axis loses the
+    # x component.
+    _solve(_axial_request(), _record(planes=["x0"]))
+    (config,) = [solve["config"] for solve in package.solves if getattr(solve["config"], "source_axes", None)]
+    assert config.source_axes[103][0] == 0.0
+
+    # A source wholly off the plane, tilted across it, is not: the reduction is
+    # refused, never projected.
+    off_plane = MESH.replace("2 0 0.02 0", "2 0.01 0.02 0").replace("3 0 0 0.03", "3 0.02 0 0.03").replace(
+        "4 0.01 0.02 0.03", "4 0.03 0.02 0.03"
+    )
+    record = _record(planes=["x0"])
+    record["_execution_msh_text"] = off_plane
+    record["mesh_content_sha256"] = mesh_text_sha256(off_plane)
+    with pytest.raises(ValueError, match="not in the symmetry"):
+        bempp_imported.solve_imported_bempp_from_msh_text(off_plane, _axial_request(), record)
 
 
 @pytest.mark.parametrize(

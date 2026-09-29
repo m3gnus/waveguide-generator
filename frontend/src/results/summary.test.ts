@@ -32,6 +32,35 @@ function row(groups: SummaryGroup[], groupTitle: string, label: string) {
 }
 
 describe('simulation summary groups', () => {
+  it('shows each axial source\'s resolved axis, snapped and raw, read-only', () => {
+    const result = {
+      frequencies: [1000],
+      metadata: {
+        source_motion: 'axial',
+        axial_contract: 'per-source-axis-v2',
+        source_axes: [
+          { tag: 101, axis: [0, 0, -1], raw_axis: [0.001, 0, -0.9999995], snapped_to: '-z' },
+          { tag: 102, axis: [0.6, 0, 0.8], raw_axis: [0.6, 0, 0.8], snapped_to: null },
+        ],
+      },
+    } as unknown as ResultPayload;
+    const groups = summaryGroups({ result });
+    expect(row(groups, 'Source motion', 'Motion')?.value).toBe('Axial piston, one axis per source');
+    expect(row(groups, 'Source motion', 'Source tag 101')?.value).toBe('(0, 0, -1) · snapped to -z');
+    expect(row(groups, 'Source motion', 'Source tag 101')?.title).toContain('before snapping');
+    expect(row(groups, 'Source motion', 'Source tag 102')?.value).toBe('(0.6, 0, 0.8)');
+  });
+
+  it('labels an axial run solved before per-source axes as the earlier frame-axis rule', () => {
+    const result = { frequencies: [1000], metadata: { source_motion: 'axial' } } as unknown as ResultPayload;
+    expect(row(summaryGroups({ result }), 'Source motion', 'Motion')?.value).toContain('earlier run');
+  });
+
+  it('shows no source-motion group for a normal drive', () => {
+    const result = { frequencies: [1000], metadata: { source_motion: 'normal' } } as unknown as ResultPayload;
+    expect(summaryGroups({ result }).some(({ title }) => title === 'Source motion')).toBe(false);
+  });
+
   it('displays an old Axisymmetric result with its original provenance', () => {
     const result = {
       frequencies: [1000],

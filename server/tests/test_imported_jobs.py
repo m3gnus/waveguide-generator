@@ -584,6 +584,35 @@ def test_imported_channel_and_mesh_validation(change: dict[str, Any], message: s
         )
 
 
+#: A flat surface with a triangle per source tag, each facing +z and each with a
+#: node on x = 0, so the record's x0 mirror cuts every source: the axial axis of
+#: any of them resolves to exactly +z.
+AXIAL_MSH = """$MeshFormat
+2.2 0 8
+$EndMeshFormat
+$PhysicalNames
+4
+2 1 "wg-import-v1|rigid"
+2 101 "wg-import-v1|tag=101|source_id=source-a|instance_id=i|role=HF"
+2 102 "wg-import-v1|tag=102|source_id=source-b|instance_id=i|role=MF"
+2 103 "wg-import-v1|tag=103|source_id=source-c|instance_id=null|role=LF"
+$EndPhysicalNames
+$Nodes
+3
+1 0 0 0
+2 0.01 0 0
+3 0 0.01 0
+$EndNodes
+$Elements
+4
+1 2 2 1 1 1 2 3
+2 2 2 101 101 1 2 3
+3 2 2 102 102 1 2 3
+4 2 2 103 103 1 2 3
+$EndElements
+"""
+
+
 def _record(mesh_path: Path, *, findings: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     msh_text = mesh_path.read_text(encoding="utf-8")
     symmetry = {
@@ -1694,7 +1723,7 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     request.options.frequencies_hz = [100.0, 200.0]
     request.geometry.drive_channels[1].motion = "axial"
     mesh_path = tmp_path / "imported.msh"
-    mesh_path.write_text("msh", encoding="utf-8")
+    mesh_path.write_text(AXIAL_MSH, encoding="utf-8")
     record = _record(mesh_path)
     record["mesh"]["stats"]["vertex_count"] = 3
 
@@ -1717,6 +1746,13 @@ def test_multi_source_orchestration_uses_channel_bases_and_anchor_frame(
     assert captured["config"]["native_symmetry_plane"] == "yz"
     assert set(captured["config"]["source_velocity_profiles"]) == {101, 102, 103}
     assert isinstance(captured["config"]["source_velocity_profiles"][103], metal.AxialProfile)
+    # Each axial source moves along its own resolved axis; a normal channel's
+    # sources carry none, and the legacy frame-axis rule is never asked for.
+    assert captured["config"]["source_axes"] == {103: (0.0, 0.0, 1.0)}
+    right = response["channels"]["right"]["metadata"]
+    assert right["axial_contract"] == "per-source-axis-v2"
+    assert right["source_axes"][0]["snapped_to"] == "+z"
+    assert "axial_contract" not in response["channels"]["left"]["metadata"]
     assert response["channel_order"] == ["left", "right"]
     assert set(response["channels"]) == {"left", "right"}
     assert response["result_kind"] == "multi_channel"
@@ -1842,8 +1878,32 @@ def test_frequency_validity_estimates_are_not_exposed_as_result_caveats(
     assert "global_frequency_caveat" not in above_response["metadata"]
 
 
+def _metal_config_has_source_axes() -> bool:
+    try:
+        import dataclasses
+
+        from hornlab_metal_bem import SolveConfig
+    except ImportError:
+        return False
+    return "source_axes" in {field.name for field in dataclasses.fields(SolveConfig)}
+
+
+@pytest.mark.parametrize(
+    "axial",
+    [
+        False,
+        pytest.param(
+            True,
+            marks=pytest.mark.skipif(
+                not _metal_config_has_source_axes(),
+                reason="installed hornlab-metal-bem lacks SolveConfig.source_axes",
+            ),
+        ),
+    ],
+    ids=["normal", "axial"],
+)
 def test_unlinked_frame_fallback_and_real_mixed_motion_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, axial: bool
 ) -> None:
     captured: dict[str, Any] = {}
     real_native_config = metal.native_config
@@ -1862,13 +1922,14 @@ def test_unlinked_frame_fallback_and_real_mixed_motion_config(
     assert real_native_config is not None
     request = _request("wgi_" + "0" * 26)
     request.options.frequencies_hz = [100.0, 200.0]
-    request.geometry.drive_channels[1].motion = "axial"
+    if axial:
+        request.geometry.drive_channels[1].motion = "axial"
     mesh_path = tmp_path / "imported.msh"
-    mesh_path.write_text("msh", encoding="utf-8")
+    mesh_path.write_text(AXIAL_MSH, encoding="utf-8")
     record = _record(mesh_path)
     record["anchor"] = {"instance_id": None, "design_id": None, "throat_frame": None}
     record["normalisation"] = {"assembly_frame_is_solver_frame": True}
-    response = metal.solve_imported_metal_from_msh_text("msh", request, record)
+    response = metal.solve_imported_metal_from_msh_text(AXIAL_MSH, request, record)
     assert captured["config"].frame_override.origin.tolist() == [0.0, 0.0, 0.0]
     assert response["metadata"]["observation_origin_effective"] == "throat"
 
@@ -4155,3 +4216,117 @@ def test_a_job_keeps_the_cad_provenance_it_was_submitted_with(tmp_path: Path) ->
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+# Axial source motion selects its engine from the resolved source axes: BEAT
+# drives an axial source only along +-z, Metal and BEMPP along any axis.
+
+
+def _flat_axial_msh(tilt_degrees: float) -> str:
+    """AXIAL_MSH with every source face tilted about x: its axis is (0, -sin, cos)."""
+
+    tilt = math.radians(tilt_degrees)
+    rows = AXIAL_MSH.splitlines()
+    nodes = rows.index("$Nodes")
+    rows[nodes + 4] = f"3 0 {0.01 * math.cos(tilt):.12g} {0.01 * math.sin(tilt):.12g}"
+    return "\n".join(rows) + "\n"
+
+
+def _axial_geometry_changes() -> dict[str, Any]:
+    return {
+        "drive_channels": [
+            {"id": "left", "source_ids": ["source-a", "source-b"], "motion": "axial"},
+            {"id": "right", "source_ids": ["source-c"]},
+        ]
+    }
+
+
+async def _resolve_axial(tmp_path: Path, registry: Any, engine: str, mesh_text: str, planes: bool = True):
+    from server.jobs.runtime import resolve_imported_submission
+
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    changes: dict[str, Any] = {"mesh": _record_mesh_with_open_edges(tmp_path, 0)}
+    runtime, ingest_id, record = await _runtime_fixture(tmp_path, changes, mesh_text=mesh_text)
+    try:
+        request = _request(ingest_id, **_axial_geometry_changes())
+        request.options.engine = engine
+        return await resolve_imported_submission(
+            request,
+            registry,
+            symmetry_metadata={"resolved_quadrants": 14 if planes else 1234},
+            imported_record={**record, "ingest_id": ingest_id},
+            imported_msh_text=mesh_text,
+        )
+    finally:
+        await runtime.shutdown()
+
+
+def test_auto_takes_beat_for_an_axis_along_z_and_passes_it_over_for_a_tilted_one(
+    tmp_path: Path,
+) -> None:
+    metal_off = _metal(available=False, reason="no Apple GPU")
+    flat = asyncio.run(
+        _resolve_axial(tmp_path / "flat", _AdapterRegistry(metal_off, _beat_cpu()), "auto", _flat_axial_msh(0.0))
+    )
+    assert flat.engine_name == "beat-cpu"
+
+    # 10 degrees off z: BEAT cannot drive it, so with nothing else the refusal
+    # names BEAT's reason; with BEMPP present AUTO takes BEMPP instead.
+    tilted = _flat_axial_msh(10.0)
+    with pytest.raises(ImportedSolveRefusal, match="z axis only"):
+        asyncio.run(
+            _resolve_axial(tmp_path / "tilted", _AdapterRegistry(metal_off, _beat_cpu()), "auto", tilted)
+        )
+    registry = _AdapterRegistry(metal_off, _beat_cpu(), _bempp(sources=("parametric", "imported")))
+    other = asyncio.run(_resolve_axial(tmp_path / "other", registry, "auto", tilted))
+    assert other.engine_name == "bempp"
+    # An explicit BEAT is refused by name, never swapped.
+    with pytest.raises(ImportedSolveRefusal, match="z axis only") as caught:
+        asyncio.run(_resolve_axial(tmp_path / "explicit", registry, "beat-cpu", tilted))
+    assert caught.value.details["capable_engines"] == ["bempp"]
+
+
+def test_a_closed_axial_source_is_refused_for_every_engine_before_a_job(tmp_path: Path) -> None:
+    tetra = "\n".join(
+        [
+            "$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$Nodes", "4",
+            "1 0 0 0", "2 0.01 0 0", "3 0 0.01 0", "4 0 0 0.01", "$EndNodes",
+            "$Elements", "4",
+            "1 2 2 101 101 1 3 2", "2 2 2 101 101 1 2 4", "3 2 2 101 101 2 3 4", "4 2 2 101 101 3 1 4",
+            "$EndElements", "",
+        ]
+    )
+    registry = _AdapterRegistry(_metal(), _beat_cpu())
+    with pytest.raises(ImportedSolveRefusal) as caught:
+        asyncio.run(_resolve_axial(tmp_path, registry, "auto", tetra))
+    assert caught.value.reason_code == "imported_axial_source_unresolvable"
+    assert "tag 101" in str(caught.value) and "no outward axis" in str(caught.value)
+
+
+def test_a_module_that_rejects_source_axes_makes_metal_unavailable_not_a_frame_axis_solve(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    seen: list[dict[str, Any]] = []
+
+    def old_config(**kwargs: Any) -> SimpleNamespace:
+        seen.append(kwargs)
+        if "source_axes" in kwargs:
+            raise TypeError("native_config() got an unexpected keyword argument 'source_axes'")
+        return SimpleNamespace(**kwargs)
+
+    monkeypatch.setattr(metal, "native_config", old_config)
+    monkeypatch.setattr(
+        metal, "native_solve_multi_source",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("must not solve")),
+    )
+    request = _request("wgi_" + "0" * 26)
+    request.geometry.drive_channels[1].motion = "axial"
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text(AXIAL_MSH, encoding="utf-8")
+
+    with pytest.raises(metal.MetalUnavailable, match="does not support per-source axial axes"):
+        metal.solve_imported_metal_from_msh_text(AXIAL_MSH, request, _record(mesh_path))
+
+    assert "source_axes" in seen[-1]

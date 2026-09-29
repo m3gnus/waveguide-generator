@@ -1209,12 +1209,18 @@ def interpretation_finding(
 
 
 #: How a drive channel may move its sources in a mirrored domain. ``normal``
-#: is a piston on each face, and ``axial`` moves along the solver's +Z, which
-#: lies in both supported mirror planes: each is its own mirror image.
+#: is a piston on each face. ``axial`` moves each source along its own resolved
+#: axis (``server.solver.imported.resolve_source_axes``): it is its own mirror
+#: image only when that axis lies in the symmetry subspace, which
+#: :func:`excitation_problem` checks per source and never projects.
 _REFLECTION_INVARIANT_MOTIONS = frozenset({"normal", "axial"})
 
 
-def excitation_problem(record: Mapping[str, Any], drive_channels: Iterable[Any]) -> str | None:
+def excitation_problem(
+    record: Mapping[str, Any],
+    drive_channels: Iterable[Any],
+    msh_text: str | None = None,
+) -> str | None:
     """Why this excitation cannot drive the record's mirrored domain, or None.
 
     A mirrored solve drives each source's image exactly as the source. That is
@@ -1225,8 +1231,12 @@ def excitation_problem(record: Mapping[str, Any], drive_channels: Iterable[Any])
       drive (paired *distinct* sources are never mirrored onto each other --
       the mesher's mirror test is per source identity -- and a pre-cut model
       carries only the retained source of any pair);
-    - each channel's motion is invariant under the reflection (a velocity
-      along the solver's +Z lies in x = 0 and y = 0).
+    - each channel's motion is invariant under the reflection: a normal drive
+      is; an axial drive is when every source's resolved axis lies in the
+      symmetry subspace (a source the mirror cuts is completed by its image,
+      so its axis has no component across the plane; a source the mirror does
+      not touch may tilt across it, and then the reduction is refused and the
+      model is solved whole).
 
     Anything else -- a motion WG does not know to be invariant, a mirror plane
     that does not contain +Z -- is a known incompatibility and refuses the
@@ -1245,10 +1255,32 @@ def excitation_problem(record: Mapping[str, Any], drive_channels: Iterable[Any])
             + ", which does not contain the radiation axis; WG cannot drive it mirrored."
         )
     driven: dict[str, str] = {}
+    channels = list(drive_channels)
+    if any(
+        str((c.get("motion") if isinstance(c, Mapping) else getattr(c, "motion", None)) or "normal") == "axial"
+        for c in channels
+    ):
+        from server.mesh.artifact import ImportedMeshArtifactError
+        from server.solver.imported import (
+            axial_domain_problem,
+            read_verified_import_mesh,
+            resolve_record_axial_axes,
+        )
+
+        try:
+            text = msh_text if msh_text is not None else read_verified_import_mesh(record)
+            axes = resolve_record_axial_axes(record, text, channels)
+        except ImportedMeshArtifactError as exc:
+            return f"Axial source motion needs the solve mesh to find each source's axis: {exc}"
+        except ValueError as exc:
+            return f"Axial source motion cannot be solved: {exc}"
+        problem = axial_domain_problem(axes, planes)
+        if problem is not None:
+            return problem
     def field_of(channel: Any, name: str) -> Any:
         return channel.get(name) if isinstance(channel, Mapping) else getattr(channel, name, None)
 
-    for channel in drive_channels:
+    for channel in channels:
         motion = str(field_of(channel, "motion") or "normal")
         channel_id = str(field_of(channel, "id") or "?")
         sources = field_of(channel, "source_ids")

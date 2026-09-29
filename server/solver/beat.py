@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 import tempfile
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
@@ -862,12 +862,17 @@ class BeatEngine:
             field_trace_unavailable_reason=field_trace_reason,
         )
 
-    def imported_preflight(self, record: Mapping[str, Any], msh_text: str) -> str | None:
+    def imported_preflight(
+        self,
+        record: Mapping[str, Any],
+        msh_text: str,
+        drive_channels: Sequence[Any] | None = None,
+    ) -> str | None:
         """Why this engine cannot solve an ingestion record, asked at submission."""
 
         from .beat_imported import imported_beat_preflight
 
-        return imported_beat_preflight(record, msh_text)
+        return imported_beat_preflight(record, msh_text, drive_channels)
 
     def _imported_refusal(self, accuracy: str) -> str | None:
         # BEAT never sees accuracy, so Fast and Accurate are the same solve.
