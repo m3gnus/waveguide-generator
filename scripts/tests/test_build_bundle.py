@@ -2194,8 +2194,8 @@ def test_the_disk_image_carries_an_executable_installer_script(tmp_path: Path) -
 
     script = installer.read_text(encoding="utf-8")
     # The two steps the user would otherwise open Terminal for.
-    assert 'ditto "$SOURCE" "$TARGET"' in script
-    assert 'xattr -dr com.apple.quarantine "$TARGET"' in script
+    assert 'ditto "$SOURCE" "$STAGED"' in script
+    assert 'xattr -dr com.apple.quarantine "$STAGED"' in script
     # It runs from a read-only mounted volume with nothing else from the checkout
     # beside it, so it may not reach back into the repository for anything.
     assert "scripts/" not in script
