@@ -18,6 +18,11 @@ function jobItem(overrides: Partial<JobItem> = {}): JobItem {
 }
 
 describe('run archive layout', () => {
+  it('does not archive an unnumbered preparation as a run', () => {
+    const unnumbered = jobItem({ run_number: null });
+    expect(needsArchiving(unnumbered)).toBe(false);
+    expect(() => buildRunRecord(unnumbered)).toThrow('A run number is required');
+  });
   it('groups a run under its design rather than under its pipeline', () => {
     expect(exportSubdirectoryForJob(jobItem())).toBe('Big_Horn/3_Big_Horn');
   });

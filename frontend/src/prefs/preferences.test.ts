@@ -375,7 +375,8 @@ describe('client preferences', () => {
     expect(runDisplayName({ ...unnumbered, label: null })).toBe('osse-9f8e7d');
     const numbered = { ...job('a', 0, '2026-01-01T00:00:00Z'), run_number: 3, label: 'same' };
     const other = { ...job('b', 0, '2026-01-01T00:00:00Z'), run_number: null, label: 'Same' };
-    expect(applyJobPreferences([other, numbered], 'name_asc', 0).map(({ id }) => id)).toEqual(['b', 'a']);
+    expect(applyJobPreferences([other, numbered], 'name_asc', 0).map(({ id }) => id)).toEqual(['a', 'b']);
+    expect(applyJobPreferences([other, numbered], 'rating_desc', 0).map(({ id }) => id)).toEqual(['a', 'b']);
     expect(applyJobPreferences([numbered, other], 'created_desc', 0).map(({ id }) => id)).toEqual(['a', 'b']);
   });
   it('uses the same untitled fallback in full and short run identities', () => {

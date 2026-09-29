@@ -29,6 +29,10 @@ Three things a scenario can say about itself:
   and the ``replacement`` names the job test that pins the same guarantee;
 - ``@backend_free``: it does not touch the backend at all (retention of a copy,
   the store's rows). It runs once, on the operations backend.
+
+One deliberate divergence: dismissing a refused operation retains a cancelled
+ledger row, while dismissing a refused job deletes that job and releases its
+captured state. Scenarios that dismiss after refusal assert each backend's row.
 """
 
 from __future__ import annotations
@@ -721,7 +725,7 @@ class JobsHarness(Harness):
         self._loop.run(self.adismiss(operation_id))
 
     async def adismiss(self, operation_id: str = "cmd-1") -> None:
-        """Stop the solve if it is still being prepared; clear it if it already ended refused."""
+        """Stop an active job; delete a refused one (the ledger keeps a cancelled row)."""
 
         latest = self._latest.get(operation_id)
         assert latest, "nothing was accepted yet: there is no job to stop"

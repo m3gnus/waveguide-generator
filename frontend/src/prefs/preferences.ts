@@ -605,6 +605,10 @@ const naturalNameCollator = new Intl.Collator(undefined, { numeric: true, sensit
 export function applyJobPreferences(jobs: JobItem[], sort: JobSort, minimumRating: number): JobItem[] {
   const filtered = jobs.filter((job) => isActiveJobStatus(job.status) || (job.rating ?? 0) >= minimumRating);
   return [...filtered].sort((a, b) => {
+    if (a.run_number === null || b.run_number === null) {
+      if (a.run_number === null && b.run_number !== null) return 1;
+      if (b.run_number === null && a.run_number !== null) return -1;
+    }
     let order = 0;
     if (sort === 'rating_desc') order = (b.rating ?? 0) - (a.rating ?? 0) || Date.parse(b.created_at) - Date.parse(a.created_at);
     else if (sort === 'name_asc') order = naturalNameCollator.compare(runDisplayName(a, 'short'), runDisplayName(b, 'short'));

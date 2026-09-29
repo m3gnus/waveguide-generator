@@ -10,6 +10,7 @@ import type { ResultPayload } from '../results/types';
 import { resultFrequencyValidity } from '../results/validity';
 import { provideExportDestinationPrompt } from './exportDestinationPrompt';
 import { designForFamily, serializeDesign } from '../stores/design';
+import { newRunBadgeLabel } from './ResultsPanel';
 import { beamShapeMissingReason, chartImageFilename, chartUnit, COMPARABLE_CHARTS, comparisonContourPointToPixels, directivityIndexOption, directivityMapPanels, driverChartMissingReason, drivePowerOption, formatGroupDelay, groupDelayMissingReason, groupDelayOption, heatmapOption, impedanceOption, measurementAngleEntries, middleEllipsis, phaseOption, polarOption, powerResponseOption, resolveMeasurementSelection, ResultsChartGrid, resolvedPolarStepNotice, resultExportSnapshot, resultLayoutClass, splOption, splSubtitle } from './ResultsPanel';
 
 const chartImageMocks = vi.hoisted(() => ({
@@ -30,6 +31,10 @@ vi.mock('../results/summary', () => ({ summaryGroups: summaryMocks.groups, summa
 
 const tokens: ChartTokens = { foreground: '#fff', muted: '#aaa', grid: '#333', gridMinor: '#222', accent: '#0ff', series: ['#0ff'], colormap: ['#000', '#fff'] };
 const result = { frequencies: [], metadata: {} };
+it('shows a new solve without a null run number', () => {
+  expect(newRunBadgeLabel(null)).toBe('New');
+  expect(newRunBadgeLabel(3)).toBe('New · #3');
+});
 function named(id: string, label: string, payload: ResultPayload): NamedResult {
   return { id, label, result: payload };
 }

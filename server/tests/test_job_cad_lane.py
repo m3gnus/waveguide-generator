@@ -13,6 +13,7 @@ stand-in of ``JobsHarness`` (the real ones run in ``test_job_cad_binding.py``).
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import closing
 import json
 import logging
@@ -325,6 +326,63 @@ def test_solve_again_is_a_new_job_that_carries_what_the_first_recorded(h: JobsHa
     assert _cad(child)["setup"]["revision_id"] == revision  # the recorded setup, named by no one
     assert len(h.ingest.calls) == 1  # its preparation was resumed, not made again
     assert _row(h, parent["id"])["status"] == "error"  # the first stays as it ended
+
+
+def test_two_solve_again_presses_share_one_continuation(h: JobsHarness) -> None:
+    _received(h)
+    h.submit_error = RuntimeError("database is locked")
+    assert h.prepare(setup_revision_id=_revision(h.store, _setup()))["reason"] == "submission_refused"
+    parent = h.latest_job()
+    first = h._loop.run(h.runtime.solve_cad_again(parent["id"]))
+    second = h._loop.run(h.runtime.solve_cad_again(parent["id"]))
+    assert first == second
+    _settle(h)
+    child = _row(h, first)
+    assert child["config_json"]["client_request_id"] != parent["config_json"]["submission_key"]
+    assert len([row for row in h.jobs_store.list_jobs(limit=500)[0]
+                if row["config_json"].get("parent_job_id") == parent["id"]]) == 1
+    with pytest.raises(JobConflictError, match="continuing job"):
+        h._loop.run(h.runtime.solve_cad_again(parent["id"]))
+
+
+def test_retry_and_solve_again_share_one_continuation(h: JobsHarness) -> None:
+    _received(h)
+    h.submit_error = RuntimeError("database is locked")
+    assert h.prepare(setup_revision_id=_revision(h.store, _setup()))["reason"] == "submission_refused"
+    parent = h.latest_job()["id"]
+    h.blocked = "An update restart is pending."
+
+    async def both() -> tuple[str, str]:
+        first, second = await asyncio.gather(
+            h.runtime.retry(parent), h.runtime.solve_cad_again(parent)
+        )
+        return first, second
+
+    first, second = h._loop.run(both())
+    assert first == second
+    h.release_latch()
+    _settle(h)
+    assert _row(h, first)["status"] == "queued"
+
+
+def test_each_continuation_has_its_own_client_request_id(h: JobsHarness) -> None:
+    _received(h)
+    h.submit_error = RuntimeError("first bind refused")
+    assert h.prepare(setup_revision_id=_revision(h.store, _setup()))["reason"] == "submission_refused"
+    parent = h.latest_job()["id"]
+    h.submit_error = RuntimeError("second bind refused")
+    child = h._loop.run(h.runtime.solve_cad_again(parent))
+    _settle(h)
+    assert _row(h, child)["status"] == "error"
+    grandchild = h._loop.run(h.runtime.solve_cad_again(child))
+    _settle(h)
+    assert _row(h, grandchild)["status"] == "queued"
+    keys = [
+        _row(h, parent)["config_json"]["submission_key"],
+        _row(h, child)["config_json"]["submission_key"],
+        _row(h, grandchild)["config_json"]["client_request_id"],
+    ]
+    assert len(set(keys)) == 3
 
 
 def test_solve_again_names_the_setup_revision_it_was_given(h: JobsHarness) -> None:

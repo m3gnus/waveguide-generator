@@ -17,18 +17,20 @@ import pytest
 from server.cadlink import ingest as ingest_module
 from server.cadlink.isolation import ChildRefusal
 
-from cad_backends import OperationsHarness as Harness
+from cad_backends import BACKENDS, Harness, backend_fixture
 from test_cad_preparation import Refused, _manifest, _revision, _setup
 from test_cad_preparation_design_gate import MesherStandIn, _current, _prepare, _received
 from test_cad_project_setup import _project, _record_setup
 
 
-@pytest.fixture
-def real(tmp_path, monkeypatch) -> tuple[Harness, MesherStandIn]:
-    harness = Harness(tmp_path)
+@pytest.fixture(params=BACKENDS)
+def real(request, tmp_path, monkeypatch) -> tuple[Harness, MesherStandIn]:
+    backend = backend_fixture(request, tmp_path)
+    harness = next(backend)
     mesher = MesherStandIn()
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
-    return harness, mesher
+    yield harness, mesher
+    next(backend, None)
 
 
 def _exported(harness: Any, name: str) -> None:
@@ -57,7 +59,7 @@ def test_a_revisionless_retry_after_a_mesher_failure_keeps_the_chosen_settings(
     assert (failed["state"], failed["reason"]) == ("needs_user_input", "preparation_failed"), failed
     assert failed["preparationId"] is None
     # ... yet the operation already holds the settings the user chose.
-    assert harness.row()["setup_revision_id"] == chosen
+    assert harness.bound_setup_revision() == chosen
 
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
     retried = _prepare(harness, setup_revision_id=None)
@@ -108,7 +110,7 @@ def test_settings_chosen_after_a_failure_replace_the_ones_the_operation_holds(
 
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", crashes)
     failed = _prepare(harness, setup_revision_id=first)
-    assert failed["reason"] == "preparation_failed" and harness.row()["setup_revision_id"] == first
+    assert failed["reason"] == "preparation_failed" and harness.bound_setup_revision() == first
 
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", mesher)
     second = _revision(harness.store, _setup(engine="bempp"))
@@ -116,4 +118,4 @@ def test_settings_chosen_after_a_failure_replace_the_ones_the_operation_holds(
 
     assert (solved["state"], solved["jobId"]) == ("accepted", "job-1"), solved
     assert harness.submitted[-1].options.engine == "bempp"
-    assert harness.row()["setup_revision_id"] == second
+    assert harness.bound_setup_revision() == second

@@ -265,12 +265,8 @@ def _jobs_for(wg: Wg | JobsWg, operation_id: str) -> list[str]:
         ).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM simulation_jobs").fetchone()[0]
         keyed = conn.execute("SELECT COUNT(*) FROM job_submissions").fetchone()[0]
-        # A Solve again is a job of its own, continuing one: a new job, never keyed.
-        continuing = conn.execute(
-            "SELECT COUNT(*) FROM simulation_jobs "
-            "WHERE json_extract(config_json, '$.parent_job_id') IS NOT NULL"
-        ).fetchone()[0]
-    assert total == keyed + continuing, "a job exists that no submission key names"
+        # A Solve again is a job of its own, keyed by its parent for idempotency.
+    assert total == keyed, "a job exists that no submission key names"
     return [row[0] for row in rows]
 
 

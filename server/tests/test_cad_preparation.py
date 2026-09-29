@@ -362,6 +362,7 @@ def test_a_return_that_changed_after_the_request_is_refused(harness: Harness) ->
     summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
 
     assert (summary["state"], summary["reason"]) == ("rejected", "snapshot_invalid")
+    assert summary["message"] == "The return bundle changed after Fusion asked WG to solve it. Send it again from Fusion."
     assert harness.submitted == []
 
 
@@ -850,6 +851,7 @@ def test_a_reloaded_ui_reads_the_same_stage(harness: Harness) -> None:
     assert (detail["state"], detail["stage"], detail["reason"]) == (
         "needs_user_input", "ready", "findings_need_review",
     )
+    assert detail["message"] == "Review the preparation's findings before solving: healing-1"
     if harness.backend == "operations":
         request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(cadlink_store=harness.store)))
         routed = asyncio.run(get_cad_operation("cmd-1", request))
@@ -1020,8 +1022,12 @@ def test_cleanup_keeps_what_a_pending_operation_still_references(
     )))
     asyncio.run(api._reclaim_captured_documents(request, tmp_path / "runs", "Tritonia"))
     assert reclaimed == [("Tritonia", ["sha256:" + "5" * 64])]
-    # Once the operation is finished, nothing of it is held back any more.
+    # Dismissal keeps a cancelled ledger row but deletes a refused job.
     harness.dismiss()
+    if harness.backend == "operations":
+        assert harness.row()["state"] == "cancelled"
+    else:
+        assert harness.jobs_store.get_job_row(harness._latest["cmd-1"]) is None
     assert harness.held_return_states() == []
     # The retained snapshot itself is never pruned.
     assert list((harness.data_dir / "imports" / "bundles").iterdir())
@@ -2186,11 +2192,7 @@ def test_the_delivery_loop_starts_nothing_while_an_update_restart_is_pending(
     assert one_pass() == ["cmd-1", "cmd-2"]
 
 
-@old_only(
-    "an attempt claim and its generation",
-    "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched",
-)
-def test_a_preparation_an_update_restart_overtakes_before_its_claim_changes_nothing(
+def test_a_press_while_an_update_restart_is_approved_reports_each_lifecycle(
     harness: Harness,
 ) -> None:
     _received(harness)
@@ -2198,12 +2200,18 @@ def test_a_preparation_an_update_restart_overtakes_before_its_claim_changes_noth
     # Approved after the loop listed it, or after the route let it through.
     harness.blocked = "Waveguide Generator is about to restart to install 0.3.4."
 
-    summary = asyncio.run(prepare_operation(
-        harness.context(), "cmd-1", PreparationInput(), expected_generation=0
-    ))
-
-    assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
-    assert harness.row() == before
+    if harness.backend == "operations":
+        summary = asyncio.run(prepare_operation(
+            harness.context(), "cmd-1", PreparationInput(), expected_generation=0
+        ))
+        assert (summary["state"], summary["attemptGeneration"]) == ("received", 0)
+        assert harness.row() == before
+    else:
+        summary = harness.prepare()
+        assert (summary["state"], summary["reason"]) == (
+            "needs_user_input", "update_restart_pending",
+        )
+        assert harness.latest_job()["status"] == "preparing"
     assert harness.ingest.calls == [] and harness.submitted == []
     harness.blocked = None
     assert harness.prepare(setup_revision_id=_revision(harness.store, _setup()))["state"] == "accepted"
@@ -2344,6 +2352,27 @@ def test_a_failure_collecting_provenance_is_not_reported_as_a_failed_submission(
 
 class EngineUnavailableError(RuntimeError):
     """Named like the jobs system's own; the mapping reads the type by name."""
+
+
+def test_engine_unavailable_at_bind_has_the_same_exact_message(harness: Harness) -> None:
+    from server.jobs.runtime import EngineUnavailableError as BindingEngineUnavailableError
+
+    _received(harness)
+    message = "Solve engine 'x' is unavailable."
+    harness.refusals.append(BindingEngineUnavailableError)
+    harness.submit_error = BindingEngineUnavailableError(message)
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+    assert (summary["state"], summary["reason"], summary["message"]) == (
+        "needs_user_input", "engine_unavailable", message,
+    )
+
+
+def test_prepared_without_submission_has_the_same_exact_message(harness: Harness) -> None:
+    _received(harness)
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()), submit=False)
+    assert (summary["state"], summary["reason"], summary["message"]) == (
+        "needs_user_input", "ready_to_solve", "Prepared. Press Solve to start it.",
+    )
 
 
 def _coded(code: str) -> BaseException:

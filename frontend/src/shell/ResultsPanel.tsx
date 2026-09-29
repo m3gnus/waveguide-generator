@@ -54,6 +54,10 @@ import { channelLabel } from '../results/channelLabel';
 import { unqualifiedMessage, channelQualificationSummary, chartUnqualifiedBands, powerChipLabel, powerQualificationDetail, powerQualificationOf, unqualifiedCaption, withUnqualifiedBands, type UnqualifiedBand } from '../results/powerQualification';
 import { solveAttention } from './solveAttention';
 
+export function newRunBadgeLabel(runNumber: number | null): string {
+  return runNumber === null ? 'New' : `New · #${runNumber}`;
+}
+
 /**
  * Where the SPL card's curves were measured.
  *
@@ -2769,7 +2773,7 @@ export function ResultsPanel() {
         className="result-new-run"
         title={`${runDisplayName(newRun)} finished. Click to show it; nothing else replaces the run on screen.`}
         onClick={() => { setDismissedNewRun(newRun.id); compareSelection.followLatest(newRun.id); }}
-      ><i/>New · #{newRun.run_number} → Show</button>}
+      ><i/>{newRunBadgeLabel(newRun.run_number)} → Show</button>}
       {/* Left of the spacer on purpose: this chip comes and goes on its own,
           and the controls on the right must not move under the cursor. */}
     </>} controls={<>

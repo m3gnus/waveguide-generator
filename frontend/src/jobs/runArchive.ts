@@ -45,6 +45,7 @@ export function buildDesignRecord(job: JobItem): WorkspaceTextFile {
 
 /** One run's record: what was solved, from what, with which settings. */
 export function buildRunRecord(job: JobItem): WorkspaceTextFile {
+  if (job.run_number === null) throw new Error('A run number is required to archive a solve');
   const cad = job.cad_source ?? null;
   return {
     filename: RUN_RECORD_FILENAME,
@@ -102,5 +103,5 @@ export function buildRunRecord(job: JobItem): WorkspaceTextFile {
 
 /** Whether this run still needs archiving. */
 export function needsArchiving(job: JobItem): boolean {
-  return job.status === 'complete' && job.has_results && !job.archived_at;
+  return job.run_number !== null && job.status === 'complete' && job.has_results && !job.archived_at;
 }

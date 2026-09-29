@@ -659,7 +659,7 @@ def test_the_routes_take_only_well_formed_settings(harness: Harness) -> None:
     assert refused.value.status_code == 422
 
 
-@backend_free
+@old_only("the operations delivery loop lifecycle", "test_job_cad_lane.py::test_a_job_accepted_while_a_restart_is_approved_waits_untouched")
 def test_the_delivery_loop_runs_only_when_enabled_and_stops_at_shutdown(
     harness: Harness, monkeypatch
 ) -> None:

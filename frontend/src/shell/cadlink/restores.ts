@@ -220,6 +220,7 @@ export async function restoreCadJobModel(
   fetcher: typeof fetch = fetch,
 ): Promise<boolean> {
   if (job.config_summary.geometry_type !== 'imported') return false;
+  if (job.run_number === null) return false;
   const ingestId = job.cad_source?.ingest_id;
   const displayName = job.cad_source?.document_name || job.label || `run #${job.run_number}`;
   integration.enterCadWorkspace();

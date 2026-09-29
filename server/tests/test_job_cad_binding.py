@@ -127,6 +127,32 @@ def test_binding_queues_the_job_with_its_request_run_number_and_mesh(tmp_path: P
     asyncio.run(scenario())
 
 
+def test_an_unheld_preparing_job_cannot_bind(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime, ingest_id, _record = await _runtime_fixture(tmp_path)
+        _quiet(runtime)
+        try:
+            job_id = _preparing(runtime)
+            runtime.store.hand_back_preparing_job(
+                job_id, stage="received", stage_message="Waiting to prepare this solve"
+            )
+            result = runtime.store.bind_preparing_job(
+                job_id, config=_request(ingest_id).model_dump(mode="json"),
+                config_summary={}, task_metadata={}, mesh_artifact="$MeshFormat\n",
+                mesh_stats=None, script_snapshot=None, label=None, parent_job_id=None,
+                initial_event=("queued", {"status": "queued", "progress": 0.0}),
+            )
+            assert result is None
+            assert runtime.store.get_job_row(job_id)["run_number"] is None
+            assert _table_counts(runtime, job_id) == {
+                "identity": 0, "artifacts": 0, "queued_events": 0,
+            }
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_binding_is_one_transaction_a_kill_before_commit_leaves_preparing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

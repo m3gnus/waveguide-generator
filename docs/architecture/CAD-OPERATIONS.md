@@ -814,9 +814,10 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   compare-and-set on the job's own row (`claim_preparing_job`, `advance_preparing_job`,
   `refuse_preparing_job`, `hand_back_preparing_job`, `bind_preparing_job`): it applies only
   while the job is `preparing`, and a stop ends the job at once, so the lane's next write
-  finds it ended and stops without writing. The ingest's commit guard reads the job's status,
-  so a record is not committed for a stopped job. `started_at` null means no lane holds the
-  job.
+  finds it ended and stops without writing. The ingest's commit guard checks the job's
+  status before committing to `cadlink.db`; because the guard reads another database,
+  a stop racing between that check and commit can leave an unused ingest record.
+  `started_at` null means no lane holds the job.
 - **Where the record lives.** `task_metadata.cad` holds `snapshot` (the retained
   snapshot's record), `setup {revision_id, digest, origin}`, `preparation {preparation_id,
   ingest_id, setup_revision_id, snapshot_sha256, report_sha256, blocking_finding_ids,
@@ -836,7 +837,10 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   record), the frame axis it was held to, and any setup, axis or approvals the user names
   now. The new job resumes the preparation when the same snapshot, setup, meshing semantics,
   complete frame and domain plan make the same one, so nothing is meshed again and approvals
-  bound to it still apply. A return WG rejected as invalid is not solved again.
+  bound to it still apply. `cad-solve-again:<parent job id>` makes two presses or a retry
+  and a press share one child. The child has its own `client_request_id`; once it has
+  a solve request, another press on the parent is refused with the existing-child reason.
+  A return WG rejected as invalid is not solved again.
 - **Binding** (`JobStore.bind_preparing_job`) is one transaction: `config_json` becomes the
   exact `SolveRequest`, the job's metadata, mesh artifact and run number are written, and it
   goes `preparing` -> `queued`, conditional on the job still being `preparing`. Every
@@ -849,22 +853,31 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
 - **Restart.** A `preparing` job no lane holds is prepared by the lane at the next start; one
   a lane held ends `error` with `interrupted` (the operation's words). While an update restart
   is approved nothing is prepared or written except that a waiting job says why
-  (`waiting-for-update-restart`); a job handed back mid-preparation keeps its record, and the
-  lane takes it up when the latch comes down or at the next start.
+  (`waiting-for-update-restart`); at the bind step a job is handed back with its record,
+  and the lane takes it up when the latch comes down or at the next start. Shutdown
+  during meshing ends the held job as `interrupted` on the next start.
 - **Retention.** `unreleased_cad_return_states` also holds the captured-document state of a
   `preparing` job, and of a refused job the user can answer until another job continues it.
 
 ### What S4-F1 must decide
 
-- **Old releases and a `preparing` row.** Measured against v0.3.2 and v0.3.3-rc.1 with
+- **Old releases and an intent or unnumbered row.** Measured against v0.3.2 and v0.3.3-rc.1 with
   one `preparing` row on disk: the jobs list and status routes return HTTP 500 (the
   status is not a valid value for them), startup recovery never settles the row, stop is
   refused, and retry returns 500. So the change that first writes `preparing` in
-  production must either settle every `preparing` row to a terminal state when an update is
-  applied and at Quit, before any rollback can happen (which conflicts with the lane
-  keeping a job `preparing` across an update restart, as S4-E2 does), or raise the jobs
-  schema with a restorable snapshot. Either way it needs a rollback test that puts a real
-  `preparing` row in front of those releases. S4-E2 does not decide this: it writes no row.
+  production must handle **every** row whose config is a `cad_intent` or that has no run
+  number, including refused and cancelled rows. Main's identity backfill has no intent
+  filter and would number a refused intent row on rollback, spending a run number without
+  a run. Older retry code would parse a refused intent as a `SolveRequest` and fail.
+  Settling `preparing` rows alone does not cure either problem. S4-F1 must either migrate
+  all such rows to a form older releases understand before rollback, or raise the jobs
+  schema with a restorable snapshot and a rollback path. Test rollback with both a
+  `preparing` row and a refused intent row. S4-E2 writes no production row.
+- **Deliberate lifecycle differences.** Dismissing a refused operation keeps a cancelled
+  ledger row; dismissing a refused job deletes it and releases its captured state. If
+  Solve is pressed while an update restart is approved, the operation stays `received`,
+  whereas the job reports `needs_user_input` / `update_restart_pending`. S4-F1 derives
+  operation summaries from the job, so this vocabulary change becomes visible then.
 - **Creation event.** A `queued` event makes the client patch the status to `queued`; the
   lane's events are `stage` events, which keep `preparing`, and the bind's `queued` event
   is the one the client reads as the job being queued.

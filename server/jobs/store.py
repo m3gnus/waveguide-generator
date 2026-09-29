@@ -965,7 +965,8 @@ class JobStore:
                        error_message = NULL, config_json = ?, config_summary_json = ?,
                        has_mesh_artifact = 1, mesh_stats_json = ?, label = ?,
                        script_snapshot_json = ?, task_metadata_json = ?
-                   WHERE id = ? AND status = 'preparing' AND cancellation_requested = 0""",
+                   WHERE id = ? AND status = 'preparing' AND started_at IS NOT NULL
+                     AND cancellation_requested = 0""",
                 (
                     now,
                     now,
@@ -1448,8 +1449,9 @@ class JobStore:
         complete run with results but no ``archived_at`` has not either. A CAD
         solve WG is still preparing holds the state its preparation named
         (``task_metadata.cad.return_state_hash``), and so does one that was
-        refused in a way the user can answer (findings to review, a frame to
-        confirm) until another job continues it: that is a solve still waiting to
+        refused in a way the user can answer, or interrupted, failed in preparation,
+        refused at submission, or ended ready to solve, until another job continues
+        it: that is a solve still waiting to
         run, as an unfinished operation was. Such a state has no archive stem
         yet, so it is kept for every project. Both still have to be handed the
         exact model they were solved from, so the project-level capture of that

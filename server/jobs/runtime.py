@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 from collections import deque
 from contextlib import asynccontextmanager
 import copy
@@ -3201,6 +3202,13 @@ class JobRuntime:
         refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else None
         if refusal is not None and CAD_REASON_STATES.get(str(refusal.get("code"))) == CAD_REJECTED:
             raise JobConflictError(str(refusal.get("message") or "WG rejected this return"))
+        continuation_key = f"cad-solve-again:{job_id}"
+        existing = await asyncio.to_thread(self.store.job_for_submission_key, continuation_key)
+        if existing is not None:
+            child = self._require_job(existing)
+            if child["status"] not in {"preparing", "error"}:
+                raise JobConflictError("This solve already has a continuing job; use that job instead")
+            return existing
         intent = solve_again_intent(
             row,
             setup_revision_id=setup_revision_id,
@@ -3209,21 +3217,29 @@ class JobRuntime:
             approve_finding_ids=approve_finding_ids,
             submit=submit,
         )
+        intent = replace(intent, submission_key=continuation_key)
         record = self._preparing_record(intent)
         # What the solve has recorded travels with it: the retained snapshot (the
         # return may have left the WGLink folder), the state cleanup keeps for it,
         # its setup, and its preparation with the approvals given on it.
         record["task_metadata"]["cad"].update(carried_record(row))
-        event = await asyncio.to_thread(
-            self.store.create_job,
+        child_id, created, event = await asyncio.to_thread(
+            self.store.create_job_idempotent,
             record,
+            submission_key=continuation_key,
+            request_sha256=hashlib.sha256(job_id.encode()).hexdigest(),
             initial_event=(
                 "stage",
                 {"stage": "received", "message": record["stage_message"], "progress": 0.0},
             ),
         )
-        self._offer_to_prep_lane(str(record["id"]), event)
-        return str(record["id"])
+        if created:
+            self._offer_to_prep_lane(child_id, event)
+        else:
+            child = self._require_job(child_id)
+            if child["status"] not in {"preparing", "error"}:
+                raise JobConflictError("This solve already has a continuing job; use that job instead")
+        return child_id
 
     def _offer_to_prep_lane(self, job_id: str, event: Mapping[str, Any] | None) -> None:
         if event is not None:

@@ -4,6 +4,7 @@ import { exportStemForJob, exportTitleSlug } from './exportNaming';
 describe('job export naming', () => {
   it('always leads with the permanent run number', () => {
     expect(exportStemForJob({ run_number: 123, label: 'asro68', config_summary: {} })).toBe('123_asro68');
+    expect(exportStemForJob({ run_number: null, label: 'asro68', config_summary: {} })).toBe('pending_asro68');
   });
 
   it('uses the current job title so a rename changes future export stems', () => {
