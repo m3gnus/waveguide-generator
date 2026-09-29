@@ -85,6 +85,7 @@ from server.solver.symmetry import (
     validate_symmetry_mode,
 )
 from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
+from server.solver.polar_arc import effective_polar_config, effective_polar_grid
 from server.solver.formulation import bem_formulation
 from server.solver.metal_permit import MetalPermit, process_metal_permit
 from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
@@ -2542,7 +2543,7 @@ class JobRuntime:
         request_dump = request.model_dump(mode="json")
         summary = self._config_summary(request)
         summary["symmetry"] = symmetry_metadata
-        polar_grid = request.options.polar_config.resolved_grid()
+        polar_grid = effective_polar_grid(request)
         if isinstance(request.geometry, ParametricGeometrySource):
             assert request.design_snapshot is not None
             script_snapshot = request.design_snapshot.model_dump(mode="json")
@@ -3791,7 +3792,7 @@ class JobRuntime:
                 num_frequencies=count,
                 frequency_spacing=request.options.frequency_spacing,
                 frequencies_hz=request.options.frequencies_hz,
-                polar_config=request.options.polar_config.model_dump(mode="json"),
+                polar_config=effective_polar_config(request),
                 mesh_validation_mode=request.options.mesh_validation_mode,
                 verbose=request.options.verbose,
             )
@@ -4576,7 +4577,7 @@ class JobRuntime:
                 "engine": request.options.engine,
                 "accuracy": request.options.accuracy,
                 "design_revision": request.design_revision,
-                "polar_grid": request.options.polar_config.resolved_grid(),
+                "polar_grid": effective_polar_grid(request),
             }
         return {
             "formula_type": "cad-import",
@@ -4605,7 +4606,7 @@ class JobRuntime:
                 if request.geometry.combine is not None
                 else None
             ),
-            "polar_grid": request.options.polar_config.resolved_grid(),
+            "polar_grid": effective_polar_grid(request),
         }
 
     @staticmethod
@@ -4624,7 +4625,7 @@ class JobRuntime:
         else:
             metadata["geometry_type"] = "imported"
             metadata["ingest_id"] = request.geometry.ingest_id
-        metadata["polar_grid"] = request.options.polar_config.resolved_grid()
+        metadata["polar_grid"] = effective_polar_grid(request)
         if symmetry_metadata is not None:
             metadata["symmetry"] = dict(symmetry_metadata)
         engine = request.options.engine

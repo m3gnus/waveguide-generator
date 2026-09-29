@@ -5,13 +5,14 @@ from the repository root (about 20 s on Metal, plus a few seconds of meshing):
 
     .venv/bin/python docs/validation/abec-g8-circsym-ib/compare_3d.py
 
-It builds G8 through WG's own library (the same path a design takes: text
-config -> mesher -> Metal), at infinite-baffle aperture scale 1.0 and an 8 mm
+It builds G8 through WG's own library (text config -> mesher -> Metal
+adapter; the observation arc is set directly, so the request layer is not
+exercised), at infinite-baffle aperture scale 1.0 and an 8 mm
 mouth cap, solves real-k on ABEC's own 100 frequencies with a quarter model, and
 compares with ``Results/Spectrum_ABEC.txt``. Unlike ``compare.py`` it uses WG's
 mesh of the ATH parameters, not ABEC's ``nodes.txt`` -- the point is to check
 what a user's design produces -- so it does not need the meridian trick, and it
-imports nothing from ``hornlab_metal_bem`` directly.
+imports nothing from ``compare.py`` (which needs the axisymmetric engine).
 
 Exit status is 0 when every assertion holds, 1 otherwise. ``--mouth`` and
 ``--no-assert`` exist for sensitivity runs (a 4.3 mm mouth is ABEC's own cap
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import re
 import sys
 import time
 from pathlib import Path
@@ -83,21 +85,43 @@ HALF_ANGLE_MIN_WINDOW_HZ = (1200.0, 3500.0)
 IMPEDANCE_MEDIAN_LIMIT = 0.03
 
 
+# Copied from ``compare.py`` (which imports metal-bem's axisymmetric engine at the
+# top and so cannot be imported here). Keep the two parsers in step.
 def load_abec():
-    """ABEC's spectra, without importing ``compare.py`` (it needs metal-bem at import).
+    """Parse Spectrum_ABEC.txt into ``caption -> (frequencies, complex (F, A))``.
 
-    ``load_abec_spectrum`` only needs ``re``, ``numpy`` and ``HERE``, so its
-    source is cut out of ``compare.py`` and executed on its own.
+    Rows are ``frequency, (re, im) x A``. This export writes ``.`` decimals; the
+    older ASRO reference files write ``,``, so both are accepted.
     """
-    source = (HERE / "compare.py").read_text()
-    namespace: dict = {}
-    exec(
-        "import re, numpy as np\nfrom pathlib import Path\n"
-        f"HERE = Path({str(HERE)!r})\n"
-        + source[source.index("def load_abec_spectrum") : source.index("def solve_ours")],
-        namespace,
-    )
-    return namespace["load_abec_spectrum"]()
+    text = (HERE / "Results" / "Spectrum_ABEC.txt").read_text(errors="replace")
+    out = {}
+    caption = None
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if line.startswith("Graph_Caption="):
+            caption = line.split("=", 1)[1].strip().strip('"')
+        elif line == "Data":
+            freqs, rows = [], []
+            i += 1
+            while i < len(lines) and lines[i].strip() != "Data_End":
+                parts = lines[i].replace(",", ".").split()
+                if len(parts) >= 3:
+                    values = [float(v) for v in parts]
+                    freqs.append(values[0])
+                    pairs = values[1:]
+                    rows.append(
+                        [
+                            complex(pairs[k], pairs[k + 1])
+                            for k in range(0, len(pairs) - 1, 2)
+                        ]
+                    )
+                i += 1
+            if caption is not None and rows:
+                out[caption] = (np.asarray(freqs), np.asarray(rows, dtype=complex))
+        i += 1
+    return out
 
 
 def db(x):
@@ -219,17 +243,18 @@ def main() -> int:
     band = f <= HALF_ANGLE_UP_TO_HZ
     both = band & np.isfinite(half_ours) & np.isfinite(half_abec)
     half_diff = np.abs(half_ours - half_abec)[both]
+    half_diff_max = float(half_diff.max()) if half_diff.size else float("nan")
     lo, hi = HALF_ANGLE_MIN_WINDOW_HZ
     window = (f >= lo) & (f <= hi)
-    min_ours = float(f[window][np.argmin(half_ours[window])])
-    min_abec = float(f[window][np.argmin(half_abec[window])])
+    min_ours = float(f[window][np.nanargmin(half_ours[window])]) if np.isfinite(half_ours[window]).any() else float("nan")
+    min_abec = float(f[window][np.nanargmin(half_abec[window])]) if np.isfinite(half_abec[window]).any() else float("nan")
     grid_step = float(f[1] / f[0])
 
     print(f"\nbelow {LOW_BAND_HZ:g} Hz, all 19 angles ({int(low.sum())} frequencies)")
     print(f"  absolute SPL rms  {abs_rms:.3f} dB   (limit {ABS_RMS_LIMIT_DB})   median on-axis offset {on_axis_offset:+.3f} dB")
     print(f"  pattern rms       {pattern_rms:.3f} dB   (limit {PATTERN_RMS_LIMIT_DB})")
     print(f"-6 dB half-angle up to {HALF_ANGLE_UP_TO_HZ / 1000:g} kHz ({int(both.sum())} frequencies)")
-    print(f"  max |ours - ABEC| {half_diff.max():.2f} deg   (limit {HALF_ANGLE_LIMIT_DEG})   rms {rms(half_diff):.2f} deg")
+    print(f"  max |ours - ABEC| {half_diff_max:.2f} deg   (limit {HALF_ANGLE_LIMIT_DEG})   rms {rms(half_diff) if half_diff.size else float('nan'):.2f} deg")
     print(f"half-angle minimum in {lo:g}-{hi:g} Hz: ours {min_ours:.0f} Hz, ABEC {min_abec:.0f} Hz (expected {HALF_ANGLE_MIN_HZ:.0f}, one grid step = x{grid_step:.4f})")
     print(f"throat impedance vs ABEC RadImp: median relative error {np.median(z_rel):.4f}, max {z_rel.max():.4f}")
     for lo_hz, hi_hz in ((200, 1000), (1000, 4000), (4000, 11000), (11000, 20001)):
@@ -239,12 +264,12 @@ def main() -> int:
             f"pattern rms {rms((ours_norm - abec_norm)[m]):.2f}  (max abs {np.abs(ours_abs - abec_abs)[m].max():.2f})"
         )
 
-    within_step = lambda x: abs(np.log(x / HALF_ANGLE_MIN_HZ)) <= np.log(grid_step) * 1.0001  # noqa: E731
+    within_step = lambda x: np.isfinite(x) and abs(np.log(x / HALF_ANGLE_MIN_HZ)) <= np.log(grid_step) * 1.0001  # noqa: E731
     checks = [
         ("real-k formulation, no shift", ours["formulation"] == ("standard", 0.0)),
         (f"absolute rms < {ABS_RMS_LIMIT_DB} dB below {LOW_BAND_HZ:g} Hz", abs_rms < ABS_RMS_LIMIT_DB),
         (f"pattern rms < {PATTERN_RMS_LIMIT_DB} dB below {LOW_BAND_HZ:g} Hz", pattern_rms < PATTERN_RMS_LIMIT_DB),
-        (f"-6 dB half-angle within {HALF_ANGLE_LIMIT_DEG} deg up to {HALF_ANGLE_UP_TO_HZ / 1000:g} kHz", bool(half_diff.max() <= HALF_ANGLE_LIMIT_DEG)),
+        (f"-6 dB half-angle within {HALF_ANGLE_LIMIT_DEG} deg up to {HALF_ANGLE_UP_TO_HZ / 1000:g} kHz", bool(half_diff.size and half_diff_max <= HALF_ANGLE_LIMIT_DEG)),
         (f"half-angle minimum at {HALF_ANGLE_MIN_HZ:.0f} Hz +- one grid step", within_step(min_ours) and within_step(min_abec)),
         (f"throat impedance median error < {IMPEDANCE_MEDIAN_LIMIT}", bool(np.median(z_rel) < IMPEDANCE_MEDIAN_LIMIT)),
     ]

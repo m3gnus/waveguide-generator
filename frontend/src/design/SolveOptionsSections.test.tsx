@@ -7,7 +7,8 @@ import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { accuracyExplainer, DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
+import { useDesignStore } from '../stores/design';
+import { accuracyExplainer, DirectivityMapControls, effectiveGridView, FrequencySweepControls, runPolarFromJob, SolveOptionsControls } from './SolveOptionsSections';
 
 // The server's per-engine verdict on one CAD return (POST
 // /api/solve/imported-plan). A test hands the selector one directly; with no
@@ -559,5 +560,37 @@ describe('accuracy explainer and the infinite baffle', () => {
     expect(fast).toContain('imaginary shift (0.005)');
     expect(fast).toContain('An infinite-baffle design is the exception');
     expect(fast).toContain('no shift and no added damping');
+  });
+});
+
+describe('infinite baffle sweep hint and the recorded arc', () => {
+  it('shows the front half-space hint only for an infinite-baffle design', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = createRoot(host);
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    const queryClient = new QueryClient();
+    const draw = () => act(() => root.render(<QueryClientProvider client={queryClient}><DirectivityMapControls /></QueryClientProvider>));
+    const original = useDesignStore.getState().design;
+    try {
+      draw();
+      expect(host.textContent).not.toContain('front half-space');
+      act(() => useDesignStore.setState({ design: { ...original, simulation: { ...original.simulation, sim_type: 'infinite-baffle' } } }));
+      draw();
+      expect(host.textContent).toContain('Infinite baffle observes the front half-space, 0–90°');
+    } finally {
+      act(() => useDesignStore.setState({ design: original }));
+      act(() => root.unmount());
+      host.remove();
+    }
+  });
+
+  it('reports the arc the run observed, not the one the request carried', () => {
+    const request = { angle_range: [0, 180, 37], angle_step: 5, distance: 2, norm_angle: 5, inclination: 45, enabled_axes: ['horizontal'], observation_origin: 'mouth', spherical_sampling: false, field_plane: true };
+    const job = { solve_options: { polar_config: request }, polar_grid: { start: 0, end: 90, count: 19, resolved_step: 5 } };
+    const polar = runPolarFromJob(job)!;
+    expect([polar.angleStart, polar.angleEnd, polar.angleStep]).toEqual([0, 90, 5]);
+    // No recorded grid: the request is all there is.
+    expect(runPolarFromJob({ solve_options: { polar_config: request } })!.angleEnd).toBe(180);
   });
 });

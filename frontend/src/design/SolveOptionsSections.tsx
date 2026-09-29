@@ -31,6 +31,7 @@ import {
   type PolarUiState,
 } from '../stores/solveOptions';
 import { runDisplayName } from '../prefs/preferences';
+import { useDesignStore } from '../stores/design';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
@@ -531,6 +532,22 @@ function polarSummary(polar: PolarUiState): string {
  * are read, and only when they differ from what is on screen -- a run that
  * matches the current settings needs no note.
  */
+/**
+ * The directivity settings a run was measured with. The request's polar config
+ * is what the client asked for; the server records the arc it actually observed
+ * (an infinite baffle narrows the default 0-180 to 0-90), so that grid wins.
+ */
+export function runPolarFromJob(job: { solve_options?: { polar_config?: unknown } | null; polar_grid?: Record<string, unknown> | null } | undefined): PolarUiState | null {
+  const requested = polarUiFromConfig(job?.solve_options?.polar_config);
+  if (!requested) return null;
+  const grid = job?.polar_grid;
+  const start = Number(grid?.start);
+  const end = Number(grid?.end);
+  const count = Number(grid?.count);
+  if (!grid || !Number.isFinite(start) || !Number.isFinite(end) || !Number.isFinite(count) || count < 2 || end <= start) return requested;
+  return { ...requested, angleStart: start, angleEnd: end, angleStep: (end - start) / (count - 1) };
+}
+
 export function SolvedWithReadout() {
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
@@ -538,7 +555,7 @@ export function SolvedWithReadout() {
   const updatePolar = useSolveOptionsStore((state) => state.updatePolar);
 
   const job = selection.primary ? snapshot.jobs.find((item) => item.id === selection.primary) : undefined;
-  const runPolar = polarUiFromConfig(job?.solve_options?.polar_config);
+  const runPolar = runPolarFromJob(job);
   if (!job || !runPolar) return null;
   const differences = polarDifferences(runPolar, current);
   if (!differences.length) return null;
@@ -555,6 +572,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
   const polar = useSolveOptionsStore((state) => state.polar);
   const update = useSolveOptionsStore((state) => state.updatePolar);
   const toggleAxis = useSolveOptionsStore((state) => state.toggleAxis);
+  const infiniteBaffle = useDesignStore((state) => state.design.simulation.sim_type === 'infinite-baffle');
   const validationError = polarValidationError(polar);
   const validationErrorId = 'polar-grid-error';
   const numeric = (key: keyof Pick<PolarUiState, 'angleStart' | 'angleEnd' | 'angleStep' | 'distance' | 'normAngle' | 'diagonalAngle'>) => (value: number) => {
@@ -577,6 +595,7 @@ export function DirectivityMapControls({ effectiveDerivation }: { effectiveDeriv
     <PolarNumber id="polar-angle-step" label="Angular step" help="Spacing between measured angles. Finer steps give smoother directivity maps and cost almost nothing, because the field is evaluated after the solve rather than solved again." value={polar.angleStep} unit="°" min={1} step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('angleStep')} />
     <PolarNumber id="polar-distance" label="Measurement distance" help="How far from the horn the virtual microphone sits. Keep it well beyond the mouth so the result is a far-field pattern." value={polar.distance} unit="m" min={.1} step={.1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('distance')} />
     <PolarNumber id="polar-norm-angle" label="Normalization angle" help="The angle held at 0 dB in the directivity maps. Every polar curve is shifted so this angle reads flat. It is applied when the map is drawn, so it takes effect immediately and re-references runs already solved -- no re-solve, and the frequency response, phase and DI never move with it." value={polar.normAngle} unit="°" step={1} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('normAngle')} />
+    {infiniteBaffle && <p className="section-note" role="note">Infinite baffle observes the front half-space, 0–90°. A default 0–180° sweep is narrowed to that; set another end angle to keep it.</p>}
     <div className="axis-toggles" role="group" aria-label="Directivity planes" {...axisHelp.triggerProps} aria-invalid={validationError ? true : undefined} aria-describedby={axisDescribedBy}>{(['horizontal', 'vertical', 'diagonal'] as PolarAxis[]).map((axis) => <label key={axis}><input type="checkbox" checked={polar.enabledAxes.includes(axis)} onChange={() => toggleAxis(axis)} /> {axis}</label>)}{axisHelp.tip}</div>
     <PolarNumber id="polar-diagonal-angle" label="Diagonal plane angle" help="Where the diagonal plane sits, measured from the horizontal. 45° is the corner of a square mouth. Only used when the diagonal plane is enabled." value={polar.diagonalAngle} unit="°" step={1} disabled={!polar.enabledAxes.includes('diagonal')} gridInvalid={Boolean(validationError)} errorId={validationErrorId} update={numeric('diagonalAngle')} />
     {validationError && <div id={validationErrorId} className="field-error polar-grid-error" role="alert">{validationError}</div>}

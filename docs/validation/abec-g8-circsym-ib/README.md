@@ -220,7 +220,7 @@ checked as well, which is what shows the scaling is right.
 - the half-angle minimum at 2047 Hz, within one grid step (x1.0476), for both;
 - the solve ran real k with no shift; throat impedance median error below 3%.
 
-**Expected numbers** (WG 56c2344e plus the polar change, metal-bem pin
+**Expected numbers** (WG 56c2344e, metal-bem pin
 `5765b21e`, mesher pin `873b0fda`, 1954 triangles, 807 of them on the aperture,
 solve 17-20 s, recorded 2026-09-29):
 

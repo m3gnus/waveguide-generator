@@ -1174,7 +1174,9 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     }];
   });
   const labelSize = LABEL_FONT[density];
-  const shadeRear = items.some(({ result }) => hasZeroRadiationRear(result));
+  // Only when every compared run has a zero-radiation rear: the wedge is drawn
+  // once for the whole chart, so it must not cover another run's real rear trace.
+  const shadeRear = items.length > 0 && items.every(({ result }) => hasZeroRadiationRear(result));
   // Two wedges, 90..180 and -180..-90, drawn as dense arcs on the outer ring:
   // a polar line is straight between samples, so a sparse pair would be a chord.
   const rearWedge = (from: number, to: number) => ({
@@ -1186,7 +1188,9 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     legendHoverLink: false,
     z: 0,
     lineStyle: { opacity: 0 },
-    areaStyle: { color: tokens.muted, opacity: .22 },
+    // origin 'start' fills from the axis minimum out to the ring; the default
+    // ('auto') is 0 dB here, which is the ring itself, so nothing would show.
+    areaStyle: { origin: 'start' as const, color: tokens.muted, opacity: .22 },
     data: Array.from({ length: 19 }, (_, step) => [0, from + ((to - from) * step) / 18]),
   });
   return {
@@ -1196,7 +1200,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
     legend: { top: 1, right: LEGEND_INSET, ...(shadeRear ? { data: items.map(({ label }) => label) } : {}), textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
-    ...(shadeRear ? { graphic: [{ type: 'text', left: 'center', top: density === 'compact' ? '80%' : '82%', silent: true, style: { text: OUTSIDE_HALF_SPACE_LABEL, fill: tokens.muted, font: `${labelSize}px ui-monospace, monospace`, align: 'center' } }] } : {}),
+    ...(shadeRear ? { graphic: [{ type: 'text', left: 'center', top: density === 'compact' ? '72%' : '82%', silent: true, style: { text: OUTSIDE_HALF_SPACE_LABEL, fill: tokens.muted, font: `${labelSize}px ui-monospace, monospace`, align: 'center' } }] } : {}),
     polar: { radius: density === 'compact' ? '68%' : '72%', center: ['50%', '54%'] },
     angleAxis: {
       type: 'value' as const,

@@ -75,6 +75,8 @@ describe('zero-radiation rear hemisphere', () => {
     const option = polarOption([named(payload('zero_radiation'))], tokens, 'horizontal', 1_000, -30, 'full');
     const wedges = (option.series as Array<{ name: string }>).filter(({ name }) => name === OUTSIDE_HALF_SPACE_LABEL);
     expect(wedges).toHaveLength(2);
+    // Filled from the axis minimum: the default origin is 0 dB, the ring itself, which encloses nothing.
+    wedges.forEach((wedge) => expect((wedge as unknown as { areaStyle: { origin?: string } }).areaStyle.origin).toBe('start'));
     expect(JSON.stringify(option.graphic)).toContain(OUTSIDE_HALF_SPACE_LABEL);
     expect((option.legend as { data?: string[] }).data).toEqual(['Run A']);
   });
@@ -86,5 +88,20 @@ describe('zero-radiation rear hemisphere', () => {
     expect(option.graphic).toBeUndefined();
     // Nothing is blanked: every rear sample keeps a plotted radius.
     expect(series[0].data.filter(([, angle]) => angle > 90).every(([radius]) => radius !== null)).toBe(true);
+  });
+
+  it('does not shade the rear when a compared run radiates into it', () => {
+    const free = payload('sampled');
+    const both = polarOption([named(payload('zero_radiation')), { id: 'b', label: 'Run B', result: free }], tokens, 'horizontal', 1_000, -30, 'full');
+    expect((both.series as Array<{ name: string }>).some(({ name }) => name === OUTSIDE_HALF_SPACE_LABEL)).toBe(false);
+    expect(both.graphic).toBeUndefined();
+    // Run A's own rear stays a gap; Run B's rear stays drawn.
+    const traces = both.series as Array<{ name: string; data: Array<[number | null, number]> }>;
+    expect(traces.find(({ name }) => name === 'Run B')!.data.filter(([, angle]) => angle > 90).every(([r]) => r !== null)).toBe(true);
+  });
+
+  it('puts the compact label clear of the outer ring', () => {
+    const option = polarOption([named(payload('zero_radiation'))], tokens, 'horizontal', 1_000, -30, 'compact');
+    expect((option.graphic as Array<{ top: string }>)[0].top).toBe('72%');
   });
 });
