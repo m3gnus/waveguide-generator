@@ -572,6 +572,27 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(puts).toEqual([{ ingestId: 'wgi_first', axis: '-z' }]);
   });
 
+  it('does not carry a Change from one model to the next: Done there waits for Solve', async () => {
+    await mount();
+    await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });
+    expect(host.querySelector('input[type="radio"]')).not.toBeNull();
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/cadlink/solver-frame?ingestId=wgi_second' && !init?.method) {
+        return json({ ...frame, ingestId: 'wgi_second', confirmed: null });
+      }
+      return base(input, init);
+    }));
+    act(() => selectSecond());
+    await mount();
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-frame')?.getAttribute('data-solver-frame')).not.toBeNull());
+    await vi.waitFor(() => expect(host.querySelector('button[data-action="change-solver-frame"]')).not.toBeNull());
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="change-solver-frame"]')!.click(); await flush(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[value="-z"]')!.click(); await flush(); });
+    await act(async () => { host.querySelector<HTMLButtonElement>('button[data-action="done-solver-frame"]')!.click(); await flush(); });
+    expect(puts).toEqual([]);
+  });
+
   it('does not reopen the chooser on a later remount', async () => {
     await mount();
     await act(async () => { useCadSolverFrameStore.getState().requestChange('wgi_first'); await flush(); });

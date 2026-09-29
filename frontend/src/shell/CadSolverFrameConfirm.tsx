@@ -173,7 +173,6 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
     .sort()
     .join('|'));
   useEffect(() => { void load(ingestId, fetcher); }, [fetcher, frameGate, ingestId, load]);
-  useEffect(() => { setChanging(false); setSwitchError(null); }, [ingestId]);
   // The run line's "Change" (an automatic axis) opens this same chooser.
   // Opened this way, the chooser confirms the axis picked (a Fusion Solve
   // never shows it, so nothing else would): the request is consumed, so a
@@ -181,6 +180,8 @@ export function CadSolverFrame({ ingestId, manifestSha256, label, fetcher = fetc
   const changeRequested = useCadSolverFrameStore((state) => state.changeRequests[ingestId] ?? 0);
   const consumeChange = useCadSolverFrameStore((state) => state.consumeChange);
   const [confirmOnDone, setConfirmOnDone] = useState(false);
+  // Another model must not inherit a Change opened for this one.
+  useEffect(() => { setChanging(false); setSwitchError(null); setConfirmOnDone(false); }, [ingestId]);
   useEffect(() => {
     if (changeRequested > 0) {
       setChanging(true);

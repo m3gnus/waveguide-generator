@@ -484,7 +484,9 @@ press at all when WG is confident.
   - **Headless solves.** `server/cli/solve.py` submits through the same runtime, so a
     headless solve of an unlinked ingestion is refused until its frame is confirmed,
     unless it was meshed along WG's confident automatic axis (a CLI import meshed as
-    modelled where WG is confident about another axis is refused; prepare it again).
+    modelled where WG is confident about another axis is refused, and the refusal says
+    to prepare it again in WG; Stage 6 owes the CLI the same automatic frame, so that
+    a first headless solve needs no second preparation).
     The frame is confirmed in WG's CAD Link panel or through the route below, for
     example `PUT /api/cadlink/solver-frame` with `{"ingestId": "wgi_…", "axis": "+z"}`.
 - **Routes.** `GET /api/cadlink/solver-frame?operationId=|ingestId=` answers every axis's

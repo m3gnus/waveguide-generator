@@ -1137,7 +1137,8 @@ def _prepare_sync(
             )
             _advance(ctx, operation_id, generation, setup_revision_id=standing)
             return _prepare_sync(
-                ctx, operation_id, generation, replace(request, setup_revision_id=standing)
+                ctx, operation_id, generation, replace(request, setup_revision_id=standing),
+                automatic_retry=automatic_retry,
             )
 
     # The automatic frame suggestion (M1e), inside this explicit command and

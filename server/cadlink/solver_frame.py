@@ -643,10 +643,18 @@ def record_frame_refusal(store: CadLinkStore, record: Mapping[str, Any]) -> str 
     requirement = dict(frame["requirement"])
     confirmed = _confirmed_axis(store, key, requirement)
     allowed = _record_allowed(frame)
-    if confirmed is None and record_automatic_axis(store, record) == frame["axis"]:
+    automatic = record_automatic_axis(store, record) if confirmed is None else None
+    if confirmed is None and automatic == frame["axis"]:
         # WG is confident which way it faces and this is the frame it was
         # meshed in: solved along it, and never recorded as a confirmation.
         return None
+    if confirmed is None and automatic is not None:
+        # Meshed as modelled, but WG is confident of another axis: the next
+        # preparation meshes along it (headless preparation owes the same).
+        return (
+            f"This model was prepared along {frame['axis']}, but WG would solve it "
+            f"along {automatic}. Prepare it again in WG."
+        )
     if confirmed is None:
         return (
             "Confirm this model's solver frame in WG first: choose the axis it "

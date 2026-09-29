@@ -14,7 +14,7 @@ from typing import Any
 
 import pytest
 
-from server.cadlink import preparation
+from server.cadlink import preparation, solver_frame
 from server.cadlink.frame_infer import ALGORITHM_VERSION
 from server.cadlink.solver_frame import (
     confirm_frame,
@@ -201,7 +201,9 @@ def test_the_jobs_gate_accepts_only_the_frame_the_record_was_meshed_in(real, mon
 
     # A record meshed as modelled while WG is confident about +x is not solved.
     modelled = _record_meshed_in(harness, record, "+z")
-    assert record_frame_refusal(harness.store, modelled) is not None
+    refusal = record_frame_refusal(harness.store, modelled)
+    assert refusal is not None
+    assert "Prepare it again in WG" in refusal and "+x" in refusal
 
 
 def _record_meshed_in(harness, record: dict[str, Any], axis: str) -> dict[str, Any]:
@@ -219,6 +221,8 @@ def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(rea
     _verdict(monkeypatch, status="automatic", axis="+x")
     # The record side keeps naming an axis nothing is ever meshed in.
     monkeypatch.setattr(preparation, "record_automatic_axis", lambda store, record: "-y")
+    # The gate reads the same record side, so it refuses the +x mesh too.
+    monkeypatch.setattr(solver_frame, "record_automatic_axis", lambda store, record: "-y")
     stages: list[str] = []
     real_advance = preparation._advance
 
@@ -239,10 +243,13 @@ def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(rea
     step = b"STEP authored"
     _received(harness, "authored", _authored(step), step)
 
-    _prepare(harness)
+    summary = _prepare(harness)
 
     assert passes == [False, True]
     assert len(mesher.calls) <= 2
+    # The bound ends at the frame gate, never at an accepted solve.
+    assert _waiting_for_frame(summary), summary
+    assert harness.submitted == []
     # A stage only moves forward: validating is entered once.
     assert stages.count("validating") == 1
 
