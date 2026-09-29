@@ -1094,7 +1094,10 @@ def _quick_timeouts(monkeypatch: pytest.MonkeyPatch) -> None:
     it would run into the suite's own faulthandler.
     """
 
-    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 30.0)
+    # Not 30 s: the macOS runner takes about 35 s before a freshly written stub
+    # answers its first /health. Green runs used to hide that behind the 120 s
+    # blocking request, which outlived the wait's deadline.
+    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 120.0)
     monkeypatch.setattr(gate, "CAPABILITY_TIMEOUT_S", 30.0)
     monkeypatch.setattr(gate, "SOLVE_TIMEOUT_S", 30.0)
     monkeypatch.setattr(gate, "PROVISION_TIMEOUT_S", 30.0)
@@ -2605,7 +2608,7 @@ def test_a_slow_health_answer_inside_the_wait_budget_is_not_fatal(
     if sys.platform == "win32":
         pytest.skip("the stub interpreter is a shebang script")
     monkeypatch.setattr(gate, "POLL_HTTP_TIMEOUT_S", 0.3)
-    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 8.0)
+    monkeypatch.setattr(gate, "STARTUP_TIMEOUT_S", 120.0)  # the macOS runner's ~35 s stub start
     payload = _stub_payload(tmp_path, ready_after_capability_polls=1, health_delay_s=1.0)
     output = tmp_path / "out"
 
