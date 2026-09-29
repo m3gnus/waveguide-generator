@@ -112,13 +112,9 @@ Same-mesh tolerance per level (twice the larger ceiling): L0 2.20e-01, L1 5.40e-
 ## Axial rows, per-source-axis-v2
 
 Measured 2026-09-29 by `python scripts/qualify_imported_same_mesh.py --axial-only`
-at `waveguide-generator` `75e49224` on Darwin arm64 (Python 3.13.1): Metal
-(`hornlab-metal-bem` 0.2.0, `source_axes` build) and BEAT CPU (`hornlab-beat-bem`
-`74da18c`, the pinned build, on its CPU path). **Provisional Metal figures:** the `source_axes` build's
-`solve_multi_source` rejects a config whose axes cover more than one tag, so this run
-used that build with its frame-resolution `replace` given `source_axes=None`; the
-Metal rows are to be re-measured on the module's fixed build before this is final.
-**BEMPP is not in these rows.** This
+at `waveguide-generator` `325cb637` on Darwin arm64 (Python 3.13.1): Metal
+(`hornlab-metal-bem` 0.2.0, `source_axes` build `cb43478`) and BEAT CPU (`hornlab-beat-bem`
+`74da18c`, the pinned build, on its CPU path). **BEMPP is not in these rows.** This
 Mac has no OpenCL CPU device, the harness admits BEMPP only on OpenCL, and WG's
 imported BEMPP path refuses numba, so the BEMPP axial rows are **owed on an OpenCL
 host**; `hornlab-bempp-bem` covers its own `source_axes` contract in its tests.
