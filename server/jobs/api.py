@@ -568,7 +568,14 @@ def create_jobs_router(
         "/api/jobs/{job_id}/retry",
         response_model=SolveAccepted,
         responses={
-            409: {"model": ErrorEnvelope, "description": "An update restart is pending"},
+            409: {
+                "model": ErrorEnvelope,
+                "description": (
+                    "An update restart is pending (error envelope), or the job "
+                    "has no solve request to replay (`detail`), for example one "
+                    "still being prepared"
+                ),
+            },
         },
     )
     async def retry_job(job_id: str) -> SolveAccepted | JSONResponse:
@@ -580,7 +587,8 @@ def create_jobs_router(
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail="Job not found") from exc
         except JobConflictError as exc:
-            # A job with no solve request to replay: one still being prepared.
+            # A job with no solve request to replay (one still being prepared, or a
+            # run with no stored design): the message says which.
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except RemovedSolverError as exc:
             return _error_response(

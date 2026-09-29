@@ -800,6 +800,31 @@ yet**; a later change does, and the CAD operation rows still own every solve tod
   The plan for the preparation lane refines this (a job whose preparation had not
   started is prepared again); that change replaces the rule.
 
+Stage 4's acceptance line "a downgrade is refused clearly" does not apply to the
+schema-only change (`user_version` is not raised), and the rebuild's guards are: it
+refuses to run with foreign keys enforced, compares the row count of every child table
+before and after, replays the old table's own indexes and triggers, and fails only on
+foreign-key violations it added, so a pre-existing orphan never blocks startup.
+
+### What the preparation-lane change must decide
+
+- **Old releases and a `preparing` row.** Measured against v0.3.2 and v0.3.3-rc.1 with
+  one `preparing` row on disk: the jobs list and status routes return HTTP 500 (the
+  status is not a valid value for them), startup recovery never settles the row, stop is
+  refused, and retry returns 500. So a change that writes `preparing` must either settle
+  every `preparing` row to a terminal state when an update is applied and at Quit, before
+  any rollback can happen (which conflicts with the update latch keeping a job in
+  `preparing`), or raise the jobs schema with a restorable snapshot. Either way it needs a
+  rollback test that puts a real `preparing` row in front of those releases.
+- **Stop against binding.** `stop()` on a `preparing` job is an unconditional
+  transition today; once a lane binds `preparing` to `queued` it must be a
+  compare-and-set against that.
+- **Creation event.** A `queued` event makes the client patch the status to `queued`;
+  choose an event type that keeps `preparing`.
+- **Return visibility.** `unreleased_cad_return_states` keys on the imported-geometry
+  metadata a `preparing` job lacks; the protection of its return must come from the
+  intent.
+
 ## Retention
 
 Cleanup never removes what a pending operation references. Retained snapshots and meshes

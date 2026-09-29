@@ -442,6 +442,51 @@ class JobStore:
         raising the version.
         """
 
+        # Dropping the parent with enforcement on would cascade-delete every
+        # child row, and both guards below would then pass. So the precondition
+        # is asserted here, inside the transaction, not trusted from the caller.
+        if conn.execute("PRAGMA foreign_keys").fetchone()[0]:
+            raise RuntimeError(
+                "Refusing to rebuild the jobs table with foreign keys enforced: "
+                "it would delete the results stored for every job. The database "
+                "was left unchanged."
+            )
+        tables = [
+            str(row["name"])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        ]
+        children = [
+            name
+            for name in tables
+            if name != "simulation_jobs"
+            and any(
+                str(ref["table"]) == "simulation_jobs"
+                for ref in conn.execute(f'PRAGMA foreign_key_list("{name}")').fetchall()
+            )
+        ]
+
+        def counts() -> dict[str, int]:
+            return {
+                name: int(conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0])
+                for name in children
+            }
+
+        def violations() -> set[tuple[Any, ...]]:
+            return {tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()}
+
+        child_counts_before = counts()
+        violations_before = violations()
+        # Indexes and triggers on the old table go with it; replay them as
+        # stored rather than by name, so none is lost.
+        dependents = [
+            str(row["sql"])
+            for row in conn.execute(
+                "SELECT sql FROM sqlite_master WHERE tbl_name = 'simulation_jobs' "
+                "AND type IN ('index', 'trigger') AND sql IS NOT NULL"
+            ).fetchall()
+        ]
         columns = [
             str(row["name"])
             for row in conn.execute("PRAGMA table_info(simulation_jobs)").fetchall()
@@ -471,13 +516,19 @@ class JobStore:
             )
         conn.execute("DROP TABLE simulation_jobs")
         conn.execute("ALTER TABLE simulation_jobs_rebuild RENAME TO simulation_jobs")
-        conn.execute("DROP INDEX IF EXISTS idx_simulation_jobs_status_created")
-        conn.execute("DROP INDEX IF EXISTS idx_simulation_jobs_created")
-        violations = conn.execute("PRAGMA foreign_key_check").fetchall()
-        if violations:
+        for statement in dependents:
+            conn.execute(statement)
+        if counts() != child_counts_before:
             raise RuntimeError(
-                "Rebuilding the jobs table broke a reference; the database was "
-                "left unchanged."
+                "Rebuilding the jobs table changed the rows of a table that "
+                "refers to it; the database was left unchanged."
+            )
+        added = violations() - violations_before
+        if added:
+            raise RuntimeError(
+                "Rebuilding the jobs table left "
+                f"{len(added)} reference(s) that did not exist before; the "
+                "database was left unchanged."
             )
 
     def _initialize_schema(self) -> None:
@@ -511,9 +562,6 @@ class JobStore:
             ).fetchone()
             if row is not None and "'preparing'" not in str(row["sql"]):
                 self._rebuild_simulation_jobs(conn)
-                for statement in _SCHEMA_STATEMENTS:
-                    if statement.lstrip().startswith("CREATE INDEX IF NOT EXISTS idx_simulation_jobs"):
-                        conn.execute(statement)
             self._backfill_job_identity(conn)
             conn.execute(f"PRAGMA user_version = {SUPPORTED_SCHEMA_VERSION}")
             # After the schema settles, so the row always describes the build

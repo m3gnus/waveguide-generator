@@ -12001,7 +12001,7 @@
                 }
               }
             },
-            "description": "An update restart is pending"
+            "description": "An update restart is pending (error envelope), or the job has no solve request to replay (`detail`), for example one still being prepared"
           },
           "422": {
             "content": {

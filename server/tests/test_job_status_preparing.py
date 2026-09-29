@@ -212,6 +212,63 @@ def test_a_failed_rebuild_leaves_the_old_table_and_every_row(
     assert "'preparing'" not in _table_sql(db_path)
 
 
+def test_a_rebuild_with_foreign_keys_enforced_is_refused_and_loses_no_child_row(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "db" / "simulations.db"
+    _old_shaped_database(db_path)
+    _fill_old_database(db_path)
+    before = _snapshot(db_path)
+    # The pre-check and the in-transaction check disagreeing is what leaves
+    # enforcement on while the table is dropped.
+    monkeypatch.setattr(JobStore, "_status_check_is_stale", lambda self: False)
+    store = _store(tmp_path)
+    with pytest.raises(RuntimeError, match="foreign keys enforced"):
+        store.initialize()
+    store.close()
+    assert _snapshot(db_path) == before
+    assert "'preparing'" not in _table_sql(db_path)
+
+
+def test_a_pre_existing_orphan_does_not_block_the_upgrade(tmp_path: Path) -> None:
+    db_path = tmp_path / "db" / "simulations.db"
+    _old_shaped_database(db_path)
+    _fill_old_database(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute("INSERT INTO simulation_artifacts (job_id, msh_text) VALUES ('ghost', 'x')")
+        conn.commit()
+    before = _snapshot(db_path)
+    store = _store(tmp_path)
+    store.initialize()
+    store.close()
+    assert "'preparing'" in _table_sql(db_path)
+    assert _snapshot(db_path) == before
+
+
+def test_the_rebuild_replays_every_index_and_trigger_the_old_table_had(tmp_path: Path) -> None:
+    db_path = tmp_path / "db" / "simulations.db"
+    _old_shaped_database(db_path)
+    with closing(sqlite3.connect(db_path)) as conn:
+        conn.execute("CREATE INDEX odd_name ON simulation_jobs(label)")
+        conn.execute(
+            "CREATE TRIGGER odd_trigger AFTER UPDATE ON simulation_jobs BEGIN SELECT 1; END"
+        )
+        conn.commit()
+    store = _store(tmp_path)
+    store.initialize()
+    store.close()
+    with closing(sqlite3.connect(db_path)) as conn:
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE tbl_name = 'simulation_jobs' "
+                "AND type IN ('index', 'trigger')"
+            )
+        }
+    assert {"odd_name", "odd_trigger", "idx_simulation_jobs_created"} <= names
+
+
 def test_the_upgrade_does_not_raise_the_schema_version(tmp_path: Path) -> None:
     """A release a rollback returns to still opens the file (contract section 6.1)."""
 
