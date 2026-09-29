@@ -86,7 +86,14 @@ Run a subset with the launcher, not with a hand-built `pytest` line:
 `scripts/run_tests.py` expands its globs itself and **refuses to run** when no target
 is given or any target resolves to no test files. Bare `pytest` with an empty file list
 runs the whole default suite, which is how a targeted run once became a 20-minute one.
-Options (`-q`, `-x`, `-k expr`, `-p name`) pass through to pytest.
+Known flags (`-q`, `-x`, `--co`, `--lf`, `--ff`) pass through to pytest. Known value
+options accept separate or attached values (`-k expr`, `-kEXPR`, `-p name`,
+`--ignore path`, `--ignore=path`); a missing, empty or dash-prefixed value is refused.
+Other long options must use `--opt=value`. Unknown bare options are refused because
+the launcher cannot safely distinguish their values from targets; bare `--flag`
+options must be in its known flags set. Use `--` to end launcher option parsing if
+needed. Pytest always receives `--` before the resolved paths, so it cannot consume
+a target as an option value. All launcher refusals exit with code 2.
 
 The server suite does not need `frontend/dist` as a whole: only the tests that build the
 real app (which serves the built SPA) do. Those fail with the build instruction

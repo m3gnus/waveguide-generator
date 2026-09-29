@@ -10,10 +10,14 @@ resolved target list is empty or any single argument resolves to nothing.
     python scripts/run_tests.py server/tests/test_design_*.py
     python scripts/run_tests.py server/tests/test_x.py::test_one -q -x
 
-Arguments that start with ``-`` (and the value after -p/-k/-m/-c/-o/-W) are passed
-to pytest unchanged. Every other
-argument is a target: a file, a directory, a glob, or a ``path::node`` id.
-Relative targets resolve against the repository root.
+Known pytest value options accept a separate value or an attached value
+(``--ignore=path``, ``-kEXPR``). Values must be nonempty and must not start with
+``-``. Known flags (such as ``-q``, ``--co``, ``--lf`` and ``--ff``) pass through.
+Other long options must use ``--opt=value``; unknown bare options are refused
+because their arity is ambiguous. Every other argument is a target: a file, a
+directory, a glob, or a ``path::node`` id. Relative targets resolve against the
+repository root. An optional ``--`` ends option parsing; the emitted pytest
+command always puts ``--`` before the resolved targets. Refusals exit with 2.
 """
 
 from __future__ import annotations
@@ -27,7 +31,30 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 #: pytest options whose next argument is their value, not a target.
-_VALUE_OPTIONS = frozenset({"-p", "-k", "-m", "-c", "-o", "-W", "--rootdir", "--maxfail"})
+_VALUE_OPTIONS = frozenset({
+    "-p", "-k", "-m", "-c", "-o", "-W", "-n", "-r",
+    "--ignore", "--ignore-glob", "--deselect", "--confcutdir", "--rootdir",
+    "--basetemp", "--maxfail", "--durations", "--junitxml", "--junit-xml",
+    "--log-file", "--log-level", "--tb", "--timeout", "--dist", "--import-mode",
+    "--override-ini", "--capture", "--cov", "--cov-report",
+})
+_SHORT_VALUE_OPTIONS = frozenset(opt for opt in _VALUE_OPTIONS if len(opt) == 2)
+_FLAGS = frozenset({
+    "-q", "-v", "-vv", "-x", "-s", "-l", "--lf", "--ff", "--sw", "--pdb",
+    "--no-header", "--co", "--collect-only", "--disable-warnings",
+})
+
+
+def refuse(reason: str) -> None:
+    """Explain why invoking pytest would be unsafe and exit with usage status."""
+
+    print(f"run_tests: {reason}", file=sys.stderr)
+    raise SystemExit(2)
+
+
+def check_value(option: str, value: str) -> None:
+    if not value or value.startswith("-"):
+        refuse(f"{option} requires a nonempty value that does not start with '-'.")
 
 
 def resolve_target(arg: str) -> list[str]:
@@ -58,26 +85,41 @@ def build_command(argv: list[str]) -> list[str]:
     targets: list[str] = []
     args = iter(argv)
     for arg in args:
+        if arg == "--":
+            targets.extend(args)
+            break
         if arg in _VALUE_OPTIONS:
-            options.extend([arg, next(args, "")])
-        elif arg.startswith("-") and arg != "-":
+            value = next(args, "")
+            check_value(arg, value)
+            options.extend([arg, value])
+        elif arg in _FLAGS:
             options.append(arg)
+        elif arg.startswith("--") and "=" in arg:
+            option, _, value = arg.partition("=")
+            check_value(option, value)
+            options.append(arg)
+        elif arg[:2] in _SHORT_VALUE_OPTIONS and len(arg) > 2:
+            check_value(arg[:2], arg[2:])
+            options.append(arg)
+        elif arg.startswith("-") and arg != "-":
+            refuse(
+                f"unknown option {arg!r}. Use --opt=value for other long options; "
+                "bare --flag options must be in the known flags set."
+            )
         else:
             targets.append(arg)
     if not targets:
-        raise SystemExit(
-            "run_tests: no test targets given. Refusing to run, because pytest with "
+        refuse(
+            "no test targets given. Refusing to run, because pytest with "
             "no paths runs the whole default suite. Name files, directories or globs."
         )
     paths: list[str] = []
     for target in targets:
         matched = resolve_target(target)
         if not matched:
-            raise SystemExit(
-                f"run_tests: {target!r} resolves to no test files. Refusing to run."
-            )
+            refuse(f"{target!r} resolves to no test files. Refusing to run.")
         paths.extend(matched)
-    return [sys.executable, "-m", "pytest", *options, *paths]
+    return [sys.executable, "-m", "pytest", *options, "--", *paths]
 
 
 def main(argv: list[str] | None = None) -> int:
