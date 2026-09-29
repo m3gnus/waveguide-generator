@@ -1921,6 +1921,11 @@ def solve_imported_metal_from_msh_text(
         # Explicit per-source axes, never the observation-frame axis: a module
         # without them must refuse, not fall back to the legacy sign vote.
         kwargs["source_axes"] = {tag: found.axis for tag, found in source_axes.items()}
+        # The module validates every axis key against the config's declared
+        # velocity sources (default: the one tag 2), so declare every driven tag.
+        kwargs["velocity_sources"] = {
+            tag: 1.0 for spec in source_specs for tag in spec
+        }
     config = _native_config_or_unavailable(kwargs)
 
     path: Path | None = None

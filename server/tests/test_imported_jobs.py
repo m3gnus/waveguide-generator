@@ -4432,3 +4432,79 @@ def test_retry_refuses_a_run_whose_axial_sources_were_solved_under_the_frame_axi
             await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.skipif(
+    not _metal_config_has_source_axes(),
+    reason="installed hornlab-metal-bem lacks SolveConfig.source_axes",
+)
+@pytest.mark.parametrize(
+    "motions",
+    [("axial", "axial"), ("normal", "axial"), ("axial", "normal")],
+    ids=["all-axial", "mixed", "mixed-reversed"],
+)
+def test_real_metal_config_takes_axial_sources_whatever_the_mix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, motions: tuple[str, str]
+) -> None:
+    """The module's own SolveConfig validates the axes against declared tags."""
+
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+
+    def solve_multi(_mesh: str, sources: list[dict[int, complex]], config: Any, frequencies_hz: Any = None):
+        captured["config"] = config
+        return [_native_result() for _ in sources]
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
+    request = _request("wgi_" + "0" * 26)
+    request.options.frequencies_hz = [100.0, 200.0]
+    for channel, motion in zip(request.geometry.drive_channels, motions, strict=True):
+        channel.motion = motion
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text(AXIAL_MSH, encoding="utf-8")
+    record = _record(mesh_path)
+    record["anchor"] = {"instance_id": None, "design_id": None, "throat_frame": None}
+    record["normalisation"] = {"assembly_frame_is_solver_frame": True}
+
+    metal.solve_imported_metal_from_msh_text(AXIAL_MSH, request, record)
+
+    config = captured["config"]
+    axial_tags = {101, 102, 103} if motions == ("axial", "axial") else (
+        {103} if motions[1] == "axial" else {101, 102}
+    )
+    assert set(config.source_axes) == axial_tags
+    assert {101, 102, 103} <= set(config.velocity_sources)
+
+
+@pytest.mark.skipif(
+    not _metal_config_has_source_axes(),
+    reason="installed hornlab-metal-bem lacks SolveConfig.source_axes",
+)
+def test_real_metal_config_takes_a_single_axial_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+
+    def solve_multi(_mesh: str, sources: list[dict[int, complex]], config: Any, frequencies_hz: Any = None):
+        captured["config"] = config
+        return [_native_result() for _ in sources]
+
+    monkeypatch.setattr(metal, "native_solve_multi_source", solve_multi)
+    request = _request(
+        "wgi_" + "0" * 26,
+        drive_channels=[{"id": "tweeter", "source_ids": ["source-a"], "motion": "axial"}],
+        mesh={"rigid_size_mm": 8.0, "transition_mm": 20.0, "source_size_mm": {"source-a": 3.0}},
+    )
+    request.options.frequencies_hz = [100.0, 200.0]
+    mesh_path = tmp_path / "imported.msh"
+    mesh_path.write_text(AXIAL_MSH, encoding="utf-8")
+    record = _record(mesh_path)
+    record["anchor"] = {"instance_id": None, "design_id": None, "throat_frame": None}
+    record["normalisation"] = {"assembly_frame_is_solver_frame": True}
+    record["skipped_source_ids"] = ["source-b", "source-c"]
+
+    metal.solve_imported_metal_from_msh_text(AXIAL_MSH, request, record)
+
+    assert set(captured["config"].source_axes) == {101}
+    assert 101 in captured["config"].velocity_sources

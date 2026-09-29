@@ -85,6 +85,7 @@ from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.platform.shutdown_backstop import shutdown_wait_limit
 from server.mesh.imported import verify_artifact_reduced_orientation
 from server.solver.imported import (
+    AXIAL_CONTRACT_VERSION,
     ImportedMeshArtifactError,
     ImportedSymmetryUnsupportedError,
     imported_domain_planes,
@@ -480,7 +481,7 @@ def _solved_under_legacy_axial(results_text: str | None, axial_ids: Sequence[str
     for channel_id in axial_ids:
         channel = channels.get(channel_id)
         metadata = channel.get("metadata") if isinstance(channel, Mapping) else None
-        if not isinstance(metadata, Mapping) or metadata.get("axial_contract") != "per-source-axis-v2":
+        if not isinstance(metadata, Mapping) or metadata.get("axial_contract") != AXIAL_CONTRACT_VERSION:
             return True
     return False
 
