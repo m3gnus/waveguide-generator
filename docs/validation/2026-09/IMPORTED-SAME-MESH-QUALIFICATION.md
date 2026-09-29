@@ -199,6 +199,44 @@ only. Solve it with Metal or BEMPP.*
 | tilted oscillating sphere, front - back | metal | analytic | complex, all points | 1.76e-02 | 2.70e-02 | pass |
 | tilted oscillating sphere | beat-cpu | refusal | refused by name | 0.00e+00 | 0.00e+00 | pass |
 
+### BEAT Metal
+
+Measured 2026-09-29 by the same command at `waveguide-generator` `805ef759` (the axial rows rebased onto
+`617d64a8`, where BEAT Metal joined the harness) with `hornlab-metal-bem` `cb43478` and the pinned
+`hornlab-beat-bem` `74da18c` on its Metal path: 61 rows, all pass. BEAT Metal runs the same Julia solver as
+BEAT CPU in Float32, so the two agree to 5.6e-05 to 7.2e-05 on every axial channel and domain, inside the
+harness's 2.0e-03 BEAT-Metal-against-CPU bound; against Metal it reads 2.30e-03 on `front - back`, and it
+refuses the tilted axis by name like BEAT CPU. The Metal and BEAT CPU rows of that run repeat the numbers
+above.
+
+| Fixture | Engine | Against | Quantity | Worst | Tolerance | Verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| oscillating sphere L0: axes | beat-metal | inferred axes | resolved axis vector | 0.00e+00 | 1.00e-09 | pass |
+| oscillating sphere L1: axes | beat-metal | inferred axes | resolved axis vector | 0.00e+00 | 1.00e-09 | pass |
+| oscillating sphere L2: axes | beat-metal | inferred axes | resolved axis vector | 0.00e+00 | 1.00e-09 | pass |
+| x0 oscillating sphere: axes | beat-metal | inferred axes | resolved axis vector | 0.00e+00 | 1.00e-09 | pass |
+| x0+y0 oscillating sphere: axes | beat-metal | inferred axes | resolved axis vector | 0.00e+00 | 1.00e-09 | pass |
+| oscillating sphere L0 (224 tri), front - back | beat-metal | analytic | complex, all points | 6.72e-02 | 1.10e-01 | pass |
+| oscillating sphere L1 (960 tri), front - back | beat-metal | analytic | complex, all points | 1.72e-02 | 2.70e-02 | pass |
+| oscillating sphere: front + back is not the dipole | beat-metal | analytic | complex, all points | 7.25e+00 | ≥ 1.00e-02 (least 1.26e+00) | pass |
+| oscillating sphere L2 (3968 tri), front - back | beat-metal | analytic | complex, all points | 4.36e-03 | 8.00e-03 | pass |
+| oscillating sphere: observed order, L0 to L2 | beat-metal | refinement | order in element size | 2.01e+00 | ≥ 1.00e+00 (least 2.01e+00) | pass |
+| same mesh: axial hemispheres, front | metal | beat-metal | complex per channel | 3.24e-03 | 5.00e-03 | pass |
+| same mesh: axial hemispheres, back | metal | beat-metal | complex per channel | 3.23e-03 | 5.00e-03 | pass |
+| same mesh: axial hemispheres, front - back | metal | beat-metal | complex channel difference | 2.30e-03 | 5.00e-03 | pass |
+| same mesh: axial hemispheres, front | beat-cpu | beat-metal | complex per channel | 5.63e-05 | 2.00e-03 | pass |
+| same mesh: axial hemispheres, back | beat-cpu | beat-metal | complex per channel | 5.68e-05 | 2.00e-03 | pass |
+| same mesh: axial hemispheres, front - back | beat-cpu | beat-metal | complex channel difference | 6.86e-05 | 2.00e-03 | pass |
+| x0 oscillating sphere, front - back | beat-metal | analytic | complex, all points | 1.72e-02 | 2.70e-02 | pass |
+| x0 oscillating sphere, front - back | beat-metal | whole | complex, all points | 6.19e-05 | 1.00e-03 | pass |
+| same mesh: x0 axial hemispheres, front - back | metal | beat-metal | complex channel difference | 2.31e-03 | 5.00e-03 | pass |
+| same mesh: x0 axial hemispheres, front - back | beat-cpu | beat-metal | complex channel difference | 7.06e-05 | 2.00e-03 | pass |
+| x0+y0 oscillating sphere, front - back | beat-metal | analytic | complex, all points | 1.72e-02 | 2.70e-02 | pass |
+| x0+y0 oscillating sphere, front - back | beat-metal | whole | complex, all points | 4.05e-05 | 1.00e-03 | pass |
+| same mesh: x0+y0 axial hemispheres, front - back | metal | beat-metal | complex channel difference | 2.31e-03 | 5.00e-03 | pass |
+| same mesh: x0+y0 axial hemispheres, front - back | beat-cpu | beat-metal | complex channel difference | 7.18e-05 | 2.00e-03 | pass |
+| tilted oscillating sphere | beat-metal | refusal | refused by name | 0.00e+00 | 0.00e+00 | pass |
+
 ## Results
 
 | Fixture | Engine | Against | Quantity | Worst | Tolerance | Verdict |
