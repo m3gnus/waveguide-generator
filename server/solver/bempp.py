@@ -904,11 +904,13 @@ def solve_bempp_from_msh_text(
             BemppUnavailable,
             "hornlab-bempp-bem",
             msh_text=msh_text,
+            aperture_tag=aperture_tag,
         ),
         "frame_override": native_observation_frame(
             context,
             msh_text,
             ObservationFrame,
+            aperture_tag=aperture_tag,
         ),
         "progress_callback": progress,
         "mesh_scale": 1.0,

@@ -10,6 +10,7 @@ import pytest
 from server.design.schema import DesignConfig
 from server.solver.context import SolverContext
 from server.solver import bempp, metal
+from server.solver.result_mapping import _gmsh22_observation_frame_parts
 
 
 def _context(
@@ -396,6 +397,45 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
     assert ib_response["_field_trace_unavailable_reason"] == (
         "unsupported_coupled_infinite_baffle"
     )
+
+
+def test_bempp_infinite_baffle_uses_aperture_centroid_for_observation_frame(monkeypatch) -> None:
+    msh_text = _cabinet_msh(aperture=True)
+    aperture_frame = _gmsh22_observation_frame_parts(
+        msh_text, symmetry_plane=None, aperture_tag=12
+    )
+    extent_frame = _gmsh22_observation_frame_parts(msh_text, symmetry_plane=None)
+    assert aperture_frame.mouth_center.tolist() == pytest.approx([0.04, 0.04, 0.05])
+    assert not np.allclose(extent_frame.mouth_center, aperture_frame.mouth_center)
+
+    captured = {}
+    monkeypatch.setattr(
+        bempp,
+        "SolveConfig",
+        lambda **kwargs: captured.update(kwargs) or _Config(**kwargs),
+    )
+    monkeypatch.setattr(bempp, "bempp_solve", lambda _path, _config: _result())
+    monkeypatch.setattr(bempp, "ObservationFrame", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: {
+            "available": True,
+            "reason": "mock CPU",
+            "assembly_backend": "numba",
+            "coupled_infinite_baffle": True,
+        },
+    )
+
+    bempp.solve_bempp_from_msh_text(
+        msh_text, _context(sim_type=1), mesh_metadata={"apertureTag": 12}
+    )
+
+    # The yz symmetry plane projects the aperture centroid onto x = 0.
+    expected_center = [0.0, 0.04, 0.05]
+    assert captured["frame_override"].origin.tolist() == pytest.approx(expected_center)
+    assert captured["frame_override"].mouth_center.tolist() == pytest.approx(expected_center)
 
 
 def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:

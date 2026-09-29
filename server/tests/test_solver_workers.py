@@ -180,7 +180,7 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
         "observation_config",
         lambda *_args, **_kwargs: SimpleNamespace(distance_m=2.0, origin="mouth"),
     )
-    monkeypatch.setattr(bempp, "native_observation_frame", lambda *_args: None)
+    monkeypatch.setattr(bempp, "native_observation_frame", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(bempp, "native_symmetry_plane", lambda _context: None)
     monkeypatch.setattr(
         bempp,
