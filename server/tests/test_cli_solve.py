@@ -549,3 +549,49 @@ Engine = dryrun
 
     assert exit_code == 0
     assert summary["engine"] == "metal"
+
+
+def test_solve_reused_client_request_id_is_a_refusal_not_a_traceback(
+    tmp_path: Path, capsys
+) -> None:
+    """A key already used for a different request (or solver configuration)."""
+
+    data_dir = tmp_path / "data"
+
+    def write(name: str, frequency: float) -> Path:
+        path = tmp_path / name
+        path.write_text(
+            json.dumps(
+                {
+                    "design": parse(VALID_MWG).semantic_data(),
+                    "options": {"engine": "bempp", "frequencies_hz": [frequency]},
+                    "client_request_id": "reused-key",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    first = main(
+        ["solve", "--request", str(write("a.json", 500.0)), "--data-dir", str(data_dir),
+         "--output", str(tmp_path / "out-a")],
+        engine_registry=_registry(engines=("bempp",)),
+    )
+    capsys.readouterr()
+    assert first == 0
+
+    second = main(
+        ["solve", "--request", str(write("b.json", 800.0)), "--data-dir", str(data_dir),
+         "--json-events"],
+        engine_registry=_registry(engines=("bempp",)),
+    )
+    captured = capsys.readouterr()
+    outcome = json.loads(captured.out.strip().splitlines()[-1])
+
+    assert second == 1
+    assert "Traceback" not in captured.err
+    assert "Solve refused" in captured.err and "new clientRequestId" in captured.err
+    assert outcome["status"] == "refused"
+    assert outcome["error"]["code"] == "submission_conflict"
+    assert outcome["error"]["stage"] == "submission"
+    assert outcome["client_request_id"] == "reused-key"

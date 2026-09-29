@@ -140,7 +140,7 @@ describe('solver-backend parameter gating', () => {
     expect(option?.disabled).toBe(true);
     const reason = warningsFor('simulation.sim_type').join(' ');
     expect(reason).toContain('BEAT cannot solve coupled infinite-baffle simulation');
-    expect(reason).toMatch(/Switch the engine to AUTO, .*bempp/i);
+    expect(reason).toMatch(/Switch the engine to AUTO, BEMPP/);
     expect(reason).not.toMatch(/No engine on this host/);
   });
 
@@ -173,8 +173,8 @@ describe('solver-backend parameter gating', () => {
       .find((item) => item.textContent === 'Infinite baffle');
     expect(option?.disabled).toBe(true);
     const reason = warningsFor('simulation.sim_type').join(' ');
-    expect(reason).toContain('METAL is not available on this host');
-    expect(reason).toMatch(/Switch the engine to AUTO, bempp/i);
+    expect(reason).toContain('Metal is not available on this host');
+    expect(reason).toMatch(/Switch the engine to AUTO, BEMPP/);
     expect(reason).not.toContain('cannot solve');
   });
 

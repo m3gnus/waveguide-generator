@@ -32,7 +32,7 @@ from server.jobs.runtime import (
     UnknownEngineError,
 )
 from server.cadlink.store import CadLinkStore
-from server.jobs.store import JobStore
+from server.jobs.store import JobStore, SubmissionConflictError
 from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import (
     register_signal_rearm,
@@ -504,6 +504,22 @@ async def solve_path(
                     error_stage="submission",
                     error_message=str(exc),
                     error_details=exc.details,
+                )
+            return 1
+        except SubmissionConflictError as exc:
+            message = (
+                f"{exc}. The stored job was made by a different request or "
+                "solver configuration; choose a new clientRequestId to solve again."
+            )
+            print(f"Solve refused: {message}", file=stderr)
+            if ndjson:
+                write_outcome(
+                    stdout,
+                    status="refused",
+                    client_request_id=request.client_request_id,
+                    error_code="submission_conflict",
+                    error_stage="submission",
+                    error_message=message,
                 )
             return 1
         except (SymmetryValidationError, UnknownEngineError, ValueError) as exc:

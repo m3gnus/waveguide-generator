@@ -239,6 +239,21 @@ export function hostLimitation(
   return `No engine on this host supports ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }
 
+/** The name to show for an engine wire identifier. */
+export function engineDisplayName(name: string): string {
+  switch (name.toLowerCase()) {
+    case 'metal': return 'Metal';
+    case 'bempp': return 'BEMPP';
+    case 'beat': return 'BEAT';
+    case 'beat-metal': return 'BEAT Metal';
+    case 'beat-cuda': return 'BEAT CUDA';
+    case 'beat-rocm': return 'BEAT ROCm';
+    case 'beat-cpu': return 'BEAT CPU';
+    case 'dryrun': return 'Dry run';
+    default: return name;
+  }
+}
+
 /**
  * Why the *current selection* cannot run `feature` although the host could,
  * naming the engine picked and what to switch to. Undefined when the selection
@@ -257,15 +272,15 @@ export function selectionLimitation(
   if (capable.length === 0) return undefined;
   const selected = typeof backend === 'string' || backend === null
     ? (backend ?? '')
-    : (backend.label ?? backend.name);
+    : backend.name;
   const own = engines.find((item) => item.name.toLowerCase() === backendName(backend));
   const others = capable.filter((item) => item !== own);
-  const names = others.map((item) => item.label ?? item.name);
+  const names = others.map((item) => engineDisplayName(item.name));
   const switchTo = ['AUTO', ...names].join(', ');
   // An engine that can run it in principle but is not installed or enabled here
   // is unavailable, not incapable; the remedy is the same but the reason is not.
   const problem = own && capabilitySupports(own, feature) && !own.available
-    ? `${selected.toUpperCase()} is not available on this host`
-    : `${selected.toUpperCase()} cannot solve ${FEATURE_LABELS[feature]}`;
+    ? `${engineDisplayName(selected)} is not available on this host`
+    : `${engineDisplayName(selected)} cannot solve ${FEATURE_LABELS[feature]}`;
   return `${problem}. Switch the engine to ${switchTo}.`;
 }

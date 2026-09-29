@@ -8,6 +8,7 @@ import {
   activeBackendCapability,
   backendLimitation,
   choosableForImportedGeometry,
+  engineDisplayName,
   plannedBackendCapabilities,
 } from './backendSupport';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
@@ -33,19 +34,6 @@ import { runDisplayName } from '../prefs/preferences';
 import type { WorkspaceMode } from '../stores/workspaceMode';
 
 const ACCURATE_HELP = 'Real-k Burton–Miller. Avoids artificial wavenumber damping; accuracy still depends on mesh, integration and physical assumptions.';
-
-function engineDisplayName(name: string): string {
-  switch (name.toLowerCase()) {
-    case 'metal': return 'Metal';
-    case 'bempp': return 'BEMPP';
-    case 'beat-metal': return 'BEAT Metal';
-    case 'beat-cuda': return 'BEAT CUDA';
-    case 'beat-rocm': return 'BEAT ROCm';
-    case 'beat-cpu': return 'BEAT CPU';
-    case 'dryrun': return 'Dry run';
-    default: return name;
-  }
-}
 
 function fastEngineForParametric(
   requested: string,

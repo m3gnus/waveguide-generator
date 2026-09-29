@@ -1,6 +1,6 @@
 """A small real infinite-baffle solve through the WG job path, on live Metal.
 
-Skipped where the native Metal backend cannot run. It pins the application-path
+Opt-in (WG2_RUN_LIVE=1, -m live); skipped where the native Metal backend cannot run. It pins the application-path
 contract of real k: the formulation the native solver executed is the one the
 result records (metadata, execution summary, power-qualification provenance),
 and the answer is a sane forward-radiating half-space field.
@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import sys
 from pathlib import Path
 
@@ -23,6 +24,16 @@ import pytest
 from server.jobs.models import SolveRequest
 from server.jobs.runtime import JobRuntime
 from server.jobs.store import JobStore
+
+
+# Opt-in like test_engines_metal_live.py: nothing probes Metal at collection.
+_pytest_config = getattr(pytest.mark, "_config", None)
+if _pytest_config is not None:
+    _pytest_config.addinivalue_line("markers", "live: real native solver qualification")
+
+
+def _live_enabled() -> bool:
+    return os.environ.get("WG2_RUN_LIVE") == "1"
 
 
 def _metal_available() -> bool:
@@ -36,9 +47,19 @@ def _metal_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _metal_available(), reason="native Metal backend is not available on this host"
-)
+pytestmark = [
+    pytest.mark.live,
+    pytest.mark.skipif(
+        not _live_enabled(),
+        reason="set WG2_RUN_LIVE=1 and select -m live for native Metal qualification",
+    ),
+]
+
+
+@pytest.fixture(autouse=True)
+def _require_metal() -> None:
+    if not _metal_available():
+        pytest.skip("native Metal backend is not available on this host")
 
 
 def _request(sim_type: str) -> SolveRequest:
