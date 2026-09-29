@@ -191,7 +191,7 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
-trap 'exit 143' HUP INT TERM
+trap 'exit 1' HUP INT TERM
 
 printf 'Copying to %s ...\n' "$TARGET_DIR"
 if ! ditto "$SOURCE" "$STAGED"; then

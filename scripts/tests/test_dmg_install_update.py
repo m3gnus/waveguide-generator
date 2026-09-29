@@ -292,7 +292,7 @@ def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, instal
         if proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate()
-    assert proc.returncode not in (0, 3), output
+    assert proc.returncode == 1, output
     assert version_of(installed) == "old"
     assert leftovers(installed.parent) == []
 
