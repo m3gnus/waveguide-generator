@@ -48,7 +48,7 @@ Adopted verbatim in intent from the tessellation review (P0.1/P0.3/P1.3; full JS
 3. Hard boundaries (mouth rim, throat seam, chamfers, intended enclosure edges) are separate surfaces or duplicated position rows with independent normals — never inferred from dihedral angles client-side.
 4. The header carries `fidelity` metadata: requested and **achieved** `maxChordErrorMm`, `maxNormalStepDeg`, `minSilhouetteSegments`; the encoder must report when a vertex cap prevented the requested tolerance. `maxChordErrorMmAchieved` is nullable only when `chordMeasurementComplete=false`, in which case `unmeasuredChordIntervals` is a positive integer so an incomplete measurement can never be mistaken for zero error.
 5. Optional `curvatureMean`/`curvaturePrincipal` `f32[V]` sections (units + sign documented) for the curvature display mode — replacing v1's density-dependent neighbor-normal heuristic.
-6. Clients MUST size-check and replace/delete every geometry attribute when vertex counts change between frames (the spike's stale-normal bug is the canonical failure; see spike/RESULTS.md §5.1).
+6. Clients MUST size-check and replace/delete every geometry attribute when vertex counts change between frames; retaining a stale normal attribute after a vertex-count change corrupts shading.
 
 ## Validation rules (both languages, enforced, fuzz-tested)
 

@@ -21,7 +21,7 @@ from server.jobs.store import JobStore
 ROOT = Path(__file__).resolve().parents[2]
 PINS = ROOT / "pins.json"
 GENERATOR = ROOT / "scripts" / "gen_requirements.py"
-ORACLE = ROOT / "spike" / "oracle" / "v1-manifest.json"
+ORACLE = Path(__file__).resolve().parent / "fixtures" / "v1-oracle-manifest.json"
 
 
 @dataclass

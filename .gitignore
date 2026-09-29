@@ -60,8 +60,5 @@ test-results/
 *.sqlite3
 *.db
 
-# Disposable spike output; curated JSON/Markdown results remain tracked.
-spike/results/*.tmp
-
 # Written by the installer to record which commit this build is (shared/build_identity.py).
 /shared/build.json
