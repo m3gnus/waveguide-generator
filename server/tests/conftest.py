@@ -69,16 +69,36 @@ def _no_backstop_ends_the_test_process():
         )
 
 
-def pytest_sessionstart(session):
-    """Refuse one missing prerequisite instead of cascading app-mount failures."""
+_FRONTEND_INDEX = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
 
-    index = Path(__file__).resolve().parents[2] / "frontend" / "dist" / "index.html"
-    if not index.is_file():
-        raise pytest.UsageError(
-            "The server test suite requires the built frontend. From the repository "
-            "root, run:\n  npm --prefix frontend ci\n"
-            "  npm --prefix frontend run build\nThen rerun pytest."
-        )
+_FRONTEND_BUILD_MESSAGE = (
+    "This test mounts the real app, which serves the built frontend, and "
+    "frontend/dist is missing. From the repository root, run:\n"
+    "  npm --prefix frontend ci\n"
+    "  npm --prefix frontend run build\n"
+    "Then rerun pytest. Tests that do not mount the app do not need it."
+)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """Say what is missing when an app-mounting test lacks the built frontend.
+
+    Only tests that build the real app (``server.app.create_app`` mounts the
+    SPA) need ``frontend/dist``; the pure tests must not be refused for it. So
+    the requirement is checked where it bites: a failure whose cause is the
+    missing directory is reported as the build instruction, not as a
+    ``RuntimeError`` traceback that reads like a defect in the test.
+    """
+
+    outcome = yield
+    report = outcome.get_result()
+    if not report.failed or call.excinfo is None or _FRONTEND_INDEX.is_file():
+        return
+    error = call.excinfo.value
+    text = str(error)
+    if isinstance(error, RuntimeError) and "does not exist" in text and "dist" in text:
+        report.longrepr = _FRONTEND_BUILD_MESSAGE
 
 
 #: Where a launcher failure would be put on screen. Two modules, because

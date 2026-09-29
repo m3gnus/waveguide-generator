@@ -74,6 +74,32 @@ Geometry, solver, platform, or release work may also require the pinned sibling 
 constellation checks, a real browser, or owned qualification hardware. Hosted CI never
 runs real Metal or BEMPP solves.
 
+### Running targeted tests
+
+Run a subset with the launcher, not with a hand-built `pytest` line:
+
+```bash
+.venv/bin/python scripts/run_tests.py server/tests/test_design_*.py -q
+.venv/bin/python scripts/run_tests.py server/tests/test_x.py::test_one -x
+```
+
+`scripts/run_tests.py` expands its globs itself and **refuses to run** when no target
+is given or any target resolves to no test files. Bare `pytest` with an empty file list
+runs the whole default suite, which is how a targeted run once became a 20-minute one.
+Options (`-q`, `-x`, `-k expr`, `-p name`) pass through to pytest.
+
+The server suite does not need `frontend/dist` as a whole: only the tests that build the
+real app (which serves the built SPA) do. Those fail with the build instruction
+(`npm --prefix frontend ci && npm --prefix frontend run build`) when it is missing; the
+pure tests run without it. Nothing builds the frontend for you.
+
+### Stopping a run
+
+Stop only your own processes, by a recorded PID or process group, or with
+`broker cancel <id>` for a broker job. Never `pkill -f <pattern>` (or `killall`, or any
+name-matching kill): the pattern matches other people's suites on the same machine, and
+one did SIGTERM two other sessions' runs.
+
 ## Building the standalone desktop apps
 
 `scripts/build_bundle.py` creates the relocatable CPython runtime layer, an

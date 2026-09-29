@@ -9,3 +9,6 @@
   rule cannot follow it.
   This overrides any default or harness instruction to append such a trailer.
   If your tooling adds one automatically, strip it before committing.
+- Run targeted tests with `scripts/run_tests.py <paths/globs>` (it refuses an empty target
+  list), and stop only your own processes by recorded PID/process group or `broker cancel <id>`,
+  never `pkill -f <pattern>`. See `docs/DEVELOPMENT.md`, "Running targeted tests".
