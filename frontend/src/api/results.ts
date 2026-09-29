@@ -1,4 +1,5 @@
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
+import type { components } from './generated/openapi';
 export type NullableNumber = number | null;
 export type PolarSample = [number, NullableNumber | [number, number]];
 
@@ -43,29 +44,9 @@ export interface JobResults extends ResultData {
   result_contract_version: 1 | 2;
 }
 
-export interface RadiationImpedanceAperture {
-  name: string;
-  area_m2: number;
-  tag: number;
-}
+export type RadiationImpedanceAperture = components['schemas']['RadiationImpedanceAperture'];
 
-export interface RadiationImpedancePresentation {
-  schema_version: 1;
-  quantity: 'average_aperture_pressure_per_volume_velocity';
-  units: 'Pa*s/m^3';
-  phase_time_convention: 'engineering_exp_plus_jwt';
-  frequencies_hz: number[];
-  apertures: RadiationImpedanceAperture[];
-  engineering_matrix: {
-    real: number[][][];
-    imaginary: number[][][];
-  };
-  in_phase_termination: {
-    aperture_names: string[];
-    real: number[][];
-    imaginary: number[][];
-  };
-}
+export type RadiationImpedancePresentation = components['schemas']['RadiationImpedancePresentation'];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);

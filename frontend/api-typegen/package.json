@@ -1,0 +1,14 @@
+{
+  "name": "@wg/api-typegen",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "node gen-openapi-types.mjs --write",
+    "check": "node gen-openapi-types.mjs --check",
+    "test": "node --test gen-openapi-types.node-tests.mjs"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3"
+  }
+}

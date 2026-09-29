@@ -1,4 +1,5 @@
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
+import type { components } from './generated/openapi';
 import { compareSelection, provisionalResults, type ResultData } from './results';
 import type { CadDeliveryStatus, CadInboxRefusal, CadOperationSummary } from './cadOperations';
 
@@ -17,7 +18,7 @@ function shallowEqual(a: object, b: object): boolean {
 /** `preparing` is a CAD solve WG has accepted but not yet meshed and bound to a
  * request: it is active and stoppable, has no results, and cannot be retried
  * or reopened. Nothing creates one yet. */
-export type JobStatus = 'preparing' | 'queued' | 'running' | 'complete' | 'error' | 'cancelled';
+export type JobStatus = components['schemas']['JobItem']['status'];
 export const JOB_STATUSES: readonly JobStatus[] = ['preparing', 'queued', 'running', 'complete', 'error', 'cancelled'];
 /** A job that is still owed work: preparing, queued or running. */
 export function isActiveJobStatus(status: JobStatus): boolean {

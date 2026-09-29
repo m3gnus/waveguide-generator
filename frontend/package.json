@@ -12,7 +12,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "benchmark:echarts": "vite --host 127.0.0.1 --open /benchmarks/echarts-live.html",
-    "test": "vitest run"
+    "test": "npm run check:api-types && npm run test:api-types && vitest run",
+    "generate:api-types": "npm run generate --workspace @wg/api-typegen",
+    "check:api-types": "npm run check --workspace @wg/api-typegen",
+    "test:api-types": "npm test --workspace @wg/api-typegen"
   },
   "type": "module",
   "dependencies": {
@@ -38,5 +41,8 @@
     "typescript": "^7.0.2",
     "vite": "^8.2.0",
     "vitest": "^4.1.10"
-  }
+  },
+  "workspaces": [
+    "api-typegen"
+  ]
 }

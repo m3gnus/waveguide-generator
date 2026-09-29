@@ -11,8 +11,9 @@
  */
 
 import type { MaxOutputLimit } from './types';
+import type { components } from '../api/generated/openapi';
 
-export type FilterFamily = 'lr' | 'butterworth' | 'bessel' | 'linear_phase';
+export type FilterFamily = components['schemas']['FilterSpec']['family'];
 
 function isMaxOutputLimit(value: unknown): value is MaxOutputLimit {
   return value === 'xmax' || value === 'power' || value === 'voltage';
@@ -80,11 +81,7 @@ export interface CrossoverSpec {
   channels: Record<string, CrossoverChannel>;
 }
 
-export interface FilterSectionWire {
-  family: FilterFamily;
-  order: number;
-  fc_hz: number;
-}
+export type FilterSectionWire = components['schemas']['FilterSpec'];
 
 export interface CrossoverChannelWire {
   hp: FilterSectionWire | null;
