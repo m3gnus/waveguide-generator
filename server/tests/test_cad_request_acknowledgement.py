@@ -520,3 +520,66 @@ def test_a_command_id_that_names_no_safe_file_is_not_acknowledged_and_not_held(
     assert _delivery_files(data_dir) == []
     assert store.get_operation(long_id) is not None
     assert not _acks(data_dir).exists() or not list(_acks(data_dir).iterdir())
+
+
+def test_make_durable_checkpoints_the_log(data_dir, store, workspace) -> None:
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    _poll(data_dir, store)
+    store.make_durable()
+    # Nothing is left uncheckpointed.
+    with store._lock:
+        busy, log_frames, checkpointed = store._connect().execute(
+            "PRAGMA wal_checkpoint(PASSIVE)"
+        ).fetchone()
+    assert busy == 0 and checkpointed == log_frames
+
+
+def test_a_reader_pinning_the_log_stops_the_acknowledgement_and_the_claim_is_never_given_up(
+    data_dir, workspace, store, monkeypatch
+) -> None:
+    import sqlite3
+
+    bundle_path, manifest = _bundle(workspace)
+    _file(data_dir, "cmd-1", bundle_path, manifest)
+    monkeypatch.setattr(solve_command, "ACK_FAILURE_PASSES", 2)
+    monkeypatch.setattr("server.cadlink.store.DURABLE_BUSY_TIMEOUT_MS", 20)
+    store.initialize()
+    # Land the row, then keep its frames un-checkpointed while a reader pins the log.
+    reader = sqlite3.connect(str(store.db_path))
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM cad_operations").fetchone()
+    try:
+        # A write after the reader's snapshot: the checkpoint cannot finish.
+        for _ in range(4):
+            _poll(data_dir, store)
+            assert _ack(data_dir, "cmd-1") is None
+            assert len(_claims(data_dir)) == 1, "the claim was consumed without a durable operation"
+    finally:
+        reader.rollback()
+        reader.close()
+
+    _poll(data_dir, store)
+
+    assert _ack(data_dir, "cmd-1")["outcome"] == "accepted"
+    assert _claims(data_dir) == []
+
+
+def test_a_busy_checkpoint_result_raises(store, monkeypatch) -> None:
+    import sqlite3
+
+    store.initialize()
+    real = store._connect()
+
+    class Busy:
+        def execute(self, sql, *args):
+            if "wal_checkpoint" in sql:
+                class Result:
+                    def fetchone(self_inner):
+                        return (1, 5, 0)
+                return Result()
+            return real.execute(sql, *args)
+
+    monkeypatch.setattr(store, "_connect", lambda: Busy())
+    with pytest.raises(sqlite3.OperationalError, match="durable"):
+        store.make_durable()

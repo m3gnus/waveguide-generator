@@ -876,8 +876,8 @@ before it deletes the request. It changes nothing about what is accepted or refu
   so the add-in can match the file to the request it wrote; `digest` is WG-internal and
   opaque. A request that names no usable command id gets no file.
 - The refusals are: a request from an older add-in, a request WG identified but could not
-  accept (unknown kind, bad `returnId`, an id that is not a plain operation id), a
-  and a request whose snapshot is rejected at acceptance. A copy under an id WG already
+  accept (unknown kind, bad `returnId`, an id that is not a plain operation id), and
+  a request whose snapshot is rejected at acceptance. A copy under an id WG already
   holds as an operation (a different request, or an invalid one) never produces a refusal:
   the file for that id always describes the operation, written from its row, so a later
   copy cannot turn an accepted original into a refusal.
@@ -896,7 +896,9 @@ before it deletes the request. It changes nothing about what is accepted or refu
   whose acknowledgement cannot be written. A file that cannot be created or written
   (for example a plain file named `.wg-solve-acks`) keeps its claim for 30 passes and is
   reported once per pass with a warning; then WG gives it up with one error and consumes
-  the request, whose operation is durable. A file can also lag the request's disappearance
+  the request, whose operation was made durable first. If the operation cannot be made
+  durable (a reader holds the CAD store's log), the claim is kept for as long as that
+  lasts and is never given up. A file can also lag the request's disappearance
   by up to about 30 passes while its snapshot is retained. The add-in must not wait for
   ever: after about two minutes with its request gone and no file, it says that WG took the
   request but has not confirmed it, never "refused" and never "solving".

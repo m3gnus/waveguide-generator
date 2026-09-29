@@ -163,8 +163,9 @@ ACK_RETENTION_SECONDS = 24 * 3600
 ACK_MAX_FILES = 500
 # An acknowledgement that cannot be written keeps its claim for this many passes
 # (about half a minute at the loop's cadence). Then WG gives it up, once and
-# loudly, and consumes the request: the operation is durable either way, and a
-# producer that finds no acknowledgement says so rather than waiting.
+# loudly, and consumes the request: the operation was made durable first, and a
+# producer that finds no acknowledgement says so rather than waiting. A claim
+# whose operation could not be made durable is never given up.
 ACK_FAILURE_PASSES = 30
 # Pruning runs at most this often, from the delivery pass.
 ACK_PRUNE_INTERVAL_SECONDS = 60.0
@@ -979,13 +980,17 @@ def _sync_directory(directory: Path) -> None:
         os.close(descriptor)
 
 
-def _ack_written(claim_name: str, written: bool) -> bool:
+def _ack_written(claim_name: str, written: bool | None) -> bool:
     """Whether a claim may go on to be deleted after its acknowledgement was tried.
 
     A failed write keeps the claim for ``ACK_FAILURE_PASSES`` passes; then it is
     given up once, with an error, and the request is consumed without one.
+    ``None`` means the operation could not be made durable: the claim is kept,
+    however often, because consuming it would risk losing the request.
     """
 
+    if written is None:
+        return False
     if written:
         _ack_failures.pop(claim_name, None)
         return True
@@ -1176,8 +1181,9 @@ def _publish_acknowledgement(
     data_dir: Path,
     store: CadLinkStore,
     command: PendingSolveCommand,
-) -> bool:
+) -> bool | None:
     """Publish what became of a delivered request. False: not written yet.
+    None: the operation could not be made durable, so nothing may be consumed.
 
     The operation's own row is the acknowledgement, so a redelivery replays it,
     and a different request under an id the store holds -- a conflict -- speaks
@@ -1195,7 +1201,7 @@ def _publish_acknowledgement(
             "Could not make the acceptance of solve command %s durable.",
             command.command_id, exc_info=True,
         )
-        return False
+        return None
     # Only a rejected row is a refusal; received, processing and accepted rows
     # are operations WG holds.
     refused_outcome = row["state"] == REJECTED

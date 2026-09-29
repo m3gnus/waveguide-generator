@@ -15,7 +15,8 @@ from typing import Any
 
 from server.platform.paths import data_paths
 from server.platform.private_paths import ensure_private_directory
-from server.platform.sqlite import JournalModeStatus, configure_connection
+from server.platform.sqlite import _BUSY_TIMEOUT_MS, JournalModeStatus, configure_connection
+
 from server.workspace.archive import archive_folder_slug
 
 from .identity import (
@@ -55,6 +56,9 @@ from .operations import (
     validate_outcome,
 )
 from .solve_command import legacy_ledger_path
+
+# How long ``make_durable`` waits for a reader that pins the log.
+DURABLE_BUSY_TIMEOUT_MS = 250
 
 
 logger = logging.getLogger(__name__)
@@ -2725,7 +2729,22 @@ class CadLinkStore:
         if str(self.db_path) == ":memory:":
             return
         with self._lock:
-            self._connect().execute("PRAGMA wal_checkpoint(FULL)").fetchall()
+            conn = self._connect()
+            # A reader pinning the log makes the checkpoint report busy. Wait
+            # only briefly for it: the caller keeps its claim and tries on the
+            # next pass, and the store lock is not held for the full timeout.
+            conn.execute(f"PRAGMA busy_timeout = {DURABLE_BUSY_TIMEOUT_MS}")
+            try:
+                busy, log_frames, checkpointed = conn.execute(
+                    "PRAGMA wal_checkpoint(FULL)"
+                ).fetchone()
+            finally:
+                conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+        if busy or (log_frames >= 0 and checkpointed < log_frames):
+            raise sqlite3.OperationalError(
+                "the CAD store could not be made durable: a reader held the log "
+                f"(busy={busy}, log={log_frames}, checkpointed={checkpointed})"
+            )
 
     def _read_one(self, sql: str, parameters: tuple[object, ...]) -> dict[str, Any] | None:
         """Read without creating a registry merely because a file was opened."""
