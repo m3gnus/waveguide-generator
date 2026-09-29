@@ -54,11 +54,11 @@ describe('versioned job design snapshots', () => {
 describe('what a job says about its own design', () => {
   const RECOVERED = { version: 1, design: { formula: 'OSSE', r0: { value: 12.7, raw: '12.7' } } };
 
-  it('reports the server verdict for a recovered v1 job', () => {
+  it('reports the server verdict for a stored design', () => {
     const job = {
       script_snapshot: RECOVERED,
       design_availability: {
-        reopenable: true, source: 'v1-design-state', reason_code: 'recovered', reason: null, note: null,
+        reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null,
       },
     } as const;
     expect(jobDesignAvailability(job).reopenable).toBe(true);
@@ -85,7 +85,7 @@ describe('what a job says about its own design', () => {
     const job = {
       script_snapshot: { version: 1, design: { formula: 'NOT-A-FORMULA' } },
       design_availability: {
-        reopenable: true, source: 'v1-design-state', reason_code: 'recovered', reason: null, note: null,
+        reopenable: true, source: 'v2-snapshot', reason_code: 'ok', reason: null, note: null,
       },
     } as const;
     expect(hydrateJobDesign(job)).toBeNull();

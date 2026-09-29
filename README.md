@@ -330,28 +330,6 @@ The Fusion WGLink exchange folder is configured separately under **Settings →
 CAD Link**. Changing the output folder never moves or disconnects Fusion's
 `.wglink` and `.wgreturn` exchange.
 
-### Original-app run migration
-
-On launch, Waveguide Generator looks for the original application's v1 run
-database in the current checkout, which covers an in-place upgrade. When it
-finds one, it automatically merges its runs, results, mesh artifacts, and saved
-workspace into the current data directory before the server starts. The v1
-database is opened read-only, the current data is backed up first, existing
-current-version runs win on an ID collision, and content hashes are verified
-before startup continues. A completion marker makes later launches no-ops;
-additional v1 runs are picked up if the source database changes.
-
-For every side-by-side install, including a v1 checkout in a sibling folder,
-set `WG1_ROOT` to that checkout before launching. Automatic sibling discovery
-is deliberately disabled because a v2 database retains the same core schema
-and cannot be distinguished safely by inspection alone. The manual dry-run,
-reporting, and rollback interface remains available:
-
-```
-.venv/bin/python scripts/migrate_v1.py --v1-root "/path/to/v1 checkout" --dry-run
-.venv/bin/python scripts/migrate_v1.py --rollback "/path/to/migration backup"
-```
-
 ## Run the server directly (dev)
 
 ```

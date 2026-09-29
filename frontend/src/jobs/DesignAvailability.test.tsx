@@ -4,35 +4,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DesignAvailabilityNotice, RerunButton } from './DesignAvailability';
 import type { JobDesignFields } from './jobDesign';
 
-const RECOVERED: JobDesignFields = {
+const STORED: JobDesignFields = {
   script_snapshot: { version: 1, design: { formula: 'OSSE', L: 120, a: 45, a0: 10, r0: 12.7, k: 1 } },
   design_availability: {
     reopenable: true,
-    source: 'v1-design-state',
-    reason_code: 'recovered',
+    source: 'v2-snapshot',
+    reason_code: 'ok',
     reason: null,
     note: null,
   },
 };
 
-const FROM_PAYLOAD: JobDesignFields = {
-  ...RECOVERED,
-  design_availability: {
-    reopenable: true,
-    source: 'v1-mesher-payload',
-    reason_code: 'recovered',
-    reason: null,
-    note: 'Recovered from the mesher payload this job was solved with.',
-  },
-};
-
-const FREEFORM: JobDesignFields = {
-  script_snapshot: { params: { type: 'FREEFORM' } },
+const UNREADABLE: JobDesignFields = {
+  script_snapshot: { params: { type: 'OSSE' } },
   design_availability: {
     reopenable: false,
     source: 'none',
-    reason_code: 'freeform_legacy_design',
-    reason: "This job's FREEFORM design was stored in the v1 format. Re-enter its profiles to run it again.",
+    reason_code: 'unreadable_design',
+    reason: "This job's stored design is not in a format this version can read back. Re-enter its profiles to run it again.",
     note: null,
   },
 };
@@ -43,7 +32,7 @@ const NO_DESIGN: JobDesignFields = {
     reopenable: false,
     source: 'none',
     reason_code: 'no_stored_design',
-    reason: 'This job predates design snapshots in v1, and no design was stored with it.',
+    reason: 'No design was stored with this job.',
     note: null,
   },
 };
@@ -79,17 +68,17 @@ describe('the design verdict a job card shows', () => {
   const button = () => host.querySelector('button') as HTMLButtonElement;
   const notice = () => host.querySelector('[role="note"]');
 
-  it('runs a recovered v1 job exactly like a native one', () => {
+  it('runs a job with a stored design', () => {
     const onRerun = vi.fn();
-    render(<RerunButton job={RECOVERED} onRerun={onRerun}/>);
+    render(<RerunButton job={STORED} onRerun={onRerun}/>);
     expect(button().disabled).toBe(false);
     act(() => { button().click(); });
     expect(onRerun).toHaveBeenCalledTimes(1);
   });
 
   it.each([
-    ['a FREEFORM design v2 cannot translate', FREEFORM, 'FREEFORM'],
-    ['a job that never stored a design', NO_DESIGN, 'predates design snapshots'],
+    ['a design this version cannot read back', UNREADABLE, 'not in a format'],
+    ['a job that never stored a design', NO_DESIGN, 'No design was stored'],
   ])('refuses %s with the reason on the control itself', (_name, job, fragment) => {
     const onRerun = vi.fn();
     render(<RerunButton job={job} onRerun={onRerun}/>);
@@ -100,19 +89,13 @@ describe('the design verdict a job card shows', () => {
   });
 
   it('states the cause in the card, not only in a tooltip', () => {
-    render(<DesignAvailabilityNotice job={FREEFORM}/>);
+    render(<DesignAvailabilityNotice job={UNREADABLE}/>);
     expect(notice()?.textContent).toContain('Re-enter its profiles');
     expect(getComputedStyle(notice()!).fontSize).toBe('11px');
   });
 
-  it('says what a payload-recovered design is missing, without blocking it', () => {
-    render(<><RerunButton job={FROM_PAYLOAD} onRerun={() => {}}/><DesignAvailabilityNotice job={FROM_PAYLOAD}/></>);
-    expect(button().disabled).toBe(false);
-    expect(notice()?.textContent).toContain('mesher payload');
-  });
-
   it('stays quiet about a job with nothing to explain', () => {
-    render(<DesignAvailabilityNotice job={RECOVERED}/>);
+    render(<DesignAvailabilityNotice job={STORED}/>);
     expect(notice()).toBeNull();
   });
 

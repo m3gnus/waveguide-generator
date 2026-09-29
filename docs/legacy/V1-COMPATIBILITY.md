@@ -12,9 +12,9 @@ Status: maintained summary of deliberate compatibility and divergence. The origi
 - The editor covers the legacy design/solve input surface, including expression-capable
   values, FREEFORM point/station tables, polar controls, viewer preferences, results,
   exports, and job metadata.
-- Original run databases and artifacts are imported read-only through the versioned
-  migration tool. Recoverable snapshots remain reopenable, rerunnable, comparable, and
-  exportable; unrecoverable legacy jobs are identified rather than guessed.
+- Original run databases and artifacts are not imported: the v1 run migration was
+  removed. Design files (`.cfg`, `.txt`, `.mwg`) are the supported way to carry a
+  design across.
 - Result phase, impedance, directivity, missing-value, and partial-success conventions
   have explicit current contracts and regression fixtures.
 

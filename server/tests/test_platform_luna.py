@@ -311,7 +311,6 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     listener_closed = False
     lock_released = False
     lock_acquired = False
-    migration_checked = False
     console_shutdown_complete: threading.Event | None = None
 
     class FakeListener:
@@ -339,13 +338,6 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
         config_kwargs.update(kwargs)
         return real_config(*args, **kwargs)
 
-    def migrate_before_start(_root: Path, data_dir: Path, _lock: FakeLock) -> list[Any]:
-        nonlocal migration_checked
-        assert lock_acquired is True
-        assert data_dir == paths.root
-        migration_checked = True
-        return []
-
     def create_application(**kwargs: Any) -> object:
         app_kwargs.update(kwargs)
         return object()
@@ -370,13 +362,12 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     monkeypatch.setattr(serve, "setup_logging", lambda _paths: None)
     monkeypatch.setattr(serve, "flush_logs", lambda: None)
     monkeypatch.setattr(serve, "InstanceLock", lambda _path: FakeLock())
-    monkeypatch.setattr(serve, "auto_migrate_v1", migrate_before_start)
 
-    def reserve_after_migration(*_args: Any, **_kwargs: Any) -> tuple[FakeListener, int]:
-        assert migration_checked is True
+    def reserve_after_lock(*_args: Any, **_kwargs: Any) -> tuple[FakeListener, int]:
+        assert lock_acquired is True
         return listener, 3100
 
-    monkeypatch.setattr(serve, "reserve_port", reserve_after_migration)
+    monkeypatch.setattr(serve, "reserve_port", reserve_after_lock)
     monkeypatch.setattr(serve, "create_app", create_application)
     monkeypatch.setattr(serve.uvicorn, "Config", capture_config)
     monkeypatch.setattr(serve.uvicorn, "Server", FakeServer)
@@ -394,7 +385,6 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     assert app_kwargs["workspace_dir"] == default_runs_dir()
     assert listener_closed is True
     assert lock_released is True
-    assert migration_checked is True
     assert console_shutdown_complete is not None
     assert console_shutdown_complete.is_set()
 

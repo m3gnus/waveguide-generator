@@ -12,7 +12,6 @@ import os
 from pathlib import Path
 import signal
 import socket
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -62,7 +61,6 @@ from server.platform.signal_rearm import (  # noqa: E402
     unregister_signal_rearm,
 )
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES  # noqa: E402
-from scripts.migrate_v1 import MigrationError, auto_migrate_v1  # noqa: E402
 
 
 HOST = "127.0.0.1"
@@ -425,7 +423,7 @@ class _NoGuiHealthyStart:
     the reason to ``update.log``, and settles nothing.
 
     It exists from the moment the data directory is known, so every way the
-    start can end reports: a refused interface, a failed migration, no free
+    start can end reports: a refused interface, no free
     port, ``create_app`` raising, the server stopping before it answered.
     Only :meth:`start` needs the server.
 
@@ -723,16 +721,6 @@ def main(argv: list[str] | None = None) -> int:
         print(interface_error, file=sys.stderr)
         logging.getLogger("wg.launch").error(interface_error)
         _not_confirmed(no_gui_start, f"the --no-gui start refused its interface: {interface_error}")
-        lock.release()
-        flush_logs()
-        return 1
-
-    try:
-        auto_migrate_v1(REPO_ROOT, paths.root, lock)
-    except (MigrationError, OSError, sqlite3.Error) as exc:
-        print(f"Waveguide Generator could not migrate v1 runs: {exc}", file=sys.stderr)
-        logging.getLogger("wg.launch").exception("Automatic v1 run migration failed")
-        _not_confirmed(no_gui_start, f"the --no-gui start could not migrate v1 runs: {exc}")
         lock.release()
         flush_logs()
         return 1

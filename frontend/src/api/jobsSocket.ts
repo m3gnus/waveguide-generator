@@ -93,8 +93,8 @@ export interface JobItem {
   log_tail: string[];
   design_availability?: {
     reopenable: boolean;
-    source: 'v2-snapshot' | 'v1-design-state' | 'v1-mesher-payload' | 'cad-import' | 'none';
-    reason_code: 'ok' | 'recovered' | 'imported_geometry' | 'freeform_legacy_design' | 'no_stored_design' | 'unreadable_design';
+    source: 'v2-snapshot' | 'cad-import' | 'none';
+    reason_code: 'ok' | 'imported_geometry' | 'no_stored_design' | 'unreadable_design';
     reason: string | null;
     note: string | null;
   } | null;

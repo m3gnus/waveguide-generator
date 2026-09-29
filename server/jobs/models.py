@@ -269,27 +269,21 @@ class DesignSnapshot(JobModel):
 class DesignAvailability(JobModel):
     """Whether a job's stored design can be reopened, and if not, why not.
 
-    Jobs imported from v1 are the reason this exists. Most of them are
-    recovered into v2's own snapshot shape and are indistinguishable from a
-    natively solved job; the rest must say what is wrong in words the user can
+    A job that cannot be reopened must say what is wrong in words the user can
     act on, because "Rerun is greyed out" is not a diagnosis.
     """
 
     reopenable: bool = True
-    source: Literal[
-        "v2-snapshot", "v1-design-state", "v1-mesher-payload", "cad-import", "none"
-    ] = "v2-snapshot"
+    source: Literal["v2-snapshot", "cad-import", "none"] = "v2-snapshot"
     reason_code: Literal[
         "ok",
-        "recovered",
         "imported_geometry",
-        "freeform_legacy_design",
         "no_stored_design",
         "unreadable_design",
     ] = "ok"
     #: Why this job cannot be reopened. Set exactly when ``reopenable`` is false.
     reason: str | None = None
-    #: A fidelity caveat about a design that *was* recovered.
+    #: A fidelity caveat about the stored design, when there is one.
     note: str | None = None
 
 

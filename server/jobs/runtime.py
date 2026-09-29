@@ -54,7 +54,7 @@ from server.engines.registry import (
     full3d_engine_order,
     resolve_legacy_beat_engine,
 )
-from server.jobs.legacy_design import resolve_job_design
+from server.jobs.design_availability import resolve_job_design
 from server.jobs.models import (
     AXIAL_SOURCE_REMOVED_MESSAGE,
     PORT_APERTURE_NAME_GROUPS,
@@ -459,7 +459,7 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     ):
         return SolveRequest.model_validate(config).model_copy(deep=True)
 
-    resolution = resolve_job_design(row.get("script_snapshot"), config)
+    resolution = resolve_job_design(row.get("script_snapshot"))
     if not resolution.reopenable or resolution.snapshot is None:
         raise JobConflictError(
             resolution.reason or "This run has no stored design and cannot be retried"
@@ -3381,7 +3381,7 @@ class JobRuntime:
                 "anchor is not the solve mesh."
             )
 
-        resolution = resolve_job_design(row.get("script_snapshot"), config)
+        resolution = resolve_job_design(row.get("script_snapshot"))
         if not resolution.reopenable or resolution.snapshot is None:
             reason = resolution.reason or "the job has no stored design"
             raise JobMeshDiscardedError(
@@ -4756,12 +4756,9 @@ class JobRuntime:
             and stored_config.get("type") == "cad_intent"
             else None
         )
-        # An imported v1 job reaches the client already translated, so reopen,
-        # rerun, compare and export need no legacy branch; one that cannot be
-        # translated keeps its original bytes and carries the reason instead.
         geometry = stored_config.get("geometry")
         imported = isinstance(geometry, Mapping) and geometry.get("type") == "imported"
-        design = resolve_job_design(row.get("script_snapshot"), row.get("config_json"))
+        design = resolve_job_design(row.get("script_snapshot"))
         if cad_intent is not None:
             design_availability = {
                 "reopenable": False,

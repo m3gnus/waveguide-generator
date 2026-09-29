@@ -3,8 +3,7 @@ import { jobDesignAvailability, jobRerunState, type JobDesignFields } from './jo
 /**
  * The two places a job's design verdict has to show up.
  *
- * Almost every imported v1 job is translated by the server and behaves like a
- * natively solved one. The rest are the reason these exist: a Rerun that does
+ * A job whose design cannot be reopened is the reason these exist: a Rerun that does
  * nothing, or worse silently runs whatever is currently on screen under an old
  * job's name, is not an acceptable way to say "this design was never stored".
  *
@@ -27,7 +26,7 @@ const NOTICE_STYLE = {
   whiteSpace: 'normal',
 } as const;
 
-/** Why this job cannot be reopened, or what its recovered design is missing. */
+/** Why this job cannot be reopened, or what its stored design is missing. */
 export function DesignAvailabilityNotice({ job }: { job: JobDesignFields }) {
   // A reason outranks a note: they never both apply, but if that ever changes
   // the blocking sentence is the one the user needs first.

@@ -1643,7 +1643,7 @@
       },
       "DesignAvailability": {
         "additionalProperties": false,
-        "description": "Whether a job's stored design can be reopened, and if not, why not.\n\nJobs imported from v1 are the reason this exists. Most of them are\nrecovered into v2's own snapshot shape and are indistinguishable from a\nnatively solved job; the rest must say what is wrong in words the user can\nact on, because \"Rerun is greyed out\" is not a diagnosis.",
+        "description": "Whether a job's stored design can be reopened, and if not, why not.\n\nA job that cannot be reopened must say what is wrong in words the user can\nact on, because \"Rerun is greyed out\" is not a diagnosis.",
         "properties": {
           "note": {
             "anyOf": [
@@ -1671,9 +1671,7 @@
             "default": "ok",
             "enum": [
               "ok",
-              "recovered",
               "imported_geometry",
-              "freeform_legacy_design",
               "no_stored_design",
               "unreadable_design"
             ],
@@ -1689,8 +1687,6 @@
             "default": "v2-snapshot",
             "enum": [
               "v2-snapshot",
-              "v1-design-state",
-              "v1-mesher-payload",
               "cad-import",
               "none"
             ],

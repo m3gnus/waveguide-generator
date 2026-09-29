@@ -596,9 +596,7 @@ remembers between sessions. That last one lives there rather than in the browser
 on purpose: browser storage is tied to the exact address a window was opened from,
 so a shifted port, a browser set to clear site data on exit, or simply opening WG
 in a different browser used to lose the lot. The uninstallers preserve the data
-directory unless `--data` is explicitly requested. Original-application runs can be imported automatically or through
-`scripts/migrate_v1.py`; the v1 source database is opened read-only and the current
-data is backed up before migration.
+directory unless `--data` is explicitly requested.
 
 ### Driver library
 

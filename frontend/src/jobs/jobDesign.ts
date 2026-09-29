@@ -2,14 +2,14 @@ import { hydrateDesignDocument } from '../api/designIo';
 import type { JobItem } from '../api/jobsSocket';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 
-/** The server's verdict on a job's stored design. See server/jobs/legacy_design.py. */
+/** The server's verdict on a job's stored design. See server/jobs/design_availability.py. */
 export interface DesignAvailability {
   reopenable: boolean;
-  source: 'v2-snapshot' | 'v1-design-state' | 'v1-mesher-payload' | 'cad-import' | 'none';
-  reason_code: 'ok' | 'recovered' | 'imported_geometry' | 'freeform_legacy_design' | 'no_stored_design' | 'unreadable_design';
+  source: 'v2-snapshot' | 'cad-import' | 'none';
+  reason_code: 'ok' | 'imported_geometry' | 'no_stored_design' | 'unreadable_design';
   /** Why this job cannot be reopened. Present exactly when `reopenable` is false. */
   reason: string | null;
-  /** A fidelity caveat about a design that *was* recovered. */
+  /** A caveat about the stored design, when there is one. */
   note: string | null;
 }
 
@@ -54,10 +54,9 @@ export function replaceWithJobDesign(
 /**
  * What this job's design permits, and what to say about it.
  *
- * The server already translates a recoverable v1 job into v2's own snapshot
- * shape, so `reopenable` is true for almost everything and the interesting
- * case is the remainder: a job that cannot be reopened has to say *why*, in a
- * sentence a user can act on. Falling back to hydration keeps the answer
+ * `reopenable` is true for almost everything and the interesting case is the
+ * remainder: a job that cannot be reopened has to say *why*, in a sentence a
+ * user can act on. Falling back to hydration keeps the answer
  * honest when the field is absent, and never reports a reason it does not have.
  */
 export function jobDesignAvailability(job: JobDesignFields): DesignAvailability {

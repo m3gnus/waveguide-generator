@@ -688,7 +688,7 @@ By mode:
   if 120 s pass without an answer it can confirm.
 - **`--no-gui`** probes `/health`, which must name this build, and `/` for up to 20 s
   after uvicorn reports started. Its check exists as soon as the data directory is known,
-  so every exit reports. That covers a refused or missing interface, a failed migration,
+  so every exit reports. That covers a refused or missing interface,
   no free port, the instance lock held elsewhere, `create_app` raising, and the server
   stopping before it answered.
 
