@@ -198,7 +198,14 @@ jobs:
     # skips exactly those 13 (the stub interpreter is a shebang script). That
     # cause is not diagnosed, and this split does not fix it: it stops one file
     # on one platform from setting the budget for the product suite.
-    timeout-minutes: ${{ matrix.budget }}
+    #
+    # Windows server is the exception: it sat at ~21m including setup on
+    # 2026-09-15 (pytest 19.0m, 3882 tests), took 30.6m on 2026-09-22 (4624
+    # tests) and 34.4m on 2026-09-28 (run 36498497078, 4893 tests), i.e. 36.7
+    # to 38.8m per job with setup. Run 36500433825 was cut off at the old 40m
+    # cap at 97% with no hang. It is capped at 60m so it has real headroom;
+    # every other job keeps matrix.budget.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && 60 || matrix.budget }}
     strategy:
       fail-fast: false
       matrix:
@@ -208,8 +215,15 @@ jobs:
           - suite: server
             label: Server
             paths: server/tests
-            # Windows, the slowest, sits at ~21m including setup.
-            budget: 40
+            # Windows, the slowest, sat at ~21m including setup on 2026-09-15
+            # (pytest 19.0m, 3882 tests), 30.6m on 2026-09-22 (4624 tests) and
+            # 34.4m on 2026-09-28 (run 36498497078, 4893 tests), which is 36.7
+            # to 38.8m per job once setup is added. Run 36500433825 was cut off
+            # at the old 40m cap at 97% with no hang. Ubuntu and macOS took
+            # 26.2m and 22.2m of pytest in that run. A single per-OS number
+            # is not possible here, so this 60m cap applies to all three; the
+            # hang detector is faulthandler_timeout, not this backstop.
+            budget: 60
           - suite: harness
             label: Harness
             paths: scripts/tests
