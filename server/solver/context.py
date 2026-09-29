@@ -36,6 +36,45 @@ def _ground_plane(request: SolveRequest) -> GroundPlane | None:
     return GroundPlane(axis=requested.axis, height_m=float(requested.height_m))
 
 
+# The arc every client sends when the user has not touched the directivity
+# settings: the model default and the browser's ATH default agree on it.
+_DEFAULT_ARC = (0.0, 180.0, 37)
+_DEFAULT_ARC_STEP = 5.0
+# A coupled infinite baffle radiates nothing into the rear half space, so an
+# observation arc past 90 degrees only samples the zero-pressure floor.
+_INFINITE_BAFFLE_ARC = (0.0, 90.0, 19)
+
+
+def _uses_default_arc(polar: PolarConfig) -> bool:
+    if "angle_range" not in polar.model_fields_set:
+        return True
+    start, end, count = polar.angle_range
+    step = polar.angle_step
+    return (
+        (float(start), float(end), int(count)) == _DEFAULT_ARC
+        and (step is None or float(step) == _DEFAULT_ARC_STEP)
+    )
+
+
+def polar_config_for(polar: PolarConfig, *, sim_type: int) -> dict[str, Any]:
+    """Serialise the polar config, defaulting the arc to 0-90 for infinite baffle.
+
+    Only an arc the user has not set is replaced: it must be the untouched
+    0-180 default (a client cannot mark "untouched" on the wire, so the default
+    value itself is the signal). Any other arc is kept as given.
+    """
+
+    config = polar.model_dump(mode="json")
+    if (
+        sim_type == 1
+        and not polar.spherical_sampling
+        and _uses_default_arc(polar)
+    ):
+        config["angle_range"] = list(_INFINITE_BAFFLE_ARC)
+        config["angle_step"] = 5.0
+    return config
+
+
 @dataclass(slots=True)
 class SolverContext:
     design: DesignConfig | None
@@ -151,6 +190,7 @@ class SolverContext:
                 raise ValueError("source.velocity must be 1 (normal) or 2 (axial)")
             source_motion = "axial" if velocity == 2.0 else "normal"
 
+        sim_type = 1 if simulation.sim_type == "infinite-baffle" else 2
         return cls(
             design=request.design,
             frequency_range=(float(start), float(end)),
@@ -161,10 +201,10 @@ class SolverContext:
             verbose=request.options.verbose,
             solver_mode=solver_mode,
             quadrants=quadrants,
-            sim_type=1 if simulation.sim_type == "infinite-baffle" else 2,
+            sim_type=sim_type,
             source_motion=source_motion,
             ground_plane=_ground_plane(request),
-            polar_config=request.options.polar_config.model_dump(mode="json"),
+            polar_config=polar_config_for(request.options.polar_config, sim_type=sim_type),
         )
 
     @classmethod

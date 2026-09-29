@@ -4,7 +4,7 @@ import type { EChartsOption } from 'echarts';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults, fetchRadiationImpedancePresentation, provisionalResults, type JobResults, type RadiationImpedancePresentation, type ResultData } from '../api/results';
 import { EChart, useChartTokens, type ChartTokens } from '../results/EChart';
-import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, impedanceComparable, impedanceSeries, impedanceSubtitle, nearestFrequencyIndex, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
+import { beamFitSeries, beamShapeSeries, directivityGrid, directivityIndexSeries, drivePowerChartSeries, excursionChartSeries, groupDelaySeries, hasZeroRadiationRear, impedanceComparable, impedanceSeries, impedanceSubtitle, isOutsideHalfSpace, nearestFrequencyIndex, OUTSIDE_HALF_SPACE_LABEL, phaseSeries, polarCut, powerResponseMethodCaption, powerResponseSeries, selectResultChannels, splSeries, type NamedResult } from '../results/mappers';
 import { BalloonRenderer, ChartStub, ForwardBeamRenderer, hasBalloonData, type ChartStubAction } from '../results/balloon';
 import { runWorkspaceExportBundle } from '../results/exporters';
 import {
@@ -399,6 +399,21 @@ export function interpolateDirectivityGrid(result: ResultPayload, plane: string,
   return { frequencies, angles, values, factor };
 }
 
+/**
+ * Blank the rear-hemisphere rows of a zero-radiation result's grid.
+ *
+ * Their level is the engine's floor, not a solved pressure: drawn, they would
+ * read as a genuine null lobe, and contoured they would trace a false edge at
+ * 90 degrees. An old saved run with 0-180 data is masked from its own metadata.
+ */
+export function maskRearHemisphere(grid: InterpolatedDirectivityGrid, result: ResultPayload): InterpolatedDirectivityGrid {
+  if (!hasZeroRadiationRear(result) || !grid.angles.some(isOutsideHalfSpace)) return grid;
+  return {
+    ...grid,
+    values: grid.values.map((row, index) => (isOutsideHalfSpace(grid.angles[index]) ? row.map(() => null) : row)),
+  };
+}
+
 type ContourSegment = [number, number, number, number];
 
 /** Small marching-squares pass used for labeled engineering reference lines. */
@@ -663,16 +678,16 @@ export function heatmapOption(
   // canonical surface when it settles. Do the same here: the live grid has at
   // most a quarter of the usual heatmap cells and also supplies its contours,
   // avoiding a second 180k-cell interpolation on every partial result.
-  const grid = live
+  const grid = maskRearHemisphere(live
     ? interpolateDirectivityGrid(result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
-    : interpolateDirectivityGrid(result, plane);
+    : interpolateDirectivityGrid(result, plane), result);
   // The exported renderer contours a canonical 500 x 361 interpolation. Keep
   // the interactive cells capped for responsiveness, but derive the visible
   // engineering reference lines from a comparably dense grid. With a typical
   // 60 x 37 result this resolves to 532 x 325 instead of 237 x 145.
   const contourGrid = live
     ? grid
-    : interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS);
+    : maskRearHemisphere(interpolateDirectivityGrid(result, plane, 12, MAX_CONTOUR_CELLS), result);
   const floor = mapReference * 5;
   const comparing = Boolean(comparison?.references.length);
   // The overlaid contours are the same runs the line charts draw, so they take
@@ -711,6 +726,31 @@ export function heatmapOption(
       return { type: 'line', shape: { x1: params.coordSys.x, y1: y, x2: params.coordSys.x + params.coordSys.width, y2: y }, style: { stroke: tokens.grid, lineWidth: .8, opacity: .9 } };
     },
   }] : [];
+  // Grey band over the rear hemisphere of a zero-radiation result: the cells
+  // there are blank (see `maskRearHemisphere`), and the band says why.
+  const rearBand = hasZeroRadiationRear(result) && grid.angles.length >= 2 && grid.angles.some(isOutsideHalfSpace)
+    ? [{
+      name: OUTSIDE_HALF_SPACE_LABEL, type: 'custom', coordinateSystem: 'cartesian2d', silent: true, z: 5, clip: true,
+      data: [0],
+      renderItem: (params: { coordSys?: PlotRect }) => {
+        if (!params.coordSys) return null;
+        const lower = grid.angles[0];
+        const upper = grid.angles.at(-1)!;
+        const firstOutside = grid.angles.findIndex(isOutsideHalfSpace);
+        // The band starts at the last solved row, so no solved cell is covered.
+        const edge = grid.angles[Math.max(0, firstOutside - 1)];
+        const top = params.coordSys.y;
+        const bottom = params.coordSys.y + params.coordSys.height * (1 - (edge - lower) / (upper - lower));
+        return {
+          type: 'group',
+          children: [
+            { type: 'rect', shape: { x: params.coordSys.x, y: top, width: params.coordSys.width, height: Math.max(0, bottom - top) }, style: { fill: tokens.muted, opacity: .28 } },
+            { type: 'text', style: { x: params.coordSys.x + params.coordSys.width / 2, y: top + Math.max(0, bottom - top) / 2, text: OUTSIDE_HALF_SPACE_LABEL, fill: tokens.foreground, font: '11px ui-monospace, monospace', textAlign: 'center', textVerticalAlign: 'middle', opacity: .85 } },
+          ],
+        };
+      },
+    }]
+    : [];
   const contourLevels = [...new Set([-3, -6, -12, mapReference])].filter((level) => level >= floor).sort((a, b) => b - a);
   const contourSeries = contourLevels.flatMap((level, contourIndex) => {
     const polylines = contourPolylines(contourSegments(contourGrid.values, level)).filter((points) => points.length > 1);
@@ -736,9 +776,9 @@ export function heatmapOption(
   });
   const comparisonSeries = comparison?.references.flatMap((reference, referenceIndex) => {
     const color = comparisonColors.get(reference.label) ?? tokens.accent;
-    const referenceGrid = live
+    const referenceGrid = maskRearHemisphere(live
       ? interpolateDirectivityGrid(reference.result, plane, 2, MAX_LIVE_INTERPOLATED_CELLS)
-      : interpolateDirectivityGrid(reference.result, plane, 12, MAX_CONTOUR_CELLS);
+      : interpolateDirectivityGrid(reference.result, plane, 12, MAX_CONTOUR_CELLS), reference.result);
     const polylines = contourPolylines(contourSegments(referenceGrid.values, mapReference)).filter((points) => points.length > 1);
     if (!polylines.length) return [];
     const labelIndex = polylines.reduce((best, points, index) => points.length > polylines[best].length ? index : best, 0);
@@ -808,7 +848,7 @@ export function heatmapOption(
     visualMap: { min: floor, max: 0, dimension: 2, seriesIndex: 0, right: 2, top: 'middle', itemWidth: density === 'compact' ? 6 : 8, itemHeight: MAP_RAMP[density], text: ['0', `${floor}`], textStyle: { color: tokens.muted, fontSize: 11 }, inRange: { color: tokens.colormap } },
     // Cartesian heatmaps do not chunk safely in ECharts: progressive mode can
     // stop after the first angle band and leave the rest of the map blank.
-    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
+    series: [{ type: 'heatmap', progressive: 0, z: 1, data: cells, emphasis: { itemStyle: { borderColor: tokens.accent, borderWidth: 1.2, shadowBlur: 7, shadowColor: tokens.accent } } }, ...angleGuideSeries, ...rearBand, ...contourSeries, ...comparisonSeries] as EChartsOption['series'],
   };
 }
 
@@ -1115,6 +1155,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
     const onAxis = points.reduce<{ db: number | null; angle: number }>((best, [db, angle]) => (
       db !== null && Math.abs(angle) < Math.abs(best.angle) ? { db, angle } : best
     ), { db: null, angle: Infinity });
+    const zeroRear = hasZeroRadiationRear(result);
     const reference = onAxis.db ?? Math.max(...points.map(([db]) => db ?? -Infinity));
     if (!Number.isFinite(reference)) return [];
     const color = colors.get(label) ?? tokens.accent;
@@ -1125,19 +1166,37 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
       showSymbol: false,
       // Radius first, angle second: that is the polar series contract, and it
       // is the order polarSeries already returns.
-      data: points.map(([db, angle]) => [db === null ? null : Math.max(floorDb, db - reference), angle]),
+      // A zero-radiation rear hemisphere holds the engine's floor, not a
+      // pressure: leave a gap there instead of a trace collapsed to the centre.
+      data: points.map(([db, angle]) => [db === null || (zeroRear && isOutsideHalfSpace(angle)) ? null : Math.max(floorDb, db - reference), angle]),
       lineStyle: { color, width: 2 },
       itemStyle: { color },
     }];
   });
   const labelSize = LABEL_FONT[density];
+  const shadeRear = items.some(({ result }) => hasZeroRadiationRear(result));
+  // Two wedges, 90..180 and -180..-90, drawn as dense arcs on the outer ring:
+  // a polar line is straight between samples, so a sparse pair would be a chord.
+  const rearWedge = (from: number, to: number) => ({
+    name: OUTSIDE_HALF_SPACE_LABEL,
+    type: 'line' as const,
+    coordinateSystem: 'polar' as const,
+    silent: true,
+    showSymbol: false,
+    legendHoverLink: false,
+    z: 0,
+    lineStyle: { opacity: 0 },
+    areaStyle: { color: tokens.muted, opacity: .22 },
+    data: Array.from({ length: 19 }, (_, step) => [0, from + ((to - from) * step) / 18]),
+  });
   return {
     animationDuration: 180,
     backgroundColor: tokens.background,
     color: tokens.series,
     textStyle: { color: tokens.foreground, fontFamily: 'Inter, system-ui, sans-serif' },
     tooltip: { trigger: 'item', confine: true, backgroundColor: tokens.background, borderColor: tokens.spine ?? tokens.grid, textStyle: { color: tokens.foreground, fontSize: 11 } },
-    legend: { top: 1, right: LEGEND_INSET, textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
+    legend: { top: 1, right: LEGEND_INSET, ...(shadeRear ? { data: items.map(({ label }) => label) } : {}), textStyle: { color: tokens.muted, fontSize: 11 }, formatter: (name: string) => middleEllipsis(name, density === 'compact' ? 12 : 22), itemWidth: density === 'compact' ? 10 : 14, itemHeight: 2 },
+    ...(shadeRear ? { graphic: [{ type: 'text', left: 'center', top: density === 'compact' ? '80%' : '82%', silent: true, style: { text: OUTSIDE_HALF_SPACE_LABEL, fill: tokens.muted, font: `${labelSize}px ui-monospace, monospace`, align: 'center' } }] } : {}),
     polar: { radius: density === 'compact' ? '68%' : '72%', center: ['50%', '54%'] },
     angleAxis: {
       type: 'value' as const,
@@ -1168,7 +1227,7 @@ export function polarOption(items: NamedResult[], tokens: ChartTokens, plane: Po
       axisLine: { show: false },
       splitLine: { lineStyle: { color: tokens.grid, width: .7 } },
     },
-    series,
+    series: shadeRear ? [rearWedge(90, 180), rearWedge(-180, -90), ...series] : series,
   };
 }
 

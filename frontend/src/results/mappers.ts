@@ -124,6 +124,30 @@ export function directivityGrid(result: ResultData, plane = 'horizontal'): Direc
   return { frequencies, angles, data, minDb: Math.max(-60, Math.floor(minDb / 5) * 5), maxDb: Number.isFinite(maxDb) ? maxDb : 0 };
 }
 
+/** Label for the part of a directivity chart a zero-radiation rear hemisphere leaves unmodelled. */
+export const OUTSIDE_HALF_SPACE_LABEL = 'outside modelled half-space';
+
+/** Angles past this, in a zero-radiation result, carry no solved pressure. */
+export const HALF_SPACE_LIMIT_DEG = 90;
+
+/**
+ * True when the solve stated that the rear hemisphere radiates nothing, as a
+ * coupled infinite baffle does. Read from the result's own metadata, so an old
+ * saved run is judged by what it recorded, never by the current app's defaults.
+ */
+export function hasZeroRadiationRear(result: { metadata?: unknown } | null | undefined): boolean {
+  const metadata = result?.metadata;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+  const index = (metadata as Record<string, unknown>).directivity_index;
+  if (!index || typeof index !== 'object' || Array.isArray(index)) return false;
+  return (index as Record<string, unknown>).rear_hemisphere === 'zero_radiation';
+}
+
+/** True for an angle in the rear hemisphere, on either side of the axis. */
+export function isOutsideHalfSpace(angleDeg: number): boolean {
+  return Math.abs(angleDeg) > HALF_SPACE_LIMIT_DEG + 1e-6;
+}
+
 export function nearestFrequencyIndex(frequencies: number[], target: number): number {
   if (!frequencies.length) return 0;
   return frequencies.reduce((best, frequency, index) => (
