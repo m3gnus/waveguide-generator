@@ -117,7 +117,9 @@ at `waveguide-generator` `325cb637` on Darwin arm64 (Python 3.13.1): Metal
 `74da18c`, the pinned build, on its CPU path). **BEMPP is not in these rows.** This
 Mac has no OpenCL CPU device, the harness admits BEMPP only on OpenCL, and WG's
 imported BEMPP path refuses numba, so the BEMPP axial rows are **owed on an OpenCL
-host**; `hornlab-bempp-bem` covers its own `source_axes` contract in its tests.
+host**; `hornlab-bempp-bem` covers its own `source_axes` contract in its tests, and
+[BEMPP, module level](#bempp-module-level) below records the same sphere solved by the
+module directly on this Mac.
 
 The fixture is the equator-split sphere (tags `top` +z, `bottom` -z) with both
 tags driven as separate axial channels, `front` and `back`. Their inferred axes
@@ -255,6 +257,37 @@ above.
 | same mesh: x0+y0 axial hemispheres, front - back | metal | beat-metal | complex channel difference | 2.31e-03 | 5.00e-03 | pass |
 | same mesh: x0+y0 axial hemispheres, front - back | beat-cpu | beat-metal | complex channel difference | 7.18e-05 | 2.00e-03 | pass |
 | tilted oscillating sphere | beat-metal | refusal | refused by name | 0.00e+00 | 0.00e+00 | pass |
+
+### BEMPP, module level
+
+Measured 2026-09-30 on Darwin arm64 with a clean, non-editable install of the
+candidate modules (`hornlab-metal-bem` `e09a88b`, `hornlab-bempp-bem` `c29ef48`, both with
+`SolveConfig.source_axes`; `hornlab-beat-bem` `74da18c`). This is **module evidence, not a
+WG row**: WG's imported BEMPP path still admits only an OpenCL CPU device, and that
+gate is unchanged. `hornlab_bempp_bem` solved the L1 two-hemisphere sphere (960
+triangles; 100, 300, 700, 1200 and 1500 Hz; the qualifier's 2,883 observation points)
+directly, front and back as separate solves with `source_motion="axial"` and
+`source_axes={101: +z, 102: -z}`, in two ways: the numba backend in fp64 (a
+correctness reference only; no numba timing is recorded or compared) and OpenCL on
+the Apple M1 Max GPU, which has no fp64, in fp32 (the singular assembler is bound to
+the GPU with `bempp_cl.api.set_default_cpu_device(0, 0)`). Metal solved the same mesh
+through the module with the same axes. Error is the qualifier's per-frequency
+complex relative L2 over all points, worst frequency.
+
+| `front - back` | Worst | Limit | Verdict |
+| --- | --- | --- | --- |
+| Metal vs analytic | 1.76e-02 | 2.70e-02 | pass |
+| BEMPP numba fp64 vs analytic | 1.76e-02 | 2.70e-02 | pass |
+| BEMPP OpenCL GPU fp32 vs analytic | 1.76e-02 | 2.70e-02 | pass |
+| BEMPP numba fp64 vs Metal | 1.52e-05 | 5.00e-03 | pass |
+| BEMPP OpenCL GPU fp32 vs Metal | 1.51e-05 | 5.00e-03 | pass |
+| BEMPP OpenCL GPU fp32 vs numba fp64 | 1.85e-06 | 5.00e-03 | pass |
+
+Per channel (front / back): numba vs Metal 5.8e-06 / 5.0e-06, GPU vs Metal 6.4e-06 /
+4.7e-06, GPU vs numba 1.8e-06 / 1.8e-06. BEMPP drives the explicit per-source axes as
+Metal does, including the -z source, and fp32 on the GPU meets the existing axial
+same-mesh threshold without a separate tolerance. The WG-path BEMPP axial rows remain
+owed on an OpenCL CPU host.
 
 ## Results
 
