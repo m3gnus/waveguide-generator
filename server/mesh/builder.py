@@ -890,6 +890,7 @@ def _build_sync(
     """Build and inspect one artifact; called only by the gmsh worker."""
 
     try:
+        from hornlab_mesher import TriangleBudgetExceeded
         from hornlab_mesher.config_builder import build_from_config
     except ImportError as exc:
         raise RuntimeError(
@@ -917,18 +918,17 @@ def _build_sync(
         # the parsed artifact below.
         try:
             result = build_from_config(config, mesh_path, allow_large_mesh=False)
+        except TriangleBudgetExceeded as exc:
+            # The pinned mesher preserves this type for both estimate and
+            # generated-count refusals; neither needs a legacy text fallback.
+            raise RuntimeError(
+                "Solver mesh exceeds the non-bypassable actual-domain "
+                f"artifact sanity ceiling of "
+                f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} triangles. "
+                "Coarsen the relevant mm mesh resolution before solving."
+            ) from exc
         except Exception as exc:
             detail = str(exc)
-            if "triangle" in detail.lower() and (
-                "effective limit" in detail.lower()
-                or "pre-mesh safety margin" in detail.lower()
-            ):
-                raise RuntimeError(
-                    "Solver mesh exceeds the non-bypassable actual-domain "
-                    f"artifact sanity ceiling of "
-                    f"{MAX_SOLVER_MESH_ARTIFACT_TRIANGLES:,} triangles. "
-                    "Coarsen the relevant mm mesh resolution before solving."
-                ) from exc
             baffle_refusal = _infinite_baffle_geometry_refusal(config, detail)
             if baffle_refusal is not None:
                 raise RuntimeError(baffle_refusal) from exc
