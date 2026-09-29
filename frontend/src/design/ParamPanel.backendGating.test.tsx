@@ -56,6 +56,11 @@ describe('solver-backend parameter gating', () => {
     ...host.querySelectorAll<HTMLOptionElement>(`[data-parameter-id="${parameterId}"] option`),
   ].map((option) => option.textContent);
 
+  /* Every warning inside one field's entry, and only that field's. */
+  const warningsFor = (parameterId: string) => [
+    ...host.querySelectorAll(`[data-parameter-id="${parameterId}"] .field-warning`),
+  ].map((node) => node.textContent ?? '');
+
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     localStorage.clear();
@@ -128,7 +133,15 @@ describe('solver-backend parameter gating', () => {
       useSolveOptionsStore.setState({ engine: 'beat' });
       await Promise.resolve();
     });
-    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
+    // Listed but disabled, naming the selection and the engines to switch to.
+    expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing', 'Infinite baffle']);
+    const option = [...host.querySelectorAll<HTMLOptionElement>('[data-parameter-id="simulation.sim_type"] option')]
+      .find((item) => item.textContent === 'Infinite baffle');
+    expect(option?.disabled).toBe(true);
+    const reason = warningsFor('simulation.sim_type').join(' ');
+    expect(reason).toContain('BEAT cannot solve coupled infinite-baffle simulation');
+    expect(reason).toMatch(/Switch the engine to AUTO, .*bempp/i);
+    expect(reason).not.toMatch(/No engine on this host/);
   });
 
   it('shows infinite baffle disabled, with a reason, when no engine on the host can run it', async () => {
@@ -144,19 +157,34 @@ describe('solver-backend parameter gating', () => {
       .find((item) => item.textContent === 'Infinite baffle');
     expect(option).toBeDefined();
     expect(option?.disabled).toBe(true);
-    const reason = host.querySelector('[data-parameter-id="simulation.sim_type"] .field-warning, .field-warning')?.textContent ?? '';
+    const reason = warningsFor('simulation.sim_type').join(' ');
     expect(reason).toContain('No engine on this host supports coupled infinite-baffle simulation');
     expect(reason).toContain('Metal, or BEMPP with coupled infinite-baffle support');
     expect(reason).not.toMatch(/beat|axisym/i);
   });
 
-  it('does not add a reason when another engine on the host can run it', async () => {
+  it('says an unavailable explicit engine is unavailable, not incapable, and offers the capable ones', async () => {
     await mount(capabilities(false));
     await act(async () => {
       useSolveOptionsStore.setState({ engine: 'metal' });
       await Promise.resolve();
     });
-    expect(host.querySelector('.field-warning')).toBeNull();
+    const option = [...host.querySelectorAll<HTMLOptionElement>('[data-parameter-id="simulation.sim_type"] option')]
+      .find((item) => item.textContent === 'Infinite baffle');
+    expect(option?.disabled).toBe(true);
+    const reason = warningsFor('simulation.sim_type').join(' ');
+    expect(reason).toContain('METAL is not available on this host');
+    expect(reason).toMatch(/Switch the engine to AUTO, bempp/i);
+    expect(reason).not.toContain('cannot solve');
+  });
+
+  it('adds no reason when the selected engine can run it', async () => {
+    await mount(capabilities(true));
+    await act(async () => {
+      useSolveOptionsStore.setState({ engine: 'metal' });
+      await Promise.resolve();
+    });
+    expect(warningsFor('simulation.sim_type')).toEqual([]);
   });
 
 });

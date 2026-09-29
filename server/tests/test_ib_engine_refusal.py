@@ -242,3 +242,32 @@ def test_a_non_planar_mouth_refusal_from_the_mesher_is_actionable() -> None:
     # Only the infinite-baffle mode, and only this refusal, is rewritten.
     assert _infinite_baffle_geometry_refusal({"mode": "freestanding"}, detail) is None
     assert _infinite_baffle_geometry_refusal({"mode": "infinite-baffle"}, "boom") is None
+
+
+def test_the_real_mesher_flush_mouth_refusals_are_rewritten() -> None:
+    """The message contract against the mesher's own wording, not a copy of it.
+
+    A hand-written string keeps passing after the mesher rewords its refusal;
+    this calls the pinned mesher's function so drift of the marker fails here.
+    """
+
+    dispatch = pytest.importorskip("hornlab_mesher.builders.point_grid_dispatch")
+    import numpy as np
+
+    from server.mesh.builder import _infinite_baffle_geometry_refusal
+
+    shift = dispatch._shift_coupled_baffle_grid
+    # (stations, ring points, xyz): last station is the mouth ring.
+    tilted = np.zeros((3, 4, 3))
+    tilted[:, :, 2] = np.array([-20.0, -10.0, 0.0])[:, None]
+    tilted[-1, :, 2] = [0.0, 1.0, 2.0, 3.0]  # non-planar mouth ring
+    protruding = np.zeros((3, 4, 3))
+    protruding[:, :, 2] = np.array([-20.0, 5.0, 0.0])[:, None]  # a station in front
+
+    for grid in (tilted, protruding):
+        with pytest.raises(ValueError) as caught:
+            shift(grid)
+        detail = str(caught.value)
+        text = _infinite_baffle_geometry_refusal({"mode": "infinite-baffle"}, detail)
+        assert text is not None, detail
+        assert "free-standing" in text and detail in text

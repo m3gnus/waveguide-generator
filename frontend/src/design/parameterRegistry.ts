@@ -1,6 +1,6 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 import type { WorkspaceMode } from '../stores/workspaceMode';
-import { backendSupports, hostLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
+import { backendSupports, hostLimitation, selectionLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
 
 export type ParameterSection =
@@ -448,11 +448,12 @@ export function fieldOptionsForBackend(
     const feature = option.requiresFeature;
     const held = String(option.value) === String(value ?? '');
     if (feature && !held && !backendSupports(backend, feature, plan)) {
-      // The chosen engine cannot run it. If no engine on the host can either,
-      // keep the option visible but disabled with the reason, so the user is
-      // not left wondering where it went. With an engine that can, hide it as
-      // before: picking another engine is the remedy, not a dead option.
-      const reason = hostLimitation(feature, hostEngines);
+      // The chosen engine cannot run it. Keep the option visible but disabled
+      // with the reason, so the user is not left wondering where it went: when
+      // no engine on the host can run it, say so; when another can, name the
+      // selected engine and the ones to switch to.
+      const reason = hostLimitation(feature, hostEngines)
+        ?? selectionLimitation(feature, backend, plan, hostEngines);
       if (reason) options.push({ ...option, unavailableReason: reason });
       continue;
     }

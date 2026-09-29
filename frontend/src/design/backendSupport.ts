@@ -238,3 +238,34 @@ export function hostLimitation(
   if (engines.some((item) => item.available && capabilitySupports(item, feature))) return undefined;
   return `No engine on this host supports ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }
+
+/**
+ * Why the *current selection* cannot run `feature` although the host could,
+ * naming the engine picked and what to switch to. Undefined when the selection
+ * can run it, when the host cannot either (that is `hostLimitation`'s case), or
+ * when the capability list has not loaded.
+ */
+export function selectionLimitation(
+  feature: BackendFeature,
+  backend: BackendIdentity,
+  plan: readonly EngineCapability[] | undefined,
+  engines?: readonly EngineCapability[],
+): string | undefined {
+  if (!engines || engines.length === 0) return undefined;
+  if (backendSupports(backend, feature, plan)) return undefined;
+  const capable = engines.filter((item) => item.available && capabilitySupports(item, feature));
+  if (capable.length === 0) return undefined;
+  const selected = typeof backend === 'string' || backend === null
+    ? (backend ?? '')
+    : (backend.label ?? backend.name);
+  const own = engines.find((item) => item.name.toLowerCase() === backendName(backend));
+  const others = capable.filter((item) => item !== own);
+  const names = others.map((item) => item.label ?? item.name);
+  const switchTo = ['AUTO', ...names].join(', ');
+  // An engine that can run it in principle but is not installed or enabled here
+  // is unavailable, not incapable; the remedy is the same but the reason is not.
+  const problem = own && capabilitySupports(own, feature) && !own.available
+    ? `${selected.toUpperCase()} is not available on this host`
+    : `${selected.toUpperCase()} cannot solve ${FEATURE_LABELS[feature]}`;
+  return `${problem}. Switch the engine to ${switchTo}.`;
+}
