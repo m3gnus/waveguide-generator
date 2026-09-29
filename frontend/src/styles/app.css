@@ -560,12 +560,6 @@ kbd { padding: 1px 4px; border: 1px solid var(--kbd-bd); border-bottom-width: 2p
 .chart-frame[data-ruler="on"] { cursor: row-resize; }
 .chart-ruler { position: absolute; z-index: 3; border-top: 1px solid color-mix(in srgb, var(--chart-fg) 46%, transparent); pointer-events: none; }
 .chart-ruler span { position: absolute; top: 0; left: 3px; padding: 0 3px; border-radius: var(--r3); background: var(--chart-bg); color: var(--chart-muted); font: var(--text-micro) var(--mono); white-space: nowrap; transform: translateY(-50%); }
-.canonical-plot { position: absolute; inset: 0; display: grid; min-width: 0; min-height: 0; place-items: stretch; overflow: hidden; background: var(--bg); }
-.canonical-plot-fallback { position: absolute; inset: 0; }
-.canonical-plot-image { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; }
-.canonical-plot-status { position: absolute; right: 7px; bottom: 7px; padding: 2px 6px; border: 1px solid var(--hair); border-radius: var(--r3); background: color-mix(in srgb, var(--bg) 88%, transparent); color: var(--fg3); font: var(--text-micro) var(--mono); letter-spacing: .05em; }
-.canonical-plot-error { position: absolute; right: 7px; bottom: 7px; display: flex; align-items: center; gap: 6px; max-width: calc(100% - 14px); padding: 2px 4px; border: 1px solid rgba(var(--red-rgb), .35); border-radius: var(--r3); background: color-mix(in srgb, var(--bg) 90%, transparent); color: var(--fg3); font-size: var(--text-micro); }
-.canonical-plot-error button { padding: 2px 4px; border: 1px solid var(--hair); border-radius: var(--r3); color: var(--fg2); }
 .frequency-canvas { position: absolute; inset: 0; }
 .frequency-canvas canvas { width: 100%; height: 100%; }
 .balloon-3d { position: absolute; inset: 0; overflow: hidden; background: radial-gradient(circle at 52% 44%, rgba(var(--acc-rgb), .055), transparent 52%); cursor: grab; touch-action: none; }
