@@ -18,6 +18,16 @@
 # nothing else from the checkout beside it, and its only dependencies are
 # /bin/bash, ditto, xattr and codesign (plus PlistBuddy in --update mode).
 
+# Exit status (what an unattended caller can rely on):
+#   0  installed
+#   1  failed, and the previous installation is intact (or was never touched):
+#      a refusal, a bad copy, a bad signature, a failed swap that was rolled back,
+#      or a TERM/HUP/INT that was rolled back
+#   2  usage error, nothing changed
+#   3  ROLLBACK INCOMPLETE: the old app was moved aside and could not be put
+#      back, so there may be no app at the target. The backup path is printed
+#      and the backup is left in place.
+
 set -u
 
 APP_NAME="Waveguide Generator.app"
@@ -133,6 +143,25 @@ else
     TARGET="$TARGET_DIR/$APP_NAME"
 fi
 
+if [ "$UPDATE" -eq 1 ] && [ "$(id -u)" = "0" ]; then
+    fail "Do not run --update as root." \
+         "A root-owned app would refuse every later update made by the user." \
+         "Nothing has been changed."
+fi
+
+# Sweep what an earlier run killed mid-install left beside the target: only
+# hidden directories of exactly the shape this script creates, never symlinks.
+# A .previous copy is the only remaining app when the target is missing, so it
+# is kept in that case.
+TARGET_BASE="$(basename -- "$TARGET")"
+for stale in "$TARGET_DIR"/".$TARGET_BASE".new.* "$TARGET_DIR"/".$TARGET_BASE".previous.*; do
+    [ -d "$stale" ] && [ ! -L "$stale" ] || continue
+    case "$stale" in
+        *.previous.*) [ -e "$TARGET" ] || continue ;;
+    esac
+    rm -rf "$stale"
+done
+
 # The copy is made and verified BESIDE the final name first, on the same volume,
 # and only then swapped in by rename. Nothing about the installation that
 # already exists is touched until the new copy has been proven good, so a failed
@@ -141,6 +170,28 @@ fi
 STAGED="$TARGET_DIR/.$(basename -- "$TARGET").new.$$"
 DISPLACED="$TARGET_DIR/.$(basename -- "$TARGET").previous.$$"
 rm -rf "$STAGED"
+
+# A TERM, HUP or INT (or any failure) anywhere from here on must never leave the
+# machine without an app: drop the staged copy, and if the old app was moved
+# aside and nothing is at the target, put it back. If that fails the exit
+# status is 3 and the backup path is printed.
+cleanup() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    rm -rf "$STAGED"
+    if [ -d "$DISPLACED" ] && [ ! -e "$TARGET" ]; then
+        if mv "$DISPLACED" "$TARGET"; then
+            printf 'Restored the previous installation.\n'
+        else
+            printf 'ERROR: could not restore the previous installation.\n' >&2
+            printf 'The previous app is at: %s\n' "$DISPLACED" >&2
+            status=3
+        fi
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 143' HUP INT TERM
 
 printf 'Copying to %s ...\n' "$TARGET_DIR"
 if ! ditto "$SOURCE" "$STAGED"; then
@@ -182,27 +233,15 @@ if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
 fi
 
 # Displace any previous copy rather than deleting it, so a failed rename leaves
-# the machine with the version it already had instead of nothing.
-HAD_PREVIOUS=0
+# the machine with the version it already had instead of nothing (cleanup above
+# restores it on any failure).
 if [ -e "$TARGET" ]; then
-    HAD_PREVIOUS=1
     printf 'Replacing the copy already in %s ...\n' "$TARGET_DIR"
-    if ! mv "$TARGET" "$DISPLACED"; then
-        rm -rf "$STAGED"
-        fail "Could not move the existing installation aside." \
-             "Quit Waveguide Generator if it is running, then try again."
-    fi
+    mv "$TARGET" "$DISPLACED" || fail "Could not move the existing installation aside." \
+                                      "Quit Waveguide Generator if it is running, then try again."
 fi
-if ! mv "$STAGED" "$TARGET"; then
-    rm -rf "$STAGED"
-    if [ "$HAD_PREVIOUS" -eq 1 ]; then
-        mv "$DISPLACED" "$TARGET" && printf 'Restored the previous installation.\n'
-    fi
-    fail "Could not put the new version in place at $TARGET."
-fi
-if [ "$HAD_PREVIOUS" -eq 1 ]; then
-    rm -rf "$DISPLACED"
-fi
+mv "$STAGED" "$TARGET" || fail "Could not put the new version in place at $TARGET."
+rm -rf "$DISPLACED"
 
 printf '\n'
 printf 'Installed: %s\n' "$TARGET"

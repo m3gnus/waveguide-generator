@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -58,7 +60,9 @@ def dmg(tmp_path: Path) -> Path:
     root = tmp_path / "dmg"
     root.mkdir()
     shutil.copy2(SCRIPT, root / SCRIPT.name)
-    make_app(root / APP, version="new")
+    app = make_app(root / APP, version="new")
+    # What a downloaded disk image hands its contents: a real quarantine flag.
+    subprocess.run(["xattr", "-w", "com.apple.quarantine", "0081;00000000;test;", str(app)], check=True)
     return root
 
 
@@ -100,6 +104,9 @@ def test_update_replaces_the_exact_app_and_clears_quarantine(dmg: Path, installe
     assert verify.returncode == 0
     quarantine = subprocess.run(["xattr", "-r", str(installed)], capture_output=True, text=True)
     assert "com.apple.quarantine" not in quarantine.stdout
+    # Not vacuous: the disk image's own copy does carry the flag.
+    source = subprocess.run(["xattr", str(dmg / APP)], capture_output=True, text=True)
+    assert "com.apple.quarantine" in source.stdout
 
 
 def test_update_mode_starts_nothing(dmg: Path, installed: Path, tmp_path: Path) -> None:
@@ -222,3 +229,85 @@ def test_interactive_install_replaces_an_existing_app(dmg: Path, installed: Path
     assert result.returncode == 0, result.stdout + result.stderr
     assert version_of(installed) == "new"
     assert leftovers(installed.parent) == []
+
+
+def test_update_refuses_to_run_as_root(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    bin_dir = shim(tmp_path / "bin", "id", "echo 0\n")
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1
+    assert version_of(installed) == "old"
+
+
+def failing_swap_shim(tmp_path: Path, *, restore_too: bool) -> Path:
+    real_mv = shutil.which("mv")
+    patterns = '*".new."*|*".previous."*' if restore_too else '*".new."*'
+    return shim(
+        tmp_path / "bin",
+        "mv",
+        f'case "$1" in {patterns}) echo "injected failure" >&2; exit 1;; esac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+
+
+def test_incomplete_rollback_has_its_own_exit_status_and_names_the_backup(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    bin_dir = failing_swap_shim(tmp_path, restore_too=True)
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 3, result.stdout + result.stderr
+    backups = [p for p in installed.parent.iterdir() if ".previous." in p.name]
+    assert len(backups) == 1 and str(backups[0]) in result.stderr
+    assert version_of(backups[0]) == "old"
+    assert not installed.exists()
+
+
+def test_a_clean_rollback_is_still_exit_status_1(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    result = run(dmg, "--update", str(installed), path_prefix=failing_swap_shim(tmp_path, restore_too=False))
+    assert result.returncode == 1
+
+
+def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    paused = tmp_path / "paused"
+    real_mv = shutil.which("mv")
+    bin_dir = shim(
+        tmp_path / "bin",
+        "mv",
+        f'case "$1" in *".new."*) touch "{paused}"; sleep 60; exit 1;; esac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    proc = subprocess.Popen(
+        ["/bin/bash", str(dmg / SCRIPT.name), "--update", str(installed)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
+        stdin=subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        deadline = time.time() + 60
+        while not paused.exists():
+            assert proc.poll() is None and time.time() < deadline, "the script never reached the swap"
+            time.sleep(0.05)
+        # Between the renames: the old app is aside and the target is empty.
+        assert not installed.exists()
+        os.killpg(proc.pid, signal.SIGTERM)
+        output, _ = proc.communicate(timeout=60)
+    finally:
+        if proc.poll() is None:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.communicate()
+    assert proc.returncode not in (0, 3), output
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []
+
+
+def test_update_sweeps_stale_hidden_leftovers_but_not_symlinks(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    folder = installed.parent
+    stale_new = make_app(folder / f".{APP}.new.111", version="junk", sign=False)
+    stale_prev = make_app(folder / f".{APP}.previous.222", version="junk", sign=False)
+    keep = tmp_path / "precious"
+    keep.mkdir()
+    link = folder / f".{APP}.new.333"
+    link.symlink_to(keep)
+    unrelated = folder / ".Other.app.new.444"
+    unrelated.mkdir()
+    assert run(dmg, "--update", str(installed)).returncode == 0
+    assert not stale_new.exists() and not stale_prev.exists()
+    assert link.is_symlink() and keep.exists()
+    assert unrelated.exists()
