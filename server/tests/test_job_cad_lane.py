@@ -593,10 +593,12 @@ def test_a_job_no_lane_held_is_prepared_by_the_next_start(h: JobsHarness) -> Non
     h.blocked = "An update restart is pending."
     job_id = _accept_direct(h, setup_revision_id=revision)
     assert _row(h, job_id)["status"] == "preparing" and h.ingest.calls == []
-    h.blocked = None
     h._latest.clear()
 
-    h.restart()  # the next process: the lane takes up what no lane held
+    # Keep the old lane held until restart has finished; releasing it first can
+    # claim the job before shutdown, correctly making it interrupted.
+    h.restart()
+    h.blocked = None  # only the next process may take up what no lane held
     _settle(h)
 
     row = _row(h, job_id)
@@ -663,10 +665,15 @@ def test_a_solve_the_restart_held_is_taken_up_again_when_the_latch_comes_down(
     _second_return(h, "cmd-2")
     h.blocked = "An update restart is pending."
     parked = _accept_direct(h, "cmd-2", setup_revision_id=revision)
-    h.blocked = None
+    # Only the next process may take it: a release on the live old runtime would
+    # resume its lane and race shutdown, correctly ending a claimed job interrupted.
     h.restart()
+    row = _row(h, parked)
+    assert (row["status"], row["started_at"]) == ("preparing", None)
+    h.blocked = None
     _settle(h)
-    assert _row(h, parked)["status"] == "queued"
+    row = _row(h, parked)
+    assert row["status"] == "queued", _cad(row).get("refusal")
 
 
 def test_a_stopped_job_the_restart_held_is_never_prepared_again(h: JobsHarness) -> None:
