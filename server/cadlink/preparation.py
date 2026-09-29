@@ -1383,17 +1383,29 @@ async def _submit(
         bound = row
     if bound is None:
         raise _Fenced()
-    # Decided once, before the job exists, by the one rule for it
-    # (``record_solved_frame_provenance``): the job's record and this
-    # operation's outcome both carry this value, so they cannot differ.
-    automatic_axis = await asyncio.to_thread(
-        _automatic_frame_axis, store, solve_request.geometry.ingest_id
-    )
+    # The setup this operation is bound to (after a binding conflict, the one
+    # already stored), so the job's record and the outcome name the same one.
+    revision_id = bound.get("setup_revision_id") or revision_id
+    # Collected once, before the job exists: the job's record and this
+    # operation's ``frame_axis_automatic`` come from the same read, by the one
+    # rule for it (``record_solved_frame_provenance``). A failure here is not a
+    # failed submission: nothing was submitted.
     try:
         provenance = await asyncio.to_thread(
-            _cad_provenance, store, operation_id, solve_request, bound, revision_id,
-            automatic_axis is not None,
+            _cad_provenance, store, operation_id, solve_request, bound, revision_id
         )
+    except Exception as exc:  # noqa: BLE001 - fail closed, with its own words
+        logger.warning("Collecting the provenance of CAD solve %s failed: %s", operation_id, exc)
+        return await asyncio.to_thread(
+            _finish, ctx, operation_id, generation, NEEDS_USER_INPUT,
+            reason="preparation_failed",
+            message=f"WG could not record what this solve was prepared from: {exc}. "
+            "Press Solve now to try again.",
+            release_binding=True,
+        )
+    frame = provenance.get("frame") or {}
+    automatic_axis = frame.get("axis") if frame.get("provenance") == "automatic" else None
+    try:
         job_id = await ctx.submit(solve_request, cad_provenance=provenance)
     except ctx.submission_refusals as exc:
         # The jobs system refused this exact request -- nothing was created --
@@ -1444,25 +1456,12 @@ async def _submit(
     )
 
 
-def _automatic_frame_axis(store: CadLinkStore, ingest_id: str) -> str | None:
-    """The axis a solve of this ingest used when WG chose it, else None."""
-
-    ingest = store.get_ingest(str(ingest_id))
-    if ingest is None:
-        return None
-    record = json.loads(ingest["record_json"])
-    if record_solved_frame_provenance(store, record) != "automatic":
-        return None
-    return _record_frame_axis(record)
-
-
 def _cad_provenance(
     store: CadLinkStore,
     operation_id: str,
     solve_request: SolveRequest,
     bound: Mapping[str, Any],
     revision_id: str | None,
-    frame_automatic: bool,
 ) -> dict[str, Any]:
     """What the job keeps of the CAD operation that made it (``task_metadata.cad``).
 
@@ -1470,8 +1469,8 @@ def _cad_provenance(
     user's, the frame and how it came to be, the operation id and the
     preparation. The operation row is kept for the ledger only; a run is
     described from this record even after the row is gone. Never part of the
-    wire request. ``frame_automatic`` is the caller's, decided before the job
-    exists from ``record_solved_frame_provenance``.
+    wire request. The frame's "automatic" label is decided here, once, from
+    ``record_solved_frame_provenance``.
     """
 
     provenance: dict[str, Any] = {"operation_id": operation_id}
@@ -1484,8 +1483,10 @@ def _cad_provenance(
         }
     ingest = store.get_ingest(str(getattr(solve_request.geometry, "ingest_id", "") or ""))
     if ingest is not None:
+        record = json.loads(ingest["record_json"])
         provenance["frame"] = frame_provenance(
-            store, json.loads(ingest["record_json"]), automatic=frame_automatic
+            store, record,
+            automatic=record_solved_frame_provenance(store, record) == "automatic",
         )
     preparation_id = bound.get("preparation_id")
     preparation = store.get_preparation(str(preparation_id)) if preparation_id else None

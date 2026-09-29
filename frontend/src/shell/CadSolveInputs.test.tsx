@@ -260,4 +260,45 @@ describe('CAD solve input identities', () => {
     await render('chosen', true);
     expect(host.querySelector('[data-frame-provenance="chosen"]')?.textContent).toContain('chosen by you');
   });
+
+  it('prefers the job record over the operation when they disagree', async () => {
+    vi.stubGlobal('fetch', vi.fn());
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({
+        setupRevisionId: 'wgs_op', setupDefaults: false, preparationId: 'wgp_op',
+      })}
+      resolvedEngine="metal"
+      engineSource="job"
+      jobStatus="complete"
+      jobCad={{
+        operation_id: 'op-1',
+        setup: { revision_id: 'wgs_job', digest: 'sha256:d', origin: 'wg_defaults' },
+        preparation: {
+          preparation_id: 'wgp_job', report_sha256: null, blocking_finding_ids: [],
+          approvals: [], meshing_semantics: null,
+        },
+      }}
+    />));
+
+    expect(host.textContent).toContain('Setup revisionwgs_job');
+    expect(host.textContent).not.toContain('wgs_op');
+    expect(host.textContent).toContain('Preparationwgp_job');
+    expect(host.querySelector('[data-setup-defaults="true"]')).not.toBeNull();
+
+    // And the other way: the job says the user's settings, the operation says defaults.
+    await act(async () => root.render(<CadSolveInputs
+      operationId="op-1"
+      operation={operation({ setupRevisionId: 'wgs_op', setupDefaults: true })}
+      resolvedEngine="metal"
+      engineSource="job"
+      jobStatus="complete"
+      jobCad={{
+        operation_id: 'op-1',
+        setup: { revision_id: 'wgs_user', digest: 'sha256:d', origin: 'user' },
+      }}
+    />));
+    expect(host.querySelector('[data-setup-defaults="true"]')).toBeNull();
+    expect(host.textContent).toContain('Setup revisionwgs_user');
+  });
 });

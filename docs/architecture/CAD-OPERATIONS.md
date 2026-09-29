@@ -742,6 +742,24 @@ The jobs API exposes the record as `cad_provenance` on a job (null when the job 
 none). The run details read "solved with WG's default settings" and the setup revision
 from it first, falling back to the operation for a job made before this record existed.
 
+The job's record is authoritative. After a recovery (`reconcile_with_jobs`, or a lost
+answer that resubmits and finds the job the first attempt made) the operation's outcome
+may lack `setup_defaults` and `frame_axis_automatic`, or differ from the job's record;
+the run details read the job first.
+
+**What Stage 5 still needs before operations can be deleted.** The record is written and
+read, but:
+
+- run details still read the snapshot, State, Stage, Reason and timings from the
+  operation row (the preparation id now comes from the job first);
+- a retried job carries no `cad` record (`retry()` clears its submission key and submits
+  without one), so it shows no inputs; it must copy the parent's `task_metadata.cad`, or
+  "Solve again" must write one;
+- the run details find a CAD job by its `cad-solve:` submission key; they need to find it
+  from `cad_provenance.operation_id` or from `imported_geometry`;
+- the reconcile path records `accepted` without `setup_defaults` and
+  `frame_axis_automatic`, which only the job then holds.
+
 ## Retention
 
 Cleanup never removes what a pending operation references. Retained snapshots and meshes

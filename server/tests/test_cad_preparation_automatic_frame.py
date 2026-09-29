@@ -245,3 +245,26 @@ def test_the_second_mesh_is_made_at_most_once_even_if_the_two_sides_disagree(rea
     assert len(mesher.calls) <= 2
     # A stage only moves forward: validating is entered once.
     assert stages.count("validating") == 1
+
+
+def test_the_operations_automatic_axis_is_derived_from_the_jobs_own_record(real, monkeypatch) -> None:
+    """One read: were the frame confirmed meanwhile, both say so, never one each."""
+
+    from server.cadlink import preparation as prep
+
+    harness, _mesher = real
+    _verdict(monkeypatch, status="automatic", axis="+x")
+    step = b"STEP authored"
+    _received(harness, "authored", _authored(step), step)
+    waiting = _prepare(harness, submit=False)
+    record = _record(harness, waiting)
+    # The rule still says automatic (a stale first read) while a confirmation
+    # exists by the time the record is collected.
+    confirm_frame(harness.store, record, "+x")
+    monkeypatch.setattr(prep, "record_solved_frame_provenance", lambda *_a: "automatic")
+
+    summary = _prepare(harness)
+
+    assert summary["state"] == "accepted", summary
+    assert harness.provenance[-1]["frame"]["provenance"] in {"chosen", "suggested"}
+    assert summary["frameAxisAutomatic"] is None

@@ -2281,7 +2281,7 @@ def test_the_job_carries_exactly_the_setup_revision_the_operation_bound(harness:
     assert cad["preparation"]["approvals"] == []
     assert isinstance(cad["preparation"]["meshing_semantics"], str)
     # A linked model has no frame to choose; the record says so.
-    assert cad["frame"]["provenance"] in {"linked", "unconfirmed", "chosen", "suggested"}
+    assert cad["frame"]["provenance"] == "linked" and cad["frame"]["axis"] is None
     assert "setup" not in harness.submitted[0].model_dump(mode="json")
     assert "cad_provenance" not in harness.submitted[0].model_dump(mode="json")
 
@@ -2299,3 +2299,25 @@ def test_a_defaults_solve_is_labelled_from_the_job(harness: Harness) -> None:
     assert cad["setup"]["digest"] == harness.store.get_setup_revision(
         summary["setupRevisionId"]
     )["content_sha256"]
+
+
+def test_a_failure_collecting_provenance_is_not_reported_as_a_failed_submission(
+    harness: Harness, monkeypatch
+) -> None:
+    from server.cadlink import preparation
+
+    _received(harness)
+
+    def broken(*_args, **_kwargs):
+        raise ValueError("approvals unreadable")
+
+    monkeypatch.setattr(preparation, "_cad_provenance", broken)
+
+    summary = harness.prepare(setup_revision_id=_revision(harness.store, _setup()))
+
+    assert (summary["state"], summary["reason"]) == ("needs_user_input", "preparation_failed")
+    assert "Submitting the solve failed" not in summary["message"]
+    assert "approvals unreadable" in summary["message"]
+    # Fail closed: nothing was submitted, and the binding is released.
+    assert harness.submitted == []
+    assert harness.row()["request_json"] is None

@@ -145,7 +145,7 @@ export function CadSolveInputs({
         {operation?.snapshot?.documentName && <span>{operation.snapshot.documentName}</span>}
         {manifest ? <code>{manifest}</code> : loadingOperation ? 'reading…' : 'not recorded'}
       </dd></div>
-      <div><dt>Preparation</dt><dd><code>{operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
+      <div><dt>Preparation</dt><dd><code>{jobCad?.preparation?.preparation_id ?? operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
       <div><dt>Setup revision</dt><dd><code>{setupRevisionId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>
       {jobCad?.frame && !automaticAxis && <div><dt>Frame</dt><dd data-frame-provenance={jobCad.frame.provenance}>
         {jobCad.frame.axis && <code>{jobCad.frame.axis}</code>} {frameProvenanceText(jobCad.frame.provenance)}
