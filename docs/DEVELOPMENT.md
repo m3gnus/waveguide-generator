@@ -111,6 +111,14 @@ Stop only your own processes, by a recorded PID or process group, or with
 name-matching kill): the pattern matches other people's suites on the same machine, and
 one did SIGTERM two other sessions' runs.
 
+## Feature flags
+
+`WG2_ENABLE_ONSHAPE=1` turns the parked Onshape adapter on. It is off in every other
+run, including a git-checkout install, so export it in a development launcher to work
+on the adapter. With it off the Onshape routes are not mounted, `/api/capabilities`
+reports `onshape: false`, and the interface hides every Onshape control; a stored
+Onshape choice reads as Fusion and is left in place.
+
 ## Building the standalone desktop apps
 
 `scripts/build_bundle.py` creates the relocatable CPython runtime layer, an

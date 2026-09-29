@@ -453,7 +453,8 @@ update. WG never silently chooses the first copy. A returned multi-instance asse
 also carries an explicit solver-anchor instance; preparation refuses a repeated
 design when that identity is missing or contradicts the selected instance.
 
-For Onshape:
+For Onshape (not in release builds; it is switched off until the Fusion path is
+stable, and only development runs with `WG2_ENABLE_ONSHAPE=1` offer it):
 
 1. In Onshape, open **My account → Developer → API keys** and create a personal API
    key pair.

@@ -113,6 +113,13 @@ def _outbound(tmp_path: Path) -> tuple[dict, bytes]:
     return product.manifest, step
 
 
+@pytest.fixture(autouse=True)
+def _onshape_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The routes under test only exist when the build flag is on."""
+
+    monkeypatch.setenv("WG2_ENABLE_ONSHAPE", "1")
+
+
 def test_fingerprint_match_allows_measured_onshape_translation_noise() -> None:
     baseline = {
         "is_solid": True,

@@ -16,6 +16,7 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.app import create_app  # noqa: E402
+from server.cadlink.build_flags import ONSHAPE_ENV  # noqa: E402
 from server.platform.paths import app_root  # noqa: E402
 
 
@@ -24,7 +25,18 @@ OUTPUT = REPO_ROOT / "docs" / "reference" / "openapi.v1.json"
 
 
 def render() -> str:
-    schema = create_app(data_dir=REPO_ROOT / ".openapi-contract-data").openapi()
+    # The committed contract documents the full surface, independent of the
+    # caller's environment: build flags that park a feature (Onshape) are forced
+    # on here, and only for the duration of this call.
+    previous = os.environ.get(ONSHAPE_ENV)
+    os.environ[ONSHAPE_ENV] = "1"
+    try:
+        schema = create_app(data_dir=REPO_ROOT / ".openapi-contract-data").openapi()
+    finally:
+        if previous is None:
+            os.environ.pop(ONSHAPE_ENV, None)
+        else:
+            os.environ[ONSHAPE_ENV] = previous
     return json.dumps(schema, indent=2, sort_keys=True, allow_nan=False) + "\n"
 
 
