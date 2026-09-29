@@ -62,8 +62,14 @@ def export_pressure_basis(
     bases_npz: bytes,
     results: Mapping[str, Any],
     channel_id: str | None = None,
+    request_motions: Mapping[str, str] | None = None,
 ) -> PressureBasisExport:
-    """Return one add-in-compatible engineering-convention pressure basis."""
+    """Return one add-in-compatible engineering-convention pressure basis.
+
+    ``request_motions`` is each drive channel's motion from the archived
+    request. It recovers the motion of a basis that did not store one; when no
+    source establishes it, the export is refused rather than guessed as normal.
+    """
 
     bundle = deserialize_channel_bases(bases_npz)
     channel_ids = list(bundle["channel_ids"])
@@ -119,10 +125,19 @@ def export_pressure_basis(
         ),
         "phase_convention": np.asarray(PRESSURE_PHASE_CONVENTION),
         "source_normalization": np.asarray(normalization),
-        "source_motion": np.asarray(str(stored.get("source_motion") or "normal")),
         "surface_pressure_avg_available": np.asarray(False),
     }
-    motion = str(stored.get("source_motion") or "normal")
+    motion = str(
+        stored.get("source_motion")
+        or public_metadata.get("source_motion")
+        or (request_motions or {}).get(selected)
+        or ""
+    )
+    if not motion:
+        raise ValueError(
+            f"the source motion of pressure basis channel {selected!r} cannot be "
+            "established from the stored basis, the results or the archived request"
+        )
     if motion == "axial":
         # A basis solved before the per-source-axis contract recorded no
         # version: it moved sources along the observation frame's axis with a
@@ -153,6 +168,8 @@ def export_pressure_basis(
                 "sphere_phi_deg": np.asarray(result.sphere_phi_deg, dtype=np.float64),
             }
         )
+
+    arrays["source_motion"] = np.asarray(motion)
 
     output = io.BytesIO()
     np.savez_compressed(output, **arrays)

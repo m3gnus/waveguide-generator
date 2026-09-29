@@ -30,7 +30,7 @@ from pathlib import Path
 import logging
 import tempfile
 import time
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import numpy as np
 
@@ -61,6 +61,8 @@ from .frequency_sweep import live_execution_frequencies, sort_native_result_freq
 from .imported import (
     imported_anchor_frame,
     imported_domain_planes,
+    config_supports_source_axes,
+    has_axial_channel,
     imported_symmetry_from_cut_planes,
     prepare_axial_drive,
 )
@@ -86,7 +88,9 @@ PASSIVE_CARDIOID_REFUSAL = (
 )
 
 
-def imported_bempp_preflight(record: Mapping[str, Any]) -> str | None:
+def imported_bempp_preflight(
+    record: Mapping[str, Any], drive_channels: Sequence[Any] | None = None
+) -> str | None:
     """Why BEMPP cannot solve this record, or None when it can.
 
     Answers only from the record, so the plan and the submission refuse before
@@ -95,6 +99,10 @@ def imported_bempp_preflight(record: Mapping[str, Any]) -> str | None:
     pressure is pinned to zero and Metal's is not.
     """
 
+    if has_axial_channel(drive_channels):
+        bempp._load_api()
+        if not config_supports_source_axes(getattr(bempp, "SolveConfig", None)):
+            return "Installed hornlab-bempp-bem does not support per-source axial axes."
     mesh = record.get("mesh")
     integrity = mesh.get("integrity") if isinstance(mesh, Mapping) else None
     count = integrity.get("off_plane_open_edge_count") if isinstance(integrity, Mapping) else None
@@ -322,7 +330,7 @@ def solve_imported_bempp_from_msh_text(
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
     backend = _require_opencl(status)
-    refusal = imported_bempp_preflight(record)
+    refusal = imported_bempp_preflight(record, geometry.drive_channels)
     if refusal is not None:
         raise BemppUnavailable(f"BEMPP cannot solve this CAD return: {refusal}")
 

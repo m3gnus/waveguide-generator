@@ -460,6 +460,40 @@ def _recorded_resolved_quadrants(metadata: Mapping[str, Any]) -> int | None:
     return int(recorded)
 
 
+def _solved_under_legacy_axial(results_text: str | None) -> bool:
+    """Whether stored results hold an axial channel from before per-source axes."""
+
+    if not results_text:
+        return False
+    try:
+        results = json.loads(results_text)
+    except json.JSONDecodeError:
+        return False
+    channels = results.get("channels") if isinstance(results, Mapping) else None
+    for channel in (channels or {}).values() if isinstance(channels, Mapping) else ():
+        metadata = channel.get("metadata") if isinstance(channel, Mapping) else None
+        if (
+            isinstance(metadata, Mapping)
+            and metadata.get("source_motion") == "axial"
+            and not metadata.get("axial_contract")
+        ):
+            return True
+    return False
+
+
+def _request_motions(row: Mapping[str, Any]) -> dict[str, str]:
+    """Each imported drive channel's motion from a job's archived request."""
+
+    try:
+        request = _replay_request(row)
+    except Exception:  # noqa: BLE001 - an unreadable request just recovers nothing
+        return {}
+    geometry = request.geometry
+    if not isinstance(geometry, ImportedGeometrySource):
+        return {}
+    return {channel.id: channel.motion for channel in geometry.drive_channels}
+
+
 def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
     """Build the faithful request represented by a native or imported row."""
 
@@ -3501,6 +3535,19 @@ class JobRuntime:
             return await self.solve_cad_again(job_id)
         request = _replay_request(row)
         _refuse_removed_solver(request)
+        if isinstance(request.geometry, ImportedGeometrySource) and any(
+            channel.motion == "axial" for channel in request.geometry.drive_channels
+        ):
+            results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
+            if _solved_under_legacy_axial(results_text):
+                # A retry promises the same solve again. Axial drive now runs
+                # per source axis, so replaying this request would silently
+                # answer a different question than the run it repeats.
+                raise ImportedSolveRefusal(
+                    "imported_axial_legacy_retry",
+                    "This run's axial sources were solved under the earlier "
+                    "frame-axis rule. Start a new solve to use per-source axes.",
+                )
         if isinstance(request.geometry, ImportedGeometrySource) and self.cadlink_store is not None:
             # A retry solves the parent's record again: only under the domain
             # decision the parent was submitted with.
@@ -3648,9 +3695,10 @@ class JobRuntime:
         if bases_npz is not None:
             try:
                 channel_ids = list(deserialize_channel_bases(bases_npz)["channel_ids"])
+                motions = _request_motions(job)
                 for channel_id in channel_ids:
                     artifact = export_pressure_basis(
-                        bases_npz, results, str(channel_id)
+                        bases_npz, results, str(channel_id), motions
                     )
                     pressure_bases.append(
                         {
@@ -3724,9 +3772,15 @@ class JobRuntime:
         results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
         if results_text is None:
             raise JobResourceUnavailableError("Results not available")
-        return await asyncio.to_thread(
-            export_pressure_basis, bases, json.loads(results_text), channel_id
-        )
+        motions = _request_motions(row)
+        try:
+            return await asyncio.to_thread(
+                export_pressure_basis, bases, json.loads(results_text), channel_id, motions
+            )
+        except ValueError as exc:
+            if "cannot be established" not in str(exc):
+                raise
+            raise JobResourceUnavailableError(str(exc)) from exc
 
     async def get_radiation_impedance_presentation(
         self, job_id: str

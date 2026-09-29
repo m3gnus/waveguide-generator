@@ -367,9 +367,13 @@ def test_a_mirror_cut_source_axis_is_projected_and_an_uncut_tilted_one_is_refuse
     _install(monkeypatch, package)
     _stub_config(monkeypatch)
 
-    # Tag 103 has a node on x = 0, so the x0 mirror cuts it: its axis loses the
-    # x component.
-    _solve(_axial_request(), _record(planes=["x0"]))
+    # Tag 103 has an edge on x = 0, so the x0 mirror cuts it: its axis loses the
+    # x component. (Node 4 moves onto the plane to make that edge.)
+    cut = MESH.replace("4 0.01 0.02 0.03", "4 0 0.02 0.03")
+    cut_record = _record(planes=["x0"])
+    cut_record["_execution_msh_text"] = cut
+    cut_record["mesh_content_sha256"] = mesh_text_sha256(cut)
+    bempp_imported.solve_imported_bempp_from_msh_text(cut, _axial_request(), cut_record)
     (config,) = [solve["config"] for solve in package.solves if getattr(solve["config"], "source_axes", None)]
     assert config.source_axes[103][0] == 0.0
 
@@ -584,3 +588,42 @@ def test_the_worker_dispatches_an_imported_payload_to_the_imported_solve(
         "kind": "design"
     }
     assert calls == ["imported", "design"]
+
+
+def test_a_module_lacking_source_axes_is_refused_up_front_before_any_channel_solves(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dataclasses
+
+    @dataclasses.dataclass
+    class OldConfig:
+        freq_min_hz: float = 0.0
+
+    package = _RecordingBempp()
+    _install(monkeypatch, package)
+    monkeypatch.setattr(bempp, "SolveConfig", OldConfig)
+    channels = _axial_request().geometry.drive_channels
+    reason = "Installed hornlab-bempp-bem does not support per-source axial axes"
+
+    assert reason in str(bempp.BemppEngine().imported_preflight(_record(), MESH, drive_channels=channels))
+    # No axial channel, nothing to refuse.
+    assert bempp.BemppEngine().imported_preflight(_record(), MESH, drive_channels=_request().geometry.drive_channels) is None
+    assert bempp.BemppEngine().imported_preflight(_record(), MESH) is None
+    with pytest.raises(BemppUnavailable, match=reason):
+        _solve(_axial_request(), _record())
+    # The normal channel listed first did not solve either.
+    assert package.solves == []
+
+
+def test_a_source_that_only_touches_the_mirror_at_a_vertex_is_not_projected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MESH's tag 103 has one node on x = 0 and a tilted face: it is a whole
+    source elsewhere, so its across-mirror axis refuses the reduction."""
+
+    _install(monkeypatch, _RecordingBempp())
+    _stub_config(monkeypatch)
+    with pytest.raises(ValueError, match="not in the symmetry"):
+        bempp_imported.solve_imported_bempp_from_msh_text(
+            MESH, _axial_request(), _record(planes=["x0"])
+        )

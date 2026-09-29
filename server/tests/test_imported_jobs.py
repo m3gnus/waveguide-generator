@@ -4262,8 +4262,13 @@ async def _resolve_axial(tmp_path: Path, registry: Any, engine: str, mesh_text: 
 
 
 def test_auto_takes_beat_for_an_axis_along_z_and_passes_it_over_for_a_tilted_one(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from server.solver import bempp as bempp_module
+
+    # A BEMPP whose module takes explicit axes, whatever the installed one is.
+    monkeypatch.setattr(bempp_module, "SolveConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(bempp_module, "_load_api", lambda: True)
     metal_off = _metal(available=False, reason="no Apple GPU")
     flat = asyncio.run(
         _resolve_axial(tmp_path / "flat", _AdapterRegistry(metal_off, _beat_cpu()), "auto", _flat_axial_msh(0.0))
@@ -4330,3 +4335,88 @@ def test_a_module_that_rejects_source_axes_makes_metal_unavailable_not_a_frame_a
         metal.solve_imported_metal_from_msh_text(AXIAL_MSH, request, _record(mesh_path))
 
     assert "source_axes" in seen[-1]
+
+
+def test_metal_and_bempp_preflight_refuse_axial_when_their_module_lacks_source_axes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dataclasses
+
+    import hornlab_metal_bem
+
+    @dataclasses.dataclass
+    class OldConfig:
+        freq_min_hz: float = 0.0
+
+    channels = _request("wgi_" + "0" * 26, **_axial_geometry_changes()).geometry.drive_channels
+    plain = _request("wgi_" + "0" * 26).geometry.drive_channels
+    monkeypatch.setattr(hornlab_metal_bem, "SolveConfig", OldConfig)
+    assert metal.MetalEngine().imported_preflight({}, "", drive_channels=channels) == (
+        "Installed hornlab-metal-bem does not support per-source axial axes."
+    )
+    assert metal.MetalEngine().imported_preflight({}, "", drive_channels=plain) is None
+    assert metal.MetalEngine().imported_preflight({}, "") is None
+
+    class NewConfig(OldConfig):
+        source_axes: dict | None = None
+
+    monkeypatch.setattr(hornlab_metal_bem, "SolveConfig", dataclasses.dataclass(NewConfig))
+    assert metal.MetalEngine().imported_preflight({}, "", drive_channels=channels) is None
+
+
+def test_auto_skips_metal_for_axial_when_its_module_lacks_source_axes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses
+
+    import hornlab_metal_bem
+
+    @dataclasses.dataclass
+    class OldConfig:
+        freq_min_hz: float = 0.0
+
+    monkeypatch.setattr(hornlab_metal_bem, "SolveConfig", OldConfig)
+    registry = _AdapterRegistry(_metal(), _beat_cpu())
+    picked = asyncio.run(_resolve_axial(tmp_path, registry, "auto", _flat_axial_msh(0.0)))
+    assert picked.engine_name == "beat-cpu"
+    with pytest.raises(ImportedSolveRefusal, match="does not support per-source axial axes"):
+        asyncio.run(_resolve_axial(tmp_path / "explicit", registry, "metal", _flat_axial_msh(0.0)))
+
+
+def test_retry_refuses_a_run_whose_axial_sources_were_solved_under_the_frame_axis_rule(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class HoldingEngine:
+        name = "metal"
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> EngineRunResult:
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    def results(**channel_metadata: Any) -> str:
+        return json.dumps({"channels": {"left": {"metadata": {"source_motion": "axial", **channel_metadata}}}})
+
+    async def scenario() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path, mesh_text=AXIAL_MSH)
+        runtime.engine_registry = _AlwaysRegistry(HoldingEngine())  # type: ignore[assignment]
+        try:
+            request = _request(ingest_id, **_axial_geometry_changes())
+            source_id = await runtime.submit(request)
+            # No stored result yet: nothing was solved under the old rule.
+            await runtime.retry(source_id)
+
+            monkeypatch.setattr(runtime.store, "get_results_text", lambda _job: results())
+            with pytest.raises(ImportedSolveRefusal, match="earlier frame-axis rule") as caught:
+                await runtime.retry(source_id)
+            assert caught.value.reason_code == "imported_axial_legacy_retry"
+            assert "new solve" in str(caught.value)
+
+            monkeypatch.setattr(
+                runtime.store, "get_results_text",
+                lambda _job: results(axial_contract="per-source-axis-v2"),
+            )
+            await runtime.retry(source_id)
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(scenario())

@@ -470,7 +470,7 @@ press at all when WG is confident.
   - `axis = normalize(P_sym(sum of n dA over the source's faces))`, with the mesh's
     outward winding, so the axis is outward-positive by construction. `P_sym` zeroes the
     component across each active mirror plane, and only for a source that plane cuts (a
-    half or quarter of a source is completed by its image). A source whose net area
+    half or quarter of a source is completed by its image; see below). A source whose net area
     vector is below 0.1 % of its area (closed or two-sided) has no outward axis and is
     refused at submission (`imported_axial_source_unresolvable`); use normal motion.
   - An axis within 0.5 degrees of +-X, +-Y or +-Z of the solver frame snaps to it
@@ -493,8 +493,14 @@ press at all when WG is confident.
     version `per-source-axis-v2` and each tag's axes. A pressure basis or result with
     axial motion and no contract version was solved under the earlier rule (the
     observation-frame axis with a per-tag sign vote); it still displays and exports, and
-    is labelled `legacy-frame-axis-v1`. Re-solving a stored axial request always runs
-    under v2 and records it; it is never presented as the older result.
+    is labelled `legacy-frame-axis-v1`; a basis that stored no motion recovers it from the
+    results or the archived request, and its export is refused if none establishes it.
+    Retry of a run whose axial sources were solved under that earlier rule is refused
+    (`imported_axial_legacy_retry`: start a new solve to use per-source axes), since a
+    retry promises the same solve. A new solve of the same setup runs under v2.
+  - A mirror plane cuts a source only when face edges of real length (at least 1 % of
+    the source's extent) lie in the plane; a source that merely touches it at a vertex
+    is not projected, so a tilted one refuses the reduction.
 - **Every submission.** The jobs system refuses, at submission, an unlinked record whose
   frame is neither the confirmed one under the same requirement nor, while nothing is
   confirmed, WG's confident automatic axis the record was meshed in

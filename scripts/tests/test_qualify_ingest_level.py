@@ -170,7 +170,7 @@ class Stubs:
         }
         return fixtures.Ingested(record=record, store=None, data_dir=data_dir, sizes=fixtures.mesh_sizes())
 
-    def solve_record(self, engine: str, ingested: fixtures.Ingested, motion: str) -> qual.Solved:
+    def solve_record(self, engine: str, ingested: fixtures.Ingested) -> qual.Solved:
         name, label = ingested.record["_stub"]
         if name == "rearcap":
             field, factor = FIELDS["rearcap"], 1.0
@@ -178,8 +178,6 @@ class Stubs:
             field = FIELDS["round"]
             factor = self.factors[engine][label if name == "round" else "reference"]
         factor = factor * self.shifts.get((name, label), 1.0)
-        if motion == "axial":
-            factor = factor * 0.5j
         return _solved(engine, factor * field)
 
     async def plan(self, _data_dir: Path, _store: Any, _request: Any) -> dict[str, Any]:
@@ -248,8 +246,7 @@ def test_engines_that_agree_on_a_converged_horn_pass_every_judged_row(
     for engine in ENGINES:
         assert _row(rows, "horn return, reference vs fine density", engine).passed is True
     # And every horn bound is the stated one, not one the engines' answers set.
-    for fixture in ("same mesh: horn quarter return, normal", "same mesh: horn quarter return, axial"):
-        assert _row(rows, fixture).tolerance == ingest.HORN_TOLERANCE
+    assert _row(rows, "same mesh: horn quarter return, normal").tolerance == ingest.HORN_TOLERANCE
     for engine in ENGINES:
         for fixture in ("horn: quarter return vs forced full domain", REAR_CAP, PLACED):
             assert _row(rows, fixture, engine).tolerance == ingest.HORN_TOLERANCE, fixture
@@ -277,7 +274,6 @@ def test_an_engine_that_disagrees_with_metal_on_the_horn_fails(
     rows, _facts = _run(tmp_path)
 
     assert _row(rows, "same mesh: horn quarter return, normal").passed is False
-    assert _row(rows, "same mesh: horn quarter return, axial").passed is False
 
 
 def test_a_horn_ladder_that_does_not_converge_fails_on_its_own(stubs: Stubs, tmp_path: Path) -> None:
@@ -405,8 +401,8 @@ def test_a_horn_solve_answered_by_another_engine_is_refused(
     ingested = Stubs().ingest(tmp_path / "round.wgreturn", tmp_path / "data")
 
     monkeypatch.setattr(registry, "create_engine", lambda _name: _Adapter("beat-cpu"))
-    assert ingest._solve_record("beat-cpu", ingested, "normal").engine == "beat-cpu"
+    assert ingest._solve_record("beat-cpu", ingested).engine == "beat-cpu"
 
     monkeypatch.setattr(registry, "create_engine", lambda _name: _Adapter("metal"))
     with pytest.raises(qual.EngineAnswerMismatch, match="'metal'"):
-        ingest._solve_record("beat-cpu", ingested, "normal")
+        ingest._solve_record("beat-cpu", ingested)

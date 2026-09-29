@@ -78,6 +78,8 @@ from .imported import (
     imported_anchor_frame,
     imported_domain_planes,
     imported_symmetry_from_cut_planes,
+    config_supports_source_axes,
+    has_axial_channel,
     mesh_frequency_validation,
     prepare_axial_drive,
     read_verified_import_mesh,
@@ -2442,9 +2444,39 @@ async def _resolve_mesh_ladder(
     return bands, None, plan
 
 
+def imported_metal_preflight(drive_channels: Sequence[Any] | None = None) -> str | None:
+    """Why Metal cannot take this drive, answered before a job exists.
+
+    An axial channel needs ``SolveConfig.source_axes``; a module without it
+    would otherwise fail after other channels had solved, or be chosen by AUTO.
+    """
+
+    if has_axial_channel(drive_channels):
+        try:
+            import hornlab_metal_bem
+
+            config = getattr(hornlab_metal_bem, "SolveConfig", None)
+        except (ImportError, OSError):
+            config = None
+        if not config_supports_source_axes(config):
+            return "Installed hornlab-metal-bem does not support per-source axial axes."
+    return None
+
+
 class MetalEngine:
     name = "metal"
     solver_port_marker = FULL3D_SOLVER_PORT_MARKER
+
+    def imported_preflight(
+        self,
+        record: Mapping[str, Any],
+        msh_text: str,
+        drive_channels: Sequence[Any] | None = None,
+    ) -> str | None:
+        """Why Metal cannot solve this imported drive, asked at submission."""
+
+        del record, msh_text
+        return imported_metal_preflight(drive_channels)
 
     async def run(
         self,

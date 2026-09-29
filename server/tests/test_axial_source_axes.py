@@ -206,3 +206,41 @@ def test_a_pressure_basis_names_its_axial_contract_and_a_legacy_one_says_so() ->
     npz, _ = _bases_with({**base, "source_motion": "normal"})
     assert "axial_contract" not in np.load(io.BytesIO(export_pressure_basis(npz, {}, "c").content)).files
     assert json.loads(json.dumps(v2)) == v2
+
+
+def test_a_tilted_source_touching_the_plane_at_one_vertex_is_not_projected() -> None:
+    tilt = math.radians(20.0)
+    # One corner on x = 0, the rest on x > 0, the face leaning across x.
+    nodes = [(0.0, 0.0, 0.0), (0.02, 0.0, 0.02 * math.tan(tilt)), (0.01, 0.01, 0.0)]
+    text = _msh(nodes, [(101, (1, 2, 3))])
+    found = resolve_source_axes(text, [101], ["x0"])[101]
+    assert found.projected_planes == ()
+    assert found.off_symmetry_planes == ("x0",)
+    assert "not in the symmetry" in axial_domain_problem({101: found}, ["x0"])
+
+
+def test_a_short_sliver_on_the_plane_does_not_count_as_a_cut() -> None:
+    nodes = [(0.0, 0.0, 0.0), (0.0, 1.0e-5, 0.0), (0.05, 0.0, 0.03)]
+    found = resolve_source_axes(_msh(nodes, [(101, (1, 2, 3))]), [101], ["x0"])[101]
+    assert found.projected_planes == ()
+
+
+def test_a_basis_with_no_stored_motion_recovers_it_from_the_request_or_is_refused() -> None:
+    from server.solver.pressure_basis import export_pressure_basis
+
+    base = {"source_ids": ["a"], "source_tags": [101], "source_normalization": "unit_normal_acceleration"}
+    npz, _ = _bases_with(base)
+    # An archived pre-v2 axial basis: motion comes from the archived request, and
+    # with no recorded contract it is labelled as the frame-axis rule.
+    archive = np.load(io.BytesIO(export_pressure_basis(npz, {}, "c", {"c": "axial"}).content))
+    assert str(archive["source_motion"]) == "axial"
+    assert str(archive["axial_contract"]) == "legacy-frame-axis-v1"
+    # The results' own channel metadata also establishes it.
+    results = {"channels": {"c": {"metadata": {"source_motion": "axial"}}}}
+    archive = np.load(io.BytesIO(export_pressure_basis(npz, results, "c").content))
+    assert str(archive["axial_contract"]) == "legacy-frame-axis-v1"
+    archive = np.load(io.BytesIO(export_pressure_basis(npz, {}, "c", {"c": "normal"}).content))
+    assert str(archive["source_motion"]) == "normal" and "axial_contract" not in archive.files
+    # Nothing establishes it: refuse, never guess normal.
+    with pytest.raises(ValueError, match="cannot be established"):
+        export_pressure_basis(npz, {}, "c")

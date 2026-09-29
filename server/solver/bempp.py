@@ -1154,10 +1154,10 @@ class BemppEngine:
     ) -> str | None:
         """Why BEMPP cannot solve this imported record, answered before a job exists."""
 
-        del msh_text, drive_channels
+        del msh_text
         from .bempp_imported import imported_bempp_preflight
 
-        return imported_bempp_preflight(record)
+        return imported_bempp_preflight(record, drive_channels)
 
     async def run(
         self,

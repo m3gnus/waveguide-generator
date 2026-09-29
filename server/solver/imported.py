@@ -254,6 +254,31 @@ def _msh_triangles(msh_text: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     )
 
 
+#: The length of a source's edges lying in a mirror plane, as a fraction of the
+#: source's extent, below which the plane only touches the source.
+AXIAL_CUT_EDGE_FRACTION = 1.0e-2
+
+
+def _plane_cuts_source(coordinates: np.ndarray, corners: np.ndarray, component: int) -> bool:
+    """Whether a mirror plane cuts a source, rather than touching it at a point.
+
+    A cut source has face edges lying in the plane, of real length: the mirror
+    image completes it. A source that only has a vertex (or a short sliver) on
+    the plane is a whole source elsewhere, and its axis must not be projected.
+    """
+
+    on_plane = np.abs(coordinates[:, component]) <= AXIAL_PLANE_TOLERANCE_M
+    edges = np.concatenate([corners[:, [0, 1]], corners[:, [1, 2]], corners[:, [2, 0]]])
+    edges = np.unique(np.sort(edges, axis=1), axis=0)
+    lying = edges[on_plane[edges[:, 0]] & on_plane[edges[:, 1]]]
+    if not len(lying):
+        return False
+    length = float(np.linalg.norm(coordinates[lying[:, 0]] - coordinates[lying[:, 1]], axis=1).sum())
+    nodes = coordinates[np.unique(corners)]
+    extent = float(np.linalg.norm(nodes.max(axis=0) - nodes.min(axis=0)))
+    return length >= AXIAL_CUT_EDGE_FRACTION * extent
+
+
 def resolve_source_axes(
     msh_text: str, tags: Iterable[int], mirror_planes: Iterable[str] = ()
 ) -> dict[int, SourceAxis]:
@@ -264,7 +289,7 @@ def resolve_source_axes(
     construction and no sign is ever voted. ``P_sym`` zeroes the component
     along the normal of each active mirror plane -- exact for a source the
     plane cuts (its mirror image completes it), and applied only to a source
-    that has nodes on the plane. A source the plane does not touch keeps its
+    with face edges lying in the plane. A source the plane does not cut keeps its
     unprojected axis, which may then lie outside the symmetry subspace
     (:meth:`SourceAxis.in_symmetry_subspace`); the caller refuses the reduction
     rather than projecting it.
@@ -292,13 +317,12 @@ def resolve_source_axes(
         # cross is 2 * area * normal, so halving gives n dA.
         net = cross[selected].sum(axis=0) * 0.5
         area = float(np.linalg.norm(cross[selected], axis=1).sum() * 0.5)
-        node_rows = np.unique(corners[selected])
         projected: list[str] = []
         for plane in planes:
             component = _PLANE_NORMAL_INDEX.get(plane)
             if component is None:
                 continue
-            if bool((np.abs(coordinates[node_rows, component]) <= AXIAL_PLANE_TOLERANCE_M).any()):
+            if _plane_cuts_source(coordinates, corners[selected], component):
                 net[component] = 0.0
                 projected.append(plane)
         magnitude = float(np.linalg.norm(net))
@@ -394,6 +418,41 @@ def axial_domain_problem(
     return None
 
 
+def config_supports_source_axes(config: Any) -> bool:
+    """Whether an engine package's ``SolveConfig`` accepts ``source_axes``.
+
+    A dataclass is asked for its field; a plain callable for its parameter or a
+    ``**kwargs``. Anything that cannot be inspected is taken as unsupported, so
+    a package that cannot show the option is never handed an axial drive.
+    """
+
+    import dataclasses
+    import inspect
+
+    if config is None:
+        return False
+    if dataclasses.is_dataclass(config):
+        return "source_axes" in {field.name for field in dataclasses.fields(config)}
+    try:
+        parameters = inspect.signature(config).parameters
+    except (TypeError, ValueError):
+        return False
+    return "source_axes" in parameters or any(
+        item.kind is inspect.Parameter.VAR_KEYWORD for item in parameters.values()
+    )
+
+
+def has_axial_channel(drive_channels: Iterable[Any] | None) -> bool:
+    return any(
+        str(
+            (channel.get("motion") if isinstance(channel, Mapping) else getattr(channel, "motion", None))
+            or "normal"
+        )
+        == "axial"
+        for channel in drive_channels or ()
+    )
+
+
 def axial_metadata(axes: Mapping[int, SourceAxis], tags: Iterable[int]) -> dict[str, Any]:
     """The per-channel record of an axial drive: contract version and axes."""
 
@@ -451,6 +510,8 @@ __all__ = [
     "axial_channel_tags",
     "axial_domain_problem",
     "axial_metadata",
+    "config_supports_source_axes",
+    "has_axial_channel",
     "prepare_axial_drive",
     "resolve_record_axial_axes",
     "resolve_source_axes",
