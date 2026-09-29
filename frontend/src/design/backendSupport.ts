@@ -31,7 +31,7 @@ const FEATURE_LABELS: Record<BackendFeature, string> = {
 /** What to do instead, so a warning is actionable rather than just a refusal. */
 const FEATURE_REMEDIES: Record<BackendFeature, string> = {
   'infinite-baffle':
-    'Use Metal or BEMPP full 3D.',
+    'Use Metal, or BEMPP with coupled infinite-baffle support.',
   'ground-plane':
     'Ground-plane solves need BEMPP full 3D on this build. Note that an infinite baffle is a different boundary, not a substitute.',
   'imported-geometry':
@@ -220,4 +220,21 @@ export function backendLimitation(
   if (backendSupports(backend, feature, plan)) return undefined;
   const name = (backendName(backend) ?? '').toUpperCase();
   return `${name} does not support ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
+}
+
+/**
+ * Why `feature` is unavailable on this whole host, or undefined when some
+ * available engine can run it (or the capability list has not loaded yet).
+ *
+ * Unlike `backendLimitation` this is judged over every engine the host has, not
+ * the ones the current selection would plan, so it says "nothing here can",
+ * never "the engine you picked cannot".
+ */
+export function hostLimitation(
+  feature: BackendFeature,
+  engines?: readonly EngineCapability[],
+): string | undefined {
+  if (!engines || engines.length === 0) return undefined;
+  if (engines.some((item) => item.available && capabilitySupports(item, feature))) return undefined;
+  return `No engine on this host supports ${FEATURE_LABELS[feature]}. ${FEATURE_REMEDIES[feature]}`;
 }

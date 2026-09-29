@@ -131,4 +131,32 @@ describe('solver-backend parameter gating', () => {
     expect(optionsOf('simulation.sim_type')).toEqual(['Free-standing']);
   });
 
+  it('shows infinite baffle disabled, with a reason, when no engine on the host can run it', async () => {
+    await mount({
+      engines: [
+        engine('metal', false, ['free-standing', 'infinite-baffle']),
+        engine('beat-cpu', true, ['free-standing']),
+        engine('bempp', true, ['free-standing']),
+      ],
+      engineSelection: { default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['metal', 'beat-cpu', 'bempp', 'dryrun'] },
+    });
+    const option = [...host.querySelectorAll<HTMLOptionElement>('[data-parameter-id="simulation.sim_type"] option')]
+      .find((item) => item.textContent === 'Infinite baffle');
+    expect(option).toBeDefined();
+    expect(option?.disabled).toBe(true);
+    const reason = host.querySelector('[data-parameter-id="simulation.sim_type"] .field-warning, .field-warning')?.textContent ?? '';
+    expect(reason).toContain('No engine on this host supports coupled infinite-baffle simulation');
+    expect(reason).toContain('Metal, or BEMPP with coupled infinite-baffle support');
+    expect(reason).not.toMatch(/beat|axisym/i);
+  });
+
+  it('does not add a reason when another engine on the host can run it', async () => {
+    await mount(capabilities(false));
+    await act(async () => {
+      useSolveOptionsStore.setState({ engine: 'metal' });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('.field-warning')).toBeNull();
+  });
+
 });

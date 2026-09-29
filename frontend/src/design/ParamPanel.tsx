@@ -5,7 +5,7 @@ import { previewSocket } from '../api/previewSocket';
 import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink';
 import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
-import { useActiveBackendCapability, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
+import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
 import { backendLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
@@ -386,6 +386,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   // AUTO can skip a mounting-incompatible default and use another advertised
   // candidate; an explicit selection remains limited to that one backend.
   const backendPlan = usePlannedBackendCapabilities();
+  const { engines: hostEngines } = useCapabilities();
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
   const updateExpression = useDesignStore((state) => state.updateExpression);
@@ -421,7 +422,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
     </div>;
   }
   if (field.kind === 'select' || field.kind === 'toggle') {
-    const options = fieldOptionsForBackend(field, value, backend, backendPlan);
+    const options = fieldOptionsForBackend(field, value, backend, backendPlan, hostEngines);
     const unsupported = fieldUnsupportedFeature(field, value, backend, backendPlan);
     return <>
       <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
@@ -430,9 +431,12 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
           const option = field.options?.find((item) => String(item.value) === event.target.value);
           commit(option?.value ?? event.target.value);
         }}>
-          {options.map((option) => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}
+          {options.map((option) => <option key={String(option.value)} value={String(option.value)} disabled={Boolean(option.unavailableReason)} title={option.unavailableReason}>{option.label}</option>)}
         </select>
       </HelpTipRow>
+      {/* Listed but disabled: no engine on this host can run it. Say why here,
+          because a title tooltip on a disabled option is easy to miss. */}
+      {options.filter((option) => option.unavailableReason).map((option) => <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}
       {/* The value survived the filter only because the design already holds
           it, so say plainly what will happen rather than leaving a control
           that looks ordinary and then fails a minute into the solve. */}

@@ -1,6 +1,6 @@
 import type { DesignDocument, DesignFamily } from '../stores/design';
 import type { WorkspaceMode } from '../stores/workspaceMode';
-import { backendSupports, type BackendFeature, type BackendIdentity } from './backendSupport';
+import { backendSupports, hostLimitation, type BackendFeature, type BackendIdentity } from './backendSupport';
 import type { EngineCapability } from '../jobs/actions';
 
 export type ParameterSection =
@@ -53,6 +53,11 @@ export interface ParameterOption {
   degradedWithout?: BackendFeature;
   /** Shown in place of `label` when `degradedWithout` is unsupported. */
   degradedLabel?: string;
+  /**
+   * Set on an option that stays listed but cannot be chosen, because no engine
+   * on this host can run `requiresFeature`. It says why, in a short sentence.
+   */
+  unavailableReason?: string;
 }
 
 export interface ParameterDefinition {
@@ -436,15 +441,27 @@ export function fieldOptionsForBackend(
   value: unknown,
   backend: BackendIdentity,
   plan?: readonly EngineCapability[],
+  hostEngines?: readonly EngineCapability[],
 ): ParameterOption[] {
-  return (field.options ?? [])
-    .filter((option) => !option.requiresFeature
-      || backendSupports(backend, option.requiresFeature, plan)
-      || String(option.value) === String(value ?? ''))
-    .map((option) => (option.degradedWithout && option.degradedLabel
+  const options: ParameterOption[] = [];
+  for (const option of field.options ?? []) {
+    const feature = option.requiresFeature;
+    const held = String(option.value) === String(value ?? '');
+    if (feature && !held && !backendSupports(backend, feature, plan)) {
+      // The chosen engine cannot run it. If no engine on the host can either,
+      // keep the option visible but disabled with the reason, so the user is
+      // not left wondering where it went. With an engine that can, hide it as
+      // before: picking another engine is the remedy, not a dead option.
+      const reason = hostLimitation(feature, hostEngines);
+      if (reason) options.push({ ...option, unavailableReason: reason });
+      continue;
+    }
+    options.push(option.degradedWithout && option.degradedLabel
       && !backendSupports(backend, option.degradedWithout, plan)
       ? { ...option, label: option.degradedLabel }
-      : option));
+      : option);
+  }
+  return options;
 }
 
 /**
