@@ -41,8 +41,11 @@ def _run(tmp_path, built):
         dist.mkdir(parents=True)
         (dist / "index.html").write_text("<!doctype html>", encoding="utf-8")
     env = dict(os.environ, PYTHONPATH=str(ROOT))
+    # -rN: no short summary. Under CI=true pytest prints each failure's full
+    # message there too, which would repeat the build instruction and make the
+    # output depend on the host.
     completed = subprocess.run(
-        [sys.executable, "-m", "pytest", str(tests), "-q", "-p", "no:cacheprovider"],
+        [sys.executable, "-m", "pytest", str(tests), "-q", "-rN", "-p", "no:cacheprovider"],
         cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60,
     )
     return completed.stdout + completed.stderr, marker
