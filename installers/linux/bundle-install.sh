@@ -37,15 +37,18 @@ DATA_HOME="${XDG_DATA_HOME:-$HOME_DIRECTORY/.local/share}"
 PREFIX="$DATA_HOME"
 LAUNCH=1
 PREFLIGHT=1
+UPDATE=0
 
 usage() {
     cat <<'USAGE'
-Usage: ./install.sh [--prefix DIR] [--no-launch] [--skip-checks]
+Usage: ./install.sh [--prefix DIR] [--no-launch] [--skip-checks] [--update]
 
   --prefix DIR   install into DIR/waveguide-generator
                  (default: $XDG_DATA_HOME, or ~/.local/share)
   --no-launch    install without starting the application afterwards
   --skip-checks  install even if the system-library check below fails
+  --update       replace an existing installation in place, without starting it;
+                 fails if DIR/waveguide-generator is not already installed
 USAGE
 }
 
@@ -126,6 +129,11 @@ while [ "$#" -gt 0 ]; do
             ;;
         --skip-checks)
             PREFLIGHT=0
+            shift
+            ;;
+        --update)
+            UPDATE=1
+            LAUNCH=0
             shift
             ;;
         -h|--help)
@@ -274,7 +282,13 @@ case "$SOURCE" in
 esac
 
 # Validate an existing target before creating even the shared destination
-# directories, and before any rename can make it disappear.
+# directories, and before any rename can make it disappear. --update (the
+# in-app updater's helper) additionally requires that an installation is there,
+# so it can never create a fresh one or touch anything else.
+if [ "$UPDATE" -eq 1 ] && [ ! -e "$TARGET/app/APP-MANIFEST.json" ]; then
+    fail "--update: there is no Waveguide Generator installation at $TARGET." \
+         "Nothing has been changed."
+fi
 if [ -e "$TARGET" ]; then
     [ -e "$TARGET/app/APP-MANIFEST.json" ] || \
         fail "$TARGET already exists and is not a Waveguide Generator installation." \
