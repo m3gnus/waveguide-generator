@@ -638,7 +638,7 @@ through the same route and stages as a solve requested by Fusion.
   into "Fusion last reported <time>, not observed since" by itself, with no request. With
   the gate off the returns listing still runs as before for an add-in that does not
   declare the inbox transfer (an add-in without `diagnostics.activation` publishes a
-  plain Send only as a return in the folder); the shipped pin `ea0f529` declares it and
+  plain Send only as a return in the folder); the shipped pin `1887491` declares it and
   sends every Send through the inbox regardless of the gate, and the CAD Link panel says
   so. While
   the consumer is off the live delivery route answers a retryable 409
@@ -825,7 +825,7 @@ need.
 A WG-bound Fusion request reaches WG as its own file:
 `<data dir>/ipc/wglink/.wg-solve-requests/<commandId>.json`. Schema 4 carries a `kind`:
 `prepare_and_solve` is Solve and `receive_snapshot` is Send. Schema 3 remains a Solve
-for compatibility with add-ins that only speak schema 3; the shipped pin `ea0f529`
+for compatibility with add-ins that only speak schema 3; the shipped pin `1887491`
 writes schema 4 for both kinds, since WG advertises `solveCommandDelivery: 4` while its
 inbox consumer runs. Schemas 1 and 2 are refused as outdated.
 
@@ -865,7 +865,7 @@ requests and the heartbeat use delivery version 3. WG advertises
 - **Files WG cannot identify as requests.** WG leaves a staging name, non-JSON file,
   another target, or otherwise unidentifiable content alone. A file it can identify as a
   request but cannot validate is claimed, refused visibly, and deleted.
-- **What the shipped pin writes.** The pinned WGLink `ea0f529` decides its schema from
+- **What the shipped pin writes.** The pinned WGLink `1887491` decides its schema from
   what WG advertises. WG advertises `solveCommandDelivery: 4` while its inbox consumer
   runs, so the pin writes schema-4 requests for both kinds: a Send (`receive_snapshot`)
   and a Solve (`prepare_and_solve`) each land in the inbox as their own file, and WG
@@ -945,6 +945,9 @@ before it deletes the request. It changes nothing about what is accepted or refu
   the add-in would see "accepted" for an operation WG lost.
 - A crash between persisting and writing leaves the claim, so the next start redelivers
   the request, gets the same operation (no second job), and writes the file.
+  The pin also reads WG's request acknowledgements (`.wg-solve-acks/<id>.json`) when WG advertises
+  `solveAcknowledgement`: it says "Written to WG's inbox" until WG answers, logs an acceptance, shows a refusal's reason,
+  and says the request was taken but not confirmed after 120 s without an answer.
 - **No file, and what the add-in does then.** Some requests get no file: one with no usable
   command id, one WG cannot read (the claim is kept and read again), a power cut, and one
   whose acknowledgement cannot be written. A file that cannot be created or written
@@ -1320,7 +1323,7 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
 `recovery_required`. A missing observation stays `processing`.
 
-| Add-in field/value at pinned add-in `ea0f529` | WG result |
+| Add-in field/value at pinned add-in `1887491` | WG result |
 | --- | --- |
 | `recentOutcomes: superseded` (`_pending_handoff`) | `cancelled` / `superseded` |
 | `recentOutcomes: discarded` (`_sweep_leftover_claims`) | `cancelled` / `adapter_not_started` |

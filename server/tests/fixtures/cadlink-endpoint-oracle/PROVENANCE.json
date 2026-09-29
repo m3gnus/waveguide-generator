@@ -1,5 +1,5 @@
 {
-  "addin_commit": "ea0f529755e81f5690edf0a41c298361c860d35c",
+  "addin_commit": "18874913e5dc0bf9baa5d78e105b4dc1b5650bae",
   "files": {
     ".gitattributes": "68d608afba2742c934f399ada0c36621f11dd2f19d78dd3a0f569a41348a67c3",
     "BARE.json": "181b52b6c01b788b3d2d217d9511ccf1fd74b422b2ff3bec2c25b623fb7329b8",
@@ -89,5 +89,5 @@
   },
   "generator": "server/tests/tools/generate_cadlink_endpoint_oracle.py",
   "schema": 1,
-  "wg_commit": "dc34b616f8138ed7f3512d102a3e085f092ff108"
+  "wg_commit": "9396111d6e5f79b4d06557d69d16e79f1e255b51"
 }
