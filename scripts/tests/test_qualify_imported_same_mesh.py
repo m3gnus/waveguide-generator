@@ -527,6 +527,183 @@ def test_observations_are_complex_per_channel_and_for_the_channel_sum() -> None:
     assert qual.relative_error(flipped.observations("top"), solved.observations("top")) == pytest.approx([2.0, 2.0])
 
 
+# ------------------------------------------------------------------ axial rows
+
+
+@pytest.mark.parametrize("frequency", [100.0, 700.0, 1500.0])
+def test_the_oscillating_reference_meets_its_boundary_condition(frequency: float) -> None:
+    # A rigid sphere of unit acceleration along the axis has a_n = cos(theta):
+    # dp/dr = -rho cos(theta) on the surface, and the same-convention breathing
+    # sphere reads -rho for a_n = 1. A wrong sign or a missing factor breaks it.
+    pytest.importorskip("scipy")
+    a = qual.SPHERE_RADIUS_M
+
+    for cos_theta in (1.0, 0.3, 0.0, -1.0):
+        slope = _radial_derivative(
+            lambda r: qual.oscillating_sphere(a, frequency, r, np.asarray(cos_theta)), a
+        )
+        assert complex(slope) == pytest.approx(-qual.AIR_DENSITY * cos_theta, rel=1e-4, abs=1e-6)
+
+
+def test_the_oscillating_reference_tends_to_the_incompressible_dipole() -> None:
+    pytest.importorskip("scipy")
+    a, distance = qual.SPHERE_RADIUS_M, 2.0
+    cos_theta = np.asarray([1.0, 0.5, 0.0, -0.5, -1.0])
+
+    pressure = qual.oscillating_sphere(a, 0.05, distance, cos_theta)
+
+    assert pressure == pytest.approx(qual.AIR_DENSITY * a**3 * cos_theta / (2.0 * distance**2), rel=1e-3, abs=1e-12)
+
+
+def test_the_oscillating_reference_radiates_outgoing_waves_for_e_minus_i_omega_t() -> None:
+    pytest.importorskip("scipy")
+    a, frequency = qual.SPHERE_RADIUS_M, 3000.0
+    k = 2.0 * math.pi * frequency / qual.SOUND_SPEED
+    near, far = 20.0, 20.4
+
+    def pressure(r: float) -> complex:
+        return complex(qual.oscillating_sphere(a, frequency, r, np.asarray(1.0)))
+
+    advance = float(np.angle((pressure(far) * far) / (pressure(near) * near)))
+    assert advance == pytest.approx(float(np.angle(np.exp(1j * k * (far - near)))), abs=1e-3)
+
+
+def _observation_shell(planes=("horizontal", "vertical", "diagonal")) -> qual.Solved:
+    angles = np.linspace(-180.0, 180.0, 73)
+    theta, phi = np.meshgrid(np.linspace(0.0, 180.0, 5), np.arange(0.0, 360.0, 90.0), indexing="ij")
+    return qual.Solved(
+        engine="metal", channel_ids=["front", "back"], frequencies_hz=np.asarray([300.0, 700.0]),
+        angles_deg=angles, planes=list(planes), pressure={}, sphere={},
+        sphere_theta_deg=theta.reshape(-1), sphere_phi_deg=phi.reshape(-1), wall_seconds=0.0,
+    )
+
+
+def test_observation_directions_follow_the_engines_polar_grid() -> None:
+    solved = _observation_shell()
+
+    polar, sphere = qual.observation_directions(solved)
+
+    assert polar.shape == (3, 73, 3) and sphere.shape == (20, 3)
+    assert np.allclose(np.linalg.norm(polar, axis=-1), 1.0) and np.allclose(np.linalg.norm(sphere, axis=-1), 1.0)
+
+    def at(plane: str, angle: float) -> np.ndarray:
+        return polar[solved.planes.index(plane), int(np.argmin(np.abs(solved.angles_deg - angle)))]
+
+    assert np.allclose(at("horizontal", 0.0), [0.0, 0.0, 1.0])
+    assert np.allclose(at("horizontal", 90.0), [1.0, 0.0, 0.0])
+    assert np.allclose(at("vertical", 90.0), [0.0, 1.0, 0.0])
+    assert np.allclose(at("diagonal", 90.0), [math.sqrt(0.5), math.sqrt(0.5), 0.0])
+    assert np.allclose(at("horizontal", 180.0), [0.0, 0.0, -1.0])
+    # sphere: phi = 0 leans toward u, phi = 90 toward v, theta = 180 is the rear.
+    assert np.allclose(sphere[1 * 4 + 1], [0.0, math.sin(math.radians(45.0)), math.cos(math.radians(45.0))])
+    assert np.allclose(sphere[-1], [0.0, 0.0, -1.0], atol=1e-12)
+
+
+def test_the_analytic_dipole_follows_its_axis_and_is_zero_on_the_equator() -> None:
+    pytest.importorskip("scipy")
+    solved = _observation_shell(("horizontal", "vertical"))
+    on_axis = qual.oscillating_sphere(qual.SPHERE_RADIUS_M, 300.0, qual.OBSERVATION_DISTANCE_M, np.asarray(1.0))
+
+    along_z = qual.analytic_observations(solved, "oscillating")
+    polar_count = 2 * 73
+    horizontal = along_z[0, :73]
+    assert horizontal[np.argmin(np.abs(solved.angles_deg))] == pytest.approx(on_axis)
+    assert horizontal[np.argmin(np.abs(solved.angles_deg - 180.0))] == pytest.approx(-on_axis)
+    assert abs(horizontal[np.argmin(np.abs(solved.angles_deg - 90.0))]) < 1e-12 * abs(on_axis)
+    assert along_z.shape == (2, polar_count + 20)
+
+    # Turned to a tilted axis, the on-axis sample is where the observation
+    # direction meets it; the reference for -axis is its exact negative.
+    tilted = qual.TILT_ROTATION[:, 2]
+    turned = qual.analytic_observations(solved, "oscillating", axis=tilted)
+    opposite = qual.analytic_observations(solved, "oscillating", axis=-tilted)
+    assert np.allclose(turned, -opposite)
+    polar, _sphere = qual.observation_directions(solved)
+    cosines = polar @ tilted
+    assert turned[0, :polar_count].reshape(2, 73)[0] == pytest.approx(
+        qual.oscillating_sphere(qual.SPHERE_RADIUS_M, 300.0, qual.OBSERVATION_DISTANCE_M, cosines[0])
+    )
+    with pytest.raises(ValueError):
+        qual.analytic_observations(solved, "no-such-body")
+
+
+def test_a_weighted_channel_combination_is_linear_and_complex() -> None:
+    rng = np.random.default_rng(3)
+    front, back = (rng.normal(size=(2, 3, 5)) + 1j * rng.normal(size=(2, 3, 5)) for _ in range(2))
+    front_sphere, back_sphere = (rng.normal(size=(2, 4)) + 1j * rng.normal(size=(2, 4)) for _ in range(2))
+    solved = qual.Solved(
+        engine="metal", channel_ids=["front", "back"], frequencies_hz=np.asarray([100.0, 200.0]),
+        angles_deg=np.linspace(-180.0, 180.0, 5), planes=["horizontal", "vertical", "diagonal"],
+        pressure={"front": front, "back": back}, sphere={"front": front_sphere, "back": back_sphere},
+        sphere_theta_deg=np.zeros(4), sphere_phi_deg=np.zeros(4), wall_seconds=0.0,
+    )
+
+    difference = solved.combined(qual.OSCILLATION_ALONG_Z)
+
+    assert np.array_equal(
+        difference, np.concatenate([(front - back).reshape(2, -1), front_sphere - back_sphere], axis=1)
+    )
+    assert np.array_equal(solved.combined({"front": 1.0}), solved.observations("front"))
+    assert qual.relative_error(solved.combined({"front": 1.0, "back": 1.0}), difference).min() > 0.1
+
+
+def _fixture_axes(rotation: np.ndarray | None = None, planes: tuple[str, ...] = ()):
+    from server.solver.imported import resolve_source_axes
+
+    points, triangles, tags = qual.sphere_mesh(qual.REFERENCE_LEVEL, split=True)
+    if planes:
+        points, triangles, tags = qual.keep_side(points, triangles, tags, planes)
+    if rotation is not None:
+        points = points @ rotation.T
+    text = qual.gmsh22(points, triangles, tags)
+    return text, resolve_source_axes(text, qual.HEMISPHERE_TAGS.values(), planes)
+
+
+def test_the_axial_fixture_is_two_open_hemispheres_with_opposite_axes() -> None:
+    from server.solver.imported import SourceAxisError, resolve_source_axes
+
+    assert [channel["motion"] for channel in qual.AXIAL_CHANNELS] == ["axial", "axial"]
+    assert [channel["source_ids"] for channel in qual.AXIAL_CHANNELS] == [["top"], ["bottom"]]
+    assert set(qual.OSCILLATION_ALONG_Z) == {channel["id"] for channel in qual.AXIAL_CHANNELS}
+    text, axes = _fixture_axes()
+
+    assert axes[101].axis == (0.0, 0.0, 1.0) and axes[101].snapped_to == "+z"
+    assert axes[102].axis == (0.0, 0.0, -1.0) and axes[102].snapped_to == "-z"
+    assert axes[101].net_area_ratio == pytest.approx(0.5, abs=0.02)  # a hemisphere's projected disc
+    # The closed sphere the old row drove as one axial tag has no outward axis.
+    points, triangles, _tags = qual.sphere_mesh(qual.REFERENCE_LEVEL, split=False)
+    whole = qual.gmsh22(points, triangles, np.full(len(triangles), 101))
+    with pytest.raises(SourceAxisError):
+        resolve_source_axes(whole, [101])
+
+
+@pytest.mark.parametrize("planes", [("x0",), ("x0", "y0")])
+def test_the_reduced_axial_fixtures_keep_their_axes_in_the_symmetry_subspace(planes: tuple[str, ...]) -> None:
+    _text, axes = _fixture_axes(planes=planes)
+
+    assert axes[101].axis == (0.0, 0.0, 1.0) and axes[102].axis == (0.0, 0.0, -1.0)
+    assert all(found.in_symmetry_subspace() for found in axes.values())
+
+
+def test_the_tilted_axial_fixture_is_on_no_solver_axis_and_beat_cannot_take_it() -> None:
+    _text, axes = _fixture_axes(qual.TILT_ROTATION)
+    tilt = qual.TILT_ROTATION[:, 2]
+
+    assert np.allclose(axes[101].axis, tilt, atol=1e-9) and np.allclose(axes[102].axis, -tilt, atol=1e-9)
+    assert axes[101].snapped_to is None and axes[102].snapped_to is None
+    # Further than the snap angle from every solver axis, so nothing is rounded onto one.
+    assert float(np.max(np.abs(tilt))) < math.cos(math.radians(2.0))
+    assert float(np.hypot(tilt[0], tilt[1])) > 0.1
+    assert np.linalg.det(qual.TILT_ROTATION) == pytest.approx(1.0)
+
+
+def test_the_axial_tolerances_are_fixed_values_and_never_looser_than_the_normal_ones() -> None:
+    assert len(qual.AXIAL_ANALYTIC_CEILINGS) == len(qual.LADDER)
+    assert all(value > 0.0 for value in qual.AXIAL_ANALYTIC_CEILINGS)
+    assert list(qual.AXIAL_ANALYTIC_CEILINGS) == sorted(qual.AXIAL_ANALYTIC_CEILINGS, reverse=True)
+    assert 0.0 < qual.AXIAL_SAME_MESH_TOLERANCE <= qual.SAME_MESH_TOLERANCE[qual.REFERENCE_LEVEL]
+
+
 class _Adapter:
     """An engine adapter that answers with *answer*'s engine, channels and frequencies."""
 
@@ -586,6 +763,7 @@ def test_a_failing_row_of_either_kind_is_reported_and_fails_the_run(
     monkeypatch.setattr(qual, "available_engines", lambda: {"metal": "available", "beat-cpu": "available"})
     monkeypatch.setattr(qual, "environment_facts", lambda: {"generated_at": "now"})
     monkeypatch.setattr(qual, "run", lambda _engines, report=print: {"rows": rows, "timings": {}})
+    monkeypatch.setattr(qual, "run_axial", lambda _engines, report=print: {"rows": [], "timings": {}, "level_errors": {}})
 
     assert qual.main(["--skip-ingest"]) == 1
 
