@@ -31,6 +31,10 @@ stopped and started on the same data directory. WG has no Save command; the
 jobs store is what keeps a result, so reopening it is the save-and-reopen
 check.
 
+**The coupled infinite baffle.** With ``--ib-engine bempp --ib-expect-backend
+numba`` it also solves two IB frequencies on the same installed server and
+checks the actual assembly backend, coupled route, formulation and radiation.
+
 Everything it needs is in the standard library and in the packaged runtime, so
 it runs with no environment of its own on any of the three platforms.
 """
@@ -76,6 +80,7 @@ DESIGN: dict[str, Any] = {
     "simulation": {"sim_type": "freestanding", "f1": 500, "f2": 1000, "num_frequencies": 2},
 }
 SOLVE_FREQUENCIES = [500.0, 1000.0]
+IB_FREQUENCIES = [1000.0, 4000.0]
 
 #: The engine row this gate is about, and the contract a solve with it must
 #: report back. ``beat-cpu`` is selected by name rather than through AUTO, so
@@ -1082,6 +1087,19 @@ def check_solve(result: dict[str, Any], expected_pins: dict[str, str]) -> dict[s
         raise QualificationError(
             f"a {CPU_ENGINE!r} solve reported {actual!r}, expected {CPU_RESULT_CONTRACT!r}"
         )
+    provenance = check_dependency_drift(result, expected_pins)
+    return {
+        "engine": metadata.get("engine"),
+        "solver_backend": metadata.get("solver_backend"),
+        "beat_backend": metadata.get("beat_backend"),
+        **provenance,
+        "axes": check_axes(result),
+    }
+
+
+def check_dependency_drift(result: dict[str, Any], expected_pins: dict[str, str]) -> dict[str, Any]:
+    """Cross-check the application's provenance against the installed pins."""
+
     provenance = result.get("provenance", {})
     drift = provenance.get("dependency_drift")
     if drift != []:
@@ -1094,14 +1112,129 @@ def check_solve(result: dict[str, Any], expected_pins: dict[str, str]) -> dict[s
     }
     if mismatched:
         raise QualificationError(f"the solve ran against other module commits: {mismatched}")
-    return {
-        "engine": metadata.get("engine"),
-        "solver_backend": metadata.get("solver_backend"),
-        "beat_backend": metadata.get("beat_backend"),
-        "dependency_drift": drift,
-        "pins_cross_checked": sorted(set(expected_pins) & set(shas)),
-        "axes": check_axes(result),
+    return {"dependency_drift": drift, "pins_cross_checked": sorted(set(expected_pins) & set(shas))}
+
+
+def check_ib_solve(
+    result: dict[str, Any], expected_pins: dict[str, str], expected_backend: str
+) -> dict[str, Any]:
+    """Coupled IB ran on the expected backend and radiates into the front half-space.
+
+    The public result carries pressure as SPL, not complex samples. Finite SPL
+    implies finite non-zero pressure; require every front sample rather than
+    accepting the documented nulls that the ordinary axes check allows. Broad
+    level bounds catch silent-zero and gross scaling failures, not solver accuracy.
+    """
+
+    metadata = result.get("metadata") or {}
+    contract = {
+        "engine": "hornlab-bempp-bem",
+        "solver_backend": "bempp",
+        "assembly_backend": expected_backend,
     }
+    actual = {key: metadata.get(key) for key in contract}
+    if actual != contract:
+        raise QualificationError(f"an IB solve reported {actual!r}, expected {contract!r}")
+    ib = metadata.get("infinite_baffle") or {}
+    bempp = metadata.get("bempp") or {}
+    if ib.get("backend") != "full_3d_coupled":
+        raise QualificationError(
+            f"the IB solve carries no coupled infinite_baffle metadata: {ib!r}"
+        )
+    if bempp.get("formulation") != "standard":
+        raise QualificationError(
+            f"the IB solve reported formulation {bempp.get('formulation')!r}, expected 'standard'"
+        )
+    provenance = check_dependency_drift(result, expected_pins)
+    axes = check_axes(result)
+    if not _same_frequencies(result["frequencies"], IB_FREQUENCIES):
+        raise QualificationError(
+            f"the IB solve answered other frequencies: {result['frequencies']!r}"
+        )
+    levels = result["spl_on_axis"]["spl"]
+    if any(
+        not isinstance(value, (int, float)) or isinstance(value, bool) or not 40.0 <= value <= 160.0
+        for value in levels
+    ):
+        raise QualificationError(f"the IB solve has implausible on-axis SPL: {levels!r}")
+    for plane in REQUESTED_PLANES:
+        for index, row in enumerate(result["directivity"][plane]):
+            samples = dict(row)
+            if not all(angle in samples for angle in (0.0, 45.0, 135.0, 180.0)):
+                raise QualificationError(f"the IB {plane} row {index} lacks front/rear samples")
+            front = [value for angle, value in row if abs(angle) < 90.0]
+            rear = [value for angle, value in row if abs(angle) > 90.0]
+            if any(
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                for value in front + rear
+            ):
+                raise QualificationError(
+                    f"the IB {plane} row {index} carries missing or non-finite pressures"
+                )
+            if (
+                abs(samples[0.0]) > 0.5
+                or any(value < -80.0 or value > 30.0 for value in front)
+                or any(value > -80.0 for value in rear)
+            ):
+                raise QualificationError(
+                    f"the IB {plane} row {index} is not forward-radiating: {row!r}"
+                )
+    return {
+        **actual,
+        "infinite_baffle": ib,
+        "formulation": bempp["formulation"],
+        **provenance,
+        "axes": axes,
+        "on_axis_spl_db": levels,
+        "front_half_space": "finite non-zero pressures",
+        "rear_half_space": "zero radiation",
+    }
+
+
+def qualify_infinite_baffle(
+    server: Server,
+    output: Path,
+    expected_pins: dict[str, str],
+    engine: str,
+    expected_backend: str,
+    section: dict[str, Any],
+) -> None:
+    """An opt-in solve on the same installed server as the CPU phase."""
+
+    capabilities = server.capabilities()
+    (output / "ib-capabilities.json").write_text(
+        json.dumps(capabilities, indent=2), encoding="utf-8"
+    )
+    row = engine_row(capabilities, engine)
+    section["offered"] = row
+    if row.get("available") is not True or "infinite-baffle" not in (row.get("mountings") or []):
+        raise QualificationError(
+            f"the candidate did not offer infinite-baffle on {engine!r}: {row!r}"
+        )
+    design = {
+        **DESIGN,
+        "simulation": {"sim_type": "infinite-baffle", "f1": 1000, "f2": 4000, "num_frequencies": 2},
+    }
+    request = {
+        "design": design,
+        "options": {
+            "engine": engine,
+            "solver_mode": "full_3d",
+            "frequencies_hz": IB_FREQUENCIES,
+            "polar_config": {"angle_range": [0.0, 180.0, 5], "norm_angle": 0.0},
+        },
+    }
+    section["request"] = request
+    accepted = api(server.base, "/api/solve", request, what="submitting the infinite-baffle solve")
+    job = accepted.get("job_id")
+    if not job:
+        raise QualificationError(f"the IB solve returned no job id: {accepted!r}")
+    section["job_id"] = job
+    result = server.completed(job)
+    (output / "ib-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+    section["solve"] = check_ib_solve(result, expected_pins, expected_backend)
 
 
 def stop_our_workers(
@@ -1879,10 +2012,14 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         }
         report["workspace"] = workspace_isolation(server.base, work)
         result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
-
-    (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-    report["solve"] = check_solve(result, expected_pins)
-    report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
+        (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        report["solve"] = check_solve(result, expected_pins)
+        report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
+        if arguments.ib_engine:
+            section: dict[str, Any] = {}
+            report["infinite_baffle"] = section
+            qualify_infinite_baffle(server, output, expected_pins, arguments.ib_engine,
+                                    arguments.ib_expect_backend, section)
 
     # After the parametric gate has passed, and on servers of its own: the
     # imported phase needs a data directory nothing has used, and a restart,
@@ -2025,6 +2162,10 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_IMPORTED_FIXTURE,
         help="the .wgreturn bundle the imported phase copies in (default: the committed one)",
     )
+    parser.add_argument("--ib-engine", choices=("bempp",),
+                        help="also qualify a two-frequency coupled infinite-baffle solve")
+    parser.add_argument("--ib-expect-backend", choices=("numba", "opencl"),
+                        help="assembly backend the IB result must report (requires --ib-engine)")
     parser.add_argument("--expected-version")
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-tree-sha256")
@@ -2063,6 +2204,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     check_imported_arguments(parser, arguments)
+    if bool(arguments.ib_engine) != bool(arguments.ib_expect_backend):
+        parser.error("--ib-engine and --ib-expect-backend must be supplied together")
     arguments.expected_pin = parse_pins(arguments.expected_pin)
     arguments.cleanup = None
     started = time.time()

@@ -22,6 +22,7 @@ const engine = (
   mountings: string[],
 ) => ({
   name, available, reason: available ? 'ok' : `${name} unavailable`, version: null, fast_paths: [],
+  assembly_backend: null as string | null,
   formulations: ['full-3d'], mountings, geometry_sources: ['parametric'],
 });
 
@@ -185,6 +186,48 @@ describe('solver-backend parameter gating', () => {
       await Promise.resolve();
     });
     expect(warningsFor('simulation.sim_type')).toEqual([]);
+  });
+
+  it.each(['freestanding', 'infinite-baffle'] as const)('shows the numba notice when IB is offered or selected (%s)', async (simType) => {
+    useDesignStore.getState().updateValue('simulation.sim_type', simType);
+    const payload = capabilities(false);
+    payload.engines[1].assembly_backend = 'numba';
+    await mount(payload);
+    expect(warningsFor('simulation.sim_type').join(' ')).toContain("Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.");
+  });
+
+  it.each(['opencl', null])('omits the notice for a BEMPP backend of %s', async (backend) => {
+    const payload = capabilities(false);
+    payload.engines[1].assembly_backend = backend;
+    await mount(payload);
+    expect(warningsFor('simulation.sim_type')).toEqual([]);
+  });
+
+  it('omits the notice when AUTO routes IB to Metal ahead of numba', async () => {
+    const payload = capabilities(true);
+    payload.engines[1].assembly_backend = 'numba';
+    await mount(payload);
+    expect(warningsFor('simulation.sim_type')).toEqual([]);
+  });
+
+  it('follows the IB candidate when AUTO skips its free-standing default', async () => {
+    const payload = capabilities(false);
+    payload.engines.unshift(engine('beat-cpu', true, ['free-standing']));
+    payload.engines[2].assembly_backend = 'numba';
+    payload.engineSelection.resolvedDefault = 'beat-cpu';
+    payload.engineSelection.full3dOrder = ['beat-cpu', 'bempp'];
+    await mount(payload);
+    expect(warningsFor('simulation.sim_type').join(' ')).toContain('correct but slow');
+    await act(async () => { useSolveOptionsStore.setState({ engine: 'beat-cpu' }); });
+    expect(warningsFor('simulation.sim_type').join(' ')).not.toContain('correct but slow');
+  });
+
+  it('omits the notice when BEMPP does not offer IB', async () => {
+    const payload = capabilities(false);
+    payload.engines[1].assembly_backend = 'numba';
+    payload.engines[1].mountings = ['free-standing'];
+    await mount(payload);
+    expect(warningsFor('simulation.sim_type').join(' ')).not.toContain('correct but slow');
   });
 
 });

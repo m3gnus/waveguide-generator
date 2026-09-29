@@ -13,6 +13,7 @@ export interface EngineCapability {
   reason: string | null;
   version: string | null;
   fast_paths: string[];
+  assembly_backend?: string | null;
   formulations?: string[];
   mountings?: string[];
   /** Single axes this engine can bound with a rigid half space, e.g. ['y']. */

@@ -856,6 +856,9 @@ class StubApplication:
             "engines": [
                 {"name": "beat-cpu", "available": available,
                  "reason": "ready" if available else "preparing"},
+                {"name": "bempp", "available": self.settings.get("ib_available", True),
+                 "reason": "ready", "mountings": self.settings.get("ib_mountings", ["free-standing", "infinite-baffle"]),
+                 "assembly_backend": "numba"},
                 {"name": "beat-metal", "available": False, "reason": "no GPU here"},
                 {"name": "metal", "available": metal,
                  "reason": "ready" if metal else "no Metal device on this runner"},
@@ -954,6 +957,8 @@ class StubApplication:
             return 200, {"items": items, "total": len(items), "limit": 200, "offset": 0}, {}
         if path.startswith("/api/status/"):
             return 200, {"status": "complete"}, {}
+        if path == "/api/results/job-ib":
+            return 200, settings["ib_result"], {}
         if path.startswith("/api/results/"):
             job = state["jobs"].get(path.rsplit("/", 1)[-1])
             if job is None:
@@ -994,6 +999,9 @@ class StubApplication:
             return 200, record, {}
         if path == "/api/solve":
             geometry = body.get("geometry") or {}
+            if (body.get("design") or {}).get("simulation", {}).get("sim_type") == "infinite-baffle":
+                (self.data / "ib-solve-request.json").write_text(json.dumps(body), encoding="utf-8")
+                return 200, {"job_id": "job-ib"}, {}
             if geometry.get("type") != "imported":
                 (self.data / "solve-request.json").write_text(json.dumps(body))
                 return 200, {"job_id": "job-1"}, {}
@@ -1195,6 +1203,7 @@ def test_the_harness_starts_waits_solves_and_stops_against_a_stub(tmp_path: Path
     assert samples[0]["available"] is False
     # Without --imported-engine the imported phase does not run at all.
     assert "imported_return" not in report
+    assert "infinite_baffle" not in report
     assert not (output / "imported-server-1.log").exists()
 
 
@@ -2647,3 +2656,158 @@ def test_a_slow_health_answer_inside_the_wait_budget_is_not_fatal(
     )
 
     assert code == 0, (output / "cpu-qualification.json").read_text(encoding="utf-8")
+
+
+# The opt-in installed IB phase uses the same HTTP harness and result contract.
+def _ib_result() -> dict:
+    result = _result()
+    result["frequencies"] = list(gate.IB_FREQUENCIES)
+    result["spl_on_axis"]["frequencies"] = list(gate.IB_FREQUENCIES)
+    result["metadata"] = {
+        "engine": "hornlab-bempp-bem",
+        "solver_backend": "bempp",
+        "assembly_backend": "numba",
+        "infinite_baffle": {"backend": "full_3d_coupled", "aperture_tag": 4},
+        "bempp": {"formulation": "standard"},
+    }
+    result["directivity"] = {
+        plane: [
+            [[0.0, 0.0], [45.0, -6.0], [90.0, -20.0], [135.0, -200.0], [180.0, -200.0]]
+            for _ in gate.IB_FREQUENCIES
+        ]
+        for plane in PLANES
+    }
+    return result
+
+
+@pytest.mark.parametrize(
+    ("damage", "message"),
+    [
+        ("pass", None),
+        ("backend", "assembly_backend"),
+        ("nonfinite", "non-finite"),
+        ("missing-ib", "infinite_baffle metadata"),
+        ("formulation", "formulation"),
+        ("drift", "dependency drift"),
+        ("pins", "other module commits"),
+        ("level", "implausible"),
+        ("rear", "forward-radiating"),
+        ("front-null", "pressures"),
+        ("frequencies", "other frequencies"),
+        ("unavailable", "did not offer"),
+        ("unsupported", "did not offer"),
+    ],
+)
+def test_ib_installed_phase(
+    tmp_path: Path, _in_process: None, damage: str, message: str | None
+) -> None:
+    result = _ib_result()
+    settings = {"ib_result": result}
+    if damage == "backend":
+        result["metadata"]["assembly_backend"] = "opencl"
+    elif damage == "nonfinite":
+        result["spl_on_axis"]["spl"][0] = float("nan")
+    elif damage == "missing-ib":
+        result["metadata"].pop("infinite_baffle")
+    elif damage == "formulation":
+        result["metadata"]["bempp"]["formulation"] = "burton_miller"
+    elif damage == "drift":
+        result["provenance"]["dependency_drift"] = ["hornlab-bempp-bem"]
+    elif damage == "pins":
+        result["provenance"]["dependency_shas"]["hornlab-beat-bem"] = "0" * 40
+    elif damage == "level":
+        result["spl_on_axis"]["spl"][0] = -120.0
+    elif damage == "rear":
+        result["directivity"]["horizontal"][0][-1][1] = -6.0
+    elif damage == "front-null":
+        result["directivity"]["horizontal"][0][1][1] = None
+    elif damage == "frequencies":
+        result["frequencies"] = [500.0, 1000.0]
+    elif damage == "unavailable":
+        settings["ib_available"] = False
+    elif damage == "unsupported":
+        settings["ib_mountings"] = ["free-standing"]
+    payload = _stub_payload(tmp_path, **settings)
+    _resources, app, interpreter = gate.resolve_payload(payload)
+    output, work = tmp_path / "out", tmp_path / "work"
+    output.mkdir()
+    section = {}
+    with gate.Server(
+        interpreter, app, {}, work / "data", work / "stop", output / "server.log"
+    ) as server:
+        if message:
+            with pytest.raises(gate.QualificationError, match=message):
+                gate.qualify_infinite_baffle(server, output, PINS, "bempp", "numba", section)
+        else:
+            gate.qualify_infinite_baffle(server, output, PINS, "bempp", "numba", section)
+            assert section["solve"]["assembly_backend"] == "numba"
+            assert section["solve"]["axes"]["frequencies"] == 2
+            request = json.loads((work / "data" / "ib-solve-request.json").read_text())
+            assert request["options"]["engine"] == "bempp"
+            assert request["options"]["frequencies_hz"] == [1000.0, 4000.0]
+            assert request["design"]["simulation"]["sim_type"] == "infinite-baffle"
+            assert request["design"]["mesh"] == gate.DESIGN["mesh"]
+    assert (output / "ib-capabilities.json").exists()
+    if damage not in ("unavailable", "unsupported"):
+        assert (output / "ib-result.json").exists()
+
+
+@pytest.mark.parametrize("job", PLATFORM_JOBS)
+def test_rc_ib_qualification_only_on_windows_and_linux(job: str) -> None:
+    command = next(
+        step["run"] for step in _steps(job) if "qualify_installed_cpu.py" in (step.get("run") or "")
+    )
+    expected = job != "macos-bundle"
+    assert ("--ib-engine bempp" in command) is expected
+    assert ("--ib-expect-backend numba" in command) is expected
+
+
+@pytest.mark.parametrize("flag", ["--ib-engine", "--ib-expect-backend"])
+def test_ib_flags_must_be_supplied_together(tmp_path: Path, flag: str) -> None:
+    with pytest.raises(SystemExit) as raised:
+        gate.main(
+            [
+                "--payload",
+                str(tmp_path),
+                "--work",
+                str(tmp_path),
+                "--output",
+                str(tmp_path),
+                flag,
+                "bempp" if flag == "--ib-engine" else "numba",
+            ]
+        )
+    assert raised.value.code == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the stub interpreter is a shebang script")
+def test_ib_opt_in_runs_on_the_cpu_server_and_keeps_its_report(
+    tmp_path: Path, _quick_timeouts: None
+) -> None:
+    payload = _stub_payload(tmp_path, ib_result=_ib_result())
+    output = tmp_path / "out"
+    code = gate.main(
+        [
+            "--payload",
+            str(payload),
+            "--payload-kind",
+            "stub",
+            "--work",
+            str(tmp_path / "work"),
+            "--output",
+            str(output),
+            "--expected-pin",
+            f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+            "--ib-engine",
+            "bempp",
+            "--ib-expect-backend",
+            "numba",
+        ]
+    )
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    assert code == 0, report
+    assert report["solve"]["beat_backend"] == "cpu"
+    assert report["infinite_baffle"]["solve"]["assembly_backend"] == "numba"
+    assert report["worker_cleanup"]["contained"] is True
+    state = json.loads((tmp_path / "work" / "data" / "stub-state.json").read_text())
+    assert state["starts"] == 1

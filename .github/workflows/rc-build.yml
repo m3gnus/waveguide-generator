@@ -455,7 +455,9 @@ jobs:
             --output (Join-Path $root "qualification") `
             --pins-json pins.json `
             --build-manifest $manifest `
-            --imported-engine beat-cpu
+            --imported-engine beat-cpu `
+            --ib-engine bempp `
+            --ib-expect-backend numba
           # PowerShell does not turn a native command's non-zero exit into a
           # terminating error: $ErrorActionPreference governs PowerShell errors,
           # not exit codes, so without this the qualifier could fail and the step
@@ -623,7 +625,9 @@ jobs:
             --output "$root/qualification" \
             --pins-json pins.json \
             --build-manifest "$manifest" \
-            --imported-engine beat-cpu
+            --imported-engine beat-cpu \
+            --ib-engine bempp \
+            --ib-expect-backend numba
 
       - name: Qualify Quit during a blocked mesh build on the same candidate
         # See the macOS job.

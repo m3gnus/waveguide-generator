@@ -1662,3 +1662,27 @@ def test_removed_mode_plan_refuses_before_engine_fallback(
     error = json.loads(response.body)["error"]
     assert error["code"] == "removed_solver_mode"
     assert "Axisymmetric solving has been removed" in error["message"]
+
+
+@pytest.mark.parametrize("backend", ["numba", "opencl", None])
+def test_bempp_assembly_backend_reaches_capabilities(monkeypatch, backend) -> None:
+    from server.solver import bempp, metal
+    from server.diagnostics.capabilities import capabilities_payload
+
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "absent"})
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: {
+            "available": backend is not None,
+            "reason": "probe",
+            "assembly_backend": backend,
+            "coupled_infinite_baffle": True,
+        },
+    )
+    _stub_beat_backends(monkeypatch, cpu=True)
+    engine_registry = registry.EngineRegistry(detector=lambda: registry.detect_engines(environ={}))
+    payload = asyncio.run(capabilities_payload(engine_registry))
+    rows = {row["name"]: row for row in payload["engines"]}
+    assert rows["bempp"]["assembly_backend"] == backend
+    assert rows["metal"]["assembly_backend"] is None

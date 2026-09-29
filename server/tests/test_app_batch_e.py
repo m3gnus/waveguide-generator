@@ -231,6 +231,7 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "field_traces",
             "di_sphere",
             "cancellation_granularity",
+            "assembly_backend",
         }
         for engine in engines
     )

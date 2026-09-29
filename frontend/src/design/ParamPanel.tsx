@@ -425,6 +425,9 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   if (field.kind === 'select' || field.kind === 'toggle') {
     const options = fieldOptionsForBackend(field, value, backend, backendPlan, hostEngines);
     const unsupported = fieldUnsupportedFeature(field, value, backend, backendPlan);
+    const ibEngine = field.id === 'simulation.sim_type'
+      ? backendPlan.find((candidate) => candidate.mountings?.includes('infinite-baffle'))
+      : undefined;
     return <>
       <HelpTipRow className={`select-row${disabled ? ' field-disabled' : ''}`} text={field.description}>
         <label htmlFor={`parameter-${field.id}`} title={disabledReason}>{field.label}</label>
@@ -435,6 +438,8 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
           {options.map((option) => <option key={String(option.value)} value={String(option.value)} disabled={Boolean(option.unavailableReason)} title={option.unavailableReason}>{option.label}</option>)}
         </select>
       </HelpTipRow>
+      {ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' &&
+        <div className="field-warning" role="status">Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.</div>}
       {/* Listed but disabled: no engine on this host can run it. Say why here,
           because a title tooltip on a disabled option is easy to miss. */}
       {options.filter((option) => option.unavailableReason).map((option) => <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}

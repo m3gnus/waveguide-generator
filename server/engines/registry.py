@@ -124,6 +124,8 @@ class EngineInfo:
     #: wants. Defaults to the name so an engine that has nothing better to say
     #: displays exactly what it did before labels existed.
     label: str = ""
+    # Structured BEMPP probe result; the UI must not parse the warning prose.
+    assembly_backend: str | None = None
 
     def display_label(self) -> str:
         return self.label or self.name
@@ -275,6 +277,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             EngineInfo(
                 name=name,
                 label=label,
+                assembly_backend=status.get("assembly_backend") if name == "bempp" else None,
                 available=bool(status.get("available")),
                 reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
                 version=(str(status["version"]) if status.get("version") is not None else None),

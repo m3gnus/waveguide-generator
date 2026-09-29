@@ -592,6 +592,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                     "di_sphere": True,
                     "cancellation_granularity": "between-frequencies",
                     "label": "",
+                    "assembly_backend": None,
                 }
             ],
             "engineSelection": {
