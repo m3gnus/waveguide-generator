@@ -183,3 +183,58 @@ radiated field collapses: the −6 dB half-angle came out 3.9° against ABEC's 4
 at 10 kHz, a 40 dB pattern error from one bad element. `subdivide()` splits along
 ABEC's own segments, so the body is unchanged. Any harness feeding an ABEC mesh
 to our solvers has to do this first.
+
+## Repeatable check through WG's own path: `compare_3d.py`
+
+`compare.py` feeds ABEC's polyline to the axisymmetric engine. `compare_3d.py`
+asks the question a user's design raises: does WG's full-3D Metal solve of G8
+agree with ABEC? It builds G8 from the ATH parameters through WG's library
+(text config, mesher, Metal), at infinite-baffle aperture scale 1.0 and an 8 mm
+mouth cap (about 1950 triangles, quarter model), solves real k (the infinite-
+baffle default) on ABEC's own 100 frequencies, and compares with
+`Results/Spectrum_ABEC.txt`. It is a manual script, not part of the test suite.
+
+Run it on an Apple Silicon Mac with WG's pinned environment, from the repository
+root (about 20 s of Metal solve plus meshing):
+
+```bash
+.venv/bin/python docs/validation/abec-g8-circsym-ib/compare_3d.py
+```
+
+It exits 0 when every assertion holds and prints the numbers either way.
+`--mouth 4.3` runs ABEC's own element cap (about two minutes; the assertions are
+calibrated for 8 mm) and `--no-assert` only reports.
+
+**Drive.** WG solves unit acceleration; ABEC's project drives the dome with
+`Acceleration = 100`. Pressure is linear in the drive, so the script scales
+ours by 100 before any absolute comparison. Pattern figures are normalised on
+axis and do not depend on it. The throat impedance is drive independent and is
+checked as well, which is what shows the scaling is right.
+
+**Assertions:**
+
+- absolute SPL rms below 0.3 dB and pattern rms below 0.2 dB, all 19 angles,
+  below 4 kHz;
+- the -6 dB half-angle within 2 degrees of ABEC's at every frequency up to
+  12 kHz;
+- the half-angle minimum at 2047 Hz, within one grid step (x1.0476), for both;
+- the solve ran real k with no shift; throat impedance median error below 3%.
+
+**Expected numbers** (WG 56c2344e plus the polar change, metal-bem pin
+`5765b21e`, mesher pin `873b0fda`, 1954 triangles, 807 of them on the aperture,
+solve 17-20 s, recorded 2026-09-29):
+
+| quantity | value |
+|---|---|
+| absolute SPL rms below 4 kHz | 0.196 dB (median on-axis offset -0.199 dB) |
+| pattern rms below 4 kHz | 0.049 dB |
+| -6 dB half-angle, max difference up to 12 kHz | 1.07 deg (rms 0.43 deg) |
+| half-angle minimum | 2047 Hz, ABEC 2047 Hz |
+| throat impedance, relative error | median 0.0146, max 0.0448 |
+
+By band, absolute SPL rms / pattern rms in dB: 200-1000 Hz 0.21 / 0.01;
+1-4 kHz 0.18 / 0.07; 4-11 kHz 0.26 / 0.26; above 11 kHz 1.27 / 1.38 (max 10.95).
+Above about 11 kHz the 8 mm mesh is too coarse to judge: the larger errors are
+off-axis nulls displaced by a small frequency error. Run with the drive set to
+50 the absolute assertion fails and the rest still pass, so the check is not
+vacuous.
