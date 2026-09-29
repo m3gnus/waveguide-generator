@@ -118,3 +118,103 @@ source_modules =
 # future server packages. Contracts may import their own descendants.
 forbidden_modules =
     server.*
+
+# Solver engine adapters are independent: no engine's adapter may import another
+# engine's, directly or through a chain. Shared solver utilities and multi-engine
+# dispatchers stay outside these lists. When you add an engine-specific module, add
+# it to its engine's list here. Ignored edges are exact module edges: new symbols
+# taken along an already ignored edge are not caught until the edge is removed.
+
+[importlinter:contract:solver-engine-metal]
+name = No other engine imports the Metal adapter
+type = forbidden
+source_modules =
+    server.solver.bempp
+    server.solver.bempp_imported
+    server.solver.bempp_process
+    server.solver.beat
+    server.solver.beat_imported
+    server.solver.beat_cpu_runtime
+    server.solver.official_beat
+    server.engines.dryrun
+forbidden_modules =
+    server.solver.metal
+    server.solver.metal_permit
+ignore_imports =
+    # Legacy: the imported BEMPP and BEAT adapters reuse four private Metal channel
+    # helpers (_apply_channel_driver, _channel_basis_metadata,
+    # _channel_source_identity, _imported_validity_metadata). Remove when they move
+    # to an engine-neutral module.
+    server.solver.bempp_imported -> server.solver.metal
+    server.solver.beat_imported -> server.solver.metal
+    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
+    # dispatcher, which reaches every engine.
+    server.solver.bempp_process -> server.solver.warmup
+    server.solver.beat -> server.solver.warmup
+unmatched_ignore_imports_alerting = none
+
+[importlinter:contract:solver-engine-bempp]
+name = No other engine imports the BEMPP adapter
+type = forbidden
+source_modules =
+    server.solver.metal
+    server.solver.metal_permit
+    server.solver.beat
+    server.solver.beat_imported
+    server.solver.beat_cpu_runtime
+    server.solver.official_beat
+    server.engines.dryrun
+forbidden_modules =
+    server.solver.bempp
+    server.solver.bempp_imported
+    server.solver.bempp_process
+ignore_imports =
+    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
+    # dispatcher, which reaches every engine.
+    server.solver.bempp_process -> server.solver.warmup
+    server.solver.beat -> server.solver.warmup
+unmatched_ignore_imports_alerting = none
+
+[importlinter:contract:solver-engine-beat]
+name = No other engine imports the BEAT adapter
+type = forbidden
+source_modules =
+    server.solver.metal
+    server.solver.metal_permit
+    server.solver.bempp
+    server.solver.bempp_imported
+    server.solver.bempp_process
+    server.engines.dryrun
+forbidden_modules =
+    server.solver.beat
+    server.solver.beat_imported
+    server.solver.beat_cpu_runtime
+    server.solver.official_beat
+ignore_imports =
+    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
+    # dispatcher, which reaches every engine.
+    server.solver.bempp_process -> server.solver.warmup
+    server.solver.beat -> server.solver.warmup
+unmatched_ignore_imports_alerting = none
+
+[importlinter:contract:solver-engine-dryrun]
+name = No other engine imports the dry-run adapter
+type = forbidden
+source_modules =
+    server.solver.metal
+    server.solver.metal_permit
+    server.solver.bempp
+    server.solver.bempp_imported
+    server.solver.bempp_process
+    server.solver.beat
+    server.solver.beat_imported
+    server.solver.beat_cpu_runtime
+    server.solver.official_beat
+forbidden_modules =
+    server.engines.dryrun
+ignore_imports =
+    # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
+    # dispatcher, which reaches every engine.
+    server.solver.bempp_process -> server.solver.warmup
+    server.solver.beat -> server.solver.warmup
+unmatched_ignore_imports_alerting = none
