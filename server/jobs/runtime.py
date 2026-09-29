@@ -85,6 +85,7 @@ from server.solver.symmetry import (
     validate_symmetry_mode,
 )
 from server.solver.field_plane import FieldPlaneEvaluation, FieldPlaneService
+from server.solver.formulation import bem_formulation
 from server.solver.metal_permit import MetalPermit, process_metal_permit
 from server.solver.base import is_full3d_solver_port, run_full3d_solver_port
 
@@ -528,6 +529,29 @@ def _ground_plane_axis(request: SolveRequest) -> str | None:
 
     ground_plane = request.options.ground_plane
     return ground_plane.axis if ground_plane.enabled else None
+
+
+def _submission_identity(request: SolveRequest) -> dict[str, Any]:
+    """What a submission key is compared against on replay.
+
+    The wire request does not carry the BEM formulation: the adapters derive it
+    from the mounting. A coupled infinite baffle now runs real k where it used
+    to run complex_k, so the same request bytes stand for a different solve. The
+    formulation it will run with is therefore part of the identity, and a replay
+    of a key that created an earlier (complex_k) infinite-baffle job conflicts
+    instead of answering with that job. Requests with any other mounting hash
+    exactly as before.
+    """
+
+    identity = request.model_dump(mode="json")
+    design = getattr(request, "design", None)
+    if design is not None and design.root.simulation.sim_type == "infinite-baffle":
+        bem = bem_formulation(coupled_infinite_baffle=True)
+        identity["effective_bem_formulation"] = {
+            "formulation": bem.formulation,
+            "complex_k_shift": bem.complex_k_shift,
+        }
+    return identity
 
 
 def _requested_mounting(request: SolveRequest) -> str | None:
@@ -2488,7 +2512,7 @@ class JobRuntime:
         await self.start()
         submission_key = request.client_request_id
         submission_request_sha256 = canonical_json_sha256(
-            request.model_dump(mode="json")
+            _submission_identity(request)
         )
         if submission_key is not None:
             existing_job_id = await asyncio.to_thread(

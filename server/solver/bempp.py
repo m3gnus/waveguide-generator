@@ -44,7 +44,7 @@ from .field_traces_store import (
     describe_retention_refusal,
     field_trace_retention_plan,
 )
-from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
+from .formulation import bem_formulation
 from .ground_plane import (
     GROUND_PLANE_AXES,
     NATIVE_GROUND_PLANE,
@@ -867,9 +867,13 @@ def solve_bempp_from_msh_text(
             )
         return True
 
-    formulation = DEFAULT_BEM_FORMULATION
+    # The coupled infinite baffle runs real k; everything else keeps complex_k.
+    # The rationale is in server/solver/formulation.py. What is chosen here is
+    # what the native config executes and what the result metadata records.
+    bem = bem_formulation(coupled_infinite_baffle=aperture_tag is not None)
+    formulation: Any = bem.formulation
     if BIEFormulation is not None:
-        formulation = getattr(BIEFormulation, "COMPLEX_K", formulation)
+        formulation = getattr(BIEFormulation, bem.formulation.upper(), formulation)
     requested_workers = _resolved_workers()
     workers = (
         1
@@ -893,7 +897,7 @@ def solve_bempp_from_msh_text(
         "freq_count": context.num_frequencies,
         "freq_spacing": context.frequency_spacing,
         "formulation": formulation,
-        "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
+        "complex_k_shift": bem.complex_k_shift,
         "observation": observation_config(
             context,
             ObservationConfig,
@@ -1059,7 +1063,7 @@ def solve_bempp_from_msh_text(
         "bempp": {
             "native_symmetry_plane": getattr(config, "native_symmetry_plane", None),
             "formulation": json_safe_native_value(getattr(config, "formulation", formulation)),
-            "complex_k_shift": float(getattr(config, "complex_k_shift", DEFAULT_COMPLEX_K_SHIFT)),
+            "complex_k_shift": float(getattr(config, "complex_k_shift", bem.complex_k_shift)),
             "assembly_backend": backend,
             "opencl_device": getattr(config, "opencl_device", OPENCL_DEVICE_TYPE),
             "precision": getattr(config, "precision", "single"),

@@ -68,7 +68,11 @@ from .field_traces_store import (
     build_field_trace_artifact,
     field_trace_retention_plan,
 )
-from .formulation import DEFAULT_BEM_FORMULATION, DEFAULT_COMPLEX_K_SHIFT
+from .formulation import (
+    DEFAULT_BEM_FORMULATION,
+    DEFAULT_COMPLEX_K_SHIFT,
+    bem_formulation,
+)
 from .infinite_baffle import require_coupled_aperture_tag
 from .imported import (
     imported_anchor_frame,
@@ -626,13 +630,17 @@ def solve_metal_from_msh_text(
         ObservationFrame,
         aperture_tag=aperture_tag,
     )
+    # The coupled infinite baffle runs real k; everything else keeps complex_k.
+    # The rationale is in server/solver/formulation.py. What is chosen here is
+    # what the native config executes and what the result metadata records.
+    bem = bem_formulation(coupled_infinite_baffle=aperture_tag is not None)
     kwargs: dict[str, Any] = {
         "freq_min_hz": context.frequency_range[0],
         "freq_max_hz": context.frequency_range[1],
         "freq_count": context.num_frequencies,
         "freq_spacing": context.frequency_spacing,
-        "formulation": DEFAULT_BEM_FORMULATION,
-        "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
+        "formulation": bem.formulation,
+        "complex_k_shift": bem.complex_k_shift,
         "observation": _observation(
             context,
             msh_text,

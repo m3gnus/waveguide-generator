@@ -7,7 +7,7 @@ import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import type { ImportedSolvePlan } from '../jobs/actions';
 import type { ImportedSolvePlanSnapshot } from '../jobs/useImportedSolvePlan';
 import { defaultPolarUi, resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
+import { accuracyExplainer, DirectivityMapControls, effectiveGridView, FrequencySweepControls, SolveOptionsControls } from './SolveOptionsSections';
 
 // The server's per-engine verdict on one CAD return (POST
 // /api/solve/imported-plan). A test hands the selector one directly; with no
@@ -550,5 +550,14 @@ describe('a corrupt stored rig still renders the rail', () => {
     expect(checked).toHaveLength(defaultPolarUi.enabledAxes.length);
     expect(host.querySelector<HTMLInputElement>('#polar-distance')!.value).toBe(String(defaultPolarUi.distance));
     expect(host.querySelector<HTMLInputElement>('#polar-angle-step')!.value).toBe(String(defaultPolarUi.angleStep));
+  });
+});
+
+describe('accuracy explainer and the infinite baffle', () => {
+  it('says Fast adds a shift, and that an infinite-baffle design is the exception', () => {
+    const [fast] = accuracyExplainer('metal', 'beat-metal');
+    expect(fast).toContain('imaginary shift (0.005)');
+    expect(fast).toContain('An infinite-baffle design is the exception');
+    expect(fast).toContain('no shift and no added damping');
   });
 });

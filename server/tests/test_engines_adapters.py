@@ -557,3 +557,104 @@ def test_bempp_retains_no_field_traces_above_a_ground_plane(monkeypatch) -> None
     kept = bempp.solve_bempp_from_msh_text(_cabinet_msh(), free)
     assert kept["_field_trace_unavailable_reason"] is None
     assert kept["_field_traces"] is not None
+
+
+# --- BEM formulation per mounting ------------------------------------------
+#
+# A coupled infinite baffle is an interior problem closed by the radiating
+# aperture, so it runs real k (``standard``); free-standing keeps ``complex_k``
+# 0.005. What the native config is given must be what the metadata records.
+
+
+def _metal_solve(monkeypatch, *, infinite_baffle: bool):
+    captured: dict = {}
+    monkeypatch.setattr(
+        metal, "native_config", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs)
+    )
+    monkeypatch.setattr(metal, "native_solve", lambda _path, _config: _result())
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ok"})
+    monkeypatch.setattr(metal, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    if infinite_baffle:
+        response = metal.solve_metal_from_msh_text(
+            _cabinet_msh(aperture=True), _context(sim_type=1), mesh_metadata={"apertureTag": 12}
+        )
+    else:
+        response = metal.solve_metal_from_msh_text(_cabinet_msh(), _context())
+    return captured, response
+
+
+def _bempp_solve(monkeypatch, *, infinite_baffle: bool):
+    captured: dict = {}
+    monkeypatch.setattr(
+        bempp, "SolveConfig", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs)
+    )
+    monkeypatch.setattr(bempp, "bempp_solve", lambda _path, _config: _result())
+    monkeypatch.setattr(
+        bempp, "BIEFormulation", SimpleNamespace(STANDARD="standard", COMPLEX_K="complex_k")
+    )
+    monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        bempp,
+        "bempp_status",
+        lambda: {
+            "available": True,
+            "reason": "mock CPU",
+            "assembly_backend": "numba",
+            "coupled_infinite_baffle": True,
+        },
+    )
+    if infinite_baffle:
+        response = bempp.solve_bempp_from_msh_text(
+            _cabinet_msh(aperture=True), _context(sim_type=1), mesh_metadata={"apertureTag": 12}
+        )
+    else:
+        response = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context())
+    return captured, response
+
+
+def test_metal_infinite_baffle_runs_real_k_and_records_it(monkeypatch) -> None:
+    captured, response = _metal_solve(monkeypatch, infinite_baffle=True)
+    assert captured["formulation"] == "standard"
+    assert captured["complex_k_shift"] == 0.0
+    recorded = response["metadata"]["metal"]
+    assert (recorded["formulation"], recorded["complex_k_shift"]) == ("standard", 0.0)
+
+
+def test_metal_free_standing_keeps_complex_k(monkeypatch) -> None:
+    captured, response = _metal_solve(monkeypatch, infinite_baffle=False)
+    assert captured["formulation"] == "complex_k"
+    assert captured["complex_k_shift"] == 0.005
+    recorded = response["metadata"]["metal"]
+    assert (recorded["formulation"], recorded["complex_k_shift"]) == ("complex_k", 0.005)
+
+
+def test_bempp_infinite_baffle_runs_real_k_and_records_it(monkeypatch) -> None:
+    captured, response = _bempp_solve(monkeypatch, infinite_baffle=True)
+    assert captured["formulation"] == "standard"
+    assert captured["complex_k_shift"] == 0.0
+    recorded = response["metadata"]["bempp"]
+    assert (recorded["formulation"], recorded["complex_k_shift"]) == ("standard", 0.0)
+
+
+def test_bempp_free_standing_keeps_complex_k(monkeypatch) -> None:
+    captured, response = _bempp_solve(monkeypatch, infinite_baffle=False)
+    assert captured["formulation"] == "complex_k"
+    assert captured["complex_k_shift"] == 0.005
+    recorded = response["metadata"]["bempp"]
+    assert (recorded["formulation"], recorded["complex_k_shift"]) == ("complex_k", 0.005)
+
+
+@pytest.mark.parametrize("engine", ["metal", "bempp"])
+def test_power_qualification_provenance_matches_the_executed_formulation(
+    monkeypatch, engine: str
+) -> None:
+    """The provenance reads the result metadata, so it names what really ran."""
+
+    from server.solver.power_qualification import _provenance
+
+    run = _metal_solve if engine == "metal" else _bempp_solve
+    captured, response = run(monkeypatch, infinite_baffle=True)
+    provenance = _provenance(response, None)
+    assert provenance["formulation"] == captured["formulation"] == "standard"
+    assert provenance["complex_k_shift"] == captured["complex_k_shift"] == 0.0
+    assert "complex_k_shift" not in provenance["missing"]

@@ -73,7 +73,8 @@ function accurateEngineForParametric(
     : null;
 }
 
-// The BEM adapters use DEFAULT_BEM_FORMULATION from server/solver/formulation.py.
+// The BEM adapters choose their formulation in server/solver/formulation.py:
+// complex_k everywhere except a coupled infinite baffle, which runs real k.
 // BEAT uses Burton–Miller, and dry-run has no BEM formulation, so neither gets
 // the complex-k damping caveat.
 function usesComplexK(engine: string): boolean {
@@ -92,7 +93,9 @@ export function accuracyExplainer(fastEngine: string | null, accurateEngine: str
   const complexKFast = 'a plain exterior BEM solve breaks down at fictitious frequencies — resonances of the '
     + 'space enclosed by the mesh surface, which do not exist physically. Fast adds a small imaginary '
     + 'shift (0.005) to the wavenumber k, which suppresses them, and solves every source from one matrix factorization, so it is cheap. '
-    + 'The trade-off is slight numerical damping: sharp chamber or cavity resonances can look milder than they are.';
+    + 'The trade-off is slight numerical damping: sharp chamber or cavity resonances can look milder than they are. '
+    + 'An infinite-baffle design is the exception: its horn is closed by the radiating aperture, so there are no fictitious '
+    + 'frequencies to suppress and it runs with the plain wavenumber, with no shift and no added damping.';
   let fast: string;
   if (fastEngine?.startsWith('beat-')) {
     fast = `Fast (default) — on this machine Fast runs on ${engineDisplayName(fastEngine)}, which already uses the `
