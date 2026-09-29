@@ -49,6 +49,9 @@ JOB_PERMISSIONS = {
     RELEASE_WORKFLOW: {
         "qualify": QUALIFY,
         **dict.fromkeys(BUILD_JOBS, RELEASE_BUILD),
+        # Signs the manifest behind the update-signing Environment; reads
+        # artifacts and the checkout, writes nothing.
+        "sign": {"contents": "read"},
         "publish": PUBLISH,
     },
     PROPOSAL_WORKFLOW: {

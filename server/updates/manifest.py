@@ -1,0 +1,124 @@
+"""Verify a signed ``SHA256SUMS`` release manifest.
+
+The manifest is plain ``sha256sum`` output with one leading comment line naming
+the release tag::
+
+    # version v0.3.3
+    <hex sha256>  Waveguide.Generator-0.3.3-macos-arm64.dmg
+
+``sha256sum -c`` ignores the comment, so a person can check a download by hand.
+``SHA256SUMS.sig`` is the raw 64-byte Ed25519 signature over the manifest bytes.
+
+The public key is compiled in and never fetched. Rotation means shipping a new
+key in a release signed by the old one (docs/reference/UPDATE-SIGNING.md).
+This module is not wired into any update flow yet.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import re
+from pathlib import Path
+
+try:  # package import inside the server
+    from . import ed25519
+except ImportError:  # loaded by path from scripts/release_manifest.py
+    import ed25519  # type: ignore[no-redef]
+
+# PLACEHOLDER: all zeros until the owner generates the release signing key and
+# pastes its public half here (docs/reference/UPDATE-SIGNING.md, step 3). While
+# this is the placeholder every verification against the default key fails.
+UPDATE_SIGNING_PUBLIC_KEY_HEX = "0" * 64
+
+_VERSION_RE = re.compile(r"^# version (\S+)$")
+_ENTRY_RE = re.compile(r"^([0-9a-f]{64})  ([^\s/\\][^/\\]*)$")
+
+
+class ManifestError(ValueError):
+    """The manifest failed verification; the message says which check."""
+
+
+def is_placeholder_key(public_key_hex: str) -> bool:
+    return public_key_hex == "0" * 64
+
+
+def parse_manifest(manifest: bytes) -> tuple[str, dict[str, str]]:
+    """Return ``(version, {file name: sha256 hex})`` from manifest bytes."""
+    try:
+        lines = manifest.decode("utf-8").split("\n")
+    except UnicodeDecodeError as exc:
+        raise ManifestError("manifest is not UTF-8") from exc
+    if lines and lines[-1] == "":
+        lines.pop()
+    version: str | None = None
+    entries: dict[str, str] = {}
+    for line in lines:
+        if line.startswith("#"):
+            match = _VERSION_RE.match(line)
+            if match is None:
+                raise ManifestError(f"unrecognised manifest comment: {line!r}")
+            if version is not None:
+                raise ManifestError("manifest names its version twice")
+            version = match.group(1)
+            continue
+        match = _ENTRY_RE.match(line)
+        if match is None:
+            raise ManifestError(f"malformed manifest line: {line!r}")
+        digest, name = match.groups()
+        if name in entries:
+            raise ManifestError(f"manifest lists {name} twice")
+        entries[name] = digest
+    if version is None:
+        raise ManifestError("manifest has no version line")
+    return version, entries
+
+
+def verify_manifest(
+    manifest: bytes,
+    signature: bytes,
+    tag: str,
+    *,
+    public_key_hex: str = UPDATE_SIGNING_PUBLIC_KEY_HEX,
+) -> dict[str, str]:
+    """Check the signature, then that the manifest version equals ``tag``.
+
+    Returns ``{file name: sha256 hex}``. Order matters: nothing in the manifest
+    is parsed for trust until the signature over its exact bytes holds.
+    """
+    if is_placeholder_key(public_key_hex):
+        raise ManifestError("no update signing key is embedded in this build")
+    try:
+        public_key = bytes.fromhex(public_key_hex)
+    except ValueError as exc:
+        raise ManifestError("embedded update signing key is not hex") from exc
+    if not ed25519.verify(public_key, manifest, signature):
+        raise ManifestError("manifest signature is not valid")
+    version, entries = parse_manifest(manifest)
+    if version != tag:
+        raise ManifestError(f"manifest is for {version}, not {tag}")
+    return entries
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_file(entries: dict[str, str], name: str, path: Path) -> None:
+    """Check ``path`` against the manifest entry for ``name``."""
+    expected = entries.get(name)
+    if expected is None:
+        raise ManifestError(f"{name} is not listed in the signed manifest")
+    if sha256_file(path) != expected:
+        raise ManifestError(f"{name} does not match its signed checksum")
+
+
+def build_manifest(tag: str, files: list[Path]) -> bytes:
+    """Manifest bytes for ``files``, sorted by name, with the version line."""
+    lines = [f"# version {tag}"]
+    for path in sorted(files, key=lambda item: item.name):
+        lines.append(f"{sha256_file(path)}  {path.name}")
+    return ("\n".join(lines) + "\n").encode("utf-8")

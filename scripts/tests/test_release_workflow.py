@@ -988,3 +988,20 @@ def test_nothing_is_built_attested_or_published_before_source_qualification(
             condition = str(body.get("if", ""))
             for escape in ("always()", "failure()", "cancelled()"):
                 assert escape not in condition, f"{name}: {job} runs on {escape}"
+
+
+def test_the_manifest_is_signed_only_in_the_environment_gated_job_and_publish_needs_it() -> None:
+    """The private key is reachable from one job, behind the update-signing Environment."""
+
+    jobs = yaml.safe_load(WORKFLOW)["jobs"]
+    assert jobs["sign"]["environment"] == "update-signing"
+    assert "sign" in jobs["publish"]["needs"]
+    assert jobs["sign"]["permissions"] == {"contents": "read"}
+    holders = [
+        name for name, body in jobs.items() if "UPDATE_SIGNING_KEY" in yaml.safe_dump(body)
+    ]
+    assert holders == ["sign"]
+    assert "environment" not in jobs["publish"]
+    # An absent secret fails the job rather than shipping an unsigned release.
+    step = next(s for s in jobs["sign"]["steps"] if "without the signing key" in s.get("name", ""))
+    assert '-z "$UPDATE_SIGNING_KEY"' in step["run"] and "exit 1" in step["run"]
