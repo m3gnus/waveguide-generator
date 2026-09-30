@@ -17,6 +17,7 @@ interface GuidanceData {
     steps?: { vendor: string; label: string; url: string; note: string }[];
   }>>;
   warnings?: { id: string; platforms: OpenClGuidancePlatform[]; text: string }[];
+  gpu_alternatives?: { id: string; platforms: OpenClGuidancePlatform[]; text: string }[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -35,9 +36,10 @@ export function isOpenClGuidanceData(value: unknown): value is GuidanceData {
     && isRecord(entry) && isText(entry.summary)
     && (entry.steps === undefined || (Array.isArray(entry.steps) && entry.steps.every((step: unknown) =>
       isRecord(step) && ['vendor', 'label', 'url', 'note'].every((key) => isText(step[key]))))))) return false;
-  return value.warnings === undefined || (Array.isArray(value.warnings) && value.warnings.every((warning: unknown) =>
-    isRecord(warning) && isText(warning.id) && isText(warning.text)
-    && Array.isArray(warning.platforms) && warning.platforms.every(isPlatform)));
+  return [value.warnings, value.gpu_alternatives].every((entries) => entries === undefined
+    || (Array.isArray(entries) && entries.every((entry: unknown) =>
+      isRecord(entry) && isText(entry.id) && isText(entry.text)
+      && Array.isArray(entry.platforms) && entry.platforms.every(isPlatform))));
 }
 
 // Validate once, before rendering. Tests assert that the shipped JSON passes.
@@ -50,10 +52,12 @@ export function OpenClGuidance({ platform, reason }: OpenClGuidanceProps) {
   const { summary, steps = [] } = entry;
   const reasonLine = reason && guidance.reasons?.[reason];
   const warnings = (guidance.warnings ?? []).filter((warning) => warning.platforms.includes(platform));
+  const alternatives = (guidance.gpu_alternatives ?? []).filter((entry) => entry.platforms.includes(platform));
   return <section className="opencl-guidance" aria-label={guidance.labels.ariaLabel}>
     <h3>{guidance.labels.heading}</h3>
     {reasonLine && <p>{reasonLine}</p>}
     <p>{summary}</p>
+    {alternatives.map(({ id, text }) => <p key={id}>{text}</p>)}
     {steps.length > 0 && <ul>
       {steps.map(({ vendor, label, url, note }) => <li key={vendor}>
         <a href={url} target="_blank" rel="noopener noreferrer">{label}</a>

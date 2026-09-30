@@ -24,14 +24,16 @@ describe('OpenClGuidance', () => {
     vi.resetModules();
   });
 
-  it.each<OpenClGuidancePlatform>(['windows', 'linux'])('renders the %s summary, steps and applicable warnings', (platform) => {
+  it.each<OpenClGuidancePlatform>(['windows', 'linux'])('renders the %s summary, alternatives, steps and applicable warnings', (platform) => {
     act(() => root.render(<OpenClGuidance platform={platform} />));
     const block = guidance.platforms[platform];
     const warnings = guidance.warnings.filter((warning) => warning.platforms.includes(platform));
+    const alternatives = guidance.gpu_alternatives.filter((entry) => entry.platforms.includes(platform));
     expect(host.querySelector('section')?.getAttribute('aria-label')).toBe(guidance.labels.ariaLabel);
     expect(host.querySelector('h3')?.textContent).toBe(guidance.labels.heading);
     expect([...host.querySelectorAll('p')].map((p) => p.textContent))
-      .toEqual([block.summary, ...block.steps.map((step) => step.note), ...warnings.map((warning) => warning.text)]);
+      .toEqual([block.summary, ...alternatives.map((entry) => entry.text),
+        ...block.steps.map((step) => step.note), ...warnings.map((warning) => warning.text)]);
     const links = [...host.querySelectorAll('a')];
     expect(links.map((a) => ({ label: a.textContent, url: a.getAttribute('href') })))
       .toEqual(block.steps.map(({ label, url }) => ({ label, url })));
@@ -65,6 +67,23 @@ describe('OpenClGuidance', () => {
     expect(isOpenClGuidanceData(guidance)).toBe(true);
   });
 
+  it.each<OpenClGuidancePlatform>(['windows', 'linux'])('filters GPU alternatives for %s and updates them on platform changes', async (platform) => {
+    const otherPlatform = platform === 'windows' ? 'linux' : 'windows';
+    const data = structuredClone(guidance);
+    data.gpu_alternatives = [
+      { id: 'applicable', platforms: [platform], text: 'Applicable alternative' },
+      { id: 'other', platforms: [otherPlatform], text: 'Other alternative' },
+    ];
+    vi.doMock('../../../shared/opencl-driver-guidance.v1.json', () => ({ default: data }));
+    const { OpenClGuidance: Component } = await import('./OpenClGuidance');
+    act(() => root.render(<Component platform={platform} />));
+    expect(host.querySelectorAll('p')[1]?.textContent).toBe(data.gpu_alternatives[0].text);
+    expect(host.textContent).not.toContain(data.gpu_alternatives[1].text);
+    act(() => root.render(<Component platform={otherPlatform} />));
+    expect(host.querySelectorAll('p')[1]?.textContent).toBe(data.gpu_alternatives[1].text);
+    expect(host.textContent).not.toContain(data.gpu_alternatives[0].text);
+  });
+
   it.each<OpenClGuidancePlatform>(['windows', 'linux'])('renders exactly the JSON step URLs for %s', (platform) => {
     act(() => root.render(<OpenClGuidance platform={platform} />));
     expect([...host.querySelectorAll('[href]')].map((link) => link.getAttribute('href')))
@@ -84,7 +103,8 @@ describe('OpenClGuidance', () => {
 
   it('keeps visible wording and all URL literals out of the component source', () => {
     const source = componentSource;
-    for (const text of [guidance.title, ...Object.values(guidance.labels), ...Object.values(guidance.reasons)]) {
+    for (const text of [guidance.title, ...Object.values(guidance.labels), ...Object.values(guidance.reasons),
+      ...guidance.gpu_alternatives.map((entry) => entry.text)]) {
       expect(source).not.toContain(text);
     }
     expect(source).not.toMatch(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s]/i);
@@ -99,6 +119,7 @@ describe('OpenClGuidance', () => {
   const omissions: [string, (data: typeof guidance) => void][] = [
     ['platform entry', (data) => { Reflect.deleteProperty(data.platforms, 'windows'); }],
     ['warnings', (data) => { Reflect.deleteProperty(data, 'warnings'); }],
+    ['GPU alternatives', (data) => { Reflect.deleteProperty(data, 'gpu_alternatives'); }],
     ['steps', (data) => { Reflect.deleteProperty(data.platforms.windows, 'steps'); }],
     ['reason line', (data) => { Reflect.deleteProperty(data.reasons, 'no_device'); }],
     ['reasons', (data) => { Reflect.deleteProperty(data, 'reasons'); }],
@@ -121,6 +142,7 @@ describe('OpenClGuidance', () => {
     const expected = [
       ...(name === 'reason line' || name === 'reasons' ? [] : [guidance.reasons.no_device]),
       guidance.platforms.windows.summary,
+      ...(name === 'GPU alternatives' ? [] : guidance.gpu_alternatives.map((entry) => entry.text)),
       ...(name === 'steps' ? [] : guidance.platforms.windows.steps.map((step) => step.note)),
       ...(name === 'warnings' ? [] : guidance.warnings.map((warning) => warning.text)),
     ];
@@ -141,6 +163,12 @@ describe('OpenClGuidance', () => {
     ['warnings', { ...guidance, warnings: {} }],
     ['warning', { ...guidance, warnings: [null] }],
     ['warning platforms', { ...guidance, warnings: [{ id: 'warning', text: 'warning', platforms: [null] }] }],
+    ['GPU alternatives', { ...guidance, gpu_alternatives: {} }],
+    ['GPU alternative', { ...guidance, gpu_alternatives: [null] }],
+    ['GPU alternative id', { ...guidance, gpu_alternatives: [{ ...guidance.gpu_alternatives[0], id: '' }] }],
+    ['GPU alternative text', { ...guidance, gpu_alternatives: [{ ...guidance.gpu_alternatives[0], text: 123 }] }],
+    ['GPU alternative platforms', { ...guidance, gpu_alternatives: [{ ...guidance.gpu_alternatives[0], platforms: null }] }],
+    ['GPU alternative platform', { ...guidance, gpu_alternatives: [{ ...guidance.gpu_alternatives[0], platforms: ['macos'] }] }],
     ['reason', { ...guidance, reasons: { no_device: 123 } }],
   ];
 

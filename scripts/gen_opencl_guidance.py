@@ -22,6 +22,10 @@ def windows_warnings(guidance: dict) -> list[str]:
     return [warning["text"] for warning in guidance["warnings"] if "windows" in warning["platforms"]]
 
 
+def windows_gpu_alternatives(guidance: dict) -> list[str]:
+    return [entry["text"] for entry in guidance.get("gpu_alternatives", []) if "windows" in entry["platforms"]]
+
+
 def pascal_string(text: str) -> str:
     """Quote Pascal strings, including apostrophes and control characters."""
     text = text.replace("\r\n", "\n")
@@ -34,7 +38,7 @@ def pascal_string(text: str) -> str:
 
 def render_include(guidance: dict) -> str:
     platform = guidance["platforms"]["windows"]
-    paragraphs = [platform["summary"]]
+    paragraphs = [platform["summary"], *windows_gpu_alternatives(guidance)]
     for step in platform["steps"]:
         paragraphs.append(f"{step['label']}: {step['url']}\n{step['note']}")
     paragraphs.extend(windows_warnings(guidance))
@@ -52,6 +56,7 @@ def render_help(guidance: dict) -> str:
     title = escape(guidance["title"])
     heading = escape(guidance["labels"]["heading"])
     summary = escape(platform["summary"])
+    alternatives = "\n".join(f"  <p>{escape(text)}</p>" for text in windows_gpu_alternatives(guidance))
     warnings = "\n".join(f"  <p>{escape(text)}</p>" for text in windows_warnings(guidance))
     links = "\n".join(
         f'    <li><a href="{escape(step["url"], quote=True)}">'
@@ -74,6 +79,7 @@ def render_help(guidance: dict) -> str:
 <body>
   <h1>{heading}</h1>
   <p>{summary}</p>
+{alternatives}
   <ul>
 {links}
   </ul>

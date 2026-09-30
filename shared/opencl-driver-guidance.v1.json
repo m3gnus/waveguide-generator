@@ -5,6 +5,13 @@
     "heading": "CPU OpenCL runtime",
     "ariaLabel": "CPU OpenCL runtime"
   },
+  "gpu_alternatives": [
+    {
+      "id": "nvidia_beat_cuda",
+      "platforms": ["windows", "linux"],
+      "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. BEMPP is for computers without a supported graphics card."
+    }
+  ],
   "warnings": [
     {
       "id": "pocl_windows",

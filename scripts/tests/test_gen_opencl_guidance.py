@@ -16,6 +16,47 @@ CPU_RUNTIME_URLS = {
     "https://portablecl.org/",
 }
 URL = re.compile(r"(?:[a-z][a-z0-9+.-]*:)?//[^\s\"'<>]+", re.IGNORECASE)
+GPU_TERMS = re.compile(
+    r"\b(?:geforce|radeon|arc[\s-]+graphics|iris[\s-]+xe"
+    r"|(?:gpu|graphics)[\s-]+drivers?)\b",
+    re.IGNORECASE,
+)
+# Also catch advice with intervening words or the driver named before the GPU,
+# e.g. "Install the latest driver for your graphics card."
+GPU_DRIVER_ADVICE = re.compile(
+    r"(?=[^.!?]*\b(?:install(?:ing|ation)?|updat(?:e|ing))\b)"
+    r"(?=[^.!?]*\b(?:gpu|graphics)\b)(?=[^.!?]*\bdrivers?\b)[^.!?]+",
+    re.IGNORECASE,
+)
+
+
+def assert_cpu_only_prose(text: str, name: str) -> None:
+    for sentence in re.split(r"[.!?]", text):
+        assert not GPU_TERMS.search(sentence), f"{name}: GPU product or driver wording"
+        assert not GPU_DRIVER_ADVICE.search(sentence), f"{name}: GPU driver installation advice"
+        if re.search(r"\b(?:amd|intel)\b", sentence, re.IGNORECASE):
+            assert not re.search(r"\b(?:gpu|graphics)\b", sentence, re.IGNORECASE), f"{name}: GPU vendor wording"
+        if re.search(r"\b(?:nvidia|cuda)\b", sentence, re.IGNORECASE):
+            # The only GPU pointer is NVIDIA + BEAT + CUDA, within one sentence.
+            assert all(re.search(rf"\b{word}\b", sentence, re.IGNORECASE)
+                       for word in ("nvidia", "beat", "cuda")), f"{name}: GPU alternative wording"
+            assert not re.search(r"\bopencl\b", sentence, re.IGNORECASE), f"{name}: GPU OpenCL advice"
+            assert not (re.search(r"\bdrivers?\b", sentence, re.IGNORECASE)
+                        and re.search(r"\b(?:install(?:ing|ation)?|updat(?:e|ing))\b", sentence, re.IGNORECASE)), (
+                f"{name}: GPU driver installation advice"
+            )
+
+
+def guidance_strings(value: object):
+    """Scan decoded values recursively so every visible field is covered."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from guidance_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from guidance_strings(child)
 
 
 def read_guidance() -> dict:
@@ -29,6 +70,8 @@ def assert_cpu_only_guidance(root: Path) -> None:
             guidance = json.loads(content)
             for platform in guidance["platforms"].values():
                 assert all(step["url"] in CPU_RUNTIME_URLS for step in platform["steps"]), name
+            for value in guidance_strings(guidance):
+                assert_cpu_only_prose(value, name)
             content = json.dumps(guidance, ensure_ascii=False)
         urls = URL.findall(content)
         if name.endswith(".html"):
@@ -36,6 +79,21 @@ def assert_cpu_only_guidance(root: Path) -> None:
             parser.feed(content)
             urls.extend(parser.links)
         assert set(urls) <= CPU_RUNTIME_URLS, f"{name}: unexpected URLs {set(urls) - CPU_RUNTIME_URLS}"
+        # JSON fields are separate prose; serialization must not join a title
+        # mentioning OpenCL to an unrelated NVIDIA alternative sentence.
+        if name != generator.SOURCE:
+            assert_cpu_only_prose(content, name)
+        if name.endswith(".html"):
+            assert_cpu_only_prose(" ".join(parser.text), name)
+        elif name.endswith(".iss"):
+            # Decode Pascal literals and control characters as the installer does.
+            tokens = re.findall(r"'(?:[^']|'')*'|#\d+", content)
+            prose = "".join(
+                chr(int(token[1:])) if token.startswith("#")
+                else token[1:-1].replace("''", "'")
+                for token in tokens
+            )
+            assert_cpu_only_prose(prose, name)
     assert not URL.search((root / COMPONENT).read_text(encoding="utf-8")), COMPONENT
 
 
@@ -43,9 +101,53 @@ def test_guidance_contains_no_gpu_driver_links_or_instructions() -> None:
     assert_cpu_only_guidance(generator.ROOT)
 
 
+@pytest.mark.parametrize("text", [
+    "NVIDIA", "GeForce", "RADEON", "Arc Graphics", "Iris Xe", "CUDA",
+    "GPU driver", "graphics driver", "graphics-driver", "GPU\ndrivers",
+    "Install the latest driver for your GPU.",
+    "Update the display driver for your graphics card.",
+    "Your graphics card needs a driver update.",
+    "Install the NVIDIA GPU driver to enable OpenCL.",
+    "update your graphics driver",
+    "install the Radeon driver",
+    "Use BEAT with CUDA on an NVIDIA GPU to enable OpenCL.",
+    "Use BEAT with CUDA on NVIDIA and install the driver.",
+    "Use BEAT with CUDA on NVIDIA and update the driver.",
+    "Use NVIDIA with OpenCL. Choose BEAT with CUDA.",
+    "NVIDIA. Use BEAT with CUDA.",
+    "Use NVIDIA graphics with OpenCL.",
+    "Use AMD graphics with OpenCL.",
+    "Use Intel graphics with OpenCL.",
+    "Use OpenCL on an AMD GPU.",
+    "Use OpenCL on an Intel GPU.",
+])
+def test_prose_guard_rejects_gpu_terms_and_driver_advice(text: str) -> None:
+    with pytest.raises(AssertionError, match="prose mutation: GPU"):
+        assert_cpu_only_prose(text, "prose mutation")
+
+
+@pytest.mark.parametrize("text", [
+    "AMD processors", "Intel processors", "graphics-card solver",
+    "Install your distribution's PoCL CPU runtime package.",
+    "A graphics-card solver is supported. Install a CPU OpenCL runtime.",
+    "use BEAT with CUDA on an NVIDIA GPU",
+    "Use BEAT with CUDA on an NVIDIA GPU. BEMPP uses CPU OpenCL.",
+])
+def test_prose_guard_allows_cpu_and_solver_wording(text: str) -> None:
+    assert_cpu_only_prose(text, "legitimate wording")
+
+
+def test_prose_guard_allows_exact_gpu_alternative() -> None:
+    assert_cpu_only_prose(read_guidance()["gpu_alternatives"][0]["text"], "GPU alternative")
+
+
 def test_versioned_contract_and_cpu_runtime_content() -> None:
     guidance = read_guidance()
-    assert set(guidance) == {"version", "title", "labels", "warnings", "reasons", "platforms"}
+    assert set(guidance) == {"version", "title", "labels", "warnings", "reasons", "platforms", "gpu_alternatives"}
+    assert guidance["gpu_alternatives"] == [{
+        "id": "nvidia_beat_cuda", "platforms": ["windows", "linux"],
+        "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. BEMPP is for computers without a supported graphics card.",
+    }]
     assert guidance["title"] == "CPU OpenCL runtime"
     assert guidance["labels"] == {"heading": guidance["title"], "ariaLabel": guidance["title"]}
     assert guidance["version"] == 1
@@ -97,6 +199,73 @@ def isolated_guidance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return source
 
 
+@pytest.mark.parametrize("mutation", [
+    "Install the NVIDIA GPU driver to enable OpenCL.",
+    "To enable OpenCL, update your graphics driver.",
+])
+def test_reviewer_linux_intel_prose_mutation_fails(isolated_guidance: Path, mutation: str) -> None:
+    guidance = json.loads(isolated_guidance.read_text(encoding="utf-8"))
+    guidance["platforms"]["linux"]["steps"][1]["note"] = mutation
+    isolated_guidance.write_text(json.dumps(guidance), encoding="utf-8")
+    assert generator.main(["--write"]) == 0
+    assert generator.main(["--check"]) == 0
+    with pytest.raises(AssertionError, match=re.escape(generator.SOURCE) + ": GPU"):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
+@pytest.mark.parametrize("field", [
+    ("title",), ("labels", "heading"), ("labels", "ariaLabel"),
+    ("reasons", "no_device"), ("warnings", 0, "text"),
+    ("gpu_alternatives", 0, "text"),
+    ("platforms", "windows", "summary"), ("platforms", "linux", "summary"),
+    ("platforms", "windows", "steps", 0, "label"),
+    ("platforms", "windows", "steps", 0, "note"),
+    ("platforms", "linux", "steps", 0, "label"),
+    ("platforms", "linux", "steps", 0, "note"),
+])
+def test_prose_guard_checks_every_visible_field(isolated_guidance: Path, field: tuple) -> None:
+    guidance = json.loads(isolated_guidance.read_text(encoding="utf-8"))
+    entry = guidance
+    for key in field[:-1]:
+        entry = entry[key]
+    entry[field[-1]] = "Update your graphics driver."
+    # JSON escapes must not conceal the decoded user-visible wording.
+    isolated_guidance.write_text(json.dumps(guidance).replace("graphics", r"\u0067raphics"), encoding="utf-8")
+    assert generator.main(["--write"]) == 0
+    with pytest.raises(AssertionError, match=re.escape(generator.SOURCE) + ": GPU"):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
+@pytest.mark.parametrize("name", ARTIFACTS)
+@pytest.mark.parametrize("mutation", [
+    "Install the NVIDIA GPU driver to enable OpenCL.",
+    "Update your graphics driver.",
+    "Install the latest driver for your GPU.",
+])
+def test_prose_guard_checks_generated_artifacts(isolated_guidance: Path, name: str, mutation: str) -> None:
+    assert generator.main(["--write"]) == 0
+    guidance = read_guidance()
+    guidance["platforms"]["windows"]["steps"][0]["note"] = mutation
+    rendered = generator.render_help(guidance) if name.endswith(".html") else generator.render_include(guidance)
+    (generator.ROOT / name).write_text(rendered, encoding="utf-8")
+    with pytest.raises(AssertionError, match=re.escape(name) + ": GPU"):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
+@pytest.mark.parametrize("name, mutation", [
+    ("shared/opencl-guidance.html", "<p>Update your gr&#97;phics driver.</p>"),
+    ("installers/windows/opencl-guidance.iss", "Notice = 'Update your gr' + #97 + 'phics' + #13#10 + 'driver.';"),
+    ("shared/opencl-guidance.html", "<p>Use BEAT with CUDA on NVIDIA for Open&#67;L.</p>"),
+    ("installers/windows/opencl-guidance.iss", "Notice = 'Use BEAT with CUDA on NVIDIA for Open' + #67 + 'L.';"),
+])
+def test_prose_guard_checks_decoded_artifacts(isolated_guidance: Path, name: str, mutation: str) -> None:
+    assert generator.main(["--write"]) == 0
+    path = generator.ROOT / name
+    path.write_text(path.read_text(encoding="utf-8") + mutation, encoding="utf-8")
+    with pytest.raises(AssertionError, match=re.escape(name) + ": GPU"):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
 @pytest.mark.parametrize("name", ARTIFACTS)
 @pytest.mark.parametrize("mutation", ["missing", "edited"])
 def test_check_rejects_missing_or_edited_outputs(
@@ -114,7 +283,7 @@ def test_check_rejects_missing_or_edited_outputs(
     assert generator.main(["--check"]) == 0
 
 
-@pytest.mark.parametrize("field", ["title", "heading", "summary", "label", "url", "note", "warning"])
+@pytest.mark.parametrize("field", ["title", "heading", "summary", "label", "url", "note", "warning", "gpu_alternative"])
 def test_source_changes_require_regeneration(isolated_guidance: Path, field: str) -> None:
     assert generator.main(["--write"]) == 0
     guidance = json.loads(isolated_guidance.read_text(encoding="utf-8"))
@@ -126,6 +295,8 @@ def test_source_changes_require_regeneration(isolated_guidance: Path, field: str
         guidance["platforms"]["windows"]["summary"] += " Updated."
     elif field == "warning":
         guidance["warnings"][0]["text"] += " Updated."
+    elif field == "gpu_alternative":
+        guidance["gpu_alternatives"][0]["text"] += " Updated."
     else:
         guidance["platforms"]["windows"]["steps"][0][field] += "updated"
     isolated_guidance.write_text(json.dumps(guidance), encoding="utf-8")
@@ -212,7 +383,8 @@ def test_wording_is_only_in_json() -> None:
     guidance = read_guidance()
     for name in [COMPONENT, "scripts/gen_opencl_guidance.py"]:
         source = (generator.ROOT / name).read_text(encoding="utf-8")
-        for text in [guidance["title"], *guidance["labels"].values(), *guidance["reasons"].values()]:
+        for text in [guidance["title"], *guidance["labels"].values(), *guidance["reasons"].values(),
+                     guidance["gpu_alternatives"][0]["text"]]:
             assert text not in source, name
 
 
@@ -239,16 +411,22 @@ def test_help_has_windows_content_and_escapes_html() -> None:
         "url": 'https://example.com/?a=1&b="two"',
     })
     guidance["warnings"][0]["text"] = '<PoCL & "Windows">'
+    guidance["gpu_alternatives"][0]["text"] = '<BEAT & "CUDA">'
+    guidance["gpu_alternatives"].append({"id": "linux_only", "platforms": ["linux"], "text": "Linux-only alternative"})
     guidance["warnings"].append({"id": "linux_only", "platforms": ["linux"], "text": "Linux-only warning"})
     rendered = generator.render_help(guidance)
     parser = HelpContent()
     parser.feed(rendered)
     assert parser.links == [step["url"] for step in platform["steps"]]
-    for value in [platform["summary"], platform["steps"][0]["label"], platform["steps"][0]["note"], guidance["warnings"][0]["text"]]:
+    for value in [platform["summary"], platform["steps"][0]["label"], platform["steps"][0]["note"],
+                  guidance["warnings"][0]["text"], guidance["gpu_alternatives"][0]["text"]]:
         assert value in parser.text
     assert "<CPU" not in rendered and "<Intel" not in rendered
     assert "<Install" not in rendered and "<PoCL" not in rendered
     assert "Linux-only warning" not in rendered
+    assert "<BEAT" not in rendered and "Linux-only alternative" not in rendered
+    assert parser.text.index(platform["summary"]) < parser.text.index(guidance["gpu_alternatives"][0]["text"])
+    assert parser.text.index(guidance["gpu_alternatives"][0]["text"]) < parser.text.index(platform["steps"][0]["label"])
     assert guidance["platforms"]["linux"]["steps"][0]["url"] not in rendered
 
 
@@ -258,10 +436,16 @@ def test_include_quotes_apostrophes_and_line_breaks() -> None:
     rendered = generator.render_include(guidance)
     assert f"OpenClGuidanceTitle = {generator.pascal_string(guidance['title'])};" in rendered
     for text in [guidance["platforms"]["windows"]["summary"], guidance["warnings"][0]["text"],
+                 guidance["gpu_alternatives"][0]["text"],
                  *guidance["platforms"]["windows"]["steps"][0].values()]:
         if text != "intel":
             assert text.replace("'", "''") in rendered
     assert guidance["platforms"]["linux"]["steps"][0]["url"] not in rendered
+    alternative = guidance["gpu_alternatives"][0]["text"].replace("'", "''")
+    assert rendered.index(guidance["platforms"]["windows"]["summary"].replace("'", "''")) < rendered.index(alternative)
+    assert rendered.index(alternative) < rendered.index(guidance["platforms"]["windows"]["steps"][0]["label"])
+    guidance["gpu_alternatives"][0]["platforms"] = ["linux"]
+    assert alternative not in generator.render_include(guidance)
     guidance["warnings"][0]["platforms"] = ["linux"]
     assert guidance["warnings"][0]["text"] not in generator.render_include(guidance)
 
