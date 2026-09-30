@@ -22,6 +22,11 @@ from server.platform.warmup import BackgroundWarmup
 
 log = logging.getLogger("wg.engines.registry")
 
+# Preserve the previous 30s qualification ceiling for an HTTP caller even
+# though cold child imports now have their own allowance. Shield the work so
+# a request deadline/disconnect does not cancel shared qualification.
+CAPABILITIES_WAIT_SECONDS = 30.0
+
 
 #: The full-3D backends AUTO walks, best first. One list, because it was two:
 #: ``resolve_auto_engine`` and the ``/api/capabilities`` payload each kept their
@@ -532,6 +537,9 @@ class EngineRegistry:
         self._factory = factory
         self._cache: tuple[EngineInfo, ...] | None = None
         self._opencl_revision = 0
+        self._initial_probe_task: asyncio.Task[None] | None = None
+        self._bempp_refresh_task: asyncio.Task[None] | None = None
+        self._opencl_retry_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -570,6 +578,11 @@ class EngineRegistry:
                 remove_readiness_listener(self._cpu_listener)
                 self._cpu_listener = None
         await self.warmup.stop()
+        for task in (self._opencl_retry_task, self._initial_probe_task, self._bempp_refresh_task):
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
         refresh_task = self._refresh_task
         if refresh_task is not None and not refresh_task.done():
             refresh_task.cancel()
@@ -587,32 +600,90 @@ class EngineRegistry:
             refresh_pending = self._refresh_revision > self._refresh_applied_revision
         return cpu_preparation_in_flight() or refresh_pending
 
+    async def _wait_for_probe(self, task: asyncio.Task[None]) -> None:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), CAPABILITIES_WAIT_SECONDS)
+        except TimeoutError:
+            pass
+
+    async def _detect_initial(self) -> None:
+        from server.solver.bempp_opencl import qualification_revision
+
+        async with self._lock:
+            self._opencl_revision = qualification_revision()
+            self._cache = tuple(await asyncio.to_thread(self._detector))
+        self._schedule_opencl_retry()
+
+    def _schedule_opencl_retry(self) -> None:
+        from server.solver.bempp_opencl import retry_pending
+
+        if (not self._listener_removed and retry_pending()
+                and self._has_bempp_timeout()
+                and (self._opencl_retry_task is None or self._opencl_retry_task.done())):
+            self._opencl_retry_task = asyncio.create_task(self._retry_opencl())
+
+    async def _wait_opencl_retry(self) -> None:
+        from server.solver.bempp_opencl import retry_delay
+
+        await asyncio.sleep(retry_delay())
+
+    async def _retry_opencl(self) -> None:
+        from server.solver.bempp_opencl import retry_pending
+
+        while not self._listener_removed and retry_pending() and self._has_bempp_timeout():
+            await self._wait_opencl_retry()
+            await self._refresh_bempp_timeout()
+
     async def capabilities(self) -> tuple[EngineInfo, ...]:
         self._loop = asyncio.get_running_loop()
         if self._cache is None:
-            async with self._lock:
-                if self._cache is None:
-                    from server.solver.bempp_opencl import qualification_revision
-
-                    self._opencl_revision = qualification_revision()
-                    self._cache = tuple(await asyncio.to_thread(self._detector))
-                    self._schedule_cpu_refresh()
-        await self._refresh_bempp_timeout()
+            if self._initial_probe_task is None or self._initial_probe_task.done():
+                self._initial_probe_task = asyncio.create_task(self._detect_initial())
+            await self._wait_for_probe(self._initial_probe_task)
+            if self._cache is None:
+                self._initial_probe_task.add_done_callback(lambda _: self._schedule_cpu_refresh())
+                # A pending check is neither a qualified backend nor a driver
+                # failure. Existing nullable fields convey that honestly;
+                # no new guidance reason code is needed.
+                return tuple(
+                    EngineInfo(name, False, "Engine qualification is in progress; retry capabilities shortly.", None)
+                    for name in full3d_engine_order() if name != "dryrun"
+                )
+            # Do not spend a second HTTP wait on a retry if a timeout aged
+            # past its retry interval while other engine imports completed.
+            self._schedule_cpu_refresh()
+            self._schedule_opencl_retry()
+            return self._cache
+        self._schedule_cpu_refresh()
+        if not self._bempp_needs_refresh():
+            self._schedule_opencl_retry()
+            return self._cache
+        if self._bempp_refresh_task is None or self._bempp_refresh_task.done():
+            self._bempp_refresh_task = asyncio.create_task(self._refresh_bempp_timeout())
+        await self._wait_for_probe(self._bempp_refresh_task)
+        self._schedule_opencl_retry()
         return self._cache
 
+    def _has_bempp_timeout(self) -> bool:
+        from server.solver.bempp_opencl import TIMEOUT_REASONS
+
+        return any(item.name == "bempp" and item.opencl_unavailable_reason in TIMEOUT_REASONS
+                   for item in self._cache or ())
+
+    def _bempp_needs_refresh(self) -> bool:
+        from server.solver.bempp_opencl import qualification_revision, retry_due
+
+        return self._has_bempp_timeout() and (
+            retry_due() or self._opencl_revision != qualification_revision()
+        )
+
     async def _refresh_bempp_timeout(self) -> None:
-        from server.solver.bempp_opencl import TIMEOUT_REASONS, qualification_revision, retry_due
+        from server.solver.bempp_opencl import qualification_revision
 
-        def needs_refresh() -> bool:
-            return any(item.name == "bempp" and item.opencl_unavailable_reason in TIMEOUT_REASONS
-                       for item in self._cache or ()) and (
-                retry_due() or self._opencl_revision != qualification_revision()
-            )
-
-        if not needs_refresh():
+        if not self._bempp_needs_refresh():
             return
         async with self._lock:
-            if not needs_refresh():
+            if not self._bempp_needs_refresh():
                 return
             from server.solver import bempp
 

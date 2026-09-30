@@ -75,33 +75,140 @@ def test_no_device_passes_means_no_opencl(monkeypatch, failure):
 
 
 def test_total_time_budget_is_bounded(monkeypatch):
-    times = iter([0.0, probe.TOTAL_SECONDS - 1, probe.TOTAL_SECONDS + 1, probe.TOTAL_SECONDS + 1])
-    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: next(times)))
     calls = []
     def run(mode, device, timeout):
         calls.append((mode, timeout))
-        return {"ok": True, "devices": [CPU, {**CPU, "device_index": 1}]} if mode == "inventory" else {"ok": False, "reason": "timeout"}
+        return ({"ok": True, "devices": [CPU, {**CPU, "device_index": 1}], "_active_seconds": 9.0}
+                if mode == "inventory" else
+                {"ok": False, "reason": "timeout", "_active_seconds": timeout})
     monkeypatch.setattr(probe, "_run_probe", run)
     assert not probe.qualified_opencl()["ok"]
-    assert calls == [("inventory", probe.INVENTORY_SECONDS), ("smoke", 1.0)]
+    assert calls == [("inventory", probe.INVENTORY_SECONDS), ("smoke", 20.0), ("smoke", 1.0)]
 
 
-def test_hung_icd_subprocess_is_time_bounded(monkeypatch):
-    def hang(argv, **kwargs):
-        assert kwargs["timeout"] == 0.25
-        assert kwargs["env"]["NUMBA_DISABLE_JIT"] == "1"
-        assert argv[2] == "smoke"
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-    monkeypatch.setattr(probe.subprocess, "run", hang)
-    verdict = probe._run_probe("smoke", CPU, 0.25)
-    assert verdict["ok"] is False
-    assert "timed out" in verdict["reason"]
+def fake_children(monkeypatch, scripts):
+    """Replay stdout and process completion on an injected monotonic clock.
+
+    Reader runs synchronously in this fixture, but timestamps/queue waits have
+    the same semantics as the real thread. No sleep depends on CI speed.
+    """
+    import queue
+    clock, children = [0.0], []
+    scripts = iter(scripts)
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    class Events:
+        def __init__(self):
+            self.items = []
+        def put(self, item):
+            self.items.append(item)
+        def get(self, timeout):
+            if not self.items or self.items[0][1] > clock[0] + timeout:
+                clock[0] += timeout
+                raise queue.Empty
+            item = self.items.pop(0)
+            clock[0] = max(clock[0], item[1])
+            return item
+    class Reader:
+        def __init__(self, target, args, daemon):
+            self.target, self.args = target, args
+        def start(self):
+            began = clock[0]
+            self.target(*self.args)
+            clock[0] = began
+        def join(self):
+            pass
+    class Stream:
+        def __init__(self, script):
+            self.script = script
+            self.closed = False
+        def __iter__(self):
+            for delay, line in self.script:
+                clock[0] += delay
+                yield line + "\n"
+        def close(self):
+            self.closed = True
+    class Child:
+        def __init__(self, argv, **kwargs):
+            assert kwargs["stderr"] == subprocess.STDOUT
+            assert kwargs["stdout"] == subprocess.PIPE
+            assert kwargs["env"]["NUMBA_DISABLE_JIT"] == "1"
+            self.args, self.returncode = argv, None
+            self.stdout = Stream(next(scripts))
+            self.killed, self.waited = False, False
+            children.append(self)
+        def poll(self):
+            return self.returncode
+        def wait(self, timeout=None):
+            self.waited = True
+            self.returncode = -9 if self.killed else 0
+            return self.returncode
+        def kill(self):
+            self.killed = True
+    monkeypatch.setattr(probe.subprocess, "Popen", Child)
+    monkeypatch.setattr(probe.queue, "Queue", Events)
+    # Do not patch threading globally: endpoint tests still use real workers.
+    monkeypatch.setattr(probe, "threading", NS(Thread=Reader, Lock=__import__("threading").Lock))
+    return clock, children
 
 
-@pytest.mark.parametrize("output", ["not json", "WG_OPENCL_RESULT invalid"])
+def child_script(verdict, *, import_seconds=0.0, compute_seconds=0.0):
+    return [(import_seconds, probe._READY_MARKER),
+            (compute_seconds, probe._RESULT_PREFIX + json.dumps(verdict))]
+
+
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_import_time_is_not_charged_to_compute_deadline(monkeypatch, mode):
+    timeout = probe.INVENTORY_SECONDS if mode == "inventory" else probe.PROBE_SECONDS
+    clock, children = fake_children(monkeypatch, [child_script(
+        {"ok": True, "devices": [CPU], "smoke": {}},
+        import_seconds=timeout + 5, compute_seconds=1)])
+    verdict = probe._run_probe(mode, CPU, timeout)
+    assert verdict["ok"]
+    assert verdict["_active_seconds"] == 1
+    assert clock[0] == timeout + 6
+    assert children[0].waited and not children[0].killed and children[0].stdout.closed
+
+
+@pytest.mark.parametrize("mode,code", [("inventory", "inventory_timeout"), ("smoke", "smoke_test_timeout")])
+@pytest.mark.parametrize("phase", ["import", "compute"])
+def test_subprocess_timeout_reason_distinguishes_stage(monkeypatch, mode, code, phase):
+    timeout = probe.INVENTORY_SECONDS if mode == "inventory" else probe.PROBE_SECONDS
+    script = child_script({"ok": True},
+                          import_seconds=probe.SPAWN_IMPORT_SECONDS + 1 if phase == "import" else 1,
+                          compute_seconds=timeout + 1 if phase == "compute" else 0)
+    clock, children = fake_children(monkeypatch, [script])
+    verdict = probe._run_probe(mode, CPU, timeout)
+    assert verdict["opencl_unavailable_reason"] == code
+    assert code in probe.OPENCL_UNAVAILABLE_REASONS
+    assert clock[0] == (probe.SPAWN_IMPORT_SECONDS if phase == "import" else timeout + 1)
+    assert children[0].killed and children[0].waited and children[0].stdout.closed
+    assert ("spawn/import" if phase == "import" else "compute") in verdict["reason"]
+
+
+def test_total_budget_excludes_imports_in_both_children(monkeypatch):
+    fake_children(monkeypatch, [
+        child_script({"ok": True, "devices": [CPU]}, import_seconds=40, compute_seconds=9),
+        child_script({"ok": True, "smoke": {}}, import_seconds=40, compute_seconds=19),
+    ])
+    assert probe.qualified_opencl()["device"] == CPU
+
+
+@pytest.mark.parametrize("output", ["not json", "WG_OPENCL_RESULT invalid", "WG_OPENCL_RESULT []"])
 def test_crashed_or_malformed_probe_is_rejected(monkeypatch, output):
-    monkeypatch.setattr(probe.subprocess, "run", lambda *a, **k: NS(stdout=output))
+    fake_children(monkeypatch, [[(0, probe._READY_MARKER), (0, output)]])
     assert not probe._run_probe("smoke", CPU, 1)["ok"]
+
+
+def test_probe_drains_large_stderr_and_ignores_import_logs(monkeypatch):
+    # Real pipe/reader coverage complements virtual timing; no near-limit sleep.
+    real_popen = subprocess.Popen
+    def child(argv, **kwargs):
+        script = ("import sys; sys.stderr.write('log' * 100000); "
+                  f"print('\\n{probe._READY_MARKER}', flush=True); "
+                  f"print({probe._RESULT_PREFIX + json.dumps({'ok': True})!r}, flush=True)")
+        return real_popen([sys.executable, "-c", script], **kwargs)
+    monkeypatch.setattr(probe.subprocess, "Popen", child)
+    assert probe._run_probe("smoke", CPU, 20)["ok"]
 
 
 @pytest.mark.parametrize("damage", ["zero", "nan", "partial", "wrong", "shape"])
@@ -277,15 +384,6 @@ def test_inventory_changed_to_gpu_is_refused_before_binding(monkeypatch):
         probe.bind_device(CPU)
 
 
-@pytest.mark.parametrize('mode,code', [('inventory', 'inventory_timeout'), ('smoke', 'smoke_test_timeout')])
-def test_subprocess_timeout_reason_distinguishes_stage(monkeypatch, mode, code):
-    def hang(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs['timeout'])
-    monkeypatch.setattr(probe.subprocess, 'run', hang)
-    assert probe._run_probe(mode, CPU, 0.1)['opencl_unavailable_reason'] == code
-    assert code in probe.OPENCL_UNAVAILABLE_REASONS
-
-
 @pytest.mark.parametrize('stage', ['inventory', 'smoke'])
 def test_timeout_is_retried_then_pass_is_cached(monkeypatch, stage):
     clock = [0.0]
@@ -320,17 +418,10 @@ def test_definitive_rejection_is_cached(monkeypatch, failure):
         calls.append(mode)
         if mode == 'inventory':
             return {'ok': True, 'devices': [] if failure == 'no_device' else [CPU]}
-        if failure == 'crash':
-            raise subprocess.CalledProcessError(1, 'probe')
         return {'ok': False, 'reason': 'wrong result', 'opencl_unavailable_reason': 'smoke_test_failed'}
     if failure == 'crash':
-        # Exercise actual subprocess error handling, not a fabricated verdict.
-        def child(argv, **kwargs):
-            if argv[2] == 'inventory':
-                return NS(stdout=probe._RESULT_PREFIX + json.dumps({'ok': True, 'devices': [CPU]}))
-            calls.append('smoke')
-            raise subprocess.CalledProcessError(1, argv)
-        monkeypatch.setattr(probe.subprocess, 'run', child)
+        fake_children(monkeypatch, [child_script({'ok': True, 'devices': [CPU]}),
+                                   [(0, probe._READY_MARKER), (0, 'crashed')]])
     else:
         monkeypatch.setattr(probe, '_run_probe', run)
     first = probe.qualified_opencl()
@@ -388,72 +479,6 @@ def test_concurrent_requests_run_only_one_qualification(monkeypatch):
     assert calls == ['inventory']
 
 
-def test_real_slow_inventory_then_fast_updates_capability_and_status(monkeypatch):
-    import asyncio
-    import threading
-    from server.engines.registry import EngineInfo, EngineRegistry
-    from server.solver import bempp
-    from server.diagnostics.capabilities import capabilities_payload
-
-    bempp.bempp_status.cache_clear()
-    clock = [0.0]
-    monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
-    monkeypatch.setattr(probe, 'INVENTORY_SECONDS', 0.1)
-    monkeypatch.setattr(bempp, '_load_api', lambda: True)
-    real_run = subprocess.run
-    inventory_calls = []
-    started = threading.Event()
-    def child(argv, **kwargs):
-        assert threading.current_thread() is not threading.main_thread()
-        mode = argv[2]
-        if mode == 'inventory':
-            inventory_calls.append(mode)
-            started.set()
-            delay = 1.0 if len(inventory_calls) == 1 else 0
-            verdict = {'ok': True, 'devices': [CPU]}
-        else:
-            delay, verdict = 0, {'ok': True, 'smoke': {}}
-        script = f'import time; time.sleep({delay}); print({probe._RESULT_PREFIX + json.dumps(verdict)!r})'
-        return real_run([sys.executable, '-c', script], **kwargs)
-    monkeypatch.setattr(probe.subprocess, 'run', child)
-    other = EngineInfo('metal', False, 'absent', None)
-    def detect():
-        status = bempp.bempp_status()
-        return [other, EngineInfo('bempp', status['available'], status['reason'], None,
-                                 assembly_backend=status['assembly_backend'],
-                                 opencl_unavailable_reason=status['opencl_unavailable_reason'],
-                                 geometry_sources=bempp.geometry_sources_for(status))]
-    registry = EngineRegistry(detector=detect, cpu_refresh=False)
-    async def exercise():
-        await registry.prewarm()
-        assert not registry.warmup.task.done()  # startup only schedules
-        while not started.is_set():
-            await asyncio.sleep(0.001)
-        await asyncio.sleep(0.01)
-        assert not registry.warmup.task.done()  # loop runs while child is slow
-        initial = await capabilities_payload(registry)
-        row = next(e for e in initial['engines'] if e['name'] == 'bempp')
-        assert row['assembly_backend'] == 'numba'
-        assert row['opencl_unavailable_reason'] == 'inventory_timeout'
-        assert tuple(row['geometry_sources']) == ('parametric',)
-        monkeypatch.setattr(probe, 'INVENTORY_SECONDS', 1.0)
-        clock[0] += probe.RETRY_INTERVAL_SECONDS
-        recovered = await capabilities_payload(registry)
-        row = next(e for e in recovered['engines'] if e['name'] == 'bempp')
-        assert row['assembly_backend'] == 'opencl'
-        assert row['assembly_device'] == CPU
-        assert row['opencl_unavailable_reason'] is None
-        assert 'imported' in row['geometry_sources']
-        assert (await registry.capabilities())[0] is other
-        assert bempp.bempp_status()['assembly_backend'] == 'opencl'
-        await registry.shutdown_prewarm()
-    try:
-        asyncio.run(exercise())
-        assert len(inventory_calls) == 2
-    finally:
-        bempp.bempp_status.cache_clear()
-
-
 def test_older_status_cannot_pin_numba_when_another_caller_recovers(monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     import threading
@@ -493,3 +518,35 @@ def test_older_status_cannot_pin_numba_when_another_caller_recovers(monkeypatch)
     finally:
         release.set()
         bempp.bempp_status.cache_clear()
+
+
+def test_registry_does_not_retry_a_timeout_outside_its_snapshot(monkeypatch):
+    import asyncio
+    from server.engines.registry import EngineInfo, EngineRegistry
+
+    clock, timers, attempts = [0.0], [], []
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    def timeout(*args):
+        attempts.append(args)
+        return {"ok": False, "opencl_unavailable_reason": "inventory_timeout", "reason": "slow"}
+    monkeypatch.setattr(probe, "_run_probe", timeout)
+    assert not probe.qualified_opencl()["ok"]
+    clock[0] += probe.RETRY_INTERVAL_SECONDS
+    async def timer(_self):
+        timers.append(clock[0])
+        await asyncio.sleep(0)
+    monkeypatch.setattr(EngineRegistry, "_wait_opencl_retry", timer)
+    # A custom detector or an unavailable wrapper does not publish this
+    # process's timeout. Retrying it would spin once the interval expires.
+    other = EngineInfo("bempp", False, "wrapper unavailable", None)
+    registry = EngineRegistry(detector=lambda: [other], cpu_refresh=False)
+    async def exercise():
+        try:
+            assert await registry.capabilities() == (other,)
+            for _ in range(5):
+                await asyncio.sleep(0)
+            assert not timers
+            assert len(attempts) == 1
+        finally:
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())

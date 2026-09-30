@@ -35,9 +35,12 @@ def _blocking_worker(connection) -> None:
             command = connection.recv()
             if command is None:
                 return
-            job_id, _payload = command
+            job_id, payload = command
             if job_id == _WARMUP_JOB_ID:
                 connection.send(("warm", job_id, {"warmed": True}))
+                continue
+            if payload.get("mesh_metadata", {}).get("complete_after_cancel"):
+                connection.send(("done", job_id, {"worker_pid": os.getpid(), "completed": True}))
                 continue
             connection.send(("stage", job_id, ("frequency_solve", 0.0, "blocked")))
             time.sleep(30.0)
@@ -141,7 +144,16 @@ def test_cancellation_terminates_blocked_native_worker_promptly() -> None:
                 stage_cb=lambda *_event: None,
                 result_cb=None,
             )
-        return time.monotonic() - started, host
+        elapsed = time.monotonic() - started
+        replacement = host._process
+        assert replacement is not None and replacement.is_alive()
+        next_result = await host.run(
+            "mesh", _context(), mesh_metadata={"complete_after_cancel": True},
+            mesh_stats={}, cancel_cb=lambda: None, stage_cb=lambda *_: None,
+            result_cb=None,
+        )
+        assert next_result == {"worker_pid": replacement.pid, "completed": True}
+        return elapsed, host
 
     elapsed, host = asyncio.run(exercise())
     try:

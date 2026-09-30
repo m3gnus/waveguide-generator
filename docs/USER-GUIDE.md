@@ -186,17 +186,28 @@ are rejected. If no CPU device passes, BEMPP falls back to numba: correct but
 slow, with about a minute of first-solve compilation.
 
 Qualification runs in background capability threads or isolated solve/warmup
-workers, so it cannot block startup or the event loop. Its limits are 10 seconds
-for inventory/import, 20 seconds per CPU smoke test and 30 seconds total. Passes
-and definitive failures persist for the process. A timeout temporarily selects
-numba; later capability or solve requests can retry after five seconds, with at
-most one qualification in flight and two retries after the initial attempt.
+workers, so it cannot block startup or the event loop. Each child's interpreter
+startup and imports have a separate 60-second limit. After the child reports
+that imports are ready, inventory gets 10 seconds and each CPU smoke test gets
+20 seconds, with 30 seconds of compute time across the qualification. Import
+time does not consume those compute budgets. Passes and definitive failures
+persist for the process. A timeout temporarily selects numba; later capability
+or solve requests can retry after five seconds. Registry prewarm also schedules
+these retries, so an idle app can recover without a request or restart. At most
+one qualification runs at a time, with two retries after the initial attempt.
 After three consecutive timeouts the timeout verdict persists until restart.
 Recovery updates the capability record (including imported CAD eligibility) and
-subsequent solves select OpenCL. `inventory_timeout` identifies a stalled
-inventory/import; `smoke_test_timeout` identifies stalled computation or an
-exhausted total budget; `no_device` identifies missing CPU devices or a failed
-inventory process. Unknown guidance reason codes still show platform driver
+subsequent solves select OpenCL.
+
+A capabilities request waits at most 30 seconds for qualification. If the first
+check is still pending, it reports qualification in progress, unavailable
+engines, null assembly backend/device fields and a null OpenCL reason code.
+A retry still in progress returns the last capability snapshot (including the
+temporary numba fallback).
+A later request reads the completed result. `inventory_timeout` also covers a
+stalled inventory child's startup/import; `smoke_test_timeout` covers a stalled
+smoke child's startup/import, computation or an exhausted compute budget;
+`no_device` identifies missing CPU devices or a failed inventory process. Unknown guidance reason codes still show platform driver
 guidance.
 
 Imported CAD geometry follows the same order with two differences: AUTO does

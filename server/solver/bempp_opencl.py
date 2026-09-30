@@ -11,6 +11,7 @@ from functools import lru_cache
 import importlib
 import json
 import os
+import queue
 from pathlib import Path
 import subprocess
 import sys
@@ -18,14 +19,14 @@ import threading
 import time
 from typing import Any, Mapping
 
-# Ryzen 7 5825U Windows VM / Intel CPU runtime: inventory (mostly bempp_cl
-# import) took 1.6s idle; full qualification took 3.5-5.6s. Allow cold disk,
-# antivirus and concurrent numba load: >6x inventory headroom and >5x full
-# headroom, while bounding hung drivers. Registry prewarm schedules background
-# work; EngineRegistry.capabilities uses asyncio.to_thread for all probes.
+# Only driver enumeration/kernel execution consumes these budgets. Child
+# interpreter startup and imports compete with the app's own cold imports.
 INVENTORY_SECONDS = 10.0
 PROBE_SECONDS = 20.0
 TOTAL_SECONDS = 30.0
+# Per child, including process creation. Cold Windows imports may be slow;
+# a hung import must still end and use the existing transient timeout codes.
+SPAWN_IMPORT_SECONDS = 60.0
 # Initial attempt plus two retries, at least 5s after each timeout completes.
 # Serialize attempts so concurrent capability/solve requests cannot pile up.
 RETRY_INTERVAL_SECONDS = 5.0
@@ -35,6 +36,7 @@ OPENCL_UNAVAILABLE_REASONS = frozenset({
 })
 TIMEOUT_REASONS = frozenset({"inventory_timeout", "smoke_test_timeout"})
 _RESULT_PREFIX = "WG_OPENCL_RESULT "
+_READY_MARKER = "WG_OPENCL_READY"
 _selection_lock = threading.Lock()
 _device_verdict_cache: dict[str, dict[str, Any]] = {}
 _cached_verdict: dict[str, Any] | None = None
@@ -218,26 +220,84 @@ def smoke_test(device: Mapping[str, Any]) -> dict[str, float]:
     return check_computation(matrix)
 
 
-def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
+def _read_probe_output(stream: Any, events: Any) -> None:
+    """Drain the merged pipe on every OS; discard logs rather than buffer them.
+
+    Timestamp READY in the reader, so parent scheduling delay cannot extend
+    the compute deadline. EOF is also timestamped to detect late results.
+    """
     try:
-        # Disable mesh-helper JIT only in this disposable eight-element probe;
-        # OpenCL still builds and executes the actual shipped BEMPP kernels.
-        completed = subprocess.run(
+        for line in stream:
+            line = line.strip()
+            if line == _READY_MARKER or line.startswith(_RESULT_PREFIX):
+                events.put((line, time.monotonic()))
+    finally:
+        events.put((None, time.monotonic()))
+
+
+def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
+    child = reader = None
+    ready_at = None
+    began = time.monotonic()
+    deadline = began + SPAWN_IMPORT_SECONDS
+    phase = "spawn/import"
+    result = None
+    try:
+        # One continuously drained pipe avoids stdout/stderr backpressure and
+        # Windows select() limitations. No native work runs in the reader.
+        child = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve()), mode, json.dumps(device)],
-            capture_output=True, text=True, timeout=timeout, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env={**os.environ, "NUMBA_DISABLE_JIT": "1"},
         )
-        line = next(line for line in reversed(completed.stdout.splitlines()) if line.startswith(_RESULT_PREFIX))
-        return json.loads(line[len(_RESULT_PREFIX):])
+        events = queue.Queue()
+        reader = threading.Thread(target=_read_probe_output, args=(child.stdout, events), daemon=True)
+        reader.start()
+        while True:
+            remaining = deadline - time.monotonic()
+            try:
+                line, observed_at = events.get(timeout=max(0.0, remaining))
+            except queue.Empty:
+                raise subprocess.TimeoutExpired(child.args, timeout) from None
+            if observed_at > deadline:
+                raise subprocess.TimeoutExpired(child.args, timeout)
+            if line == _READY_MARKER and ready_at is None:
+                ready_at = observed_at
+                deadline = ready_at + timeout
+                phase = "compute"
+            elif line is None:
+                child.wait(timeout=max(0.001, deadline - time.monotonic()))
+                if child.returncode or result is None:
+                    raise ValueError("Child exited without a successful protocol response")
+                # Engine import failures may precede READY; successful native
+                # work must always have a READY marker.
+                if ready_at is None and result.get("ok"):
+                    raise ValueError("Missing ready marker")
+                return {**result, "_active_seconds": 0.0 if ready_at is None else observed_at - ready_at}
+            elif line.startswith(_RESULT_PREFIX):
+                result = json.loads(line[len(_RESULT_PREFIX):])
+                if not isinstance(result, dict):
+                    raise ValueError("Invalid probe response")
     except subprocess.TimeoutExpired:
-        return {"ok": False, "opencl_unavailable_reason": "inventory_timeout" if mode == "inventory" else "smoke_test_timeout", "reason": f"OpenCL {mode} timed out after {timeout:.1f}s"}
-    except (OSError, subprocess.CalledProcessError, StopIteration, ValueError) as exc:
-        return {"ok": False, "opencl_unavailable_reason": "no_device" if mode == "inventory" else "smoke_test_failed", "reason": f"OpenCL {mode} probe failed: {type(exc).__name__}"}
+        limit = SPAWN_IMPORT_SECONDS if ready_at is None else timeout
+        return {"ok": False, "opencl_unavailable_reason": "inventory_timeout" if mode == "inventory" else "smoke_test_timeout", "reason": f"OpenCL {mode} {phase} timed out after {limit:.1f}s",
+                "_active_seconds": 0.0 if ready_at is None else timeout}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "opencl_unavailable_reason": "no_device" if mode == "inventory" else "smoke_test_failed", "reason": f"OpenCL {mode} probe failed: {type(exc).__name__}",
+                "_active_seconds": 0.0 if ready_at is None else min(timeout, time.monotonic() - ready_at)}
+    finally:
+        if child is not None:
+            if child.poll() is None:
+                child.kill()
+            child.wait()
+            if reader is not None:
+                reader.join()
+            child.stdout.close()
 
 
 def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
     if device_json in _device_verdict_cache:
-        return _device_verdict_cache[device_json]
+        return {**_device_verdict_cache[device_json], "_active_seconds": 0.0}
     verdict = _run_probe("smoke", json.loads(device_json), timeout)
     if verdict.get("opencl_unavailable_reason") not in TIMEOUT_REASONS:
         _device_verdict_cache[device_json] = verdict
@@ -245,8 +305,9 @@ def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
 
 
 def _qualified_opencl() -> dict[str, Any]:
-    began = time.monotonic()
+    active_seconds = 0.0
     found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
+    active_seconds += found.pop("_active_seconds", 0.0)
     if not found.get("ok"):
         return {**found, "opencl_unavailable_reason": found.get("opencl_unavailable_reason", "no_device")}
     devices = rank_devices(found["devices"])
@@ -261,12 +322,13 @@ def _qualified_opencl() -> dict[str, Any]:
     failures = []
     unavailable_reason = "smoke_test_failed"
     for device in devices:
-        remaining = TOTAL_SECONDS - (time.monotonic() - began)
+        remaining = TOTAL_SECONDS - active_seconds
         if remaining <= 0:
             failures.append("OpenCL qualification time budget exhausted")
             unavailable_reason = "smoke_test_timeout"
             break
         verdict = _device_verdict(json.dumps(device, sort_keys=True), min(PROBE_SECONDS, remaining))
+        active_seconds += verdict.get("_active_seconds", 0.0)
         if verdict.get("ok"):
             return {"ok": True, "device": device, "smoke": verdict["smoke"],
                     "opencl_unavailable_reason": None,
@@ -286,6 +348,10 @@ def _qualified_opencl() -> dict[str, Any]:
 def retry_pending() -> bool:
     """Cheap state inspection; never waits on the probe lock/event loop."""
     return _last_timeout is not None and _cached_verdict is None
+
+
+def retry_delay() -> float:
+    return max(0.0, _retry_after - time.monotonic())
 
 
 def retry_due() -> bool:
@@ -337,6 +403,12 @@ if __name__ == "__main__":
     try:
         import bempp_cl.api  # noqa: F401 - test the native engine import in the bounded child
         stage = "opencl"
+        import pyopencl  # noqa: F401
+        if sys.argv[1] != "inventory":
+            import numpy  # noqa: F401
+            import bempp_cl.core.opencl_kernels  # noqa: F401
+            import hornlab_bempp_bem.device  # noqa: F401
+        print(_READY_MARKER, flush=True)
         result = {"ok": True}
         if sys.argv[1] == "inventory":
             result["devices"] = inventory()
@@ -344,4 +416,4 @@ if __name__ == "__main__":
             result["smoke"] = smoke_test(json.loads(sys.argv[2]))
     except Exception as exc:
         result = {"ok": False, "stage": stage, "opencl_unavailable_reason": "no_device" if sys.argv[1] == "inventory" else "smoke_test_failed", "reason": f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"}
-    print(_RESULT_PREFIX + json.dumps(result))
+    print(_RESULT_PREFIX + json.dumps(result), flush=True)

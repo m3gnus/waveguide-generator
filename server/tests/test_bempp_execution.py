@@ -242,3 +242,33 @@ def test_guard_reuses_only_a_matching_one_cpu_context(monkeypatch, host):
     probe.native_call(execute, assembly_backend="opencl", opencl_device="cpu")
     assert host.bindings == [host.cpu, host.cpu]
     assert host.contexts == [[host.cpu], [host.cpu]]
+
+
+def test_later_infinite_baffle_solve_requalifies_cpu_without_restart(monkeypatch, host):
+    """Keep the native config/binding boundary, substitute only kernel work."""
+    clock, inventories, observed = [0.0], [], []
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    def run(mode, device, timeout):
+        if mode == "inventory":
+            inventories.append(mode)
+            if len(inventories) == 1:
+                return {"ok": False, "reason": "startup contention",
+                        "opencl_unavailable_reason": "inventory_timeout"}
+            return {"ok": True, "devices": probe.inventory()}
+        return {"ok": True, "smoke": {}}
+    monkeypatch.setattr(probe, "_run_probe", run)
+    assert bempp.bempp_status()["assembly_backend"] == "numba"
+    clock[0] += probe.RETRY_INTERVAL_SECONDS
+    def solve(path, config):
+        observed.append(config)
+        assert config.assembly_backend == "opencl"
+        assert config.opencl_device == "cpu"
+        assert host.kernels.default_cpu_device() is host.cpu
+        assert config.aperture_tag is not None
+        return _result()
+    monkeypatch.setattr(bempp, "bempp_solve", solve)
+    context = _context(field_plane=False, sim_type=1)
+    bempp.solve_bempp_from_msh_text(_cabinet_msh(aperture=True), context, mesh_metadata={"apertureTag": 12})
+    assert len(observed) == 1
+    assert len(inventories) == 2
+    assert bempp.bempp_status()["assembly_backend"] == "opencl"
