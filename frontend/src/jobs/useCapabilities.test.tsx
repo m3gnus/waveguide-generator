@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preferencesStore } from '../prefs/preferences';
 import { AppQueryProvider, appQueryClient } from '../queryClient';
-import { CAPABILITIES_STALE_MS, useCapabilities, useCapabilityRefreshOnReconnect } from './useCapabilities';
+import { CAPABILITIES_STALE_MS, OPENCL_POLL_FALLBACK_MS, OPENCL_POLL_SAFETY_FACTOR, useCapabilities, useCapabilityRefreshOnReconnect } from './useCapabilities';
 
 const CAPABILITIES = {
   engines: [
@@ -226,19 +226,61 @@ describe('useCapabilities', () => {
 
   it.each([
     { name: 'bempp', qualification: 'pending' },
-    { name: 'bempp', qualification: 'done', assembly_backend: 'numba',
-      opencl_unavailable_reason: 'inventory_timeout', opencl_retry_pending: true },
-  ])('bounds qualification/retry polling even if the server never finishes (%j)', async (engine) => {
-    const pending = { ...CAPABILITIES, engines: [engine] };
-    fetchMock.mockImplementation(async () => new Response(JSON.stringify(pending), { status: 200 }));
-    await render(<Consumer tag="status"/>);
-    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000 + 10_000); });
-    await flushReact();
+    // Retry ownership alone drives polling, independent of backend/reason.
+    { name: 'bempp', qualification: 'done', opencl_retry_pending: true },
+  ])('observes long qualification resolution after 300 seconds without remounting (%j)', async (engine) => {
+    let response: { engines: Record<string, unknown>[]; engineSelection: Omit<typeof CAPABILITIES.engineSelection, 'resolvedDefault'> & { resolvedDefault: string | null }; opencl_qualification_max_seconds: number } = { ...CAPABILITIES, opencl_qualification_max_seconds: 460,
+      engines: [engine], engineSelection: { ...CAPABILITIES.engineSelection, resolvedDefault: null as string | null } };
+    function Lifecycle() {
+      const snapshot = useCapabilities();
+      return <div>{snapshot.engines[0]?.qualification}|{snapshot.engines[0]?.assembly_backend}|{snapshot.engineSelection.resolvedDefault}</div>;
+    }
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(response)));
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    await render(<Lifecycle/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(310_000); });
     const count = fetchMock.mock.calls.length;
     expect(count).toBeGreaterThan(2);
-    expect(count).toBeLessThan(40);
+    response = { ...response, engines: [{ ...engine, qualification: 'done', opencl_retry_pending: false,
+      assembly_backend: 'opencl', available: true }],
+      engineSelection: { ...response.engineSelection, resolvedDefault: 'bempp' } };
+    await act(async () => { await vi.advanceTimersByTimeAsync(180_000); });
+    await flushReact();
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(count);
+    expect(host.textContent).toBe('done|opencl|bempp');
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['solve-plan'] });
+    const resolvedCount = fetchMock.mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(fetchMock).toHaveBeenCalledTimes(resolvedCount);
+  });
+
+  it.each([10, 30, undefined, 0, -1])('derives its safety ceiling from the server budget (%s)', async (seconds) => {
+    const pending = { ...CAPABILITIES, opencl_qualification_max_seconds: seconds,
+      engines: [{ name: 'bempp', qualification: 'pending' }] };
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(pending)));
+    function Lifecycle({ tag }: { tag: string }) {
+      const snapshot = useCapabilities();
+      return <div data-tag={tag}>{snapshot.qualificationRefreshNeeded ? 'expired' : 'polling'}
+        <button onClick={snapshot.refreshCapabilities}>Refresh</button></div>;
+    }
+    await render(<><Lifecycle tag="first"/><Lifecycle tag="second"/></>);
+    const ceiling = seconds && seconds > 0 ? seconds * 1000 * OPENCL_POLL_SAFETY_FACTOR : OPENCL_POLL_FALLBACK_MS;
+    await act(async () => { await vi.advanceTimersByTimeAsync(ceiling - 1); });
+    expect(textOf('first')).toBe('pollingRefresh');
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await flushReact();
+    expect(textOf('first')).toBe('expiredRefresh');
+    expect(textOf('second')).toBe('expiredRefresh');
+    const count = fetchMock.mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
     expect(fetchMock).toHaveBeenCalledTimes(count);
+    await act(async () => { host.querySelector<HTMLButtonElement>('button')!.click(); });
+    await flushReact();
+    expect(fetchMock).toHaveBeenCalledTimes(count + 1);
+    expect(textOf('first')).toBe('pollingRefresh');
+    expect(textOf('second')).toBe('pollingRefresh');
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(count + 1);
   });
 
   it('stops polling after terminal preparation failure', async () => {

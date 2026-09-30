@@ -576,6 +576,7 @@ def test_capability_probe_runs_off_thread_and_is_cached(
             key: value for key, value in first.items() if key not in _host_scoped
         } == {
             "cpuPreparationInFlight": False,
+            "opencl_qualification_max_seconds": 460.0,
             "engines": [
                 {
                     "name": "mock",

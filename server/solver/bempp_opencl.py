@@ -32,6 +32,23 @@ SPAWN_IMPORT_SECONDS = 60.0
 # Serialize attempts so concurrent capability/solve requests cannot pile up.
 RETRY_INTERVAL_SECONDS = 5.0
 MAX_TIMEOUT_ATTEMPTS = 3
+
+
+def qualification_max_seconds() -> float:
+    """Inventory + smoke startup, shared active budget, then retry cooldowns.
+
+    INVENTORY_SECONDS and PROBE_SECONDS split TOTAL_SECONDS; they do not add
+    another active budget. Compute dynamically so publication follows limits.
+    """
+    return MAX_TIMEOUT_ATTEMPTS * _attempt_max_seconds() + (
+        max(0, MAX_TIMEOUT_ATTEMPTS - 1) * RETRY_INTERVAL_SECONDS
+    )
+
+
+def _attempt_max_seconds() -> float:
+    return 2 * SPAWN_IMPORT_SECONDS + TOTAL_SECONDS
+
+
 OPENCL_UNAVAILABLE_REASONS = frozenset({
     "no_device", "inventory_timeout", "smoke_test_failed", "smoke_test_timeout", "pocl_windows",
 })
@@ -225,6 +242,7 @@ def smoke_test(device: Mapping[str, Any]) -> dict[str, float]:
 # Holding this lock through spawn closes the shutdown-versus-registration race.
 _probe_lock = threading.Lock()
 _probe_owner: ContextVar[threading.Event | None] = ContextVar("opencl_probe_owner", default=None)
+_attempt_deadline: ContextVar[float] = ContextVar("opencl_attempt_deadline", default=float("inf"))
 _active_probes: dict[_ProbeHandle, threading.Event | None] = {}
 
 
@@ -307,7 +325,7 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
     child = reader = handle = None
     ready_at = None
     began = time.monotonic()
-    deadline = began + SPAWN_IMPORT_SECONDS
+    deadline = min(began + SPAWN_IMPORT_SECONDS, _attempt_deadline.get())
     phase = "spawn/import"
     result = None
     try:
@@ -336,7 +354,7 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
                 raise subprocess.TimeoutExpired(child.args, timeout)
             if line == _READY_MARKER and ready_at is None:
                 ready_at = observed_at
-                deadline = ready_at + timeout
+                deadline = min(ready_at + timeout, _attempt_deadline.get())
                 phase = "compute"
             elif line is None:
                 child.wait(timeout=max(0.001, deadline - time.monotonic()))
@@ -377,6 +395,16 @@ def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
 
 
 def _qualified_opencl() -> dict[str, Any]:
+    # Multiple CPU ICDs may each require another cold child. Bound their
+    # combined startup too, so the published lifecycle ceiling remains true.
+    token = _attempt_deadline.set(time.monotonic() + _attempt_max_seconds())
+    try:
+        return _probe_devices()
+    finally:
+        _attempt_deadline.reset(token)
+
+
+def _probe_devices() -> dict[str, Any]:
     active_seconds = 0.0
     found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
     active_seconds += found.pop("_active_seconds", 0.0)
@@ -395,7 +423,7 @@ def _qualified_opencl() -> dict[str, Any]:
     unavailable_reason = "smoke_test_failed"
     for device in devices:
         remaining = TOTAL_SECONDS - active_seconds
-        if remaining <= 0:
+        if remaining <= 0 or time.monotonic() >= _attempt_deadline.get():
             failures.append("OpenCL qualification time budget exhausted")
             unavailable_reason = "smoke_test_timeout"
             break

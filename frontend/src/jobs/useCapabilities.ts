@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
   getCapabilities,
@@ -49,6 +49,17 @@ const NO_ENGINE_SELECTION: Readonly<EngineSelection> = Object.freeze({
 });
 const plannerSupportByClient = new WeakMap<QueryClient, string>();
 
+/** Twice the server budget allows scheduling/HTTP overhead. Older servers: 15 minutes. */
+export const OPENCL_POLL_SAFETY_FACTOR = 2;
+export const OPENCL_POLL_FALLBACK_MS = 15 * 60_000;
+
+// All mounted consumers share the lifecycle clock, including manual refresh.
+const qualificationClocks = new WeakMap<QueryClient, {
+  started: number | null;
+  generation: number;
+  listeners: Set<() => void>;
+}>();
+
 export interface CapabilitiesSnapshot {
   hostPlatform: string | null;
   engines: readonly EngineCapability[];
@@ -56,11 +67,29 @@ export interface CapabilitiesSnapshot {
   /** A human-readable reason, or null while loading or once loaded. */
   error: string | null;
   isLoading: boolean;
+  qualificationRefreshNeeded: boolean;
+  refreshCapabilities: () => void;
 }
 
 export function useCapabilities(): CapabilitiesSnapshot {
   const client = useQueryClient();
-  const qualificationPollStarted = useRef<number | null>(null);
+  let clock = qualificationClocks.get(client);
+  if (!clock) {
+    clock = { started: null, generation: 0, listeners: new Set() };
+    qualificationClocks.set(client, clock);
+  }
+  const pollingClock = clock;
+  const subscribe = useCallback((listener: () => void) => {
+    pollingClock.listeners.add(listener);
+    return () => { pollingClock.listeners.delete(listener); };
+  }, [pollingClock]);
+  const getGeneration = useCallback(() => pollingClock.generation, [pollingClock]);
+  const generation = useSyncExternalStore(subscribe, getGeneration);
+  const [ceilingReached, setCeilingReached] = useState(false);
+  const pollCeiling = (seconds: number | undefined) => (
+    typeof seconds === 'number' && Number.isFinite(seconds) && seconds > 0
+      ? seconds * 1000 * OPENCL_POLL_SAFETY_FACTOR : OPENCL_POLL_FALLBACK_MS
+  );
   const { data, error, isError, isPending } = useQuery({
     queryKey: CAPABILITIES_QUERY_KEY,
     queryFn: () => getCapabilities(),
@@ -69,24 +98,36 @@ export function useCapabilities(): CapabilitiesSnapshot {
     // This explicit server lifecycle covers delayed hardware inventory too.
     // Terminal ready, failed and skipped answers all stop the timer.
     refetchInterval: (query) => {
-      const pending = query.state.data?.engines?.some((engine) => engine.name === 'bempp' && (
-        engine.qualification === 'pending' || (
-          engine.assembly_backend === 'numba' && engine.opencl_retry_pending === true &&
-          (engine.opencl_unavailable_reason === 'inventory_timeout' ||
-            engine.opencl_unavailable_reason === 'smoke_test_timeout')
-        )
-      ));
+      const pending = query.state.data?.engines?.some(qualificationPending);
       if (pending) {
-        qualificationPollStarted.current ??= Date.now();
-        if (Date.now() - qualificationPollStarted.current < 5 * 60_000) {
-          return Math.min(1000 * 2 ** Math.min(query.state.dataUpdateCount - 1, 4), 10_000);
+        pollingClock.started ??= Date.now();
+        const remaining = pollCeiling(query.state.data?.opencl_qualification_max_seconds)
+          - (Date.now() - pollingClock.started);
+        if (remaining > 0) {
+          return Math.min(1000 * 2 ** Math.min(query.state.dataUpdateCount - 1, 4), 10_000, remaining);
         }
       } else {
-        qualificationPollStarted.current = null;
+        pollingClock.started = null;
       }
       return query.state.data?.cpuPreparationInFlight ? 1000 : false;
     },
   });
+  const pending = data?.engines?.some(qualificationPending) ?? false;
+  const ceiling = pollCeiling(data?.opencl_qualification_max_seconds);
+  useEffect(() => {
+    setCeilingReached(false);
+    if (!pending) return;
+    pollingClock.started ??= Date.now();
+    const timer = setTimeout(() => setCeilingReached(true),
+      Math.max(0, ceiling - (Date.now() - pollingClock.started)));
+    return () => clearTimeout(timer);
+  }, [pending, ceiling, generation, pollingClock]);
+  const refreshCapabilities = useCallback(() => {
+    pollingClock.started = Date.now();
+    pollingClock.generation += 1;
+    for (const listener of pollingClock.listeners) listener();
+    void client.refetchQueries({ queryKey: CAPABILITIES_QUERY_KEY });
+  }, [client, pollingClock]);
   const onshapeOffered = data === undefined ? null : data.onshape === true;
   useEffect(() => {
     if (onshapeOffered !== null) preferencesStore.setOnshapeAvailable(onshapeOffered);
@@ -108,7 +149,15 @@ export function useCapabilities(): CapabilitiesSnapshot {
     engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,
     error: isError ? (error instanceof Error ? error.message : String(error)) : null,
     isLoading: isPending,
+    qualificationRefreshNeeded: pending && ceilingReached,
+    refreshCapabilities,
   };
+}
+
+function qualificationPending(engine: EngineCapability): boolean {
+  return engine.name === 'bempp' && (
+    engine.qualification === 'pending' || engine.opencl_retry_pending === true
+  );
 }
 
 /** Full capability record for controls whose support is version-dependent. */

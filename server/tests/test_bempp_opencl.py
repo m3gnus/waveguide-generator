@@ -23,6 +23,30 @@ def clear_cache():
     probe.clear_cache()
 
 
+@pytest.mark.parametrize("constant,value", [
+    ("SPAWN_IMPORT_SECONDS", 80), ("TOTAL_SECONDS", 40),
+    ("MAX_TIMEOUT_ATTEMPTS", 4), ("RETRY_INTERVAL_SECONDS", 7),
+])
+def test_published_qualification_budget_tracks_limits(monkeypatch, constant, value):
+    import asyncio
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.engines.registry import EngineInfo
+
+    class Snapshot:
+        async def capabilities(self):
+            return (EngineInfo("bempp", False, "Checking OpenCL…", None,
+                               qualification="pending"),)
+
+    original = asyncio.run(capabilities_payload(Snapshot()))["opencl_qualification_max_seconds"]
+    assert original == 460.0
+    monkeypatch.setattr(probe, constant, value)
+    expected = (probe.MAX_TIMEOUT_ATTEMPTS * (2 * probe.SPAWN_IMPORT_SECONDS + probe.TOTAL_SECONDS)
+                + (probe.MAX_TIMEOUT_ATTEMPTS - 1) * probe.RETRY_INTERVAL_SECONDS)
+    published = asyncio.run(capabilities_payload(Snapshot()))["opencl_qualification_max_seconds"]
+    assert published == expected
+    assert published != original
+
+
 def test_inventory_excludes_every_vendor_gpu(monkeypatch):
     def device(name, kind, vendor):
         return NS(name=name, vendor=vendor, type=kind, extensions="", double_fp_config=0)
@@ -156,6 +180,21 @@ def fake_children(monkeypatch, scripts):
 def child_script(verdict, *, import_seconds=0.0, compute_seconds=0.0):
     return [(import_seconds, probe._READY_MARKER),
             (compute_seconds, probe._RESULT_PREFIX + json.dumps(verdict))]
+
+
+def test_multiple_cpu_imports_share_published_wall_budget(monkeypatch):
+    devices = [{**CPU, "device_index": index} for index in range(4)]
+    clock, children = fake_children(monkeypatch, [
+        child_script({"ok": True, "devices": devices}, import_seconds=58, compute_seconds=9),
+        *[child_script({"ok": False, "reason": "bad computation"},
+                       import_seconds=58, compute_seconds=1) for _ in devices],
+    ])
+    verdict = probe.qualified_opencl()
+    assert verdict["opencl_unavailable_reason"] == "smoke_test_timeout"
+    assert clock[0] == 2 * probe.SPAWN_IMPORT_SECONDS + probe.TOTAL_SECONDS
+    assert len(children) == 3
+    assert all(child.waited and child.stdout.closed for child in children)
+    assert children[-1].killed
 
 
 @pytest.mark.parametrize("mode", ["inventory", "smoke"])

@@ -201,7 +201,10 @@ def test_explicit_workspace_default_is_separate_from_internal_data(
 def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.delenv("WG2_ENABLE_DRYRUN", raising=False)
     client = TestClient(create_app(data_dir=tmp_path))
-    engines = client.get("/api/capabilities").json()["engines"]
+    payload = client.get("/api/capabilities").json()
+    from server.solver.bempp_opencl import qualification_max_seconds
+    assert payload["opencl_qualification_max_seconds"] == qualification_max_seconds()
+    engines = payload["engines"]
     # Real detection (batch Q) probes THIS machine, so availability values are
     # environment-dependent; assert the report contract, not the environment.
     names = [engine["name"] for engine in engines]

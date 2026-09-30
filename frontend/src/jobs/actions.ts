@@ -43,6 +43,8 @@ export interface EngineSelection {
 export interface Capabilities {
   /** Server host, not the browser's OS. Absent on older servers. */
   hostPlatform?: string;
+  /** Server qualification/retry budget; absent on older servers. */
+  opencl_qualification_max_seconds?: number;
   engines: EngineCapability[];
   engineSelection: EngineSelection;
   /** True only while this server is deciding or preparing the BEAT CPU runtime. */

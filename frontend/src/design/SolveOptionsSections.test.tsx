@@ -47,7 +47,28 @@ describe('solve and directivity control help', () => {
     act(() => root.unmount());
     host.remove();
     queryClient.clear();
+    vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it.each(['parametric', 'cad'] as const)('offers Refresh at the qualification ceiling in %s and resumes', async (mode) => {
+    const pending = { engines: [{ name: 'bempp', qualification: 'pending', available: false }],
+      opencl_qualification_max_seconds: 10, cpuPreparationInFlight: false };
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(pending)));
+    vi.stubGlobal('fetch', fetchMock);
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, pending);
+    render(<SolveOptionsControls mode={mode} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+    expect(host.textContent).not.toContain('checking OpenCL…');
+    const button = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
+    expect(button.textContent).toBe('Refresh');
+    const count = fetchMock.mock.calls.length;
+    await act(async () => { button.click(); await vi.advanceTimersByTimeAsync(1); });
+    expect(fetchMock).toHaveBeenCalledTimes(count + 1);
+    expect(host.querySelector('[role="status"] button')).toBeNull();
+    expect(host.textContent).toContain('checking OpenCL…');
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(fetchMock.mock.calls.length).toBeGreaterThan(count + 1);
   });
 
   const render = (node: React.ReactNode) => act(() => root.render(<QueryClientProvider client={queryClient}>{node}</QueryClientProvider>));

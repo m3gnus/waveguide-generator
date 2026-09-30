@@ -40,7 +40,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     """The engine list, the resolved default, module drift, and storage mode."""
 
     engines = [asdict(engine) for engine in await engine_registry.capabilities()]
-    from server.solver.bempp_opencl import retry_pending
+    from server.solver.bempp_opencl import qualification_max_seconds, retry_pending
 
     for engine in engines:
         if engine["name"] == "bempp":
@@ -61,6 +61,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     installed, drift = measure_installed_stack(pinned)
     return {
         "hostPlatform": platform.system().lower(),
+        "opencl_qualification_max_seconds": qualification_max_seconds(),
         "engines": engines,
         "cpuPreparationInFlight": bool(
             getattr(engine_registry, "cpu_preparation_in_flight", lambda: False)()
