@@ -21,11 +21,13 @@ reached by killing a process.
 from __future__ import annotations
 
 import builtins
+import errno
 import json
 import os
 from collections.abc import Callable
 from pathlib import Path
 import signal
+import stat
 import subprocess
 import sys
 import textwrap
@@ -172,6 +174,97 @@ def _generations(resources: Path) -> dict[str, str]:
 def _user_data_intact(data_dir: Path) -> bool:
     design = data_dir / "workspace" / "design.wg2"
     return design.is_file() and design.read_text(encoding="utf-8") == "a design"
+
+
+def _inject_layer_directory_eio(monkeypatch, flush_after_move, *, fail_later=False):
+    """Fail a real directory fsync after a completed move, once."""
+    if not apply_update_module.DIRECTORY_SYNC_SUPPORTED:
+        pytest.skip("host does not flush directories")
+    real_replace = os.replace
+    real_fsync = os.fsync
+    moves = []
+    failures = []
+    rename_failures = []
+
+    def replace(source, destination):
+        if fail_later and len(moves) == 2 and not rename_failures:
+            rename_failures.append((source, destination))
+            raise OSError(errno.EIO, "later rename failure")
+        real_replace(source, destination)
+        moves.append((source, destination))
+
+    def fsync(fd):
+        if (stat.S_ISDIR(os.fstat(fd).st_mode)
+                and len(moves) == flush_after_move and not failures):
+            failures.append(moves[-1])
+            raise OSError(errno.EIO, "injected directory EIO")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", False)
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(os, "fsync", fsync)
+    return moves, failures, rename_failures
+
+
+@pytest.mark.parametrize("fail_later", [False, True], ids=["complete", "recover"])
+@pytest.mark.parametrize("flush_after_move", [1, 2], ids=["old-runtime", "staged-runtime"])
+def test_swap_directory_eio_keeps_completed_moves_recorded(
+    tmp_path, monkeypatch, caplog, flush_after_move, fail_later
+):
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    moves, failures, rename_failures = _inject_layer_directory_eio(
+        monkeypatch, flush_after_move, fail_later=fail_later
+    )
+    if fail_later:
+        with pytest.raises(apply_update_module.ApplyUpdateError, match="installed layers were restored"):
+            swap_staged_layers(resources, staged_app, staged_runtime)
+        assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+        assert not (resources / "runtime.previous").exists()
+        assert (staged_runtime / "marker.txt").read_text() == "new1"
+        assert moves[2:] == [(b, a) for a, b in reversed(moves[:2])]
+    else:
+        swap_staged_layers(resources, staged_app, staged_runtime)
+        assert _generations(resources) == {"app": "new1", "runtime": "new1"}
+        for layer in ("app", "runtime"):
+            assert (resources / f"{layer}.previous" / "marker.txt").read_text() == "old0"
+    assert len(moves) == 4
+    assert failures == [moves[flush_after_move - 1]]
+    assert bool(rename_failures) == fail_later
+    assert "Durability is reduced; the move completed" in caplog.text
+    assert _user_data_intact(data_dir)
+
+
+@pytest.mark.parametrize("fail_later", [False, True], ids=["complete", "recover"])
+def test_rollback_directory_eio_keeps_completed_moves_recorded(
+    tmp_path, monkeypatch, caplog, fail_later
+):
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    swap_staged_layers(resources, staged_app, staged_runtime)
+    moves, failures, rename_failures = _inject_layer_directory_eio(
+        monkeypatch, 1, fail_later=fail_later
+    )
+    logs = []
+    assert rollback_previous_layers(resources, log=logs.append) is not fail_later
+    if fail_later:
+        assert _generations(resources) == {"app": "new1", "runtime": "new1"}
+        for layer in ("app", "runtime"):
+            assert (resources / f"{layer}.previous" / "marker.txt").read_text() == "old0"
+        assert moves[2:] == [(b, a) for a, b in reversed(moves[:2])]
+        assert not (resources / "app.failed").exists()
+    else:
+        assert _generations(resources) == {"app": "old0", "runtime": "old0"}
+        for layer in ("app", "runtime"):
+            assert not (resources / f"{layer}.previous").exists()
+        assert moves == [move for layer in ("app", "runtime") for move in (
+            (resources / layer, resources / f"{layer}.failed"),
+            (resources / f"{layer}.previous", resources / layer),
+        )]
+        assert sum("Restored the previous layer" in line for line in logs) == 2
+    assert len(moves) == 4
+    assert failures == [moves[0]]
+    assert bool(rename_failures) == fail_later
+    assert "Durability is reduced; the move completed" in caplog.text
+    assert _user_data_intact(data_dir)
 
 
 # ---------------------------------------------------------------------------

@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 import errno
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -1927,28 +1928,37 @@ def _rename(
     directories on their own schedule, so retry briefly instead of failing an
     update that would have succeeded a moment later.
 
-    Both parent directories are flushed after a rename that returned, so on a
-    platform that permits it the new directory entry is on stable storage before
-    the next rename is issued. Windows does not permit it (``sync_directory``
-    explains why) and nothing here depends on it: the journal makes recovery a
-    question about the directories that exist, not about the order two renames
-    were persisted in.
+    Both parent directories are flushed after a successful rename. A flush
+    failure reduces durability but must not report that the move failed:
+    callers record completed moves only after this function returns. Jobs DB
+    restore separately requires a strict directory flush in its recovery handler.
     """
 
     deadline = clock() + timeout
     while True:
         try:
             os.replace(source, destination)
-            sync_directory(source.parent)
-            if destination.parent != source.parent:
-                sync_directory(destination.parent)
-            return
         except OSError as exc:
             if getattr(exc, "winerror", None) not in WINDOWS_TRANSIENT_RENAME_ERRORS:
                 raise
             if clock() >= deadline:
                 raise
             sleeper(RENAME_RETRY_INTERVAL)
+        else:
+            break
+
+    parents = [source.parent]
+    if destination.parent != source.parent:
+        parents.append(destination.parent)
+    for parent in parents:
+        try:
+            sync_directory(parent)
+        except OSError as exc:
+            _emit_log(
+                logging.getLogger(__name__).warning,
+                f"Moved {source} to {destination}, but could not flush {parent}: "
+                f"{exc}. Durability is reduced; the move completed.",
+            )
 
 
 def _remove(path: Path) -> None:
@@ -2217,9 +2227,12 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
                     _rename(copying, target)
                 else:
                     _rename(source, target)
-                sync_jobs_restore_file(target, log=log)
+                # Unlike layer moves, jobs restore treats a real directory
+                # flush failure as a handled failure and recovers the live set.
                 sync_directory(db.parent, log=log)
+                sync_jobs_restore_file(target, log=log)
             _rename(temporary, db)
+        # Also required when replay finds the final replacement already done.
         sync_directory(db.parent, log=log)
         plan["state"] = "restored"
         write_journal(data_dir, resources, journal)
