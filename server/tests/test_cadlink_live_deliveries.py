@@ -610,7 +610,7 @@ def test_a_slow_retention_racing_a_delivery_pass_starts_nothing(
         visible: list[str] = []
 
         def list_while_retaining(self, **kwargs: Any):
-            if kwargs.get("kind") == PREPARE_AND_SOLVE and kwargs.get("states") == {"received"}:
+            if kwargs.get("kind") == PREPARE_AND_SOLVE and "received" in kwargs.get("states", set()):
                 listing.set()
                 assert gate.entered.wait(WAIT)
                 rows = real_list(self, **kwargs)
@@ -651,7 +651,7 @@ def test_the_accept_commit_racing_a_pass_listing_starts_nothing(
         real_accept = CadLinkStore.accept_operation
 
         def gated_list(self, **kwargs: Any):
-            if kwargs.get("kind") == PREPARE_AND_SOLVE and kwargs.get("states") == {"received"}:
+            if kwargs.get("kind") == PREPARE_AND_SOLVE and "received" in kwargs.get("states", set()):
                 listing.set()
                 assert committed.wait(WAIT)
             return real_list(self, **kwargs)

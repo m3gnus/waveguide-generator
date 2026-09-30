@@ -2384,7 +2384,7 @@ def test_jobs_restore_replays_each_rename_by_identity_and_fsyncs_recovery_set(tm
         pass
     def interrupted(source, target):
         replace(source, target)
-        if (crash_suffix == "installed" and Path(target) == db) or (Path(source) == Path(str(db) + crash_suffix)):
+        if (crash_suffix == "installed" and Path(target) == db) or (crash_suffix == "" and Path(source).name.endswith(".copying")) or (crash_suffix and Path(source) == Path(str(db) + crash_suffix)):
             raise Crash()
     monkeypatch.setattr(apply_update_module.os, "replace", interrupted)
     with pytest.raises(Crash):
@@ -2490,3 +2490,195 @@ def test_handled_sidecar_move_failure_reconstitutes_live_db_and_keeps_code_rollb
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
     plan = read_journal(data_dir, resources)["jobsRestore"]
     assert plan["state"] == "failed" and (db.parent / plan["preserved"]).is_file()
+
+
+@pytest.mark.parametrize("point", ["plan", "copy", "copy-flush", "main", "-wal", "-shm", "installed"])
+def test_jobs_restore_crashes_are_safe_for_launcher_ignoring_restore_plan(tmp_path, monkeypatch, point):
+    import shutil
+    import sqlite3
+    from contextlib import closing
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    identity = apply_update_module.jobs_snapshot_identity
+    injected = False
+    def with_committed_wal(path, **kwargs):
+        nonlocal injected
+        if path == db and not injected:
+            injected = True
+            # The ownership reader has closed. Leave a real committed WAL
+            # tail after abrupt process exit, without a checkpoint on close.
+            subprocess.run([sys.executable, "-c",
+                            "import sqlite3,os,sys; c=sqlite3.connect(sys.argv[1]); "
+                            "c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA wal_autocheckpoint=0'); "
+                            "c.execute(\"UPDATE simulation_jobs SET label='wal-tail' WHERE id='a'\"); "
+                            "c.commit(); os._exit(0)", str(db)], check=True, stdin=subprocess.DEVNULL)
+        return identity(path, **kwargs)
+    monkeypatch.setattr(apply_update_module, "jobs_snapshot_identity", with_committed_wal)
+    class Crash(BaseException):
+        pass
+    real_write = apply_update_module.write_journal
+    def journal(*args, **kwargs):
+        real_write(*args, **kwargs)
+        if point == "plan" and args[2].get("jobsRestore", {}).get("state") == "in-progress":
+            raise Crash()
+    monkeypatch.setattr(apply_update_module, "write_journal", journal)
+    real_copy = apply_update_module.shutil.copy2
+    def copy(source, target):
+        result = real_copy(source, target)
+        if point == "copy" and Path(target).name.endswith(".copying"):
+            raise Crash()
+        return result
+    monkeypatch.setattr(apply_update_module.shutil, "copy2", copy)
+    real_sync = apply_update_module.sync_jobs_restore_file
+    def sync(path, **kwargs):
+        real_sync(path, **kwargs)
+        if point == "copy-flush" and path.name.endswith(".copying"):
+            raise Crash()
+    monkeypatch.setattr(apply_update_module, "sync_jobs_restore_file", sync)
+    real_replace = apply_update_module.os.replace
+    def replace(source, target):
+        real_replace(source, target)
+        if ((point == "main" and Path(source).name.endswith(".copying"))
+                or (point in {"-wal", "-shm"} and Path(source) == Path(str(db) + point))
+                or (point == "installed" and Path(target) == db)):
+            raise Crash()
+    monkeypatch.setattr(apply_update_module.os, "replace", replace)
+    with pytest.raises(Crash):
+        apply_update_module.restore_previous_generation(resources, None, platform_name="linux", data_dir=data_dir)
+    plan = read_journal(data_dir, resources)["jobsRestore"]
+    assert db.is_file()  # The old launcher must never create an empty main.
+    monkeypatch.setattr(apply_update_module, "write_journal", real_write)
+    monkeypatch.setattr(apply_update_module.os, "replace", real_replace)
+    # Simulate old recover_transaction: no previous layers means seal and
+    # mark rolled-back. It cannot interpret, resume or clean up jobsRestore.
+    assert not (resources / "app.previous").exists()
+    old_journal = read_journal(data_dir, resources)
+    old_journal.pop("jobsRestore")
+    real_write(data_dir, resources, old_journal)
+    apply_update_module.recover_transaction(data_dir=data_dir, resources=resources, platform_name="linux")
+    with closing(sqlite3.connect(db)) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if point == "installed":
+            assert version == 5
+            assert {row[0] for row in conn.execute("SELECT id FROM simulation_jobs")} == {"a", "b", "c", "d"}
+        else:
+            # The old JobStore checks this before initializing its tables.
+            with pytest.raises(RuntimeError, match="newer jobs schema"):
+                if version > 5:
+                    raise RuntimeError("This release cannot open a newer jobs schema; restore the snapshot.")
+    preserved = db.parent / plan["preserved"]
+    # If WAL was not moved yet, the refused old open may checkpoint it into
+    # the live main. Otherwise the preserved main+WAL remains the full set.
+    source = preserved if Path(str(preserved) + "-wal").exists() else db
+    recovery = tmp_path / "verify-upgraded.db"
+    shutil.copyfile(source, recovery)
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(source) + suffix)
+        if sidecar.exists():
+            shutil.copyfile(sidecar, Path(str(recovery) + suffix))
+    with closing(sqlite3.connect(recovery)) as conn:
+        assert conn.execute("SELECT label FROM simulation_jobs WHERE id='a'").fetchone()[0] == "wal-tail"
+
+
+@pytest.mark.parametrize("suffix", ["main", "-journal", "installed"])
+def test_jobs_restore_retries_transient_windows_sharing_violation(tmp_path, monkeypatch, suffix):
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    real_identity = apply_update_module.jobs_snapshot_identity
+    injected = False
+    def identity(path, **kwargs):
+        nonlocal injected
+        if path == db and not injected:
+            injected = True
+            Path(str(db) + "-journal").write_bytes(b"journal")
+        return real_identity(path, **kwargs)
+    monkeypatch.setattr(apply_update_module, "jobs_snapshot_identity", identity)
+    real_replace = apply_update_module.os.replace
+    calls = 0
+    sleeps = []
+    def held(source, target):
+        nonlocal calls
+        selected = (Path(source).name.endswith(".copying") if suffix == "main" else
+                    Path(target) == db if suffix == "installed" else Path(source) == Path(str(db) + suffix))
+        if selected:
+            calls += 1
+            if calls < 3:
+                exc = OSError("temporarily held")
+                exc.winerror = 32
+                raise exc
+        real_replace(source, target)
+    # _rename's sleeper is bound at definition; supply a test clock through a wrapper.
+    real_rename = apply_update_module._rename
+    monkeypatch.setattr(apply_update_module.os, "replace", held)
+    monkeypatch.setattr(apply_update_module, "_rename", lambda a, b: real_rename(a, b, sleeper=sleeps.append))
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
+    assert calls == 3 and len(sleeps) == 2
+    assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored"
+
+
+@pytest.mark.parametrize("age,restored", [(-60, True), (-61, False)])
+def test_jobs_restore_tolerates_small_backward_clock_steps(tmp_path, monkeypatch, age, restored):
+    resources, data_dir, _db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    snapshot_time = read_journal(data_dir, resources)["jobsUpgradeSnapshot"]["identity"]["mtimeNs"] / 1e9
+    monkeypatch.setattr(apply_update_module.time, "time", lambda: snapshot_time + age)
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
+    assert ("jobsRestore" in read_journal(data_dir, resources)) is restored
+
+
+def test_jobs_restore_compares_naive_row_times_in_utc(tmp_path, monkeypatch):
+    import sqlite3
+    from contextlib import closing
+    from datetime import datetime, timezone
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    snapshot_time = read_journal(data_dir, resources)["jobsUpgradeSnapshot"]["identity"]["mtimeNs"] / 1e9
+    newer = datetime.fromtimestamp(snapshot_time + 3600, timezone.utc).replace(tzinfo=None).isoformat()
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("UPDATE simulation_jobs SET updated_at=? WHERE id='a'", (newer,))
+        conn.commit()
+    # A timezone with +12 offset would incorrectly place the naive newer row
+    # before the snapshot if timestamp() used the helper's local timezone.
+    import time
+    if not hasattr(time, "tzset"):
+        pytest.skip("tzset is unavailable")
+    monkeypatch.setenv("TZ", "Etc/GMT-12")
+    time.tzset()
+    try:
+        apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
+        assert "jobsRestore" not in read_journal(data_dir, resources)
+    finally:
+        monkeypatch.undo()
+        time.tzset()
+
+
+def test_jobs_restore_file_flush_propagates_failures_and_allows_logged_fallback(tmp_path, monkeypatch):
+    path = tmp_path / "db"
+    path.write_bytes(b"data")
+    monkeypatch.setattr(apply_update_module, "_fsync_descriptor", lambda *_a, **_k: False)
+    assert apply_update_module.sync_jobs_restore_file(path) is None
+    def failed(*_a, **_k):
+        raise OSError("flush failed")
+    monkeypatch.setattr(apply_update_module, "_fsync_descriptor", failed)
+    with pytest.raises(OSError, match="flush failed"):
+        apply_update_module.sync_jobs_restore_file(path)
+
+
+def test_jobs_restore_keeps_original_set_when_schema_upgrade_is_only_in_wal(tmp_path, monkeypatch):
+    import shutil
+    import sqlite3
+    from contextlib import closing
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    shutil.copyfile(snapshot, db)
+    subprocess.run([sys.executable, "-c",
+                    "import sqlite3,os,sys; c=sqlite3.connect(sys.argv[1]); "
+                    "c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA wal_autocheckpoint=0'); "
+                    "c.execute('PRAGMA user_version=6'); "
+                    "c.execute(\"UPDATE simulation_jobs SET label='wal-only-upgrade' WHERE id='a'\"); "
+                    "c.commit(); os._exit(0)", str(db)], check=True, stdin=subprocess.DEVNULL)
+    assert int.from_bytes(db.read_bytes()[60:64], "big") == 5
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert "jobsRestore" not in read_journal(data_dir, resources)
+    assert "still in the WAL" in " ".join(logs)
+    assert db.exists()
+    with closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert conn.execute("SELECT label FROM simulation_jobs WHERE id='a'").fetchone()[0] == "wal-only-upgrade"

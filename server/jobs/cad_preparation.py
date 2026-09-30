@@ -200,9 +200,9 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
 def _last_stage(cad: Mapping[str, Any]) -> str | None:
     """How far preparation got before it stopped, for the operation vocabulary."""
 
-    if isinstance(cad.get("preparation"), Mapping):
-        return STAGE_READY
-    return str(cad.get("last_stage") or "") or None
+    if cad.get("last_stage"):
+        return str(cad["last_stage"])
+    return STAGE_READY if isinstance(cad.get("preparation"), Mapping) else None
 
 
 # -- the lane's environment ------------------------------------------------------

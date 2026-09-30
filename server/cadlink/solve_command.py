@@ -185,6 +185,7 @@ _DELIVERY_LOCK = threading.Lock()
 # Each kept claim, by claim name: the operation it names, and how many passes
 # it has waited for that operation's return.
 _retention_waits: dict[str, tuple[str, int]] = {}
+_admission_waits: dict[str, tuple[str, int]] = {}
 # How long a delivery over HTTP whose return cannot be read is answered 503 and
 # held, from its first such answer (CADLINK-LIVE-PROTOCOL.md section 8). The
 # file claim's RETENTION_PASSES is the same bound counted in passes.
@@ -1322,6 +1323,8 @@ def collect_solve_deliveries(
         present = {delivery.path.name for delivery in deliveries if delivery.claimed}
         for name in set(_retention_waits) - present:
             del _retention_waits[name]
+        for name in set(_admission_waits) - present:
+            del _admission_waits[name]
         for name in set(_unreadable_waits) - present:
             del _unreadable_waits[name]
         _refused_claims.intersection_update(present)
@@ -1333,6 +1336,7 @@ def collect_solve_deliveries(
             # A pass can stop at an answer before it reaches a waiting claim;
             # that claim's operation is held all the same.
             held.update(operation_id for operation_id, _waited in _retention_waits.values())
+            held.update(operation_id for operation_id, _waited in _admission_waits.values())
         for delivery in deliveries:
             if delivery.claimed and delivery.path.name in _refused_claims:
                 # Refused (or reported unreadable) already, and its file is
@@ -1460,8 +1464,30 @@ def collect_solve_deliveries(
             if _retention_waits.pop(claim.name, None) is not None and held is not None:
                 # It waits no more: retained, never retainable, or at the bound.
                 held.discard(command.command_id)
-            if accept_solve is not None:
-                accept_solve(command.command_id)
+            if accept_solve is not None and accept_solve(command.command_id) is False:
+                waited = _admission_waits.get(claim.name, (command.command_id, 0))[1] + 1
+                _admission_waits[claim.name] = (command.command_id, waited)
+                if waited < RETENTION_PASSES:
+                    if held is not None:
+                        held.add(command.command_id)
+                    continue
+                reason = "WG could not admit this solve within the delivery retry bound. The operation is kept and admission will be retried."
+                row = store.get_operation(command.command_id)
+                outcome = json.loads(row.get("outcome_json") or "{}") if row else {}
+                if outcome.get("admission_retrying"):
+                    reason += " " + outcome["admission_retrying"]
+                refused(inbox_refusal(payload, delivery.path.name, reason))
+                if not write_acknowledgement(data_dir, command.command_id, ACK_REFUSED, reason=reason,
+                                             manifest_sha256=command.manifest_sha256, kind=command.kind):
+                    continue
+                _admission_waits.pop(claim.name, None)
+                if held is not None:
+                    held.discard(command.command_id)
+                _acknowledge(claim, dir_fd=delivery.dir_fd)
+                continue
+            _admission_waits.pop(claim.name, None)
+            if held is not None:
+                held.discard(command.command_id)
             # The outcome is published before the request is deleted. If it
             # cannot be written the claim stays, and the next poll recovers the
             # same operation and publishes then.

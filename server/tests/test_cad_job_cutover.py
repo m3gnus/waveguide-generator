@@ -689,3 +689,104 @@ def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monk
         assert h.jobs_store.latest_cad_job("cmd-1") is None
     h._loop.run(dismiss())
     assert h.submitted == []
+
+
+def test_failed_admission_keeps_claim_then_refuses_at_bound_and_still_retries(h, monkeypatch):
+    from server.cadlink import solve_command
+    from server.cadlink.preparation import run_delivery_pass
+    from test_cad_preparation import _deliver_file
+    bundle, manifest = _received(h)
+    inbox = _deliver_file(h, bundle, manifest)
+    h.runtime._ensure_prep_lane = lambda: None
+    real = h.runtime.accept_cad_solve
+    async def broken(*args, **kwargs):
+        raise sqlite3.OperationalError("admission storage unavailable")
+    monkeypatch.setattr(h.runtime, "accept_cad_solve", broken)
+    monkeypatch.setattr(solve_command, "RETENTION_PASSES", 6)
+    ack = h.data_dir / "ipc" / "wglink" / solve_command.SOLVE_ACKS_DIRECTORY / "cmd-1.json"
+    def run():
+        return h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None))
+    for attempt in range(1, 6):
+        if attempt > 1:
+            h.runtime._cad_admission_retries["cmd-1"] = (attempt - 1, 0)
+        assert run() == []
+        assert not ack.exists()
+        assert list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
+        assert h.row()["state"] == "received"
+    summary = operation_summary(h.row(), h.jobs_store)
+    assert summary["reason"] == "admission_retrying"
+    assert "admission storage unavailable" in summary["message"]
+    # The capped backoff stays in effect; reaching the claim bound is not a
+    # sixth admission attempt and does not turn the operation terminal.
+    assert run() == []
+    answer = json.loads(ack.read_text())
+    assert answer["outcome"] == "refused" and answer["jobId"] is None
+    assert "retry bound" in answer["reason"] and "admission storage unavailable" in answer["reason"]
+    assert not list(inbox.glob(solve_command.CLAIM_PREFIX + "*"))
+    assert h.row()["state"] == "received"
+    monkeypatch.setattr(h.runtime, "accept_cad_solve", real)
+    h.runtime._cad_admission_retries["cmd-1"] = (5, 0)
+    assert run() == ["cmd-1"]
+    assert h.row()["job_id"] and operation_summary(h.row(), h.jobs_store)["reason"] is None
+
+
+@pytest.mark.parametrize("state", ["processing", "needs_user_input", "cancel_requested"])
+def test_delivery_pass_retries_failed_startup_migrations(h, monkeypatch, state):
+    from server.cadlink.preparation import run_delivery_pass
+    _received(h)
+    generation = h.store.claim("cmd-1", 0)
+    if state == "needs_user_input":
+        h.store.record_outcome("cmd-1", generation, state, reason="findings_need_review",
+                               outcome={"message": "Review the original finding."})
+    elif state == "cancel_requested":
+        h.store.request_cancel("cmd-1")
+    h.runtime._ensure_prep_lane = lambda: None
+    real = h.runtime.accept_cad_solve
+    async def broken(*args, **kwargs):
+        raise OSError("transient storage failure")
+    monkeypatch.setattr(h.runtime, "accept_cad_solve", broken)
+    assert h._loop.run(sweep_pending_solves(h.context())) == 0
+    assert h.row()["state"] == state
+    monkeypatch.setattr(h.runtime, "accept_cad_solve", real)
+    # No hot retry before the deadline.
+    assert h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None)) == []
+    h.runtime._cad_admission_retries["cmd-1"] = (1, 0)
+    assert h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_: None)) == ["cmd-1"]
+    assert h.row()["state"] == "accepted" and h.row()["job_id"]
+
+
+def test_continuation_snapshot_refusal_uses_current_stage_despite_old_preparation(h):
+    import shutil
+    _received(h)
+    h.ingest.findings = [{"id": "review", "kind": "warning", "blocking": True}]
+    request = _request(h)
+    first = h._loop.run(api.post_prepare_cad_operation(
+        "cmd-1", api.PrepareOperationRequest(wait=True), request))["operation"]
+    assert first["stage"] == "ready" and first["preparationId"]
+    shutil.rmtree(h.data_dir / "imports" / "bundles")
+    inputs = json.loads(h.row()["inputs_json"])
+    (h.workspace / inputs["bundle_path"] / "manifest.json").write_text("{invalid")
+    second = h._loop.run(api.post_prepare_cad_operation(
+        "cmd-1", api.PrepareOperationRequest(wait=True), request))["operation"]
+    assert second["preparationId"] == first["preparationId"]
+    assert second["stage"] == "validating"
+    assert second["reason"] == "snapshot_invalid" and second["message"]
+
+
+def test_prepare_during_claim_retention_is_visibly_refused_with_settings(h):
+    from fastapi import HTTPException
+    from server.cadlink import solve_command
+    from test_cad_preparation import _deliver_file
+    bundle, manifest = _received(h)
+    (h.workspace / bundle).rename(h.workspace / "gone")
+    delivery = _deliver_file(h, bundle, manifest) / "cmd-1.json"
+    delivery.rename(delivery.with_name(solve_command.CLAIM_PREFIX + "prepare-wait.json"))
+    revision = _revision(h.store, _setup())
+    with pytest.raises(HTTPException) as caught:
+        h._loop.run(api.post_prepare_cad_operation(
+            "cmd-1", api.PrepareOperationRequest(setupRevisionId=revision, frameAxis="+x", submit=False,
+                                                 approvals={"preparationId": "old-prep", "findingIds": ["review"]}),
+            _request(h)))
+    assert caught.value.status_code == 409
+    assert "press Prepare again with these settings" in caught.value.detail
+    assert h.jobs_store.latest_cad_job("cmd-1") is None

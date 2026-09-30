@@ -289,6 +289,8 @@ def operation_summary(row: Mapping[str, Any], job_store: Any = None) -> dict[str
         elif job is None and row.get("job_id"):
             # A deleted job is a durable dismissal, including after reconnect.
             summary.update(state="cancelled", stage=None, reason=None, message=None, jobId=None)
+    if not summary["jobId"] and state not in TERMINAL_STATES and outcome.get("admission_retrying"):
+        summary.update(reason="admission_retrying", message=outcome["admission_retrying"])
     return summary
 
 
@@ -1910,7 +1912,7 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
     accepted: list[str] = []
     loop = asyncio.get_running_loop()
 
-    def accept(operation_id: str) -> None:
+    def accept(operation_id: str) -> bool:
         try:
             row = ctx.store.get_operation(operation_id)
             if row and row["kind"] == PREPARE_AND_SOLVE and not row.get("legacy") and operation_id not in running:
@@ -1920,8 +1922,11 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
                 ).result()
                 if was_pending and job_id is not None:
                     accepted.append(operation_id)
+                return job_id is not None or not was_pending
+            return True
         except Exception:
             logger.exception("Could not recover CAD delivery %s; retrying on a later pass", operation_id)
+            return False
 
     held: set[str] = set()
     await asyncio.to_thread(
@@ -1948,7 +1953,8 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
     cursor = 0
     while True:
         page = await asyncio.to_thread(ctx.store.operation_page, kind=PREPARE_AND_SOLVE,
-                                      states={RECEIVED}, after_rowid=cursor, limit=100)
+                                      states={RECEIVED, PROCESSING, NEEDS_USER_INPUT, CANCEL_REQUESTED},
+                                      after_rowid=cursor, limit=100)
         if not page:
             break
         held |= live_held_operation_ids()

@@ -1381,6 +1381,19 @@ class CadLinkStore:
                          (latest.strftime("%Y-%m-%dT%H:%M:%SZ"), operation_id))
         self.make_durable()
 
+    def note_admission_retry(self, operation_id: str, message: str) -> dict[str, Any] | None:
+        """Expose a retry without replacing the pending attempt's original refusal."""
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute("SELECT * FROM cad_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+            if row is None or row["state"] in TERMINAL_STATES:
+                return None
+            outcome = json.loads(row["outcome_json"] or "{}")
+            outcome["admission_retrying"] = message
+            conn.execute("UPDATE cad_operations SET outcome_json = ?, updated_at = ? WHERE operation_id = ?",
+                         (canonical_json(outcome), utc_now(), operation_id))
+        return self.get_operation(operation_id)
+
     def request_cancel(self, operation_id: str) -> dict[str, Any] | None:
         """Dismiss an operation: at once when idle, at the attempt's next step when running.
 

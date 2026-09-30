@@ -43,6 +43,8 @@ async def operation_fence(operation_id: str):
     """Serialize admission with Cancel; nested receipt recovery uses the same fence."""
     key = (asyncio.get_running_loop(), operation_id)
     inside = _inside_fence.get()
+    # Re-entry is only safe in this task. Do not await admission from a child
+    # task (gather/ensure_future or a thread bridge) while holding this fence.
     entry = (key, asyncio.current_task())
     if entry in inside:
         yield
@@ -139,6 +141,8 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
     if retention == RETAIN_TRANSIENT and not cancelled and not delivery_released:
         waiting = live_held_operation_ids() | await asyncio.to_thread(waiting_claim_operation_ids, ctx.data_dir)
         if operation_id in waiting:
+            if press is not None:
+                raise ValueError("The delivered return is still being retained. Wait for delivery to finish, then press Prepare again with these settings.")
             return None
     inputs = _solve_inputs(row)
     manual = manual or (press is None and inputs["bundle_path"].startswith("ingest/"))
@@ -256,9 +260,16 @@ async def accept_operation_solve_isolated(ctx, operation_id, **kwargs):
                         await asyncio.to_thread(record_outcome, ctx.store, operation_id, state="accepted", job_id=result)
         retries.pop(operation_id, None)
         return result
-    except Exception:
+    except Exception as exc:
         attempts += 1
         retries[operation_id] = (attempts, time.monotonic() + min(60, 2 ** min(attempts, 6)))
+        if attempts >= 5:
+            try:
+                async with operation_fence(operation_id):
+                    row = await asyncio.to_thread(ctx.store.note_admission_retry, operation_id, f"{type(exc).__name__}: {exc}")
+                    _publish(ctx, row)
+            except Exception:
+                logger.exception("Could not record admission retry for CAD solve %s", operation_id)
         logger.exception("Could not admit CAD solve %s; retrying on a later pass (backoff at most 60 seconds)", operation_id)
         return None
 

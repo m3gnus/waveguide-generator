@@ -822,15 +822,22 @@ These are recorded, not designed.
      no layer rollback occurs. An explicit rollback, including the desktop window
      fallback, that supersedes that update inherits this ownership.
    - Ownership is bounded: the snapshot must be at most **one hour** old, and no
-     job row may have a `created_at` or `updated_at` newer than the snapshot's mtime.
+     job row may have a `created_at` or `updated_at` newer than the snapshot's mtime
+     (compared in UTC). A backwards clock step of up to 60 seconds is tolerated.
      Otherwise automatic jobs restore is skipped and the reason is logged. This prevents
      an old installed journal from replacing later work.
    - Before moving any live DB file, flush the staged standalone snapshot and
      write a `jobsRestore` **in-progress** marker to the journal. It records the
      identities of the live main and each existing sidecar, the staged restore,
-     and a unique `.schema-6.failed-<timestamp>-<id>` recovery basename. Rename
-     the main and its sidecars into that set, flushing each preserved file and
-     directory. Replace the live main with the standalone snapshot atomically.
+     and a unique `.schema-6.failed-<timestamp>-<id>` recovery basename. Copy
+     the live main to a temporary preserved file, flush it, and rename it into
+     the recovery set. Then rename the sidecars, flushing each preserved file
+     and directory. Replace the live main with the standalone snapshot LAST,
+     atomically. Every crash leaves the original set, a schema-6 live main
+     refused by older releases with its preserved recovery set, or the restored
+     standalone database; the live main is never missing.
+     If schema 6 is still only in the live WAL, leave the original complete set
+     intact and log the manual recovery remedy rather than moving its sidecars.
      A replay compares file identities with the recorded original/restored sets;
      it never infers completed restoration from `user_version` alone. It resumes
      an interrupted set of renames, or refuses changed files for manual recovery.
@@ -840,8 +847,9 @@ These are recorded, not designed.
    - A jobs restore failure is logged with the manual recovery remedy and never
      blocks code rollback. After a handled rename failure, moved files are copied
      back into the live set while the preserved recovery copies remain. An
-     interrupted helper resumes the in-progress restore even if its layers were
-     already restored. The older release clearly refuses schema 6 until the
+     new recovery helper can resume the in-progress plan, but an older launcher
+     ignores it after code rollback. The file ordering remains safe for that
+     launcher: the older release clearly refuses schema 6 until the
      manual procedure below is completed. Lifecycle ordering remains required:
      startup finishes recording the snapshot before health; the helper must own
      a stopped installation before renaming its database files.
