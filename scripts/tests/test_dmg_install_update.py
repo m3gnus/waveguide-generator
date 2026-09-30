@@ -26,6 +26,16 @@ APP = "Waveguide Generator.app"
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS packaging tools")
 
 
+@pytest.fixture(autouse=True)
+def check_generated_shell_shims(tmp_path: Path):
+    yield
+    for path in tmp_path.rglob("*"):
+        if path.is_file() and "bin" in path.parent.name:
+            if path.read_bytes().startswith((b"#!/bin/sh\n", b"#!/bin/bash\n")):
+                result = subprocess.run(["/bin/sh", "-n", str(path)], capture_output=True, text=True)
+                assert result.returncode == 0, f"{path.name}: {result.stderr}"
+
+
 def installer_process_signals() -> None:
     """Use catchable signals even when the suite broker started with SIG_IGN.
 
@@ -98,7 +108,7 @@ def shim(directory: Path, name: str, body: str) -> Path:
     path = directory / name
     if name == "mv":
         # Match the source, preserving move options for the real rename underneath.
-        body = 'source="$1"\n[ "$source" = "-f" ] && source="$2"\n' + body.replace('case "$*" in', 'case "$source" in')
+        body = 'source=""\nfor arg do case "$arg" in -*) ;; *) source="$arg"; break;; esac; done\n' + body.replace('case "$*" in', 'case "$source" in')
     path.write_text("#!/bin/bash\n" + body, encoding="utf-8")
     path.chmod(0o755)
     return directory
@@ -283,7 +293,7 @@ def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, instal
     bin_dir = shim(
         tmp_path / "bin",
         "mv",
-        f'case "$*" in *".new."*) touch "{paused}"; sleep 60; exit 1;; esac\n'
+        f'case "$*" in *".new."*) touch "{paused}"; exec sleep 60;; esac\n'
         f'exec "{real_mv}" "$@"\n',
     )
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
@@ -302,18 +312,22 @@ def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, instal
         os.killpg(proc.pid, signal.SIGTERM)
         output, _ = proc.communicate(timeout=60)
     finally:
-        if proc.poll() is None:
+        try:
             os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate()
+        except ProcessLookupError:
+            pass
+        proc.communicate()
     assert proc.returncode == 1, output
     assert version_of(installed) == "old"
     assert leftovers(installed.parent) == []
 
 
-def test_update_sweeps_stale_hidden_leftovers_but_not_symlinks(dmg: Path, installed: Path, tmp_path: Path) -> None:
+def test_update_sweeps_empty_debris_but_keeps_application_bundles_and_symlinks(dmg: Path, installed: Path, tmp_path: Path) -> None:
     folder = installed.parent
     stale_new = make_app(folder / f".{APP}.new.111", version="junk", sign=False)
     stale_prev = make_app(folder / f".{APP}.previous.222", version="junk", sign=False)
+    debris = folder / f".{APP}.new.000"
+    debris.mkdir()
     keep = tmp_path / "precious"
     keep.mkdir()
     link = folder / f".{APP}.new.333"
@@ -321,7 +335,8 @@ def test_update_sweeps_stale_hidden_leftovers_but_not_symlinks(dmg: Path, instal
     unrelated = folder / ".Other.app.new.444"
     unrelated.mkdir()
     assert run(dmg, "--update", str(installed)).returncode == 0
-    assert not stale_new.exists() and not stale_prev.exists()
+    assert stale_new.exists() and stale_prev.exists()
+    assert not debris.exists()
     assert link.is_symlink() and keep.exists()
     assert unrelated.exists()
 
@@ -373,7 +388,8 @@ def test_an_occupied_backup_name_is_refused_before_displacing_the_app(
     precious = make_app(tmp_path / "precious", version="precious", sign=False)
     backup_record = tmp_path / "backup-path"
     occupied = f'{installed.parent}/.{APP}.previous.$PPID'
-    create = f'mkdir -p "{occupied}"' if kind == "directory" else f'ln -s "{precious}" "{occupied}"'
+    create = (f'mkdir -p "{occupied}"; printf precious > "{occupied}/keep"'
+              if kind == "directory" else f'ln -s "{precious}" "{occupied}"')
     # id runs before the sweep and knows its parent installer PID.
     bin_dir = shim(
         tmp_path / "bin", "id",
@@ -387,6 +403,8 @@ def test_an_occupied_backup_name_is_refused_before_displacing_the_app(
     assert version_of(installed) == "old"
     backup = Path(backup_record.read_text(encoding="utf-8"))
     assert backup.exists()
+    if kind == "directory":
+        assert (backup / "keep").read_text() == "precious"
     assert not (backup / APP).exists()
     assert version_of(precious) == "precious"
 
@@ -595,8 +613,12 @@ def instrument_boundaries(script: Path, row: int, boundary: str, paused: Path, r
                    f'{m[1]}{m[2]}\n{m[1]}state_boundary {row_expr} {m[3]}'),
         body, flags=re.MULTILINE,
     )
-    needle = '    NEW_ID[i]="$(object_id' if row_expr != "0" else 'NEW_ID="$(object_id'
+    needle = '    same_object "${STAGED[i]}" "${NEW_ID[i]}" || fail' if row_expr != "0" else 'same_object "$STAGED_PATH" "$NEW_ID" || fail'
     body = body.replace(needle, f'    state_boundary {row_expr} staged\n' + needle, 1)
+    if boundary == "cleanup_handover":
+        clear = "    trap - EXIT\n" if row_expr != "0" else "    trap - 0\n"
+        start = body.index("\nrollback() {" if row_expr != "0" else "\ncleanup() {")
+        body = body[:start] + body[start:].replace(clear, clear + "    state_boundary 0 cleanup_handover\n", 1)
     if boundary in RECOVERY_BOUNDARIES:
         body = body.replace("COMMITTED=1\n", "exit 1\n", 1)
     elif boundary == "committed":
@@ -666,7 +688,7 @@ def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None
         'import os, signal, stat, subprocess, sys\n'
         'args = sys.argv[1:]\n'
         'fd = os.fstat(0)\n'
-        'safe = "-f" in args and stat.S_ISCHR(fd.st_mode) and fd.st_rdev == os.stat("/dev/null").st_rdev\n'
+        'safe = "-n" in args and stat.S_ISCHR(fd.st_mode) and fd.st_rdev == os.stat("/dev/null").st_rdev\n'
         'safe = safe and all(signal.getsignal(sig) != signal.SIG_IGN for sig in (signal.SIGHUP, signal.SIGTERM))\n'
         f'with open({str(log)!r}, "a") as stream: stream.write(str(safe) + " " + repr(args) + "\\n")\n'
         'if not safe: sys.exit(91)\n'
@@ -678,6 +700,7 @@ def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None
 
 
 @pytest.mark.parametrize("boundary", BOUNDARIES)
+@pytest.mark.slow
 def test_every_row_recovers_at_every_state_boundary(dmg: Path, installed: Path, tmp_path: Path, boundary: str) -> None:
     old_inode = installed.stat().st_ino
     paused, release = tmp_path / "paused", tmp_path / "release"
@@ -722,7 +745,7 @@ def test_signal_after_displacement_before_bookkeeping(dmg: Path, installed: Path
     assert leftovers(installed.parent) == []
 
 
-def test_every_move_is_forced_and_has_null_stdin(dmg: Path, installed: Path, tmp_path: Path) -> None:
+def test_every_move_is_no_clobber_and_has_null_stdin(dmg: Path, installed: Path, tmp_path: Path) -> None:
     log = tmp_path / "moves"
     bin_dir = tmp_path / "bin"
     noninteractive_move_shim(bin_dir, log, ".new.")
@@ -739,6 +762,7 @@ def test_every_move_is_forced_and_has_null_stdin(dmg: Path, installed: Path, tmp
 
 @pytest.mark.parametrize("interrupt", (None, signal.SIGHUP, signal.SIGINT, signal.SIGTERM))
 @pytest.mark.parametrize("blocked_step", ("evacuate", "restore"))
+@pytest.mark.slow
 def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(dmg: Path, installed: Path, tmp_path: Path, blocked_step: str, interrupt: signal.Signals | None) -> None:
     script = dmg / SCRIPT.name
     target = installed
@@ -819,6 +843,7 @@ def test_recreated_target_after_displacement_reports_the_real_backup(dmg: Path, 
 
 
 @pytest.mark.parametrize("boundary", ("install_intent", "post_install", "installed"))
+@pytest.mark.slow
 def test_first_install_interruption_removes_the_new_app(dmg: Path, tmp_path: Path, boundary: str) -> None:
     folder = tmp_path / "Apps"
     folder.mkdir()

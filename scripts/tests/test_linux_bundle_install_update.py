@@ -18,6 +18,16 @@ SCRIPT = ROOT / "installers" / "linux" / "bundle-install.sh"
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell installer")
 
 
+@pytest.fixture(autouse=True)
+def check_generated_shell_shims(tmp_path: Path):
+    yield
+    for path in tmp_path.rglob("*"):
+        if path.is_file() and "bin" in path.parent.name:
+            if path.read_bytes().startswith((b"#!/bin/sh\n", b"#!/bin/bash\n")):
+                result = subprocess.run(["/bin/sh", "-n", str(path)], capture_output=True, text=True)
+                assert result.returncode == 0, f"{path.name}: {result.stderr}"
+
+
 def installer_process_signals() -> None:
     """Use catchable signals even when the suite broker started with SIG_IGN.
 
@@ -58,7 +68,25 @@ def env(tmp_path: Path) -> dict[str, str]:
     return {**os.environ, "HOME": str(home), "XDG_DATA_HOME": str(home / "share")}
 
 
+def adapt_link_shim(directory: Path) -> None:
+    """Let existing move hooks also intercept file transfers via ln -P."""
+    path = directory / "ln"
+    if path.exists():
+        return
+    real_ln = shutil.which("ln")
+    path.write_text(
+        '#!/bin/sh\n'
+        'if [ "$1" = "-P" ]; then\nshift\n[ "$1" != "--" ] || shift\n'
+        f'exec "{directory / "mv"}" -n -- "$@" </dev/null\nfi\n'
+        f'exec "{real_ln}" "$@"\n'
+    )
+    path.chmod(0o755)
+
+
 def run(tarball: Path, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    first_path = Path(env["PATH"].split(os.pathsep)[0])
+    if (first_path / "mv").is_file():
+        adapt_link_shim(first_path)
     return subprocess.run(
         ["/bin/bash", str(tarball / "install.sh"), "--skip-checks", *args], preexec_fn=installer_process_signals,
         capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120,
@@ -153,6 +181,7 @@ def late_failure_env(tmp_path: Path, env: dict[str, str], *, restore_failure: st
         + f'exec "{real_mv}" "$@"\n', encoding="utf-8",
     )
     (bin_dir / "mv").chmod(0o755)
+    adapt_link_shim(bin_dir)
     return {**env, "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}"}
 
 
@@ -216,7 +245,7 @@ def test_a_signal_during_swap_returns_1_after_restoring_the_app(
     bin_dir.mkdir()
     real_mv = shutil.which("mv")
     (bin_dir / "mv").write_text(
-        f'#!/bin/sh\ncase "$*" in *".install."*) touch "{paused}"; sleep 60; exit 1;; esac\n'
+        f'#!/bin/sh\ncase "$*" in *".install."*) touch "{paused}"; exec sleep 60;; esac\n'
         f'exec "{real_mv}" "$@"\n', encoding="utf-8",
     )
     (bin_dir / "mv").chmod(0o755)
@@ -234,9 +263,11 @@ def test_a_signal_during_swap_returns_1_after_restoring_the_app(
         os.killpg(proc.pid, interrupt)
         output, _ = proc.communicate(timeout=15)
     finally:
-        if proc.poll() is None:
+        try:
             os.killpg(proc.pid, signal.SIGKILL)
-            proc.communicate()
+        except ProcessLookupError:
+            pass
+        proc.communicate()
     assert proc.returncode == 1, output
     assert (installed_dir(env) / "version.txt").read_text(encoding="utf-8") == "one"
     assert not list(installed_dir(env).parent.glob(".waveguide-generator.*"))
@@ -267,7 +298,7 @@ def test_a_directory_racing_the_restore_is_not_reported_as_restored(
     safe_move = 'if [ "$no_nesting" = 1 ] && [ -e "$2" ]; then exit 1; fi\n' if supports_t else ''
     # Emulate GNU -T on BSD too; the false case forces the portable fallback.
     (tmp_path / "bin" / "mv").write_text(
-        '#!/bin/sh\n' + t_option + '[ "$1" = "-f" ] && shift\n[ "$1" = "--" ] && shift\n'
+        '#!/bin/sh\n' + t_option + '[ "$1" = "-n" ] && shift\n[ "$1" = "--" ] && shift\n'
         'case "$1" in *".link.new."*) exit 1;; *".previous."*)\n'
         'mkdir -p "$2/app"\necho racer > "$2/app/APP-MANIFEST.json"\n;; esac\n'
         + safe_move + f'exec "{real_mv}" "$@"\n', encoding="utf-8",
@@ -360,8 +391,12 @@ def instrument_boundaries(script: Path, row: int, boundary: str, paused: Path, r
                    f'{m[1]}{m[2]}\n{m[1]}state_boundary {row_expr} {m[3]}'),
         body, flags=re.MULTILINE,
     )
-    needle = '    NEW_ID[i]="$(object_id' if row_expr != "0" else 'NEW_ID="$(object_id'
+    needle = '    same_object "${STAGED[i]}" "${NEW_ID[i]}" || fail' if row_expr != "0" else 'same_object "$STAGED_PATH" "$NEW_ID" || fail'
     body = body.replace(needle, f'    state_boundary {row_expr} staged\n' + needle, 1)
+    if boundary == "cleanup_handover":
+        clear = "    trap - EXIT\n" if row_expr != "0" else "    trap - 0\n"
+        start = body.index("\nrollback() {" if row_expr != "0" else "\ncleanup() {")
+        body = body[:start] + body[start:].replace(clear, clear + "    state_boundary 0 cleanup_handover\n", 1)
     if boundary in RECOVERY_BOUNDARIES:
         body = body.replace("COMMITTED=1\n", "exit 1\n", 1)
     elif boundary == "committed":
@@ -394,6 +429,7 @@ def state_move_shim(bin_dir: Path, paths: list[Path], row: int, boundary: str, p
         'sys.exit(result.returncode)\n', encoding="utf-8",
     )
     wrapper.chmod(0o755)
+    adapt_link_shim(bin_dir)
 
 
 def signal_paused_process(command: list[str], env: dict[str, str], paused: Path, release: Path,
@@ -431,7 +467,7 @@ def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None
         'import os, signal, stat, subprocess, sys\n'
         'args = sys.argv[1:]\n'
         'fd = os.fstat(0)\n'
-        'safe = "-f" in args and stat.S_ISCHR(fd.st_mode) and fd.st_rdev == os.stat("/dev/null").st_rdev\n'
+        'safe = "-n" in args and stat.S_ISCHR(fd.st_mode) and fd.st_rdev == os.stat("/dev/null").st_rdev\n'
         'safe = safe and all(signal.getsignal(sig) != signal.SIG_IGN for sig in (signal.SIGHUP, signal.SIGTERM))\n'
         f'with open({str(log)!r}, "a") as stream: stream.write(str(safe) + " " + repr(args) + "\\n")\n'
         'if not safe: sys.exit(91)\n'
@@ -440,10 +476,12 @@ def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None
         f'sys.exit(subprocess.run([{real_mv!r}, *args]).returncode)\n', encoding="utf-8",
     )
     wrapper.chmod(0o755)
+    adapt_link_shim(bin_dir)
 
 
 @pytest.mark.parametrize("row", range(6))
 @pytest.mark.parametrize("boundary", BOUNDARIES)
+@pytest.mark.slow
 def test_every_row_recovers_at_every_state_boundary(tmp_path: Path, env: dict[str, str], row: int, boundary: str) -> None:
     assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
     paths = [installed_dir(env), *integration_paths(env).values()]
@@ -525,7 +563,7 @@ def test_each_restored_object_rejects_nesting(tmp_path: Path, env: dict[str, str
         '#!/bin/sh\nno_nesting=0\n'
         + ('[ "$1" = "-T" ] && exit 1\n' if not supports_t else
            'if [ "$1" = "-T" ]; then no_nesting=1; shift; fi\n')
-        + '[ "$1" = "-f" ] && shift\n[ "$1" = "--" ] && shift\n'
+        + '[ "$1" = "-n" ] && shift\n[ "$1" = "--" ] && shift\n'
         'case "$1" in *".link.new."*) exit 1;; esac\n'
         f'if [ "$2" = "{target}" ] && case "$1" in *.backup.*|*.previous.*) true;; *) false;; esac; then\n'
         'mkdir -p "$2"\necho racer > "$2/keep.txt"\n'
@@ -539,12 +577,12 @@ def test_each_restored_object_rejects_nesting(tmp_path: Path, env: dict[str, str
     assert len(lines) == 1, result.stderr
     backup = Path(lines[0].removeprefix("Its backup remains at: "))
     assert backup.lstat().st_ino == old_inode
-    assert backup.parent == (target.parent if supports_t else target)
+    assert backup.parent == (target.parent if supports_t and artifact == "application" else target)
     assert (target / "keep.txt").read_text().strip() == "racer"
     assert "Restored the previous installation" not in result.stdout
 
 
-def test_every_move_is_forced_and_has_null_stdin(tmp_path: Path, env: dict[str, str]) -> None:
+def test_every_move_is_no_clobber_and_has_null_stdin(tmp_path: Path, env: dict[str, str]) -> None:
     assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
     new = make_tarball(tmp_path / "v2", "two")
     log = tmp_path / "moves"
@@ -563,6 +601,7 @@ def test_every_move_is_forced_and_has_null_stdin(tmp_path: Path, env: dict[str, 
 
 @pytest.mark.parametrize("interrupt", (None, signal.SIGHUP, signal.SIGINT, signal.SIGTERM))
 @pytest.mark.parametrize("blocked_step", ("evacuate", "restore"))
+@pytest.mark.slow
 def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(tmp_path: Path, env: dict[str, str], blocked_step: str, interrupt: signal.Signals | None) -> None:
     assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
     new = make_tarball(tmp_path / "v2", "two")
@@ -591,6 +630,7 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(tmp_path: Pat
         f'sys.exit(subprocess.run([{real_mv!r}, *sys.argv[1:]]).returncode)\n', encoding="utf-8",
     )
     wrapper.chmod(0o755)
+    adapt_link_shim(bin_dir)
     proc = subprocess.Popen(command, preexec_fn=installer_process_signals, env={**process_env, "PATH": f"{bin_dir}{os.pathsep}{process_env['PATH']}"},
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             stdin=subprocess.DEVNULL, start_new_session=True)
@@ -634,17 +674,22 @@ def test_real_mv_never_waits_for_a_read_only_overwrite_prompt(tmp_path: Path, en
     process_env = env
     desktop = integration_paths(env)["desktop"]
     old_desktop = desktop.read_bytes()
+    reached = tmp_path / "restore-reached"
+    displaced = tmp_path / "desktop-displaced"
     real_mv = shutil.which("mv")
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     wrapper = bin_dir / "mv"
     wrapper.write_text(
         '#!/bin/sh\nsource=""\nfor arg do case "$arg" in -*) ;; *) source="$arg"; break;; esac; done\n'
-        'case "$source" in *.link.new.*) exit 1;; esac\\n'
-        f'case "$source" in *.desktop.backup.*) printf racer > "{desktop}"; chmod 400 "{desktop}";; esac\n'
+        'case "$source" in *.link.new.*) exit 1;; esac\n'
+        f'[ "$source" != "{desktop}" ] || touch "{displaced}"\n'
+        f'case "$source" in *.desktop.backup.*) touch "{reached}"; printf racer > "{desktop}"; chmod 400 "{desktop}";; esac\n'
         f'exec "{real_mv}" "$@"\n', encoding="utf-8",
     )
     wrapper.chmod(0o755)
+    adapt_link_shim(bin_dir)
+    subprocess.run(["/bin/sh", "-n", str(wrapper)], check=True, capture_output=True)
     master, slave = pty.openpty()
     proc = subprocess.Popen(command, preexec_fn=installer_process_signals, env={**process_env, "PATH": f"{bin_dir}{os.pathsep}{process_env['PATH']}"},
                             stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -652,9 +697,12 @@ def test_real_mv_never_waits_for_a_read_only_overwrite_prompt(tmp_path: Path, en
     os.close(slave)
     try:
         output, _ = proc.communicate(timeout=10)
-        assert proc.returncode == 1, output
+        assert proc.returncode == 3, output
         assert (target / "version.txt").read_text() == "one"
-        assert desktop.read_bytes() == old_desktop
+        assert reached.exists() and displaced.exists(), output
+        assert desktop.read_bytes() == b"racer"
+        backups = list(desktop.parent.glob(".waveguide-generator.desktop.backup.*"))
+        assert len(backups) == 1 and backups[0].read_bytes() == old_desktop
         assert "override" not in output.lower()
     finally:
         try:
@@ -678,7 +726,7 @@ def test_each_displacement_reconciles_the_actual_old_object(tmp_path: Path, env:
     # Force the BSD fallback so a raced backup directory can really nest a row.
     (bin_dir / "mv").write_text(
         '#!/bin/sh\n[ "$1" = "-T" ] && exit 1\n'
-        '[ "$1" = "-f" ] && shift\n[ "$1" = "--" ] && shift\n'
+        '[ "$1" = "-n" ] && shift\n[ "$1" = "--" ] && shift\n'
         f'if [ "$1" = "{target}" ]; then\n'
         + ('mkdir -p "$2"\n' if race == "backup_directory" else '')
         + f'"{real_mv}" -f "$@" </dev/null || exit $?\n'
@@ -708,6 +756,7 @@ def test_each_displacement_reconciles_the_actual_old_object(tmp_path: Path, env:
 
 @pytest.mark.parametrize("row", range(6))
 @pytest.mark.parametrize("boundary", ("install_intent", "post_install", "installed"))
+@pytest.mark.slow
 def test_first_install_interruption_removes_every_new_row(tmp_path: Path, env: dict[str, str], row: int, boundary: str) -> None:
     new = make_tarball(tmp_path / "v2", "two")
     paths = [installed_dir(env), *integration_paths(env).values()]

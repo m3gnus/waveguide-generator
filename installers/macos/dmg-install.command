@@ -16,7 +16,8 @@
 #
 # It must stay self-contained. It runs from a read-only mounted volume with
 # nothing else from the checkout beside it, and its only dependencies are
-# /bin/sh, ditto, xattr and codesign (plus PlistBuddy in --update mode).
+# standard macOS shell tools, ditto, xattr and codesign (plus PlistBuddy
+# in --update mode).
 
 # Exit status (what an unattended caller can rely on):
 #   0  installed
@@ -27,8 +28,25 @@
 #   3  ROLLBACK INCOMPLETE: the old app was moved aside and could not be put
 #      back, so there may be no app at the target. The backup path is printed
 #      and the backup is left in place.
+#   4  installer lock busy or unverifiable; nothing replaced by this run.
+#
+# Minimal lock: mkdir beside the resolved target, held through cleanup. A PID
+# that is no longer running can be reclaimed. A missing/invalid PID, unexpected
+# contents, or an interrupted stale-lock reaper needs manual inspection/removal;
+# a reused PID is treated as busy. This is local per-target exclusion, not the
+# updater helper's fuller lock contract (hornlab-policy UPDATER-PLAN.md section 9).
+# Known limit: there is no journal. SIGKILL/power loss between the two renames
+# can leave the target absent; a rerun does not discover/restore the backup.
+# Look beside the target for .<app basename>.previous.<installer PID>.
+# Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
 set -u
+# A disconnected reader must not bypass the EXIT recovery path.
+trap '' PIPE
+# A failed shell stdout write can remain buffered and be flushed into a later
+# command substitution. Isolate writes so disconnected diagnostics cannot
+# contaminate the identities used by recovery.
+printf() ( command printf "$@" )
 
 APP_NAME="Waveguide Generator.app"
 HERE="$(cd -- "$(dirname -- "$0")" && pwd)"
@@ -72,12 +90,115 @@ fail() {
     printf '\n'
     printf '  xattr -dr com.apple.quarantine "/Applications/%s"\n' "$APP_NAME"
     printf '\n'
-    if [ -t 0 ]; then
-        printf 'Press Return to close...'
-        read -r _unused
-    fi
+    PROMPT_ON_FAILURE=1
     exit 1
 }
+PROMPT_ON_FAILURE=0
+close_prompt() {
+    if [ "$PROMPT_ON_FAILURE" -eq 1 ] && [ -t 0 ]; then
+        printf 'Press Return to close...' || :
+        read -r _unused || :
+    fi
+}
+
+# Identity is (device, inode), valid only while the recorded object survives.
+# stat does not follow symlinks, including broken command links.
+object_id() {
+    [ -e "$1" ] || [ -L "$1" ] || return 1
+    stat -f '%d:%i' "$1" 2>/dev/null
+}
+same_object() {
+    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+}
+same_device() {
+    source_id=$(object_id "$1") || return 1
+    parent_id=$(object_id "${2%/*}") || return 1
+    if [ "${source_id%%:*}" != "${parent_id%%:*}" ]; then
+        printf 'ERROR: staging and destination are on different devices: %s -> %s\n' "$1" "$2" >&2
+        return 1
+    fi
+    if [ -e "$2" ] || [ -L "$2" ]; then
+        destination_id=$(object_id "$2") || return 1
+        if [ "${source_id%%:*}" != "${destination_id%%:*}" ]; then
+            printf 'ERROR: destination is on a different device: %s\n' "$2" >&2
+            return 1
+        fi
+    fi
+}
+
+# mkdir is the exclusion primitive. An unreadable/missing PID is never assumed
+# stale: it may belong to an owner still starting. PID reuse errs toward busy.
+LOCK_PATH=""
+LOCK_ID=""
+LOCK_HELD=0
+LOCK_ACQUIRING=0
+LOCK_INTERRUPTED=0
+interrupt_early() {
+    if [ "$LOCK_ACQUIRING" -eq 1 ]; then LOCK_INTERRUPTED=1; else exit 1; fi
+}
+release_lock() {
+    [ "$LOCK_HELD" -eq 1 ] || return 0
+    if same_object "$LOCK_PATH" "$LOCK_ID"; then
+        rm -f "$LOCK_PATH/pid"
+        rmdir "$LOCK_PATH" 2>/dev/null || printf 'WARNING: could not release installer lock: %s\n' "$LOCK_PATH" >&2
+    else
+        printf 'WARNING: installer lock was replaced; leaving it at: %s\n' "$LOCK_PATH" >&2
+    fi
+    LOCK_HELD=0
+    LOCK_ID=""
+}
+lock_busy() {
+    printf 'Another installer owns the lock, or its owner cannot be verified: %s\n' "$LOCK_PATH" >&2
+    printf 'Retry after it exits; remove this lock manually only after checking that no installer is running.\n' >&2
+    exit 4
+}
+acquire_lock() {
+    LOCK_ACQUIRING=1
+    if ! mkdir "$LOCK_PATH" 2>/dev/null; then
+        stale_id=$(object_id "$LOCK_PATH") || lock_busy
+        [ -d "$LOCK_PATH" ] && [ ! -L "$LOCK_PATH" ] || lock_busy
+        owner=$(cat "$LOCK_PATH/pid" 2>/dev/null) || lock_busy
+        case "$owner" in ''|*[!0-9]*|0) lock_busy ;; esac
+        # ESRCH is conclusive even where process listing is unavailable.
+        # Other probe failures (for example EPERM) need ps or remain busy.
+        if owner_probe=$(LC_ALL=C kill -0 "$owner" 2>&1); then lock_busy; fi
+        case "$owner_probe" in
+            *"No such process"*) ;;
+            *)
+                owner_listing=$(ps -p "$owner" -o pid= 2>/dev/null)
+                owner_status=$?
+                case "$owner_status" in
+                    0) [ -z "$owner_listing" ] || lock_busy ;;
+                    1) ;; # ps found no such process
+                    *) lock_busy ;; # unknown status cannot prove a dead owner
+                esac
+                ;;
+        esac
+        # Only one contender may reap a dead owner. Never recursively delete a
+        # lock; unexpected contents (or an interrupted reaper) require inspection.
+        mkdir "$LOCK_PATH/reap" 2>/dev/null || lock_busy
+        if ! same_object "$LOCK_PATH" "$stale_id" || [ "$(cat "$LOCK_PATH/pid" 2>/dev/null)" != "$owner" ]; then lock_busy; fi
+        rm -f "$LOCK_PATH/pid"
+        rmdir "$LOCK_PATH/reap" && rmdir "$LOCK_PATH" || lock_busy
+        stale_id=""
+        mkdir "$LOCK_PATH" 2>/dev/null || lock_busy
+    fi
+    LOCK_HELD=1
+    LOCK_ID=$(object_id "$LOCK_PATH") || fail "Could not identify the installer lock."
+    printf '%s\n' "$$" > "$LOCK_PATH/pid" || fail "Could not record the installer lock owner."
+    LOCK_ACQUIRING=0
+    [ "$LOCK_INTERRUPTED" -eq 0 ] || exit 1
+}
+early_cleanup() {
+    early_status=$?
+    trap ':' HUP INT TERM
+    trap - 0
+    release_lock
+    close_prompt
+    exit "$early_status"
+}
+trap early_cleanup 0
+trap 'interrupt_early' HUP INT TERM
 
 bundle_identifier() {
     /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$1/Contents/Info.plist" 2>/dev/null
@@ -113,6 +234,10 @@ if [ "$UPDATE" -eq 1 ]; then
             ;;
     esac
     TARGET_DIR="$(dirname -- "$TARGET")"
+    TARGET_DIR=$(cd -- "$TARGET_DIR" && pwd -P) || fail "Could not resolve the target parent."
+    TARGET="$TARGET_DIR/$(basename -- "$TARGET")"
+    LOCK_PATH="$TARGET_DIR/.$(basename -- "$TARGET").install.lock"
+    acquire_lock
     if [ ! -d "$TARGET" ] || [ -L "$TARGET" ]; then
         fail "There is no app bundle at: $TARGET" "Nothing has been changed."
     fi
@@ -153,7 +278,10 @@ else
         printf '%s is not writable by this account.\n' "$DEFAULT_TARGET_DIR"
         printf 'Installing to %s instead.\n\n' "$TARGET_DIR"
     fi
+    TARGET_DIR=$(cd -- "$TARGET_DIR" && pwd -P) || fail "Could not resolve the target parent."
     TARGET="$TARGET_DIR/$APP_NAME"
+    LOCK_PATH="$TARGET_DIR/.$APP_NAME.install.lock"
+    acquire_lock
 fi
 
 if [ "$UPDATE" -eq 1 ] && [ "$(id -u)" = "0" ]; then
@@ -162,17 +290,19 @@ if [ "$UPDATE" -eq 1 ] && [ "$(id -u)" = "0" ]; then
          "Nothing has been changed."
 fi
 
-# Sweep what an earlier run killed mid-install left beside the target: only
-# hidden directories of exactly the shape this script creates, never symlinks.
-# A .previous copy is the only remaining app when the target is missing, so it
-# is kept in that case.
+# Sweep only empty hidden debris of exactly the shapes this script creates.
+# Without a journal, application-bearing directories and unexpected contents
+# must stay available for manual recovery, regardless of the live target.
 TARGET_BASE="$(basename -- "$TARGET")"
 for stale in "$TARGET_DIR"/".$TARGET_BASE".new.* "$TARGET_DIR"/".$TARGET_BASE".previous.*; do
     [ -d "$stale" ] && [ ! -L "$stale" ] || continue
-    case "$stale" in
-        *.previous.*) [ -e "$TARGET" ] || continue ;;
-    esac
-    rm -rf "$stale"
+    # Without a journal, any application-bearing directory might be the only
+    # copy that an earlier exit 3 told the user to keep. Sweep only empty debris.
+    [ ! -d "$stale/Contents" ] || continue
+    contains_app=0
+    for app in "$stale"/*.app; do [ ! -d "$app" ] || contains_app=1; done
+    [ "$contains_app" -eq 0 ] || continue
+    rmdir "$stale" 2>/dev/null || :
 done
 
 # The copy is made and verified BESIDE the final name first, on the same volume,
@@ -182,21 +312,20 @@ done
 # version it already had.
 STAGED="$TARGET_DIR/.$(basename -- "$TARGET").new.$$"
 DISPLACED="$TARGET_DIR/.$(basename -- "$TARGET").previous.$$"
-rm -rf "$STAGED"
 # A failed sweep (or a leftover symlink) must never turn mv into a nesting
 # operation. Refuse occupied names before touching the current installation.
 if [ -e "$STAGED" ] || [ -L "$STAGED" ] || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
     fail "A staging or backup path is still occupied." "Nothing has been changed."
 fi
 # Swap table (one row): LIVE_PATH=TARGET, BACKUP_PATH=DISPLACED,
-# STAGED_PATH=STAGED, plus the old/new inode identities. States are staged ->
+# STAGED_PATH=STAGED, plus the old/new device/inode identities. States are staged ->
 # prepared -> displace_intent -> displaced -> install_intent -> installed.
 # Record intent BEFORE acting, then verify both source absence and destination
 # identity. Cleanup reconciles actual objects even before post-move bookkeeping:
 # prepared/displace_intent keeps or restores old; displaced/install_intent/
 # installed returns new to staging via evacuate_intent -> evacuated, then
 # restores old via restore_intent ->
-# restored. COMMITTED alone retains new and retires old. Never delete a racer;
+# restored. COMMITTED alone retains new and retires old. Never replace a raced file;
 # a failed restore exits 3 and prints the real old-object path, including nesting.
 LIVE_PATH="$TARGET"
 BACKUP_PATH="$DISPLACED"
@@ -206,28 +335,39 @@ NEW_ID=""
 STATE=staged
 COMMITTED=0
 
-# Renames preserve the inode on this filesystem, including a broken symlink.
-# Comparing identity, rather than existence/type, rejects both nesting and a
-# plausible-looking directory created by another process.
-object_id() {
-    [ -e "$1" ] || [ -L "$1" ] || return 1
-    identity=$(LC_ALL=C ls -di "$1" 2>/dev/null) || return 1
-    identity=${identity#"${identity%%[! ]*}"}
-    printf '%s\n' "${identity%% *}"
-}
-same_object() {
-    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+remove_owned() {
+    [ -n "$1" ] || return 0
+    [ -e "$1" ] || [ -L "$1" ] || return 0
+    if ! same_object "$1" "$2"; then
+        printf 'WARNING: leaving foreign staging/backup occupant: %s\n' "$1" >&2
+        return 1
+    fi
+    rm -rf "$1"
 }
 
 # Catch signals in the parent; never ignore them in recovery children. Forward
 # INT as TERM as well, because asynchronous POSIX jobs may start with INT ignored.
 MOVE_PID=""
+MOVE_ACTIVE=0
+INTERRUPTED=0
+interrupt_install() {
+    INTERRUPTED=1
+    if [ "$MOVE_ACTIVE" -eq 1 ]; then interrupt_recovery; else exit 1; fi
+}
 interrupt_recovery() {
     [ -z "$MOVE_PID" ] || kill -TERM "$MOVE_PID" 2>/dev/null || :
 }
 bounded_move() {
-    (trap - HUP INT TERM; exec mv -f "$1" "$2" </dev/null) &
+    same_device "$1" "$2" || return 1
+    move_identity=$(object_id "$1") || return 1
+    MOVE_ACTIVE=1
+    (
+        trap - HUP INT TERM
+        if [ ! -d "$1" ] || [ -L "$1" ]; then exec ln -P -- "$1" "$2" </dev/null; fi
+        exec mv -n "$1" "$2" </dev/null
+    ) &
     MOVE_PID=$!
+    [ "$INTERRUPTED" -eq 0 ] || interrupt_recovery
     (
         # A process-group signal must not cancel the deadline. It can shorten
         # it: an interrupted timer still kills the move. USR1 is our private
@@ -253,7 +393,13 @@ bounded_move() {
     done
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
     wait "$watchdog_pid" 2>/dev/null || :
+    if same_object "$2" "$move_identity" && same_object "$1" "$move_identity"; then
+        rm -f "$1"
+    fi
+    move_identity=""
     MOVE_PID=""
+    MOVE_ACTIVE=0
+    [ "$INTERRUPTED" -eq 0 ] || return 1
     return "$move_status"
 }
 
@@ -266,7 +412,7 @@ locate_old() {
 }
 locate_new() {
     NEW_PATH=""
-    for candidate in "$STAGED_PATH" "$LIVE_PATH" "$LIVE_PATH/${STAGED_PATH##*/}"; do
+    for candidate in "$LIVE_PATH" "$STAGED_PATH" "$LIVE_PATH/${STAGED_PATH##*/}"; do
         if same_object "$candidate" "$NEW_ID"; then NEW_PATH="$candidate"; return 0; fi
     done
     return 1
@@ -277,14 +423,19 @@ verify_move() {
 restore_row() {
     [ "$STATE" != staged ] || return 0
     if locate_new && [ "$NEW_PATH" != "$STAGED_PATH" ]; then
-        [ ! -e "$STAGED_PATH" ] && [ ! -L "$STAGED_PATH" ] || return 1
         STATE=evacuate_intent
-        for attempt in 1 2; do
-            bounded_move "$NEW_PATH" "$STAGED_PATH" || :
-            verify_move "$NEW_PATH" "$STAGED_PATH" "$NEW_ID" && break
-            locate_new || return 1
-        done
-        same_object "$STAGED_PATH" "$NEW_ID" || return 1
+        if same_object "$STAGED_PATH" "$NEW_ID"; then
+            remove_owned "$NEW_PATH" "$NEW_ID" || return 1
+            verify_move "$NEW_PATH" "$STAGED_PATH" "$NEW_ID" || return 1
+        else
+            [ ! -e "$STAGED_PATH" ] && [ ! -L "$STAGED_PATH" ] || return 1
+            for attempt in 1 2; do
+                bounded_move "$NEW_PATH" "$STAGED_PATH" || :
+                verify_move "$NEW_PATH" "$STAGED_PATH" "$NEW_ID" && break
+                locate_new || return 1
+            done
+            same_object "$STAGED_PATH" "$NEW_ID" || return 1
+        fi
         STATE=evacuated
     fi
     if [ -z "$OLD_ID" ]; then
@@ -292,7 +443,10 @@ restore_row() {
         return
     fi
     locate_old || return 1
-    [ "$OLD_PATH" != "$LIVE_PATH" ] || return 0
+    if [ "$OLD_PATH" = "$LIVE_PATH" ]; then
+        if same_object "$BACKUP_PATH" "$OLD_ID"; then remove_owned "$BACKUP_PATH" "$OLD_ID" || :; fi
+        return 0
+    fi
     [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ] || return 1
     STATE=restore_intent
     for attempt in 1 2; do
@@ -308,8 +462,9 @@ restore_row() {
 }
 cleanup() {
     status=$?
-    trap - 0
     trap 'interrupt_recovery' HUP INT TERM
+    trap - 0
+    INTERRUPTED=0
     if [ "$COMMITTED" -eq 1 ]; then
         status=0
     elif restore_row; then
@@ -324,15 +479,20 @@ cleanup() {
         fi
         status=3
     fi
-    rm -rf "$STAGED_PATH"
+    remove_owned "$STAGED_PATH" "$NEW_ID"
+    NEW_ID=""
+    release_lock
+    close_prompt
     exit "$status"
 }
 trap cleanup 0
-trap 'exit 1' HUP INT TERM
+trap 'interrupt_install' HUP INT TERM
 
+mkdir "$STAGED_PATH" || fail "Could not create the staged app."
+NEW_ID=$(object_id "$STAGED_PATH") || fail "Could not identify the staged app."
+same_device "$STAGED_PATH" "$LIVE_PATH" || fail "The staging and destination must be on the same device."
 printf 'Copying to %s ...\n' "$TARGET_DIR"
 if ! ditto "$SOURCE" "$STAGED"; then
-    rm -rf "$STAGED"
     fail "Could not copy the app to $TARGET_DIR."
 fi
 
@@ -341,7 +501,6 @@ fi
 # one of its several thousand files until this runs.
 printf 'Clearing the download quarantine flag ...\n'
 if ! xattr -dr com.apple.quarantine "$STAGED"; then
-    rm -rf "$STAGED"
     fail "Could not clear the quarantine flag from the copy."
 fi
 
@@ -353,7 +512,6 @@ if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
         # Never re-sign here. An ad-hoc signature carries no identity, so it
         # would add no authenticity, and a seal that fails after a verified
         # copy means a damaged copy, which re-signing would bless.
-        rm -rf "$STAGED"
         fail "The copy of the new version does not have a valid signature." \
              "It was not installed, and the current version was left in place."
     fi
@@ -363,13 +521,13 @@ if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
     printf 'Re-signing the copy (this takes a moment) ...\n'
     codesign --force --deep --sign - "$STAGED" >/dev/null 2>&1 || true
     if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
-        rm -rf "$STAGED"
         fail "The copy in $TARGET_DIR does not have a valid signature." \
              "macOS will refuse to start it. The previous installation was left in place."
     fi
 fi
 
-NEW_ID="$(object_id "$STAGED_PATH")" || fail "The staged app is missing."
+same_object "$STAGED_PATH" "$NEW_ID" || fail "The staged app is missing or replaced."
+same_device "$STAGED_PATH" "$LIVE_PATH" || fail "The staging and destination must be on the same device."
 OLD_ID="$(object_id "$LIVE_PATH")" || OLD_ID=""
 STATE=prepared
 if [ -n "$OLD_ID" ]; then
@@ -378,7 +536,7 @@ if [ -n "$OLD_ID" ]; then
         fail "The backup path is still occupied." "Nothing has been changed."
     fi
     STATE=displace_intent
-    mv -f "$LIVE_PATH" "$BACKUP_PATH" </dev/null
+    bounded_move "$LIVE_PATH" "$BACKUP_PATH"
     move_status=$?
     if ! verify_move "$LIVE_PATH" "$BACKUP_PATH" "$OLD_ID" || [ "$move_status" -ne 0 ]; then
         fail "Could not move the existing installation aside." \
@@ -388,17 +546,18 @@ fi
 STATE=displaced
 [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ] || fail "The app destination is occupied."
 STATE=install_intent
-mv -f "$STAGED_PATH" "$LIVE_PATH" </dev/null
+bounded_move "$STAGED_PATH" "$LIVE_PATH"
 move_status=$?
 if ! verify_move "$STAGED_PATH" "$LIVE_PATH" "$NEW_ID" || [ "$move_status" -ne 0 ]; then
     fail "Could not put the new version in place at $TARGET."
 fi
 STATE=installed
 COMMITTED=1
-if ! rm -rf "$DISPLACED" || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
+if ! remove_owned "$DISPLACED" "$OLD_ID" || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
     printf 'WARNING: installed successfully, but could not fully remove the previous copy.\n' >&2
     printf 'The leftover backup is at: %s\n' "$DISPLACED" >&2
 fi
+OLD_ID=""
 
 printf '\n'
 printf 'Installed: %s\n' "$TARGET"

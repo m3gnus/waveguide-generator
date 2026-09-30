@@ -3244,7 +3244,7 @@ def test_a_commit_failure_restores_the_previous_linux_installation(tmp_path: Pat
     mv = fake_bin / "mv"
     mv.write_text(
         "#!/bin/bash\n"
-        "while [ \"${1:-}\" = -T ] || [ \"${1:-}\" = -f ] || [ \"${1:-}\" = -- ]; do shift; done\n"
+        "while [ \"${1:-}\" = -T ] || [ \"${1:-}\" = -f ] || [ \"${1:-}\" = -n ] || [ \"${1:-}\" = -- ]; do shift; done\n"
         f"case \"${{1:-}}\" in */.waveguide-generator.*.desktop) "
         f"if [ \"${{2:-}}\" = \"{desktop}\" ] && [ ! -e \"{failure_marker}\" ]; then "
         f"touch \"{failure_marker}\"; echo injected desktop move failure >&2; exit 23; fi;; esac\n"
@@ -3252,6 +3252,8 @@ def test_a_commit_failure_restores_the_previous_linux_installation(tmp_path: Pat
         encoding="utf-8",
     )
     mv.chmod(0o755)
+    from scripts.tests.test_linux_bundle_install_update import adapt_link_shim
+    adapt_link_shim(fake_bin)
 
     again = _install_linux(
         tmp_path,
@@ -3289,7 +3291,7 @@ def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path,
     mv = fake_bin / "mv"
     mv.write_text(
         "#!/bin/bash\n"
-        "while [ \"${1:-}\" = -T ] || [ \"${1:-}\" = -f ] || [ \"${1:-}\" = -- ]; do shift; done\n"
+        "while [ \"${1:-}\" = -T ] || [ \"${1:-}\" = -f ] || [ \"${1:-}\" = -n ] || [ \"${1:-}\" = -- ]; do shift; done\n"
         f"case \"${{1:-}}\" in\n"
         f"  */.waveguide-generator.*.desktop) "
         f"if [ \"${{2:-}}\" = \"{desktop}\" ]; then exit 23; fi;;\n"
@@ -3300,6 +3302,8 @@ def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path,
         encoding="utf-8",
     )
     mv.chmod(0o755)
+    from scripts.tests.test_linux_bundle_install_update import adapt_link_shim
+    adapt_link_shim(fake_bin)
     if failure_mode == "evacuate":
         # Returning the replacement to staging now removes it from the live path
         # with a rename. Fail that operation; old must remain at its named backup.

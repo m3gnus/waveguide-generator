@@ -16,7 +16,7 @@
 #
 # It must stay self-contained. It runs from wherever the user extracted the
 # tarball, with nothing from the checkout beside it, and its only dependencies
-# are bash and coreutils.
+# are bash, coreutils and ps.
 
 # Exit status:
 #   0  installed
@@ -24,8 +24,26 @@
 #      restored (or no previous installation existed), including HUP/INT/TERM
 #   3  ROLLBACK INCOMPLETE: a previous installation or desktop integration
 #      could not be restored. Backup paths are printed and left in place.
+#   4  installer lock busy or unverifiable; nothing replaced by this run.
+#
+# Minimal lock: mkdir beside the resolved target, held through cleanup. A PID
+# that is no longer running can be reclaimed. A missing/invalid PID, unexpected
+# contents, or an interrupted stale-lock reaper needs manual inspection/removal;
+# a reused PID is treated as busy. This is local per-target exclusion, not the
+# updater helper's fuller lock contract (hornlab-policy UPDATER-PLAN.md section 9).
+# Known limit: there is no journal. SIGKILL/power loss between the two renames
+# can leave the target absent; a rerun does not discover/restore the backup.
+# Look beside the resolved target for .waveguide-generator.previous.*; desktop
+# integration backups remain beside their destinations as .waveguide-generator.*.backup.*.
+# Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
 set -u
+# A disconnected reader must not bypass the EXIT recovery path.
+trap '' PIPE
+# Bash 3.2 can retain a failed stdout write in its stdio buffer, then flush it
+# into a later command substitution. Isolate writes so recovery identities
+# cannot be contaminated by diagnostics after the reader disconnects.
+printf() ( command printf "$@" )
 
 BUNDLE_DIRECTORY="waveguide-generator"
 LAUNCHER_NAME="waveguide-generator"
@@ -67,6 +85,110 @@ fail() {
     printf '\n'
     exit 1
 }
+
+STAT_STYLE=gnu
+stat -c '%d:%i' -- / >/dev/null 2>&1 || STAT_STYLE=bsd
+# Identity is (device, inode), valid only while the recorded object survives.
+# stat does not follow symlinks, including broken command links.
+object_id() {
+    [ -e "$1" ] || [ -L "$1" ] || return 1
+    if [ "$STAT_STYLE" = gnu ]; then
+        stat -c '%d:%i' -- "$1" 2>/dev/null
+    else
+        stat -f '%d:%i' "$1" 2>/dev/null
+    fi
+}
+same_object() {
+    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+}
+same_device() {
+    source_id=$(object_id "$1") || return 1
+    parent_id=$(object_id "${2%/*}") || return 1
+    if [ "${source_id%%:*}" != "${parent_id%%:*}" ]; then
+        printf 'ERROR: staging and destination are on different devices: %s -> %s\n' "$1" "$2" >&2
+        return 1
+    fi
+    if [ -e "$2" ] || [ -L "$2" ]; then
+        destination_id=$(object_id "$2") || return 1
+        if [ "${source_id%%:*}" != "${destination_id%%:*}" ]; then
+            printf 'ERROR: destination is on a different device: %s\n' "$2" >&2
+            return 1
+        fi
+    fi
+}
+
+# mkdir is the exclusion primitive. An unreadable/missing PID is never assumed
+# stale: it may belong to an owner still starting. PID reuse errs toward busy.
+LOCK_PATH=""
+LOCK_ID=""
+LOCK_HELD=0
+LOCK_ACQUIRING=0
+LOCK_INTERRUPTED=0
+interrupt_early() {
+    if [ "$LOCK_ACQUIRING" -eq 1 ]; then LOCK_INTERRUPTED=1; else exit 1; fi
+}
+release_lock() {
+    [ "$LOCK_HELD" -eq 1 ] || return 0
+    if same_object "$LOCK_PATH" "$LOCK_ID"; then
+        rm -f "$LOCK_PATH/pid"
+        rmdir "$LOCK_PATH" 2>/dev/null || printf 'WARNING: could not release installer lock: %s\n' "$LOCK_PATH" >&2
+    else
+        printf 'WARNING: installer lock was replaced; leaving it at: %s\n' "$LOCK_PATH" >&2
+    fi
+    LOCK_HELD=0
+    LOCK_ID=""
+}
+lock_busy() {
+    printf 'Another installer owns the lock, or its owner cannot be verified: %s\n' "$LOCK_PATH" >&2
+    printf 'Retry after it exits; remove this lock manually only after checking that no installer is running.\n' >&2
+    exit 4
+}
+acquire_lock() {
+    LOCK_ACQUIRING=1
+    if ! mkdir "$LOCK_PATH" 2>/dev/null; then
+        stale_id=$(object_id "$LOCK_PATH") || lock_busy
+        [ -d "$LOCK_PATH" ] && [ ! -L "$LOCK_PATH" ] || lock_busy
+        owner=$(cat "$LOCK_PATH/pid" 2>/dev/null) || lock_busy
+        case "$owner" in ''|*[!0-9]*|0) lock_busy ;; esac
+        # ESRCH is conclusive even where process listing is unavailable.
+        # Other probe failures (for example EPERM) need ps or remain busy.
+        if owner_probe=$(LC_ALL=C kill -0 "$owner" 2>&1); then lock_busy; fi
+        case "$owner_probe" in
+            *"No such process"*) ;;
+            *)
+                owner_listing=$(ps -p "$owner" -o pid= 2>/dev/null)
+                owner_status=$?
+                case "$owner_status" in
+                    0) [ -z "$owner_listing" ] || lock_busy ;;
+                    1) ;; # ps found no such process
+                    *) lock_busy ;; # unknown status cannot prove a dead owner
+                esac
+                ;;
+        esac
+        # Only one contender may reap a dead owner. Never recursively delete a
+        # lock; unexpected contents (or an interrupted reaper) require inspection.
+        mkdir "$LOCK_PATH/reap" 2>/dev/null || lock_busy
+        if ! same_object "$LOCK_PATH" "$stale_id" || [ "$(cat "$LOCK_PATH/pid" 2>/dev/null)" != "$owner" ]; then lock_busy; fi
+        rm -f "$LOCK_PATH/pid"
+        rmdir "$LOCK_PATH/reap" && rmdir "$LOCK_PATH" || lock_busy
+        stale_id=""
+        mkdir "$LOCK_PATH" 2>/dev/null || lock_busy
+    fi
+    LOCK_HELD=1
+    LOCK_ID=$(object_id "$LOCK_PATH") || fail "Could not identify the installer lock."
+    printf '%s\n' "$$" > "$LOCK_PATH/pid" || fail "Could not record the installer lock owner."
+    LOCK_ACQUIRING=0
+    [ "$LOCK_INTERRUPTED" -eq 0 ] || exit 1
+}
+early_cleanup() {
+    early_status=$?
+    trap ':' HUP INT TERM
+    trap - EXIT
+    release_lock
+    exit "$early_status"
+}
+trap early_cleanup EXIT
+trap 'interrupt_early' HUP INT TERM
 
 canonical_path() {
     local input="$1" part resolved candidate
@@ -288,6 +410,12 @@ case "$SOURCE" in
         ;;
 esac
 
+# Lock before inspecting an installed target, staging, or touching integration.
+TARGET_PARENT="${TARGET%/*}"
+mkdir -p "$TARGET_PARENT" || fail "Could not create the target parent."
+LOCK_PATH="$TARGET_PARENT/.${TARGET##*/}.install.lock"
+acquire_lock
+
 # Validate an existing target before creating even the shared destination
 # directories, and before any rename can make it disappear. --update (the
 # in-app updater's helper) additionally requires that an installation is there,
@@ -320,20 +448,17 @@ mkdir -p "$PREFIX" "$APPLICATIONS" "$ICONS" "$BIN" || \
 # TARGET may resolve through a symlink; stage and back up beside its actual path.
 TARGET_PARENT="${TARGET%/*}"
 # Files are staged on the same filesystems as their final names, so the commit
-# below consists only of renames and can restore every displaced predecessor.
-STAGE_ROOT="$(mktemp -d "$TARGET_PARENT/.waveguide-generator.install.XXXXXX")" || \
-    fail "Could not create a staging directory under $PREFIX."
-STAGED_TARGET="$STAGE_ROOT/$BUNDLE_DIRECTORY"
-STAGED_DESKTOP="$(mktemp "$APPLICATIONS/.waveguide-generator.XXXXXX.desktop")" || \
-    { rm -rf -- "$STAGE_ROOT"; fail "Could not stage the desktop entry under $APPLICATIONS."; }
-STAGED_ICON="$(mktemp "$ICONS/.waveguide-generator.icon.XXXXXX")" || \
-    { rm -rf -- "$STAGE_ROOT" "$STAGED_DESKTOP"; fail "Could not stage the icon under $ICONS."; }
-STAGED_DESKTOP_OWNER="$(mktemp "$APPLICATIONS/.waveguide-generator.owner.XXXXXX")" || \
-    { rm -rf -- "$STAGE_ROOT" "$STAGED_DESKTOP" "$STAGED_ICON"; fail "Could not stage desktop ownership under $APPLICATIONS."; }
-STAGED_ICON_OWNER="$(mktemp "$ICONS/.waveguide-generator.owner.XXXXXX")" || \
-    { rm -rf -- "$STAGE_ROOT" "$STAGED_DESKTOP" "$STAGED_ICON" "$STAGED_DESKTOP_OWNER"; fail "Could not stage icon ownership under $ICONS."; }
+# below uses renames for directories and link/unlink for files, preserving
+# the identities of every displaced predecessor.
+STAGE_ROOT=""
+STAGE_ROOT_ID=""
+STAGED_TARGET=""
+STAGED_DESKTOP=""
+STAGED_ICON=""
+STAGED_DESKTOP_OWNER=""
+STAGED_ICON_OWNER=""
 
-# Swap table: LIVE[i], BACKUP[i], STAGED[i], with old/new inode identities.
+# Swap table: LIVE[i], BACKUP[i], STAGED[i], with old/new device/inode identities.
 # Each row goes staged -> prepared -> displace_intent -> displaced ->
 # install_intent -> installed. Intent is recorded BEFORE acting; both the
 # command result and the exact destination identity are verified afterward.
@@ -343,7 +468,8 @@ STAGED_ICON_OWNER="$(mktemp "$ICONS/.waveguide-generator.owner.XXXXXX")" || \
 # evacuate_intent -> evacuated (new back to stage), then
 # restore_intent -> restored with the same verification for EVERY row.
 # Only after all rows verify does COMMITTED retain new and retire backups.
-# A raced destination is never deleted: report the real old-object location
+# File transfers use no-clobber link/unlink; directories use verified mv -n.
+# Raced files are never replaced: report the real old-object location
 # (including BSD mv nesting) with exit 3. Uncommitted clean recovery exits 1.
 COMMITTED=0
 LIVE=("$TARGET" "$APPLICATIONS/$DESKTOP_ENTRY_NAME" "$ICONS/$ICON_NAME"
@@ -358,30 +484,45 @@ INSTALL_ERROR=("Could not put the staged application in $TARGET." "Could not ins
 STATE=(staged staged staged staged staged staged)
 OLD_ID=("" "" "" "" "" "")
 NEW_ID=("" "" "" "" "" "")
-MV_OPTIONS=(-f --)
+MV_OPTIONS=(-n --)
 
-# Renames preserve the inode on this filesystem, including a broken symlink.
-# Comparing identity, rather than existence/type, rejects both nesting and a
-# plausible-looking directory created by another process.
-object_id() {
-    [ -e "$1" ] || [ -L "$1" ] || return 1
-    identity=$(LC_ALL=C ls -di "$1" 2>/dev/null) || return 1
-    identity=${identity#"${identity%%[! ]*}"}
-    printf '%s\n' "${identity%% *}"
-}
-same_object() {
-    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+remove_owned() {
+    [ -n "$1" ] || return 0
+    [ -e "$1" ] || [ -L "$1" ] || return 0
+    if ! same_object "$1" "$2"; then
+        printf 'WARNING: leaving foreign staging/backup occupant: %s\n' "$1" >&2
+        return 1
+    fi
+    rm -rf -- "$1"
 }
 
 # Catch signals in the parent; never ignore them in recovery children. Forward
 # INT as TERM as well, because asynchronous POSIX jobs may start with INT ignored.
 MOVE_PID=""
+MOVE_ACTIVE=0
+INTERRUPTED=0
+interrupt_install() {
+    INTERRUPTED=1
+    if [ "$MOVE_ACTIVE" -eq 1 ]; then interrupt_recovery; else exit 1; fi
+}
 interrupt_recovery() {
     [ -z "$MOVE_PID" ] || kill -TERM "$MOVE_PID" 2>/dev/null || :
 }
 bounded_move() {
-    (trap - HUP INT TERM; exec mv "${MV_OPTIONS[@]}" "$1" "$2" </dev/null) &
+    same_device "$1" "$2" || return 1
+    move_identity=$(object_id "$1") || return 1
+    MOVE_ACTIVE=1
+    (
+        trap - HUP INT TERM
+        if [ ! -d "$1" ] || [ -L "$1" ]; then
+            # link(2) refuses an existing file atomically, preserving the
+            # recorded identity. -P links a symlink itself, not its referent.
+            exec ln -P -- "$1" "$2" </dev/null
+        fi
+        exec mv "${MV_OPTIONS[@]}" "$1" "$2" </dev/null
+    ) &
     MOVE_PID=$!
+    [ "$INTERRUPTED" -eq 0 ] || interrupt_recovery
     (
         # A process-group signal must not cancel the deadline. It can shorten
         # it: an interrupted timer still kills the move. USR1 is our private
@@ -407,7 +548,15 @@ bounded_move() {
     done
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
     wait "$watchdog_pid" 2>/dev/null || :
+    # A file transfer has two temporary aliases; unlink only after verifying
+    # the destination. The identity stays live at the destination after unlink.
+    if same_object "$2" "$move_identity" && same_object "$1" "$move_identity"; then
+        rm -f -- "$1"
+    fi
+    move_identity=""
     MOVE_PID=""
+    MOVE_ACTIVE=0
+    [ "$INTERRUPTED" -eq 0 ] || return 1
     return "$move_status"
 }
 
@@ -425,7 +574,7 @@ locate_old() {
 locate_new() {
     local candidate
     NEW_PATH=""
-    for candidate in "${STAGED[i]}" "${LIVE[i]}" "${LIVE[i]}/${STAGED[i]##*/}"; do
+    for candidate in "${LIVE[i]}" "${STAGED[i]}" "${LIVE[i]}/${STAGED[i]##*/}"; do
         if same_object "$candidate" "${NEW_ID[i]}"; then NEW_PATH="$candidate"; return 0; fi
     done
     return 1
@@ -439,14 +588,21 @@ restore_row() {
     # Put our new object back beside the target, rather than recursively deleting
     # a possibly foreign destination. A failed evacuation preserves old's backup.
     if locate_new && [ "$NEW_PATH" != "${STAGED[i]}" ]; then
-        if [ -e "${STAGED[i]}" ] || [ -L "${STAGED[i]}" ]; then return 1; fi
         STATE[i]=evacuate_intent
-        for attempt in 1 2; do
-            bounded_move "$NEW_PATH" "${STAGED[i]}" || :
-            verify_move "$NEW_PATH" "${STAGED[i]}" "${NEW_ID[i]}" && break
-            locate_new || return 1
-        done
-        same_object "${STAGED[i]}" "${NEW_ID[i]}" || return 1
+        # A signal/unlink error can leave both names of our new file.
+        # Keep staging as the anchor and remove only the verified live alias.
+        if same_object "${STAGED[i]}" "${NEW_ID[i]}"; then
+            remove_owned "$NEW_PATH" "${NEW_ID[i]}" || return 1
+            verify_move "$NEW_PATH" "${STAGED[i]}" "${NEW_ID[i]}" || return 1
+        else
+            if [ -e "${STAGED[i]}" ] || [ -L "${STAGED[i]}" ]; then return 1; fi
+            for attempt in 1 2; do
+                bounded_move "$NEW_PATH" "${STAGED[i]}" || :
+                verify_move "$NEW_PATH" "${STAGED[i]}" "${NEW_ID[i]}" && break
+                locate_new || return 1
+            done
+            same_object "${STAGED[i]}" "${NEW_ID[i]}" || return 1
+        fi
         STATE[i]=evacuated
     fi
     if [ -z "${OLD_ID[i]}" ]; then
@@ -454,7 +610,11 @@ restore_row() {
         return
     fi
     locate_old || return 1
-    if [ "$OLD_PATH" = "${LIVE[i]}" ]; then return 0; fi
+    if [ "$OLD_PATH" = "${LIVE[i]}" ]; then
+        # A failed unlink after displacement can leave an old backup alias.
+        if same_object "${BACKUP[i]}" "${OLD_ID[i]}"; then remove_owned "${BACKUP[i]}" "${OLD_ID[i]}" || :; fi
+        return 0
+    fi
     [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ] || return 1
     STATE[i]=restore_intent
     for attempt in 1 2; do
@@ -471,8 +631,9 @@ restore_row() {
 }
 rollback() {
     local status=$? i
-    trap - EXIT
     trap 'interrupt_recovery' HUP INT TERM
+    trap - EXIT
+    INTERRUPTED=0
     RESTORE_FAILED=0
     HAD_PREVIOUS=0
     if [ "$COMMITTED" -ne 1 ]; then
@@ -498,22 +659,57 @@ rollback() {
     else
         status=0
     fi
-    rm -rf -- "$STAGE_ROOT"
-    rm -f -- "$STAGED_DESKTOP" "$STAGED_ICON" "$STAGED_DESKTOP_OWNER" "$STAGED_ICON_OWNER" "${STAGED[5]}"
+    for ((i=0; i<${#STAGED[@]}; i++)); do
+        remove_owned "${STAGED[i]}" "${NEW_ID[i]}"
+        # No later lookup may treat a deleted inode as historical identity.
+        NEW_ID[i]=""
+    done
+    if [ -n "$STAGE_ROOT" ] && { [ -e "$STAGE_ROOT" ] || [ -L "$STAGE_ROOT" ]; }; then
+        if same_object "$STAGE_ROOT" "$STAGE_ROOT_ID"; then
+            rmdir "$STAGE_ROOT" 2>/dev/null || printf 'WARNING: leaving occupied staging directory: %s\n' "$STAGE_ROOT" >&2
+        else
+            printf 'WARNING: leaving foreign staging occupant: %s\n' "$STAGE_ROOT" >&2
+        fi
+    fi
+    STAGE_ROOT_ID=""
+    release_lock
     exit "$status"
 }
 trap rollback EXIT
-trap 'exit 1' HUP INT TERM
+trap 'interrupt_install' HUP INT TERM
 
-# GNU mv prevents nesting atomically. BSD fixtures fall back to verified identity.
+STAGE_ROOT=$(mktemp -d "$TARGET_PARENT/.waveguide-generator.install.XXXXXX") || fail "Could not create application staging."
+STAGE_ROOT_ID=$(object_id "$STAGE_ROOT") || fail "Could not identify application staging."
+STAGED[0]="$STAGE_ROOT/$BUNDLE_DIRECTORY"
+mkdir "${STAGED[0]}" || fail "Could not create the staged application."
+NEW_ID[0]=$(object_id "${STAGED[0]}") || fail "Could not identify the staged application."
+STAGED[1]=$(mktemp "$APPLICATIONS/.waveguide-generator.XXXXXX.desktop") || fail "Could not stage the desktop entry."
+NEW_ID[1]=$(object_id "${STAGED[1]}") || fail "Could not identify desktop staging."
+STAGED[2]=$(mktemp "$ICONS/.waveguide-generator.icon.XXXXXX") || fail "Could not stage the icon."
+NEW_ID[2]=$(object_id "${STAGED[2]}") || fail "Could not identify icon staging."
+STAGED[3]=$(mktemp "$APPLICATIONS/.waveguide-generator.owner.XXXXXX") || fail "Could not stage desktop ownership."
+NEW_ID[3]=$(object_id "${STAGED[3]}") || fail "Could not identify desktop-owner staging."
+STAGED[4]=$(mktemp "$ICONS/.waveguide-generator.owner.XXXXXX") || fail "Could not stage icon ownership."
+NEW_ID[4]=$(object_id "${STAGED[4]}") || fail "Could not identify icon-owner staging."
+STAGED_TARGET=${STAGED[0]}
+STAGED_DESKTOP=${STAGED[1]}
+STAGED_ICON=${STAGED[2]}
+STAGED_DESKTOP_OWNER=${STAGED[3]}
+STAGED_ICON_OWNER=${STAGED[4]}
+
+# No-clobber moves refuse raced files. GNU -T also refuses directory nesting;
+# BSD fixtures still reconcile any nested object by its recorded identity.
 mkdir "$STAGE_ROOT/mv-probe-source" || fail "Could not probe safe rename support."
-if (cd -- "$STAGE_ROOT" && mv -T -f -- mv-probe-source mv-probe-target </dev/null 2>/dev/null); then
-    MV_OPTIONS=(-T -f --)
+PROBE_ID=$(object_id "$STAGE_ROOT/mv-probe-source") || fail "Could not identify the rename probe."
+if (cd -- "$STAGE_ROOT" && mv -T -n -- mv-probe-source mv-probe-target </dev/null 2>/dev/null); then
+    MV_OPTIONS=(-T -n --)
 fi
-rm -rf -- "$STAGE_ROOT/mv-probe-source" "$STAGE_ROOT/mv-probe-target"
+remove_owned "$STAGE_ROOT/mv-probe-source" "$PROBE_ID"
+remove_owned "$STAGE_ROOT/mv-probe-target" "$PROBE_ID"
+PROBE_ID=""
 
 printf 'Staging the application (this takes a moment) ...\n'
-cp -a -- "$SOURCE" "$STAGED_TARGET" || \
+cp -a -- "$SOURCE/." "$STAGED_TARGET" || \
     fail "Could not stage the application under $PREFIX." \
          "Check that there is enough free space and that $PREFIX is writable."
 cp -- "$HERE/$UNINSTALLER_NAME" "$STAGED_TARGET/$UNINSTALLER_NAME" || \
@@ -553,9 +749,11 @@ if { [ -e "$BIN/$LAUNCHER_NAME" ] || [ -L "$BIN/$LAUNCHER_NAME" ]; } && \
          "Move it yourself before installing. Nothing has been replaced."
 fi
 
-# Stage the link too, so every installation step below is the same rename.
+# Stage the link too. Its final no-clobber creation keeps this recorded identity;
+# the live hard link is verified before the staging alias is removed.
 [ ! -e "${STAGED[5]}" ] && [ ! -L "${STAGED[5]}" ] || fail "The staged command path is occupied."
 ln -s -- "$TARGET/$LAUNCHER_NAME" "${STAGED[5]}" || fail "Could not stage the command link."
+NEW_ID[5]=$(object_id "${STAGED[5]}") || fail "Could not identify the staged command link."
 
 # Reserve same-directory rollback names, then leave them absent for renames.
 BACKUP[0]="$(mktemp -d "$TARGET_PARENT/.waveguide-generator.previous.XXXXXX")" || fail "Could not reserve application rollback."
@@ -569,13 +767,14 @@ rm -f -- "${BACKUP[@]:1}"
 
 printf 'Committing the staged installation ...\n'
 for ((i=0; i<${#LIVE[@]}; i++)); do
-    NEW_ID[i]="$(object_id "${STAGED[i]}")" || fail "The staged ${DESCRIPTION[i]} is missing."
+    same_object "${STAGED[i]}" "${NEW_ID[i]}" || fail "The staged ${DESCRIPTION[i]} is missing or replaced."
+    same_device "${STAGED[i]}" "${LIVE[i]}" || fail "The staging and destination must be on the same device."
     OLD_ID[i]="$(object_id "${LIVE[i]}")" || OLD_ID[i]=""
     STATE[i]=prepared
     if [ -n "${OLD_ID[i]}" ]; then
         [ ! -e "${BACKUP[i]}" ] && [ ! -L "${BACKUP[i]}" ] || fail "The backup path is still occupied."
         STATE[i]=displace_intent
-        mv "${MV_OPTIONS[@]}" "${LIVE[i]}" "${BACKUP[i]}" </dev/null
+        bounded_move "${LIVE[i]}" "${BACKUP[i]}"
         move_status=$?
         if ! verify_move "${LIVE[i]}" "${BACKUP[i]}" "${OLD_ID[i]}" || [ "$move_status" -ne 0 ]; then
             fail "Could not move the existing ${DESCRIPTION[i]} aside."
@@ -584,7 +783,7 @@ for ((i=0; i<${#LIVE[@]}; i++)); do
     STATE[i]=displaced
     [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ] || fail "The ${DESCRIPTION[i]} destination is occupied."
     STATE[i]=install_intent
-    mv "${MV_OPTIONS[@]}" "${STAGED[i]}" "${LIVE[i]}" </dev/null
+    bounded_move "${STAGED[i]}" "${LIVE[i]}"
     move_status=$?
     if ! verify_move "${STAGED[i]}" "${LIVE[i]}" "${NEW_ID[i]}" || [ "$move_status" -ne 0 ]; then
         fail "${INSTALL_ERROR[i]}"
@@ -592,8 +791,10 @@ for ((i=0; i<${#LIVE[@]}; i++)); do
     STATE[i]=installed
 done
 COMMITTED=1
-rm -rf -- "${BACKUP[0]}"
-rm -f -- "${BACKUP[@]:1}"
+for ((i=0; i<${#BACKUP[@]}; i++)); do
+    remove_owned "${BACKUP[i]}" "${OLD_ID[i]}"
+    OLD_ID[i]=""
+done
 
 # Best effort, and genuinely optional: every current desktop notices a new
 # .desktop file on its own, and these tools are absent on minimal systems.
