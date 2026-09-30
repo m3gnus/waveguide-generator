@@ -1,7 +1,7 @@
 import sharedGuidance from '../../../shared/opencl-driver-guidance.v1.json';
 
 export type OpenClGuidancePlatform = 'windows' | 'linux';
-export type OpenClGuidanceReason = 'no_device' | 'smoke_test_failed' | 'smoke_test_timeout' | 'pocl_windows';
+export type OpenClGuidanceReason = 'no_device' | 'smoke_test_failed' | 'smoke_test_timeout' | 'inventory_timeout' | 'pocl_windows';
 export interface OpenClGuidanceProps {
   platform: OpenClGuidancePlatform;
   reason?: OpenClGuidanceReason;

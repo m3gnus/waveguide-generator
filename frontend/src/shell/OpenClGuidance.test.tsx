@@ -46,7 +46,7 @@ describe('OpenClGuidance', () => {
     }
   });
 
-  it.each<OpenClGuidanceReason>(['no_device', 'smoke_test_failed', 'smoke_test_timeout', 'pocl_windows'])('renders the shared %s reason', (reason) => {
+  it.each<OpenClGuidanceReason>(['no_device', 'smoke_test_failed', 'smoke_test_timeout', 'inventory_timeout', 'pocl_windows'])('renders the shared %s reason', (reason) => {
     act(() => root.render(<OpenClGuidance platform="windows" reason={reason} />));
     expect(host.querySelector('p')?.textContent).toBe(guidance.reasons[reason]);
     for (const [code, text] of Object.entries(guidance.reasons)) {

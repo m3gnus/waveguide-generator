@@ -22,7 +22,8 @@
   "reasons": {
     "no_device": "No CPU OpenCL device was found.",
     "smoke_test_failed": "The CPU OpenCL runtime failed its test calculation.",
-    "smoke_test_timeout": "The CPU OpenCL runtime's test calculation timed out.",
+    "smoke_test_timeout": "The CPU OpenCL runtime's test calculation timed out. WG will check again; restarting WG also retries.",
+    "inventory_timeout": "Checking for a CPU OpenCL runtime took too long, so WG is using its slower engine for now. WG will check again; restarting WG also retries.",
     "pocl_windows": "PoCL on Windows cannot run BEMPP calculations."
   },
   "platforms": {

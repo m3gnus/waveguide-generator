@@ -151,7 +151,7 @@ def test_versioned_contract_and_cpu_runtime_content() -> None:
     assert guidance["title"] == "CPU OpenCL runtime"
     assert guidance["labels"] == {"heading": guidance["title"], "ariaLabel": guidance["title"]}
     assert guidance["version"] == 1
-    assert set(guidance["reasons"]) == {"no_device", "smoke_test_failed", "smoke_test_timeout", "pocl_windows"}
+    assert set(guidance["reasons"]) == {"no_device", "smoke_test_failed", "smoke_test_timeout", "inventory_timeout", "pocl_windows"}
     assert guidance["reasons"]["no_device"] == "No CPU OpenCL device was found."
     assert all(text and "\n" not in text for text in guidance["reasons"].values())
     assert set(guidance["platforms"]) == {"windows", "linux"}
@@ -487,7 +487,10 @@ APPROVED_GUIDANCE = {'version': 1,
                        'installing it does not help.'}],
  'reasons': {'no_device': 'No CPU OpenCL device was found.',
              'smoke_test_failed': 'The CPU OpenCL runtime failed its test calculation.',
-             'smoke_test_timeout': "The CPU OpenCL runtime's test calculation timed out.",
+             'smoke_test_timeout': "The CPU OpenCL runtime's test calculation timed out. WG will check again; "
+                                   'restarting WG also retries.',
+             'inventory_timeout': 'Checking for a CPU OpenCL runtime took too long, so WG is using its slower '
+                                  'engine for now. WG will check again; restarting WG also retries.',
              'pocl_windows': 'PoCL on Windows cannot run BEMPP calculations.'},
  'platforms': {'windows': {'summary': "On computers without a supported graphics-card solver, WG's "
                                       'BEMPP solver runs on the CPU. Installing a CPU OpenCL '
