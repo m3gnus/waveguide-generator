@@ -27,6 +27,7 @@ from server.jobs.runtime import (
     RESTART_RECOVERY_MESSAGE,
     _apply_bempp_wall_default,
     _bempp_wall_adjustment_message,
+    _replay_request,
     merge_provisional_results,
     resolve_submission,
 )
@@ -47,6 +48,28 @@ def _request(*, delay_ms: int = 2, count: int = 5) -> SolveRequest:
             "options": {"engine": "dryrun", "stage_delay_ms": delay_ms},
         }
     )
+
+
+def test_replay_refuses_a_snapshot_without_a_design_key() -> None:
+    with pytest.raises(
+        JobConflictError, match="This run has no stored design and cannot be retried"
+    ):
+        _replay_request(
+            {"config_json": {}, "script_snapshot": {"formula": "OSSE", "L": 120, "a": 45}}
+        )
+
+
+def test_replay_preserves_a_design_from_a_versioned_snapshot() -> None:
+    design = _request().design.model_dump(mode="json")
+    snapshot = {"version": 1, "design": design}
+
+    request = _replay_request(
+        {"config_json": {}, "script_snapshot": snapshot, "label": "Stored design"}
+    )
+
+    assert request.design.model_dump(mode="json") == design
+    assert request.design_snapshot.model_dump(mode="json") == snapshot
+    assert request.label == "Stored design"
 
 
 def test_result_records_choice_engine_and_actual_formulation_per_channel() -> None:

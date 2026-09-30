@@ -519,7 +519,11 @@ def _replay_request(row: Mapping[str, Any]) -> SolveRequest:
         return SolveRequest.model_validate(config).model_copy(deep=True)
 
     resolution = resolve_job_design(row.get("script_snapshot"))
-    if not resolution.reopenable or resolution.snapshot is None:
+    if (
+        not resolution.reopenable
+        or resolution.snapshot is None
+        or "design" not in resolution.snapshot
+    ):
         raise JobConflictError(
             resolution.reason or "This run has no stored design and cannot be retried"
         )

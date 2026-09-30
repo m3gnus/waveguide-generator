@@ -15,6 +15,11 @@ Status: maintained summary of deliberate compatibility and divergence. The origi
 - Original run databases and artifacts are not imported: the v1 run migration was
   removed. Design files (`.cfg`, `.txt`, `.mwg`) are the supported way to carry a
   design across.
+- Existing data directories may still contain `backups/pre-v1-migration-*` folders
+  and a `v1_migrations` table in `simulations.db`. These are inert leftovers of the
+  removed v1 migration; the app no longer uses them. They may be deleted by hand
+  if you no longer need the migration backups or records. No automatic cleanup
+  removes them.
 - Result phase, impedance, directivity, missing-value, and partial-success conventions
   have explicit current contracts and regression fixtures.
 

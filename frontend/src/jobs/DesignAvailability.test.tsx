@@ -21,7 +21,7 @@ const UNREADABLE: JobDesignFields = {
     reopenable: false,
     source: 'none',
     reason_code: 'unreadable_design',
-    reason: "This job's stored design is not in a format this version can read back. Re-enter its profiles to run it again.",
+    reason: "This job's stored design is not in a format this version can read back. It cannot be reopened or rerun.",
     note: null,
   },
 };
@@ -32,7 +32,7 @@ const NO_DESIGN: JobDesignFields = {
     reopenable: false,
     source: 'none',
     reason_code: 'no_stored_design',
-    reason: 'No design was stored with this job.',
+    reason: 'This job has no design snapshot, because no design was stored with it. There is nothing to reopen or rerun.',
     note: null,
   },
 };
@@ -78,7 +78,7 @@ describe('the design verdict a job card shows', () => {
 
   it.each([
     ['a design this version cannot read back', UNREADABLE, 'not in a format'],
-    ['a job that never stored a design', NO_DESIGN, 'No design was stored'],
+    ['a job that never stored a design', NO_DESIGN, 'no design was stored'],
   ])('refuses %s with the reason on the control itself', (_name, job, fragment) => {
     const onRerun = vi.fn();
     render(<RerunButton job={job} onRerun={onRerun}/>);
@@ -90,7 +90,7 @@ describe('the design verdict a job card shows', () => {
 
   it('states the cause in the card, not only in a tooltip', () => {
     render(<DesignAvailabilityNotice job={UNREADABLE}/>);
-    expect(notice()?.textContent).toContain('Re-enter its profiles');
+    expect(notice()?.textContent).toContain('It cannot be reopened or rerun.');
     expect(getComputedStyle(notice()!).fontSize).toBe('11px');
   });
 
