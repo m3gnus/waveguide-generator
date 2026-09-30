@@ -667,8 +667,10 @@ def test_fifty_signal_burst_offsets_from_start_to_release(install: Install, tmp_
     # first handler excludes OS delivery before shell startup, which no shell
     # script can handle. Offsets extend through staging, swaps and cleanup.
     started = tmp_path / 'started'
-    body = install.script.read_text().replace("trap 'INTERRUPTED=1' HUP INT TERM\n",
-                                           f"trap 'INTERRUPTED=1' HUP INT TERM\n: > {str(started)!r}\n", 1)
+    body = install.script.read_text()
+    trap_line = "trap 'INTERRUPTED=1' HUP INT TERM QUIT\n"
+    assert body.count(trap_line) == 1, 'readiness hook must follow the installed handler'
+    body = body.replace(trap_line, trap_line + f": > {str(started)!r}\n", 1)
     install.script.write_text(body)
     # Fail at the forward install so repeated successful runs cannot change
     # our baseline; this gives an observable restoration during later offsets.
@@ -835,7 +837,7 @@ def test_unwritable_parent_fails_before_attempting_lock(install: Install, existi
             pytest.skip('requires an account subject to directory write permissions')
         result = install.run()
         assert result.returncode == 1, result.stdout + result.stderr
-        assert 'not writable' in result.stdout + result.stderr
+        assert 'cannot be written' in result.stdout + result.stderr
     finally:
         install.target.parent.chmod(before['.'][1] & 0o777)
     assert snapshot(install.target.parent) == before
@@ -995,3 +997,368 @@ exec {real!r} "$@"
     assert result.returncode == 1, result.stdout + result.stderr
     assert not survived.exists(), 'move child inherited ignored SIGPIPE'
     assert_truthful(install, result.returncode, result.stdout + result.stderr)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('forced_failure', (False, True))
+@pytest.mark.parametrize('batch', range(10))
+def test_dense_group_bursts_during_rollback(install: Install, tmp_path: Path, forced_failure: bool, batch: int) -> None:
+    # Reuse the reviewers' cleanup-burst and burst_capture models: fail the last
+    # forward row, synchronize at a real restore child, vary the burst offset.
+    # Each platform gets 100 recoverable + 100 genuinely failed restores. On
+    # Linux all six rows have been displaced, so every recovery line is checked.
+    ready, go = tmp_path / 'restore-ready', tmp_path / 'restore-go'
+    burst_done = tmp_path / 'burst-done'
+    body = install.script.read_text()
+    assert body.count('    release_lock\n') == 1
+    # Keep the parent alive through the whole burst, including status/recovery
+    # printing. Signalling an already-exited group is outside cleanup and can
+    # be denied by the macOS sandbox for reparented descendants.
+    install.script.write_text(body.replace('    release_lock\n',
+        f'    while [ ! -e {str(burst_done)!r} ]; do sleep 0.01; done\n    release_lock\n', 1))
+    original = {path: identity(path) for path in install.paths}
+    fail = install.paths[-1]
+    env = move_shim(tmp_path, install, f'''
+backup = '.previous.' in source or '.backup.' in source
+if destination == {str(fail)!r} and not backup:
+    sys.exit(1)
+if backup:
+    pathlib.Path({str(ready)!r}).touch()
+    while not pathlib.Path({str(go)!r}).exists(): time.sleep(.001)
+    if {forced_failure!r}: sys.exit(1)
+''')
+    prefix = 'Its backup remains at: ' if install.platform == 'linux' else 'The previous app is at: '
+    # Keep each pytest item below the suite's 300-second hang backstop while
+    # preserving 100 runs for each outcome/platform across ten batches.
+    for local_run in range(10):
+        run = batch * 10 + local_run
+        burst_done.unlink(missing_ok=True)
+        ready.unlink(missing_ok=True)
+        go.unlink(missing_ok=True)
+        proc = spawn(install, env)
+        try:
+            wait_marker(proc, ready)
+            assert not install.target.exists(), 'burst must land during rollback'
+            go.touch()
+            time.sleep((run % 10) * .0002)
+            for number in range(80):
+                try:
+                    os.killpg(proc.pid, (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT)[number % 4])
+                except ProcessLookupError:
+                    pytest.fail('installer exited before all cleanup burst signals arrived')
+                time.sleep(.0005 + (run % 3) * .0002)
+            burst_done.touch()
+            output, _ = proc.communicate(timeout=15)
+            assert proc.returncode == (3 if forced_failure else 1), output
+            if forced_failure:
+                recovery = [Path(line.removeprefix(prefix)) for line in output.splitlines() if line.startswith(prefix)]
+                assert len(recovery) == len(original), output
+                assert {identity(path) for path in recovery} == set(original.values()), output
+                assert output.count('ERROR: could not restore') == len(original), output
+                if install.platform == 'linux':
+                    assert 'ERROR: rollback was incomplete;' in output
+                # Restore these exact objects for the next run, after recording
+                # and checking status and all printed paths (reviewer ordering).
+                recovery_by_identity = {identity(p): p for p in recovery}
+                for path, old_id in original.items():
+                    backup = recovery_by_identity[old_id]
+                    assert not path.exists() and not path.is_symlink(), output
+                    backup.rename(path)
+            else:
+                assert {path: identity(path) for path in install.paths} == original, output
+                assert sum(line.startswith('Restored the previous installation') for line in output.splitlines()) == 1, output
+            assert install.version() == 'old'
+            assert_no_staging(install)
+        finally:
+            go.touch()
+            burst_done.touch()
+            stop(proc)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('tool', ('copy', 'xattr', 'codesign'))
+def test_term_ignoring_long_step_is_killed(install: Install, tmp_path: Path, tool: str) -> None:
+    if install.platform == 'linux' and tool != 'copy':
+        pytest.skip('macOS signature tools')
+    tool = ('cp' if install.platform == 'linux' else 'ditto') if tool == 'copy' else tool
+    marker = tmp_path / 'long-step'
+    directory = tmp_path / 'bin'
+    directory.mkdir()
+    wrapper = directory / tool
+    wrapper.write_text(f'''#!{sys.executable}
+import os, pathlib, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))
+time.sleep(60)
+''')
+    wrapper.chmod(0o755)
+    original = {path: identity(path) for path in install.paths}
+    proc = spawn(install, {**install.env, 'PATH': f'{directory}{os.pathsep}{install.env["PATH"]}'})
+    try:
+        wait_marker(proc, marker)
+        started = time.monotonic()
+        os.kill(proc.pid, signal.SIGTERM)
+        output, _ = proc.communicate(timeout=8)
+        assert 4.5 <= time.monotonic() - started < 8, output
+        assert proc.returncode == 1 and 'Installation interrupted.' in output, output
+        assert {path: identity(path) for path in install.paths} == original
+        assert install.version() == 'old'
+        assert_no_staging(install)
+    finally:
+        stop(proc)
+
+
+def test_fifo_lock_owner_refuses_promptly(install: Install) -> None:
+    # Reuse fifo_lock.py: real FIFO, no writer, no command shim.
+    install.lock.mkdir()
+    fifo = install.lock / 'pid'
+    os.mkfifo(fifo)
+    before = (identity(install.lock), identity(fifo), fifo.lstat().st_mode)
+    proc = spawn(install)
+    try:
+        output, _ = proc.communicate(timeout=3)
+        assert proc.returncode == 4, output
+        assert 'unreadable or missing' in output
+        assert (identity(install.lock), identity(fifo), fifo.lstat().st_mode) == before
+        assert install.version() == 'old'
+    finally:
+        stop(proc)
+
+
+@pytest.mark.slow
+def test_linux_preflight_pid_only_term_is_interruption(install: Install, tmp_path: Path) -> None:
+    if install.platform != 'linux':
+        pytest.skip('Linux Bash 3.2 library preflight')
+    marker = tmp_path / 'preflight-child'
+    exe = install.script.parent / 'waveguide-generator/runtime/bin/python3.13'
+    exe.parent.mkdir(exist_ok=True)
+    exe.write_text(f'''#!{sys.executable}
+import os, pathlib, time
+pathlib.Path({str(marker)!r}).write_text(str(os.getpid()))
+time.sleep(60)
+''')
+    exe.chmod(0o755)
+    original = {path: identity(path) for path in install.paths}
+    capture_parent = tmp_path / 'captures'
+    capture_parent.mkdir()
+    proc = subprocess.Popen(['/bin/bash', str(install.script), '--update'],
+                            env={**install.env, 'TMPDIR': str(capture_parent)},
+                            preexec_fn=linux.installer_process_signals, start_new_session=True,
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        wait_marker(proc, marker)
+        os.kill(proc.pid, signal.SIGTERM)
+        output, _ = proc.communicate(timeout=8)
+        assert proc.returncode == 1 and 'Installation interrupted.' in output, output
+        assert 'cannot load a library' not in output, output
+        assert {path: identity(path) for path in install.paths} == original
+        assert_no_staging(install)
+        assert not list(capture_parent.iterdir())
+    finally:
+        stop(proc)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('interrupt', (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT))
+def test_signal_just_after_commit_finishes_success(install: Install, tmp_path: Path, interrupt) -> None:
+    ready, go = tmp_path / 'committed', tmp_path / 'commit-go'
+    install.hook('committed', ready, go)
+    proc = spawn(install)
+    try:
+        wait_marker(proc, ready)
+        os.killpg(proc.pid, interrupt)
+        go.touch()
+        output, _ = proc.communicate(timeout=15)
+        assert proc.returncode == 0 and f'Installed: {install.target}' in output, output
+        assert install.version() == 'new'
+        assert_no_staging(install)
+        parents = {p.parent for p in install.paths}
+        assert not [p for parent in parents for p in parent.iterdir() if '.backup.' in p.name or '.previous.' in p.name]
+    finally:
+        go.touch()
+        stop(proc)
+
+
+@pytest.mark.slow
+def test_quit_during_swap_restores(install: Install, tmp_path: Path) -> None:
+    ready, go = tmp_path / 'displaced', tmp_path / 'quit-go'
+    original = {path: identity(path) for path in install.paths}
+    install.hook('displaced', ready, go)
+    proc = spawn(install)
+    try:
+        wait_marker(proc, ready)
+        os.killpg(proc.pid, signal.SIGQUIT)
+        go.touch()
+        output, _ = proc.communicate(timeout=15)
+        assert proc.returncode == 1 and 'Installation interrupted.' in output, output
+        assert {path: identity(path) for path in install.paths} == original
+        assert_no_staging(install)
+    finally:
+        go.touch()
+        stop(proc)
+
+
+@pytest.mark.parametrize('kind', ('file', 'symlink', 'directory', 'unexpected'))
+def test_printed_lock_command_removes_each_kind(install: Install, tmp_path: Path, kind: str) -> None:
+    # new_probes.py lock-command model, including quoted shell metacharacters.
+    parent = install.target.parent
+    quoted = parent.with_name(parent.name + "' $HOME `literal`")
+    parent.rename(quoted)
+    install.paths = [quoted / p.name if p.parent == parent else p for p in install.paths]
+    install.target = quoted / install.target.name
+    if install.platform == 'linux':
+        install.env['XDG_DATA_HOME'] = str(quoted)
+    if kind == 'file':
+        install.lock.write_text('foreign file')
+    elif kind == 'symlink':
+        install.lock.symlink_to(tmp_path / 'absent')
+    else:
+        install.lock.mkdir()
+        (install.lock / 'pid').write_text('2147483647\n')
+        if kind == 'unexpected':
+            (install.lock / 'precious').write_text('keep')
+    before = snapshot(quoted)
+    result = install.run()
+    output = result.stdout + result.stderr
+    assert result.returncode == 4 and snapshot(quoted) == before, output
+    assert 'look inside a lock with unexpected contents' in output
+    command = next(line.strip() for line in output.splitlines() if line.startswith('  rm '))
+    removal = subprocess.run(['/bin/sh', '-c', command], capture_output=True, text=True, timeout=3)
+    if kind == 'unexpected':
+        assert removal.returncode != 0 and (install.lock / 'precious').read_text() == 'keep'
+    else:
+        assert removal.returncode == 0, removal.stderr
+        assert not install.lock.exists() and not install.lock.is_symlink()
+
+
+@pytest.mark.slow
+def test_cancelled_watchdog_has_bounded_reap(install: Install, tmp_path: Path) -> None:
+    # A watchdog which receives cancellation but never finishes (the captured
+    # hang's wait boundary). No unbounded wait is allowed even in that case.
+    body = install.script.read_text()
+    key = "trap 'timer_cancelled=1' USR1"
+    assert body.count(key) == 1
+    stuck = tmp_path / 'stuck-watchdog'
+    install.script.write_text(body.replace(key, f"trap 'if [ ! -e \"{stuck}\" ]; then touch \"{stuck}\"; while :; do sleep 0.1; done; fi; timer_cancelled=1' USR1"))
+    original = {path: identity(path) for path in install.paths}
+    started = time.monotonic()
+    proc = spawn(install, fail_app_install(tmp_path, install))
+    try:
+        output, _ = proc.communicate(timeout=15)
+        assert time.monotonic() - started < 15
+        assert proc.returncode == 1, output
+        assert {path: identity(path) for path in install.paths} == original
+        assert 'Restored the previous installation' in output
+        assert_no_staging(install)
+    finally:
+        stop(proc)
+
+
+@pytest.mark.slow
+def test_signal_killed_restore_and_message_are_retried(install: Install, tmp_path: Path) -> None:
+    killed_move, killed_print = tmp_path / 'move-killed', tmp_path / 'print-killed'
+    original = identity(install.target)
+    env = fail_app_install(tmp_path, install, f'''
+if '.previous.' in source or '.backup.' in source:
+    marker = pathlib.Path({str(killed_move)!r})
+    count = int(marker.read_text()) if marker.exists() else 0
+    if count < 3:
+        marker.write_text(str(count + 1))
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTERM)
+''')
+    body = install.script.read_text()
+    body = body.replace('(command printf "$@")', f'''(
+            case "$1" in 'Restored the previous installation'*)
+                if [ ! -e '{killed_print}' ]; then
+                    touch '{killed_print}'
+                    exec '{sys.executable}' -c 'import os, signal; os.kill(os.getpid(), signal.SIGKILL)'
+                fi ;;
+            esac
+            command printf "$@"
+        )''', 1)
+    install.script.write_text(body)
+    result = install.run(env)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1 and identity(install.target) == original, output
+    assert killed_move.exists() and killed_print.exists()
+    assert sum(line.startswith('Restored the previous installation') for line in output.splitlines()) == 1, output
+    assert_no_staging(install)
+
+
+@pytest.mark.slow
+def test_cleanup_ignores_parent_signals_for_rest_of_run(install: Install, tmp_path: Path) -> None:
+    # Pause after cleanup has entered protection, then send every catchable
+    # signal to the parent. The initial (failure-triggered) flag must stay clear.
+    ready, go = tmp_path / 'cleanup-protected', tmp_path / 'protected-go'
+    body = install.script.read_text()
+    key = '    status="$EXIT_STATUS"\n' if install.platform == 'macos' else '    local status="$EXIT_STATUS" i\n'
+    body = body.replace(key, key + f'''    touch '{ready}'
+    while [ ! -e '{go}' ]; do sleep 0.01; done
+    printf 'Cleanup interruption flag: %s\\n' "$INTERRUPTED"
+''', 1)
+    install.script.write_text(body)
+    proc = spawn(install, fail_app_install(tmp_path, install))
+    try:
+        wait_marker(proc, ready)
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
+            os.kill(proc.pid, sig)
+            time.sleep(.01)
+        go.touch()
+        output, _ = proc.communicate(timeout=15)
+        assert proc.returncode == 1, output
+        assert 'Cleanup interruption flag: 0' in output, output
+        assert_truthful(install, proc.returncode, output)
+    finally:
+        go.touch()
+        stop(proc)
+
+
+def test_cleanup_documentation_describes_hard_kill_staging(install: Install) -> None:
+    from scripts.build_bundle import BundleBuilder
+
+    header = install.script.read_text().split('INTERRUPTED=0')[0]
+    readme = BundleBuilder.LINUX_TARBALL_INSTRUCTIONS if install.platform == 'linux' else BundleBuilder(Path('.')).dmg_readme()
+    pattern = '.waveguide-generator.install.*' if install.platform == 'linux' else '.new.'
+    for text in (header, readme):
+        assert pattern in text
+        assert 'safe to delete' in text
+        assert 'unexpected contents' in ' '.join(text.split())
+    assert 'a crash, power loss or a forced quit' in readme
+    assert 'closed Terminal window' not in readme
+
+
+@pytest.mark.slow
+def test_cleanup_mover_inherits_ignored_signals(install: Install, tmp_path: Path) -> None:
+    marker = tmp_path / 'restore-dispositions'
+    env = fail_app_install(tmp_path, install, f'''
+if '.previous.' in source or '.backup.' in source:
+    pathlib.Path({str(marker)!r}).write_text(str([int(signal.getsignal(sig)) for sig in
+        (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT)]))
+''')
+    result = install.run(env)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1, output
+    assert marker.read_text() == '[1, 1, 1, 1]', output
+    assert_truthful(install, result.returncode, output)
+
+
+@pytest.mark.parametrize('interrupt', (signal.SIGHUP, signal.SIGTERM))
+def test_linux_launched_application_keeps_hup_term_defaults(install: Install, tmp_path: Path, interrupt) -> None:
+    if install.platform != 'linux':
+        pytest.skip('Linux Bash 3.2 application launch')
+    marker = tmp_path / 'application-signals'
+    launcher = install.script.parent / 'waveguide-generator' / 'waveguide-generator'
+    launcher.write_text(f'''#!{sys.executable}
+import pathlib, signal
+pathlib.Path({str(marker)!r}).write_text(str(int(signal.getsignal({int(interrupt)}))))
+''')
+    launcher.chmod(0o755)
+    result = subprocess.run(['/bin/bash', str(install.script), '--skip-checks'], env=install.env,
+                            preexec_fn=linux.installer_process_signals, capture_output=True, text=True, timeout=20)
+    assert result.returncode == 0, result.stdout + result.stderr
+    deadline = time.monotonic() + 5
+    while not marker.exists():
+        assert time.monotonic() < deadline, 'installed application did not run'
+        time.sleep(.01)
+    assert marker.read_text() == str(int(signal.SIG_DFL)), 'application inherited cleanup signal ignores'

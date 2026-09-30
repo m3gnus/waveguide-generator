@@ -1,4 +1,5 @@
 #!/bin/bash
+# Bash, compatible with Bash 3.2; this is not a POSIX /bin/sh script.
 # Install Waveguide Generator from the release tarball. This file ships INSIDE
 # Waveguide.Generator-<version>-linux-x86_64.tar.gz, beside the application
 # folder; it is not the source installer, which is installers/linux/install.sh
@@ -29,7 +30,7 @@
 # Minimal lock: mkdir beside the resolved target, held through cleanup. Existing
 # locks are NEVER reclaimed automatically, even after SIGKILL or power loss.
 # After checking no installer is running, remove the exact lock path printed by
-# the refused run (its pid file, then rmdir; inspect unexpected contents first).
+# the refused run using its command; inspect unexpected contents first.
 # This is per-target exclusion; Linux integration paths are shared across prefixes.
 # The updater helper owns staleness policy (UPDATER-PLAN.md section 9).
 # Statuses verify recorded object identities, not external edits to their
@@ -38,13 +39,17 @@
 # can leave the target absent; a rerun does not discover/restore the backup.
 # Look beside the resolved target for .waveguide-generator.previous.*; desktop
 # integration backups remain beside their destinations as .waveguide-generator.*.backup.*.
+# A hard kill can also leave a half-copied .waveguide-generator.install.*
+# staging folder beside the target; after checking no installer is running,
+# that staging folder is safe to delete.
 # Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
 # A signal before the traps ends a run that has done nothing; the flag never
 # comes from the environment.
 INTERRUPTED=0
-# Install these before any other executable line. Never replace either trap.
-trap 'INTERRUPTED=1' HUP INT TERM
+# Install these before any other executable line. Signals only record intent
+# until cleanup or commit makes the rest of the run uninterruptible.
+trap 'INTERRUPTED=1' HUP INT TERM QUIT
 trap cleanup EXIT
 trap '' PIPE
 CLEANING=0
@@ -55,11 +60,22 @@ LOCK_PATH=""
 LOCK_ID=""
 LOCK_HELD=0
 MOVE_PID=""
+PREFLIGHT_CAPTURE=""
+PREFLIGHT_CAPTURE_ID=""
 STAGE_ROOT=""
 STAGE_ROOT_ID=""
 set -u
 # Isolate writes so a closed reader cannot contaminate identity substitutions.
-printf() ( command printf "$@" )
+printf() {
+    # Bash 3.2 can kill a fork made while a trapped signal is pending, before
+    # the child executes anything. Retry that case; never retry an I/O error.
+    for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
+        (command printf "$@")
+        print_status=$?
+        [ "$print_status" -gt 128 ] || return "$print_status"
+    done
+    return "$print_status"
+}
 
 usage() {
     cat <<'USAGE'
@@ -88,7 +104,7 @@ fail() {
 # Always called in a command substitution: ignore group signals at once, and
 # callers retry a lookup a signal still managed to kill (status above 128).
 object_id() {
-    trap '' HUP INT TERM
+    trap '' HUP INT TERM QUIT
     [ -e "$1" ] || [ -L "$1" ] || return 1
     if [ "$STAT_STYLE" = gnu ]; then
         protected_output stat -c '%d:%i' -- "$1" 2>/dev/null
@@ -127,7 +143,7 @@ same_device() {
 
 # Call only inside command substitutions: protect the capturing shell itself,
 # then exec, so group signals cannot discard a newly created object's name.
-protected_output() { trap '' HUP INT TERM; exec "$@"; }
+protected_output() { trap '' HUP INT TERM QUIT; exec "$@"; }
 
 # Poll while a child runs, then reap it after exit. This keeps the parent's
 # blocking wait out of the signal burst; short sleep interruptions are harmless.
@@ -140,10 +156,27 @@ wait_for_child() {
 # caught signal to the child, and report the interruption rather than the
 # step's own failure.
 run_interruptible() {
-    (trap - HUP INT TERM; exec "$@") &
+    step_capture=""
+    if [ "$1" = --capture-output ]; then step_capture="$2"; shift 2; fi
+    (
+        trap - HUP INT TERM QUIT
+        if [ -n "$step_capture" ]; then exec "$@" > "$step_capture" 2>&1; fi
+        exec "$@"
+    ) &
     step_pid=$!
     while kill -0 "$step_pid" 2>/dev/null; do
-        if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$step_pid" 2>/dev/null || :; fi
+        if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
+            kill -TERM "$step_pid" 2>/dev/null || :
+            # No deadline on an ordinary large copy: only cancellation gets
+            # a five-second grace period, then KILL and a reap.
+            cancel_ticks=0
+            while kill -0 "$step_pid" 2>/dev/null && [ "$cancel_ticks" -lt 50 ]; do
+                sleep 0.1
+                cancel_ticks=$((cancel_ticks + 1))
+            done
+            kill -KILL "$step_pid" 2>/dev/null || :
+            break
+        fi
         sleep 0.1
     done
     wait "$step_pid"
@@ -152,9 +185,21 @@ run_interruptible() {
     return "$step_status"
 }
 
+# A cancelled watchdog must never hold the lock indefinitely. Give it one
+# second to stop its timer, then KILL it and reap. Polls may end early on signals.
+reap_cancelled_watchdog() {
+    watchdog_ticks=0
+    while kill -0 "$1" 2>/dev/null && [ "$watchdog_ticks" -lt 100 ]; do
+        sleep 0.01
+        watchdog_ticks=$((watchdog_ticks + 1))
+    done
+    kill -KILL "$1" 2>/dev/null || :
+    wait_for_child "$1"
+}
+
 # Record and reap housekeeping before inspecting its effects.
 run_housekeeping() {
-    (trap '' HUP INT TERM; exec "$@") &
+    (trap '' HUP INT TERM QUIT; exec "$@") &
     housekeeping_pid=$!
     wait_for_child "$housekeeping_pid"
 }
@@ -177,7 +222,11 @@ release_lock() {
     LOCK_ID=""
 }
 lock_busy() {
-    owner=$(cat "$LOCK_PATH/pid" 2>/dev/null) || owner="unreadable or missing"
+    owner="unreadable or missing"
+    # Never open a FIFO/device/socket (or a symlink to one) for the diagnostic.
+    if [ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ]; then
+        owner=$(cat "$LOCK_PATH/pid" 2>/dev/null) || owner="unreadable or missing"
+    fi
     made=$(stat -c '%y' "$LOCK_PATH" 2>/dev/null || stat -f '%Sm' "$LOCK_PATH" 2>/dev/null) || made="unknown"
     # Single-quoted for the shell the user pastes it into.
     quoted=$(printf '%s' "$LOCK_PATH" | sed "s/'/'\\\\''/g")
@@ -185,8 +234,9 @@ lock_busy() {
     printf 'Its lock: %s\n' "$LOCK_PATH" >&2
     printf 'Made: %s, by process %s.\n' "$made" "$owner" >&2
     printf 'If an install was cut off (a crash or power loss) and no installer window is open,\n' >&2
-    printf 'remove the lock with this command, then run the installer again:\n' >&2
-    if [ -L "$LOCK_PATH" ]; then
+    printf 'look inside a lock with unexpected contents before removing it.\n' >&2
+    printf 'Remove the lock with this command, then run the installer again:\n' >&2
+    if [ -L "$LOCK_PATH" ] || [ ! -d "$LOCK_PATH" ]; then
         printf "  rm -f '%s'\n" "$quoted" >&2
     else
         printf "  rm -f '%s/pid' && rmdir '%s'\n" "$quoted" "$quoted" >&2
@@ -197,7 +247,7 @@ lock_busy() {
 
 # The parent must be writable before attempting the exclusion primitive.
 acquire_lock() {
-    [ -w "${LOCK_PATH%/*}" ] || fail "${LOCK_PATH%/*} is not writable by this account." "Nothing has been changed."
+    [ -w "${LOCK_PATH%/*}" ] || fail "${LOCK_PATH%/*} cannot be written." "Nothing has been changed."
     check_interrupted
     if ! run_housekeeping mkdir "$LOCK_PATH" 2>/dev/null; then
         if [ -e "$LOCK_PATH" ] || [ -L "$LOCK_PATH" ]; then lock_busy; fi
@@ -213,7 +263,7 @@ acquire_lock() {
 }
 
 check_interrupted() {
-    if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
+    if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ] && [ "$COMMITTED" -eq 0 ]; then
         EXIT_STATUS=1
         exit 1
     fi
@@ -283,13 +333,18 @@ remove_owned() {
     [ ! -e "$1" ] && [ ! -L "$1" ]
 }
 
-# One flag-only signal handler lasts for the entire parent lifetime.
+# Forward moves obey the flag; cleanup moves ignore catchable signals.
 # wait can return early on a signal; reap the move before reconciling objects.
 bounded_move() {
     same_device "$1" "$2" || return 1
     move_identity=$(object_id "$1") || return 1
     (
-        trap - HUP INT TERM PIPE
+        if [ "$CLEANING" -eq 1 ]; then
+            trap '' HUP INT TERM QUIT
+            trap - PIPE
+        else
+            trap - HUP INT TERM QUIT PIPE
+        fi
         if [ ! -d "$1" ] || [ -L "$1" ]; then
             # link(2) refuses an existing file atomically, preserving the
             # recorded identity. -P links a symlink itself, not its referent.
@@ -300,17 +355,16 @@ bounded_move() {
     MOVE_PID=$!
     if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$MOVE_PID" 2>/dev/null || :; fi
     (
-        # A process-group signal must not cancel the deadline. It can shorten
-        # it: an interrupted timer still kills the move. USR1 is our private
-        # cancellation, sent only after the move has been reaped.
-        trap ':' HUP INT TERM
+        # Ignore group signals in the watchdog AND its timer. USR1 is our
+        # private cancellation, sent only after the move has been reaped.
+        trap '' HUP INT TERM QUIT
         timer_cancelled=0
         trap 'timer_cancelled=1' USR1
         sleep 5 &
         timer_pid=$!
         while [ "$timer_cancelled" -eq 0 ] && kill -0 "$timer_pid" 2>/dev/null; do sleep 0.01; done
         if [ "$timer_cancelled" -eq 0 ]; then kill -KILL "$MOVE_PID" 2>/dev/null || :; fi
-        kill "$timer_pid" 2>/dev/null || :
+        kill -KILL "$timer_pid" 2>/dev/null || :
         wait_for_child "$timer_pid" 2>/dev/null || :
     ) &
     watchdog_pid=$!
@@ -324,7 +378,7 @@ bounded_move() {
     wait "$MOVE_PID"
     move_status=$?
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
-    wait_for_child "$watchdog_pid" 2>/dev/null || :
+    reap_cancelled_watchdog "$watchdog_pid" 2>/dev/null || :
     # A file transfer has two temporary aliases; unlink only after verifying
     # the destination. The identity stays live at the destination after unlink.
     if same_object "$2" "$move_identity" && same_object "$1" "$move_identity"; then
@@ -338,6 +392,18 @@ bounded_move() {
 
 # Locate only the recorded object, never an unrelated occupant. BSD mv can nest
 # at either end; these are the only locations a single rename can produce.
+# Retry only a move killed by a catchable signal, including the Bash 3.2
+# pending-signal fork race. Ordinary failures/timeouts retain the two attempts
+# in restore_row, so a blocked restore still has a bounded deadline.
+recovery_move() {
+    for recovery_attempt in 1 2 3 4 5 6 7 8 9 10; do
+        bounded_move "$@"
+        recovery_status=$?
+        case "$recovery_status" in 129|130|131|143) ;; *) return "$recovery_status" ;; esac
+    done
+    return "$recovery_status"
+}
+
 locate_old() {
     local candidate
     OLD_PATH=""
@@ -376,7 +442,7 @@ restore_row() {
         else
             if [ -e "${STAGED[i]}" ] || [ -L "${STAGED[i]}" ]; then return 1; fi
             for attempt in 1 2; do
-                bounded_move "$NEW_PATH" "${STAGED[i]}" || :
+                recovery_move "$NEW_PATH" "${STAGED[i]}" || :
                 verify_move "$NEW_PATH" "${STAGED[i]}" "${NEW_ID[i]}" && break
                 locate_new || return 1
             done
@@ -397,7 +463,7 @@ restore_row() {
     [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ] || return 1
     STATE[i]=restore_intent
     for attempt in 1 2; do
-        bounded_move "$OLD_PATH" "${LIVE[i]}" || :
+        recovery_move "$OLD_PATH" "${LIVE[i]}" || :
         if verify_move "$OLD_PATH" "${LIVE[i]}" "${OLD_ID[i]}"; then
             STATE[i]=restored
             return 0
@@ -412,7 +478,13 @@ restore_row() {
 cleanup() {
     [ "$CLEANING" -eq 0 ] || return 0
     CLEANING=1
+    # The interruption flag is already recorded. Ignore in the parent before
+    # forking: Bash 3.2 may resend a pending trapped signal in a new child.
+    trap '' HUP INT TERM QUIT
     local status="$EXIT_STATUS" i
+    if [ "$INTERRUPTED" -ne 0 ] && [ "$COMMITTED" -eq 0 ]; then
+        printf 'Installation interrupted.\n' >&2
+    fi
     if [ "$SWAP_READY" -eq 1 ]; then
         RESTORE_FAILED=0
         HAD_PREVIOUS=0
@@ -461,6 +533,7 @@ cleanup() {
             fi
         done
     fi
+    remove_owned "$PREFLIGHT_CAPTURE" "$PREFLIGHT_CAPTURE_ID"
     release_lock
     exit "$status"
 }
@@ -595,10 +668,12 @@ SOURCE="$(canonical_path "$SOURCE")" || fail "Could not resolve the extracted ap
 # and the packages that provide them differ on every distribution.
 if [ "$PREFLIGHT" -eq 1 ]; then
     printf 'Checking system libraries ...\n'
-    if ! PREFLIGHT_ERROR="$("$SOURCE/runtime/bin/python3.13" -c 'import gmsh' 2>&1)"; then
+    PREFLIGHT_CAPTURE=$(protected_output mktemp -d "${TMPDIR:-/tmp}/waveguide-preflight.XXXXXX") || fail "Could not create library-check capture."
+    PREFLIGHT_CAPTURE_ID=$(object_id "$PREFLIGHT_CAPTURE") || fail "Could not identify library-check capture."
+    if ! run_interruptible --capture-output "$PREFLIGHT_CAPTURE/output" "$SOURCE/runtime/bin/python3.13" -c 'import gmsh'; then
         fail "Waveguide Generator's mesher cannot load a library this system does not have:" \
              "" \
-             "$(printf '%s' "$PREFLIGHT_ERROR" | tail -n 1)" \
+             "$(tail -n 1 "$PREFLIGHT_CAPTURE/output")" \
              "" \
              "These are ordinary OpenGL and X11 desktop libraries. Pick the line" \
              "for your distribution; each installs every one the mesher needs." \
@@ -625,6 +700,9 @@ if [ "$PREFLIGHT" -eq 1 ]; then
              "Then run this installer again. Nothing has been installed yet." \
              "Use --skip-checks to install anyway."
     fi
+    remove_owned "$PREFLIGHT_CAPTURE" "$PREFLIGHT_CAPTURE_ID"
+    PREFLIGHT_CAPTURE=""
+    PREFLIGHT_CAPTURE_ID=""
 fi
 
 TARGET="$PREFIX/$BUNDLE_DIRECTORY"
@@ -897,7 +975,8 @@ for ((i=0; i<${#LIVE[@]}; i++)); do
 done
 check_interrupted
 COMMITTED=1
-check_interrupted
+# Once committed, finish the success message and removal of this run's backups.
+trap '' HUP INT TERM QUIT
 for ((i=0; i<${#BACKUP[@]}; i++)); do
     remove_owned "${BACKUP[i]}" "${OLD_ID[i]}"
     OLD_ID[i]=""
@@ -931,7 +1010,8 @@ printf '  %s/%s          (add --data to remove your designs and job history too)
 
 if [ "$LAUNCH" -eq 1 ]; then
     printf 'Starting Waveguide Generator ...\n'
-    (trap - PIPE; exec "$TARGET/$LAUNCHER_NAME") >/dev/null 2>&1 &
+    # The application outlives the installer; give it ordinary signal handling.
+    (trap - HUP INT TERM QUIT PIPE; exec "$TARGET/$LAUNCHER_NAME") >/dev/null 2>&1 &
 fi
 check_interrupted
 exit 0

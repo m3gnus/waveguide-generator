@@ -2128,7 +2128,7 @@ package it needs; nothing is installed system-wide and nothing asks for root.
 
 What it does not bring is the system OpenGL and X11 libraries the mesher loads
 when it starts. Any desktop system already has them; a server install may not.
-install.sh checks before it copies anything, and prints the exact command if
+install.sh uses Bash (compatible with Bash 3.2). It checks before it copies anything, and prints the exact command if
 something is missing. On Ubuntu 24.04 that command is:
 
     sudo apt install libglu1-mesa libgl1 libgomp1 libfontconfig1 \
@@ -2163,10 +2163,12 @@ replacing files inside its own installation, which it can only do where it
 does not need root -- a system-wide copy under /opt or /usr would break every
 later in-app update.
 
-If an install was cut off (a crash, power loss or a killed terminal), the next
+If an install was cut off (a crash, power loss or a forced quit), the next
 run may say another installation seems to be running and change nothing. If no
-installer is open, run the one command it prints to remove the lock, then run
-./install.sh again.
+installer is open, look inside a lock with unexpected contents before removing
+it, then run the command it prints and run ./install.sh again. A hard kill can
+also leave a half-copied .waveguide-generator.install.* staging folder beside
+the application; once no installer is running, that folder is safe to delete.
 
 
 UNINSTALL
@@ -2408,6 +2410,8 @@ cache under %LOCALAPPDATA%\WaveguideGenerator, which is safe to delete too.
         return """Waveguide Generator - first launch on macOS
 ===========================================
 
+The installer uses POSIX /bin/sh (Bash 3.2 on macOS).
+
 macOS will refuse to open this app the first time, with:
 
     "Waveguide Generator" Not Opened
@@ -2458,10 +2462,13 @@ Use whichever you prefer. Both were confirmed working on macOS 26.5.2 in
 September 2026: each was listed under Security and each opened after
 "Open Anyway".
 
-If an install was cut off (a crash, power loss or a closed Terminal window),
+If an install was cut off (a crash, power loss or a forced quit),
 the next run may say another installation seems to be running and change
-nothing. If no installer window is open, paste the one command it prints to
-remove the lock, then run the installer again.
+nothing. If no installer window is open, look inside a lock with unexpected
+contents before removing it, then paste the command it prints and run the
+installer again. A hard kill can also leave a half-copied
+.Waveguide Generator.app.new.<pid> beside the app; once no installer is running,
+that staging copy is safe to delete.
 
 IF PRIVACY & SECURITY LISTS NOTHING AT ALL
 ------------------------------------------

@@ -15,12 +15,13 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST = 'scripts/tests/test_installer_review_followups.py'
-SCRIPTS = {'linux': 'installers/linux/bundle-install.sh', 'macos': 'installers/macos/dmg-install.command'}
+SCRIPTS = {'linux': 'installers/linux/bundle-install.sh', 'macos': 'installers/macos/dmg-install.command',
+           'bundle': 'scripts/build_bundle.py'}
 
 # name, selected behavioral test, exact source change
 MUTATIONS = [
     ('handler_exits', 'signal_at_cleanup_entry and failure',
-     "trap 'INTERRUPTED=1' HUP INT TERM", "trap 'exit 1' HUP INT TERM"),
+     "trap 'INTERRUPTED=1' HUP INT TERM QUIT", "trap 'exit 1' HUP INT TERM QUIT"),
     ('cleanup_not_idempotent', 'cleanup_is_safe_when_reentered',
      '[ "$CLEANING" -eq 0 ] || return 0', '[ "$CLEANING" -eq 0 ] || exit 1'),
     ('refusal_modifies_lock', 'unverifiable_lock and unexpected_contents',
@@ -33,13 +34,48 @@ MUTATIONS = [
      'same_object "${BACKUP[i]}" "${RESERVATION_ID[i]}" && rmdir "${BACKUP[i]}" || fail "The rollback reservation is occupied or replaced: ${BACKUP[i]}"',
      'rm -rf -- "${BACKUP[i]}"'),
     ('move_sigpipe_ignored', 'move_children_have_default_sigpipe',
-     'trap - HUP INT TERM PIPE', 'trap - HUP INT TERM'),
+     'else\n            trap - HUP INT TERM QUIT PIPE', 'else\n            trap - HUP INT TERM QUIT'),
     ('application_sigpipe_ignored', 'launched_application_has_default_sigpipe',
-     '(trap - PIPE; exec "$TARGET/$LAUNCHER_NAME")', '(exec "$TARGET/$LAUNCHER_NAME")'),
+     '(trap - HUP INT TERM QUIT PIPE; exec "$TARGET/$LAUNCHER_NAME")', '(trap - HUP INT TERM QUIT; exec "$TARGET/$LAUNCHER_NAME")'),
+    ('application_inherits_cleanup_signals', 'launched_application_keeps_hup_term',
+     '(trap - HUP INT TERM QUIT PIPE; exec "$TARGET/$LAUNCHER_NAME")', '(trap - PIPE; exec "$TARGET/$LAUNCHER_NAME")'),
     ('missing_prefix_created', 'missing_update_prefix_creates_nothing',
      '[ "$UPDATE" -eq 1 ] && [ ! -d "$TARGET_PARENT" ]', '[ "$UPDATE" -eq 2 ] && [ ! -d "$TARGET_PARENT" ]'),
     ('later_forward_move_unbounded', 'later_linux_forward_deadlines and 5 and install and False',
      'sleep 5 &', 'sleep 60 &'),
+    ('cleanup_parent_interruptible', 'cleanup_ignores_parent_signals',
+     "    # forking: Bash 3.2 may resend a pending trapped signal in a new child.\n    trap '' HUP INT TERM QUIT",
+     "    # forking: Bash 3.2 may resend a pending trapped signal in a new child.\n    trap 'INTERRUPTED=1' HUP INT TERM QUIT"),
+    ('cleanup_mover_interruptible', 'cleanup_mover_inherits_ignored_signals',
+     "if [ \"$CLEANING\" -eq 1 ]; then\n            trap '' HUP INT TERM QUIT",
+     "if [ \"$CLEANING\" -eq 1 ]; then\n            trap - HUP INT TERM QUIT"),
+    ('cancelled_watchdog_unbounded', 'cancelled_watchdog_has_bounded_reap',
+     'reap_cancelled_watchdog "$watchdog_pid"', 'wait_for_child "$watchdog_pid"'),
+    ('long_step_no_kill', 'term_ignoring_long_step',
+     'kill -KILL "$step_pid" 2>/dev/null || :', ': # escalation disabled'),
+    ('fifo_owner_opened', 'fifo_lock_owner_refuses',
+     '[ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ]', ':'),
+    ('preflight_foreground', 'preflight_pid_only_term',
+     'run_interruptible --capture-output "$PREFLIGHT_CAPTURE/output" "$SOURCE/runtime/bin/python3.13" -c \'import gmsh\'',
+     '"$SOURCE/runtime/bin/python3.13" -c \'import gmsh\' > "$PREFLIGHT_CAPTURE/output" 2>&1'),
+    ('postcommit_early_exit', 'signal_just_after_commit',
+     "# Once committed, finish the success message and removal of this run's backups.\ntrap '' HUP INT TERM QUIT",
+     "# Once committed, finish the success message and removal of this run's backups.\nif [ \"$INTERRUPTED\" -ne 0 ]; then exit 0; fi"),
+    ('quit_untrapped', 'quit_during_swap',
+     "trap 'INTERRUPTED=1' HUP INT TERM QUIT", "trap 'INTERRUPTED=1' HUP INT TERM"),
+    ('file_lock_wrong_command', 'printed_lock_command and file',
+     '[ -L "$LOCK_PATH" ] || [ ! -d "$LOCK_PATH" ]', '[ -L "$LOCK_PATH" ]'),
+    ('restore_signal_not_retried', 'signal_killed_restore_and_message',
+     'case "$recovery_status" in 129|130|131|143) ;; *) return "$recovery_status" ;; esac',
+     'return "$recovery_status"'),
+    ('message_signal_not_retried', 'signal_killed_restore_and_message',
+     '[ "$print_status" -gt 128 ] || return "$print_status"', 'return "$print_status"'),
+    ('write_failure_blames_account', 'unwritable_parent',
+     '${LOCK_PATH%/*} cannot be written.', '${LOCK_PATH%/*} is not writable by this account.'),
+    ('staging_not_documented', 'cleanup_documentation',
+     'safe to delete', 'left behind'),
+    ('terminal_close_documented_as_crash', 'cleanup_documentation',
+     'a crash, power loss or a forced quit', 'a crash, power loss or a closed Terminal window'),
 ]
 
 
@@ -58,10 +94,14 @@ def main() -> int:
             for platform, filename in SCRIPTS.items():
                 body = (ROOT / filename).read_text()
                 if mode == 'mutant' and old in body:
-                    assert body.count(old) == 1, (name, filename)
-                    body = body.replace(old, new, 1)
+                    assert body.count(old) == 1 or platform == 'bundle', (name, filename)
+                    body = body.replace(old, new)
                     changed += 1
-                (directory / f'{platform}.sh').write_text(body)
+                suffix = 'py' if platform == 'bundle' else 'sh'
+                (directory / f'{platform}.{suffix}').write_text(body)
+                if platform != 'bundle':
+                    shell = '/bin/sh' if platform == 'macos' else '/bin/bash'
+                    subprocess.run([shell, '-n', str(directory / f'{platform}.sh')], check=True, capture_output=True)
             if mode == 'mutant':
                 assert changed, name
             # pytest_configure imports the exact fixture modules and redirects
@@ -75,6 +115,8 @@ def pytest_configure(config):
     root = Path(os.environ['INSTALLER_MUTANT_ROOT'])
     mac.SCRIPT = root / 'macos.sh'
     linux.SCRIPT = root / 'linux.sh'
+    from scripts import build_bundle
+    exec(compile((root / 'bundle.py').read_text(), str(root / 'bundle.py'), 'exec'), build_bundle.__dict__)
 ''')
             env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'INSTALLER_MUTANT_ROOT': str(directory.resolve()),
                    'PYTHONPATH': str(directory.resolve()) + os.pathsep + str(ROOT)}

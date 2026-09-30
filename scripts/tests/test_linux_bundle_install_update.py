@@ -469,19 +469,21 @@ def signal_paused_process(command: list[str], env: dict[str, str], paused: Path,
     return proc.returncode, output
 
 
-def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None:
+def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str, cleanup_marker: Path) -> None:
     """Inspect actual argv/fd 0 while the installer itself receives a pipe."""
     bin_dir.mkdir()
     real_mv = shutil.which("mv")
     wrapper = bin_dir / "mv"
     wrapper.write_text(
         f'#!{sys.executable}\n'
-        'import os, signal, stat, subprocess, sys\n'
+        'import os, pathlib, signal, stat, subprocess, sys\n'
         'args = sys.argv[1:]\n'
         'fd = os.fstat(0)\n'
         'safe = "-n" in args and stat.S_ISCHR(fd.st_mode) and fd.st_rdev == os.stat("/dev/null").st_rdev\n'
-        'safe = safe and all(signal.getsignal(sig) != signal.SIG_IGN for sig in (signal.SIGHUP, signal.SIGTERM))\n'
-        f'with open({str(log)!r}, "a") as stream: stream.write(str(safe) + " " + repr(args) + "\\n")\n'
+        f'cleanup = pathlib.Path({str(cleanup_marker)!r}).exists()\n'
+        'signals = (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT) if cleanup else (signal.SIGHUP, signal.SIGTERM)\n'
+        'safe = safe and all((signal.getsignal(sig) == signal.SIG_IGN) == cleanup for sig in signals)\n'
+        f'with open({str(log)!r}, "a") as stream: stream.write(str(safe) + " " + repr(args) + (" cleanup" if cleanup else " forward") + "\\n")\n'
         'if not safe: sys.exit(91)\n'
         'source = [arg for arg in args if not arg.startswith("-")][-2]\n'
         f'if {fail_source!r} in source: sys.exit(1)\n'
@@ -600,7 +602,12 @@ def test_every_move_is_no_clobber_and_has_null_stdin(tmp_path: Path, env: dict[s
     new = make_tarball(tmp_path / "v2", "two")
     log = tmp_path / "moves"
     bin_dir = tmp_path / "bin"
-    noninteractive_move_shim(bin_dir, log, ".link.new.")
+    cleanup_marker = tmp_path / "cleanup-started"
+    script = new / "install.sh"
+    body = script.read_text()
+    assert body.count('    CLEANING=1\n') == 1
+    script.write_text(body.replace('    CLEANING=1\n', f'    CLEANING=1\n    : > {str(cleanup_marker)!r}\n', 1))
+    noninteractive_move_shim(bin_dir, log, ".link.new.", cleanup_marker)
     result = subprocess.run(
         ["/bin/bash", str(new / "install.sh"), "--skip-checks", "--update"], preexec_fn=installer_process_signals,
         env={**env, "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}"},
@@ -609,6 +616,7 @@ def test_every_move_is_no_clobber_and_has_null_stdin(tmp_path: Path, env: dict[s
     assert result.returncode == 1, result.stdout + result.stderr
     calls = log.read_text().splitlines()
     assert len(calls) >= 20 and all(s.startswith("True ") for s in calls), calls
+    assert any(s.endswith(" forward") for s in calls) and any(s.endswith(" cleanup") for s in calls), calls
     assert (installed_dir(env) / "version.txt").read_text() == "one"
 
 
