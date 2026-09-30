@@ -19,8 +19,16 @@
     ]
   },
   "dimensions_sampling": {
-    "method": "resolved-control-geometry",
-    "lod_independent": true
+    "method": "preview-reference-normal-offset",
+    "lod_independent": true,
+    "tolerance_mm": 1.0,
+    "best_effort": true,
+    "wall": "unrepaired normal offset; no solve/CAD exterior-envelope repair",
+    "reduced_domain_reference": {
+      "angular_segments_min": 128,
+      "angular_segments_max": 512,
+      "length_segments": 48
+    }
   },
   "coordinate_frame": "mesher-xyz",
   "formula": "OSSE",
@@ -33,9 +41,9 @@
     "source_cap_radial": 8
   },
   "timings_ms": {
-    "canonical_sampling": 8.916249964386225,
-    "surface_assembly_and_fidelity": 23.2504999730736,
-    "total": 62.35949997790158
+    "canonical_sampling": 7.994750048965216,
+    "surface_assembly_and_fidelity": 22.257291013374925,
+    "total": 44.011584017425776
   },
   "canonical_reference": {
     "axial_rows": 49,
