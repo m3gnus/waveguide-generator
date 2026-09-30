@@ -444,12 +444,24 @@ reads it directly.
 The parametric Geometry panel displays accepted preview metadata directly:
 `previewMetadata.dimensions_mm`: `mouth_opening` is `[W, H]`,
 `horn_overall` and optional `enclosure_overall` are `[W, H, D]` in millimetres.
-Canonical solve/CAD geometry supplies these values, displayed to one decimal place.
+The card is labelled "Design size": canonical `resolve_geometry` design controls
+supply these values, displayed to one decimal place. The sampling method is
+`resolved-design-geometry`; these are not measured CAD or STEP bounds. Exported
+surfaces on morphed mouths can differ by the mesher's documented fitting tolerance.
+Optional `dimensions_requested_mm.mouth_opening` supplies the requested morph
+target; the card shows requested and effective sizes together when they differ.
 The card displays no revision text; revision and sequence checks still reject old responses.
-New/Open clears the frame and readouts until the new document's preview arrives.
+New/Open retains the previous viewport frame as a fallback while hiding its
+readouts, even when live updates are paused. An accepted replacement carries a
+client document identity so the viewport and card can replace a high revision
+from the old document with a lower revision from the new one. Matching error-only
+responses end the document wait with unavailable sizes. Older meshers retain
+the established shared error/badge behavior while the card stays hidden.
 A coarse `dimensions_status: "pending"` frame shows the same document's previous
 canonical values as "Updating dimensions", or "updating" when no values exist.
-`"current"` shows the values plainly; `"unavailable"` clears values and shows unavailable.
+The card uses the viewport's lane-selection policy, so a late coarse frame
+cannot downgrade settled sizes for the same revision. `"current"` shows the
+values plainly; `"unavailable"` clears values and shows unavailable.
 Invalid drafts and failed edits label retained values "Last valid preview".
 Older meshers without the additive metadata hide the card.
 Completed run summaries continue using that run's `mesh_stats.dimensions_m`.

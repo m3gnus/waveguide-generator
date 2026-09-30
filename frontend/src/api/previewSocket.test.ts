@@ -201,7 +201,8 @@ describe('preview socket state machine', () => {
     // The viewport keeps the previous document's frame until the new one
     // arrives; only its readouts are dropped.
     expect(manager.getSnapshot().frame).toBe(frameBeforeReset);
-    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(true);
+    // An older mesher has no card state to reset; keep shared notifications unchanged.
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
     expect(manager.getSnapshot().lastCanonicalDimensions ?? null).toBeNull();
 
     for (let i = 0; i < 9; i += 1) useDesignStore.getState().updateField('a', 40 + i);
@@ -474,7 +475,7 @@ it('drops the readouts but keeps the frame when New replaces a document at the s
   manager.stop(); resetDesignStore();
 });
 
-it('resets document-scoped error floors on New and rejects late previous-document failures', () => {
+it('retains old-mesher error badges on New but accepts only new-document outcomes', () => {
   resetDesignStore(); useDesignStore.setState({ designRevision: 58 });
   const socket = new MockSocket();
   const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
@@ -483,9 +484,9 @@ it('resets document-scoped error floors on New and rejects late previous-documen
   socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 1, designRevision: 59, code: 'INVALID', message: 'Previous document failure' }));
   expect(manager.getSnapshot().errorRevision).toBe(59);
   resetDesignStore();
-  expect(manager.getSnapshot()).toMatchObject({ error: null, errorFields: null, errorRevision: null, lastValidRevision: null, stale: true });
+  expect(manager.getSnapshot()).toMatchObject({ error: 'Previous document failure', errorRevision: 59, lastValidRevision: 58, stale: true });
   socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 1, designRevision: 59, code: 'INVALID', message: 'Late old failure' }));
-  expect(manager.getSnapshot().error).toBeNull();
+  expect(manager.getSnapshot().error).toBe('Previous document failure');
   socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2, designRevision: 1, code: 'INVALID', message: 'New document failure' }));
   expect(manager.getSnapshot()).toMatchObject({ errorRevision: 1, error: 'New document failure' });
   socket.message(fixtureWithHeader({ seq: 2, designRevision: 1 }));
@@ -525,11 +526,12 @@ describe('rendered document dimension transitions', () => {
     const revision = useDesignStore.getState().designRevision;
     act(() => socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2,
       designRevision: revision, code: 'INVALID', message: 'New document failed' })));
-    expect(host.querySelector('[aria-label="Design dimensions"]')).toBeNull();
+    expect(host.textContent).toContain('Dimensions unavailable');
+    expect(host.textContent).not.toContain('400.0');
     // Late previous-document frames cannot resurrect the hidden readouts.
     act(() => socket.message(fixtureWithHeader({ seq: 1, designRevision: firstRevision,
       previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: [400, 200] } } })));
-    expect(host.querySelector('[aria-label="Design dimensions"]')).toBeNull();
+    expect(host.textContent).toContain('Dimensions unavailable');
     act(() => socket.message(fixtureWithHeader({ seq: 3, designRevision: revision,
       previewMetadata: { dimensions_status: 'pending', dimensions_mm: null } })));
     expect(host.textContent).toContain('Updating dimensions');
@@ -541,11 +543,13 @@ describe('rendered document dimension transitions', () => {
     expect(host.textContent).toContain('Current preview');
     expect(host.textContent).not.toContain('400.0');
     // A coarse frame after another edit retains only this document's values.
-    act(() => socket.message(fixtureWithHeader({ seq: 5, designRevision: revision,
+    act(() => useDesignStore.getState().updateField('a', 46));
+    const editedRevision = useDesignStore.getState().designRevision;
+    act(() => socket.message(fixtureWithHeader({ seq: 5, designRevision: editedRevision, lod: 'coarse',
       previewMetadata: { dimensions_status: 'pending', dimensions_mm: null } })));
     expect(host.textContent).toContain('Updating dimensions');
     expect(host.textContent).toContain(mouth.map((value) => value.toFixed(1)).join(' × ') + ' mm');
-    act(() => socket.message(fixtureWithHeader({ seq: 6, designRevision: revision,
+    act(() => socket.message(fixtureWithHeader({ seq: 6, designRevision: editedRevision, lod: 'fine',
       previewMetadata: { dimensions_status: 'unavailable', dimensions_mm: null, dimensions_error: 'Cannot resolve' } })));
     expect(host.textContent).toContain('unavailable');
     expect(host.textContent).not.toContain(mouth[0].toFixed(1));

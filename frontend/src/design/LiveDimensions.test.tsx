@@ -89,6 +89,17 @@ describe('live design dimensions', () => {
     render(); const free = structuredClone(metadata); delete free.dimensions_mm!.enclosure_overall; valid(free);
     expect(dimensions()?.textContent).not.toContain('Enclosure overall');
   });
+  it('labels design size and shows a floored morph request beside its effective aperture', () => {
+    render();
+    const floored = structuredClone(metadata);
+    floored.dimensions_requested_mm = { mouth_opening: [320, 240] };
+    valid(floored);
+    expect(dimensions()?.querySelector('h3')?.textContent).toBe('Design size');
+    expect(dimensions()?.querySelector('dd')?.textContent).toBe(`requested 320.0 × 240.0 mm, effective ${expectedMouth}`);
+    floored.dimensions_requested_mm = { mouth_opening: floored.dimensions_mm!.mouth_opening };
+    valid(floored);
+    expect(dimensions()?.querySelector('dd')?.textContent).toBe(expectedMouth);
+  });
   it('labels the accepted older frame after a new edit and a matching failure', () => {
     render(); valid();
     act(() => useDesignStore.setState({ designRevision: 2 }));

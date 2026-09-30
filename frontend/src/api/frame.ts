@@ -48,6 +48,8 @@ export interface FrameHeader {
       enclosure_overall?: [number, number, number];
     } | null;
     dimensions_status?: 'pending' | 'current' | 'unavailable';
+    /** Requested morph targets before implicit sizing and no-shrink floors. */
+    dimensions_requested_mm?: { mouth_opening?: [number, number] };
     dimensions_error?: string;
     dimensions_sampling?: { method: string; lod_independent: boolean };
   };
@@ -62,6 +64,8 @@ export interface FrameHeader {
 }
 
 export interface DecodedFrame {
+  /** Client-only document identity; revision counters reset on New/Open. */
+  documentLoad?: number;
   header: FrameHeader;
   sections: Record<string, FrameArray>;
 }

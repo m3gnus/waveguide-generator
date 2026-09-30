@@ -11,6 +11,8 @@ function sequence(frame: DecodedFrame): number {
 export function selectPreferredFrame(current: DecodedFrame | null, incoming: DecodedFrame | null): DecodedFrame | null {
   if (!incoming) return current;
   if (!current) return incoming;
+  if (incoming.documentLoad !== undefined && current.documentLoad !== undefined
+      && incoming.documentLoad !== current.documentLoad) return incoming;
   // Sequence numbers restart with each socket epoch. An accepted frame from a
   // new epoch must replace the retained reconnect fallback even at a lower seq.
   if (incoming.header.epoch !== current.header.epoch) return incoming;

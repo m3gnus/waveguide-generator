@@ -20,7 +20,7 @@
   },
   "dimensions_status": "current",
   "dimensions_sampling": {
-    "method": "resolved-canonical-geometry",
+    "method": "resolved-design-geometry",
     "lod_independent": true
   },
   "coordinate_frame": "mesher-xyz",
@@ -34,9 +34,9 @@
     "source_cap_radial": 16
   },
   "timings_ms": {
-    "canonical_sampling": 18.795749987475574,
-    "surface_assembly_and_fidelity": 47.19341697636992,
-    "total": 138.71391699649394
+    "canonical_sampling": 22.052999935112894,
+    "surface_assembly_and_fidelity": 48.75816695857793,
+    "total": 148.35825003683567
   },
   "canonical_reference": {
     "axial_rows": 193,
