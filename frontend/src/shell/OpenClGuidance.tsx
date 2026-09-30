@@ -3,8 +3,10 @@ import sharedGuidance from '../../../shared/opencl-driver-guidance.v1.json';
 export type OpenClGuidancePlatform = 'windows' | 'linux';
 export type OpenClGuidanceReason = 'no_device' | 'smoke_test_failed' | 'smoke_test_timeout' | 'inventory_timeout' | 'pocl_windows';
 export type OpenClGuidanceNotice = 'infinite_baffle_numba';
+/** Where the app runs. macOS has no runtime guidance, only notices. */
+export type OpenClGuidanceHost = OpenClGuidancePlatform | 'macos';
 export interface OpenClGuidanceProps {
-  platform: OpenClGuidancePlatform;
+  platform: OpenClGuidanceHost;
   reason?: OpenClGuidanceReason;
   /** A situation-specific line shown first, e.g. why this solve is on numba. */
   notice?: OpenClGuidanceNotice;
@@ -51,13 +53,20 @@ const guidance: GuidanceData | undefined = isOpenClGuidanceData(sharedGuidance) 
 
 /** Shared CPU runtime guidance for solver settings and the numba fallback notice. */
 export function OpenClGuidance({ platform, reason, notice }: OpenClGuidanceProps) {
-  const entry = guidance?.platforms[platform];
-  if (!guidance || !entry) return null;
+  if (!guidance) return null;
+  const noticeLine = notice && guidance.notices?.[notice];
+  const runtimePlatform = platform === 'macos' ? undefined : platform;
+  const entry = runtimePlatform && guidance.platforms[runtimePlatform];
+  if (!runtimePlatform || !entry) {
+    // No runtime guidance for this platform: a notice still explains itself.
+    return noticeLine
+      ? <section className="opencl-guidance" aria-label={guidance.labels.ariaLabel}><p>{noticeLine}</p></section>
+      : null;
+  }
   const { summary, steps = [] } = entry;
   const reasonLine = reason && guidance.reasons?.[reason];
-  const noticeLine = notice && guidance.notices?.[notice];
-  const warnings = (guidance.warnings ?? []).filter((warning) => warning.platforms.includes(platform));
-  const alternatives = (guidance.gpu_alternatives ?? []).filter((entry) => entry.platforms.includes(platform));
+  const warnings = (guidance.warnings ?? []).filter((warning) => warning.platforms.includes(runtimePlatform));
+  const alternatives = (guidance.gpu_alternatives ?? []).filter((entry) => entry.platforms.includes(runtimePlatform));
   return <section className="opencl-guidance" aria-label={guidance.labels.ariaLabel}>
     <h3>{guidance.labels.heading}</h3>
     {noticeLine && <p>{noticeLine}</p>}

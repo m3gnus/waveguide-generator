@@ -63,6 +63,15 @@ describe('OpenClGuidance', () => {
     expect(host.textContent).not.toContain(guidance.notices.infinite_baffle_numba);
   });
 
+  it('renders only the notice on a platform without runtime guidance, and nothing without one', () => {
+    act(() => root.render(<OpenClGuidance platform="macos" notice="infinite_baffle_numba" reason="no_device" />));
+    const paragraphs = [...host.querySelectorAll('section > p')].map((node) => node.textContent);
+    expect(paragraphs).toEqual([guidance.notices.infinite_baffle_numba]);
+    expect(host.querySelector('a')).toBeNull();
+    act(() => root.render(<OpenClGuidance platform="macos" />));
+    expect(host.innerHTML).toBe('');
+  });
+
   it('updates the platform and clears a previous reason without retaining the Windows warning', () => {
     act(() => root.render(<OpenClGuidance platform="windows" reason="no_device" />));
     act(() => root.render(<OpenClGuidance platform="linux" />));
