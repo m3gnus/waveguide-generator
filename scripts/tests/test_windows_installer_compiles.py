@@ -122,4 +122,4 @@ def test_uninstall_removes_every_directory_the_bundle_owns() -> None:
     script = (ROOT / "installers/windows/bundle-setup.iss").read_text(encoding="utf-8")
     section = script.split("[UninstallDelete]", 1)[1].split("\n[", 1)[0]
     for directory in ("runtime", "app", build_bundle.RECOVERY_DIRECTORY_NAME):
-        assert f'Type: filesandordirs; Name: "{{app}}\{directory}"' in section, directory
+        assert rf'Type: filesandordirs; Name: "{{app}}\{directory}"' in section, directory
