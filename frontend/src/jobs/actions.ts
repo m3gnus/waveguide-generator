@@ -15,6 +15,8 @@ export interface EngineCapability {
   reason: string | null;
   version: string | null;
   fast_paths: string[];
+  /** Server-owned retry lifecycle; absent on older servers. */
+  opencl_retry_pending?: boolean;
   qualification?: 'pending' | 'done' | null;
   assembly_backend?: 'opencl' | 'numba' | null;
   assembly_device?: { type: 'cpu'; vendor: string; name: string; platform: string; fp64: boolean } | null;

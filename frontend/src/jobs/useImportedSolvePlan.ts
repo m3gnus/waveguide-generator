@@ -7,6 +7,7 @@ import {
   type ImportedSolvePlan,
 } from './actions';
 import { buildImportedSubmission } from './importedSubmission';
+import { capabilityFingerprint } from './capabilityFingerprint';
 import { useCapabilities } from './useCapabilities';
 import {
   SOLVE_PLAN_DEBOUNCE_MS,
@@ -59,9 +60,7 @@ export function useImportedSolvePlan(enabled: boolean): ImportedSolvePlanSnapsho
     // `solveOptions` is read inside buildImportedSubmission, from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, cadReturn, solveOptions]);
-  const capabilityKey = engines
-    .map((engine) => `${engine.name}:${engine.available ? 1 : 0}`)
-    .join(',');
+  const capabilityKey = capabilityFingerprint(engines);
   const [settledBody, setSettledBody] = useState<string | null>(currentBody);
 
   useEffect(() => {

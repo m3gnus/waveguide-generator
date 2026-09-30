@@ -547,6 +547,7 @@ class EngineRegistry:
         self._initial_bempp_task: asyncio.Task[None] | None = None
         self._bempp_refresh_task: asyncio.Task[None] | None = None
         self._opencl_retry_task: asyncio.Task[None] | None = None
+        self._qualification_cancelled = threading.Event()
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -584,11 +585,17 @@ class EngineRegistry:
 
                 remove_readiness_listener(self._cpu_listener)
                 self._cpu_listener = None
+        from server.solver.bempp_opencl import ProbeCancelled, shutdown_qualification
+
+        # Coroutine cancellation cannot stop asyncio.to_thread's native check.
+        # Stop its owned child before cancelling the shared qualification tasks.
+        await asyncio.to_thread(shutdown_qualification, self._qualification_cancelled)
         await self.warmup.stop()
         for task in (self._opencl_retry_task, self._initial_probe_task, self._initial_bempp_task, self._bempp_refresh_task):
-            if task is not None and not task.done():
-                task.cancel()
-                with suppress(asyncio.CancelledError):
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+                with suppress(asyncio.CancelledError, ProbeCancelled):
                     await task
         refresh_task = self._refresh_task
         if refresh_task is not None and not refresh_task.done():
@@ -613,11 +620,18 @@ class EngineRegistry:
         except TimeoutError:
             pass
 
+    async def _qualification_thread(self, function: Any, *args: Any, **kwargs: Any) -> Any:
+        from server.solver.bempp_opencl import owned_qualification
+
+        return await asyncio.to_thread(
+            owned_qualification, self._qualification_cancelled, function, *args, **kwargs
+        )
+
     async def _publish_detection(self, names: Sequence[str]) -> None:
         from server.solver.bempp_opencl import qualification_revision
 
         revision = qualification_revision()
-        detected = await asyncio.to_thread(self._detector, names=names)
+        detected = await self._qualification_thread(self._detector, names=names)
         async with self._lock:
             results = {item.name: item for item in detected}
             self._cache = tuple(results.get(item.name, item) for item in self._cache or ())
@@ -637,7 +651,7 @@ class EngineRegistry:
             from server.solver.bempp_opencl import qualification_revision
 
             self._opencl_revision = qualification_revision()
-            self._cache = tuple(await asyncio.to_thread(self._detector))
+            self._cache = tuple(await self._qualification_thread(self._detector))
         self._schedule_cpu_refresh()
         self._schedule_opencl_retry()
 
@@ -745,7 +759,7 @@ class EngineRegistry:
         # A retry shares the same submission wait as the initial check. No
         # registry lock is held while native qualification runs off-thread.
         revision = qualification_revision()
-        status = await asyncio.to_thread(bempp.bempp_status)
+        status = await self._qualification_thread(bempp.bempp_status)
         axes = _ground_plane_axes("bempp", status)
         async with self._lock:
             self._cache = tuple(

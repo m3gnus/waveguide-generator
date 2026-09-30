@@ -115,8 +115,10 @@ def fake_children(monkeypatch, scripts):
             began = clock[0]
             self.target(*self.args)
             clock[0] = began
-        def join(self):
+        def join(self, timeout=None):
             pass
+        def is_alive(self):
+            return False
     class Stream:
         def __init__(self, script):
             self.script = script
@@ -435,6 +437,10 @@ def test_definitive_rejection_is_cached(monkeypatch, failure):
 
 @pytest.mark.parametrize('stage', ['inventory', 'smoke'])
 def test_timeout_retries_have_interval_and_terminal_cap(monkeypatch, stage):
+    import asyncio
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.engines.registry import EngineInfo
+
     clock = [0.0]
     monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
     attempts = []
@@ -447,6 +453,12 @@ def test_timeout_retries_have_interval_and_terminal_cap(monkeypatch, stage):
     monkeypatch.setattr(probe, '_run_probe', run)
     for attempt in range(probe.MAX_TIMEOUT_ATTEMPTS):
         assert probe.qualified_opencl()['opencl_unavailable_reason'] == code
+        class Snapshot:
+            async def capabilities(self):
+                return (EngineInfo('bempp', True, 'timeout', None,
+                                   assembly_backend='numba', opencl_unavailable_reason=code),)
+        payload = asyncio.run(capabilities_payload(Snapshot()))
+        assert payload['engines'][0]['opencl_retry_pending'] is (attempt + 1 < probe.MAX_TIMEOUT_ATTEMPTS)
         for _ in range(20):
             assert not probe.qualified_opencl()['ok']
         assert len(attempts) == attempt + 1

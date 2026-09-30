@@ -32,7 +32,7 @@ def pending_probe(monkeypatch):
     monkeypatch.setattr(metal, 'metal_status', lambda: {
         'available': state.metal, 'reason': 'Metal real state', 'version': 'test'})
     monkeypatch.setattr(beat, 'beat_backend_statuses', lambda: {
-        backend: {'available': backend == 'cpu' or (backend == 'cuda' and state.gpu),
+        backend: {'available': backend == 'cpu' or (backend in {'cuda', 'metal'} and state.gpu),
                   'reason': 'BEAT real state', 'version': 'test'}
         for backend in beat.BEAT_BACKENDS})
     def run(mode, device, timeout):
@@ -86,7 +86,7 @@ class RecordedEngine:
         })
 
 
-@pytest.mark.parametrize('engine', ['metal', 'beat-cuda', 'beat-cpu'])
+@pytest.mark.parametrize('engine', ['metal', 'beat-cuda', 'beat-metal', 'beat-cpu'])
 def test_other_engine_publishes_and_runs_without_qualification_wait(pending_probe, tmp_path, engine):
     p = pending_probe
     p.state.metal = p.state.gpu = True

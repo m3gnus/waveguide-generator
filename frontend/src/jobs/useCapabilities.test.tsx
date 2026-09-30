@@ -176,8 +176,60 @@ describe('useCapabilities', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('bounds pending qualification polling even if the server never finishes', async () => {
-    const pending = { ...CAPABILITIES, engines: [{ name: 'bempp', qualification: 'pending' }] };
+  it.each(['inventory_timeout', 'smoke_test_timeout'])(
+    'polls a retryable %s until OpenCL recovers without a remount', async (reason) => {
+      const retrying = { ...CAPABILITIES, engines: [{
+        name: 'bempp', available: true, qualification: 'done', assembly_backend: 'numba',
+        opencl_unavailable_reason: reason, opencl_retry_pending: true,
+      }] };
+      const recovered = { ...retrying, engines: [{ ...retrying.engines[0],
+        assembly_backend: 'opencl', opencl_unavailable_reason: null, opencl_retry_pending: false,
+      }] };
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify(retrying), { status: 200 }));
+      await render(<Consumer tag="status"/>);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+      await flushReact();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      fetchMock.mockImplementation(async () => new Response(JSON.stringify(recovered), { status: 200 }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      await flushReact();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    },
+  );
+
+  it.each([false, undefined])('does not guess a retry from a cached timeout (%s)', async (retry) => {
+    const terminal = { ...CAPABILITIES, engines: [{
+      name: 'bempp', available: true, qualification: 'done', assembly_backend: 'numba',
+      opencl_unavailable_reason: 'inventory_timeout', opencl_retry_pending: retry,
+    }] };
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(terminal), { status: 200 }));
+    await render(<Consumer tag="status"/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops when a retry finishes with a terminal timeout', async () => {
+    const row = { name: 'bempp', qualification: 'done', assembly_backend: 'numba',
+      opencl_unavailable_reason: 'smoke_test_timeout', opencl_retry_pending: true };
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ...CAPABILITIES, engines: [row] })))
+      .mockImplementation(async () => new Response(JSON.stringify({ ...CAPABILITIES,
+        engines: [{ ...row, opencl_retry_pending: false }] })));
+    await render(<Consumer tag="status"/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await flushReact();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * 60_000); });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    { name: 'bempp', qualification: 'pending' },
+    { name: 'bempp', qualification: 'done', assembly_backend: 'numba',
+      opencl_unavailable_reason: 'inventory_timeout', opencl_retry_pending: true },
+  ])('bounds qualification/retry polling even if the server never finishes (%j)', async (engine) => {
+    const pending = { ...CAPABILITIES, engines: [engine] };
     fetchMock.mockImplementation(async () => new Response(JSON.stringify(pending), { status: 200 }));
     await render(<Consumer tag="status"/>);
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000 + 10_000); });

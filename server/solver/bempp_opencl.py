@@ -7,6 +7,7 @@ Timeouts are transient; passes and definitive rejections persist for the process
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
 from functools import lru_cache
 import importlib
 import json
@@ -220,6 +221,73 @@ def smoke_test(device: Mapping[str, Any]) -> dict[str, float]:
     return check_computation(matrix)
 
 
+# Each registry owns a cancellation token carried into its executor threads.
+# Holding this lock through spawn closes the shutdown-versus-registration race.
+_probe_lock = threading.Lock()
+_probe_owner: ContextVar[threading.Event | None] = ContextVar("opencl_probe_owner", default=None)
+_active_probes: dict[_ProbeHandle, threading.Event | None] = {}
+
+
+class ProbeCancelled(RuntimeError):
+    """Shutdown is not a driver verdict and must never enter the cache."""
+
+
+def _check_cancelled() -> None:
+    owner = _probe_owner.get()
+    if owner is not None and owner.is_set():
+        raise ProbeCancelled("OpenCL qualification stopped")
+
+
+def owned_qualification(owner: threading.Event, function: Any, *args: Any, **kwargs: Any) -> Any:
+    token = _probe_owner.set(owner)
+    try:
+        _check_cancelled()
+        return function(*args, **kwargs)
+    finally:
+        _probe_owner.reset(token)
+
+
+class _ProbeHandle:
+    def __init__(self, child: Any, reader: Any, events: Any) -> None:
+        self.child, self.reader, self.events = child, reader, events
+        self.lock = threading.Lock()
+        self.closed = False
+
+    def close(self, *, graceful: bool = False) -> None:
+        with self.lock:
+            if self.closed:
+                return
+            if self.child.poll() is None:
+                if graceful:
+                    self.child.terminate()
+                    try:
+                        self.child.wait(timeout=0.25)
+                    except subprocess.TimeoutExpired:
+                        self.child.kill()
+                else:
+                    self.child.kill()
+            # Always reap, even if poll/terminate already observed an exit.
+            self.child.wait(timeout=1.5)
+            self.reader.join(timeout=1.0)
+            if self.reader.is_alive():
+                raise RuntimeError("OpenCL probe reader did not stop")
+            self.child.stdout.close()
+            self.closed = True
+
+
+def shutdown_qualification(owner: threading.Event) -> None:
+    """Terminate/reap only this registry's children; safe on repeated shutdown."""
+    with _probe_lock:
+        owner.set()
+        handles = [handle for handle, token in _active_probes.items() if token is owner]
+    for handle in handles:
+        handle.close(graceful=True)
+        with _probe_lock:
+            _active_probes.pop(handle, None)
+        # Cancellation is checked before this synthetic EOF is consumed.
+        handle.events.put((None, time.monotonic()))
+
+
 def _read_probe_output(stream: Any, events: Any) -> None:
     """Drain the merged pipe on every OS; discard logs rather than buffer them.
 
@@ -236,7 +304,7 @@ def _read_probe_output(stream: Any, events: Any) -> None:
 
 
 def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
-    child = reader = None
+    child = reader = handle = None
     ready_at = None
     began = time.monotonic()
     deadline = began + SPAWN_IMPORT_SECONDS
@@ -245,20 +313,25 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
     try:
         # One continuously drained pipe avoids stdout/stderr backpressure and
         # Windows select() limitations. No native work runs in the reader.
-        child = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), mode, json.dumps(device)],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env={**os.environ, "NUMBA_DISABLE_JIT": "1"},
-        )
-        events = queue.Queue()
-        reader = threading.Thread(target=_read_probe_output, args=(child.stdout, events), daemon=True)
-        reader.start()
+        with _probe_lock:
+            _check_cancelled()
+            child = subprocess.Popen(
+                [sys.executable, str(Path(__file__).resolve()), mode, json.dumps(device)],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                env={**os.environ, "NUMBA_DISABLE_JIT": "1"},
+            )
+            events = queue.Queue()
+            reader = threading.Thread(target=_read_probe_output, args=(child.stdout, events), daemon=True)
+            reader.start()
+            handle = _ProbeHandle(child, reader, events)
+            _active_probes[handle] = _probe_owner.get()
         while True:
             remaining = deadline - time.monotonic()
             try:
                 line, observed_at = events.get(timeout=max(0.0, remaining))
             except queue.Empty:
                 raise subprocess.TimeoutExpired(child.args, timeout) from None
+            _check_cancelled()
             if observed_at > deadline:
                 raise subprocess.TimeoutExpired(child.args, timeout)
             if line == _READY_MARKER and ready_at is None:
@@ -286,13 +359,12 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
         return {"ok": False, "opencl_unavailable_reason": "no_device" if mode == "inventory" else "smoke_test_failed", "reason": f"OpenCL {mode} probe failed: {type(exc).__name__}",
                 "_active_seconds": 0.0 if ready_at is None else min(timeout, time.monotonic() - ready_at)}
     finally:
-        if child is not None:
-            if child.poll() is None:
-                child.kill()
-            child.wait()
-            if reader is not None:
-                reader.join()
-            child.stdout.close()
+        if handle is not None:
+            try:
+                handle.close()
+            finally:
+                with _probe_lock:
+                    _active_probes.pop(handle, None)
 
 
 def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
@@ -366,11 +438,13 @@ def qualification_revision() -> int:
 def qualified_opencl() -> dict[str, Any]:
     global _cached_verdict, _last_timeout, _timeout_attempts, _retry_after, _revision
     with _selection_lock:
+        _check_cancelled()
         if _cached_verdict is not None:
             return dict(_cached_verdict)
         if _last_timeout is not None and not retry_due():
             return dict(_last_timeout)
         verdict = _qualified_opencl()
+        _check_cancelled()
         if verdict.get("opencl_unavailable_reason") in TIMEOUT_REASONS:
             _timeout_attempts += 1
             _last_timeout = verdict

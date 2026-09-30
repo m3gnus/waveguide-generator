@@ -10,6 +10,7 @@ import {
   migratedLegacyBeatEngine,
   plannedBackendCapabilities,
 } from '../design/backendSupport';
+import { capabilityFingerprint } from './capabilityFingerprint';
 import { preferencesStore } from '../prefs/preferences';
 import { useSolveOptionsStore } from '../stores/solveOptions';
 
@@ -25,7 +26,7 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
  * Most results do not change within a server process: `EngineRegistry` probes
  * once and memoises them. The one live transition is BEAT CPU preparation;
  * its explicit lifecycle flag temporarily enables the short poll below.
- * BEMPP qualification also polls while pending, with bounded backoff.
+ * BEMPP qualification and server-owned timeout retries use bounded backoff.
  * Everything else uses the long stale time so panel remounts stay cache-only.
  *
  * What a long staleTime cannot do is notice a *new* process. It only marks data
@@ -68,7 +69,13 @@ export function useCapabilities(): CapabilitiesSnapshot {
     // This explicit server lifecycle covers delayed hardware inventory too.
     // Terminal ready, failed and skipped answers all stop the timer.
     refetchInterval: (query) => {
-      const pending = query.state.data?.engines?.some((engine) => engine.qualification === 'pending');
+      const pending = query.state.data?.engines?.some((engine) => engine.name === 'bempp' && (
+        engine.qualification === 'pending' || (
+          engine.assembly_backend === 'numba' && engine.opencl_retry_pending === true &&
+          (engine.opencl_unavailable_reason === 'inventory_timeout' ||
+            engine.opencl_unavailable_reason === 'smoke_test_timeout')
+        )
+      ));
       if (pending) {
         qualificationPollStarted.current ??= Date.now();
         if (Date.now() - qualificationPollStarted.current < 5 * 60_000) {
@@ -85,9 +92,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
     if (onshapeOffered !== null) preferencesStore.setOnshapeAvailable(onshapeOffered);
   }, [onshapeOffered]);
   const plannerSupport = data
-    ? `${data.engineSelection?.resolvedDefault ?? ''}|${(data.engines ?? NO_ENGINES)
-      .map((engine) => `${engine.name}:${engine.available ? 1 : 0}:${engine.qualification ?? ""}:${engine.assembly_backend ?? ""}:${engine.geometry_sources?.join("/") ?? ""}`)
-      .join(',')}`
+    ? `${data.engineSelection?.resolvedDefault ?? ''}|${capabilityFingerprint(data.engines ?? NO_ENGINES)}`
     : null;
   useEffect(() => {
     if (plannerSupport === null) return;

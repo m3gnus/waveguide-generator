@@ -98,6 +98,7 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                 await registry.wait_for_bempp()
                 monkeypatch.setattr(registry_module, 'CAPABILITIES_WAIT_SECONDS', 30)
                 first = row(await client.request_async('GET', '/api/capabilities'))
+                assert first['opencl_retry_pending'] is True
                 assert first['qualification'] == 'done'
                 assert first['assembly_backend'] == 'numba'
                 assert first['opencl_unavailable_reason'] == 'inventory_timeout'
@@ -114,6 +115,7 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                     assert row(await client.request_async('GET', '/api/capabilities'))['qualification'] == 'pending'
                     await registry.wait_for_bempp()
                 recovered = row(await client.request_async('GET', '/api/capabilities'))
+                assert recovered['opencl_retry_pending'] is False
                 assert recovered['qualification'] == 'done'
                 assert recovered['assembly_backend'] == 'opencl'
                 assert recovered['assembly_device'] == CPU
