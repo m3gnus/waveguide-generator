@@ -3244,7 +3244,7 @@ def test_a_commit_failure_restores_the_previous_linux_installation(tmp_path: Pat
     mv = fake_bin / "mv"
     mv.write_text(
         "#!/bin/bash\n"
-        "if [ \"${1:-}\" = -- ]; then shift; fi\n"
+        "while [ \"${1:-}\" = -T ] || [ \"${1:-}\" = -f ] || [ \"${1:-}\" = -- ]; do shift; done\n"
         f"case \"${{1:-}}\" in */.waveguide-generator.*.desktop) "
         f"if [ \"${{2:-}}\" = \"{desktop}\" ] && [ ! -e \"{failure_marker}\" ]; then "
         f"touch \"{failure_marker}\"; echo injected desktop move failure >&2; exit 23; fi;; esac\n"
@@ -3272,7 +3272,7 @@ def test_a_commit_failure_restores_the_previous_linux_installation(tmp_path: Pat
 
 
 @_NEEDS_POSIX_BASH
-@pytest.mark.parametrize("failure_mode", ["restore", "remove"])
+@pytest.mark.parametrize("failure_mode", ["restore", "evacuate"])
 def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path, failure_mode: str) -> None:
     _linux_payload(tmp_path)
     home = tmp_path / "home"
@@ -3289,7 +3289,7 @@ def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path,
     mv = fake_bin / "mv"
     mv.write_text(
         "#!/bin/bash\n"
-        "if [ \"${1:-}\" = -- ]; then shift; fi\n"
+        "while [ \"${1:-}\" = -T ] || [ \"${1:-}\" = -f ] || [ \"${1:-}\" = -- ]; do shift; done\n"
         f"case \"${{1:-}}\" in\n"
         f"  */.waveguide-generator.*.desktop) "
         f"if [ \"${{2:-}}\" = \"{desktop}\" ]; then exit 23; fi;;\n"
@@ -3300,19 +3300,14 @@ def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path,
         encoding="utf-8",
     )
     mv.chmod(0o755)
-    if failure_mode == "remove":
-        # If removing the replacement fails, mv must not nest the backup
-        # inside it and then falsely report that recovery succeeded.
-        mv.write_text(mv.read_text().replace("then exit 24;", "then :;"))
-        real_rm = shutil.which("rm")
-        assert real_rm
-        rm = fake_bin / "rm"
-        rm.write_text(
-            "#!/bin/bash\n"
-            f'if [ "${{@: -1}}" = "{target}" ]; then exit 25; fi\n'
-            f'exec "{real_rm}" "$@"\n', encoding="utf-8",
-        )
-        rm.chmod(0o755)
+    if failure_mode == "evacuate":
+        # Returning the replacement to staging now removes it from the live path
+        # with a rename. Fail that operation; old must remain at its named backup.
+        mv.write_text(mv.read_text().replace("then exit 24;", "then :;").replace(
+            "esac\n",
+            f'esac\nif [ "${{1:-}}" = "{target}" ]; then '
+            'case "${2:-}" in */.waveguide-generator.install.*/*) exit 25;; esac; fi\n',
+        ))
 
     again = _install_linux(
         tmp_path,

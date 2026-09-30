@@ -188,34 +188,143 @@ rm -rf "$STAGED"
 if [ -e "$STAGED" ] || [ -L "$STAGED" ] || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
     fail "A staging or backup path is still occupied." "Nothing has been changed."
 fi
+# Swap table (one row): LIVE_PATH=TARGET, BACKUP_PATH=DISPLACED,
+# STAGED_PATH=STAGED, plus the old/new inode identities. States are staged ->
+# prepared -> displace_intent -> displaced -> install_intent -> installed.
+# Record intent BEFORE acting, then verify both source absence and destination
+# identity. Cleanup reconciles actual objects even before post-move bookkeeping:
+# prepared/displace_intent keeps or restores old; displaced/install_intent/
+# installed returns new to staging via evacuate_intent -> evacuated, then
+# restores old via restore_intent ->
+# restored. COMMITTED alone retains new and retires old. Never delete a racer;
+# a failed restore exits 3 and prints the real old-object path, including nesting.
+LIVE_PATH="$TARGET"
+BACKUP_PATH="$DISPLACED"
+STAGED_PATH="$STAGED"
+OLD_ID=""
+NEW_ID=""
+STATE=staged
 COMMITTED=0
-BACKUP_PATH=""
 
-# A TERM, HUP or INT (or any failure) anywhere from here on must never leave the
-# machine without an app: drop the staged copy, and if the old app was moved
-# aside and nothing is at the target, put it back. If that fails the exit
-# status is 3 and the backup path is printed.
+# Renames preserve the inode on this filesystem, including a broken symlink.
+# Comparing identity, rather than existence/type, rejects both nesting and a
+# plausible-looking directory created by another process.
+object_id() {
+    [ -e "$1" ] || [ -L "$1" ] || return 1
+    identity=$(LC_ALL=C ls -di "$1" 2>/dev/null) || return 1
+    identity=${identity#"${identity%%[! ]*}"}
+    printf '%s\n' "${identity%% *}"
+}
+same_object() {
+    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+}
+
+# Catch signals in the parent; never ignore them in recovery children. Forward
+# INT as TERM as well, because asynchronous POSIX jobs may start with INT ignored.
+MOVE_PID=""
+interrupt_recovery() {
+    [ -z "$MOVE_PID" ] || kill -TERM "$MOVE_PID" 2>/dev/null || :
+}
+bounded_move() {
+    (trap - HUP INT TERM; exec mv -f "$1" "$2" </dev/null) &
+    MOVE_PID=$!
+    (
+        # A process-group signal must not cancel the deadline. It can shorten
+        # it: an interrupted timer still kills the move. USR1 is our private
+        # cancellation, sent only after the move has been reaped.
+        trap ':' HUP INT TERM
+        timer_pid=""
+        trap '[ -z "$timer_pid" ] || kill "$timer_pid" 2>/dev/null || :; wait "$timer_pid" 2>/dev/null; exit' USR1
+        sleep 5 &
+        timer_pid=$!
+        wait "$timer_pid" || :
+        kill -KILL "$MOVE_PID" 2>/dev/null || :
+        kill "$timer_pid" 2>/dev/null || :
+        wait "$timer_pid" 2>/dev/null || :
+    ) &
+    watchdog_pid=$!
+    move_status=1
+    # A caught signal interrupts wait before the child exits. Reap that child
+    # before inspecting paths, retrying, or stopping its watchdog.
+    while :; do
+        wait "$MOVE_PID"
+        move_status=$?
+        kill -0 "$MOVE_PID" 2>/dev/null || break
+    done
+    kill -USR1 "$watchdog_pid" 2>/dev/null || :
+    wait "$watchdog_pid" 2>/dev/null || :
+    MOVE_PID=""
+    return "$move_status"
+}
+
+locate_old() {
+    OLD_PATH=""
+    for candidate in "$LIVE_PATH" "$BACKUP_PATH" "$BACKUP_PATH/$TARGET_BASE" "$LIVE_PATH/${BACKUP_PATH##*/}"; do
+        if same_object "$candidate" "$OLD_ID"; then OLD_PATH="$candidate"; return 0; fi
+    done
+    return 1
+}
+locate_new() {
+    NEW_PATH=""
+    for candidate in "$STAGED_PATH" "$LIVE_PATH" "$LIVE_PATH/${STAGED_PATH##*/}"; do
+        if same_object "$candidate" "$NEW_ID"; then NEW_PATH="$candidate"; return 0; fi
+    done
+    return 1
+}
+verify_move() {
+    ! { [ -e "$1" ] || [ -L "$1" ]; } && same_object "$2" "$3"
+}
+restore_row() {
+    [ "$STATE" != staged ] || return 0
+    if locate_new && [ "$NEW_PATH" != "$STAGED_PATH" ]; then
+        [ ! -e "$STAGED_PATH" ] && [ ! -L "$STAGED_PATH" ] || return 1
+        STATE=evacuate_intent
+        for attempt in 1 2; do
+            bounded_move "$NEW_PATH" "$STAGED_PATH" || :
+            verify_move "$NEW_PATH" "$STAGED_PATH" "$NEW_ID" && break
+            locate_new || return 1
+        done
+        same_object "$STAGED_PATH" "$NEW_ID" || return 1
+        STATE=evacuated
+    fi
+    if [ -z "$OLD_ID" ]; then
+        [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ]
+        return
+    fi
+    locate_old || return 1
+    [ "$OLD_PATH" != "$LIVE_PATH" ] || return 0
+    [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ] || return 1
+    STATE=restore_intent
+    for attempt in 1 2; do
+        bounded_move "$OLD_PATH" "$LIVE_PATH" || :
+        if verify_move "$OLD_PATH" "$LIVE_PATH" "$OLD_ID"; then
+            STATE=restored
+            return 0
+        fi
+        locate_old || return 1
+        [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ] || return 1
+    done
+    return 1
+}
 cleanup() {
     status=$?
-    trap '' HUP INT TERM
     trap - 0
-    rm -rf "$STAGED"
-    if [ "$COMMITTED" -eq 0 ] && [ -n "$BACKUP_PATH" ]; then
-        if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && \
-           mv -n "$BACKUP_PATH" "$TARGET" && [ ! -e "$BACKUP_PATH" ] && [ ! -L "$BACKUP_PATH" ] && \
-           [ -d "$TARGET/Contents" ] && [ ! -e "$TARGET/$(basename -- "$BACKUP_PATH")" ]; then
-            printf 'Restored the previous installation.\n'
+    trap 'interrupt_recovery' HUP INT TERM
+    if [ "$COMMITTED" -eq 1 ]; then
+        status=0
+    elif restore_row; then
+        status=1
+        [ -z "$OLD_ID" ] || [ "$STATE" != restored ] || printf 'Restored the previous installation.\n'
+    else
+        printf 'ERROR: could not restore the previous installation.\n' >&2
+        if locate_old; then
+            printf 'The previous app is at: %s\n' "$OLD_PATH" >&2
         else
-            # A directory may also appear during the restore's mv. If mv
-            # nested the backup, name its actual location for manual recovery.
-            if [ ! -e "$BACKUP_PATH" ] && [ -d "$TARGET/$(basename -- "$BACKUP_PATH")" ]; then
-                BACKUP_PATH="$TARGET/$(basename -- "$BACKUP_PATH")"
-            fi
-            printf 'ERROR: could not restore the previous installation.\n' >&2
-            printf 'The previous app is at: %s\n' "$BACKUP_PATH" >&2
-            status=3
+            printf 'ERROR: recorded previous app is missing from its recovery paths.\n' >&2
         fi
+        status=3
     fi
+    rm -rf "$STAGED_PATH"
     exit "$status"
 }
 trap cleanup 0
@@ -260,35 +369,31 @@ if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
     fi
 fi
 
-# Displace any previous copy rather than deleting it, so a failed rename leaves
-# the machine with the version it already had instead of nothing (cleanup above
-# restores it on any failure).
-if [ -e "$TARGET" ]; then
+NEW_ID="$(object_id "$STAGED_PATH")" || fail "The staged app is missing."
+OLD_ID="$(object_id "$LIVE_PATH")" || OLD_ID=""
+STATE=prepared
+if [ -n "$OLD_ID" ]; then
     printf 'Replacing the copy already in %s ...\n' "$TARGET_DIR"
-    if [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
+    if [ -e "$BACKUP_PATH" ] || [ -L "$BACKUP_PATH" ]; then
         fail "The backup path is still occupied." "Nothing has been changed."
     fi
-    mv -n "$TARGET" "$DISPLACED"
+    STATE=displace_intent
+    mv -f "$LIVE_PATH" "$BACKUP_PATH" </dev/null
     move_status=$?
-    if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
-        BACKUP_PATH="$DISPLACED"
-        if [ -d "$DISPLACED/$TARGET_BASE/Contents" ]; then
-            BACKUP_PATH="$DISPLACED/$TARGET_BASE"
-        fi
-    fi
-    if [ "$move_status" -ne 0 ] || [ -e "$TARGET" ] || [ -L "$TARGET" ] || \
-       [ ! -d "$DISPLACED/Contents" ] || [ -e "$DISPLACED/$TARGET_BASE" ]; then
+    if ! verify_move "$LIVE_PATH" "$BACKUP_PATH" "$OLD_ID" || [ "$move_status" -ne 0 ]; then
         fail "Could not move the existing installation aside." \
              "Quit Waveguide Generator if it is running, then try again."
     fi
 fi
-# BSD mv -n can report success without moving, or nest a source inside an
-# existing directory. Check the exact bundle path and the source after rename.
-if [ -e "$TARGET" ] || [ -L "$TARGET" ] || \
-   ! mv -n "$STAGED" "$TARGET" || [ -e "$STAGED" ] || [ -L "$STAGED" ] || \
-   [ ! -d "$TARGET/Contents" ] || [ -e "$TARGET/$(basename -- "$STAGED")" ]; then
+STATE=displaced
+[ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ] || fail "The app destination is occupied."
+STATE=install_intent
+mv -f "$STAGED_PATH" "$LIVE_PATH" </dev/null
+move_status=$?
+if ! verify_move "$STAGED_PATH" "$LIVE_PATH" "$NEW_ID" || [ "$move_status" -ne 0 ]; then
     fail "Could not put the new version in place at $TARGET."
 fi
+STATE=installed
 COMMITTED=1
 if ! rm -rf "$DISPLACED" || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
     printf 'WARNING: installed successfully, but could not fully remove the previous copy.\n' >&2

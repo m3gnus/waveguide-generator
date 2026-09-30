@@ -317,9 +317,11 @@ mkdir -p "$PREFIX" "$APPLICATIONS" "$ICONS" "$BIN" || \
     fail "Could not create the installation directories under $HOME_DIRECTORY."
 
 # Build and validate every new artefact before moving the current installation.
+# TARGET may resolve through a symlink; stage and back up beside its actual path.
+TARGET_PARENT="${TARGET%/*}"
 # Files are staged on the same filesystems as their final names, so the commit
 # below consists only of renames and can restore every displaced predecessor.
-STAGE_ROOT="$(mktemp -d "$PREFIX/.waveguide-generator.install.XXXXXX")" || \
+STAGE_ROOT="$(mktemp -d "$TARGET_PARENT/.waveguide-generator.install.XXXXXX")" || \
     fail "Could not create a staging directory under $PREFIX."
 STAGED_TARGET="$STAGE_ROOT/$BUNDLE_DIRECTORY"
 STAGED_DESKTOP="$(mktemp "$APPLICATIONS/.waveguide-generator.XXXXXX.desktop")" || \
@@ -331,114 +333,182 @@ STAGED_DESKTOP_OWNER="$(mktemp "$APPLICATIONS/.waveguide-generator.owner.XXXXXX"
 STAGED_ICON_OWNER="$(mktemp "$ICONS/.waveguide-generator.owner.XXXXXX")" || \
     { rm -rf -- "$STAGE_ROOT" "$STAGED_DESKTOP" "$STAGED_ICON" "$STAGED_DESKTOP_OWNER"; fail "Could not stage icon ownership under $ICONS."; }
 
+# Swap table: LIVE[i], BACKUP[i], STAGED[i], with old/new inode identities.
+# Each row goes staged -> prepared -> displace_intent -> displaced ->
+# install_intent -> installed. Intent is recorded BEFORE acting; both the
+# command result and the exact destination identity are verified afterward.
+# Cleanup reconciles identities on disk even when a signal precedes bookkeeping:
+# prepared/displace_intent keeps or restores old; displaced/install_intent/
+# installed returns new to staging and restores old. Recovery goes through
+# evacuate_intent -> evacuated (new back to stage), then
+# restore_intent -> restored with the same verification for EVERY row.
+# Only after all rows verify does COMMITTED retain new and retire backups.
+# A raced destination is never deleted: report the real old-object location
+# (including BSD mv nesting) with exit 3. Uncommitted clean recovery exits 1.
 COMMITTED=0
-TARGET_INSTALLED=0
-DESKTOP_INSTALLED=0
-ICON_INSTALLED=0
-DESKTOP_OWNER_INSTALLED=0
-ICON_OWNER_INSTALLED=0
-LINK_INSTALLED=0
-TARGET_HAD=0
-DESKTOP_HAD=0
-ICON_HAD=0
-DESKTOP_OWNER_HAD=0
-ICON_OWNER_HAD=0
-LINK_HAD=0
-DISPLACED_TARGET=""
-BACKUP_DESKTOP=""
-BACKUP_ICON=""
-BACKUP_DESKTOP_OWNER=""
-BACKUP_ICON_OWNER=""
-BACKUP_LINK=""
-RESTORE_MV_OPTIONS=(--)
+LIVE=("$TARGET" "$APPLICATIONS/$DESKTOP_ENTRY_NAME" "$ICONS/$ICON_NAME"
+      "$APPLICATIONS/$DESKTOP_OWNER_NAME" "$ICONS/$ICON_OWNER_NAME" "$BIN/$LAUNCHER_NAME")
+STAGED=("$STAGED_TARGET" "$STAGED_DESKTOP" "$STAGED_ICON"
+        "$STAGED_DESKTOP_OWNER" "$STAGED_ICON_OWNER" "$BIN/.waveguide-generator.link.new.$$")
+BACKUP=("" "" "" "" "" "")
+DESCRIPTION=("application" "desktop entry" "icon" "desktop ownership marker" "icon ownership marker" "command link")
+INSTALL_ERROR=("Could not put the staged application in $TARGET." "Could not install the rendered desktop entry."
+               "Could not install the application icon." "Could not install desktop ownership."
+               "Could not install icon ownership." "Could not install the command link.")
+STATE=(staged staged staged staged staged staged)
+OLD_ID=("" "" "" "" "" "")
+NEW_ID=("" "" "" "" "" "")
+MV_OPTIONS=(-f --)
 
-rollback() {
-    status=$?
-    trap '' HUP INT TERM
-    trap - EXIT
-    RESTORE_FAILED=0
-    restore_backup() {
-        backup="$1"
-        destination="$2"
-        description="$3"
-        if [ -e "$backup" ] || [ -L "$backup" ]; then
-            if [ -e "$destination" ] || [ -L "$destination" ]; then
-                printf 'ERROR: cannot restore the previous %s while its destination remains.\n' "$description" >&2
-                printf 'Its backup remains at: %s\n' "$backup" >&2
-                RESTORE_FAILED=1
-                return
-            fi
-            if ! mv "${RESTORE_MV_OPTIONS[@]}" "$backup" "$destination" || \
-               [ -e "$backup" ] || [ -L "$backup" ] || \
-               { [ ! -e "$destination" ] && [ ! -L "$destination" ]; } || \
-               { [ "$description" = "application" ] && \
-                 { [ ! -e "$destination/app/APP-MANIFEST.json" ] || \
-                   [ -e "$destination/$(basename -- "$backup")" ]; }; }; then
-                # BSD mv can nest the backup if a directory races the check.
-                if [ ! -e "$backup" ] && [ ! -L "$backup" ] && \
-                   { [ -e "$destination/$(basename -- "$backup")" ] || \
-                     [ -L "$destination/$(basename -- "$backup")" ]; }; then
-                    backup="$destination/$(basename -- "$backup")"
-                fi
-                printf 'ERROR: could not restore the previous %s.\n' "$description" >&2
-                printf 'Its backup remains at: %s\n' "$backup" >&2
-                RESTORE_FAILED=1
-            fi
-        fi
-    }
-    if [ "$COMMITTED" -ne 1 ]; then
-        if [ "$TARGET_INSTALLED" -eq 1 ] && ! rm -rf -- "$TARGET"; then
-            printf 'ERROR: could not remove the incomplete application at: %s\n' "$TARGET" >&2
-            RESTORE_FAILED=1
-        fi
-        if [ "$TARGET_HAD" -eq 1 ] && [ -n "$DISPLACED_TARGET" ]; then
-            restore_backup "$DISPLACED_TARGET" "$TARGET" "application"
-        fi
-        if [ "$DESKTOP_INSTALLED" -eq 1 ]; then rm -f -- "$APPLICATIONS/$DESKTOP_ENTRY_NAME"; fi
-        if [ "$DESKTOP_HAD" -eq 1 ] && [ -n "$BACKUP_DESKTOP" ]; then
-            restore_backup "$BACKUP_DESKTOP" "$APPLICATIONS/$DESKTOP_ENTRY_NAME" "desktop entry"
-        fi
-        if [ "$ICON_INSTALLED" -eq 1 ]; then rm -f -- "$ICONS/$ICON_NAME"; fi
-        if [ "$ICON_HAD" -eq 1 ] && [ -n "$BACKUP_ICON" ]; then
-            restore_backup "$BACKUP_ICON" "$ICONS/$ICON_NAME" "icon"
-        fi
-        if [ "$DESKTOP_OWNER_INSTALLED" -eq 1 ]; then rm -f -- "$APPLICATIONS/$DESKTOP_OWNER_NAME"; fi
-        if [ "$DESKTOP_OWNER_HAD" -eq 1 ] && [ -n "$BACKUP_DESKTOP_OWNER" ]; then
-            restore_backup "$BACKUP_DESKTOP_OWNER" "$APPLICATIONS/$DESKTOP_OWNER_NAME" "desktop ownership marker"
-        fi
-        if [ "$ICON_OWNER_INSTALLED" -eq 1 ]; then rm -f -- "$ICONS/$ICON_OWNER_NAME"; fi
-        if [ "$ICON_OWNER_HAD" -eq 1 ] && [ -n "$BACKUP_ICON_OWNER" ]; then
-            restore_backup "$BACKUP_ICON_OWNER" "$ICONS/$ICON_OWNER_NAME" "icon ownership marker"
-        fi
-        if [ "$LINK_INSTALLED" -eq 1 ]; then rm -f -- "$BIN/$LAUNCHER_NAME"; fi
-        if [ "$LINK_HAD" -eq 1 ] && [ -n "$BACKUP_LINK" ]; then
-            restore_backup "$BACKUP_LINK" "$BIN/$LAUNCHER_NAME" "command link"
-        fi
-        if [ "$TARGET_HAD" -eq 1 ] || [ "$DESKTOP_HAD" -eq 1 ] || \
-           [ "$ICON_HAD" -eq 1 ] || [ "$LINK_HAD" -eq 1 ]; then
-            if [ "$RESTORE_FAILED" -eq 0 ]; then
-                printf 'Restored the previous installation and desktop integration.\n'
-            else
-                printf 'ERROR: rollback was incomplete; the backup paths above were preserved.\n' >&2
-            fi
-        fi
+# Renames preserve the inode on this filesystem, including a broken symlink.
+# Comparing identity, rather than existence/type, rejects both nesting and a
+# plausible-looking directory created by another process.
+object_id() {
+    [ -e "$1" ] || [ -L "$1" ] || return 1
+    identity=$(LC_ALL=C ls -di "$1" 2>/dev/null) || return 1
+    identity=${identity#"${identity%%[! ]*}"}
+    printf '%s\n' "${identity%% *}"
+}
+same_object() {
+    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+}
+
+# Catch signals in the parent; never ignore them in recovery children. Forward
+# INT as TERM as well, because asynchronous POSIX jobs may start with INT ignored.
+MOVE_PID=""
+interrupt_recovery() {
+    [ -z "$MOVE_PID" ] || kill -TERM "$MOVE_PID" 2>/dev/null || :
+}
+bounded_move() {
+    (trap - HUP INT TERM; exec mv "${MV_OPTIONS[@]}" "$1" "$2" </dev/null) &
+    MOVE_PID=$!
+    (
+        # A process-group signal must not cancel the deadline. It can shorten
+        # it: an interrupted timer still kills the move. USR1 is our private
+        # cancellation, sent only after the move has been reaped.
+        trap ':' HUP INT TERM
+        timer_pid=""
+        trap '[ -z "$timer_pid" ] || kill "$timer_pid" 2>/dev/null || :; wait "$timer_pid" 2>/dev/null; exit' USR1
+        sleep 5 &
+        timer_pid=$!
+        wait "$timer_pid" || :
+        kill -KILL "$MOVE_PID" 2>/dev/null || :
+        kill "$timer_pid" 2>/dev/null || :
+        wait "$timer_pid" 2>/dev/null || :
+    ) &
+    watchdog_pid=$!
+    move_status=1
+    # A caught signal interrupts wait before the child exits. Reap that child
+    # before inspecting paths, retrying, or stopping its watchdog.
+    while :; do
+        wait "$MOVE_PID"
+        move_status=$?
+        kill -0 "$MOVE_PID" 2>/dev/null || break
+    done
+    kill -USR1 "$watchdog_pid" 2>/dev/null || :
+    wait "$watchdog_pid" 2>/dev/null || :
+    MOVE_PID=""
+    return "$move_status"
+}
+
+# Locate only the recorded object, never an unrelated occupant. BSD mv can nest
+# at either end; these are the only locations a single rename can produce.
+locate_old() {
+    local candidate
+    OLD_PATH=""
+    for candidate in "${LIVE[i]}" "${BACKUP[i]}" \
+                     "${BACKUP[i]}/${LIVE[i]##*/}" "${LIVE[i]}/${BACKUP[i]##*/}"; do
+        if same_object "$candidate" "${OLD_ID[i]}"; then OLD_PATH="$candidate"; return 0; fi
+    done
+    return 1
+}
+locate_new() {
+    local candidate
+    NEW_PATH=""
+    for candidate in "${STAGED[i]}" "${LIVE[i]}" "${LIVE[i]}/${STAGED[i]##*/}"; do
+        if same_object "$candidate" "${NEW_ID[i]}"; then NEW_PATH="$candidate"; return 0; fi
+    done
+    return 1
+}
+verify_move() {
+    ! { [ -e "$1" ] || [ -L "$1" ]; } && same_object "$2" "$3"
+}
+restore_row() {
+    local attempt
+    [ "${STATE[i]}" != staged ] || return 0
+    # Put our new object back beside the target, rather than recursively deleting
+    # a possibly foreign destination. A failed evacuation preserves old's backup.
+    if locate_new && [ "$NEW_PATH" != "${STAGED[i]}" ]; then
+        if [ -e "${STAGED[i]}" ] || [ -L "${STAGED[i]}" ]; then return 1; fi
+        STATE[i]=evacuate_intent
+        for attempt in 1 2; do
+            bounded_move "$NEW_PATH" "${STAGED[i]}" || :
+            verify_move "$NEW_PATH" "${STAGED[i]}" "${NEW_ID[i]}" && break
+            locate_new || return 1
+        done
+        same_object "${STAGED[i]}" "${NEW_ID[i]}" || return 1
+        STATE[i]=evacuated
     fi
-    if [ "$RESTORE_FAILED" -ne 0 ]; then
-        status=3
+    if [ -z "${OLD_ID[i]}" ]; then
+        [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ]
+        return
+    fi
+    locate_old || return 1
+    if [ "$OLD_PATH" = "${LIVE[i]}" ]; then return 0; fi
+    [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ] || return 1
+    STATE[i]=restore_intent
+    for attempt in 1 2; do
+        bounded_move "$OLD_PATH" "${LIVE[i]}" || :
+        if verify_move "$OLD_PATH" "${LIVE[i]}" "${OLD_ID[i]}"; then
+            STATE[i]=restored
+            return 0
+        fi
+        locate_old || return 1
+        # A failed postcondition (including nesting) is not retried into a racer.
+        [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ] || return 1
+    done
+    return 1
+}
+rollback() {
+    local status=$? i
+    trap - EXIT
+    trap 'interrupt_recovery' HUP INT TERM
+    RESTORE_FAILED=0
+    HAD_PREVIOUS=0
+    if [ "$COMMITTED" -ne 1 ]; then
+        status=1
+        for ((i=0; i<${#LIVE[@]}; i++)); do
+            [ -z "${OLD_ID[i]}" ] || HAD_PREVIOUS=1
+            if ! restore_row; then
+                printf 'ERROR: could not restore the previous %s.\n' "${DESCRIPTION[i]}" >&2
+                if locate_old; then
+                    printf 'Its backup remains at: %s\n' "$OLD_PATH" >&2
+                else
+                    printf 'ERROR: recorded previous object is missing from its recovery paths.\n' >&2
+                fi
+                RESTORE_FAILED=1
+            fi
+        done
+        if [ "$RESTORE_FAILED" -ne 0 ]; then
+            printf 'ERROR: rollback was incomplete; the backup paths above were preserved.\n' >&2
+            status=3
+        elif [ "$HAD_PREVIOUS" -eq 1 ]; then
+            printf 'Restored the previous installation and desktop integration.\n'
+        fi
+    else
+        status=0
     fi
     rm -rf -- "$STAGE_ROOT"
-    rm -f -- "$STAGED_DESKTOP" "$STAGED_ICON" \
-        "$STAGED_DESKTOP_OWNER" "$STAGED_ICON_OWNER"
+    rm -f -- "$STAGED_DESKTOP" "$STAGED_ICON" "$STAGED_DESKTOP_OWNER" "$STAGED_ICON_OWNER" "${STAGED[5]}"
     exit "$status"
 }
 trap rollback EXIT
 trap 'exit 1' HUP INT TERM
 
-# GNU mv prevents directory nesting; BSD mv in the macOS fixtures lacks -T.
-# Probe once, using disposable directories, and verify every restore either way.
+# GNU mv prevents nesting atomically. BSD fixtures fall back to verified identity.
 mkdir "$STAGE_ROOT/mv-probe-source" || fail "Could not probe safe rename support."
-if (cd -- "$STAGE_ROOT" && mv -T -- mv-probe-source mv-probe-target 2>/dev/null); then
-    RESTORE_MV_OPTIONS=(-T --)
+if (cd -- "$STAGE_ROOT" && mv -T -f -- mv-probe-source mv-probe-target </dev/null 2>/dev/null); then
+    MV_OPTIONS=(-T -f --)
 fi
 rm -rf -- "$STAGE_ROOT/mv-probe-source" "$STAGE_ROOT/mv-probe-target"
 
@@ -483,64 +553,47 @@ if { [ -e "$BIN/$LAUNCHER_NAME" ] || [ -L "$BIN/$LAUNCHER_NAME" ]; } && \
          "Move it yourself before installing. Nothing has been replaced."
 fi
 
-# Prepare unused backup names in the same directories as their final paths.
-DISPLACED_TARGET="$(mktemp -d "$PREFIX/.waveguide-generator.previous.XXXXXX")" || \
-    fail "Could not reserve a rollback path under $PREFIX."
-rmdir "$DISPLACED_TARGET" || fail "Could not prepare the application rollback path."
-BACKUP_DESKTOP="$(mktemp "$APPLICATIONS/.waveguide-generator.desktop.backup.XXXXXX")" || fail "Could not prepare desktop rollback."
-BACKUP_ICON="$(mktemp "$ICONS/.waveguide-generator.icon.backup.XXXXXX")" || fail "Could not prepare icon rollback."
-BACKUP_DESKTOP_OWNER="$(mktemp "$APPLICATIONS/.waveguide-generator.owner.backup.XXXXXX")" || fail "Could not prepare desktop-owner rollback."
-BACKUP_ICON_OWNER="$(mktemp "$ICONS/.waveguide-generator.owner.backup.XXXXXX")" || fail "Could not prepare icon-owner rollback."
-BACKUP_LINK="$(mktemp "$BIN/.waveguide-generator.link.backup.XXXXXX")" || fail "Could not prepare command rollback."
-rm -f -- "$BACKUP_DESKTOP" "$BACKUP_ICON" "$BACKUP_DESKTOP_OWNER" "$BACKUP_ICON_OWNER" "$BACKUP_LINK"
+# Stage the link too, so every installation step below is the same rename.
+[ ! -e "${STAGED[5]}" ] && [ ! -L "${STAGED[5]}" ] || fail "The staged command path is occupied."
+ln -s -- "$TARGET/$LAUNCHER_NAME" "${STAGED[5]}" || fail "Could not stage the command link."
+
+# Reserve same-directory rollback names, then leave them absent for renames.
+BACKUP[0]="$(mktemp -d "$TARGET_PARENT/.waveguide-generator.previous.XXXXXX")" || fail "Could not reserve application rollback."
+rmdir "${BACKUP[0]}" || fail "Could not prepare application rollback."
+BACKUP[1]="$(mktemp "$APPLICATIONS/.waveguide-generator.desktop.backup.XXXXXX")" || fail "Could not prepare desktop rollback."
+BACKUP[2]="$(mktemp "$ICONS/.waveguide-generator.icon.backup.XXXXXX")" || fail "Could not prepare icon rollback."
+BACKUP[3]="$(mktemp "$APPLICATIONS/.waveguide-generator.owner.backup.XXXXXX")" || fail "Could not prepare desktop-owner rollback."
+BACKUP[4]="$(mktemp "$ICONS/.waveguide-generator.owner.backup.XXXXXX")" || fail "Could not prepare icon-owner rollback."
+BACKUP[5]="$(mktemp "$BIN/.waveguide-generator.link.backup.XXXXXX")" || fail "Could not prepare command rollback."
+rm -f -- "${BACKUP[@]:1}"
 
 printf 'Committing the staged installation ...\n'
-if [ -e "$TARGET" ]; then
-    TARGET_HAD=1
-    mv -- "$TARGET" "$DISPLACED_TARGET" || fail "Could not move the existing installation aside."
-fi
-mv -- "$STAGED_TARGET" "$TARGET" || fail "Could not put the staged application in $TARGET."
-TARGET_INSTALLED=1
-
-if [ -e "$APPLICATIONS/$DESKTOP_ENTRY_NAME" ] || [ -L "$APPLICATIONS/$DESKTOP_ENTRY_NAME" ]; then
-    DESKTOP_HAD=1
-    mv -- "$APPLICATIONS/$DESKTOP_ENTRY_NAME" "$BACKUP_DESKTOP" || fail "Could not back up the current desktop entry."
-fi
-mv -- "$STAGED_DESKTOP" "$APPLICATIONS/$DESKTOP_ENTRY_NAME" || fail "Could not install the rendered desktop entry."
-DESKTOP_INSTALLED=1
-
-if [ -e "$ICONS/$ICON_NAME" ] || [ -L "$ICONS/$ICON_NAME" ]; then
-    ICON_HAD=1
-    mv -- "$ICONS/$ICON_NAME" "$BACKUP_ICON" || fail "Could not back up the current icon."
-fi
-mv -- "$STAGED_ICON" "$ICONS/$ICON_NAME" || fail "Could not install the application icon."
-ICON_INSTALLED=1
-
-if [ -e "$APPLICATIONS/$DESKTOP_OWNER_NAME" ] || [ -L "$APPLICATIONS/$DESKTOP_OWNER_NAME" ]; then
-    DESKTOP_OWNER_HAD=1
-    mv -- "$APPLICATIONS/$DESKTOP_OWNER_NAME" "$BACKUP_DESKTOP_OWNER" || fail "Could not back up desktop ownership."
-fi
-mv -- "$STAGED_DESKTOP_OWNER" "$APPLICATIONS/$DESKTOP_OWNER_NAME" || fail "Could not install desktop ownership."
-DESKTOP_OWNER_INSTALLED=1
-
-if [ -e "$ICONS/$ICON_OWNER_NAME" ] || [ -L "$ICONS/$ICON_OWNER_NAME" ]; then
-    ICON_OWNER_HAD=1
-    mv -- "$ICONS/$ICON_OWNER_NAME" "$BACKUP_ICON_OWNER" || fail "Could not back up icon ownership."
-fi
-mv -- "$STAGED_ICON_OWNER" "$ICONS/$ICON_OWNER_NAME" || fail "Could not install icon ownership."
-ICON_OWNER_INSTALLED=1
-
-if [ -L "$BIN/$LAUNCHER_NAME" ]; then
-    LINK_HAD=1
-    mv -- "$BIN/$LAUNCHER_NAME" "$BACKUP_LINK" || fail "Could not back up the current command link."
-fi
-ln -s -- "$TARGET/$LAUNCHER_NAME" "$BIN/$LAUNCHER_NAME" || fail "Could not install the command link."
-LINK_INSTALLED=1
-
+for ((i=0; i<${#LIVE[@]}; i++)); do
+    NEW_ID[i]="$(object_id "${STAGED[i]}")" || fail "The staged ${DESCRIPTION[i]} is missing."
+    OLD_ID[i]="$(object_id "${LIVE[i]}")" || OLD_ID[i]=""
+    STATE[i]=prepared
+    if [ -n "${OLD_ID[i]}" ]; then
+        [ ! -e "${BACKUP[i]}" ] && [ ! -L "${BACKUP[i]}" ] || fail "The backup path is still occupied."
+        STATE[i]=displace_intent
+        mv "${MV_OPTIONS[@]}" "${LIVE[i]}" "${BACKUP[i]}" </dev/null
+        move_status=$?
+        if ! verify_move "${LIVE[i]}" "${BACKUP[i]}" "${OLD_ID[i]}" || [ "$move_status" -ne 0 ]; then
+            fail "Could not move the existing ${DESCRIPTION[i]} aside."
+        fi
+    fi
+    STATE[i]=displaced
+    [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ] || fail "The ${DESCRIPTION[i]} destination is occupied."
+    STATE[i]=install_intent
+    mv "${MV_OPTIONS[@]}" "${STAGED[i]}" "${LIVE[i]}" </dev/null
+    move_status=$?
+    if ! verify_move "${STAGED[i]}" "${LIVE[i]}" "${NEW_ID[i]}" || [ "$move_status" -ne 0 ]; then
+        fail "${INSTALL_ERROR[i]}"
+    fi
+    STATE[i]=installed
+done
 COMMITTED=1
-rm -rf -- "$DISPLACED_TARGET"
-rm -f -- "$BACKUP_DESKTOP" "$BACKUP_ICON" "$BACKUP_DESKTOP_OWNER" \
-    "$BACKUP_ICON_OWNER" "$BACKUP_LINK"
+rm -rf -- "${BACKUP[0]}"
+rm -f -- "${BACKUP[@]:1}"
 
 # Best effort, and genuinely optional: every current desktop notices a new
 # .desktop file on its own, and these tools are absent on minimal systems.

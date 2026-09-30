@@ -26,6 +26,16 @@ APP = "Waveguide Generator.app"
 pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="macOS packaging tools")
 
 
+def installer_process_signals() -> None:
+    """Use catchable signals even when the suite broker started with SIG_IGN.
+
+    POSIX sh cannot install a handler for a signal ignored on entry. Set the
+    installer launch contract explicitly instead of inheriting the test runner.
+    """
+    for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(sig, signal.SIG_DFL)
+
+
 def make_app(path: Path, *, version: str, bundle_id: str = BUNDLE_ID, sign: bool = True) -> Path:
     contents = path / "Contents"
     (contents / "MacOS").mkdir(parents=True)
@@ -46,7 +56,7 @@ def make_app(path: Path, *, version: str, bundle_id: str = BUNDLE_ID, sign: bool
     launcher.chmod(0o755)
     (contents / "Resources" / "version.txt").write_text(version, encoding="utf-8")
     if sign:
-        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(path)], check=True, capture_output=True)
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(path)], preexec_fn=installer_process_signals, check=True, capture_output=True)
     return path
 
 
@@ -62,7 +72,7 @@ def dmg(tmp_path: Path) -> Path:
     shutil.copy2(SCRIPT, root / SCRIPT.name)
     app = make_app(root / APP, version="new")
     # What a downloaded disk image hands its contents: a real quarantine flag.
-    subprocess.run(["xattr", "-w", "com.apple.quarantine", "0081;00000000;test;", str(app)], check=True)
+    subprocess.run(["xattr", "-w", "com.apple.quarantine", "0081;00000000;test;", str(app)], preexec_fn=installer_process_signals, check=True)
     return root
 
 
@@ -78,7 +88,7 @@ def run(dmg: Path, *args: str, path_prefix: Path | None = None) -> subprocess.Co
     if path_prefix is not None:
         env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
     return subprocess.run(
-        ["/bin/sh", str(dmg / SCRIPT.name), *args],
+        ["/bin/sh", str(dmg / SCRIPT.name), *args], preexec_fn=installer_process_signals,
         capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120,
     )
 
@@ -87,8 +97,8 @@ def shim(directory: Path, name: str, body: str) -> Path:
     directory.mkdir(exist_ok=True)
     path = directory / name
     if name == "mv":
-        # Match the source, preserving -n for the real rename underneath.
-        body = 'source="$1"\n[ "$source" = "-n" ] && source="$2"\n' + body.replace('case "$*" in', 'case "$source" in')
+        # Match the source, preserving move options for the real rename underneath.
+        body = 'source="$1"\n[ "$source" = "-f" ] && source="$2"\n' + body.replace('case "$*" in', 'case "$source" in')
     path.write_text("#!/bin/bash\n" + body, encoding="utf-8")
     path.chmod(0o755)
     return directory
@@ -103,12 +113,12 @@ def test_update_replaces_the_exact_app_and_clears_quarantine(dmg: Path, installe
     assert result.returncode == 0, result.stdout + result.stderr
     assert version_of(installed) == "new"
     assert leftovers(installed.parent) == []
-    verify = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(installed)], capture_output=True)
+    verify = subprocess.run(["codesign", "--verify", "--deep", "--strict", str(installed)], preexec_fn=installer_process_signals, capture_output=True)
     assert verify.returncode == 0
-    quarantine = subprocess.run(["xattr", "-r", str(installed)], capture_output=True, text=True)
+    quarantine = subprocess.run(["xattr", "-r", str(installed)], preexec_fn=installer_process_signals, capture_output=True, text=True)
     assert "com.apple.quarantine" not in quarantine.stdout
     # Not vacuous: the disk image's own copy does carry the flag.
-    source = subprocess.run(["xattr", str(dmg / APP)], capture_output=True, text=True)
+    source = subprocess.run(["xattr", str(dmg / APP)], preexec_fn=installer_process_signals, capture_output=True, text=True)
     assert "com.apple.quarantine" in source.stdout
 
 
@@ -159,7 +169,7 @@ def test_update_never_falls_back_when_the_parent_is_unwritable(dmg: Path, instal
     try:
         env_home = {**os.environ, "HOME": str(home)}
         result = subprocess.run(
-            ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+            ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
             capture_output=True, text=True, env=env_home, stdin=subprocess.DEVNULL,
         )
     finally:
@@ -278,7 +288,7 @@ def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, instal
     )
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
     proc = subprocess.Popen(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
         stdin=subprocess.DEVNULL, start_new_session=True,
     )
@@ -530,7 +540,7 @@ def test_a_signal_during_cleanup_allows_the_old_app_to_be_restored(
         f'exec "{real_mv}" "$@"\n',
     )
     proc = subprocess.Popen(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL,
         env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, start_new_session=True,
     )
@@ -554,3 +564,273 @@ def test_a_signal_during_cleanup_allows_the_old_app_to_be_restored(
     assert "Restored the previous installation" in output
     assert version_of(installed) == "old"
     assert leftovers(installed.parent) == []
+
+
+# Deterministic pauses use the same temporary-file/process-group mechanism as
+# the earlier mv-shim tests. Instrument only the shipped copy, never the source.
+BOUNDARIES = (
+    "staged", "prepared", "displace_intent", "post_displace", "displaced",
+    "install_intent", "post_install", "installed", "evacuate_intent",
+    "post_evacuate", "evacuated", "restore_intent", "post_restore", "restored",
+)
+RECOVERY_BOUNDARIES = frozenset(BOUNDARIES[8:])
+
+
+def instrument_boundaries(script: Path, row: int, boundary: str, paused: Path, release: Path) -> None:
+    import re
+
+    body = script.read_text(encoding="utf-8")
+    hook = (
+        'state_boundary() {\n'
+        f'    [ "$1:$2" = "{row}:{boundary}" ] || return 0\n'
+        f'    touch "{paused}"\n'
+        f'    while [ ! -e "{release}" ]; do sleep 0.01; done\n'
+        '}\n'
+    )
+    body = body.replace("set -u\n", "set -u\n" + hook, 1)
+    row_expr = '"$i"' if "STATE[i]=" in body else "0"
+    body = re.sub(
+        r"^(\s*)(STATE(?:\[i\])?=([a-z_]+))$",
+        lambda m: (m[0] if m[3] == 'staged' else
+                   f'{m[1]}{m[2]}\n{m[1]}state_boundary {row_expr} {m[3]}'),
+        body, flags=re.MULTILINE,
+    )
+    needle = '    NEW_ID[i]="$(object_id' if row_expr != "0" else 'NEW_ID="$(object_id'
+    body = body.replace(needle, f'    state_boundary {row_expr} staged\n' + needle, 1)
+    if boundary in RECOVERY_BOUNDARIES:
+        body = body.replace("COMMITTED=1\n", "exit 1\n", 1)
+    elif boundary == "committed":
+        body = body.replace("COMMITTED=1\n", "COMMITTED=1\nstate_boundary 0 committed\n", 1)
+    script.write_text(body, encoding="utf-8")
+
+
+def state_move_shim(bin_dir: Path, paths: list[Path], row: int, boundary: str, paused: Path, release: Path) -> None:
+    """Pause after the real rename but before the installer can record its result."""
+    bin_dir.mkdir(exist_ok=True)
+    real_mv = shutil.which("mv")
+    wrapper = bin_dir / "mv"
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import pathlib, subprocess, sys, time\n'
+        f'paths = {[str(p) for p in paths]!r}\n'
+        'args = [arg for arg in sys.argv[1:] if not arg.startswith("-")]\n'
+        'source, destination = args[-2:]\n'
+        'phase, index = "", -1\n'
+        'if source in paths:\n'
+        '    index = paths.index(source)\n'
+        '    phase = "post_displace" if (".backup." in destination or ".previous." in destination) else "post_evacuate"\n'
+        'elif destination in paths:\n'
+        '    index = paths.index(destination)\n'
+        '    phase = "post_restore" if (".backup." in source or ".previous." in source) else "post_install"\n'
+        f'result = subprocess.run([{real_mv!r}, *sys.argv[1:]])\n'
+        f'if result.returncode == 0 and (index, phase) == ({row}, {boundary!r}):\n'
+        f'    pathlib.Path({str(paused)!r}).touch()\n'
+        f'    while not pathlib.Path({str(release)!r}).exists(): time.sleep(0.01)\n'
+        'sys.exit(result.returncode)\n', encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+
+def signal_paused_process(command: list[str], env: dict[str, str], paused: Path, release: Path,
+                          interrupt: signal.Signals = signal.SIGTERM) -> tuple[int, str]:
+    proc = subprocess.Popen(
+        command, preexec_fn=installer_process_signals, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, stdin=subprocess.DEVNULL, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not paused.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "boundary never reached"
+            time.sleep(0.01)
+        os.killpg(proc.pid, interrupt)
+        release.touch()
+        output, _ = proc.communicate(timeout=15)
+    finally:
+        release.touch()
+        # Kill only the session we created, also cleaning any surviving shim child.
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+    return proc.returncode, output
+
+
+def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None:
+    """Inspect actual argv/fd 0 while the installer itself receives a pipe."""
+    bin_dir.mkdir()
+    real_mv = shutil.which("mv")
+    wrapper = bin_dir / "mv"
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import os, signal, stat, subprocess, sys\n'
+        'args = sys.argv[1:]\n'
+        'fd = os.fstat(0)\n'
+        'safe = "-f" in args and stat.S_ISCHR(fd.st_mode) and fd.st_rdev == os.stat("/dev/null").st_rdev\n'
+        'safe = safe and all(signal.getsignal(sig) != signal.SIG_IGN for sig in (signal.SIGHUP, signal.SIGTERM))\n'
+        f'with open({str(log)!r}, "a") as stream: stream.write(str(safe) + " " + repr(args) + "\\n")\n'
+        'if not safe: sys.exit(91)\n'
+        'source = [arg for arg in args if not arg.startswith("-")][-2]\n'
+        f'if {fail_source!r} in source: sys.exit(1)\n'
+        f'sys.exit(subprocess.run([{real_mv!r}, *args]).returncode)\n', encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+
+
+@pytest.mark.parametrize("boundary", BOUNDARIES)
+def test_every_row_recovers_at_every_state_boundary(dmg: Path, installed: Path, tmp_path: Path, boundary: str) -> None:
+    old_inode = installed.stat().st_ino
+    paused, release = tmp_path / "paused", tmp_path / "release"
+    instrument_boundaries(dmg / SCRIPT.name, 0, boundary, paused, release)
+    bin_dir = tmp_path / "bin"
+    state_move_shim(bin_dir, [installed], 0, boundary, paused, release)
+    code, output = signal_paused_process(
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, paused, release,
+    )
+    assert code == 1, output
+    assert version_of(installed) == "old"
+    assert installed.stat().st_ino == old_inode
+    assert leftovers(installed.parent) == []
+    assert not list(installed.rglob(f".{APP}.*"))
+    assert subprocess.run(["codesign", "--verify", "--deep", "--strict", str(installed)], preexec_fn=installer_process_signals, capture_output=True).returncode == 0
+
+
+def test_signal_after_commit_keeps_the_complete_new_installation(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    paused, release = tmp_path / "paused", tmp_path / "release"
+    instrument_boundaries(dmg / SCRIPT.name, 0, "committed", paused, release)
+    code, output = signal_paused_process(
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], dict(os.environ), paused, release,
+    )
+    assert code == 0, output
+    assert version_of(installed) == "new"
+    assert not list(installed.rglob(f".{APP}.*"))
+    assert subprocess.run(["codesign", "--verify", "--deep", "--strict", str(installed)], preexec_fn=installer_process_signals, capture_output=True).returncode == 0
+
+
+@pytest.mark.parametrize("interrupt", (signal.SIGHUP, signal.SIGINT, signal.SIGTERM))
+def test_signal_after_displacement_before_bookkeeping(dmg: Path, installed: Path, tmp_path: Path, interrupt: signal.Signals) -> None:
+    paused, release = tmp_path / "paused", tmp_path / "release"
+    bin_dir = tmp_path / "bin"
+    state_move_shim(bin_dir, [installed], 0, "post_displace", paused, release)
+    code, output = signal_paused_process(
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, paused, release, interrupt,
+    )
+    assert code == 1, output
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []
+
+
+def test_every_move_is_forced_and_has_null_stdin(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    log = tmp_path / "moves"
+    bin_dir = tmp_path / "bin"
+    noninteractive_move_shim(bin_dir, log, ".new.")
+    result = subprocess.run(
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
+        env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
+        input="must never reach mv\n", capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    calls = log.read_text().splitlines()
+    assert len(calls) == 3 and all(s.startswith("True ") for s in calls), calls
+    assert version_of(installed) == "old"
+
+
+@pytest.mark.parametrize("interrupt", (None, signal.SIGHUP, signal.SIGINT, signal.SIGTERM))
+@pytest.mark.parametrize("blocked_step", ("evacuate", "restore"))
+def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(dmg: Path, installed: Path, tmp_path: Path, blocked_step: str, interrupt: signal.Signals | None) -> None:
+    script = dmg / SCRIPT.name
+    target = installed
+    command = ["/bin/sh", str(script), "--update", str(target)]
+    process_env = dict(os.environ)
+    # Force rollback with all new rows installed, and accelerate the SAME watchdog.
+    body = script.read_text().replace("COMMITTED=1\n", "exit 1\n", 1).replace("sleep 5 &", "sleep 1 &", 1)
+    script.write_text(body)
+    old_inode = target.stat().st_ino
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "blocked-pids"
+    real_mv = shutil.which("mv")
+    wrapper = bin_dir / "mv"
+    wrapper.write_text(
+        f'#!{sys.executable}\n'
+        'import os, pathlib, signal, subprocess, sys, time\n'
+        'source, destination = [a for a in sys.argv[1:] if not a.startswith("-")][-2:]\n'
+        f'blocked = ({blocked_step!r} == "restore" and destination == {str(target)!r} and (".backup." in source or ".previous." in source)) or ({blocked_step!r} == "evacuate" and source == {str(target)!r} and (".install." in destination or ".new." in destination))\n'
+        'if blocked:\n'
+        '    for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM): signal.signal(sig, signal.SIG_IGN)\n'
+        f'    with open({str(log)!r}, "a") as stream: stream.write(str(os.getpid()) + "\\n")\n'
+        '    time.sleep(60)\n'
+        f'sys.exit(subprocess.run([{real_mv!r}, *sys.argv[1:]]).returncode)\n', encoding="utf-8",
+    )
+    wrapper.chmod(0o755)
+    proc = subprocess.Popen(command, preexec_fn=installer_process_signals, env={**process_env, "PATH": f"{bin_dir}{os.pathsep}{process_env['PATH']}"},
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            stdin=subprocess.DEVNULL, start_new_session=True)
+    started = time.monotonic()
+    try:
+        if interrupt is not None:
+            deadline = time.monotonic() + 5
+            while not log.exists():
+                assert proc.poll() is None and time.monotonic() < deadline
+                time.sleep(0.01)
+            os.killpg(proc.pid, interrupt)
+        output, _ = proc.communicate(timeout=10)
+        assert proc.returncode == 3, output
+        assert time.monotonic() - started < 8
+        prefix = 'The previous app is at: '
+        lines = [s.removeprefix(prefix) for s in output.splitlines() if s.startswith(prefix)]
+        assert len(lines) == 1, output
+        backup = Path(lines[0])
+        assert backup.stat().st_ino == old_inode
+        assert version_of(backup) == "old"
+        assert len(log.read_text().splitlines()) == 2
+        for child in map(int, log.read_text().splitlines()):
+            with pytest.raises(ProcessLookupError):
+                os.kill(child, 0)
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+
+
+def test_recreated_target_after_displacement_reports_the_real_backup(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    old_inode = installed.stat().st_ino
+    real_mv = shutil.which("mv")
+    bin_dir = shim(
+        tmp_path / "bin", "mv",
+        f'if [ "$source" = "{installed}" ]; then\n'
+        f'"{real_mv}" "$@" || exit $?\n'
+        f'mkdir -p "{installed}/Contents"\necho racer > "{installed}/keep.txt"\nexit 0\nfi\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 3, result.stdout + result.stderr
+    lines = [s.removeprefix("The previous app is at: ") for s in result.stderr.splitlines()
+             if s.startswith("The previous app is at: ")]
+    assert len(lines) == 1, result.stderr
+    backup = Path(lines[0])
+    assert backup.stat().st_ino == old_inode and version_of(backup) == "old"
+    assert (installed / "keep.txt").read_text().strip() == "racer"
+    assert "Restored" not in result.stdout
+
+
+@pytest.mark.parametrize("boundary", ("install_intent", "post_install", "installed"))
+def test_first_install_interruption_removes_the_new_app(dmg: Path, tmp_path: Path, boundary: str) -> None:
+    folder = tmp_path / "Apps"
+    folder.mkdir()
+    target = folder / APP
+    paused, release = tmp_path / "paused", tmp_path / "release"
+    instrument_boundaries(dmg / SCRIPT.name, 0, boundary, paused, release)
+    bin_dir = tmp_path / "bin"
+    state_move_shim(bin_dir, [target], 0, boundary, paused, release)
+    code, output = signal_paused_process(
+        ["/bin/sh", str(dmg / SCRIPT.name), str(folder)],
+        {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, paused, release,
+    )
+    assert code == 1, output
+    assert not target.exists()
+    assert leftovers(folder) == []
