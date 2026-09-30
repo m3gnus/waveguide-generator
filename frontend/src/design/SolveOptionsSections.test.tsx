@@ -103,6 +103,27 @@ describe('solve and directivity control help', () => {
     expect(blocks[0].previousElementSibling?.querySelector('#solve-engine')).not.toBeNull();
   });
 
+  it.each(['parametric', 'cad'] as const)('shows a short pending label without driver guidance in %s', (mode) => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      hostPlatform: 'windows',
+      engines: [{ name: 'bempp', available: false, reason: 'Checking OpenCL…', version: null,
+        fast_paths: [], qualification: 'pending', assembly_backend: null, opencl_unavailable_reason: null }],
+      engineSelection: { default: 'auto', resolvedDefault: null, full3dOrder: ['bempp'] },
+      cpuPreparationInFlight: false,
+    });
+    render(<SolveOptionsControls mode={mode} />);
+    expect(host.querySelector('[role="status"]')?.textContent).toBe('BEMPP · checking OpenCL…');
+    const option = host.querySelector<HTMLOptionElement>('option[value="bempp"]')!;
+    expect(option.textContent).toContain('checking OpenCL…');
+    if (mode === 'parametric') expect(option.disabled).toBe(false);
+    expect(host.querySelector('.opencl-guidance')).toBeNull();
+    act(() => { queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      hostPlatform: 'windows',
+      engines: [{ name: 'bempp', available: true, qualification: 'done', assembly_backend: 'opencl' }],
+    }); vi.advanceTimersByTime(1); });
+    expect(host.textContent).not.toContain('checking OpenCL…');
+  });
+
   it.each([
     ['windows', 'opencl'], ['darwin', 'numba'], [undefined, 'numba'],
   ])('omits solver-settings guidance for host %s and backend %s', (hostPlatform, backend) => {

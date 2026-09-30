@@ -69,6 +69,12 @@ describe('OpenclUnavailableHook', () => {
       .toEqual(block.steps.map((step) => step.url));
   });
 
+  it('suppresses driver guidance while qualification is pending', () => {
+    act(() => root.render(<OpenclUnavailableHook platform="windows"
+      engine={{ ...engine, qualification: 'pending' }} />));
+    expect(host.innerHTML).toBe('');
+  });
+
   it.each(['opencl', null, undefined] as const)('renders nothing for backend %s', (backend) => {
     act(() => root.render(<OpenclUnavailableHook platform="windows"
       engine={{ ...engine, assembly_backend: backend, opencl_unavailable_reason: 'no_device' }} />));

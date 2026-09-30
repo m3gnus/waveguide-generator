@@ -231,6 +231,7 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "field_traces",
             "di_sphere",
             "cancellation_granularity",
+            "qualification",
             "assembly_backend",
             "assembly_device",
             "opencl_unavailable_reason",

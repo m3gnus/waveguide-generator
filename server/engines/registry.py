@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 import logging
 import os
 import threading
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any, Callable, Literal, Mapping, Sequence
 
 from server.contracts.geometry import SYMMETRY_DOMAINS_BY_QUADRANTS
 from server.platform.warmup import BackgroundWarmup
@@ -22,9 +22,8 @@ from server.platform.warmup import BackgroundWarmup
 
 log = logging.getLogger("wg.engines.registry")
 
-# Preserve the previous 30s qualification ceiling for an HTTP caller even
-# though cold child imports now have their own allowance. Shield the work so
-# a request deadline/disconnect does not cancel shared qualification.
+# Bound HTTP waiting for ordinary detection. BEMPP qualification runs
+# independently; only a submission choosing BEMPP waits for its child budgets.
 CAPABILITIES_WAIT_SECONDS = 30.0
 
 
@@ -130,6 +129,7 @@ class EngineInfo:
     #: displays exactly what it did before labels existed.
     label: str = ""
     # Structured BEMPP probe result; the UI must not parse the warning prose.
+    qualification: Literal["pending", "done"] | None = None  # BEMPP only: pending / done
     assembly_backend: str | None = None
     assembly_device: dict[str, Any] | None = None
     opencl_unavailable_reason: str | None = None
@@ -220,12 +220,15 @@ def _mountings(
     return tuple(names)
 
 
-def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineInfo]:
+def detect_engines(
+    *, environ: Mapping[str, str] | None = None, names: Sequence[str] | None = None,
+) -> list[EngineInfo]:
     """Return stable, honest reasons without treating optional absence as an error."""
 
+    selected = set(full3d_engine_order() if names is None else names)
     env = os.environ if environ is None else environ
     engines: list[EngineInfo] = []
-    if env.get("WG2_ENABLE_DRYRUN") == "1":
+    if "dryrun" in selected and env.get("WG2_ENABLE_DRYRUN") == "1":
         engines.append(
             EngineInfo(
                 name="dryrun",
@@ -239,18 +242,6 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 symmetry_domains=("full",),
             )
         )
-
-    from server.solver import bempp as bempp_adapter
-    from server.solver import metal as metal_adapter
-    from server.solver.beat import (
-        BEAT_BACKENDS,
-        BEAT_BACKEND_LABELS,
-        beat_backend_statuses,
-        beat_engine_name,
-        beat_geometry_sources,
-    )
-    from server.solver.bempp import bempp_status
-    from server.solver.metal import metal_status
 
     # BEAT's symmetry and DI entries were stale rather than wrong: the package
     # has mapped WG's "yz" half onto its x mirror and "yz+xz" quarter onto its
@@ -268,10 +259,16 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     # the half that does work.
     # Each adapter declares what it solves; the registry only publishes it, so
     # an engine gains imported geometry by implementing it, never by name.
-    for name, label, probe, adapter in (
-        ("metal", "Metal \u2014 Apple GPU", metal_status, metal_adapter),
-        ("bempp", "BEMPP \u2014 CPU", bempp_status, bempp_adapter),
-    ):
+    for name, label in (("metal", "Metal — Apple GPU"), ("bempp", "BEMPP — CPU")):
+        if name not in selected:
+            continue
+        # Do not import the BEMPP stack on another engine's detection path.
+        if name == "bempp":
+            from server.solver import bempp as adapter
+            probe = adapter.bempp_status
+        else:
+            from server.solver import metal as adapter
+            probe = adapter.metal_status
         try:
             status = probe()
         except Exception as exc:  # a broken optional stack is unavailable, not fatal
@@ -284,6 +281,7 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
             EngineInfo(
                 name=name,
                 label=label,
+                qualification="done" if name == "bempp" else None,
                 assembly_backend=status.get("assembly_backend") if name == "bempp" else None,
                 assembly_device=status.get("assembly_device") if name == "bempp" else None,
                 opencl_unavailable_reason=status.get("opencl_unavailable_reason") if name == "bempp" else None,
@@ -327,6 +325,12 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     #
     # The four share every capability below: the backend is an execution
     # choice, not a formulation, and the same Julia solver runs on each.
+    if not any(name.startswith("beat-") for name in selected):
+        return engines
+    from server.solver.beat import (
+        BEAT_BACKENDS, BEAT_BACKEND_LABELS, beat_backend_statuses,
+        beat_engine_name, beat_geometry_sources,
+    )
     try:
         backend_statuses = beat_backend_statuses()
     except Exception as exc:  # a broken optional stack is unavailable, not fatal
@@ -341,6 +345,8 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
     for backend in BEAT_BACKENDS:
         status = backend_statuses.get(backend, {})
         name = beat_engine_name(backend)
+        if name not in selected:
+            continue
         engines.append(
             EngineInfo(
                 name=name,
@@ -538,6 +544,7 @@ class EngineRegistry:
         self._cache: tuple[EngineInfo, ...] | None = None
         self._opencl_revision = 0
         self._initial_probe_task: asyncio.Task[None] | None = None
+        self._initial_bempp_task: asyncio.Task[None] | None = None
         self._bempp_refresh_task: asyncio.Task[None] | None = None
         self._opencl_retry_task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
@@ -578,7 +585,7 @@ class EngineRegistry:
                 remove_readiness_listener(self._cpu_listener)
                 self._cpu_listener = None
         await self.warmup.stop()
-        for task in (self._opencl_retry_task, self._initial_probe_task, self._bempp_refresh_task):
+        for task in (self._opencl_retry_task, self._initial_probe_task, self._initial_bempp_task, self._bempp_refresh_task):
             if task is not None and not task.done():
                 task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -606,13 +613,49 @@ class EngineRegistry:
         except TimeoutError:
             pass
 
-    async def _detect_initial(self) -> None:
+    async def _publish_detection(self, names: Sequence[str]) -> None:
         from server.solver.bempp_opencl import qualification_revision
 
+        revision = qualification_revision()
+        detected = await asyncio.to_thread(self._detector, names=names)
         async with self._lock:
+            results = {item.name: item for item in detected}
+            self._cache = tuple(results.get(item.name, item) for item in self._cache or ())
+            if "bempp" in names:
+                self._opencl_revision = revision
+        self._schedule_opencl_retry()
+
+    async def _detect_initial(self) -> None:
+        if self._detector is detect_engines:
+            # Each adapter publishes independently. BEAT's one hardware query
+            # returns its four backends together; BEMPP never gates that query.
+            await asyncio.gather(*(self._publish_detection(names) for names in (
+                ("metal",), ("beat-cuda", "beat-rocm", "beat-metal", "beat-cpu"), ("dryrun",),
+            )))
+        else:
+            # Preserve the injectable whole-list detector used by embedders.
+            from server.solver.bempp_opencl import qualification_revision
+
             self._opencl_revision = qualification_revision()
             self._cache = tuple(await asyncio.to_thread(self._detector))
+        self._schedule_cpu_refresh()
         self._schedule_opencl_retry()
+
+    def _start_detection(self) -> None:
+        if self._initial_probe_task is not None and (
+            not self._initial_probe_task.done() or self._cache is not None
+        ):
+            return
+        if self._detector is detect_engines:
+            self._cache = tuple(
+                EngineInfo(name, False,
+                           "Checking OpenCL…" if name == "bempp" else "Engine detection is in progress.",
+                           None, qualification="pending" if name == "bempp" else None)
+                for name in full3d_engine_order()
+                if name != "dryrun" or os.environ.get("WG2_ENABLE_DRYRUN") == "1"
+            )
+            self._initial_bempp_task = asyncio.create_task(self._publish_detection(("bempp",)))
+        self._initial_probe_task = asyncio.create_task(self._detect_initial())
 
     def _schedule_opencl_retry(self) -> None:
         from server.solver.bempp_opencl import retry_pending
@@ -632,37 +675,54 @@ class EngineRegistry:
 
         while not self._listener_removed and retry_pending() and self._has_bempp_timeout():
             await self._wait_opencl_retry()
-            await self._refresh_bempp_timeout()
+            self._schedule_bempp_refresh()
+            if self._bempp_refresh_task is not None:
+                await asyncio.shield(self._bempp_refresh_task)
+
+    def _schedule_bempp_refresh(self) -> None:
+        if self._bempp_needs_refresh() and (
+            self._bempp_refresh_task is None or self._bempp_refresh_task.done()
+        ):
+            self._cache = tuple(
+                replace(item, available=False, qualification="pending", reason="Checking OpenCL…",
+                        assembly_backend=None, assembly_device=None, opencl_unavailable_reason=None)
+                if item.name == "bempp" else item for item in self._cache or ()
+            )
+            self._bempp_refresh_task = asyncio.create_task(self._refresh_bempp_timeout())
 
     async def capabilities(self) -> tuple[EngineInfo, ...]:
         self._loop = asyncio.get_running_loop()
-        if self._cache is None:
-            if self._initial_probe_task is None or self._initial_probe_task.done():
-                self._initial_probe_task = asyncio.create_task(self._detect_initial())
+        initial = self._initial_probe_task is None or self._cache is None
+        self._start_detection()
+        if not self._initial_probe_task.done():
             await self._wait_for_probe(self._initial_probe_task)
-            if self._cache is None:
-                self._initial_probe_task.add_done_callback(lambda _: self._schedule_cpu_refresh())
-                # A pending check is neither a qualified backend nor a driver
-                # failure. Existing nullable fields convey that honestly;
-                # no new guidance reason code is needed.
-                return tuple(
-                    EngineInfo(name, False, "Engine qualification is in progress; retry capabilities shortly.", None)
-                    for name in full3d_engine_order() if name != "dryrun"
-                )
-            # Do not spend a second HTTP wait on a retry if a timeout aged
-            # past its retry interval while other engine imports completed.
-            self._schedule_cpu_refresh()
-            self._schedule_opencl_retry()
-            return self._cache
+        if self._cache is None:
+            return tuple(EngineInfo(name, False, "Engine detection is in progress.", None)
+                         for name in full3d_engine_order() if name != "dryrun")
         self._schedule_cpu_refresh()
-        if not self._bempp_needs_refresh():
-            self._schedule_opencl_retry()
-            return self._cache
-        if self._bempp_refresh_task is None or self._bempp_refresh_task.done():
-            self._bempp_refresh_task = asyncio.create_task(self._refresh_bempp_timeout())
-        await self._wait_for_probe(self._bempp_refresh_task)
+        # The first snapshot already contains the attempt that just finished.
+        # Do not turn its timeout into another pending snapshot immediately.
+        if not initial:
+            self._schedule_bempp_refresh()
         self._schedule_opencl_retry()
         return self._cache
+
+    async def wait_for_bempp(self) -> tuple[EngineInfo, ...]:
+        """Submission-only wait, shielded from caller cancellation.
+
+        The shared check owns the spawn/import and READY-based compute budgets
+        in bempp_opencl; an HTTP snapshot deadline must not choose a backend.
+        Resolve before persisting a job so acceptance has a real engine/reason.
+        """
+        capabilities = await self.capabilities()
+        if self._initial_bempp_task is not None:
+            await asyncio.shield(self._initial_bempp_task)
+        # Notice a newer shared verdict, including one produced by the initial
+        # task while this submission waited. Retry work has one owner too.
+        self._schedule_bempp_refresh()
+        if self._bempp_refresh_task is not None:
+            await asyncio.shield(self._bempp_refresh_task)
+        return self._cache or capabilities
 
     def _has_bempp_timeout(self) -> bool:
         from server.solver.bempp_opencl import TIMEOUT_REASONS
@@ -680,20 +740,17 @@ class EngineRegistry:
     async def _refresh_bempp_timeout(self) -> None:
         from server.solver.bempp_opencl import qualification_revision
 
-        if not self._bempp_needs_refresh():
-            return
-        async with self._lock:
-            if not self._bempp_needs_refresh():
-                return
-            from server.solver import bempp
+        from server.solver import bempp
 
-            # A retry may take the entire qualification budget. Keep it on the
-            # capability thread, including retries triggered by solve requests.
-            revision = qualification_revision()
-            status = await asyncio.to_thread(bempp.bempp_status)
-            axes = _ground_plane_axes("bempp", status)
+        # A retry shares the same submission wait as the initial check. No
+        # registry lock is held while native qualification runs off-thread.
+        revision = qualification_revision()
+        status = await asyncio.to_thread(bempp.bempp_status)
+        axes = _ground_plane_axes("bempp", status)
+        async with self._lock:
             self._cache = tuple(
                 replace(item,
+                        qualification="done",
                         available=bool(status.get("available")),
                         reason=str(status["reason"]),
                         assembly_backend=status.get("assembly_backend"),
@@ -773,6 +830,22 @@ class EngineRegistry:
         resolved_quadrants: int | None = None,
     ) -> str | None:
         capabilities = await self.capabilities()
+        pending = next((item for item in capabilities
+                        if item.name == "bempp" and item.qualification == "pending"), None)
+        if pending is not None:
+            # Its capabilities are unknown until qualification finishes. Keep
+            # its normal place, then re-run all filters with the real result.
+            provisional = tuple(
+                replace(item, available=True, mountings=("free-standing", "infinite-baffle", "ground-plane"),
+                        symmetry_domains=()) if item is pending else item
+                for item in capabilities
+            )
+            candidate = resolve_auto_engine(
+                solver_mode=solver_mode, mounting=mounting,
+                resolved_quadrants=resolved_quadrants, capabilities=provisional,
+            ) if requested == "auto" else requested
+            if candidate == "bempp":
+                capabilities = await self.wait_for_bempp()
         if requested == "auto":
             return resolve_auto_engine(
                 solver_mode=solver_mode,
@@ -792,7 +865,7 @@ class EngineRegistry:
         return item is not None and engine_supports_symmetry(item, resolved_quadrants)
 
     async def get_engine(self, name: str) -> Any | None:
-        capabilities = await self.capabilities()
+        capabilities = await (self.wait_for_bempp() if name == "bempp" else self.capabilities())
         if not any(item.name == name and item.available for item in capabilities):
             return None
         return self._factory(name)

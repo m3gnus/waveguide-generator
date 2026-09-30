@@ -15,6 +15,7 @@ export interface EngineCapability {
   reason: string | null;
   version: string | null;
   fast_paths: string[];
+  qualification?: 'pending' | 'done' | null;
   assembly_backend?: 'opencl' | 'numba' | null;
   assembly_device?: { type: 'cpu'; vendor: string; name: string; platform: string; fp64: boolean } | null;
   opencl_unavailable_reason?: OpenclUnavailableReason | null;

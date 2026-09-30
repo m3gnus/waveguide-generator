@@ -25,6 +25,7 @@ import { useSolveOptionsStore } from '../stores/solveOptions';
  * Most results do not change within a server process: `EngineRegistry` probes
  * once and memoises them. The one live transition is BEAT CPU preparation;
  * its explicit lifecycle flag temporarily enables the short poll below.
+ * BEMPP qualification also polls while pending, with bounded backoff.
  * Everything else uses the long stale time so panel remounts stay cache-only.
  *
  * What a long staleTime cannot do is notice a *new* process. It only marks data
@@ -58,6 +59,7 @@ export interface CapabilitiesSnapshot {
 
 export function useCapabilities(): CapabilitiesSnapshot {
   const client = useQueryClient();
+  const qualificationPollStarted = useRef<number | null>(null);
   const { data, error, isError, isPending } = useQuery({
     queryKey: CAPABILITIES_QUERY_KEY,
     queryFn: () => getCapabilities(),
@@ -65,7 +67,18 @@ export function useCapabilities(): CapabilitiesSnapshot {
     staleTime: CAPABILITIES_STALE_MS,
     // This explicit server lifecycle covers delayed hardware inventory too.
     // Terminal ready, failed and skipped answers all stop the timer.
-    refetchInterval: (query) => query.state.data?.cpuPreparationInFlight ? 1000 : false,
+    refetchInterval: (query) => {
+      const pending = query.state.data?.engines?.some((engine) => engine.qualification === 'pending');
+      if (pending) {
+        qualificationPollStarted.current ??= Date.now();
+        if (Date.now() - qualificationPollStarted.current < 5 * 60_000) {
+          return Math.min(1000 * 2 ** Math.min(query.state.dataUpdateCount - 1, 4), 10_000);
+        }
+      } else {
+        qualificationPollStarted.current = null;
+      }
+      return query.state.data?.cpuPreparationInFlight ? 1000 : false;
+    },
   });
   const onshapeOffered = data === undefined ? null : data.onshape === true;
   useEffect(() => {
@@ -73,7 +86,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
   }, [onshapeOffered]);
   const plannerSupport = data
     ? `${data.engineSelection?.resolvedDefault ?? ''}|${(data.engines ?? NO_ENGINES)
-      .map((engine) => `${engine.name}:${engine.available ? 1 : 0}`)
+      .map((engine) => `${engine.name}:${engine.available ? 1 : 0}:${engine.qualification ?? ""}:${engine.assembly_backend ?? ""}:${engine.geometry_sources?.join("/") ?? ""}`)
       .join(',')}`
     : null;
   useEffect(() => {

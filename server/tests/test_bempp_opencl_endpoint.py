@@ -9,7 +9,7 @@ import pytest
 
 from server import app as app_module
 from server.engines import registry as registry_module
-from server.solver import bempp, bempp_opencl as probe, warmup
+from server.solver import beat, bempp, bempp_opencl as probe, metal, warmup
 from server.tests.test_app_batch_e import TestClient
 from server.tests.test_bempp_opencl import CPU
 
@@ -56,17 +56,11 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                     'opencl_unavailable_reason': 'inventory_timeout'}
         return {'ok': True, 'devices': [CPU]} if mode == 'inventory' else {'ok': True, 'smoke': {}}
     monkeypatch.setattr(probe, '_run_probe', run)
-    other = registry_module.EngineInfo('metal', False, 'absent', None)
-    def detect():
-        status = bempp.bempp_status()
-        return [other, registry_module.EngineInfo(
-            'bempp', status['available'], status['reason'], None,
-            assembly_backend=status['assembly_backend'],
-            assembly_device=status['assembly_device'],
-            opencl_unavailable_reason=status['opencl_unavailable_reason'],
-            geometry_sources=bempp.geometry_sources_for(status),
-            mountings=('free-standing', 'infinite-baffle'))]
-    monkeypatch.setattr(app_module, 'detect_engines', detect)
+    monkeypatch.setattr(metal, 'metal_status', lambda: {
+        'available': True, 'reason': 'Metal ready', 'version': 'test'})
+    monkeypatch.setattr(beat, 'beat_backend_statuses', lambda: {
+        backend: {'available': backend == 'cpu', 'reason': 'BEAT detected', 'version': 'test'}
+        for backend in beat.BEAT_BACKENDS})
     # A zero injected HTTP wait exercises the timeout branch deterministically
     # while the real qualification thread is held by events, not timed sleeps.
     assert registry_module.CAPABILITIES_WAIT_SECONDS <= probe.TOTAL_SECONDS
@@ -86,18 +80,25 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
         async with application.router.lifespan_context(application):
             try:
                 assert await asyncio.to_thread(probe_started.wait, 5)
+                await registry._initial_probe_task
+                other = next(item for item in registry._cache if item.name == 'metal')
                 pending = row(await asyncio.wait_for(client.request_async('GET', '/api/capabilities'), 5))
                 assert not release_probe.is_set() and not release_import.is_set()
                 assert pending['available'] is False
                 assert pending['assembly_backend'] is None
                 assert pending['opencl_unavailable_reason'] is None
-                assert 'in progress' in pending['reason']
+                assert pending['qualification'] == 'pending'
+                assert 'Checking OpenCL' in pending['reason']
+                rows = (await client.request_async('GET', '/api/capabilities')).json()['engines']
+                assert next(item for item in rows if item['name'] == 'metal')['available'] is True
+                assert next(item for item in rows if item['name'] == 'beat-cpu')['available'] is True
                 # Completing the first timeout publishes numba; qualification stays
                 # alive when the first HTTP wait expires.
                 release_probe.set()
-                await registry._initial_probe_task
+                await registry.wait_for_bempp()
                 monkeypatch.setattr(registry_module, 'CAPABILITIES_WAIT_SECONDS', 30)
                 first = row(await client.request_async('GET', '/api/capabilities'))
+                assert first['qualification'] == 'done'
                 assert first['assembly_backend'] == 'numba'
                 assert first['opencl_unavailable_reason'] == 'inventory_timeout'
                 assert tuple(first['geometry_sources']) == ('parametric',)
@@ -108,16 +109,21 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                     retry_permission.set()
                     # No endpoint or solve triggers this attempt: prewarm owns it.
                     await asyncio.wait_for(registry._opencl_retry_task, 5)
-                    assert registry._cache[1].assembly_backend == 'opencl'
+                    assert next(item for item in registry._cache if item.name == 'bempp').assembly_backend == 'opencl'
+                if recovery == 'request':
+                    assert row(await client.request_async('GET', '/api/capabilities'))['qualification'] == 'pending'
+                    await registry.wait_for_bempp()
                 recovered = row(await client.request_async('GET', '/api/capabilities'))
+                assert recovered['qualification'] == 'done'
                 assert recovered['assembly_backend'] == 'opencl'
                 assert recovered['assembly_device'] == CPU
                 assert recovered['opencl_unavailable_reason'] is None
                 assert 'imported' in recovered['geometry_sources']
-                assert await registry.resolve('auto', solver_mode=None, mounting='infinite-baffle') == 'bempp'
+                assert await registry.resolve('auto', solver_mode=None, mounting='infinite-baffle') == 'metal'
+                assert await registry.resolve('bempp', solver_mode=None) == 'bempp'
                 assert probe.execution_route() == ('opencl', CPU)
                 assert calls == ['inventory', 'inventory', 'smoke']
-                assert registry._cache[0] is other
+                assert next(item for item in registry._cache if item.name == 'metal') is other
             finally:
                 release_probe.set()
                 release_import.set()

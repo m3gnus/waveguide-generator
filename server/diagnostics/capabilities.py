@@ -46,7 +46,9 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     # that advertised a different one from the one AUTO follows would be worse
     # than no order at all.
     order = full3d_engine_order()
-    resolved = next((name for name in order if name in available), None)
+    pending = {item["name"] for item in engines if item.get("qualification") == "pending"}
+    first = next((name for name in order if name in available or name in pending), None)
+    resolved = first if first in available else None
     # "What can this host do" is incomplete without "and is this host the stack
     # it claims to be". A drifted module changes what the probes above report
     # while every version string stays put.

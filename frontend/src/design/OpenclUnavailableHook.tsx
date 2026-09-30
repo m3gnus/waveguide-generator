@@ -10,7 +10,7 @@ export function OpenclUnavailableHook({ platform, engine, notice }: {
 }) {
   const host: OpenClGuidanceHost | undefined = platform === 'darwin' ? 'macos'
     : platform === 'windows' || platform === 'linux' ? platform : undefined;
-  if (engine?.name !== 'bempp' || engine.assembly_backend !== 'numba' || !host) return null;
+  if (engine?.qualification === 'pending' || engine?.name !== 'bempp' || engine.assembly_backend !== 'numba' || !host) return null;
   const reason = engine.opencl_unavailable_reason;
   return <OpenClGuidance platform={host} notice={notice}
     reason={reason && Object.hasOwn(guidance.reasons, reason)

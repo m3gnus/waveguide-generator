@@ -1597,6 +1597,9 @@ async def resolve_imported_submission(
         raise UnknownEngineError(f"Unknown solve engine: {requested}")
 
     detected = await engine_registry.capabilities()
+    if requested == "bempp" and any(info.name == "bempp" and info.qualification == "pending"
+                                    for info in detected):
+        detected = await engine_registry.wait_for_bempp()
     declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine)
     order = full3d_engine_order()
     capable = [
@@ -1671,6 +1674,15 @@ async def resolve_imported_submission(
     refused: list[str] = []
     for name in candidates:
         info = declared.get(name)
+        if info is not None and info.qualification == "pending":
+            # Walk the imported request's normal order too: a higher engine's
+            # preflight can choose it immediately, but pending BEMPP cannot be
+            # passed over just because OpenCL has not returned yet.
+            detected = await engine_registry.wait_for_bempp()
+            declared = _imported_capabilities(detected, _imported_accuracy(request), request.options.engine)
+            capable = [candidate for candidate in order if candidate in declared
+                       and _IMPORTED_GEOMETRY in declared[candidate].geometry_sources]
+            info = declared.get(name)
         if info is None:
             # Not detected on this host at all, so not a candidate here.
             continue

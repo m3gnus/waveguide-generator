@@ -753,7 +753,7 @@ def test_bempp_solve_retries_timeout_and_selects_recovered_opencl(monkeypatch):
         assert bound == [device]
         # The solve recovered first; the registry must observe that even while
         # retry_due() is now false because the pass is cached.
-        recovered = asyncio.run(registry.capabilities())[0]
+        recovered = asyncio.run(registry.wait_for_bempp())[0]
         assert recovered.assembly_backend == 'opencl'
         assert recovered.assembly_device == device
         assert 'imported' in recovered.geometry_sources

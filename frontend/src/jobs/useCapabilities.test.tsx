@@ -150,6 +150,45 @@ describe('useCapabilities', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('polls pending OpenCL with backoff, stops on done, and invalidates plans', async () => {
+    const pending = { ...CAPABILITIES, engines: [{
+      name: 'bempp', available: false, qualification: 'pending', assembly_backend: null,
+    }] };
+    const done = { ...pending, engines: [{
+      name: 'bempp', available: true, qualification: 'done', assembly_backend: 'opencl',
+    }] };
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(pending), { status: 200 }));
+    const invalidate = vi.spyOn(client, 'invalidateQueries');
+    await render(<Consumer tag="status"/>);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await flushReact();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(done), { status: 200 }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await flushReact();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['solve-plan'] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('bounds pending qualification polling even if the server never finishes', async () => {
+    const pending = { ...CAPABILITIES, engines: [{ name: 'bempp', qualification: 'pending' }] };
+    fetchMock.mockImplementation(async () => new Response(JSON.stringify(pending), { status: 200 }));
+    await render(<Consumer tag="status"/>);
+    await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000 + 10_000); });
+    await flushReact();
+    const count = fetchMock.mock.calls.length;
+    expect(count).toBeGreaterThan(2);
+    expect(count).toBeLessThan(40);
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(fetchMock).toHaveBeenCalledTimes(count);
+  });
+
   it('stops polling after terminal preparation failure', async () => {
     const preparing = { ...CAPABILITIES, cpuPreparationInFlight: true };
     const failed = {
