@@ -196,7 +196,12 @@ if ($landed) {
     $planted = "$installRoot\app\__pycache__"
     New-Item -ItemType Directory -Force $planted | Out-Null
     Set-Content "$planted\gate.pyc" "planted by the gate run"
-    $unins = Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1
+    # recovery\sitecustomize.py is imported by every start of the bundled
+    # interpreter, so an ordinary launch writes bytecode there as well.
+    $plantedRecovery = "$installRoot\recovery\__pycache__"
+    New-Item -ItemType Directory -Force $plantedRecovery | Out-Null
+    Set-Content "$plantedRecovery\gate.pyc" "planted by the gate run"
+    $unins =Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1
     if ($unins) {
         $p = Start-Process -FilePath $unins.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -Wait -NoNewWindow
         Start-Sleep -Seconds 3

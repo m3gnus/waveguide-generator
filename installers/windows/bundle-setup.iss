@@ -142,12 +142,19 @@ Filename: "{app}\Waveguide Generator.exe"; Description: "Start Waveguide Generat
 ; writes __pycache__ beside every .py in the tree -- hundreds of directories,
 ; not one, which is why naming a single path here would not work.
 ;
-; These two directories are the bundle's own layers and hold nothing a user
-; put there, so removing them wholesale is safe. {app} itself is only removed
-; if empty, which leaves anything the user added in the install root alone
-; rather than trusting a wildcard with a path they were able to edit.
+; These three directories are the bundle's own and hold nothing a user put
+; there, so removing them wholesale is safe. {app} itself is only removed if
+; empty, which leaves anything the user added in the install root alone rather
+; than trusting a wildcard with a path they were able to edit.
+;
+; recovery is listed for the same reason as the two layers. Its
+; sitecustomize.py is imported by every start of the bundled interpreter,
+; before the launcher has redirected the bytecode cache, so an ordinary launch
+; writes recovery\__pycache__. Without this entry an uninstall after any use
+; left that folder behind, and {app} with it.
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\recovery"
 Type: dirifempty; Name: "{app}"
 
 [Code]

@@ -106,3 +106,20 @@ def test_no_constant_shadows_one_inno_setup_predefines() -> None:
         assert not re.search(rf"^\s*{name}\s*=", code, flags=re.MULTILINE), (
             f"{name} is declared in [Code]; Inno Setup 6.7.3 already defines it"
         )
+
+
+def test_uninstall_removes_every_directory_the_bundle_owns() -> None:
+    """Bytecode Python writes beside the bundle's own files must not survive an uninstall.
+
+    ``recovery/sitecustomize.py`` is imported by every start of the bundled
+    interpreter, so an ordinary launch writes ``recovery/__pycache__``. An
+    [UninstallDelete] that names only ``app`` and ``runtime`` leaves it, and the
+    install root with it.
+    """
+
+    from scripts import build_bundle
+
+    script = (ROOT / "installers/windows/bundle-setup.iss").read_text(encoding="utf-8")
+    section = script.split("[UninstallDelete]", 1)[1].split("\n[", 1)[0]
+    for directory in ("runtime", "app", build_bundle.RECOVERY_DIRECTORY_NAME):
+        assert f'Type: filesandordirs; Name: "{{app}}\{directory}"' in section, directory
