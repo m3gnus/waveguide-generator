@@ -184,6 +184,33 @@ jobs:
       - name: Server import boundaries
         run: lint-imports --no-cache
 
+  windows-installer-compile:
+    # Compile only: ISCC on the real bundle-setup.iss with a stub payload.
+    # The .iss is only ever compiled on Windows, so this is the one place a
+    # change it refuses is caught before a release build. Adds about a minute.
+    name: Windows installer compiles
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install the pinned Inno Setup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup --version=6.7.1 -y --no-progress
+          if ($LASTEXITCODE -ne 0) {
+            throw "Chocolatey Inno Setup install exited $LASTEXITCODE"
+          }
+          $iscc = & ./scripts/ci/verify_inno_setup.ps1
+          "WG2_ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Compile the installer script against a stub payload
+        shell: pwsh
+        run: ./scripts/ci/compile_inno_stub.ps1 -CompilerPath $env:WG2_ISCC
+
   server:
     name: ${{ matrix.label }} (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

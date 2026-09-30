@@ -246,3 +246,24 @@ def test_inno_verifier_executes_the_real_installed_compiler_probe() -> None:
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Verified Inno Setup compiler 6.7.1" in result.stdout
+
+
+def test_ci_compiles_the_windows_installer_script_on_every_run() -> None:
+    """ISCC on the real .iss, stub payload, pinned 6.7.1: a refused compile fails CI."""
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = workflow["jobs"]["windows-installer-compile"]
+    assert job["runs-on"] == "windows-latest"
+    assert job["permissions"] == {"contents": "read"}
+    assert "if" not in job, "the compile must run on every CI run"
+    install, compile_step = job["steps"][1], job["steps"][2]
+    assert "choco install innosetup --version=6.7.1" in install["run"]
+    assert "$LASTEXITCODE -ne 0" in install["run"]
+    assert "./scripts/ci/verify_inno_setup.ps1" in install["run"]
+    assert "./scripts/ci/compile_inno_stub.ps1" in compile_step["run"]
+
+    stub = (ROOT / "scripts" / "ci" / "compile_inno_stub.ps1").read_text(encoding="utf-8")
+    assert "installers\\windows\\bundle-setup.iss" in stub
+    assert "$code -ne 0" in stub and "throw" in stub
+    assert "stub-setup.exe" in stub
+    # Compile only: the produced setup is never started.
+    assert "Start-Process" not in stub and "Invoke-Item" not in stub
