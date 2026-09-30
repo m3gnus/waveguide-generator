@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "warnings": [
+    {
+      "id": "pocl_windows",
+      "platforms": ["windows"],
+      "text": "PoCL on Windows shows up as an OpenCL device but computes nothing, so installing it does not help."
+    }
+  ],
+  "reasons": {
+    "no_device": "No CPU OpenCL device was found.",
+    "smoke_test_failed": "The CPU OpenCL runtime failed its test calculation.",
+    "smoke_test_timeout": "The CPU OpenCL runtime's test calculation timed out.",
+    "pocl_windows": "PoCL on Windows cannot run BEMPP calculations."
+  },
+  "platforms": {
+    "windows": {
+      "summary": "On computers without a supported graphics-card solver, WG's BEMPP solver runs on the CPU. Installing a CPU OpenCL runtime makes it much faster. It still works without one, more slowly.",
+      "steps": [
+        {
+          "vendor": "intel",
+          "label": "Intel CPU OpenCL runtime",
+          "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html",
+          "note": "Intel's CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. If no OpenCL device works, WG falls back to its slower numba engine."
+        }
+      ]
+    },
+    "linux": {
+      "summary": "On computers without a supported graphics-card solver, WG's BEMPP solver runs on the CPU. Installing a CPU OpenCL runtime makes it much faster. It still works without one, more slowly.",
+      "steps": [
+        {
+          "vendor": "pocl",
+          "label": "PoCL CPU OpenCL runtime",
+          "url": "https://portablecl.org/",
+          "note": "Install your distribution's PoCL CPU runtime package."
+        },
+        {
+          "vendor": "intel",
+          "label": "Intel CPU OpenCL runtime",
+          "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html",
+          "note": "Alternatively, install Intel's CPU runtime through your distribution or Intel's packages."
+        }
+      ]
+    }
+  }
+}

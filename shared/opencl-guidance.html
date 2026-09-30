@@ -1,0 +1,22 @@
+<!doctype html>
+<!-- Generated from shared/opencl-driver-guidance.v1.json.
+     Regenerate with scripts/gen_opencl_guidance.py --write. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CPU OpenCL runtime</title>
+  <style>
+    body { font: 1rem/1.5 system-ui, sans-serif; max-width: 44rem; margin: 2rem auto; padding: 0 1rem; }
+    li { margin: 0.75rem 0; }
+  </style>
+</head>
+<body>
+  <h1>CPU OpenCL runtime</h1>
+  <p>On computers without a supported graphics-card solver, WG&#x27;s BEMPP solver runs on the CPU. Installing a CPU OpenCL runtime makes it much faster. It still works without one, more slowly.</p>
+  <ul>
+    <li><a href="https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html">Intel CPU OpenCL runtime</a><p>Intel&#x27;s CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. If no OpenCL device works, WG falls back to its slower numba engine.</p></li>
+  </ul>
+  <p>PoCL on Windows shows up as an OpenCL device but computes nothing, so installing it does not help.</p>
+</body>
+</html>
