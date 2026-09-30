@@ -531,6 +531,7 @@ class EngineRegistry:
         self._detector = detector
         self._factory = factory
         self._cache: tuple[EngineInfo, ...] | None = None
+        self._opencl_revision = 0
         self._lock = asyncio.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._refresh_task: asyncio.Task[None] | None = None
@@ -591,9 +592,50 @@ class EngineRegistry:
         if self._cache is None:
             async with self._lock:
                 if self._cache is None:
+                    from server.solver.bempp_opencl import qualification_revision
+
+                    self._opencl_revision = qualification_revision()
                     self._cache = tuple(await asyncio.to_thread(self._detector))
                     self._schedule_cpu_refresh()
+        await self._refresh_bempp_timeout()
         return self._cache
+
+    async def _refresh_bempp_timeout(self) -> None:
+        from server.solver.bempp_opencl import TIMEOUT_REASONS, qualification_revision, retry_due
+
+        def needs_refresh() -> bool:
+            return any(item.name == "bempp" and item.opencl_unavailable_reason in TIMEOUT_REASONS
+                       for item in self._cache or ()) and (
+                retry_due() or self._opencl_revision != qualification_revision()
+            )
+
+        if not needs_refresh():
+            return
+        async with self._lock:
+            if not needs_refresh():
+                return
+            from server.solver import bempp
+
+            # A retry may take the entire qualification budget. Keep it on the
+            # capability thread, including retries triggered by solve requests.
+            revision = qualification_revision()
+            status = await asyncio.to_thread(bempp.bempp_status)
+            axes = _ground_plane_axes("bempp", status)
+            self._cache = tuple(
+                replace(item,
+                        available=bool(status.get("available")),
+                        reason=str(status["reason"]),
+                        assembly_backend=status.get("assembly_backend"),
+                        assembly_device=status.get("assembly_device"),
+                        opencl_unavailable_reason=status.get("opencl_unavailable_reason"),
+                        geometry_sources=bempp.geometry_sources_for(status),
+                        mountings=_mountings(infinite_baffle=bool(status.get("coupled_infinite_baffle")),
+                                            ground_plane_axes=axes),
+                        ground_plane_axes=axes,
+                        ground_plane_composes_with_symmetry=bool(status.get("ground_plane_composes_with_symmetry")))
+                if item.name == "bempp" else item for item in self._cache or ()
+            )
+            self._opencl_revision = revision
 
     def _cpu_readiness_changed(self) -> None:
         if self._listener_removed:

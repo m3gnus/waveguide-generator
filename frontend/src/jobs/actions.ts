@@ -2,7 +2,7 @@ import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
-export type OpenclUnavailableReason = 'no_device' | 'smoke_test_failed' | 'smoke_test_timeout' | 'pocl_windows';
+export type OpenclUnavailableReason = 'no_device' | 'inventory_timeout' | 'smoke_test_failed' | 'smoke_test_timeout' | 'pocl_windows';
 
 export interface EngineCapability {
   name: string;

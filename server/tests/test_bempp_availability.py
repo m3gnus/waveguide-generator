@@ -60,7 +60,7 @@ def test_opencl_is_preferred_when_a_device_exists(monkeypatch):
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
     monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
-    monkeypatch.setattr(bempp, "_opencl_status", lambda: (True, "Fake CPU passed compute smoke", {"type": "cpu", "name": "Fake CPU"}, None))
+    monkeypatch.setattr(bempp, "_opencl_status", lambda result: (True, "Fake CPU passed compute smoke", {"type": "cpu", "name": "Fake CPU"}, None))
 
     status = bempp.bempp_status()
 
@@ -80,7 +80,7 @@ def test_numba_fallback_is_never_silent(monkeypatch):
     monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
     monkeypatch.setattr(
         bempp, "_opencl_status",
-        lambda: (False, "no CPU OpenCL device is present", None, "no_device"),
+        lambda result: (False, "no CPU OpenCL device is present", None, "no_device"),
     )
 
     status = bempp.bempp_status()
@@ -100,7 +100,7 @@ def test_available_requires_a_working_assembly_backend(monkeypatch):
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
     monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
-    monkeypatch.setattr(bempp, "_opencl_status", lambda: (False, "no OpenCL here.", None, "no_device"))
+    monkeypatch.setattr(bempp, "_opencl_status", lambda result: (False, "no OpenCL here.", None, "no_device"))
     monkeypatch.setattr(bempp.importlib, "import_module", _refusing_numba())
 
     status = bempp.bempp_status()
@@ -116,7 +116,7 @@ def test_windows_missing_runtime_names_the_dlls_and_the_fix(monkeypatch):
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
     monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
-    monkeypatch.setattr(bempp, "_opencl_status", lambda: (False, "no OpenCL here.", None, "no_device"))
+    monkeypatch.setattr(bempp, "_opencl_status", lambda result: (False, "no OpenCL here.", None, "no_device"))
     monkeypatch.setattr(bempp.importlib, "import_module", _refusing_numba())
     monkeypatch.setattr(
         bempp, "_missing_windows_runtime_dlls", lambda: ["vcruntime140.dll", "msvcp140.dll"]

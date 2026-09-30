@@ -55,6 +55,20 @@ describe('OpenclUnavailableHook', () => {
       .toEqual(block.steps.map((step) => step.url));
   });
 
+  it.each(['inventory_timeout', 'future_reason', 'toString'])('renders platform guidance for unknown reason %s', (reason) => {
+    act(() => root.render(<OpenclUnavailableHook platform="windows"
+      engine={{ ...engine, opencl_unavailable_reason: reason as EngineCapability['opencl_unavailable_reason'] }} />));
+    const block = guidance.platforms.windows;
+    expect([...host.querySelectorAll('p')].map((p) => p.textContent)).toEqual([
+      block.summary,
+      ...guidance.gpu_alternatives.filter((entry) => entry.platforms.includes('windows')).map((entry) => entry.text),
+      ...block.steps.map((step) => step.note),
+      ...guidance.warnings.filter((warning) => warning.platforms.includes('windows')).map((warning) => warning.text),
+    ]);
+    expect([...host.querySelectorAll('a')].map((a) => a.getAttribute('href')))
+      .toEqual(block.steps.map((step) => step.url));
+  });
+
   it.each(['opencl', null, undefined] as const)('renders nothing for backend %s', (backend) => {
     act(() => root.render(<OpenclUnavailableHook platform="windows"
       engine={{ ...engine, assembly_backend: backend, opencl_unavailable_reason: 'no_device' }} />));

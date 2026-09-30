@@ -1,8 +1,9 @@
 """Qualify OpenCL in disposable processes before selecting it for BEMPP.
 
 Enumeration, driver imports, context creation and kernel execution can all hang.
-None runs in the capability thread. The eight-second total budget includes a
-five-second limit per device, and each verdict is retained for this process.
+Native work runs in bounded children, waited on by the background capability
+thread or the isolated solve/warmup worker, never by startup or the event loop.
+Timeouts are transient; passes and definitive rejections persist for the process.
 """
 from __future__ import annotations
 
@@ -16,11 +17,30 @@ import threading
 import time
 from typing import Any, Mapping
 
-PROBE_SECONDS = 5.0
-TOTAL_SECONDS = 8.0
+# Ryzen 7 5825U Windows VM / Intel CPU runtime: inventory (mostly bempp_cl
+# import) took 1.6s idle; full qualification took 3.5-5.6s. Allow cold disk,
+# antivirus and concurrent numba load: >6x inventory headroom and >5x full
+# headroom, while bounding hung drivers. Registry prewarm schedules background
+# work; EngineRegistry.capabilities uses asyncio.to_thread for all probes.
+INVENTORY_SECONDS = 10.0
+PROBE_SECONDS = 20.0
+TOTAL_SECONDS = 30.0
+# Initial attempt plus two retries, at least 5s after each timeout completes.
+# Serialize attempts so concurrent capability/solve requests cannot pile up.
+RETRY_INTERVAL_SECONDS = 5.0
+MAX_TIMEOUT_ATTEMPTS = 3
+OPENCL_UNAVAILABLE_REASONS = frozenset({
+    "no_device", "inventory_timeout", "smoke_test_failed", "smoke_test_timeout", "pocl_windows",
+})
+TIMEOUT_REASONS = frozenset({"inventory_timeout", "smoke_test_timeout"})
 _RESULT_PREFIX = "WG_OPENCL_RESULT "
 _selection_lock = threading.Lock()
 _device_verdict_cache: dict[str, dict[str, Any]] = {}
+_cached_verdict: dict[str, Any] | None = None
+_last_timeout: dict[str, Any] | None = None
+_timeout_attempts = 0
+_retry_after = 0.0
+_revision = 0
 
 
 def inventory() -> list[dict[str, Any]]:
@@ -161,23 +181,25 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
         line = next(line for line in reversed(completed.stdout.splitlines()) if line.startswith(_RESULT_PREFIX))
         return json.loads(line[len(_RESULT_PREFIX):])
     except subprocess.TimeoutExpired:
-        return {"ok": False, "opencl_unavailable_reason": "smoke_test_timeout", "reason": f"OpenCL {mode} timed out after {timeout:.1f}s"}
+        return {"ok": False, "opencl_unavailable_reason": "inventory_timeout" if mode == "inventory" else "smoke_test_timeout", "reason": f"OpenCL {mode} timed out after {timeout:.1f}s"}
     except (OSError, subprocess.CalledProcessError, StopIteration, ValueError) as exc:
         return {"ok": False, "opencl_unavailable_reason": "no_device" if mode == "inventory" else "smoke_test_failed", "reason": f"OpenCL {mode} probe failed: {type(exc).__name__}"}
 
 
 def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
-    if device_json not in _device_verdict_cache:
-        _device_verdict_cache[device_json] = _run_probe("smoke", json.loads(device_json), timeout)
-    return _device_verdict_cache[device_json]
+    if device_json in _device_verdict_cache:
+        return _device_verdict_cache[device_json]
+    verdict = _run_probe("smoke", json.loads(device_json), timeout)
+    if verdict.get("opencl_unavailable_reason") not in TIMEOUT_REASONS:
+        _device_verdict_cache[device_json] = verdict
+    return verdict
 
 
-@lru_cache(maxsize=1)
 def _qualified_opencl() -> dict[str, Any]:
     began = time.monotonic()
-    found = _run_probe("inventory", None, min(2.0, TOTAL_SECONDS))
+    found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
     if not found.get("ok"):
-        return {"opencl_unavailable_reason": "no_device", **found}
+        return {**found, "opencl_unavailable_reason": found.get("opencl_unavailable_reason", "no_device")}
     devices = rank_devices(found["devices"])
     if not devices:
         return {
@@ -212,16 +234,53 @@ def _qualified_opencl() -> dict[str, Any]:
             "reason": "; ".join(failures)}
 
 
+def retry_pending() -> bool:
+    """Cheap state inspection; never waits on the probe lock/event loop."""
+    return _last_timeout is not None and _cached_verdict is None
+
+
+def retry_due() -> bool:
+    return retry_pending() and time.monotonic() >= _retry_after
+
+
+def qualification_revision() -> int:
+    """Let registry snapshots notice a qualification done by another caller."""
+    return _revision
+
+
 def qualified_opencl() -> dict[str, Any]:
-    # lru_cache alone can duplicate the first call from simultaneous probes.
+    global _cached_verdict, _last_timeout, _timeout_attempts, _retry_after, _revision
     with _selection_lock:
-        return dict(_qualified_opencl())
+        if _cached_verdict is not None:
+            return dict(_cached_verdict)
+        if _last_timeout is not None and not retry_due():
+            return dict(_last_timeout)
+        verdict = _qualified_opencl()
+        if verdict.get("opencl_unavailable_reason") in TIMEOUT_REASONS:
+            _timeout_attempts += 1
+            _last_timeout = verdict
+            _retry_after = time.monotonic() + RETRY_INTERVAL_SECONDS
+            if _timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
+                # Stop retrying a persistently hung runtime; retain its timeout
+                # code for guidance, rather than misreporting an absent device.
+                _cached_verdict = verdict
+        else:
+            _cached_verdict = verdict
+            _last_timeout = None
+            _timeout_attempts = 0
+        _revision += 1
+        return dict(verdict)
 
 
 def clear_cache() -> None:
-    _qualified_opencl.cache_clear()
-    _device_verdict_cache.clear()
-    _bind_device.cache_clear()
+    global _cached_verdict, _last_timeout, _timeout_attempts, _retry_after, _revision
+    with _selection_lock:
+        _cached_verdict = _last_timeout = None
+        _timeout_attempts = 0
+        _retry_after = 0.0
+        _revision += 1
+        _device_verdict_cache.clear()
+        _bind_device.cache_clear()
 
 
 if __name__ == "__main__":

@@ -700,3 +700,60 @@ def test_power_qualification_provenance_matches_the_executed_formulation(
     assert provenance["formulation"] == captured["formulation"] == "standard"
     assert provenance["complex_k_shift"] == captured["complex_k_shift"] == 0.0
     assert "complex_k_shift" not in provenance["missing"]
+
+
+def test_bempp_solve_retries_timeout_and_selects_recovered_opencl(monkeypatch):
+    """Exercise the real status cache and adapter config, not a status stub."""
+    import asyncio
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.solver import bempp_opencl as probe
+
+    bempp.bempp_status.cache_clear()
+    device = {'platform_index': 0, 'device_index': 0, 'type': 'cpu',
+              'platform': 'Intel OpenCL', 'vendor': 'AMD', 'name': 'Ryzen', 'fp64': True}
+    clock, attempts, bound, configs = [0.0], [], [], []
+    monkeypatch.setattr(probe, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+    def run(mode, candidate, timeout):
+        if mode == 'inventory':
+            attempts.append(mode)
+            if len(attempts) == 1:
+                return {'ok': False, 'reason': 'slow import', 'opencl_unavailable_reason': 'inventory_timeout'}
+            return {'ok': True, 'devices': [device]}
+        return {'ok': True, 'smoke': {}}
+    monkeypatch.setattr(probe, '_run_probe', run)
+    monkeypatch.setattr(bempp, '_load_api', lambda: True)
+    monkeypatch.setattr(bempp, 'bind_device', lambda selected: bound.append(selected))
+    def config(**kwargs):
+        if 'assembly_backend' in kwargs:
+            configs.append(kwargs)
+        return _Config(**kwargs)
+    monkeypatch.setattr(bempp, 'SolveConfig', config)
+    monkeypatch.setattr(bempp, 'bempp_solve', lambda _path, _config: _result())
+    monkeypatch.setattr(bempp, 'ObservationConfig', lambda **kwargs: SimpleNamespace(**kwargs))
+    def detect():
+        status = bempp.bempp_status()
+        return [EngineInfo('bempp', status['available'], status['reason'], None,
+                           assembly_backend=status['assembly_backend'],
+                           opencl_unavailable_reason=status['opencl_unavailable_reason'])]
+    registry = EngineRegistry(detector=detect, cpu_refresh=False)
+    try:
+        assert asyncio.run(registry.capabilities())[0].assembly_backend == 'numba'
+        first = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(field_plane=False))
+        assert first['metadata']['assembly_backend'] == 'numba'
+        assert configs[-1]['assembly_backend'] == 'numba'
+        assert bound == []
+        clock[0] += probe.RETRY_INTERVAL_SECONDS
+        second = bempp.solve_bempp_from_msh_text(_cabinet_msh(), _context(field_plane=False))
+        assert second['metadata']['assembly_backend'] == 'opencl'
+        assert configs[-1]['assembly_backend'] == 'opencl'
+        assert configs[-1]['opencl_device'] == 'cpu'
+        assert bound == [device]
+        # The solve recovered first; the registry must observe that even while
+        # retry_due() is now false because the pass is cached.
+        recovered = asyncio.run(registry.capabilities())[0]
+        assert recovered.assembly_backend == 'opencl'
+        assert recovered.assembly_device == device
+        assert 'imported' in recovered.geometry_sources
+        assert attempts == ['inventory', 'inventory']
+    finally:
+        bempp.bempp_status.cache_clear()

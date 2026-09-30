@@ -27,7 +27,10 @@ from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
-from .bempp_opencl import bind_device, clear_cache as clear_opencl_cache, qualified_opencl
+from .bempp_opencl import (
+    TIMEOUT_REASONS, bind_device, clear_cache as clear_opencl_cache,
+    qualification_revision, qualified_opencl, retry_pending,
+)
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -349,9 +352,8 @@ def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
 
 
-def _opencl_status() -> tuple[bool, str, dict[str, Any] | None, str | None]:
+def _opencl_status(result: Mapping[str, Any]) -> tuple[bool, str, dict[str, Any] | None, str | None]:
     """Only CPU devices passing a bounded real assembly/solve qualify."""
-    result = qualified_opencl()
     reason = str(result["reason"])
     return bool(result.get("ok")), reason, result.get("device"), result.get("opencl_unavailable_reason")
 
@@ -377,13 +379,13 @@ def numba_fallback_warning(opencl_reason: str) -> str:
 
 def _assembly_backend_status() -> tuple[bool, str, str | None, str | None, dict[str, Any] | None, str | None]:
     """Resolve the compute-qualified OpenCL device, otherwise explicit numba."""
-    opencl_usable, opencl_reason, device, unavailable_reason = _opencl_status()
+    probe = qualified_opencl()
+    opencl_usable, opencl_reason, device, unavailable_reason = _opencl_status(probe)
     if opencl_usable:
         return True, opencl_reason, PREFERRED_ASSEMBLY_BACKEND, None, device, None
 
     # bempp-cl imports and ICD enumeration run in the bounded probe child.
     # An actual engine import error is different from absent/broken OpenCL.
-    probe = qualified_opencl()
     if probe.get("stage") == "engine":
         missing = _missing_windows_runtime_dlls()
         remedy = f" Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}" if missing else ""
@@ -498,12 +500,16 @@ def _probe_bempp_status() -> dict[str, Any]:
 
 
 @lru_cache(maxsize=1)
-def _cached_successful_bempp_status() -> dict[str, Any]:
+def _cached_successful_bempp_status(revision: int) -> dict[str, Any]:
+    # Key the status by qualification revision as well: another thread may
+    # recover while this call is finishing an older numba status.
     status = _probe_bempp_status()
-    if not status["available"]:
-        # functools does not cache exceptions, so an unavailable result is
-        # re-probed next time. Device verdicts stay cached for this process;
-        # installing or replacing an ICD requires restarting the server.
+    if not status["available"] or (
+        status.get("opencl_unavailable_reason") in TIMEOUT_REASONS and retry_pending()
+    ):
+        # numba is available during a transient timeout, but caching that
+        # fallback would prevent the next qualification from selecting OpenCL.
+        # Exceptions bypass lru_cache; the qualification layer bounds retries.
         raise _BemppProbeUnavailable(status)
     return status
 
@@ -511,15 +517,14 @@ def _cached_successful_bempp_status() -> dict[str, Any]:
 def bempp_status() -> dict[str, Any]:
     """Report whether a solve can run, not merely whether the wrapper imports.
 
-    Successful probes are cached, following ``server/solver/metal.py``. The
-    probe imports ``bempp_cl.api``, enumerates every OpenCL platform and its
-    devices in bounded children, computes a tiny reference problem, and reads
-    distribution metadata. Neither successes nor rejected devices are retried
-    during subsequent solves in this process.
+    Passes and definitive OpenCL rejections are cached. A timeout fallback is
+    re-evaluated on later calls, subject to qualification's interval and attempt
+    cap. The adapter reads this status for every solve, so recovery selects
+    OpenCL without restarting the server or its persistent solve worker.
     """
 
     try:
-        status = _cached_successful_bempp_status()
+        status = _cached_successful_bempp_status(qualification_revision())
     except _BemppProbeUnavailable as exc:
         status = exc.status
     return dict(status)

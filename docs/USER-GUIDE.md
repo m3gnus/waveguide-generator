@@ -185,6 +185,20 @@ alone does not qualify a device; zero, incorrect or timed-out compute probes
 are rejected. If no CPU device passes, BEMPP falls back to numba: correct but
 slow, with about a minute of first-solve compilation.
 
+Qualification runs in background capability threads or isolated solve/warmup
+workers, so it cannot block startup or the event loop. Its limits are 10 seconds
+for inventory/import, 20 seconds per CPU smoke test and 30 seconds total. Passes
+and definitive failures persist for the process. A timeout temporarily selects
+numba; later capability or solve requests can retry after five seconds, with at
+most one qualification in flight and two retries after the initial attempt.
+After three consecutive timeouts the timeout verdict persists until restart.
+Recovery updates the capability record (including imported CAD eligibility) and
+subsequent solves select OpenCL. `inventory_timeout` identifies a stalled
+inventory/import; `smoke_test_timeout` identifies stalled computation or an
+exhausted total budget; `no_device` identifies missing CPU devices or a failed
+inventory process. Unknown guidance reason codes still show platform driver
+guidance.
+
 Imported CAD geometry follows the same order with two differences: AUTO does
 not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
 Accurate), and BEMPP offers it only where it assembles on OpenCL. On such a
