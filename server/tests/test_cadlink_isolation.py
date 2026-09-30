@@ -233,15 +233,28 @@ def test_occ_parallel_preserves_small_fixture_mesh_arrays() -> None:
         )[order]
         return nodes[np.argsort(nodes[:, 0])], triangles, physical[order]
 
-    if not gmsh.isInitialized():
-        gmsh.initialize(interruptible=False)
-    gmsh.option.setNumber("General.Terminal", 0)
-    try:
-        serial = mesh(0)
-        parallel = mesh(1)
-    finally:
-        gmsh.clear()
-        gmsh.option.setNumber("Geometry.OCCParallel", 0)
+    from server.mesh.gmsh_worker import _run_in_gmsh_session
+
+    def compare():
+        # A session opened by this qualification must close afterwards. An
+        # existing caller-owned session must get all changed options back;
+        # gmsh.clear() removes models but does not reset native options.
+        saved = {
+            name: gmsh.option.getNumber(name)
+            for name in (
+                "General.Terminal", "Geometry.OCCParallel",
+                "Mesh.MeshSizeMin", "Mesh.MeshSizeMax",
+            )
+        }
+        try:
+            gmsh.option.setNumber("General.Terminal", 0)
+            return mesh(0), mesh(1)
+        finally:
+            gmsh.clear()
+            for name, value in saved.items():
+                gmsh.option.setNumber(name, value)
+
+    serial, parallel = _run_in_gmsh_session(compare)
 
     # The tags were read back from gmsh, not assumed: every triangle carries
     # the one boundary group, so a lost or changed group shows here too.

@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import json
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -578,3 +580,37 @@ def test_the_real_return_smoke_test_crosses_two_fresh_process_boundaries(
     assert manifest["sources"][0]["observed"] == in_process["source_observed"]
     assert manifest["sources"][0]["role"] == "HF"
     assert record["sources"][0]["id"] == "source-hf"
+
+
+def test_occ_qualification_then_sewing_does_not_pollute_onshape_returns() -> None:
+    """Replay the shortest failing worker order in a fresh native process.
+
+    The qualification used to leave Gmsh initialized. The bare-sewing test
+    then left OCCSewFaces=1/OCCMakeSolids=0 in that session, so the synthetic
+    Onshape return lost its solid when it imported the outbound STEP. Each
+    predecessor alone passed; their order is part of this regression.
+    """
+
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/run_tests.py",
+            "server/tests/test_cadlink_isolation.py::test_occ_parallel_preserves_small_fixture_mesh_arrays",
+            "server/tests/test_occ_healing_preserves_solids.py::test_sewing_alone_dissolves_the_solid",
+            "server/tests/test_onshape_return.py::test_source_bearing_return_passes_the_existing_ingest_pipeline",
+            "server/tests/test_onshape_return.py::test_an_onshape_return_rebuilds_with_the_local_mesh_controls",
+            "-n", "0",
+            "-p", "no:randomly",
+            "-p", "no:cacheprovider",
+            "-q",
+            "--tb=short",
+        ],
+        cwd=root,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
