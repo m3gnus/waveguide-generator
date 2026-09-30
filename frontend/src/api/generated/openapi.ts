@@ -2180,24 +2180,24 @@ export interface components {
          */
         CadSource: {
             /** Archive Stem */
-            archive_stem?: string | null;
+            archive_stem: string | null;
             /** Design Id */
-            design_id?: string | null;
+            design_id: string | null;
             /** Document Name */
-            document_name?: string | null;
+            document_name: string | null;
             /** Domain Decision */
             domain_decision?: {
                 [key: string]: unknown;
             } | null;
             identity?: components["schemas"]["CadIdentityProvenance"] | null;
             /** Ingest Id */
-            ingest_id?: string | null;
+            ingest_id: string | null;
             /** Lineage Id */
-            lineage_id?: string | null;
+            lineage_id: string | null;
             /** Manifest Sha256 */
-            manifest_sha256?: string | null;
+            manifest_sha256: string | null;
             /** Return State Hash */
-            return_state_hash?: string | null;
+            return_state_hash: string | null;
             /** Solve Model Sha256 */
             solve_model_sha256?: string | null;
             /** Transformed Geometry Hash */
@@ -2300,6 +2300,21 @@ export interface components {
             /** Invert */
             invert?: boolean | null;
             lp?: components["schemas"]["FilterSpec"] | null;
+        };
+        /**
+         * ChannelSolveExecution
+         * @description Execution identity emitted for each solved channel.
+         */
+        ChannelSolveExecution: {
+            /**
+             * Accuracy
+             * @enum {string}
+             */
+            accuracy: "fast" | "accurate";
+            /** Engine */
+            engine: string;
+            /** Formulation */
+            formulation: string | null;
         };
         /** ChartsReferencePayload */
         ChartsReferencePayload: {
@@ -2520,26 +2535,21 @@ export interface components {
          */
         DesignAvailability: {
             /** Note */
-            note?: string | null;
+            note: string | null;
             /** Reason */
-            reason?: string | null;
+            reason: string | null;
             /**
              * Reason Code
-             * @default ok
              * @enum {string}
              */
-            reason_code?: "ok" | "imported_geometry" | "no_stored_design" | "unreadable_design";
-            /**
-             * Reopenable
-             * @default true
-             */
-            reopenable?: boolean;
+            reason_code: "ok" | "imported_geometry" | "no_stored_design" | "unreadable_design";
+            /** Reopenable */
+            reopenable: boolean;
             /**
              * Source
-             * @default v2-snapshot
              * @enum {string}
              */
-            source?: "v2-snapshot" | "cad-import" | "none";
+            source: "v2-snapshot" | "cad-import" | "none";
         };
         /**
          * DesignConfig
@@ -3439,7 +3449,7 @@ export interface components {
             /** Archived At */
             archived_at?: string | null;
             /** Auto Export Completed At */
-            auto_export_completed_at?: string | null;
+            auto_export_completed_at: string | null;
             /** Auto Export Formats */
             auto_export_formats: {
                 [key: string]: unknown;
@@ -3462,30 +3472,28 @@ export interface components {
             /** Cancellation Requested */
             cancellation_requested: boolean;
             /** Channel Solve Executions */
-            channel_solve_executions?: {
-                [key: string]: {
-                    [key: string]: unknown;
-                };
+            channel_solve_executions: {
+                [key: string]: components["schemas"]["ChannelSolveExecution"];
             };
             /** Client Metadata */
-            client_metadata?: {
+            client_metadata: {
                 [key: string]: unknown;
             };
             /** Client Request Id */
             client_request_id?: string | null;
             /** Completed At */
-            completed_at?: string | null;
+            completed_at: string | null;
             /** Config Summary */
             config_summary: {
                 [key: string]: unknown;
             };
             /** Created At */
             created_at: string;
-            design_availability?: components["schemas"]["DesignAvailability"];
+            design_availability: components["schemas"]["DesignAvailability"];
             /** Design Revision */
             design_revision: number;
             /** Error Message */
-            error_message?: string | null;
+            error_message: string | null;
             /** Exported Files */
             exported_files: string[];
             /**
@@ -3512,15 +3520,15 @@ export interface components {
             /** Id */
             id: string;
             /** Label */
-            label?: string | null;
+            label: string | null;
             /** Log Tail */
             log_tail: string[];
             /** Mesh Artifact File */
-            mesh_artifact_file?: string | null;
+            mesh_artifact_file: string | null;
             /** Mesh Discarded At */
             mesh_discarded_at?: string | null;
             /** Mesh Stats */
-            mesh_stats?: {
+            mesh_stats: {
                 [key: string]: unknown;
             } | null;
             /** Parent Job Id */
@@ -3540,15 +3548,15 @@ export interface components {
             /** Radiation Impedance Artifact Bytes */
             radiation_impedance_artifact_bytes?: number | null;
             /** Rating */
-            rating?: number | null;
+            rating: number | null;
             /** Raw Results File */
-            raw_results_file?: string | null;
+            raw_results_file: string | null;
             /** Results Discarded At */
             results_discarded_at?: string | null;
             /** Run Number */
             run_number: number | null;
             /** Script Snapshot */
-            script_snapshot?: {
+            script_snapshot: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -3557,21 +3565,18 @@ export interface components {
              * @enum {string}
              */
             solve_accuracy?: "fast" | "accurate";
-            /** Solve Execution */
-            solve_execution?: {
-                [key: string]: unknown;
-            } | null;
-            solve_options: components["schemas"]["SolveOptions"];
+            solve_execution: components["schemas"]["SolveExecution"] | null;
+            solve_options: components["schemas"]["SolveOptionsResponse"];
             /** Solve Path */
             solve_path?: ("full-3d" | "axisymmetric-meridian") | null;
             /** Solve Wall Time Seconds */
             solve_wall_time_seconds?: number | null;
             /** Stage */
-            stage?: string | null;
+            stage: string | null;
             /** Stage Message */
-            stage_message?: string | null;
+            stage_message: string | null;
             /** Started At */
-            started_at?: string | null;
+            started_at: string | null;
             /**
              * Status
              * @enum {string}
@@ -3628,7 +3633,7 @@ export interface components {
             /** Archived At */
             archived_at?: string | null;
             /** Auto Export Completed At */
-            auto_export_completed_at?: string | null;
+            auto_export_completed_at: string | null;
             /** Auto Export Formats */
             auto_export_formats: {
                 [key: string]: unknown;
@@ -3651,30 +3656,28 @@ export interface components {
             /** Cancellation Requested */
             cancellation_requested: boolean;
             /** Channel Solve Executions */
-            channel_solve_executions?: {
-                [key: string]: {
-                    [key: string]: unknown;
-                };
+            channel_solve_executions: {
+                [key: string]: components["schemas"]["ChannelSolveExecution"];
             };
             /** Client Metadata */
-            client_metadata?: {
+            client_metadata: {
                 [key: string]: unknown;
             };
             /** Client Request Id */
             client_request_id?: string | null;
             /** Completed At */
-            completed_at?: string | null;
+            completed_at: string | null;
             /** Config Summary */
             config_summary: {
                 [key: string]: unknown;
             };
             /** Created At */
             created_at: string;
-            design_availability?: components["schemas"]["DesignAvailability"];
+            design_availability: components["schemas"]["DesignAvailability"];
             /** Design Revision */
             design_revision: number;
             /** Error Message */
-            error_message?: string | null;
+            error_message: string | null;
             /** Exported Files */
             exported_files: string[];
             /**
@@ -3701,15 +3704,15 @@ export interface components {
             /** Id */
             id: string;
             /** Label */
-            label?: string | null;
+            label: string | null;
             /** Log Tail */
             log_tail: string[];
             /** Mesh Artifact File */
-            mesh_artifact_file?: string | null;
+            mesh_artifact_file: string | null;
             /** Mesh Discarded At */
             mesh_discarded_at?: string | null;
             /** Mesh Stats */
-            mesh_stats?: {
+            mesh_stats: {
                 [key: string]: unknown;
             } | null;
             /** Message */
@@ -3731,15 +3734,15 @@ export interface components {
             /** Radiation Impedance Artifact Bytes */
             radiation_impedance_artifact_bytes?: number | null;
             /** Rating */
-            rating?: number | null;
+            rating: number | null;
             /** Raw Results File */
-            raw_results_file?: string | null;
+            raw_results_file: string | null;
             /** Results Discarded At */
             results_discarded_at?: string | null;
             /** Run Number */
             run_number: number | null;
             /** Script Snapshot */
-            script_snapshot?: {
+            script_snapshot: {
                 [key: string]: unknown;
             } | null;
             /**
@@ -3748,21 +3751,18 @@ export interface components {
              * @enum {string}
              */
             solve_accuracy?: "fast" | "accurate";
-            /** Solve Execution */
-            solve_execution?: {
-                [key: string]: unknown;
-            } | null;
-            solve_options: components["schemas"]["SolveOptions"];
+            solve_execution: components["schemas"]["SolveExecution"] | null;
+            solve_options: components["schemas"]["SolveOptionsResponse"];
             /** Solve Path */
             solve_path?: ("full-3d" | "axisymmetric-meridian") | null;
             /** Solve Wall Time Seconds */
             solve_wall_time_seconds?: number | null;
             /** Stage */
-            stage?: string | null;
+            stage: string | null;
             /** Stage Message */
-            stage_message?: string | null;
+            stage_message: string | null;
             /** Started At */
-            started_at?: string | null;
+            started_at: string | null;
             /**
              * Status
              * @enum {string}
@@ -4485,6 +4485,20 @@ export interface components {
             /** State */
             state: string;
         };
+        /** SolveExecution */
+        SolveExecution: {
+            /**
+             * Accuracy
+             * @enum {string}
+             */
+            accuracy: "fast" | "accurate";
+            /** Engine */
+            engine: string;
+            /** Fallback Reason */
+            fallback_reason?: string | null;
+            /** Formulation */
+            formulation: string | null;
+        };
         /**
          * SolveOptions
          * @description Execution choices kept separate from the authoritative v2 design.
@@ -4548,6 +4562,56 @@ export interface components {
              * @default false
              */
             verbose?: boolean;
+        };
+        /**
+         * SolveOptionsResponse
+         * @description Stored options are fully dumped; submission defaults remain optional.
+         */
+        SolveOptionsResponse: {
+            /**
+             * Accuracy
+             * @default fast
+             * @enum {string}
+             */
+            accuracy?: "fast" | "accurate";
+            /** Engine */
+            engine: string;
+            /** Frequencies Hz */
+            frequencies_hz: number[] | null;
+            /** Frequency Range */
+            frequency_range: number[] | null;
+            /**
+             * Frequency Spacing
+             * @enum {string}
+             */
+            frequency_spacing: "log" | "linear";
+            ground_plane?: components["schemas"]["GroundPlaneConfig"];
+            /**
+             * Mesh Ladder
+             * @default off
+             * @enum {string}
+             */
+            mesh_ladder?: "off" | "auto";
+            /**
+             * Mesh Validation Mode
+             * @enum {string}
+             */
+            mesh_validation_mode: "warn" | "strict" | "off";
+            /** Num Frequencies */
+            num_frequencies: number | null;
+            polar_config: components["schemas"]["PolarConfig"];
+            /**
+             * Solver Mode
+             * @default full_3d
+             * @enum {string}
+             */
+            solver_mode?: "auto" | "full_3d" | "circsym";
+            /** Stage Delay Ms */
+            stage_delay_ms: number;
+            /** Symmetry */
+            symmetry: string;
+            /** Verbose */
+            verbose: boolean;
         };
         /**
          * SolvePlanResponse

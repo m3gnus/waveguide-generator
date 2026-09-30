@@ -261,6 +261,21 @@ class SolveOptions(JobModel):
         return self
 
 
+class SolveOptionsResponse(SolveOptions):
+    """Stored options are fully dumped; submission defaults remain optional."""
+
+    engine: str
+    symmetry: str
+    frequency_range: list[float] | None
+    num_frequencies: int | None = Field(ge=1, le=401)
+    frequency_spacing: Literal["log", "linear"]
+    frequencies_hz: list[float] | None
+    verbose: bool
+    mesh_validation_mode: Literal["warn", "strict", "off"]
+    polar_config: PolarConfig
+    stage_delay_ms: int = Field(ge=0, le=2000)
+
+
 class DesignSnapshot(JobModel):
     version: Literal[1] = 1
     design: DesignConfig
@@ -273,18 +288,18 @@ class DesignAvailability(JobModel):
     act on, because "Rerun is greyed out" is not a diagnosis.
     """
 
-    reopenable: bool = True
-    source: Literal["v2-snapshot", "cad-import", "none"] = "v2-snapshot"
+    reopenable: bool
+    source: Literal["v2-snapshot", "cad-import", "none"]
     reason_code: Literal[
         "ok",
         "imported_geometry",
         "no_stored_design",
         "unreadable_design",
-    ] = "ok"
+    ]
     #: Why this job cannot be reopened. Set exactly when ``reopenable`` is false.
-    reason: str | None = None
+    reason: str | None
     #: A fidelity caveat about the stored design, when there is one.
-    note: str | None = None
+    note: str | None
 
 
 class ParametricGeometrySource(JobModel):
@@ -1246,17 +1261,17 @@ class CadSource(JobModel):
     addressed by content and says nothing about which document a person opened.
     """
 
-    ingest_id: str | None = None
-    design_id: str | None = None
-    lineage_id: str | None = None
+    ingest_id: str | None
+    design_id: str | None
+    lineage_id: str | None
     #: The folder this design's runs are archived under -- the name its
     #: ``.wglink`` bundle already owns, so a rename does not start a second one.
-    archive_stem: str | None = None
-    manifest_sha256: str | None = None
+    archive_stem: str | None
+    manifest_sha256: str | None
     transformed_geometry_hash: str | None = None
     solve_model_sha256: str | None = None
-    document_name: str | None = None
-    return_state_hash: str | None = None
+    document_name: str | None
+    return_state_hash: str | None
     identity: CadIdentityProvenance | None = None
     #: The domain decision the run was submitted and solved under, as the job
     #: recorded it (``server/cadlink/domain_decision.py:decision_summary``):
@@ -1265,27 +1280,41 @@ class CadSource(JobModel):
     domain_decision: dict[str, Any] | None = None
 
 
+class ChannelSolveExecution(JobModel):
+    """Execution identity emitted for each solved channel."""
+
+    accuracy: Literal["fast", "accurate"]
+    engine: str
+    formulation: str | None
+
+
+class SolveExecution(ChannelSolveExecution):
+    # The runtime adds this key only when a fallback occurred. Avoid inserting
+    # a null key into responses for executions that never had a fallback.
+    fallback_reason: str | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class JobItem(JobModel):
     id: str
     client_request_id: str | None = None
-    client_metadata: dict[str, Any] = Field(default_factory=dict)
+    client_metadata: dict[str, Any]
     #: Null for a CAD solve that is still being prepared or ended refused: a
     #: run number names a run, and it is assigned when the solve is queued.
     run_number: int | None
     parent_job_id: str | None
     status: JobStatusName
     progress: float
-    stage: str | None = None
-    stage_message: str | None = None
+    stage: str | None
+    stage_message: str | None
     created_at: str
     queued_at: str
-    started_at: str | None = None
-    completed_at: str | None = None
+    started_at: str | None
+    completed_at: str | None
     config_summary: dict[str, Any]
-    solve_options: SolveOptions
+    solve_options: SolveOptionsResponse
     solve_accuracy: Literal["fast", "accurate"] = "fast"
-    solve_execution: dict[str, Any] | None = None
-    channel_solve_executions: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    solve_execution: SolveExecution | None
+    channel_solve_executions: dict[str, ChannelSolveExecution]
     has_results: bool
     has_mesh_artifact: bool
     has_pressure_basis_artifact: bool = False
@@ -1302,23 +1331,23 @@ class JobItem(JobModel):
     field_plane_available: bool = False
     field_trace_bytes: int | None = None
     unavailable_reason: str | None = None
-    label: str | None = None
-    error_message: str | None = None
+    label: str | None
+    error_message: str | None
     cancellation_requested: bool
-    mesh_stats: dict[str, Any] | None = None
-    script_snapshot: dict[str, Any] | None = None
-    design_availability: DesignAvailability = Field(default_factory=DesignAvailability)
+    mesh_stats: dict[str, Any] | None
+    script_snapshot: dict[str, Any] | None
+    design_availability: DesignAvailability
     design_revision: int
     polar_grid: dict[str, Any]
-    rating: int | None = None
+    rating: int | None
     exported_files: list[str]
-    auto_export_completed_at: str | None = None
+    auto_export_completed_at: str | None
     auto_export_formats: dict[str, Any]
     #: When this run was written to the run archive. The job database prunes
     #: results after 30 days; the archive folder is what survives that.
     archived_at: str | None = None
-    raw_results_file: str | None = None
-    mesh_artifact_file: str | None = None
+    raw_results_file: str | None
+    mesh_artifact_file: str | None
     results_discarded_at: str | None = None
     mesh_discarded_at: str | None = None
     log_tail: list[str]

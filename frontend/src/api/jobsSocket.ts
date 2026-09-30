@@ -31,7 +31,23 @@ export interface AutoExportFormatStatus {
   reason?: string;
 }
 
-export interface JobItem {
+// These fields have the same required, nullable wire shape as the snapshot.
+type JobNullableFields = Pick<components['schemas']['JobItem'],
+  'stage'
+  | 'stage_message'
+  | 'started_at'
+  | 'completed_at'
+  | 'label'
+  | 'error_message'
+  | 'mesh_stats'
+  | 'script_snapshot'
+  | 'rating'
+  | 'auto_export_completed_at'
+  | 'raw_results_file'
+  | 'mesh_artifact_file'
+>;
+
+export interface JobItem extends JobNullableFields {
   id: string;
   /** The submission key; `cad-solve:<operation id>` for a solve CAD Link submitted. */
   client_request_id?: string | null;
@@ -39,12 +55,8 @@ export interface JobItem {
   parent_job_id: string | null;
   status: JobStatus;
   progress: number;
-  stage: string | null;
-  stage_message: string | null;
   created_at: string;
   queued_at: string;
-  started_at: string | null;
-  completed_at: string | null;
   config_summary: Record<string, unknown>;
   solve_options: {
     engine: string;
@@ -60,8 +72,8 @@ export interface JobItem {
     stage_delay_ms: number;
   };
   solve_accuracy?: 'fast' | 'accurate';
-  solve_execution?: { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null; fallback_reason?: string } | null;
-  channel_solve_executions?: Record<string, { accuracy: 'fast' | 'accurate'; engine: string; formulation: string | null }>;
+  solve_execution?: (components['schemas']['ChannelSolveExecution'] & { fallback_reason?: string }) | null;
+  channel_solve_executions?: Record<string, components['schemas']['ChannelSolveExecution']>;
   has_results: boolean;
   has_mesh_artifact: boolean;
   /** Whether the run produced a port-exit radiation-impedance matrix, i.e. it
@@ -74,31 +86,17 @@ export interface JobItem {
   field_plane_available?: boolean;
   field_trace_bytes?: number | null;
   unavailable_reason?: string | null;
-  label: string | null;
-  error_message: string | null;
   cancellation_requested: boolean;
-  mesh_stats: Record<string, unknown> | null;
-  script_snapshot: Record<string, unknown> | null;
   design_revision: number;
   polar_grid: Record<string, unknown>;
-  rating: number | null;
   exported_files: string[];
-  auto_export_completed_at: string | null;
   auto_export_formats: Record<string, AutoExportFormatStatus>;
   /** When this run was written to the run archive, if it has been. */
   archived_at?: string | null;
-  raw_results_file: string | null;
-  mesh_artifact_file: string | null;
   results_discarded_at?: string | null;
   mesh_discarded_at?: string | null;
   log_tail: string[];
-  design_availability?: {
-    reopenable: boolean;
-    source: 'v2-snapshot' | 'cad-import' | 'none';
-    reason_code: 'ok' | 'imported_geometry' | 'no_stored_design' | 'unreadable_design';
-    reason: string | null;
-    note: string | null;
-  } | null;
+  design_availability?: components['schemas']['DesignAvailability'] | null;
   symmetry?: Record<string, unknown>;
   solve_path?: 'full-3d' | 'axisymmetric-meridian' | null;
   axisymmetric_eligibility_reasons?: string[];
@@ -203,22 +201,10 @@ export interface CadIdentityProvenance {
   }>;
 }
 
-export interface CadSource {
-  ingest_id: string | null;
-  design_id: string | null;
-  lineage_id: string | null;
-  /** The folder this design's runs are archived under. */
-  archive_stem: string | null;
-  manifest_sha256: string | null;
-  transformed_geometry_hash?: string | null;
-  solve_model_sha256?: string | null;
-  document_name: string | null;
-  return_state_hash: string | null;
+// Historical identity graphs retain their compatibility type until the stored
+// nested keys have the same optionality as the generated response schema.
+export interface CadSource extends Omit<components['schemas']['CadSource'], 'identity'> {
   identity?: CadIdentityProvenance | null;
-  /** The domain decision the run was solved under, as the job recorded it
-   * (`api/domainDecision.ts:DomainDecisionSummary`); null for a run saved
-   * before decisions existed. */
-  domain_decision?: Record<string, unknown> | null;
 }
 
 export interface JobsSnapshot {

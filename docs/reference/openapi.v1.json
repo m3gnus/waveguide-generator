@@ -636,6 +636,15 @@
             "title": "Transformed Geometry Hash"
           }
         },
+        "required": [
+          "ingest_id",
+          "design_id",
+          "lineage_id",
+          "archive_stem",
+          "manifest_sha256",
+          "document_name",
+          "return_state_hash"
+        ],
         "title": "CadSource",
         "type": "object"
       },
@@ -934,6 +943,42 @@
           }
         },
         "title": "ChannelFilterSpec",
+        "type": "object"
+      },
+      "ChannelSolveExecution": {
+        "additionalProperties": false,
+        "description": "Execution identity emitted for each solved channel.",
+        "properties": {
+          "accuracy": {
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Accuracy",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "formulation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formulation"
+          }
+        },
+        "required": [
+          "accuracy",
+          "engine",
+          "formulation"
+        ],
+        "title": "ChannelSolveExecution",
         "type": "object"
       },
       "ChartsReferencePayload": {
@@ -1668,7 +1713,6 @@
             "title": "Reason"
           },
           "reason_code": {
-            "default": "ok",
             "enum": [
               "ok",
               "imported_geometry",
@@ -1679,12 +1723,10 @@
             "type": "string"
           },
           "reopenable": {
-            "default": true,
             "title": "Reopenable",
             "type": "boolean"
           },
           "source": {
-            "default": "v2-snapshot",
             "enum": [
               "v2-snapshot",
               "cad-import",
@@ -1694,6 +1736,13 @@
             "type": "string"
           }
         },
+        "required": [
+          "reopenable",
+          "source",
+          "reason_code",
+          "reason",
+          "note"
+        ],
         "title": "DesignAvailability",
         "type": "object"
       },
@@ -4532,8 +4581,7 @@
           },
           "channel_solve_executions": {
             "additionalProperties": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ChannelSolveExecution"
             },
             "title": "Channel Solve Executions",
             "type": "object"
@@ -4810,17 +4858,15 @@
           "solve_execution": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/SolveExecution"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Solve Execution"
+            ]
           },
           "solve_options": {
-            "$ref": "#/components/schemas/SolveOptions"
+            "$ref": "#/components/schemas/SolveOptionsResponse"
           },
           "solve_path": {
             "anyOf": [
@@ -4912,21 +4958,37 @@
         },
         "required": [
           "id",
+          "client_metadata",
           "run_number",
           "parent_job_id",
           "status",
           "progress",
+          "stage",
+          "stage_message",
           "created_at",
           "queued_at",
+          "started_at",
+          "completed_at",
           "config_summary",
           "solve_options",
+          "solve_execution",
+          "channel_solve_executions",
           "has_results",
           "has_mesh_artifact",
+          "label",
+          "error_message",
           "cancellation_requested",
+          "mesh_stats",
+          "script_snapshot",
+          "design_availability",
           "design_revision",
           "polar_grid",
+          "rating",
           "exported_files",
+          "auto_export_completed_at",
           "auto_export_formats",
+          "raw_results_file",
+          "mesh_artifact_file",
           "log_tail"
         ],
         "title": "JobItem",
@@ -5167,8 +5229,7 @@
           },
           "channel_solve_executions": {
             "additionalProperties": {
-              "additionalProperties": true,
-              "type": "object"
+              "$ref": "#/components/schemas/ChannelSolveExecution"
             },
             "title": "Channel Solve Executions",
             "type": "object"
@@ -5456,17 +5517,15 @@
           "solve_execution": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/SolveExecution"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Solve Execution"
+            ]
           },
           "solve_options": {
-            "$ref": "#/components/schemas/SolveOptions"
+            "$ref": "#/components/schemas/SolveOptionsResponse"
           },
           "solve_path": {
             "anyOf": [
@@ -5562,21 +5621,37 @@
         },
         "required": [
           "id",
+          "client_metadata",
           "run_number",
           "parent_job_id",
           "status",
           "progress",
+          "stage",
+          "stage_message",
           "created_at",
           "queued_at",
+          "started_at",
+          "completed_at",
           "config_summary",
           "solve_options",
+          "solve_execution",
+          "channel_solve_executions",
           "has_results",
           "has_mesh_artifact",
+          "label",
+          "error_message",
           "cancellation_requested",
+          "mesh_stats",
+          "script_snapshot",
+          "design_availability",
           "design_revision",
           "polar_grid",
+          "rating",
           "exported_files",
+          "auto_export_completed_at",
           "auto_export_formats",
+          "raw_results_file",
+          "mesh_artifact_file",
           "log_tail",
           "updated_at"
         ],
@@ -7914,6 +7989,52 @@
         "title": "SolveCommandOutcome",
         "type": "object"
       },
+      "SolveExecution": {
+        "additionalProperties": false,
+        "properties": {
+          "accuracy": {
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Accuracy",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback Reason"
+          },
+          "formulation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Formulation"
+          }
+        },
+        "required": [
+          "accuracy",
+          "engine",
+          "formulation"
+        ],
+        "title": "SolveExecution",
+        "type": "object"
+      },
       "SolveOptions": {
         "additionalProperties": false,
         "description": "Execution choices kept separate from the authoritative v2 design.",
@@ -8036,6 +8157,136 @@
           }
         },
         "title": "SolveOptions",
+        "type": "object"
+      },
+      "SolveOptionsResponse": {
+        "additionalProperties": false,
+        "description": "Stored options are fully dumped; submission defaults remain optional.",
+        "properties": {
+          "accuracy": {
+            "default": "fast",
+            "enum": [
+              "fast",
+              "accurate"
+            ],
+            "title": "Accuracy",
+            "type": "string"
+          },
+          "engine": {
+            "title": "Engine",
+            "type": "string"
+          },
+          "frequencies_hz": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequencies Hz"
+          },
+          "frequency_range": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Range"
+          },
+          "frequency_spacing": {
+            "enum": [
+              "log",
+              "linear"
+            ],
+            "title": "Frequency Spacing",
+            "type": "string"
+          },
+          "ground_plane": {
+            "$ref": "#/components/schemas/GroundPlaneConfig"
+          },
+          "mesh_ladder": {
+            "default": "off",
+            "enum": [
+              "off",
+              "auto"
+            ],
+            "title": "Mesh Ladder",
+            "type": "string"
+          },
+          "mesh_validation_mode": {
+            "enum": [
+              "warn",
+              "strict",
+              "off"
+            ],
+            "title": "Mesh Validation Mode",
+            "type": "string"
+          },
+          "num_frequencies": {
+            "anyOf": [
+              {
+                "maximum": 401.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Num Frequencies"
+          },
+          "polar_config": {
+            "$ref": "#/components/schemas/PolarConfig"
+          },
+          "solver_mode": {
+            "default": "full_3d",
+            "enum": [
+              "auto",
+              "full_3d",
+              "circsym"
+            ],
+            "title": "Solver Mode",
+            "type": "string"
+          },
+          "stage_delay_ms": {
+            "maximum": 2000.0,
+            "minimum": 0.0,
+            "title": "Stage Delay Ms",
+            "type": "integer"
+          },
+          "symmetry": {
+            "title": "Symmetry",
+            "type": "string"
+          },
+          "verbose": {
+            "title": "Verbose",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "engine",
+          "symmetry",
+          "frequency_range",
+          "num_frequencies",
+          "frequency_spacing",
+          "frequencies_hz",
+          "verbose",
+          "mesh_validation_mode",
+          "polar_config",
+          "stage_delay_ms"
+        ],
+        "title": "SolveOptionsResponse",
         "type": "object"
       },
       "SolvePlanResponse": {
