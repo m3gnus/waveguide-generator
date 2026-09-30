@@ -8164,7 +8164,6 @@
         "description": "Stored options are fully dumped; submission defaults remain optional.",
         "properties": {
           "accuracy": {
-            "default": "fast",
             "enum": [
               "fast",
               "accurate"
@@ -8216,7 +8215,6 @@
             "$ref": "#/components/schemas/GroundPlaneConfig"
           },
           "mesh_ladder": {
-            "default": "off",
             "enum": [
               "off",
               "auto"
@@ -8250,7 +8248,6 @@
             "$ref": "#/components/schemas/PolarConfig"
           },
           "solver_mode": {
-            "default": "full_3d",
             "enum": [
               "auto",
               "full_3d",
@@ -8276,14 +8273,18 @@
         },
         "required": [
           "engine",
+          "accuracy",
+          "solver_mode",
           "symmetry",
           "frequency_range",
           "num_frequencies",
           "frequency_spacing",
           "frequencies_hz",
           "verbose",
+          "mesh_ladder",
           "mesh_validation_mode",
           "polar_config",
+          "ground_plane",
           "stage_delay_ms"
         ],
         "title": "SolveOptionsResponse",

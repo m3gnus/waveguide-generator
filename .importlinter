@@ -92,8 +92,6 @@ ignore_imports =
     server.solver.bempp_imported -> server.jobs.models
     # Legacy use: ImportedGeometrySource, PolarConfig, SolveRequest.
     server.solver.context -> server.jobs.models
-    # Legacy use: DriverSpec.
-    server.solver.driver_lem -> server.jobs.models
     # Legacy use: FieldPlaneRequest, FieldPlaneSpec.
     server.solver.field_plane -> server.jobs.models
     # Legacy use: JobStore.

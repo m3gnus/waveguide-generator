@@ -29,7 +29,7 @@ import numpy as np
 from hornlab_sim.methods import bandpass, driver_coupling
 
 from server.contracts.conventions import engineering_to_solver, solver_to_engineering
-from server.jobs.models import DriverSpec
+from server.contracts import DriverSpec
 
 _TWO_PI = 2.0 * np.pi
 

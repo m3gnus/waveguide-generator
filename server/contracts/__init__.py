@@ -3,3 +3,6 @@
 Keep transport-independent types here. Standard-library and external type or
 validation dependencies are allowed; server orchestration and services are not.
 """
+
+from .base import JobModel as JobModel
+from .drivers import DriverSpec as DriverSpec

@@ -20,9 +20,10 @@ NULLABLE_FIELDS = (
     "auto_export_completed_at", "raw_results_file", "mesh_artifact_file",
 )
 OPTION_FIELDS = (
-    "engine", "symmetry", "frequency_range", "num_frequencies",
-    "frequency_spacing", "frequencies_hz", "verbose", "mesh_validation_mode",
-    "polar_config", "stage_delay_ms",
+    "engine", "accuracy", "solver_mode", "symmetry", "frequency_range",
+    "num_frequencies", "frequency_spacing", "frequencies_hz", "verbose",
+    "mesh_ladder", "mesh_validation_mode", "polar_config", "ground_plane",
+    "stage_delay_ms",
 )
 CAD_SOURCE_FIELDS = (
     "ingest_id", "design_id", "lineage_id", "archive_stem", "manifest_sha256",
@@ -55,10 +56,25 @@ def test_serialized_historical_rows_satisfy_response_contract(config):
     assert set(wire["design_availability"]) == {
         "reopenable", "source", "reason_code", "reason", "note",
     }
-    assert set(OPTION_FIELDS) <= set(wire["solve_options"])
+    assert set(OPTION_FIELDS) == set(wire["solve_options"])
     if wire["cad_source"] is not None:
         assert set(CAD_SOURCE_FIELDS) <= set(wire["cad_source"])
     JobStatusResponse.model_validate(JobRuntime._serialize_job(row, detailed=True))
+
+
+@pytest.mark.parametrize("detailed", [False, True])
+def test_stored_solve_options_preserve_nondefault_values(detailed):
+    options = SolveOptions(
+        accuracy="accurate", mesh_ladder="auto",
+        ground_plane={"enabled": True, "axis": "x", "height_m": 1.5},
+    ).model_dump(mode="json")
+    wire = JobRuntime._serialize_job(_row({
+        "geometry": {"type": "imported"}, "options": options,
+    }), detailed=detailed)
+    response = JobStatusResponse if detailed else JobItem
+    parsed = response.model_validate(wire)
+    assert wire["solve_options"] == options
+    assert parsed.solve_options.model_dump(mode="json") == options
 
 
 @pytest.mark.parametrize("field", NULLABLE_FIELDS)
@@ -158,7 +174,9 @@ def test_schema_uses_response_option_requirements_without_changing_requests():
     schema = JobItem.model_json_schema()
     assert set(NULLABLE_FIELDS) <= set(schema["required"])
     assert {"solve_execution", "channel_solve_executions", "design_availability", "client_metadata"} <= set(schema["required"])
-    assert set(OPTION_FIELDS) <= set(schema["$defs"]["SolveOptionsResponse"]["required"])
+    response_options = schema["$defs"]["SolveOptionsResponse"]
+    assert set(OPTION_FIELDS) == set(response_options["required"])
+    assert set(response_options["properties"]) == set(response_options["required"])
     assert set(schema["$defs"]["DesignAvailability"]["properties"]) == set(
         schema["$defs"]["DesignAvailability"]["required"]
     )

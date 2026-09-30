@@ -4570,10 +4570,9 @@ export interface components {
         SolveOptionsResponse: {
             /**
              * Accuracy
-             * @default fast
              * @enum {string}
              */
-            accuracy?: "fast" | "accurate";
+            accuracy: "fast" | "accurate";
             /** Engine */
             engine: string;
             /** Frequencies Hz */
@@ -4585,13 +4584,12 @@ export interface components {
              * @enum {string}
              */
             frequency_spacing: "log" | "linear";
-            ground_plane?: components["schemas"]["GroundPlaneConfig"];
+            ground_plane: components["schemas"]["GroundPlaneConfig"];
             /**
              * Mesh Ladder
-             * @default off
              * @enum {string}
              */
-            mesh_ladder?: "off" | "auto";
+            mesh_ladder: "off" | "auto";
             /**
              * Mesh Validation Mode
              * @enum {string}
@@ -4602,10 +4600,9 @@ export interface components {
             polar_config: components["schemas"]["PolarConfig"];
             /**
              * Solver Mode
-             * @default full_3d
              * @enum {string}
              */
-            solver_mode?: "auto" | "full_3d" | "circsym";
+            solver_mode: "auto" | "full_3d" | "circsym";
             /** Stage Delay Ms */
             stage_delay_ms: number;
             /** Symmetry */
