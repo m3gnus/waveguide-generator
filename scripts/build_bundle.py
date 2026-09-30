@@ -2163,6 +2163,11 @@ replacing files inside its own installation, which it can only do where it
 does not need root -- a system-wide copy under /opt or /usr would break every
 later in-app update.
 
+If an install was cut off (a crash, power loss or a killed terminal), the next
+run may say another installation seems to be running and change nothing. If no
+installer is open, run the one command it prints to remove the lock, then run
+./install.sh again.
+
 
 UNINSTALL
 ---------
@@ -2452,6 +2457,11 @@ app, just a different starting point:
 Use whichever you prefer. Both were confirmed working on macOS 26.5.2 in
 September 2026: each was listed under Security and each opened after
 "Open Anyway".
+
+If an install was cut off (a crash, power loss or a closed Terminal window),
+the next run may say another installation seems to be running and change
+nothing. If no installer window is open, paste the one command it prints to
+remove the lock, then run the installer again.
 
 IF PRIVACY & SECURITY LISTS NOTHING AT ALL
 ------------------------------------------

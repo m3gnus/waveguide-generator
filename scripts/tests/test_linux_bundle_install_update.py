@@ -372,7 +372,7 @@ BOUNDARIES = (
 RECOVERY_BOUNDARIES = frozenset(BOUNDARIES[8:])
 
 
-def instrument_boundaries(script: Path, row: int, boundary: str, paused: Path, release: Path) -> None:
+def instrument_boundaries(script: Path, row: int, boundary: str, paused: Path, release: Path, side: str = "after") -> None:
     import re
 
     body = script.read_text(encoding="utf-8")
@@ -385,18 +385,21 @@ def instrument_boundaries(script: Path, row: int, boundary: str, paused: Path, r
     )
     body = body.replace("set -u\n", "set -u\n" + hook, 1)
     row_expr = '"$i"' if "STATE[i]=" in body else "0"
+    def state_hook(m):
+        if m[3] == "staged":
+            return m[0]
+        hook_line = f"{m[1]}state_boundary {row_expr} {m[3]}"
+        state_line = f"{m[1]}{m[2]}"
+        return f"{hook_line}\n{state_line}" if side == "before" else f"{state_line}\n{hook_line}"
     body = re.sub(
         r"^(\s*)(STATE(?:\[i\])?=([a-z_]+))$",
-        lambda m: (m[0] if m[3] == 'staged' else
-                   f'{m[1]}{m[2]}\n{m[1]}state_boundary {row_expr} {m[3]}'),
+        state_hook,
         body, flags=re.MULTILINE,
     )
     needle = '    same_object "${STAGED[i]}" "${NEW_ID[i]}" || fail' if row_expr != "0" else 'same_object "$STAGED_PATH" "$NEW_ID" || fail'
     body = body.replace(needle, f'    state_boundary {row_expr} staged\n' + needle, 1)
-    if boundary == "cleanup_handover":
-        clear = "    trap - EXIT\n" if row_expr != "0" else "    trap - 0\n"
-        start = body.index("\nrollback() {" if row_expr != "0" else "\ncleanup() {")
-        body = body[:start] + body[start:].replace(clear, clear + "    state_boundary 0 cleanup_handover\n", 1)
+    if boundary == "cleanup_entry":
+        body = body.replace("cleanup() {\n", "cleanup() {\n    state_boundary 0 cleanup_entry\n", 1)
     if boundary in RECOVERY_BOUNDARIES:
         body = body.replace("COMMITTED=1\n", "exit 1\n", 1)
     elif boundary == "committed":
@@ -433,7 +436,7 @@ def state_move_shim(bin_dir: Path, paths: list[Path], row: int, boundary: str, p
 
 
 def signal_paused_process(command: list[str], env: dict[str, str], paused: Path, release: Path,
-                          interrupt: signal.Signals = signal.SIGTERM) -> tuple[int, str]:
+                          interrupt: signal.Signals = signal.SIGTERM, *, burst: bool = False) -> tuple[int, str]:
     proc = subprocess.Popen(
         command, preexec_fn=installer_process_signals, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, stdin=subprocess.DEVNULL, start_new_session=True,
@@ -445,6 +448,15 @@ def signal_paused_process(command: list[str], env: dict[str, str], paused: Path,
             time.sleep(0.01)
         os.killpg(proc.pid, interrupt)
         release.touch()
+        if burst:
+            # Keep the group-interruption probe, then spread further signals
+            # across recovery without repeatedly killing its move children.
+            for _ in range(39):
+                try:
+                    os.kill(proc.pid, interrupt)
+                except ProcessLookupError:
+                    break
+                time.sleep(.0005)
         output, _ = proc.communicate(timeout=15)
     finally:
         release.touch()
@@ -481,8 +493,9 @@ def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str) -> None
 
 @pytest.mark.parametrize("row", range(6))
 @pytest.mark.parametrize("boundary", BOUNDARIES)
+@pytest.mark.parametrize("side", ("before", "after"))
 @pytest.mark.slow
-def test_every_row_recovers_at_every_state_boundary(tmp_path: Path, env: dict[str, str], row: int, boundary: str) -> None:
+def test_every_row_recovers_at_every_state_boundary(tmp_path: Path, env: dict[str, str], row: int, boundary: str, side: str) -> None:
     assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
     paths = [installed_dir(env), *integration_paths(env).values()]
     # Snapshot contents AND inodes: a superficially identical replacement is not restoration.
@@ -491,12 +504,12 @@ def test_every_row_recovers_at_every_state_boundary(tmp_path: Path, env: dict[st
     link = os.readlink(paths[-1])
     new = make_tarball(tmp_path / "v2", "two")
     paused, release = tmp_path / "paused", tmp_path / "release"
-    instrument_boundaries(new / "install.sh", row, boundary, paused, release)
+    instrument_boundaries(new / "install.sh", row, boundary, paused, release, side)
     bin_dir = tmp_path / "bin"
     state_move_shim(bin_dir, paths, row, boundary, paused, release)
     code, output = signal_paused_process(
         ["/bin/bash", str(new / "install.sh"), "--skip-checks", "--update"],
-        {**env, "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}"}, paused, release,
+        {**env, "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}"}, paused, release, burst=True,
     )
     assert code == 1, output
     assert (paths[0] / "version.txt").read_text() == "one"
