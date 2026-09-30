@@ -6,8 +6,8 @@ therefore made Stop wait for the current case.  This module keeps one warm child
 alive across successful jobs (so bempp/numba import and JIT costs are amortised),
 but terminates the child when the parent cancellation callback raises.
 
-Only the native solve crosses this boundary.  Meshing and durable artifact
-publication remain in the parent, and stage/provisional-result events are
+Native solves and retained-field evaluation cross this boundary. Meshing and
+durable artifact publication remain in the parent, and stage/provisional-result events are
 forwarded over the same pipe in order.
 
 Two things follow from the child being the process that actually solves, and
@@ -167,9 +167,13 @@ def _solve_payload(
     *,
     stage: Callable[[str, float, str], None],
     result: Callable[[int, dict[str, Any]], None],
-) -> dict[str, Any]:
-    """Run one queued solve in this process: a design, or an imported CAD record."""
+) -> Any:
+    """Run native design/imported solves or retained-field evaluation here."""
 
+    if payload.get("kind") == "field":
+        from .field_plane import evaluate_bempp_field_payload
+
+        return evaluate_bempp_field_payload(payload)
     if payload.get("kind") == "imported":
         from .bempp_imported import solve_imported_bempp_from_msh_text
 
@@ -457,7 +461,7 @@ class BemppProcessHost:
         cancel_cb: CancelCallback,
         stage_cb: StageCallback,
         result_cb: ResultCallback | None,
-    ) -> dict[str, Any]:
+    ) -> Any:
         with self._state_lock:
             if self._active_job_id is not None:
                 raise BemppWorkerError(
@@ -476,7 +480,10 @@ class BemppProcessHost:
                     raise BemppWorkerError(
                         "The native BEMPP worker exited before returning a result"
                     )
-                event = await asyncio.to_thread(_poll_and_recv, connection)
+                try:
+                    event = await asyncio.to_thread(_poll_and_recv, connection)
+                except (EOFError, BrokenPipeError, OSError) as exc:
+                    raise BemppWorkerError("The native BEMPP worker disconnected before returning a result") from exc
                 if event is None:
                     continue
                 kind, event_job_id, value = event
@@ -538,6 +545,14 @@ def shutdown_bempp_process() -> None:
     """Stop the application-wide BEMPP worker.  Bounded by ``_JOIN_SECONDS``."""
 
     _HOST.close()
+
+
+async def evaluate_field_bempp_in_process(payload: Mapping[str, Any]) -> Any:
+    """Evaluate in the solve worker; cancellation/timeout kills its native work."""
+    return await _HOST._run_payload(
+        {**payload, "kind": "field"},
+        cancel_cb=lambda: None, stage_cb=lambda *_args: None, result_cb=None,
+    )
 
 
 async def solve_bempp_in_process(

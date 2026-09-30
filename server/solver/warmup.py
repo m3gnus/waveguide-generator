@@ -258,10 +258,11 @@ def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
     host it was already populated.
     """
 
-    from .bempp import bind_assembly_device
+    from .bempp import validate_assembly_status
+    from .bempp_opencl import execution_route, native_call
 
-    bind_assembly_device(status)
-    backend = status.get("assembly_backend") or "opencl"
+    validate_assembly_status(status)
+    backend, _device = execution_route()
     from hornlab_bempp_bem import ObservationConfig, SolveConfig, solve
 
     config = SolveConfig(
@@ -277,7 +278,7 @@ def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
         # trying to use the application.
         workers=1,
     )
-    solve(str(WARMUP_MESH), config)
+    native_call(solve, str(WARMUP_MESH), config, execution_config=config)
 
 
 def _warm_bempp(status: Mapping[str, object]) -> None:

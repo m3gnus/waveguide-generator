@@ -55,7 +55,7 @@ describe('OpenclUnavailableHook', () => {
       .toEqual(block.steps.map((step) => step.url));
   });
 
-  it.each(['inventory_timeout', 'future_reason', 'toString'])('renders platform guidance for unknown reason %s', (reason) => {
+  it.each(['future_reason', 'toString'])('renders platform guidance for unknown reason %s', (reason) => {
     act(() => root.render(<OpenclUnavailableHook platform="windows"
       engine={{ ...engine, opencl_unavailable_reason: reason as EngineCapability['opencl_unavailable_reason'] }} />));
     const block = guidance.platforms.windows;
@@ -77,6 +77,23 @@ describe('OpenclUnavailableHook', () => {
 
   it.each(['darwin', 'macos', 'unknown', 'toString', null, undefined])('renders nothing on host %s', (platform) => {
     act(() => root.render(<OpenclUnavailableHook platform={platform} engine={engine} />));
+    expect(host.innerHTML).toBe('');
+  });
+
+  it.each(['windows', 'linux', 'darwin'])('shows the shared notice only when requested on %s', (platform) => {
+    act(() => root.render(<OpenclUnavailableHook platform={platform} engine={engine} notice="infinite_baffle_numba" />));
+    expect(host.textContent).toContain(guidance.notices.infinite_baffle_numba);
+    expect([...host.querySelectorAll('p')].filter((p) => p.textContent === guidance.notices.infinite_baffle_numba)).toHaveLength(1);
+    if (platform === 'darwin') {
+      expect(host.textContent).toBe(guidance.notices.infinite_baffle_numba);
+      expect(host.querySelector('a')).toBeNull();
+    }
+    act(() => root.render(<OpenclUnavailableHook platform={platform} engine={engine} />));
+    expect(host.textContent).not.toContain(guidance.notices.infinite_baffle_numba);
+  });
+
+  it.each(['macos', 'unknown', 'toString', null, undefined])('suppresses even a notice on unknown server host %s', (platform) => {
+    act(() => root.render(<OpenclUnavailableHook platform={platform} engine={engine} notice="infinite_baffle_numba" />));
     expect(host.innerHTML).toBe('');
   });
 

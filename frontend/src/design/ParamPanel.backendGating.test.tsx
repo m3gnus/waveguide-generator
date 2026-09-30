@@ -205,8 +205,9 @@ describe('solver-backend parameter gating', () => {
     expect(host.querySelectorAll('.opencl-guidance')).toHaveLength(1);
     const block = host.querySelector('[data-parameter-id="simulation.sim_type"] .opencl-guidance')!;
     expect(block.textContent).toContain(guidance.platforms.windows.summary);
-    expect(block.querySelector('p')?.textContent).toBe(guidance.reasons[reason]);
-    expect(warningsFor('simulation.sim_type').join(' ')).toContain("Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.");
+    expect(block.querySelector('p')?.textContent).toBe(guidance.notices.infinite_baffle_numba);
+    expect(block.textContent).toContain(guidance.reasons[reason]);
+    expect(block.textContent).toContain(guidance.notices.infinite_baffle_numba);
   });
 
   it.each(['opencl', null] as const)('omits the notice for a BEMPP backend of %s', async (backend) => {
@@ -223,8 +224,9 @@ describe('solver-backend parameter gating', () => {
     payload.engines[1].assembly_backend = 'numba';
     payload.engines[1].opencl_unavailable_reason = 'no_device';
     await mount(payload);
-    expect(warningsFor('simulation.sim_type').join(' ')).toContain('correct but slow');
-    expect(host.querySelector('.opencl-guidance')).toBeNull();
+    expect(host.textContent).toContain(guidance.notices.infinite_baffle_numba);
+    expect(host.querySelector('.opencl-guidance')?.textContent).toBe(guidance.notices.infinite_baffle_numba);
+    expect(host.querySelector('.opencl-guidance a')).toBeNull();
   });
 
   it('omits the notice when AUTO routes IB to Metal ahead of numba', async () => {
@@ -241,9 +243,9 @@ describe('solver-backend parameter gating', () => {
     payload.engineSelection.resolvedDefault = 'beat-cpu';
     payload.engineSelection.full3dOrder = ['beat-cpu', 'bempp'];
     await mount(payload);
-    expect(warningsFor('simulation.sim_type').join(' ')).toContain('correct but slow');
+    expect(host.textContent).toContain(guidance.notices.infinite_baffle_numba);
     await act(async () => { useSolveOptionsStore.setState({ engine: 'beat-cpu' }); });
-    expect(warningsFor('simulation.sim_type').join(' ')).not.toContain('correct but slow');
+    expect(host.textContent).not.toContain(guidance.notices.infinite_baffle_numba);
   });
 
   it('omits the notice when BEMPP does not offer IB', async () => {
@@ -251,7 +253,7 @@ describe('solver-backend parameter gating', () => {
     payload.engines[1].assembly_backend = 'numba';
     payload.engines[1].mountings = ['free-standing'];
     await mount(payload);
-    expect(warningsFor('simulation.sim_type').join(' ')).not.toContain('correct but slow');
+    expect(host.textContent).not.toContain(guidance.notices.infinite_baffle_numba);
   });
 
 });

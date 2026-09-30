@@ -626,6 +626,9 @@ def _metal_solve(monkeypatch, *, infinite_baffle: bool):
 
 
 def _bempp_solve(monkeypatch, *, infinite_baffle: bool):
+    from server.solver import bempp_opencl
+
+    monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": False})
     captured: dict = {}
     monkeypatch.setattr(
         bempp, "SolveConfig", lambda **kwargs: captured.update(kwargs) or _Config(**kwargs)
@@ -722,7 +725,7 @@ def test_bempp_solve_retries_timeout_and_selects_recovered_opencl(monkeypatch):
         return {'ok': True, 'smoke': {}}
     monkeypatch.setattr(probe, '_run_probe', run)
     monkeypatch.setattr(bempp, '_load_api', lambda: True)
-    monkeypatch.setattr(bempp, 'bind_device', lambda selected: bound.append(selected))
+    monkeypatch.setattr(probe, 'bind_device', lambda selected, **_kwargs: bound.append(selected))
     def config(**kwargs):
         if 'assembly_backend' in kwargs:
             configs.append(kwargs)

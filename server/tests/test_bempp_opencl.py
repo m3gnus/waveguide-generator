@@ -148,13 +148,14 @@ def test_cpu_is_bound_before_single_precision_bempp_assembly(monkeypatch):
     )
     monkeypatch.setitem(sys.modules, "pyopencl", NS(device_type=NS(CPU=2, GPU=4), get_platforms=lambda: [None, NS(get_devices=lambda: [selected])]))
     monkeypatch.setitem(sys.modules, "bempp_cl.api", api)
+    if "bempp_cl" in sys.modules:
+        monkeypatch.setattr(sys.modules["bempp_cl"], "api", api)
     monkeypatch.setitem(sys.modules, "bempp_cl.core.opencl_kernels", NS(default_cpu_device=lambda: selected))
     monkeypatch.setitem(sys.modules, "hornlab_bempp_bem.device", NS(
         reset_opencl_device=lambda: events.append(("reset",)),
         configure_opencl=lambda kind: events.append(("configure", kind)),
     ))
     assert probe.smoke_test(CPU)["solve_relative_error"] == 0
-    probe.bind_device(CPU)
     assert events.count(("bind", 1, 0)) == 1
 
 

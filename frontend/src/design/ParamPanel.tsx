@@ -440,8 +440,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         </select>
       </HelpTipRow>
       {ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' &&
-        <><div className="field-warning" role="status">Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.</div>
-          <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} /></>}
+        <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} notice="infinite_baffle_numba" />}
       {/* Listed but disabled: no engine on this host can run it. Say why here,
           because a title tooltip on a disabled option is easy to miss. */}
       {options.filter((option) => option.unavailableReason).map((option) => <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}

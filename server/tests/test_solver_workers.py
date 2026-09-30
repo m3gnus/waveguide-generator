@@ -152,6 +152,9 @@ def test_explicit_frequency_lists_are_reported_as_the_serial_sweeps_they_are(
     stages: list[tuple[str, float, str]] = []
     native_workers: list[int] = []
 
+    from server.solver import bempp_opencl
+
+    monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": False})
     monkeypatch.setenv("WG2_SOLVE_WORKERS", "4")
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
     monkeypatch.setattr(bempp, "SolveConfig", WorkerConfig)

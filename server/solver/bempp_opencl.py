@@ -8,6 +8,7 @@ Timeouts are transient; passes and definitive rejections persist for the process
 from __future__ import annotations
 
 from functools import lru_cache
+import importlib
 import json
 import os
 from pathlib import Path
@@ -93,10 +94,14 @@ def _bind_device(device_json: str) -> None:
         device["name"], device["vendor"], device["platform"],
     ):
         raise RuntimeError("OpenCL inventory changed after qualification; refusing another device")
-    api.set_default_cpu_device(device["platform_index"], device["device_index"])
-    from bempp_cl.core.opencl_kernels import default_cpu_device
-
-    selected = default_cpu_device()
+    kernels = importlib.import_module("bempp_cl.core.opencl_kernels")
+    # Inspect the pinned slots without calling a default getter: an unset slot
+    # would enumerate an ALL-device context and could choose its last GPU.
+    selected = getattr(kernels, "_DEFAULT_CPU_DEVICE", None)
+    context = getattr(kernels, "_DEFAULT_CPU_CONTEXT", None)
+    if selected != candidate or list(getattr(context, "devices", [])) != [candidate]:
+        api.set_default_cpu_device(device["platform_index"], device["device_index"])
+    selected = kernels.default_cpu_device()
     if not selected.type & cl.device_type.CPU or selected.type & cl.device_type.GPU:
         raise RuntimeError("BEMPP refuses a non-CPU OpenCL device")
     if (selected.name.strip(), selected.vendor.strip(), selected.platform.name.strip()) != (
@@ -108,9 +113,53 @@ def _bind_device(device_json: str) -> None:
     configure_opencl("cpu")
 
 
-def bind_device(device: Mapping[str, Any]) -> None:
+def bind_device(device: Mapping[str, Any], *, force: bool = False) -> None:
     """Bind a qualified device in the killable process that will actually solve."""
-    _bind_device(json.dumps(dict(device), sort_keys=True))
+    binder = _bind_device.__wrapped__ if force else _bind_device
+    binder(json.dumps(dict(device), sort_keys=True))
+
+
+def execution_route(verdict: Mapping[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
+    """The sole backend/device decision, from WG's compute qualification.
+
+    The optional verdict lets capability reporting use the same probe snapshot.
+    Native callers always resolve the current process's own qualification.
+    """
+    verdict = qualified_opencl() if verdict is None else verdict
+    if not verdict.get("ok"):
+        if verdict.get("stage") == "engine":
+            raise RuntimeError(f"BEMPP engine unavailable: {verdict.get('reason')}")
+        return "numba", None
+    device = verdict.get("device")
+    if not isinstance(device, Mapping) or device.get("type") != "cpu":
+        raise RuntimeError("BEMPP refuses GPU or unqualified OpenCL devices")
+    return "opencl", dict(device)
+
+
+def guard_execution(backend: str | None, opencl_device: str | None) -> None:
+    """Refuse implicit/default selection and bind only the qualified CPU.
+
+    Revalidate before every native call: a cached bind cannot protect against
+    a library replacing its default slot between assembly and evaluation.
+    Retain a matching one-CPU context so warmed kernels remain reusable.
+    Numba never enumerates or initializes an OpenCL device here.
+    """
+    qualified_backend, device = execution_route()
+    if backend not in {"numba", "opencl"} or backend != qualified_backend or opencl_device != "cpu":
+        raise RuntimeError("BEMPP refuses GPU, implicit or unqualified execution; "
+                           f"requested {backend!r}/{opencl_device!r}, qualified {qualified_backend}")
+    if device is not None:
+        bind_device(device, force=True)
+
+
+def native_call(function: Any, *args: Any, execution_config: Any = None, **kwargs: Any) -> Any:
+    """Lowest shared boundary for solves and potential/field evaluation."""
+    backend = (getattr(execution_config, "assembly_backend", None)
+               if execution_config is not None else kwargs.get("assembly_backend"))
+    device = (getattr(execution_config, "opencl_device", None)
+              if execution_config is not None else kwargs.get("opencl_device"))
+    guard_execution(backend, device)
+    return function(*args, **kwargs)
 
 
 def reference_matrix() -> Any:
@@ -156,7 +205,7 @@ def smoke_test(device: Mapping[str, Any]) -> dict[str, float]:
     import numpy as np
     import bempp_cl.api as api
 
-    bind_device(device)
+    bind_device(device, force=True)
     grid = api.shapes.regular_sphere(0)
     space = api.function_space(grid, "DP", 0)
     parameters = api.DefaultParameters()

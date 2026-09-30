@@ -408,6 +408,18 @@ def test_artifact_backend_dispatches_matching_mesh_loader_and_evaluator(
         lambda name: packages[name],
     )
 
+    from server.solver import bempp_process, bempp_opencl
+
+    monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": False})
+
+    async def isolated_field(payload):
+        # The worker command dispatch is real; fake native functions stay local.
+        return bempp_process._solve_payload(
+            {**payload, "kind": "field"}, stage=lambda *_args: None, result=lambda *_args: None,
+        )
+
+    monkeypatch.setattr(bempp_process, "evaluate_field_bempp_in_process", isolated_field)
+
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path)
         store = app.state.jobs_runtime.store
@@ -436,7 +448,7 @@ def test_artifact_backend_dispatches_matching_mesh_loader_and_evaluator(
     metal_kwargs = calls[1][2]
     bempp_kwargs = calls[3][2]
     assert metal_kwargs == {"symmetry_plane": "yz", "check_open_edges": True}
-    assert bempp_kwargs == {"symmetry_plane": "yz"}
+    assert bempp_kwargs == {"symmetry_plane": "yz", "assembly_backend": "numba", "opencl_device": "cpu"}
 
 
 def test_artifact_backend_unavailable_returns_clear_error(

@@ -333,8 +333,9 @@ def solve_imported_bempp_from_msh_text(
     status = bempp.bempp_status()
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
-    backend = _require_opencl(status)
-    bempp.bind_assembly_device(status)
+    _require_opencl(status)
+    backend, _device = bempp.execution_route()
+    bempp.validate_assembly_status(status)
     refusal = imported_bempp_preflight(record, geometry.drive_channels)
     if refusal is not None:
         raise BemppUnavailable(f"BEMPP cannot solve this CAD return: {refusal}")
@@ -555,7 +556,7 @@ def solve_imported_bempp_from_msh_text(
             config.require_closed_mesh = True
             # One cancellable process that streams; Stop kills the worker.
             config.workers = 1
-            result = bempp.bempp_solve_frequencies(str(path), frequencies, config)
+            result = bempp.native_call(bempp.bempp_solve_frequencies, str(path), frequencies, config, execution_config=config)
             sort_native_result_frequencies(result)
             bempp._refuse_silent_zero_result(result, backend)
             sorted_results[channel.id] = result

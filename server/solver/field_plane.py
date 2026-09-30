@@ -54,6 +54,8 @@ NO_SYNTHESIS_REVISION = hashlib.sha256(
 #: Backends whose degraded-assembly warning has already been logged. Dragging
 #: the plane re-evaluates continuously, so this must not warn per request.
 _WARNED_BACKENDS: set[str] = set()
+# Native BEMPP grids stay in its serial worker, never cross the IPC boundary.
+_BEMPP_MESH_CACHE: OrderedDict[tuple[str, str | None], Any] = OrderedDict()
 
 
 class FieldPlaneJobNotFound(LookupError):
@@ -117,7 +119,7 @@ def _field_backend_status(backend: FieldTraceBackend) -> Mapping[str, Any]:
     raise ArtifactCorrupt(f"field-trace backend {backend!r} is unsupported")
 
 
-def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
+def _require_field_backend(backend: FieldTraceBackend) -> None:
     status = _field_backend_status(backend)
     if not bool(status.get("available")):
         reason = str(status.get("reason") or "runtime capability probe failed")
@@ -134,6 +136,9 @@ def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
         _WARNED_BACKENDS.add(backend)
         logger.warning("%s", warning)
 
+
+def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
+    _require_field_backend(backend)
     package_name = (
         "hornlab_metal_bem"
         if backend == METAL_FIELD_TRACE_BACKEND
@@ -148,7 +153,59 @@ def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
             f"Field-trace artifact requires backend {backend!r}, but installed "
             f"{package_name} does not provide trace field evaluation"
         ) from exc
+    if backend == BEMPP_FIELD_TRACE_BACKEND:
+        from .bempp_opencl import native_call
+
+        native_evaluator = evaluator
+
+        def evaluator(*args: Any, **kwargs: Any) -> Any:
+            return native_call(native_evaluator, *args, **kwargs)
+
     return _FieldBackendAPI(mesh_loader, evaluator)
+
+
+def evaluate_bempp_field_payload(payload: Mapping[str, Any]) -> FieldPlaneEvaluation:
+    """Native retained-field work; dispatched only inside the BEMPP worker."""
+    from .bempp_opencl import execution_route, guard_execution
+
+    (mesh_text, frequency_hz, k_real, symmetry_plane, pressure, neumann,
+     _backend, synthesis_revision) = payload["traces"]
+    points = payload["points"]
+    backend, _device = execution_route()
+    api = _load_field_backend(BEMPP_FIELD_TRACE_BACKEND)
+    guard_execution(backend, "cpu")
+    key = (mesh_text_sha256(mesh_text), symmetry_plane)
+    mesh = _BEMPP_MESH_CACHE.pop(key, None)
+    if mesh is None:
+        with tempfile.TemporaryDirectory(dir=temporary_directory_root()) as directory:
+            path = Path(directory) / "mesh.msh"
+            path.write_text(mesh_text, encoding="utf-8")
+            mesh = api.load_mesh(path, native_symmetry_plane=symmetry_plane)
+    _BEMPP_MESH_CACHE[key] = mesh
+    while len(_BEMPP_MESH_CACHE) > 4:
+        _BEMPP_MESH_CACHE.popitem(last=False)
+    values = np.asarray(api.evaluate_exterior_from_traces(
+        mesh, frequency_hz, k_real, pressure, neumann, points,
+        symmetry_plane=symmetry_plane, assembly_backend=backend, opencl_device="cpu",
+    ))
+    if values.shape != (points.shape[0],):
+        raise RuntimeError("field evaluator returned an unexpected pressure grid shape")
+    return FieldPlaneEvaluation(
+        frequency_hz=float(frequency_hz),
+        pressure=np.ascontiguousarray(values, dtype=np.complex64),
+        geometry_sha256=mesh_text_sha256(mesh_text),
+        synthesis_revision=synthesis_revision,
+        symmetry_plane=symmetry_plane,
+    )
+
+
+async def _isolated_bempp_field(payload: Mapping[str, Any]) -> FieldPlaneEvaluation:
+    from .bempp_process import BemppWorkerError, evaluate_field_bempp_in_process
+
+    try:
+        return await evaluate_field_bempp_in_process(payload)
+    except BemppWorkerError as exc:
+        raise FieldPlaneUnsupported(f"BEMPP field evaluation failed: {exc}") from exc
 
 
 def field_plane_timeout_seconds(
@@ -329,28 +386,37 @@ class FieldPlaneService:
             request.request_id,
             solve_queued=bool(self._solve_queued()),
         )
-        work = asyncio.create_task(
-            asyncio.to_thread(
-                self._evaluate_sync,
-                job_id,
-                row,
-                request,
-                points,
-            ),
-            name=f"wg2-field-plane-{request.request_id}",
-        )
+        try:
+            traces = await asyncio.to_thread(self._load_response_traces, job_id, row, request)
+            if traces[6] == BEMPP_FIELD_TRACE_BACKEND:
+                await asyncio.to_thread(_require_field_backend, traces[6])
+        except BaseException:
+            await lease.release()
+            raise
+        isolated = traces[6] == BEMPP_FIELD_TRACE_BACKEND
+        if isolated:
+            operation = _isolated_bempp_field({"traces": traces, "points": points})
+        else:
+            operation = asyncio.to_thread(self._evaluate_sync, job_id, row, request, points)
+        work = asyncio.create_task(operation, name=f"wg2-field-plane-{request.request_id}")
         try:
             evaluation = await asyncio.wait_for(
-                asyncio.shield(work),
+                work if isolated else asyncio.shield(work),
                 timeout=self.timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
-            self._release_when_finished(work, lease)
+            if isolated:
+                await lease.release()  # wait_for has killed/reaped the native worker
+            else:
+                self._release_when_finished(work, lease)
             raise FieldPlaneTimedOut(
                 f"Field evaluation exceeded {self.timeout_seconds:g} seconds"
             ) from exc
         except asyncio.CancelledError:
-            self._release_when_finished(work, lease)
+            if isolated:
+                await lease.release()
+            else:
+                self._release_when_finished(work, lease)
             raise
         except BaseException:
             await lease.release()
@@ -390,6 +456,8 @@ class FieldPlaneService:
             backend,
             synthesis_revision,
         ) = self._load_response_traces(job_id, row, request)
+        if backend == BEMPP_FIELD_TRACE_BACKEND:
+            raise RuntimeError("BEMPP field evaluation must run in the isolated worker")
         backend_api = _load_field_backend(backend)
         geometry_sha256 = mesh_text_sha256(mesh_text)
         mesh = self._cached_mesh(

@@ -77,11 +77,14 @@ SIDEWAYS_FRAME = {
     "source_center_m": [0.05, 0.02, 0.03],
 }
 
+CPU = {"type": "cpu", "name": "test CPU"}
+
 OPENCL = {
     "available": True,
     "reason": "mock OpenCL CPU device",
     "version": "0.1.1",
     "assembly_backend": "opencl",
+    "assembly_device": CPU,
 }
 
 
@@ -195,6 +198,12 @@ def _install(monkeypatch: pytest.MonkeyPatch, package: _RecordingBempp, status: 
     assert bempp._load_api(), "hornlab-bempp-bem must import for these tests"
     monkeypatch.setattr(bempp, "bempp_solve_frequencies", package.solve_frequencies)
     monkeypatch.setattr(bempp, "bempp_status", lambda: dict(status or OPENCL))
+    from server.solver import bempp_opencl
+
+    monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": True, "device": CPU})
+    bound = []
+    monkeypatch.setattr(bempp_opencl, "bind_device", lambda device, **_kwargs: bound.append(device))
+    package.bound = bound
 
 
 @pytest.fixture
@@ -233,6 +242,7 @@ def test_each_channel_is_one_sweep_driving_its_own_tags_in_the_records_frame(
         assert list(config.frame_override.mouth_center) == pytest.approx([0.09, 0.02, 0.03])
         assert config.native_symmetry_plane == "yz"
         assert config.assembly_backend == "opencl"
+        assert recording_bempp.bound and all(device == CPU for device in recording_bempp.bound)
         assert config.workers == 1
         # Metal re-checks the executed mesh for a free rim; so does BEMPP.
         assert config.require_closed_mesh is True

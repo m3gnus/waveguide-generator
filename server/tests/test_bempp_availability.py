@@ -59,8 +59,7 @@ def test_opencl_is_preferred_when_a_device_exists(monkeypatch):
     """OpenCL is hornlab-bempp-bem's production backend, so it wins by default."""
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
-    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
-    monkeypatch.setattr(bempp, "_opencl_status", lambda result: (True, "Fake CPU passed compute smoke", {"type": "cpu", "name": "Fake CPU"}, None))
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": True, "reason": "Fake CPU passed compute smoke", "device": {"type": "cpu", "name": "Fake CPU"}})
 
     status = bempp.bempp_status()
 

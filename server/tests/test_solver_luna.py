@@ -125,10 +125,13 @@ def test_temp_path_exists_before_write_and_cleanup_never_masks_solver_error(
         monkeypatch.setattr(metal, "native_solve", lambda *_args: None)
         call = lambda: metal.solve_metal_from_msh_text("msh", _context())
     else:
+        from server.solver import bempp_opencl
+
+        monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": False})
         monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
         monkeypatch.setattr(bempp, "SolveConfig", lambda **kwargs: SimpleNamespace(**kwargs))
         monkeypatch.setattr(bempp, "bempp_solve", lambda *_args: None)
-        monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": True, "reason": "ok"})
+        monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": True, "reason": "ok", "assembly_backend": "numba"})
         call = lambda: bempp.solve_bempp_from_msh_text("msh", _context())
     with pytest.raises(OSError, match="write failed"):
         call()
@@ -157,10 +160,13 @@ def test_temp_cleanup_oserror_does_not_mask_native_solver_error(
         monkeypatch.setattr(metal, "native_solve", fail_solve)
         call = lambda: metal.solve_metal_from_msh_text("msh", _context())
     else:
+        from server.solver import bempp_opencl
+
+        monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": False})
         monkeypatch.setattr(bempp, "ObservationConfig", lambda **kwargs: SimpleNamespace(**kwargs))
         monkeypatch.setattr(bempp, "SolveConfig", lambda **kwargs: SimpleNamespace(**kwargs))
         monkeypatch.setattr(bempp, "bempp_solve", fail_solve)
-        monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": True, "reason": "ok"})
+        monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": True, "reason": "ok", "assembly_backend": "numba"})
         call = lambda: bempp.solve_bempp_from_msh_text("msh", _context())
     with pytest.raises(RuntimeError, match="native solve failed"):
         call()

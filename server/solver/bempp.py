@@ -28,8 +28,8 @@ from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
 from .bempp_opencl import (
-    TIMEOUT_REASONS, bind_device, clear_cache as clear_opencl_cache,
-    qualification_revision, qualified_opencl, retry_pending,
+    TIMEOUT_REASONS, clear_cache as clear_opencl_cache,
+    execution_route, native_call, qualification_revision, qualified_opencl, retry_pending,
 )
 from .base import (
     ArtifactCallback,
@@ -358,10 +358,11 @@ def _opencl_status(result: Mapping[str, Any]) -> tuple[bool, str, dict[str, Any]
     return bool(result.get("ok")), reason, result.get("device"), result.get("opencl_unavailable_reason")
 
 
-def bind_assembly_device(status: Mapping[str, Any]) -> None:
-    """Call only in the killable solve/warmup process, after qualification."""
-    if status.get("assembly_backend") == PREFERRED_ASSEMBLY_BACKEND and status.get("assembly_device"):
-        bind_device(status["assembly_device"])
+def validate_assembly_status(status: Mapping[str, Any]) -> None:
+    """Refuse stale/incomplete capability snapshots before constructing a config."""
+    backend, device = execution_route()
+    if (status.get("assembly_backend"), status.get("assembly_device")) != (backend, device):
+        raise RuntimeError("BEMPP capability disagrees with the qualified execution route")
 
 
 def numba_fallback_warning(opencl_reason: str) -> str:
@@ -382,7 +383,8 @@ def _assembly_backend_status() -> tuple[bool, str, str | None, str | None, dict[
     probe = qualified_opencl()
     opencl_usable, opencl_reason, device, unavailable_reason = _opencl_status(probe)
     if opencl_usable:
-        return True, opencl_reason, PREFERRED_ASSEMBLY_BACKEND, None, device, None
+        backend, device = execution_route(probe)
+        return True, opencl_reason, backend, None, device, None
 
     # bempp-cl imports and ICD enumeration run in the bounded probe child.
     # An actual engine import error is different from absent/broken OpenCL.
@@ -397,7 +399,7 @@ def _assembly_backend_status() -> tuple[bool, str, str | None, str | None, dict[
         remedy = f" Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}" if missing else ""
         return False, f"no assembly backend can run a solve. OpenCL: {opencl_reason} numba also failed ({_describe(exc)}).{remedy}", None, None, None, unavailable_reason
     warning = numba_fallback_warning(opencl_reason)
-    return True, warning, FALLBACK_ASSEMBLY_BACKEND, warning, None, unavailable_reason
+    return True, warning, execution_route(probe)[0], warning, None, unavailable_reason
 
 
 def _probe_ground_plane_axes() -> tuple[str, ...]:
@@ -707,8 +709,8 @@ def solve_bempp_from_msh_text(
         logger.warning("%s", retention_detail)
         if stage_callback:
             stage_callback("setup", 0.0, retention_detail)
-    backend = status.get("assembly_backend") or PREFERRED_ASSEMBLY_BACKEND
-    bind_assembly_device(status)
+    backend, _device = execution_route()
+    validate_assembly_status(status)
     started = time.time()
     if status.get("warning"):
         # The user asked for a solve, not for a lecture, but silently assembling
@@ -894,15 +896,15 @@ def solve_bempp_from_msh_text(
             and workers == 1
             and bempp_solve_frequencies is not None
         ):
-            result = bempp_solve_frequencies(
-                str(path), live_execution_frequencies(context).tolist(), config
+            result = native_call(bempp_solve_frequencies,
+                str(path), live_execution_frequencies(context).tolist(), config, execution_config=config
             )
             sort_native_result_frequencies(result)
         elif context.frequencies_hz is None:
-            result = bempp_solve(str(path), config)
+            result = native_call(bempp_solve, str(path), config, execution_config=config)
         else:
-            result = bempp_solve_frequencies(
-                str(path), list(context.frequencies_hz), config
+            result = native_call(bempp_solve_frequencies,
+                str(path), list(context.frequencies_hz), config, execution_config=config
             )
     finally:
         if path is not None:
