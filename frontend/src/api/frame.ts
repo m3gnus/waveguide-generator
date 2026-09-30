@@ -47,6 +47,7 @@ export interface FrameHeader {
       horn_overall?: [number, number, number];
       enclosure_overall?: [number, number, number];
     } | null;
+    dimensions_status?: 'pending' | 'current' | 'unavailable';
     dimensions_error?: string;
     dimensions_sampling?: { method: string; lod_independent: boolean };
   };

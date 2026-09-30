@@ -36,21 +36,25 @@ export function LiveDimensions() {
     return () => observer.disconnect();
   }, [supported]);
 
-  if (!supported) return null;
-  const dimensions = metadata.dimensions_mm;
+  // After New/Open the retained frame is the previous document's: show nothing
+  // until this document has a frame of its own.
+  if (!supported || preview.awaitingDocumentFrame) return null;
+  const pending = metadata.dimensions_status === 'pending';
+  const dimensions = metadata.dimensions_status === 'unavailable' ? null
+    : pending ? preview.lastCanonicalDimensions : metadata.dimensions_mm;
   const current = preview.displayedRevision === revision
     && preview.frame?.header.designRevision === revision
-    && !preview.stale && !preview.error && !invalidDraft;
+    && !pending && !preview.stale && !preview.error && !invalidDraft;
   return <section ref={host} className="live-dimensions" aria-label="Design dimensions">
     <h3>Design dimensions</h3>
-    <p>W × H × D · {current ? 'Current preview' : 'Last valid preview'}</p>
+    <p>W × H × D · {pending ? 'Updating dimensions' : dimensions ? current ? 'Current preview' : 'Last valid preview' : 'Dimensions unavailable'}</p>
     <dl className="realized-dimension-list">
       {readouts.map(([key, label, count]) => {
         if (key === 'enclosure_overall' && dimensions && !(key in dimensions)) return null;
         const value = formatted(dimensions?.[key], count);
         return <div className="realized-dimension-row" key={key}>
           <dt><span>{label}</span></dt>
-          <dd>{value ?? 'unavailable'}{value && !current && <small>last valid</small>}</dd>
+          <dd>{value ?? (pending ? 'updating' : 'unavailable')}{value && !current && <small>{pending ? 'updating' : 'last valid'}</small>}</dd>
         </div>;
       })}
     </dl>

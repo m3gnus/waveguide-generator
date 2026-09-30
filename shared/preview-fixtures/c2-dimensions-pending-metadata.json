@@ -2,23 +2,8 @@
   "api_version": "hornlab.preview/1",
   "metadata_version": "hornlab.preview/1.4",
   "units": "mm",
-  "dimensions_mm": {
-    "mouth_opening": [
-      348.5794722023637,
-      348.5794722023637
-    ],
-    "horn_overall": [
-      348.5794722023637,
-      348.5794722023637,
-      120.0
-    ],
-    "enclosure_overall": [
-      400.0,
-      400.0,
-      150.0
-    ]
-  },
-  "dimensions_status": "current",
+  "dimensions_mm": null,
+  "dimensions_status": "pending",
   "dimensions_sampling": {
     "method": "resolved-canonical-geometry",
     "lod_independent": true
@@ -26,107 +11,107 @@
   "coordinate_frame": "mesher-xyz",
   "formula": "OSSE",
   "mode": "enclosure",
-  "lod": "fine",
+  "lod": "coarse",
   "actual_segment_counts": {
-    "horn_phi": 256,
-    "horn_axial": 54,
-    "enclosure_roundover_quarter": 32,
-    "source_cap_radial": 16
+    "horn_phi": 128,
+    "horn_axial": 20,
+    "enclosure_roundover_quarter": 14,
+    "source_cap_radial": 8
   },
   "timings_ms": {
-    "canonical_sampling": 18.795749987475574,
-    "surface_assembly_and_fidelity": 47.19341697636992,
-    "total": 138.71391699649394
+    "canonical_sampling": 8.118791971355677,
+    "surface_assembly_and_fidelity": 21.00437495391816,
+    "total": 41.869624983519316
   },
   "canonical_reference": {
-    "axial_rows": 193,
-    "azimuth_rows": 512,
+    "axial_rows": 49,
+    "azimuth_rows": 256,
     "escalated": false
   },
   "fidelity": {
     "horn.inner": {
-      "max_chord_error_mm": 0.017096597201173167,
-      "max_normal_step_deg": 2.987047457010931,
+      "max_chord_error_mm": null,
+      "max_normal_step_deg": 2.7101079104621357,
       "reference_density_multiplier": 4,
-      "max_chord_error_mm_requested": 0.05,
-      "max_normal_step_deg_requested": 3.0,
-      "min_silhouette_segments_requested": 128,
-      "max_chord_error_mm_achieved": 0.017096597201173167,
-      "max_normal_step_deg_achieved": 2.987047457010931,
-      "vertex_cap_limited": false,
-      "measurement_complete": true,
-      "unmeasured_intervals": 0,
-      "silhouette_segments_achieved": 256
+      "max_chord_error_mm_requested": 0.15,
+      "max_normal_step_deg_requested": 8.0,
+      "min_silhouette_segments_requested": 64,
+      "max_chord_error_mm_achieved": null,
+      "max_normal_step_deg_achieved": 2.7101079104621357,
+      "vertex_cap_limited": true,
+      "measurement_complete": false,
+      "unmeasured_intervals": 8,
+      "silhouette_segments_achieved": 128
     },
     "source_cap": {
-      "max_chord_error_mm": 0.0016982064638673933,
-      "max_normal_step_deg": 0.96875,
+      "max_chord_error_mm": 0.006792704486942346,
+      "max_normal_step_deg": 1.9375,
       "reference_density_multiplier": 4,
-      "max_chord_error_mm_requested": 0.05,
-      "max_normal_step_deg_requested": 3.0,
-      "min_silhouette_segments_requested": 128,
-      "max_chord_error_mm_achieved": 0.0016982064638673933,
-      "max_normal_step_deg_achieved": 0.96875,
+      "max_chord_error_mm_requested": 0.15,
+      "max_normal_step_deg_requested": 8.0,
+      "min_silhouette_segments_requested": 64,
+      "max_chord_error_mm_achieved": 0.006792704486942346,
+      "max_normal_step_deg_achieved": 1.9375,
       "vertex_cap_limited": false,
       "measurement_complete": true,
       "unmeasured_intervals": 0,
-      "silhouette_segments_achieved": 256
+      "silhouette_segments_achieved": 128
     },
     "enclosure.front": {
       "max_chord_error_mm": 2.220446049250313e-16,
       "max_normal_step_deg": 0.0,
       "reference_density_multiplier": 4,
-      "max_chord_error_mm_requested": 0.05,
-      "max_normal_step_deg_requested": 3.0,
-      "min_silhouette_segments_requested": 128,
+      "max_chord_error_mm_requested": 0.15,
+      "max_normal_step_deg_requested": 8.0,
+      "min_silhouette_segments_requested": 64,
       "max_chord_error_mm_achieved": 2.220446049250313e-16,
       "max_normal_step_deg_achieved": 0.0,
       "vertex_cap_limited": false,
       "measurement_complete": true,
       "unmeasured_intervals": 0,
-      "silhouette_segments_achieved": 256
+      "silhouette_segments_achieved": 128
     },
     "enclosure.roundover": {
-      "max_chord_error_mm": 0.028016655362092874,
-      "max_normal_step_deg": 2.9963855442998883,
+      "max_chord_error_mm": 0.10151042942760982,
+      "max_normal_step_deg": 7.976346681797716,
       "reference_density_multiplier": 4,
-      "max_chord_error_mm_requested": 0.05,
-      "max_normal_step_deg_requested": 3.0,
-      "min_silhouette_segments_requested": 128,
-      "max_chord_error_mm_achieved": 0.028016655362092874,
-      "max_normal_step_deg_achieved": 2.9963855442998883,
+      "max_chord_error_mm_requested": 0.15,
+      "max_normal_step_deg_requested": 8.0,
+      "min_silhouette_segments_requested": 64,
+      "max_chord_error_mm_achieved": 0.10151042942760982,
+      "max_normal_step_deg_achieved": 7.976346681797716,
       "vertex_cap_limited": false,
       "measurement_complete": true,
       "unmeasured_intervals": 0,
-      "silhouette_segments_achieved": 136
+      "silhouette_segments_achieved": 64
     },
     "enclosure.side": {
-      "max_chord_error_mm": 0.005421263468323501,
-      "max_normal_step_deg": 2.8125,
+      "max_chord_error_mm": 0.028317329679301118,
+      "max_normal_step_deg": 6.428571428571429,
       "reference_density_multiplier": 4,
-      "max_chord_error_mm_requested": 0.05,
-      "max_normal_step_deg_requested": 3.0,
-      "min_silhouette_segments_requested": 128,
-      "max_chord_error_mm_achieved": 0.005421263468323501,
-      "max_normal_step_deg_achieved": 2.8125,
+      "max_chord_error_mm_requested": 0.15,
+      "max_normal_step_deg_requested": 8.0,
+      "min_silhouette_segments_requested": 64,
+      "max_chord_error_mm_achieved": 0.028317329679301118,
+      "max_normal_step_deg_achieved": 6.428571428571429,
       "vertex_cap_limited": false,
       "measurement_complete": true,
       "unmeasured_intervals": 0,
-      "silhouette_segments_achieved": 136
+      "silhouette_segments_achieved": 64
     },
     "enclosure.rear": {
       "max_chord_error_mm": 2.220446049250313e-16,
       "max_normal_step_deg": 0.0,
       "reference_density_multiplier": 4,
-      "max_chord_error_mm_requested": 0.05,
-      "max_normal_step_deg_requested": 3.0,
-      "min_silhouette_segments_requested": 128,
+      "max_chord_error_mm_requested": 0.15,
+      "max_normal_step_deg_requested": 8.0,
+      "min_silhouette_segments_requested": 64,
       "max_chord_error_mm_achieved": 2.220446049250313e-16,
       "max_normal_step_deg_achieved": 0.0,
       "vertex_cap_limited": false,
       "measurement_complete": true,
       "unmeasured_intervals": 0,
-      "silhouette_segments_achieved": 136
+      "silhouette_segments_achieved": 64
     }
   },
   "warnings": [],
@@ -136,40 +121,40 @@
     "best_effort": true
   },
   "requested_fidelity": {
-    "max_chord_error_mm": 0.05,
-    "max_normal_step_deg": 3.0,
-    "min_silhouette_segments": 128,
+    "max_chord_error_mm": 0.15,
+    "max_normal_step_deg": 8.0,
+    "min_silhouette_segments": 64,
     "max_vertices": null
   },
   "angular_sampling": {
     "strategy": "adaptive-periodic",
     "corner_arc_rows": 0,
-    "flat_side_rows": 256,
+    "flat_side_rows": 128,
     "uses_zipper_indices": true
   },
   "vertex_accounting": {
     "horn.inner": {
-      "vertices": 14080,
+      "vertices": 2688,
       "max_vertices": null,
-      "vertex_cap_limited": false
+      "vertex_cap_limited": true
     },
     "source_cap": {
-      "vertices": 4097,
+      "vertices": 1025,
       "max_vertices": null,
       "vertex_cap_limited": false
     },
     "enclosure.front": {
-      "vertices": 512,
+      "vertices": 256,
       "max_vertices": null,
       "vertex_cap_limited": false
     },
     "enclosure.roundover": {
-      "vertices": 5992,
+      "vertices": 1320,
       "max_vertices": null,
       "vertex_cap_limited": false
     },
     "enclosure.side": {
-      "vertices": 272,
+      "vertices": 128,
       "max_vertices": null,
       "vertex_cap_limited": false
     },
@@ -205,8 +190,8 @@
   },
   "surface_metadata": {
     "horn.inner": {
-      "degenerateTriangles": 6912,
-      "orientationAbstainingTriangles": 6912,
+      "degenerateTriangles": 1408,
+      "orientationAbstainingTriangles": 1408,
       "disagreeingTriangles": 0,
       "orientationSingularTriangles": 0,
       "orientation": "air-side",

@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
+import { act, createElement } from 'react';
+import { createRoot } from 'react-dom/client';
+import { LiveDimensions } from '../design/LiveDimensions';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetDesignStore, useDesignStore } from '../stores/design';
-import { PreviewSocketManager, type WebSocketLike } from './previewSocket';
+import { PreviewSocketManager, previewSocket, type WebSocketLike } from './previewSocket';
 
 class MockSocket implements WebSocketLike {
   binaryType = '';
@@ -195,7 +198,11 @@ describe('preview socket state machine', () => {
     // The late frame must never be shown: it belongs to the document New
     // replaced, not the one now on screen.
     expect(manager.getSnapshot().displayedRevision).toBeNull();
+    // The viewport keeps the previous document's frame until the new one
+    // arrives; only its readouts are dropped.
     expect(manager.getSnapshot().frame).toBe(frameBeforeReset);
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(true);
+    expect(manager.getSnapshot().lastCanonicalDimensions ?? null).toBeNull();
 
     for (let i = 0; i < 9; i += 1) useDesignStore.getState().updateField('a', 40 + i);
     expect(useDesignStore.getState().designRevision).toBe(10);
@@ -206,6 +213,8 @@ describe('preview socket state machine', () => {
     expect(manager.getSnapshot().displayedRevision).toBe(10);
     expect(manager.getSnapshot().stale).toBe(false);
     expect(manager.getSnapshot().frame).not.toBe(frameBeforeReset);
+    expect(manager.getSnapshot().frame?.header.designRevision).toBe(10);
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
     manager.stop();
   });
 
@@ -440,7 +449,7 @@ it('keeps canonical dimensions attached to the newest displayed design despite l
   manager.stop(); resetDesignStore();
 });
 
-it('marks dimensions last valid when New replaces a document at the same revision number', () => {
+it('drops the readouts but keeps the frame when New replaces a document at the same revision number', () => {
   const metadata = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-metadata.json')));
   resetDesignStore();
   const socket = new MockSocket();
@@ -453,7 +462,11 @@ it('marks dimensions last valid when New replaces a document at the same revisio
   expect(manager.getSnapshot().stale).toBe(true);
   expect(manager.getSnapshot().displayedRevision).toBeNull();
   socket.message(fixtureWithHeader({ seq: 1, designRevision: 1, previewMetadata: metadata }));
-  expect(manager.getSnapshot().frame).toBe(previous);
+  // The viewport keeps the previous document's frame until the new one
+    // arrives; only its readouts are dropped.
+    expect(manager.getSnapshot().frame).toBe(previous);
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(true);
+    expect(manager.getSnapshot().lastCanonicalDimensions ?? null).toBeNull();
   expect(manager.getSnapshot().stale).toBe(true);
   socket.message(fixtureWithHeader({ seq: 2, designRevision: 1, previewMetadata: metadata }));
   expect(manager.getSnapshot().displayedRevision).toBe(1);
@@ -478,4 +491,64 @@ it('resets document-scoped error floors on New and rejects late previous-documen
   socket.message(fixtureWithHeader({ seq: 2, designRevision: 1 }));
   expect(manager.getSnapshot()).toMatchObject({ error: null, errorRevision: null, stale: false, displayedRevision: 1, lastValidRevision: 1 });
   manager.stop(); resetDesignStore();
+});
+
+
+describe('rendered document dimension transitions', () => {
+  beforeEach(() => {
+    vi.useFakeTimers(); resetDesignStore();
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  });
+  afterEach(() => { vi.restoreAllMocks(); resetDesignStore(); vi.useRealTimers(); });
+
+  it.each(['New', 'Open'] as const)('hides previous document values after %s, including failed previews', (action) => {
+    const socket = new MockSocket();
+    const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+    vi.spyOn(previewSocket, 'subscribe').mockImplementation(manager.subscribe);
+    vi.spyOn(previewSocket, 'getSnapshot').mockImplementation(manager.getSnapshot);
+    const host = document.createElement('div'); document.body.append(host);
+    const root = createRoot(host);
+    const oldDocument = structuredClone(useDesignStore.getState().design); oldDocument.scale = 2;
+    useDesignStore.getState().loadDesign(oldDocument);
+    manager.start(); socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+    act(() => root.render(createElement(LiveDimensions)));
+    const firstRevision = useDesignStore.getState().designRevision;
+    act(() => socket.message(fixtureWithHeader({ seq: 1, designRevision: firstRevision,
+      previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: [400, 200], horn_overall: [410, 210, 200] } } })));
+    expect(host.textContent).toContain('400.0 × 200.0 mm');
+    const newDocument = structuredClone(oldDocument); newDocument.scale = 3;
+    act(() => {
+      if (action === 'New') resetDesignStore();
+      else useDesignStore.getState().replaceDesign(newDocument);
+    });
+    expect(host.querySelector('[aria-label="Design dimensions"]')).toBeNull();
+    const revision = useDesignStore.getState().designRevision;
+    act(() => socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2,
+      designRevision: revision, code: 'INVALID', message: 'New document failed' })));
+    expect(host.querySelector('[aria-label="Design dimensions"]')).toBeNull();
+    // Late previous-document frames cannot resurrect the hidden readouts.
+    act(() => socket.message(fixtureWithHeader({ seq: 1, designRevision: firstRevision,
+      previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: [400, 200] } } })));
+    expect(host.querySelector('[aria-label="Design dimensions"]')).toBeNull();
+    act(() => socket.message(fixtureWithHeader({ seq: 3, designRevision: revision,
+      previewMetadata: { dimensions_status: 'pending', dimensions_mm: null } })));
+    expect(host.textContent).toContain('Updating dimensions');
+    expect(host.textContent).not.toContain('400.0');
+    const mouth: [number, number] = action === 'New' ? [300, 150] : [600, 300];
+    act(() => socket.message(fixtureWithHeader({ seq: 4, designRevision: revision, lod: 'fine',
+      previewMetadata: { dimensions_status: 'current', dimensions_mm: { mouth_opening: mouth, horn_overall: [610, 310, 300] } } })));
+    expect(host.textContent).toContain(mouth.map((value) => value.toFixed(1)).join(' × ') + ' mm');
+    expect(host.textContent).toContain('Current preview');
+    expect(host.textContent).not.toContain('400.0');
+    // A coarse frame after another edit retains only this document's values.
+    act(() => socket.message(fixtureWithHeader({ seq: 5, designRevision: revision,
+      previewMetadata: { dimensions_status: 'pending', dimensions_mm: null } })));
+    expect(host.textContent).toContain('Updating dimensions');
+    expect(host.textContent).toContain(mouth.map((value) => value.toFixed(1)).join(' × ') + ' mm');
+    act(() => socket.message(fixtureWithHeader({ seq: 6, designRevision: revision,
+      previewMetadata: { dimensions_status: 'unavailable', dimensions_mm: null, dimensions_error: 'Cannot resolve' } })));
+    expect(host.textContent).toContain('unavailable');
+    expect(host.textContent).not.toContain(mouth[0].toFixed(1));
+    act(() => root.unmount()); manager.stop(); host.remove();
+  });
 });

@@ -1,4 +1,4 @@
-import { decodeFrame, type DecodedFrame } from './frame';
+import { decodeFrame, type DecodedFrame, type FrameHeader } from './frame';
 import {
   registerRevisionTimer,
   serializeDesign,
@@ -14,6 +14,15 @@ export interface PreviewSnapshot {
   connection: ConnectionState;
   epoch: number | null;
   frame: DecodedFrame | null;
+  /** Last canonical readout in this document, retained through pending frames. */
+  lastCanonicalDimensions?: NonNullable<FrameHeader['previewMetadata']>['dimensions_mm'];
+  /**
+   * True from a document load until a frame for the new document is accepted.
+   * The retained frame still belongs to the previous document in that window:
+   * the viewport keeps showing it, but nothing may present its numbers as this
+   * document's.
+   */
+  awaitingDocumentFrame?: boolean;
   displayedRevision: number | null;
   lastValidRevision: number | null;
   stale: boolean;
@@ -324,8 +333,14 @@ export class PreviewSocketManager {
       || frameRevision >= this.snapshot.errorRevision
     );
     this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, frameSeq);
+    const metadata = header.previewMetadata;
+    const lastCanonicalDimensions = metadata?.dimensions_status === 'pending'
+      ? this.snapshot.lastCanonicalDimensions
+      : metadata?.dimensions_status === 'unavailable' ? null : metadata?.dimensions_mm;
     this.update({
       frame,
+      lastCanonicalDimensions,
+      awaitingDocumentFrame: false,
       displayedRevision: frameRevision,
       lastValidRevision: frameRevision,
       stale: frameRevision !== revision,
@@ -357,8 +372,11 @@ export class PreviewSocketManager {
     // New can also replace a document at the SAME revision (1 -> 1).
     // Its retained frame belongs to the previous document until the load's
     // own request returns, even though the numeric revisions compare equal.
+    // The viewport keeps that frame; the previous document's readouts are
+    // dropped and hidden until a frame for the new document is accepted.
     if (event.reason === 'load') {
       this.update({
+        lastCanonicalDimensions: null, awaitingDocumentFrame: true,
         displayedRevision: null, lastValidRevision: null,
         error: null, errorFields: null, errorRevision: null,
       });

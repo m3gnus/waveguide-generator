@@ -18,7 +18,7 @@ import { resetDesignStore, useDesignStore } from '../stores/design';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { ParamPanel } from './ParamPanel';
 
-// Captured verbatim from the producer mesher build_preview_geometry(OSSE enclosure, coarse).
+// Captured verbatim from the producer mesher build_preview_geometry(OSSE enclosure, fine).
 const metadata = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-metadata.json'))) as NonNullable<FrameHeader['previewMetadata']>;
 
 function frame(data: FrameHeader['previewMetadata'], revision = 1, lod: 'coarse' | 'fine' = 'coarse') {
@@ -64,6 +64,26 @@ describe('live design dimensions', () => {
     const before = dimensions()?.textContent;
     publish({ frame: frame(metadata, 1, 'fine') });
     expect(dimensions()?.textContent).toBe(before);
+  });
+  it('retains this document canonical values while a coarse measurement is pending', () => {
+    render(); valid();
+    const pending = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-pending-metadata.json')));
+    publish({ frame: frame(pending), lastCanonicalDimensions: metadata.dimensions_mm });
+    expect(dimensions()?.textContent).toContain(expectedMouth);
+    expect(dimensions()?.textContent).toContain('Updating dimensions');
+    expect(dimensions()?.textContent).not.toContain('Current preview');
+    publish({ frame: frame(metadata, 1, 'fine') });
+    expect(dimensions()?.textContent).toContain('Current preview');
+    expect(dimensions()?.textContent).not.toMatch(/approx|tolerance|~|≈/i);
+    publish({ frame: frame({ dimensions_mm: null, dimensions_status: 'unavailable', dimensions_error: 'Invalid geometry' }) });
+    expect(dimensions()?.textContent).toContain('unavailable');
+    expect(dimensions()?.textContent).not.toContain(expectedMouth);
+  });
+  it('shows updating with no values on a new document pending frame', () => {
+    render();
+    valid({ dimensions_mm: null, dimensions_status: 'pending' });
+    expect(dimensions()?.textContent).toContain('Updating dimensions');
+    expect(dimensions()?.textContent).not.toContain(expectedMouth);
   });
   it('omits the enclosure readout for a free horn', () => {
     render(); const free = structuredClone(metadata); delete free.dimensions_mm!.enclosure_overall; valid(free);

@@ -165,22 +165,25 @@ def test_incomplete_enclosure_fidelity_remains_unmeasured_in_aggregate() -> None
 
 
 def test_real_mesher_dimensions_pass_through_preview_frame_unchanged() -> None:
-    """Automatically exercises the additive contract after the mesher pin moves."""
-    geometry = build_preview_geometry(
-        {
-            "formula": "OSSE",
-            "mode": "enclosure",
-            "profile": {"L_mm": 120, "r0_mm": 12.7, "a_deg": 55, "a0_deg": 15.5, "k": 1, "q": 0.995},
-            "enclosure": {"depth_mm": 150, "edge_mm": 18},
-        },
-        preview_options("coarse"),
-    )
-    if "dimensions_mm" not in geometry.metadata:
-        pytest.skip("Pinned mesher 0.2.3 has no C2 dimensions metadata; runs after the mesher pin moves")
-    assert set(geometry.metadata["dimensions_mm"]) == {
-        "mouth_opening", "horn_overall", "enclosure_overall",
+    """Exercises both statuses automatically after the mesher pin moves."""
+    config = {
+        "formula": "OSSE", "mode": "enclosure", "scale": 1.037,
+        "profile": {"L_mm": 120, "r0_mm": 12.7, "a_deg": 55, "a0_deg": 15.5, "k": 1, "q": 0.995},
+        "enclosure": {"depth_mm": 150, "edge_mm": 18},
     }
-    header, _ = decode(encode_preview_geometry(
-        geometry, epoch=7, seq=11, design_revision=19, lod="coarse", eval_ms=4.2,
-    ))
-    assert header["previewMetadata"] == geometry.metadata
+    for lod, status in [("coarse", "pending"), ("fine", "current")]:
+        geometry = build_preview_geometry(config, preview_options(lod))
+        if "dimensions_mm" not in geometry.metadata:
+            pytest.skip("Pinned mesher 0.2.3 has no C2 dimensions metadata; runs after the mesher pin moves")
+        assert geometry.metadata["dimensions_status"] == status
+        if status == "pending":
+            assert geometry.metadata["dimensions_mm"] is None
+            assert "dimensions_error" not in geometry.metadata
+        else:
+            assert set(geometry.metadata["dimensions_mm"]) == {
+                "mouth_opening", "horn_overall", "enclosure_overall",
+            }
+        header, _ = decode(encode_preview_geometry(
+            geometry, epoch=7, seq=11, design_revision=19, lod=lod, eval_ms=4.2,
+        ))
+        assert header["previewMetadata"] == geometry.metadata

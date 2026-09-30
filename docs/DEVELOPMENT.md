@@ -441,17 +441,19 @@ reads it directly.
 
 ### Live design dimensions (C2)
 
-The parametric geometry panel reads the accepted preview frame's
+The parametric Geometry panel displays accepted preview metadata directly:
 `previewMetadata.dimensions_mm`: `mouth_opening` is `[W, H]`,
-`horn_overall` is `[W, H, D]`, and optional `enclosure_overall` is `[W, H, D]`,
-all in millimetres. The mesher measures full canonical control geometry,
-including the modelled wall; origin, symmetry reduction and render LOD do not
-change these extents. No frontend profile formula or separate request is used.
-
-Older pins without the key display no dimension card. A current frame displays
-its revision; pending edits, failures and invalid local field drafts label the
-accepted values as last valid. A null or malformed readout says unavailable.
+`horn_overall` and optional `enclosure_overall` are `[W, H, D]` in millimetres.
+Canonical solve/CAD geometry supplies these values, displayed to one decimal place.
+The card displays no revision text; revision and sequence checks still reject old responses.
+New/Open clears the frame and readouts until the new document's preview arrives.
+A coarse `dimensions_status: "pending"` frame shows the same document's previous
+canonical values as "Updating dimensions", or "updating" when no values exist.
+`"current"` shows the values plainly; `"unavailable"` clears values and shows unavailable.
+Invalid drafts and failed edits label retained values "Last valid preview".
+Older meshers without the additive metadata hide the card.
 Completed run summaries continue using that run's `mesh_stats.dimensions_m`.
-The producer metadata captured in `shared/preview-fixtures/c2-dimensions-metadata.json`
-tests this contract before a pin move. The real server pass-through test skips
-with an explicit reason until the installed mesher emits the dimension keys.
+The fine producer metadata and a coarse pending example are captured in
+`shared/preview-fixtures/c2-dimensions-metadata.json` and
+`shared/preview-fixtures/c2-dimensions-pending-metadata.json`.
+The real-mesher server regression skips until the dependency pin supplies C2.
