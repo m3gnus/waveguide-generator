@@ -468,3 +468,89 @@ def test_a_volume_missing_from_mount_output_refuses_without_touching_the_app(
     assert "Could not identify the mounted volume" in result.stdout
     assert version_of(installed) == "old"
     assert leftovers(installed.parent) == []
+
+
+def test_a_backup_collision_during_verification_leaves_the_old_app_in_place(
+    dmg: Path, installed: Path, tmp_path: Path,
+) -> None:
+    record = tmp_path / "backup-path"
+    real_codesign = shutil.which("codesign")
+    bin_dir = shim(
+        tmp_path / "bin", "codesign",
+        f'backup="{installed.parent}/.{APP}.previous.$PPID"\n'
+        f'mkdir "$backup"\nprintf "%s" "$backup" > "{record}"\n'
+        f'exec "{real_codesign}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "still occupied" in result.stdout
+    assert version_of(installed) == "old"
+    backup = Path(record.read_text(encoding="utf-8"))
+    assert backup.is_dir() and list(backup.iterdir()) == []
+    assert "Restored" not in result.stdout
+
+
+@pytest.mark.parametrize("with_contents", (False, True))
+def test_a_collision_during_displacement_reports_the_real_old_app(
+    dmg: Path, installed: Path, tmp_path: Path, with_contents: bool,
+) -> None:
+    real_mv = shutil.which("mv")
+    create_contents = 'mkdir -p "$3/Contents"\n' if with_contents else ''
+    bin_dir = shim(
+        tmp_path / "bin", "mv",
+        'case "$*" in\n'
+        '*".previous."*) exit 1;;\n'
+        '*".new."*) exit 1;;\n'
+        '*) mkdir -p "$3"\n' + create_contents + ';;\nesac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "Could not move the existing installation aside" in result.stdout
+    assert "Restored" not in result.stdout
+    assert not installed.exists()
+    backup_lines = [line for line in result.stderr.splitlines() if line.startswith("The previous app is at: ")]
+    assert len(backup_lines) == 1, result.stderr
+    backup = Path(backup_lines[0].removeprefix("The previous app is at: "))
+    assert backup.name == APP and backup.parent.parent == installed.parent
+    assert version_of(backup) == "old"
+
+
+@pytest.mark.parametrize("interrupt", (signal.SIGHUP, signal.SIGINT, signal.SIGTERM))
+def test_a_signal_during_cleanup_allows_the_old_app_to_be_restored(
+    dmg: Path, installed: Path, tmp_path: Path, interrupt: signal.Signals,
+) -> None:
+    paused = tmp_path / "cleanup-paused"
+    release = tmp_path / "cleanup-release"
+    real_mv = shutil.which("mv")
+    bin_dir = shim(
+        tmp_path / "bin", "mv",
+        'case "$*" in\n*".new."*) exit 1;;\n*".previous."*)\n'
+        f'touch "{paused}"\nwhile [ ! -e "{release}" ]; do sleep 0.05; done\n;;\nesac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    proc = subprocess.Popen(
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL,
+        env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not paused.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "cleanup never reached"
+            time.sleep(0.05)
+        assert not installed.exists()
+        os.killpg(proc.pid, interrupt)
+        release.touch()
+        output, _ = proc.communicate(timeout=15)
+    finally:
+        release.touch()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+    assert proc.returncode == 1, output
+    assert "Restored the previous installation" in output
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []

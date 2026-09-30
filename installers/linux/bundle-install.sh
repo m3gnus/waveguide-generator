@@ -350,10 +350,12 @@ BACKUP_ICON=""
 BACKUP_DESKTOP_OWNER=""
 BACKUP_ICON_OWNER=""
 BACKUP_LINK=""
+RESTORE_MV_OPTIONS=(--)
 
 rollback() {
     status=$?
-    trap - EXIT HUP INT TERM
+    trap '' HUP INT TERM
+    trap - EXIT
     RESTORE_FAILED=0
     restore_backup() {
         backup="$1"
@@ -366,7 +368,18 @@ rollback() {
                 RESTORE_FAILED=1
                 return
             fi
-            if ! mv -- "$backup" "$destination"; then
+            if ! mv "${RESTORE_MV_OPTIONS[@]}" "$backup" "$destination" || \
+               [ -e "$backup" ] || [ -L "$backup" ] || \
+               { [ ! -e "$destination" ] && [ ! -L "$destination" ]; } || \
+               { [ "$description" = "application" ] && \
+                 { [ ! -e "$destination/app/APP-MANIFEST.json" ] || \
+                   [ -e "$destination/$(basename -- "$backup")" ]; }; }; then
+                # BSD mv can nest the backup if a directory races the check.
+                if [ ! -e "$backup" ] && [ ! -L "$backup" ] && \
+                   { [ -e "$destination/$(basename -- "$backup")" ] || \
+                     [ -L "$destination/$(basename -- "$backup")" ]; }; then
+                    backup="$destination/$(basename -- "$backup")"
+                fi
                 printf 'ERROR: could not restore the previous %s.\n' "$description" >&2
                 printf 'Its backup remains at: %s\n' "$backup" >&2
                 RESTORE_FAILED=1
@@ -420,6 +433,14 @@ rollback() {
 }
 trap rollback EXIT
 trap 'exit 1' HUP INT TERM
+
+# GNU mv prevents directory nesting; BSD mv in the macOS fixtures lacks -T.
+# Probe once, using disposable directories, and verify every restore either way.
+mkdir "$STAGE_ROOT/mv-probe-source" || fail "Could not probe safe rename support."
+if (cd -- "$STAGE_ROOT" && mv -T -- mv-probe-source mv-probe-target 2>/dev/null); then
+    RESTORE_MV_OPTIONS=(-T --)
+fi
+rm -rf -- "$STAGE_ROOT/mv-probe-source" "$STAGE_ROOT/mv-probe-target"
 
 printf 'Staging the application (this takes a moment) ...\n'
 cp -a -- "$SOURCE" "$STAGED_TARGET" || \

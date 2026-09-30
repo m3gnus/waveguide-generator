@@ -241,3 +241,80 @@ def test_update_with_unicode_and_escaped_desktop_paths(tmp_path: Path, env: dict
     assert 'Mes  Apps é' in entry
     assert '\\\\"quoted\\\\"' in entry and '\\\\$dollar' in entry and '\\\\`tick\\\\`' in entry
     assert '\\\\\\\\slash' in entry
+
+
+@pytest.mark.parametrize("supports_t", (False, True))
+def test_a_directory_racing_the_restore_is_not_reported_as_restored(
+    tmp_path: Path, env: dict[str, str], supports_t: bool,
+) -> None:
+    assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
+    failure_env = late_failure_env(tmp_path, env)
+    real_mv = shutil.which("mv")
+    t_option = '[ "$1" = "-T" ] && exit 1\n' if not supports_t else (
+        'no_nesting=0\nif [ "$1" = "-T" ]; then no_nesting=1; shift; fi\n'
+    )
+    safe_move = 'if [ "$no_nesting" = 1 ] && [ -e "$2" ]; then exit 1; fi\n' if supports_t else ''
+    # Emulate GNU -T on BSD too; the false case forces the portable fallback.
+    (tmp_path / "bin" / "mv").write_text(
+        '#!/bin/sh\n' + t_option + '[ "$1" = "--" ] && shift\n'
+        'case "$1" in *".previous."*)\n'
+        'mkdir -p "$2/app"\necho racer > "$2/app/APP-MANIFEST.json"\n;; esac\n'
+        + safe_move + f'exec "{real_mv}" "$@"\n', encoding="utf-8",
+    )
+    (tmp_path / "bin" / "mv").chmod(0o755)
+    result = run(make_tarball(tmp_path / "v2", "two"), failure_env, "--update")
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "Restored the previous installation" not in result.stdout
+    lines = [line for line in result.stderr.splitlines() if line.startswith("Its backup remains at: ")]
+    assert len(lines) == 1, result.stderr
+    backup = Path(lines[0].removeprefix("Its backup remains at: "))
+    expected_parent = installed_dir(env).parent if supports_t else installed_dir(env)
+    assert backup.parent == expected_parent
+    assert (backup / "version.txt").read_text(encoding="utf-8") == "one"
+    assert not (installed_dir(env) / "version.txt").exists()
+    assert (installed_dir(env) / "app" / "APP-MANIFEST.json").read_text(encoding="utf-8").strip() == "racer"
+
+
+@pytest.mark.parametrize("interrupt", (signal.SIGHUP, signal.SIGINT, signal.SIGTERM))
+def test_a_signal_during_rollback_allows_the_old_installation_to_be_restored(
+    tmp_path: Path, env: dict[str, str], interrupt: signal.Signals,
+) -> None:
+    assert run(make_tarball(tmp_path / "v1", "one"), env, "--no-launch").returncode == 0
+    failure_env = late_failure_env(tmp_path, env)
+    new = make_tarball(tmp_path / "v2", "two")
+    paused = tmp_path / "rollback-paused"
+    release = tmp_path / "rollback-release"
+    real_mv = shutil.which("mv")
+    (tmp_path / "bin" / "mv").write_text(
+        '#!/bin/sh\nsource="$1"\n[ "$source" = "-T" ] && source="$3"\n'
+        '[ "$source" = "--" ] && source="$2"\ncase "$source" in *".previous."*)\n'
+        f'touch "{paused}"\nwhile [ ! -e "{release}" ]; do sleep 0.05; done\n;; esac\n'
+        f'exec "{real_mv}" "$@"\n', encoding="utf-8",
+    )
+    (tmp_path / "bin" / "mv").chmod(0o755)
+    proc = subprocess.Popen(
+        ["/bin/bash", str(new / "install.sh"), "--skip-checks", "--update"],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL,
+        env=failure_env, start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic() + 15
+        while not paused.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "rollback never reached"
+            time.sleep(0.05)
+        assert not installed_dir(env).exists()
+        os.killpg(proc.pid, interrupt)
+        release.touch()
+        output, _ = proc.communicate(timeout=15)
+    finally:
+        release.touch()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.communicate()
+    assert proc.returncode == 1, output
+    assert "Restored the previous installation and desktop integration" in output
+    assert (installed_dir(env) / "version.txt").read_text(encoding="utf-8") == "one"
+    assert not list(Path(env["HOME"]).rglob("*.backup.*"))
+    assert not list(installed_dir(env).parent.glob(".waveguide-generator.*"))

@@ -189,6 +189,7 @@ if [ -e "$STAGED" ] || [ -L "$STAGED" ] || [ -e "$DISPLACED" ] || [ -L "$DISPLAC
     fail "A staging or backup path is still occupied." "Nothing has been changed."
 fi
 COMMITTED=0
+BACKUP_PATH=""
 
 # A TERM, HUP or INT (or any failure) anywhere from here on must never leave the
 # machine without an app: drop the staged copy, and if the old app was moved
@@ -196,19 +197,19 @@ COMMITTED=0
 # status is 3 and the backup path is printed.
 cleanup() {
     status=$?
-    trap - 0 HUP INT TERM
+    trap '' HUP INT TERM
+    trap - 0
     rm -rf "$STAGED"
-    if [ "$COMMITTED" -eq 0 ] && [ -d "$DISPLACED" ]; then
+    if [ "$COMMITTED" -eq 0 ] && [ -n "$BACKUP_PATH" ]; then
         if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && \
-           mv -n "$DISPLACED" "$TARGET" && [ ! -e "$DISPLACED" ] && \
-           [ -d "$TARGET/Contents" ] && [ ! -e "$TARGET/$(basename -- "$DISPLACED")" ]; then
+           mv -n "$BACKUP_PATH" "$TARGET" && [ ! -e "$BACKUP_PATH" ] && [ ! -L "$BACKUP_PATH" ] && \
+           [ -d "$TARGET/Contents" ] && [ ! -e "$TARGET/$(basename -- "$BACKUP_PATH")" ]; then
             printf 'Restored the previous installation.\n'
         else
             # A directory may also appear during the restore's mv. If mv
             # nested the backup, name its actual location for manual recovery.
-            BACKUP_PATH="$DISPLACED"
-            if [ ! -e "$DISPLACED" ] && [ -d "$TARGET/$(basename -- "$DISPLACED")" ]; then
-                BACKUP_PATH="$TARGET/$(basename -- "$DISPLACED")"
+            if [ ! -e "$BACKUP_PATH" ] && [ -d "$TARGET/$(basename -- "$BACKUP_PATH")" ]; then
+                BACKUP_PATH="$TARGET/$(basename -- "$BACKUP_PATH")"
             fi
             printf 'ERROR: could not restore the previous installation.\n' >&2
             printf 'The previous app is at: %s\n' "$BACKUP_PATH" >&2
@@ -264,13 +265,27 @@ fi
 # restores it on any failure).
 if [ -e "$TARGET" ]; then
     printf 'Replacing the copy already in %s ...\n' "$TARGET_DIR"
-    mv "$TARGET" "$DISPLACED" || fail "Could not move the existing installation aside." \
-                                      "Quit Waveguide Generator if it is running, then try again."
+    if [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
+        fail "The backup path is still occupied." "Nothing has been changed."
+    fi
+    mv -n "$TARGET" "$DISPLACED"
+    move_status=$?
+    if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ]; then
+        BACKUP_PATH="$DISPLACED"
+        if [ -d "$DISPLACED/$TARGET_BASE/Contents" ]; then
+            BACKUP_PATH="$DISPLACED/$TARGET_BASE"
+        fi
+    fi
+    if [ "$move_status" -ne 0 ] || [ -e "$TARGET" ] || [ -L "$TARGET" ] || \
+       [ ! -d "$DISPLACED/Contents" ] || [ -e "$DISPLACED/$TARGET_BASE" ]; then
+        fail "Could not move the existing installation aside." \
+             "Quit Waveguide Generator if it is running, then try again."
+    fi
 fi
 # BSD mv -n can report success without moving, or nest a source inside an
 # existing directory. Check the exact bundle path and the source after rename.
 if [ -e "$TARGET" ] || [ -L "$TARGET" ] || \
-   ! mv -n "$STAGED" "$TARGET" || [ -e "$STAGED" ] || \
+   ! mv -n "$STAGED" "$TARGET" || [ -e "$STAGED" ] || [ -L "$STAGED" ] || \
    [ ! -d "$TARGET/Contents" ] || [ -e "$TARGET/$(basename -- "$STAGED")" ]; then
     fail "Could not put the new version in place at $TARGET."
 fi
