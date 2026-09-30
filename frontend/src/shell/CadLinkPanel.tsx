@@ -529,17 +529,19 @@ export function CadLinkPanel() {
   const [unlinkingOnshape, setUnlinkingOnshape] = useState(false);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [installingAddin, setInstallingAddin] = useState(false);
-  const [addinNotice, setAddinNotice] = useState<string | null>(null);
+  // The action's own answer, and the Fusion status it was given under. A later
+  // status read replaces it: a pending install can finish on its own.
+  const [addinReply, setAddinReply] = useState<{ detail: string; under: unknown } | null>(null);
   async function installAddin() {
     setInstallingAddin(true);
+    let detail: string;
     try {
-      const result = await installCadLinkAddin();
-      setAddinNotice(result.detail);
+      detail = (await installCadLinkAddin()).detail;
     } catch (error) {
-      setAddinNotice(error instanceof Error ? error.message : 'Could not install WGLink. Try again.');
-    } finally {
-      setInstallingAddin(false);
+      detail = error instanceof Error ? error.message : 'Could not install WGLink. Try again.';
     }
+    setAddinReply({ detail, under: cadLinkCoordinatorBridge.getSnapshot().fusionStatus });
+    setInstallingAddin(false);
   }
   const operations = useCadOperationsStore((current) => current.operations);
   const onshapeSendGeneration = useRef(0);
@@ -558,6 +560,10 @@ export function CadLinkPanel() {
     onshapeStatus,
     onshapeConnection,
   } = cadCoordinator;
+  const addinNotice = addinReply === null ? null
+    : fusionStatus !== addinReply.under && fusionStatus?.addinRefresh
+      ? fusionStatus.addinRefresh.detail
+      : addinReply.detail;
   const projectBundles = identity?.designId
     ? bundles.filter((bundle) => returnBelongsToProject(bundle, identity.designId))
     : bundles;

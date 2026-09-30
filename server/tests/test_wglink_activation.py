@@ -248,15 +248,41 @@ def test_usage_is_checked_again_under_the_install_lock(tmp_path: Path, monkeypat
     data = tmp_path / "data"
     addins = tmp_path / "AddIns"
     calls: list[dict[str, object]] = []
-    _fake_installer(
-        monkeypatch, calls, held={},
-        on_lock=lambda: usage_path(data).unlink(),
-    )
+    held: dict[str, bool] = {}
+    _fake_installer(monkeypatch, calls, held=held, on_lock=lambda: usage_path(data).unlink())
     activation = addin_update.activate_wglink(
         root=root, addins_dir=addins, data_dir=data, confirmed=CONFIRMED,
     )
     assert activation.verdict == "not-in-use"
-    assert calls == [] and not (addins / "WGLink").exists()
+    assert calls == [] and held == {"now": False}
+    # Only evidence that vanishes mid-call gets this far. The lock file stays
+    # (removing a lock another installer may wait on would let two in); no
+    # add-in is installed.
+    assert sorted(p.name for p in addins.iterdir()) == [".WGLink-install.lock"]
+
+
+def test_a_use_that_ends_under_the_lock_leaves_an_existing_addins_folder_as_it_was(
+    tmp_path: Path, monkeypatch
+) -> None:
+    root = _populate(tmp_path / "wg")
+    data = tmp_path / "data"
+    addins = tmp_path / "AddIns"
+    (addins / "Other").mkdir(parents=True)
+    (addins / "Other" / "Other.py").write_text("# someone else's\n", encoding="utf-8")
+    record_usage(data, "install-action")
+    before = {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()}
+    calls: list[dict[str, object]] = []
+    held: dict[str, bool] = {}
+    _fake_installer(monkeypatch, calls, held=held, on_lock=lambda: usage_path(data).unlink())
+    activation = addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data, confirmed=CONFIRMED,
+    )
+    assert activation.verdict == "not-in-use"
+    assert calls == [] and held == {"now": False}
+    others = addins / "Other"
+    assert {p.relative_to(addins): p.read_bytes() for p in others.rglob("*") if p.is_file()} == before
+    # The released lock file is the one thing left behind, and only in this case.
+    assert sorted(p.name for p in addins.iterdir()) == [".WGLink-install.lock", "Other"]
 
 
 def test_old_pending_work_is_not_a_usage_signal(tmp_path: Path, monkeypatch) -> None:

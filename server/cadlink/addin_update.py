@@ -1024,6 +1024,10 @@ def _activate(
                 "awaiting-startup", f"WGLink is changed only once this start is confirmed: {why}"
             )
         if not in_use():
+            # Reached only when the evidence went away between the two checks
+            # (the data directory removed or swapped mid-call). The lock file
+            # stays: removing a lock another installer may be waiting on would
+            # let two in. Nothing else under AddIns is touched.
             return unused
         read = inputs()
         if isinstance(read, Activation):

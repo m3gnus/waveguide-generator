@@ -141,6 +141,30 @@ describe('CadLinkPanel', () => {
     expect(install.disabled).toBe(false);
   });
 
+  it('replaces a deferred install answer with the status once the add-in is installed', async () => {
+    let refresh = { verdict: 'pending', detail: 'Close Fusion to finish installing WGLink.' };
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/install-addin')) return json(refresh);
+      if (path.endsWith('/fusion-status')) return json({ ...closedFusion, addinRefresh: refresh });
+      if (path.endsWith('/returns')) return json(listing);
+      return json(record);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    const install = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Install add-in')!;
+    await act(async () => { install.click(); await Promise.resolve(); await Promise.resolve(); });
+    const notice = () => host.querySelector('.cad-link-actions [role="status"]')?.textContent;
+    expect(notice()).toBe('Close Fusion to finish installing WGLink.');
+
+    // Fusion closes and the start-up pass installs it with no further click.
+    refresh = { verdict: 'installed', detail: 'WGLink 0.3.3 was installed.' };
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      for (let turn = 0; turn < 8; turn += 1) await Promise.resolve();
+    });
+    expect(notice()).toBe('WGLink 0.3.3 was installed.');
+  });
+
   const openHistory = () => {
     const disclosure = host.querySelector<HTMLButtonElement>('.cad-history > .section-heading button')!;
     if (disclosure.getAttribute('aria-expanded') === 'false') act(() => disclosure.click());
