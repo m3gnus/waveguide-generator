@@ -73,6 +73,8 @@ ignore_imports =
     server.mesh.api -> server.solver.symmetry
     # solver -> cadlink: existing upward dependency.
     # Legacy use: canonical_source_role.
+    server.solver.imported_channels -> server.cadlink.roles
+    # Legacy use: canonical_source_role.
     server.solver.metal -> server.cadlink.roles
     # solver -> engines: existing upward dependency.
     # Legacy use: full3d_engine_order.
@@ -96,6 +98,8 @@ ignore_imports =
     server.solver.field_plane -> server.jobs.models
     # Legacy use: JobStore.
     server.solver.field_plane -> server.jobs.store
+    # Legacy use: ImportedGeometrySource.
+    server.solver.imported_channels -> server.jobs.models
     # Legacy use: ImportedGeometrySource, PORT_APERTURE_NAME_GROUPS, SolveRequest.
     server.solver.metal -> server.jobs.models
     # Legacy use: ImportedGeometrySource, SolveRequest.
@@ -137,12 +141,6 @@ forbidden_modules =
     server.solver.metal
     server.solver.metal_permit
 ignore_imports =
-    # Legacy: the imported BEMPP and BEAT adapters reuse four private Metal channel
-    # helpers (_apply_channel_driver, _channel_basis_metadata,
-    # _channel_source_identity, _imported_validity_metadata). Remove when they move
-    # to an engine-neutral module.
-    server.solver.bempp_imported -> server.solver.metal
-    server.solver.beat_imported -> server.solver.metal
     # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
     # dispatcher, which reaches every engine.
     server.solver.bempp_process -> server.solver.warmup

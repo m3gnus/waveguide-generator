@@ -33,7 +33,7 @@ from server.jobs.runtime import (
 )
 from server.jobs.store import JobStore
 from server.mesh.imported import polar_grid_from_symmetry
-from server.solver import metal
+from server.solver import imported_channels, metal
 from server.solver.base import EngineRunResult
 from server.solver.imported import (
     ImportedSymmetryUnsupportedError,
@@ -1802,7 +1802,7 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
 ) -> None:
     scales = np.asarray([2 + 3j, -1 + 0.5j], dtype=np.complex128)
     monkeypatch.setattr(
-        metal,
+        imported_channels,
         "channel_drive_scaling",
         lambda *_args, **_kwargs: (scales, {}),
     )
@@ -1816,7 +1816,7 @@ def test_channel_driver_scaling_includes_retained_pressure_and_neumann_traces(
         driver=object(),
     )
 
-    metal._apply_channel_driver(
+    imported_channels.apply_channel_driver(
         channel,
         result,
         {

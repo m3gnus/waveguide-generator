@@ -70,11 +70,11 @@ from .imported import (
     imported_symmetry_from_cut_planes,
     prepare_axial_drive,
 )
-from .metal import (
-    _apply_channel_driver,
-    _channel_basis_metadata,
-    _channel_source_identity,
-    _imported_validity_metadata,
+from .imported_channels import (
+    apply_channel_driver,
+    channel_basis_metadata,
+    channel_source_identity,
+    imported_validity_metadata,
 )
 from .result_mapping import (
     build_provisional_frequency_response,
@@ -392,7 +392,7 @@ def solve_imported_bempp_from_msh_text(
         )
     except ValueError as exc:
         raise ValueError(f"axial source motion cannot be solved: {exc}") from exc
-    channel_identity = _channel_source_identity(geometry, record, axial_identity)
+    channel_identity = channel_source_identity(geometry, record, axial_identity)
     anchor = imported_anchor_frame(record)
     frame_override = bempp.ObservationFrame(**anchor)
     frame_basis = {
@@ -583,7 +583,7 @@ def solve_imported_bempp_from_msh_text(
                 f"BEMPP returned no source-average pressure for drive channel "
                 f"{channel.id!r}, which its driver model needs."
             )
-        driver_payloads[channel.id] = _apply_channel_driver(
+        driver_payloads[channel.id] = apply_channel_driver(
             channel,
             result,
             record,
@@ -668,10 +668,10 @@ def solve_imported_bempp_from_msh_text(
             response_metadata["warning_count"] = len(warnings)
         channels[channel.id] = channel_response
 
-    per_source_validity = _imported_validity_metadata(record)
+    per_source_validity = imported_validity_metadata(record)
     channel_bases_npz = serialize_channel_bases(
         sorted_results,
-        metadata_by_id=_channel_basis_metadata(
+        metadata_by_id=channel_basis_metadata(
             geometry, record, source_tags, driver_payloads, axial_identity
         ),
     )
