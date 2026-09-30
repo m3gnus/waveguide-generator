@@ -146,10 +146,11 @@ def test_user_guide_distinguishes_startup_returns_from_new_arrivals() -> None:
     )
     normalized = " ".join(workflow.split())
 
-    assert "manually select from the History list" in normalized
+    assert "manually select from **Model versions**" in normalized
     assert "prepared automatically" in normalized
     assert "On startup" in normalized
-    assert "Ready to prepare" in normalized
+    assert "without preparing it; choose **Prepare simulation**" in normalized
+    assert "Ready to prepare" not in normalized
     assert "Prepare simulation" in normalized
     assert "appears only as the retry" not in normalized
 

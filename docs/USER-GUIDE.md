@@ -402,18 +402,20 @@ the command prints a retention warning.
 Follow [Finish a speaker in Fusion and solve it in WG](CAD-LINK-GUIDE.md) for
 WGLink installation, explicit Send and Solve, source-face marking, driver data,
 ports, full/half/quarter symmetry, solver choice and refusal remedies. It also
-explains the limits of STEP input from another CAD program.
+explains the limits of STEP input from another CAD program, startup add-in
+updates and registration checks, exchange folders, multiple placements, waiting
+solve requests, settings continuity and the development-only Onshape setup.
 
 CAD edits arrive as retained geometry snapshots; they do not become editable
 parametric waveguide fields. The CAD Link panel appears in CAD mode. Keep WG
 running, and use Fusion's **Send to WG** or **Solve in WG** after modelling;
 continuous geometry transfers are off by default.
 
-A newly arriving return — and a return you manually select from the History list —
+A newly arriving return — and a return you manually select from **Model versions** —
 is prepared automatically. On startup, WG selects the newest existing return
-without preparing it; its summary says **Ready to prepare**, and you must choose
-**Prepare simulation**. That action also remains available to retry a failed
-preparation.
+without preparing it; choose **Prepare simulation**. After a failed preparation,
+retry with **Prepare simulation**, or **Prepare again** when a preparation record
+already exists. Completed solves are listed under **Runs**.
 
 ### Starting from a model drawn in Fusion
 
