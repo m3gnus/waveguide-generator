@@ -253,7 +253,7 @@ def test_map_covers_tests_that_directly_reference_each_server_area(area):
     tests = [* (run_tests.REPO_ROOT / "server/tests").glob("test_*.py"),
              * (run_tests.REPO_ROOT / "scripts/tests").glob("test_*.py")]
     missing = [str(test.relative_to(run_tests.REPO_ROOT)) for test in tests
-               if f"server.{area}" in test.read_text() and test not in covered]
+               if f"server.{area}" in test.read_text(encoding="utf-8") and test not in covered]
     assert not missing, f"add these tests to the {area} map: {missing}"
 
 

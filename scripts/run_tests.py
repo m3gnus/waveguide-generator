@@ -124,7 +124,7 @@ def _tests_referencing(path: str, prefix: str) -> list[str]:
                     if _IMPORT_LINE.match(line)
                 )
             if hit:
-                found.append(str(test.relative_to(REPO_ROOT)))
+                found.append(test.relative_to(REPO_ROOT).as_posix())
     return found
 
 
