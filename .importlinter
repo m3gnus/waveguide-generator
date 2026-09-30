@@ -130,6 +130,8 @@ source_modules =
     server.solver.bempp
     server.solver.bempp_imported
     server.solver.bempp_process
+    server.solver.bempp_field
+    server.solver.bempp_opencl
     server.solver.beat
     server.solver.beat_imported
     server.solver.beat_cpu_runtime
@@ -160,6 +162,8 @@ forbidden_modules =
     server.solver.bempp
     server.solver.bempp_imported
     server.solver.bempp_process
+    server.solver.bempp_field
+    server.solver.bempp_opencl
 ignore_imports =
     # Legacy: BEMPP's worker and BEAT's readiness import the shared warmup
     # dispatcher, which reaches every engine.
@@ -176,6 +180,8 @@ source_modules =
     server.solver.bempp
     server.solver.bempp_imported
     server.solver.bempp_process
+    server.solver.bempp_field
+    server.solver.bempp_opencl
     server.engines.dryrun
 forbidden_modules =
     server.solver.beat
@@ -198,6 +204,8 @@ source_modules =
     server.solver.bempp
     server.solver.bempp_imported
     server.solver.bempp_process
+    server.solver.bempp_field
+    server.solver.bempp_opencl
     server.solver.beat
     server.solver.beat_imported
     server.solver.beat_cpu_runtime

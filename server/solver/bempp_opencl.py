@@ -164,12 +164,15 @@ def guard_execution(backend: str | None, opencl_device: str | None) -> None:
     Retain a matching one-CPU context so warmed kernels remain reusable.
     Numba never enumerates or initializes an OpenCL device here.
     """
-    qualified_backend, device = execution_route()
-    if backend not in {"numba", "opencl"} or backend != qualified_backend or opencl_device != "cpu":
+    if backend not in {"numba", "opencl"} or opencl_device != "cpu":
         raise RuntimeError("BEMPP refuses GPU, implicit or unqualified execution; "
-                           f"requested {backend!r}/{opencl_device!r}, qualified {qualified_backend}")
-    if device is not None:
-        bind_device(device, force=True)
+                           f"requested {backend!r}/{opencl_device!r}")
+    if backend == "numba":
+        return
+    qualified_backend, device = execution_route()
+    if qualified_backend != "opencl" or device is None:
+        raise RuntimeError("BEMPP refuses unqualified OpenCL execution")
+    bind_device(device, force=True)
 
 
 def native_call(function: Any, *args: Any, execution_config: Any = None, **kwargs: Any) -> Any:

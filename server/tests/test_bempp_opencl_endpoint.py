@@ -90,6 +90,8 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                 assert pending['qualification'] == 'pending'
                 assert 'Checking OpenCL' in pending['reason']
                 rows = (await client.request_async('GET', '/api/capabilities')).json()['engines']
+                assert all(set(item) == set(pending) for item in rows)
+                assert all(item['label'] for item in rows)
                 assert next(item for item in rows if item['name'] == 'metal')['available'] is True
                 assert next(item for item in rows if item['name'] == 'beat-cpu')['available'] is True
                 # Completing the first timeout publishes numba; qualification stays
@@ -115,6 +117,8 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                     assert row(await client.request_async('GET', '/api/capabilities'))['qualification'] == 'pending'
                     await registry.wait_for_bempp()
                 recovered = row(await client.request_async('GET', '/api/capabilities'))
+                assert set(recovered) == set(pending)
+                assert recovered['label']
                 assert recovered['opencl_retry_pending'] is False
                 assert recovered['qualification'] == 'done'
                 assert recovered['assembly_backend'] == 'opencl'

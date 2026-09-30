@@ -171,7 +171,7 @@ def _solve_payload(
     """Run native design/imported solves or retained-field evaluation here."""
 
     if payload.get("kind") == "field":
-        from .field_plane import evaluate_bempp_field_payload
+        from .bempp_field import evaluate_bempp_field_payload
 
         return evaluate_bempp_field_payload(payload)
     if payload.get("kind") == "imported":

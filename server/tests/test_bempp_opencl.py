@@ -12,7 +12,7 @@ import pytest
 from server.solver import bempp_opencl as probe
 
 
-CPU = {"platform_index": 1, "device_index": 0, "type": "cpu", "platform": "PoCL", "vendor": "CPU", "name": "CPU", "fp64": True}
+CPU = {"platform_index": 1, "device_index": 0, "type": "cpu", "platform": "CPU OpenCL", "vendor": "CPU", "name": "CPU", "fp64": True}
 GPU = {"platform_index": 0, "device_index": 0, "type": "gpu", "platform": "Apple", "vendor": "Apple", "name": "M1 GPU", "fp64": False}
 
 
@@ -334,7 +334,7 @@ def test_failed_compute_routes_to_numba_with_notice(monkeypatch, reason, code):
         bempp.bempp_status.cache_clear()
 
 
-def test_pocl_zero_compute_is_rejected_and_gpu_is_never_smoke_tested(monkeypatch):
+def test_zero_compute_is_rejected_and_gpu_is_never_smoke_tested(monkeypatch):
     def run(mode, device, timeout):
         if mode == "inventory":
             return {"ok": True, "devices": [CPU, GPU]}
@@ -394,12 +394,20 @@ def test_gpu_cannot_be_bound_or_smoke_tested(entry):
         getattr(probe, entry)(GPU)
 
 
-@pytest.mark.parametrize("system,code", [("win32", "pocl_windows"), ("linux", "smoke_test_failed")])
-def test_pocl_windows_zero_compute_reason(monkeypatch, system, code):
+@pytest.mark.parametrize("system", ["win32", "linux", "darwin"])
+@pytest.mark.parametrize("platform,windows_code", [
+    ("PoCL", "pocl_windows"),
+    ("Portable Computing Language", "pocl_windows"),
+    ("CPU OpenCL", "smoke_test_failed"),
+])
+def test_windows_smoke_failure_reason_uses_platform_identity(monkeypatch, system, platform, windows_code):
     monkeypatch.setattr(probe.sys, "platform", system)
+    # The device name is deliberately misleading: only its platform identifies PoCL.
+    device = {**CPU, "platform": platform, "name": "PoCL CPU"}
     monkeypatch.setattr(probe, "_run_probe", lambda mode, *args:
-                        {"ok": True, "devices": [CPU]} if mode == "inventory"
+                        {"ok": True, "devices": [device]} if mode == "inventory"
                         else {"ok": False, "reason": "zero computation"})
+    code = windows_code if system == "win32" else "smoke_test_failed"
     assert probe.qualified_opencl()["opencl_unavailable_reason"] == code
 
 

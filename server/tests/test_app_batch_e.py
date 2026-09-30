@@ -238,11 +238,11 @@ def test_capabilities_and_dryrun_guard(tmp_path: Path, monkeypatch) -> None:
             "assembly_backend",
             "assembly_device",
             "opencl_unavailable_reason",
+            "opencl_retry_pending",
         }
-        | ({"opencl_retry_pending"} if engine["name"] == "bempp" else set())
         for engine in engines
     )
-    assert isinstance(next(engine for engine in engines if engine["name"] == "bempp")["opencl_retry_pending"], bool)
+    assert all(isinstance(engine["opencl_retry_pending"], bool) for engine in engines)
     assert all(engine["label"] for engine in engines)
     assert all(engine["reason"] for engine in engines if engine["available"] is False)
 

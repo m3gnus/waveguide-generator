@@ -334,8 +334,8 @@ def solve_imported_bempp_from_msh_text(
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
     _require_opencl(status)
-    backend, _device = bempp.execution_route()
     bempp.validate_assembly_status(status)
+    backend = status["assembly_backend"]
     refusal = imported_bempp_preflight(record, geometry.drive_channels)
     if refusal is not None:
         raise BemppUnavailable(f"BEMPP cannot solve this CAD return: {refusal}")

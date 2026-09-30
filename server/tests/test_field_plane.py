@@ -5,6 +5,7 @@ from datetime import datetime
 import json
 from pathlib import Path
 import struct
+import sys
 import threading
 from types import SimpleNamespace
 from typing import Any
@@ -397,20 +398,18 @@ def test_artifact_backend_dispatches_matching_mesh_loader_and_evaluator(
         "hornlab_metal_bem": package(METAL_FIELD_TRACE_BACKEND),
         "hornlab_bempp_bem": package(BEMPP_FIELD_TRACE_BACKEND),
     }
+    for name, fake_package in packages.items():
+        monkeypatch.setitem(sys.modules, name, fake_package)
     monkeypatch.setattr(
         field_plane,
         "_field_backend_status",
         lambda _backend: {"available": True, "reason": "test"},
     )
-    monkeypatch.setattr(
-        field_plane.importlib,
-        "import_module",
-        lambda name: packages[name],
-    )
-
-    from server.solver import bempp_process, bempp_opencl
+    from server.solver import bempp, bempp_field, bempp_process, bempp_opencl
 
     monkeypatch.setattr(bempp_opencl, "qualified_opencl", lambda: {"ok": False})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": True, "reason": "test"})
+    monkeypatch.setattr(bempp_field, "_BEMPP_MESH_CACHE", bempp_field.OrderedDict())
 
     async def isolated_field(payload):
         # The worker command dispatch is real; fake native functions stay local.

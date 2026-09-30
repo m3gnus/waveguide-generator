@@ -8,7 +8,7 @@ from types import SimpleNamespace as NS
 import numpy as np
 import pytest
 
-from server.solver import bempp, bempp_opencl as probe, bempp_process, field_plane, warmup
+from server.solver import bempp, bempp_opencl as probe, bempp_process, bempp_field, field_plane, warmup
 from server.solver.field_traces_store import BEMPP_FIELD_TRACE_BACKEND
 from server.tests.test_engines_adapters import _cabinet_msh, _context, _result
 from server.tests import test_imported_bempp as imported
@@ -23,7 +23,7 @@ def host(monkeypatch):
     from hornlab_bempp_bem import device as native_device
 
     bempp.bempp_status.cache_clear()
-    monkeypatch.setattr(field_plane, "_BEMPP_MESH_CACHE", field_plane.OrderedDict())
+    monkeypatch.setattr(bempp_field, "_BEMPP_MESH_CACHE", bempp_field.OrderedDict())
     platform = NS(name="mixed platform")
     def device(name, kind):
         return NS(name=name, type=kind, platform=platform, vendor="vendor",
@@ -154,6 +154,30 @@ def test_explicit_cpu_opencl_cannot_bypass_rejection(monkeypatch, host, state):
     with pytest.raises(RuntimeError, match="unqualified"):
         probe.native_call(lambda **_kwargs: pytest.fail("unqualified call ran"),
                           assembly_backend="opencl", opencl_device="cpu")
+
+
+def test_explicit_numba_never_probes_or_binds_opencl(monkeypatch):
+    monkeypatch.setattr(probe, "qualified_opencl", lambda:
+                        pytest.fail("explicit numba must not probe OpenCL"))
+    monkeypatch.setattr(probe, "bind_device", lambda *_args, **_kwargs:
+                        pytest.fail("explicit numba must not bind OpenCL"))
+    status = {"assembly_backend": "numba", "assembly_device": None}
+    bempp.validate_assembly_status(status)
+    assert probe.native_call(lambda **_kwargs: "ran", assembly_backend="numba",
+                             opencl_device="cpu") == "ran"
+
+
+@pytest.mark.parametrize("snapshot", [
+    {}, {"assembly_backend": "auto"},
+    {"assembly_backend": "numba", "assembly_device": {"type": "cpu"}},
+    {"assembly_backend": "opencl", "assembly_device": None},
+    {"assembly_backend": "opencl", "assembly_device": {"type": "gpu"}},
+    {"assembly_backend": "opencl", "assembly_device": {"type": "cpu", "name": "another CPU"}},
+])
+def test_capability_cannot_select_implicit_or_unqualified_device(monkeypatch, host, snapshot):
+    qualify(monkeypatch, host, "qualified_cpu")
+    with pytest.raises(RuntimeError, match="disagrees"):
+        bempp.validate_assembly_status(snapshot)
 
 
 def test_field_service_sends_bempp_work_across_process_boundary(monkeypatch, tmp_path):

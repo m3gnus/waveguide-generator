@@ -359,7 +359,9 @@ def _opencl_status(result: Mapping[str, Any]) -> tuple[bool, str, dict[str, Any]
 
 
 def validate_assembly_status(status: Mapping[str, Any]) -> None:
-    """Refuse stale/incomplete capability snapshots before constructing a config."""
+    """Allow explicit numba; require OpenCL snapshots to name the qualified CPU."""
+    if status.get("assembly_backend") == "numba" and status.get("assembly_device") is None:
+        return
     backend, device = execution_route()
     if (status.get("assembly_backend"), status.get("assembly_device")) != (backend, device):
         raise RuntimeError("BEMPP capability disagrees with the qualified execution route")
@@ -709,8 +711,8 @@ def solve_bempp_from_msh_text(
         logger.warning("%s", retention_detail)
         if stage_callback:
             stage_callback("setup", 0.0, retention_detail)
-    backend, _device = execution_route()
     validate_assembly_status(status)
+    backend = status["assembly_backend"]
     started = time.time()
     if status.get("warning"):
         # The user asked for a solve, not for a lecture, but silently assembling

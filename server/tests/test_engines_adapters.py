@@ -14,6 +14,24 @@ from server.solver import bempp, metal
 from server.solver.result_mapping import _gmsh22_observation_frame_parts
 
 
+@pytest.fixture(params=["no_opencl", "qualified_cpu"])
+def bempp_numba_host(monkeypatch, request):
+    """Keep explicit-numba adapters independent of the machine's devices."""
+    from server.solver import bempp_opencl as probe
+
+    device = {"platform_index": 0, "device_index": 0, "type": "cpu",
+              "platform": "CPU OpenCL", "vendor": "CPU", "name": "Test CPU", "fp64": True}
+    probe.clear_cache()
+    monkeypatch.setattr(probe, "_run_probe", lambda mode, *_args:
+                        {"ok": True, "devices": [device] if request.param == "qualified_cpu" else []}
+                        if mode == "inventory" else {"ok": True, "smoke": {}})
+    monkeypatch.setattr(probe, "bind_device", lambda *_args, **_kwargs:
+                        pytest.fail("explicit numba must not bind OpenCL"))
+    assert probe.qualified_opencl()["ok"] is (request.param == "qualified_cpu")
+    yield
+    probe.clear_cache()
+
+
 def _context(
     *, axial: bool = False, sim_type: int = 2, field_plane: bool = True
 ) -> SolverContext:
@@ -329,7 +347,7 @@ def test_metal_infinite_baffle_requires_and_maps_aperture_tag(monkeypatch) -> No
     )
 
 
-def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monkeypatch) -> None:
+def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monkeypatch, bempp_numba_host) -> None:
     captured = {}
     created = {}
 
@@ -401,7 +419,7 @@ def test_bempp_adapter_is_cpu_fallback_and_supports_coupled_infinite_baffle(monk
     )
 
 
-def test_bempp_infinite_baffle_uses_aperture_centroid_for_observation_frame(monkeypatch) -> None:
+def test_bempp_infinite_baffle_uses_aperture_centroid_for_observation_frame(monkeypatch, bempp_numba_host) -> None:
     msh_text = _cabinet_msh(aperture=True)
     aperture_frame = _gmsh22_observation_frame_parts(
         msh_text, symmetry_plane=None, aperture_tag=12
@@ -440,7 +458,7 @@ def test_bempp_infinite_baffle_uses_aperture_centroid_for_observation_frame(monk
     assert captured["frame_override"].mouth_center.tolist() == pytest.approx(expected_center)
 
 
-def test_bempp_field_plane_option_disables_trace_retention(monkeypatch) -> None:
+def test_bempp_field_plane_option_disables_trace_retention(monkeypatch, bempp_numba_host) -> None:
     captured = {}
     monkeypatch.setattr(
         bempp,
@@ -522,7 +540,7 @@ def test_metal_adapter_refuses_an_explicit_list_the_pin_cannot_solve(monkeypatch
         metal.solve_metal_from_msh_text("msh", _explicit_context((500.0, 1000.0)))
 
 
-def test_bempp_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
+def test_bempp_adapter_solves_an_explicit_list_verbatim(monkeypatch, bempp_numba_host) -> None:
     frequencies = (500.0, 812.3, 1000.0)
     seen: dict[str, object] = {}
     monkeypatch.setattr(bempp, "SolveConfig", lambda **kwargs: _Config(**kwargs))
@@ -547,7 +565,7 @@ def test_bempp_adapter_solves_an_explicit_list_verbatim(monkeypatch) -> None:
     assert response["metadata"]["frequency_source"] == "explicit_list"
 
 
-def test_bempp_retains_no_field_traces_above_a_ground_plane(monkeypatch) -> None:
+def test_bempp_retains_no_field_traces_above_a_ground_plane(monkeypatch, bempp_numba_host) -> None:
     """A grounded solve must reach the retention plan as unsupported.
 
     Not asserted by handing `field_trace_retention_plan` a `supported=False` it

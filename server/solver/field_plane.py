@@ -37,6 +37,7 @@ from .field_traces_store import (
     FieldTraceBackend,
     METAL_FIELD_TRACE_BACKEND,
 )
+from .field_plane_result import FieldPlaneEvaluation
 from .metal_permit import MetalLease, MetalPermit
 from .sampling_provenance import sampling_provenance
 
@@ -54,8 +55,6 @@ NO_SYNTHESIS_REVISION = hashlib.sha256(
 #: Backends whose degraded-assembly warning has already been logged. Dragging
 #: the plane re-evaluates continuously, so this must not warn per request.
 _WARNED_BACKENDS: set[str] = set()
-# Native BEMPP grids stay in its serial worker, never cross the IPC boundary.
-_BEMPP_MESH_CACHE: OrderedDict[tuple[str, str | None], Any] = OrderedDict()
 
 
 class FieldPlaneJobNotFound(LookupError):
@@ -87,16 +86,6 @@ class FieldPlaneInvalidSelection(ValueError):
 
 class FieldPlaneTimedOut(TimeoutError):
     """The configured field evaluation deadline elapsed."""
-
-
-@dataclass(frozen=True, slots=True)
-class FieldPlaneEvaluation:
-    frequency_hz: float
-    pressure: NDArray[np.complex64]
-    geometry_sha256: str
-    synthesis_revision: str
-    symmetry_plane: str | None
-    sampling: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,41 +151,6 @@ def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
             return native_call(native_evaluator, *args, **kwargs)
 
     return _FieldBackendAPI(mesh_loader, evaluator)
-
-
-def evaluate_bempp_field_payload(payload: Mapping[str, Any]) -> FieldPlaneEvaluation:
-    """Native retained-field work; dispatched only inside the BEMPP worker."""
-    from .bempp_opencl import execution_route, guard_execution
-
-    (mesh_text, frequency_hz, k_real, symmetry_plane, pressure, neumann,
-     _backend, synthesis_revision) = payload["traces"]
-    points = payload["points"]
-    backend, _device = execution_route()
-    api = _load_field_backend(BEMPP_FIELD_TRACE_BACKEND)
-    guard_execution(backend, "cpu")
-    key = (mesh_text_sha256(mesh_text), symmetry_plane)
-    mesh = _BEMPP_MESH_CACHE.pop(key, None)
-    if mesh is None:
-        with tempfile.TemporaryDirectory(dir=temporary_directory_root()) as directory:
-            path = Path(directory) / "mesh.msh"
-            path.write_text(mesh_text, encoding="utf-8")
-            mesh = api.load_mesh(path, native_symmetry_plane=symmetry_plane)
-    _BEMPP_MESH_CACHE[key] = mesh
-    while len(_BEMPP_MESH_CACHE) > 4:
-        _BEMPP_MESH_CACHE.popitem(last=False)
-    values = np.asarray(api.evaluate_exterior_from_traces(
-        mesh, frequency_hz, k_real, pressure, neumann, points,
-        symmetry_plane=symmetry_plane, assembly_backend=backend, opencl_device="cpu",
-    ))
-    if values.shape != (points.shape[0],):
-        raise RuntimeError("field evaluator returned an unexpected pressure grid shape")
-    return FieldPlaneEvaluation(
-        frequency_hz=float(frequency_hz),
-        pressure=np.ascontiguousarray(values, dtype=np.complex64),
-        geometry_sha256=mesh_text_sha256(mesh_text),
-        synthesis_revision=synthesis_revision,
-        symmetry_plane=symmetry_plane,
-    )
 
 
 async def _isolated_bempp_field(payload: Mapping[str, Any]) -> FieldPlaneEvaluation:
