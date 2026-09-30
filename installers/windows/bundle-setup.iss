@@ -159,7 +159,9 @@ const
   { launchers/apply_update.py STAGING_ROOT_SUFFIX: kept identical so this
     installer and the server name the same folder. }
   UpdateStagingRootSuffix = '.update-staging';
-  FILE_ATTRIBUTE_REPARSE_POINT = $400;
+  { Prefixed: Inno Setup 6.7.3 predefines FILE_ATTRIBUTE_REPARSE_POINT, and a
+    second declaration is a "Duplicate identifier" compile error there. }
+  WG_FILE_ATTRIBUTE_REPARSE_POINT = $400;
   INVALID_FILE_ATTRIBUTES = -1;
 
 var
@@ -467,11 +469,11 @@ end;
 
 { launchers/apply_update.py destination_staging_root(): "<the bundle's own
   parent directory>\.<the bundle's own directory name>.update-staging" --
-  beside {app}, never inside it. {app} is the installed bundle
-  (launchers/apply_update.py bundle_from_app_layer treats {app}\app's own
+  beside <app>, never inside it. <app> is the installed bundle
+  (launchers/apply_update.py bundle_from_app_layer treats <app>\app's own
   parent as the bundle on Windows), and its directory name is whatever the
   user chose on the wizard's directory page, so the path is computed here
-  from {app} itself rather than assumed to be the default. Never a wildcard:
+  from <app> itself rather than assumed to be the default. Never a wildcard:
   only this one exact path is ever named. }
 function UpdateStagingRoot(): String;
 var
@@ -488,7 +490,7 @@ var
 begin
   Attributes := GetFileAttributesW(Path);
   Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
-    ((Attributes and FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
+    ((Attributes and WG_FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
 end;
 
 procedure RemoveUpdateStagingRoot();
@@ -521,7 +523,7 @@ begin
   { usUninstall runs before [UninstallDelete], while both the app script and
     bundled runtime still exist. Keep the managed Fusion cleanup ahead of the
     app/runtime deletion below; external targets are preserved above. The
-    staging folder lives outside {app} and does not depend on either, so its
+    staging folder lives outside <app> and does not depend on either, so its
     order relative to them does not matter. }
   if CurUninstallStep = usUninstall then
   begin
