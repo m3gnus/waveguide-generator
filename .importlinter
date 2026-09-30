@@ -71,10 +71,6 @@ ignore_imports =
     # mesh -> solver: existing upward dependency.
     # Legacy use: resolve_symmetry, validate_symmetry_mode.
     server.mesh.api -> server.solver.symmetry
-    # Legacy use: FULL_DOMAIN_QUADRANTS, normalise_quadrants.
-    server.mesh.builder -> server.solver.quadrants
-    # Legacy use: imported_symmetry_from_cut_planes.
-    server.mesh.imported -> server.solver.imported
     # solver -> cadlink: existing upward dependency.
     # Legacy use: canonical_source_role.
     server.solver.metal -> server.cadlink.roles
