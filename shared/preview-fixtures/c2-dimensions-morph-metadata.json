@@ -1,0 +1,1724 @@
+{
+  "width-implicit": {
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "L_mm": 120.0,
+        "r0_mm": 12.7,
+        "a0_deg": 15.5,
+        "a_deg": 55.0,
+        "k": 1.0,
+        "q": 0.995
+      },
+      "mesh": {
+        "wall_thickness_mm": 6.0
+      },
+      "morph": {
+        "morphTarget": 1,
+        "morphWidth": 0,
+        "morphHeight": 240,
+        "morphCorner": 0
+      }
+    },
+    "metadata": {
+      "api_version": "hornlab.preview/1",
+      "metadata_version": "hornlab.preview/1.4",
+      "units": "mm",
+      "dimensions_mm": {
+        "mouth_opening": [
+          350.0,
+          348.5794722023637
+        ],
+        "horn_overall": [
+          356.83753563074464,
+          355.47421870823666,
+          126.0
+        ]
+      },
+      "dimensions_status": "current",
+      "dimensions_requested_mm": {
+        "mouth_opening": [
+          0.0,
+          240.0
+        ]
+      },
+      "dimensions_sampling": {
+        "method": "resolved-design-geometry",
+        "lod_independent": true
+      },
+      "coordinate_frame": "mesher-xyz",
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "lod": "fine",
+      "actual_segment_counts": {
+        "horn_phi": 128,
+        "horn_axial": 70,
+        "enclosure_roundover_quarter": 0,
+        "source_cap_radial": 16
+      },
+      "timings_ms": {
+        "canonical_sampling": 0.0,
+        "surface_assembly_and_fidelity": 0.0,
+        "total": 0.0
+      },
+      "canonical_reference": {
+        "axial_rows": 193,
+        "azimuth_rows": 128,
+        "escalated": false
+      },
+      "fidelity": {
+        "horn.inner": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048457,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048457,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "horn.outer": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048457,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048457,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "mouth_rim": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048457,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048457,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "source_cap": {
+          "max_chord_error_mm": 0.0016982064638673933,
+          "max_normal_step_deg": 0.96875,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.0016982064638673933,
+          "max_normal_step_deg_achieved": 0.96875,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_cap": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048457,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048457,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_return": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048457,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048457,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        }
+      },
+      "warnings": [],
+      "guiding_curve_probe": {
+        "step_deg": 1.0,
+        "azimuths": 360,
+        "best_effort": true
+      },
+      "requested_fidelity": {
+        "max_chord_error_mm": 0.05,
+        "max_normal_step_deg": 3.0,
+        "min_silhouette_segments": 128,
+        "max_vertices": null
+      },
+      "angular_sampling": {
+        "strategy": "stable-union-corner-grid",
+        "corner_arc_rows": 128,
+        "flat_side_rows": 0,
+        "uses_zipper_indices": false
+      },
+      "vertex_accounting": {
+        "horn.inner": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "horn.outer": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "mouth_rim": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "source_cap": {
+          "vertices": 2049,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_return": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "wall.rear_cap": {
+          "vertices": 129,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        }
+      },
+      "semantic_stations": {
+        "inserted_first": [
+          "throat",
+          "mouth",
+          "corner tangencies/cardinals",
+          "enclosure transitions"
+        ],
+        "unavailable_additively": [
+          "OSSE extension/slot boundaries when expression-valued"
+        ]
+      },
+      "nesting": {
+        "horn_phi": "coarse is a subset of fine for circular grids; corner grids use the stable union row identities",
+        "horn_axial": "12 -> 48 -> 96 base stations are nested; semantic stations are shared by value",
+        "exceptions": [
+          "custom tolerances/caps may choose different refinement paths",
+          "canonical ATH z-map modes are not guaranteed to be nested"
+        ]
+      },
+      "normal_convention": "role-oriented analytic/exact normals; every triangle is counter-clockwise when viewed from its normal side",
+      "normal_method_notes": {
+        "analytic-parametric": "finite differences of true analytic/canonical surface samples in their real axial and azimuthal parameter coordinates; never mesh-derived",
+        "exact-planar": "the exact constant normal of an emitted planar face"
+      },
+      "surface_metadata": {
+        "horn.inner": {
+          "degenerateTriangles": 3916,
+          "orientationAbstainingTriangles": 3916,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "horn.outer": {
+          "degenerateTriangles": 3924,
+          "orientationAbstainingTriangles": 3924,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "mouth_rim": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "source_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_return": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "planar"
+        }
+      },
+      "source_cap_height_mm": 1.728394143942964,
+      "source_cap_radius_mm": 47.52311470520606
+    }
+  },
+  "height-implicit": {
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "L_mm": 120.0,
+        "r0_mm": 12.7,
+        "a0_deg": 15.5,
+        "a_deg": 55.0,
+        "k": 1.0,
+        "q": 0.995
+      },
+      "mesh": {
+        "wall_thickness_mm": 6.0
+      },
+      "morph": {
+        "morphTarget": 1,
+        "morphWidth": 320,
+        "morphHeight": 0,
+        "morphCorner": 0
+      }
+    },
+    "metadata": {
+      "api_version": "hornlab.preview/1",
+      "metadata_version": "hornlab.preview/1.4",
+      "units": "mm",
+      "dimensions_mm": {
+        "mouth_opening": [
+          348.5794722023637,
+          350.0
+        ],
+        "horn_overall": [
+          355.47421870823666,
+          356.83753563074464,
+          126.0
+        ]
+      },
+      "dimensions_status": "current",
+      "dimensions_requested_mm": {
+        "mouth_opening": [
+          320.0,
+          0.0
+        ]
+      },
+      "dimensions_sampling": {
+        "method": "resolved-design-geometry",
+        "lod_independent": true
+      },
+      "coordinate_frame": "mesher-xyz",
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "lod": "fine",
+      "actual_segment_counts": {
+        "horn_phi": 128,
+        "horn_axial": 70,
+        "enclosure_roundover_quarter": 0,
+        "source_cap_radial": 16
+      },
+      "timings_ms": {
+        "canonical_sampling": 0.0,
+        "surface_assembly_and_fidelity": 0.0,
+        "total": 0.0
+      },
+      "canonical_reference": {
+        "axial_rows": 193,
+        "azimuth_rows": 128,
+        "escalated": false
+      },
+      "fidelity": {
+        "horn.inner": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048482,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048482,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "horn.outer": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048482,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048482,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "mouth_rim": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048482,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048482,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "source_cap": {
+          "max_chord_error_mm": 0.0016982064638673933,
+          "max_normal_step_deg": 0.96875,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.0016982064638673933,
+          "max_normal_step_deg_achieved": 0.96875,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_cap": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048482,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048482,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_return": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015448285048482,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015448285048482,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        }
+      },
+      "warnings": [],
+      "guiding_curve_probe": {
+        "step_deg": 1.0,
+        "azimuths": 360,
+        "best_effort": true
+      },
+      "requested_fidelity": {
+        "max_chord_error_mm": 0.05,
+        "max_normal_step_deg": 3.0,
+        "min_silhouette_segments": 128,
+        "max_vertices": null
+      },
+      "angular_sampling": {
+        "strategy": "stable-union-corner-grid",
+        "corner_arc_rows": 128,
+        "flat_side_rows": 0,
+        "uses_zipper_indices": false
+      },
+      "vertex_accounting": {
+        "horn.inner": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "horn.outer": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "mouth_rim": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "source_cap": {
+          "vertices": 2049,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_return": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "wall.rear_cap": {
+          "vertices": 129,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        }
+      },
+      "semantic_stations": {
+        "inserted_first": [
+          "throat",
+          "mouth",
+          "corner tangencies/cardinals",
+          "enclosure transitions"
+        ],
+        "unavailable_additively": [
+          "OSSE extension/slot boundaries when expression-valued"
+        ]
+      },
+      "nesting": {
+        "horn_phi": "coarse is a subset of fine for circular grids; corner grids use the stable union row identities",
+        "horn_axial": "12 -> 48 -> 96 base stations are nested; semantic stations are shared by value",
+        "exceptions": [
+          "custom tolerances/caps may choose different refinement paths",
+          "canonical ATH z-map modes are not guaranteed to be nested"
+        ]
+      },
+      "normal_convention": "role-oriented analytic/exact normals; every triangle is counter-clockwise when viewed from its normal side",
+      "normal_method_notes": {
+        "analytic-parametric": "finite differences of true analytic/canonical surface samples in their real axial and azimuthal parameter coordinates; never mesh-derived",
+        "exact-planar": "the exact constant normal of an emitted planar face"
+      },
+      "surface_metadata": {
+        "horn.inner": {
+          "degenerateTriangles": 3916,
+          "orientationAbstainingTriangles": 3916,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "horn.outer": {
+          "degenerateTriangles": 3924,
+          "orientationAbstainingTriangles": 3924,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "mouth_rim": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "source_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_return": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "planar"
+        }
+      },
+      "source_cap_height_mm": 1.728394143942964,
+      "source_cap_radius_mm": 47.52311470520606
+    }
+  },
+  "both-explicit": {
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "L_mm": 120.0,
+        "r0_mm": 12.7,
+        "a0_deg": 15.5,
+        "a_deg": 55.0,
+        "k": 1.0,
+        "q": 0.995
+      },
+      "mesh": {
+        "wall_thickness_mm": 6.0
+      },
+      "morph": {
+        "morphTarget": 1,
+        "morphWidth": 320,
+        "morphHeight": 240,
+        "morphCorner": 0
+      }
+    },
+    "metadata": {
+      "api_version": "hornlab.preview/1",
+      "metadata_version": "hornlab.preview/1.4",
+      "units": "mm",
+      "dimensions_mm": {
+        "mouth_opening": [
+          348.5794722023637,
+          348.5794722023637
+        ],
+        "horn_overall": [
+          355.47421870823666,
+          355.47421870823666,
+          126.0
+        ]
+      },
+      "dimensions_status": "current",
+      "dimensions_requested_mm": {
+        "mouth_opening": [
+          320.0,
+          240.0
+        ]
+      },
+      "dimensions_sampling": {
+        "method": "resolved-design-geometry",
+        "lod_independent": true
+      },
+      "coordinate_frame": "mesher-xyz",
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "lod": "fine",
+      "actual_segment_counts": {
+        "horn_phi": 128,
+        "horn_axial": 70,
+        "enclosure_roundover_quarter": 0,
+        "source_cap_radial": 16
+      },
+      "timings_ms": {
+        "canonical_sampling": 0.0,
+        "surface_assembly_and_fidelity": 0.0,
+        "total": 0.0
+      },
+      "canonical_reference": {
+        "axial_rows": 193,
+        "azimuth_rows": 128,
+        "escalated": false
+      },
+      "fidelity": {
+        "horn.inner": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.133864752960513,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.133864752960513,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "horn.outer": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.133864752960513,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.133864752960513,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "mouth_rim": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.133864752960513,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.133864752960513,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "source_cap": {
+          "max_chord_error_mm": 0.0016982064638673933,
+          "max_normal_step_deg": 0.96875,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.0016982064638673933,
+          "max_normal_step_deg_achieved": 0.96875,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_cap": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.133864752960513,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.133864752960513,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_return": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.133864752960513,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.133864752960513,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        }
+      },
+      "warnings": [],
+      "guiding_curve_probe": {
+        "step_deg": 1.0,
+        "azimuths": 360,
+        "best_effort": true
+      },
+      "requested_fidelity": {
+        "max_chord_error_mm": 0.05,
+        "max_normal_step_deg": 3.0,
+        "min_silhouette_segments": 128,
+        "max_vertices": null
+      },
+      "angular_sampling": {
+        "strategy": "stable-union-corner-grid",
+        "corner_arc_rows": 128,
+        "flat_side_rows": 0,
+        "uses_zipper_indices": false
+      },
+      "vertex_accounting": {
+        "horn.inner": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "horn.outer": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "mouth_rim": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "source_cap": {
+          "vertices": 2049,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_return": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "wall.rear_cap": {
+          "vertices": 129,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        }
+      },
+      "semantic_stations": {
+        "inserted_first": [
+          "throat",
+          "mouth",
+          "corner tangencies/cardinals",
+          "enclosure transitions"
+        ],
+        "unavailable_additively": [
+          "OSSE extension/slot boundaries when expression-valued"
+        ]
+      },
+      "nesting": {
+        "horn_phi": "coarse is a subset of fine for circular grids; corner grids use the stable union row identities",
+        "horn_axial": "12 -> 48 -> 96 base stations are nested; semantic stations are shared by value",
+        "exceptions": [
+          "custom tolerances/caps may choose different refinement paths",
+          "canonical ATH z-map modes are not guaranteed to be nested"
+        ]
+      },
+      "normal_convention": "role-oriented analytic/exact normals; every triangle is counter-clockwise when viewed from its normal side",
+      "normal_method_notes": {
+        "analytic-parametric": "finite differences of true analytic/canonical surface samples in their real axial and azimuthal parameter coordinates; never mesh-derived",
+        "exact-planar": "the exact constant normal of an emitted planar face"
+      },
+      "surface_metadata": {
+        "horn.inner": {
+          "degenerateTriangles": 3912,
+          "orientationAbstainingTriangles": 3912,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "horn.outer": {
+          "degenerateTriangles": 3920,
+          "orientationAbstainingTriangles": 3920,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "mouth_rim": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "source_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_return": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "planar"
+        }
+      },
+      "source_cap_height_mm": 1.728394143942964,
+      "source_cap_radius_mm": 47.52311470520606
+    }
+  },
+  "matching": {
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "L_mm": 120.0,
+        "r0_mm": 12.7,
+        "a0_deg": 15.5,
+        "a_deg": 55.0,
+        "k": 1.0,
+        "q": 0.995
+      },
+      "mesh": {
+        "wall_thickness_mm": 6.0
+      },
+      "morph": {
+        "morphTarget": 1,
+        "morphWidth": 400,
+        "morphHeight": 400,
+        "morphCorner": 0
+      }
+    },
+    "metadata": {
+      "api_version": "hornlab.preview/1",
+      "metadata_version": "hornlab.preview/1.4",
+      "units": "mm",
+      "dimensions_mm": {
+        "mouth_opening": [
+          400.0,
+          400.0
+        ],
+        "horn_overall": [
+          405.22553542743475,
+          405.22553542743475,
+          126.0
+        ]
+      },
+      "dimensions_status": "current",
+      "dimensions_requested_mm": {
+        "mouth_opening": [
+          400.0,
+          400.0
+        ]
+      },
+      "dimensions_sampling": {
+        "method": "resolved-design-geometry",
+        "lod_independent": true
+      },
+      "coordinate_frame": "mesher-xyz",
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "lod": "fine",
+      "actual_segment_counts": {
+        "horn_phi": 128,
+        "horn_axial": 76,
+        "enclosure_roundover_quarter": 0,
+        "source_cap_radial": 16
+      },
+      "timings_ms": {
+        "canonical_sampling": 0.0,
+        "surface_assembly_and_fidelity": 0.0,
+        "total": 0.0
+      },
+      "canonical_reference": {
+        "axial_rows": 193,
+        "azimuth_rows": 128,
+        "escalated": false
+      },
+      "fidelity": {
+        "horn.inner": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 13.646914364285044,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 13.646914364285044,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "horn.outer": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 13.646914364285044,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 13.646914364285044,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "mouth_rim": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 13.646914364285044,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 13.646914364285044,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "source_cap": {
+          "max_chord_error_mm": 0.0016982064638673933,
+          "max_normal_step_deg": 0.96875,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.0016982064638673933,
+          "max_normal_step_deg_achieved": 0.96875,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_cap": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 13.646914364285044,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 13.646914364285044,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_return": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 13.646914364285044,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 13.646914364285044,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        }
+      },
+      "warnings": [],
+      "guiding_curve_probe": {
+        "step_deg": 1.0,
+        "azimuths": 360,
+        "best_effort": true
+      },
+      "requested_fidelity": {
+        "max_chord_error_mm": 0.05,
+        "max_normal_step_deg": 3.0,
+        "min_silhouette_segments": 128,
+        "max_vertices": null
+      },
+      "angular_sampling": {
+        "strategy": "stable-union-corner-grid",
+        "corner_arc_rows": 128,
+        "flat_side_rows": 0,
+        "uses_zipper_indices": false
+      },
+      "vertex_accounting": {
+        "horn.inner": {
+          "vertices": 9856,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "horn.outer": {
+          "vertices": 9856,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "mouth_rim": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "source_cap": {
+          "vertices": 2049,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_return": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "wall.rear_cap": {
+          "vertices": 129,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        }
+      },
+      "semantic_stations": {
+        "inserted_first": [
+          "throat",
+          "mouth",
+          "corner tangencies/cardinals",
+          "enclosure transitions"
+        ],
+        "unavailable_additively": [
+          "OSSE extension/slot boundaries when expression-valued"
+        ]
+      },
+      "nesting": {
+        "horn_phi": "coarse is a subset of fine for circular grids; corner grids use the stable union row identities",
+        "horn_axial": "12 -> 48 -> 96 base stations are nested; semantic stations are shared by value",
+        "exceptions": [
+          "custom tolerances/caps may choose different refinement paths",
+          "canonical ATH z-map modes are not guaranteed to be nested"
+        ]
+      },
+      "normal_convention": "role-oriented analytic/exact normals; every triangle is counter-clockwise when viewed from its normal side",
+      "normal_method_notes": {
+        "analytic-parametric": "finite differences of true analytic/canonical surface samples in their real axial and azimuthal parameter coordinates; never mesh-derived",
+        "exact-planar": "the exact constant normal of an emitted planar face"
+      },
+      "surface_metadata": {
+        "horn.inner": {
+          "degenerateTriangles": 3840,
+          "orientationAbstainingTriangles": 3840,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "horn.outer": {
+          "degenerateTriangles": 3840,
+          "orientationAbstainingTriangles": 3840,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "mouth_rim": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "source_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_return": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "planar"
+        }
+      },
+      "source_cap_height_mm": 1.728394143942964,
+      "source_cap_radius_mm": 47.52311470520606
+    }
+  },
+  "inactive": {
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "L_mm": 120.0,
+        "r0_mm": 12.7,
+        "a0_deg": 15.5,
+        "a_deg": 55.0,
+        "k": 1.0,
+        "q": 0.995
+      },
+      "mesh": {
+        "wall_thickness_mm": 6.0
+      },
+      "morph": {
+        "morphTarget": 0,
+        "morphWidth": 320,
+        "morphHeight": 240,
+        "morphCorner": 0
+      }
+    },
+    "metadata": {
+      "api_version": "hornlab.preview/1",
+      "metadata_version": "hornlab.preview/1.4",
+      "units": "mm",
+      "dimensions_mm": {
+        "mouth_opening": [
+          348.5794722023637,
+          348.5794722023637
+        ],
+        "horn_overall": [
+          355.474218669031,
+          355.474218669031,
+          126.0
+        ]
+      },
+      "dimensions_status": "current",
+      "dimensions_sampling": {
+        "method": "resolved-design-geometry",
+        "lod_independent": true
+      },
+      "coordinate_frame": "mesher-xyz",
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "lod": "fine",
+      "actual_segment_counts": {
+        "horn_phi": 256,
+        "horn_axial": 54,
+        "enclosure_roundover_quarter": 0,
+        "source_cap_radial": 16
+      },
+      "timings_ms": {
+        "canonical_sampling": 0.0,
+        "surface_assembly_and_fidelity": 0.0,
+        "total": 0.0
+      },
+      "canonical_reference": {
+        "axial_rows": 193,
+        "azimuth_rows": 512,
+        "escalated": false
+      },
+      "fidelity": {
+        "horn.inner": {
+          "max_chord_error_mm": 0.017096597201173167,
+          "max_normal_step_deg": 2.987047457010931,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.017096597201173167,
+          "max_normal_step_deg_achieved": 2.987047457010931,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 256
+        },
+        "horn.outer": {
+          "max_chord_error_mm": 0.017096597201173167,
+          "max_normal_step_deg": 2.987047457010931,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.017096597201173167,
+          "max_normal_step_deg_achieved": 2.987047457010931,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 256
+        },
+        "mouth_rim": {
+          "max_chord_error_mm": 0.017096597201173167,
+          "max_normal_step_deg": 2.987047457010931,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.017096597201173167,
+          "max_normal_step_deg_achieved": 2.987047457010931,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 256
+        },
+        "source_cap": {
+          "max_chord_error_mm": 0.0016982064638673933,
+          "max_normal_step_deg": 0.96875,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.0016982064638673933,
+          "max_normal_step_deg_achieved": 0.96875,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 256
+        },
+        "wall.rear_cap": {
+          "max_chord_error_mm": 0.017096597201173167,
+          "max_normal_step_deg": 2.987047457010931,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.017096597201173167,
+          "max_normal_step_deg_achieved": 2.987047457010931,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 256
+        },
+        "wall.rear_return": {
+          "max_chord_error_mm": 0.017096597201173167,
+          "max_normal_step_deg": 2.987047457010931,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.017096597201173167,
+          "max_normal_step_deg_achieved": 2.987047457010931,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 256
+        }
+      },
+      "warnings": [],
+      "guiding_curve_probe": {
+        "step_deg": 1.0,
+        "azimuths": 360,
+        "best_effort": true
+      },
+      "requested_fidelity": {
+        "max_chord_error_mm": 0.05,
+        "max_normal_step_deg": 3.0,
+        "min_silhouette_segments": 128,
+        "max_vertices": null
+      },
+      "angular_sampling": {
+        "strategy": "adaptive-periodic",
+        "corner_arc_rows": 0,
+        "flat_side_rows": 256,
+        "uses_zipper_indices": false
+      },
+      "vertex_accounting": {
+        "horn.inner": {
+          "vertices": 14080,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "horn.outer": {
+          "vertices": 14080,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "mouth_rim": {
+          "vertices": 512,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "source_cap": {
+          "vertices": 4097,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_return": {
+          "vertices": 512,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_cap": {
+          "vertices": 257,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        }
+      },
+      "semantic_stations": {
+        "inserted_first": [
+          "throat",
+          "mouth",
+          "corner tangencies/cardinals",
+          "enclosure transitions"
+        ],
+        "unavailable_additively": [
+          "OSSE extension/slot boundaries when expression-valued"
+        ]
+      },
+      "nesting": {
+        "horn_phi": "coarse is a subset of fine for circular grids; corner grids use the stable union row identities",
+        "horn_axial": "12 -> 48 -> 96 base stations are nested; semantic stations are shared by value",
+        "exceptions": [
+          "custom tolerances/caps may choose different refinement paths",
+          "canonical ATH z-map modes are not guaranteed to be nested"
+        ]
+      },
+      "normal_convention": "role-oriented analytic/exact normals; every triangle is counter-clockwise when viewed from its normal side",
+      "normal_method_notes": {
+        "analytic-parametric": "finite differences of true analytic/canonical surface samples in their real axial and azimuthal parameter coordinates; never mesh-derived",
+        "exact-planar": "the exact constant normal of an emitted planar face"
+      },
+      "surface_metadata": {
+        "horn.inner": {
+          "degenerateTriangles": 6912,
+          "orientationAbstainingTriangles": 6912,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "horn.outer": {
+          "degenerateTriangles": 7168,
+          "orientationAbstainingTriangles": 7168,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "mouth_rim": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "source_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_return": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "planar"
+        }
+      },
+      "source_cap_height_mm": 1.728394143942964,
+      "source_cap_radius_mm": 47.52311470520606
+    }
+  },
+  "both-implicit": {
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "L_mm": 120.0,
+        "r0_mm": 12.7,
+        "a0_deg": 15.5,
+        "a_deg": 55.0,
+        "k": 1.0,
+        "q": 0.995
+      },
+      "mesh": {
+        "wall_thickness_mm": 6.0
+      },
+      "morph": {
+        "morphTarget": 1,
+        "morphWidth": 0,
+        "morphHeight": 0,
+        "morphCorner": 0
+      }
+    },
+    "metadata": {
+      "api_version": "hornlab.preview/1",
+      "metadata_version": "hornlab.preview/1.4",
+      "units": "mm",
+      "dimensions_mm": {
+        "mouth_opening": [
+          350.0,
+          350.0
+        ],
+        "horn_overall": [
+          356.83753563074464,
+          356.83753563074464,
+          126.0
+        ]
+      },
+      "dimensions_status": "current",
+      "dimensions_requested_mm": {
+        "mouth_opening": [
+          0.0,
+          0.0
+        ]
+      },
+      "dimensions_sampling": {
+        "method": "resolved-design-geometry",
+        "lod_independent": true
+      },
+      "coordinate_frame": "mesher-xyz",
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "lod": "fine",
+      "actual_segment_counts": {
+        "horn_phi": 128,
+        "horn_axial": 70,
+        "enclosure_roundover_quarter": 0,
+        "source_cap_radial": 16
+      },
+      "timings_ms": {
+        "canonical_sampling": 0.0,
+        "surface_assembly_and_fidelity": 0.0,
+        "total": 0.0
+      },
+      "canonical_reference": {
+        "axial_rows": 193,
+        "azimuth_rows": 128,
+        "escalated": false
+      },
+      "fidelity": {
+        "horn.inner": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015688048047544,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015688048047544,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "horn.outer": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015688048047544,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015688048047544,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "mouth_rim": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015688048047544,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015688048047544,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "source_cap": {
+          "max_chord_error_mm": 0.0016982064638673933,
+          "max_normal_step_deg": 0.96875,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": 0.0016982064638673933,
+          "max_normal_step_deg_achieved": 0.96875,
+          "vertex_cap_limited": false,
+          "measurement_complete": true,
+          "unmeasured_intervals": 0,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_cap": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015688048047544,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015688048047544,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        },
+        "wall.rear_return": {
+          "max_chord_error_mm": null,
+          "max_normal_step_deg": 17.015688048047544,
+          "reference_density_multiplier": 4,
+          "max_chord_error_mm_requested": 0.05,
+          "max_normal_step_deg_requested": 3.0,
+          "min_silhouette_segments_requested": 128,
+          "max_chord_error_mm_achieved": null,
+          "max_normal_step_deg_achieved": 17.015688048047544,
+          "vertex_cap_limited": true,
+          "measurement_complete": false,
+          "unmeasured_intervals": 128,
+          "silhouette_segments_achieved": 128
+        }
+      },
+      "warnings": [],
+      "guiding_curve_probe": {
+        "step_deg": 1.0,
+        "azimuths": 360,
+        "best_effort": true
+      },
+      "requested_fidelity": {
+        "max_chord_error_mm": 0.05,
+        "max_normal_step_deg": 3.0,
+        "min_silhouette_segments": 128,
+        "max_vertices": null
+      },
+      "angular_sampling": {
+        "strategy": "stable-union-corner-grid",
+        "corner_arc_rows": 128,
+        "flat_side_rows": 0,
+        "uses_zipper_indices": false
+      },
+      "vertex_accounting": {
+        "horn.inner": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "horn.outer": {
+          "vertices": 9088,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "mouth_rim": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "source_cap": {
+          "vertices": 2049,
+          "max_vertices": null,
+          "vertex_cap_limited": false
+        },
+        "wall.rear_return": {
+          "vertices": 256,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        },
+        "wall.rear_cap": {
+          "vertices": 129,
+          "max_vertices": null,
+          "vertex_cap_limited": true
+        }
+      },
+      "semantic_stations": {
+        "inserted_first": [
+          "throat",
+          "mouth",
+          "corner tangencies/cardinals",
+          "enclosure transitions"
+        ],
+        "unavailable_additively": [
+          "OSSE extension/slot boundaries when expression-valued"
+        ]
+      },
+      "nesting": {
+        "horn_phi": "coarse is a subset of fine for circular grids; corner grids use the stable union row identities",
+        "horn_axial": "12 -> 48 -> 96 base stations are nested; semantic stations are shared by value",
+        "exceptions": [
+          "custom tolerances/caps may choose different refinement paths",
+          "canonical ATH z-map modes are not guaranteed to be nested"
+        ]
+      },
+      "normal_convention": "role-oriented analytic/exact normals; every triangle is counter-clockwise when viewed from its normal side",
+      "normal_method_notes": {
+        "analytic-parametric": "finite differences of true analytic/canonical surface samples in their real axial and azimuthal parameter coordinates; never mesh-derived",
+        "exact-planar": "the exact constant normal of an emitted planar face"
+      },
+      "surface_metadata": {
+        "horn.inner": {
+          "degenerateTriangles": 3912,
+          "orientationAbstainingTriangles": 3912,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "horn.outer": {
+          "degenerateTriangles": 3920,
+          "orientationAbstainingTriangles": 3920,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "mouth_rim": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "source_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "air-side",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_return": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "analytic"
+        },
+        "wall.rear_cap": {
+          "degenerateTriangles": 0,
+          "orientationAbstainingTriangles": 0,
+          "disagreeingTriangles": 0,
+          "orientationSingularTriangles": 0,
+          "orientation": "exterior",
+          "windingChecked": true,
+          "curvature": "planar"
+        }
+      },
+      "source_cap_height_mm": 1.728394143942964,
+      "source_cap_radius_mm": 47.52311470520606
+    }
+  }
+}

@@ -99,6 +99,19 @@ describe('document-scoped design size regressions',()=>{
     msg(frame({epoch:3,seq:opened.seq,designRevision:opened.designRevision,previewMetadata:OLD}));
     expect(host.textContent).not.toContain('111.0');answer(NEW);expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
   });
+  it.each([
+    ['width-implicit', 'requested auto × 240.0 mm, effective 350.0 × 348.6 mm'],
+    ['height-implicit', 'requested 320.0 × auto mm, effective 348.6 × 350.0 mm'],
+    ['both-explicit', 'requested 320.0 × 240.0 mm, effective 348.6 × 348.6 mm'],
+    ['matching', '400.0 × 400.0 mm'],
+    ['inactive', '348.6 × 348.6 mm'],
+    ['both-implicit', '350.0 × 350.0 mm'],
+  ])('formats the real emitted %s morph target', (name, expected) => {
+    const fixtures = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-morph-metadata.json')));
+    answer(fixtures[name].metadata, { lod: 'fine' });
+    expect(host.querySelector('dd')?.textContent).toBe(expected);
+    expect(host.textContent).toContain('Current preview');
+  });
   it('absent dimension keys preserve existing same-revision error and badge behavior',()=>{
     answer(undefined);
     const r=request();

@@ -14,6 +14,13 @@ function formatted(value: unknown, count: number): string | null {
   return `${value.map((item: number) => item.toFixed(1)).join(' × ')} mm`;
 }
 
+function formattedTarget(value: unknown): string | null {
+  if (!Array.isArray(value) || value.length !== 2
+      || !value.every((item) => typeof item === 'number' && Number.isFinite(item) && item >= 0)
+      || value.every((item) => item === 0)) return null;
+  return `${value.map((item: number) => item === 0 ? 'auto' : item.toFixed(1)).join(' × ')} mm`;
+}
+
 /** Read only the accepted frame; older meshers simply have no readouts. */
 export function LiveDimensions() {
   const revision = useDesignStore((state) => state.designRevision);
@@ -54,11 +61,11 @@ export function LiveDimensions() {
       {readouts.map(([key, label, count]) => {
         if (key === 'enclosure_overall' && dimensions && !(key in dimensions)) return null;
         const value = formatted(dimensions?.[key], count);
+        const requested = key === 'mouth_opening' ? formattedTarget(metadata!.dimensions_requested_mm?.mouth_opening) : null;
         return <div className="realized-dimension-row" key={key}>
           <dt><span>{label}</span></dt>
-          <dd>{key === 'mouth_opening' && value && formatted(metadata!.dimensions_requested_mm?.mouth_opening, 2)
-            && formatted(metadata!.dimensions_requested_mm?.mouth_opening, 2) !== value
-            ? <>requested {formatted(metadata!.dimensions_requested_mm?.mouth_opening, 2)}, effective {value}</>
+          <dd>{value && requested && requested !== value
+            ? <>requested {requested}, effective {value}</>
             : value ?? (pending ? 'updating' : 'unavailable')}{value && !current && <small>{pending ? 'updating' : 'last valid'}</small>}</dd>
         </div>;
       })}

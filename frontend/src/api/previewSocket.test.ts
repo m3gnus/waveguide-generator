@@ -202,7 +202,7 @@ describe('preview socket state machine', () => {
     // arrives; only its readouts are dropped.
     expect(manager.getSnapshot().frame).toBe(frameBeforeReset);
     // An older mesher has no card state to reset; keep shared notifications unchanged.
-    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBeUndefined();
     expect(manager.getSnapshot().lastCanonicalDimensions ?? null).toBeNull();
 
     for (let i = 0; i < 9; i += 1) useDesignStore.getState().updateField('a', 40 + i);
@@ -215,7 +215,7 @@ describe('preview socket state machine', () => {
     expect(manager.getSnapshot().stale).toBe(false);
     expect(manager.getSnapshot().frame).not.toBe(frameBeforeReset);
     expect(manager.getSnapshot().frame?.header.designRevision).toBe(10);
-    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBeUndefined();
     manager.stop();
   });
 
@@ -475,7 +475,7 @@ it('drops the readouts but keeps the frame when New replaces a document at the s
   manager.stop(); resetDesignStore();
 });
 
-it('retains old-mesher error badges on New but accepts only new-document outcomes', () => {
+it('preserves base old-mesher error floors across New and late outcomes', () => {
   resetDesignStore(); useDesignStore.setState({ designRevision: 58 });
   const socket = new MockSocket();
   const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
@@ -486,11 +486,13 @@ it('retains old-mesher error badges on New but accepts only new-document outcome
   resetDesignStore();
   expect(manager.getSnapshot()).toMatchObject({ error: 'Previous document failure', errorRevision: 59, lastValidRevision: 58, stale: true });
   socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 1, designRevision: 59, code: 'INVALID', message: 'Late old failure' }));
-  expect(manager.getSnapshot().error).toBe('Previous document failure');
+  expect(manager.getSnapshot().error).toBe('Late old failure');
   socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2, designRevision: 1, code: 'INVALID', message: 'New document failure' }));
-  expect(manager.getSnapshot()).toMatchObject({ errorRevision: 1, error: 'New document failure' });
+  expect(manager.getSnapshot()).toMatchObject({ errorRevision: 59, error: 'Late old failure' });
   socket.message(fixtureWithHeader({ seq: 2, designRevision: 1 }));
-  expect(manager.getSnapshot()).toMatchObject({ error: null, errorRevision: null, stale: false, displayedRevision: 1, lastValidRevision: 1 });
+  expect(manager.getSnapshot()).toMatchObject({ error: 'Late old failure', errorRevision: 59, stale: false, displayedRevision: 1, lastValidRevision: 1 });
+  socket.message(fixtureWithHeader({ seq: 3, designRevision: 60 }));
+  expect(manager.getSnapshot()).toMatchObject({ error: null, errorRevision: null });
   manager.stop(); resetDesignStore();
 });
 

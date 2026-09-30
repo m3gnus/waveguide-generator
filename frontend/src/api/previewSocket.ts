@@ -154,9 +154,13 @@ export class PreviewSocketManager {
 
   private observeRevisions(): void {
     if (!this.unsubscribeRevision) this.unsubscribeRevision = subscribeRevision((event) => this.onRevision(event));
-    if (this.documentLoad !== currentDocumentLoad()) {
+    if (this.documentLoad !== currentDocumentLoad() && this.hasDimensions()) {
       this.onRevision({ reason: 'load', revision: useDesignStore.getState().designRevision, immediate: true });
     }
+  }
+
+  private hasDimensions(): boolean {
+    return this.snapshot.frame?.header.previewMetadata?.dimensions_mm !== undefined;
   }
 
   private stopObservingRevisions(): void {
@@ -289,12 +293,13 @@ export class PreviewSocketManager {
       const fields = validatedErrorFields(message.fields);
       const errorRevision = Number.isInteger(message.designRevision) ? message.designRevision! : null;
       const errorSeq = Number.isInteger(message.seq) ? message.seq! : null;
-      if (errorSeq !== null && errorSeq < this.loadFloorSeq) return;
+      const supported = this.hasDimensions();
+      if (supported && errorSeq !== null && errorSeq < this.loadFloorSeq) return;
       // A successful newer frame, or a newer failure already on screen, has
       // superseded this response. The coarse and fine lanes can finish out of
       // order, so accepting it would resurrect a field error the user fixed.
-      if (this.snapshot.frame?.documentLoad === this.documentLoad && errorRevision !== null && errorRevision < (this.snapshot.lastValidRevision ?? 0)) return;
-      if (this.errorDocumentLoad === this.documentLoad && errorRevision !== null && errorRevision < (this.snapshot.errorRevision ?? 0)) return;
+      if ((!supported || this.snapshot.frame?.documentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.lastValidRevision ?? 0)) return;
+      if ((!supported || this.errorDocumentLoad === this.documentLoad) && errorRevision !== null && errorRevision < (this.snapshot.errorRevision ?? 0)) return;
       if (errorSeq !== null && errorSeq < this.latestOutcomeSeq) return;
       const detail = (typeof message.message === 'string' && message.message.trim())
         || Object.values(fields ?? {})[0]
@@ -302,7 +307,7 @@ export class PreviewSocketManager {
         || 'Preview request failed';
       if (errorSeq !== null) this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, errorSeq);
       this.errorDocumentLoad = this.documentLoad;
-      const documentFailed = this.snapshot.awaitingDocumentFrame
+      const documentFailed = supported && this.snapshot.awaitingDocumentFrame
         && errorSeq !== null && errorSeq >= this.loadFloorSeq
         && errorRevision === useDesignStore.getState().designRevision;
       this.update({ error: detail, errorFields: fields, errorRevision, stale: true,
@@ -357,14 +362,14 @@ export class PreviewSocketManager {
     }
     // An error belongs to the revision that produced it. A frame older than
     // that revision does not answer it, so it must not clear the message.
+    const supported = header.previewMetadata?.dimensions_mm !== undefined || this.hasDimensions();
     const clearsError = frameSeq >= this.latestOutcomeSeq && (
-      this.errorDocumentLoad !== this.documentLoad
-      || this.snapshot.awaitingDocumentFrame
+      (supported && (this.errorDocumentLoad !== this.documentLoad || this.snapshot.awaitingDocumentFrame))
       || this.snapshot.errorRevision === null
       || frameRevision >= this.snapshot.errorRevision
     );
     this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, frameSeq);
-    frame.documentLoad = this.documentLoad;
+    if (supported) frame.documentLoad = this.documentLoad;
     const dimensionsFrame = selectPreferredFrame(this.snapshot.dimensionsFrame ?? this.snapshot.frame, frame);
     const metadata = dimensionsFrame?.header.previewMetadata;
     const lastCanonicalDimensions = metadata?.dimensions_status === 'pending'
@@ -372,10 +377,8 @@ export class PreviewSocketManager {
       : metadata?.dimensions_status === 'unavailable' ? null : metadata?.dimensions_mm;
     this.update({
       frame,
-      dimensionsFrame,
-      dimensionsUnavailable: false,
-      lastCanonicalDimensions,
-      awaitingDocumentFrame: false,
+      ...(supported ? { dimensionsFrame, dimensionsUnavailable: false,
+        lastCanonicalDimensions, awaitingDocumentFrame: false } : {}),
       displayedRevision: frameRevision,
       lastValidRevision: frameRevision,
       stale: frameRevision !== revision,
@@ -384,6 +387,13 @@ export class PreviewSocketManager {
   }
 
   private onRevision(event: RevisionEvent): void {
+    // Paused observation exists only to hide dimensions from replaced documents.
+    // Older meshers retain the shared state and notifications of the base path.
+    const supported = this.hasDimensions();
+    if (this.stopped && !supported) {
+      if (event.reason === 'load') this.documentLoad = currentDocumentLoad();
+      return;
+    }
     if (event.immediate) this.barrierRevision = event.revision;
     if (event.reason === 'load') {
       // A load starts a new document identity, and `New design` rewinds its
@@ -411,7 +421,6 @@ export class PreviewSocketManager {
     // The viewport keeps that frame; the previous document's readouts are
     // dropped and hidden until a frame for the new document is accepted.
     if (event.reason === 'load') {
-      const supported = this.snapshot.frame?.header.previewMetadata?.dimensions_mm !== undefined;
       if (supported) {
         this.update({
           lastCanonicalDimensions: null, awaitingDocumentFrame: true,

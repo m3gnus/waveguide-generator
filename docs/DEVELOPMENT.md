@@ -450,13 +450,17 @@ supply these values, displayed to one decimal place. The sampling method is
 surfaces on morphed mouths can differ by the mesher's documented fitting tolerance.
 Optional `dimensions_requested_mm.mouth_opening` supplies the requested morph
 target; the card shows requested and effective sizes together when they differ.
+Each requested axis is formatted separately: zero displays as "auto" beside an
+explicit axis. Both implicit axes omit the requested pair.
 The card displays no revision text; revision and sequence checks still reject old responses.
 New/Open retains the previous viewport frame as a fallback while hiding its
 readouts, even when live updates are paused. An accepted replacement carries a
 client document identity so the viewport and card can replace a high revision
 from the old document with a lower revision from the new one. Matching error-only
-responses end the document wait with unavailable sizes. Older meshers retain
-the established shared error/badge behavior while the card stays hidden.
+responses end the document wait with unavailable sizes. Document observation
+while paused and document-scoped error filtering apply only to dimension metadata.
+With older meshers that omit dimension keys, shared errors, badges, stale fields
+and subscriber notifications follow the established behavior, and the card stays hidden.
 A coarse `dimensions_status: "pending"` frame shows the same document's previous
 canonical values as "Updating dimensions", or "updating" when no values exist.
 The card uses the viewport's lane-selection policy, so a late coarse frame
