@@ -455,6 +455,12 @@ class JobStore:
                     sidecar = Path(str(target) + suffix)
                     if sidecar.exists():
                         os.replace(sidecar, Path(str(invalid) + suffix))
+        # Keep one quarantined recovery set, including only its own sidecars.
+        invalid_sets = sorted(path for path in target.parent.glob(target.name + ".invalid-*")
+                              if not path.name.endswith(("-wal", "-shm", "-journal")))
+        for old in invalid_sets[:-1]:
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                Path(str(old) + suffix).unlink(missing_ok=True)
         fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=self.db_path.parent)
         os.close(fd)
         temporary = Path(name)

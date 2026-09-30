@@ -2286,6 +2286,14 @@ async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict
     while the jobs store cannot be read (409).
     """
 
+    from .job_shims import operation_fence
+    async with operation_fence(operation_id):
+        return await _cancel_cad_operation(operation_id, request)
+
+
+async def _cancel_cad_operation(operation_id: str, request: Request) -> dict[str, Any]:
+    """Implement cancellation while the operation admission fence is held."""
+
     context = _preparation_context(request.app.state)
     ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
     if ledger is not None and ledger["kind"] == PREPARE_AND_SOLVE and context.runtime is not None:
@@ -2297,7 +2305,7 @@ async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict
                 # receipt. Make that join durable before deleting the intent;
                 # otherwise a restart could accept the dismissed delivery again.
                 try:
-                    await accept_operation_solve(context, operation_id, schedule=False)
+                    await accept_operation_solve(context, operation_id, schedule=False, delivery_released=True)
                     await asyncio.to_thread(context.store.make_durable)
                 except sqlite3.Error as exc:
                     raise HTTPException(status_code=409, detail="WG could not durably record this solve's acceptance. Try dismissing it again.") from exc

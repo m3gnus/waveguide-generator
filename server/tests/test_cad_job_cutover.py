@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -384,12 +385,16 @@ def test_startup_recovers_retention_before_accepting_a_persisted_delivery(h):
     import shutil
     _received(h)
     h.runtime._ensure_prep_lane = lambda: None
+    from server.cadlink import solve_command
+    solve_command._live_waits["cmd-1"] = solve_command._LiveWait(True, None)
     missing = h.workspace.with_name("unmounted")
     h.workspace.rename(missing)
     assert h._loop.run(sweep_pending_solves(h.context())) == 0
     assert h.row()["state"] == "received" and h.row()["snapshot_json"] is None
     assert h.jobs_store.latest_cad_job("cmd-1") is None
     missing.rename(h.workspace)
+    from server.cadlink import solve_command
+    solve_command._live_waits.clear()
     assert h._loop.run(sweep_pending_solves(h.context())) == 1
     assert h.row()["state"] == "accepted" and h.row()["snapshot_json"] is not None
     shutil.rmtree(h.workspace)
@@ -434,6 +439,7 @@ def test_one_malformed_row_between_good_rows_is_refused_and_does_not_block_sweep
         assert h.jobs_store.latest_cad_job(op)["status"] == "preparing"
     refused = h.jobs_store.latest_cad_job("cmd-2")
     assert refused["status"] == "error"
+    assert cad_of(refused)["refusal"]["code"] == "request_payload_invalid"
     assert "could not be migrated" in cad_of(refused)["refusal"]["message"]
     assert "cmd-2" in caplog.text
     assert h._loop.run(sweep_pending_solves(h.context())) == 0
@@ -446,10 +452,11 @@ def test_dismissal_timestamp_is_durable_and_at_least_the_refusals_timestamp(h):
     refused = h.prepare(setup_revision_id=_revision(h.store, _setup()))
     # Exercise ordering even when the refusal is ahead of the ledger clock.
     job = h.jobs_store.latest_cad_job("cmd-1")
-    h.jobs_store.update_job(job["id"], updated_at="2099-01-01T00:00:00")
+    h.jobs_store.update_job(job["id"], updated_at="2099-01-01T00:00:00.500000")
     refused = operation_summary(h.row(), h.jobs_store)
     dismissed = h._loop.run(api.post_cancel_cad_operation("cmd-1", _request(h)))
     assert dismissed["state"] == "cancelled"
+    assert dismissed["updatedAt"].endswith("Z") and "." not in dismissed["updatedAt"]
     assert dismissed["attemptGeneration"] == refused["attemptGeneration"]
     assert datetime.fromisoformat(dismissed["updatedAt"]).astimezone(timezone.utc) >= datetime.fromisoformat(refused["updatedAt"]).astimezone(timezone.utc)
     assert operation_summary(h.row(), h.jobs_store)["updatedAt"] == dismissed["updatedAt"]
@@ -467,4 +474,218 @@ def test_replay_stops_an_existing_keyed_job_when_the_ledger_still_requests_cance
     assert h._loop.run(sweep_pending_solves(h.context())) == 1
     assert h.jobs_store.get_job_row("committed-before-stop")["status"] == "cancelled"
     assert h.row()["job_id"] == "committed-before-stop"
+    assert h.submitted == []
+
+
+@pytest.mark.parametrize("press", [False, True])
+@pytest.mark.parametrize("state", ["received", "processing", "needs_user_input"])
+def test_missing_return_after_bound_is_visibly_refused_and_dismissal_never_replays(h, press, state):
+    from server.cadlink import solve_command
+    from server.cadlink.preparation import run_delivery_pass
+    bundle, _ = _received(h)
+    if state != "received":
+        generation = h.store.claim("cmd-1", 0)
+        if state == "needs_user_input":
+            h.store.record_outcome("cmd-1", generation, state, reason="preparation_failed", outcome={"message": "Old failure"})
+    original = h.workspace / bundle
+    hidden = original.with_name("gone")
+    original.rename(hidden)
+    # An expired HTTP hold, including a client that never retries.
+    solve_command._live_waits["cmd-1"] = solve_command._LiveWait(False, 0)
+    async def flow():
+        if press:
+            result = await api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(wait=True), _request(h))
+            detail = result["operation"]
+        else:
+            if state == "received":
+                await run_delivery_pass(h.context(), spawn=lambda *_: None)
+            else:
+                await sweep_pending_solves(h.context())
+            await h.runtime.wait_cad_preparations()
+            detail = operation_summary(h.row(), h.jobs_store)
+        assert detail["state"] == "needs_user_input"
+        assert detail["reason"] == "preparation_failed" and detail["message"]
+        assert detail["stage"] == "validating"
+        dismissed = await api.post_cancel_cad_operation("cmd-1", _request(h))
+        assert dismissed["state"] == "cancelled"
+        hidden.rename(original)
+        assert await sweep_pending_solves(h.context()) == 0
+        assert await run_delivery_pass(h.context(), spawn=lambda *_: None) == []
+        assert h.jobs_store.latest_cad_job("cmd-1") is None
+    h._loop.run(flow())
+    assert h.submitted == []
+
+
+@pytest.mark.parametrize("active", [False, True])
+def test_real_cancel_route_wins_while_retention_is_blocked(h, monkeypatch, active):
+    import asyncio
+    import threading
+    from server.cadlink import job_shims
+    _received(h)
+    if active:
+        h.store.claim("cmd-1", 0)
+    entered, release = threading.Event(), threading.Event()
+    retain = job_shims.retain_operation_snapshot
+    def blocked(*args):
+        entered.set()
+        assert release.wait(10)
+        return retain(*args)
+    monkeypatch.setattr(job_shims, "retain_operation_snapshot", blocked)
+    async def race():
+        accepting = asyncio.create_task(job_shims.accept_operation_solve(h.context(), "cmd-1"))
+        try:
+            assert await asyncio.to_thread(entered.wait, 10)
+            result = await api.post_cancel_cad_operation("cmd-1", _request(h))
+            assert result["state"] in {"cancelled", "cancel_requested"}
+        finally:
+            release.set()
+        await accepting
+        await h.runtime.wait_cad_preparations()
+    h._loop.run(race())
+    job = h.jobs_store.latest_cad_job("cmd-1")
+    assert job is None or job["status"] == "cancelled"
+    assert h.ingest.calls == h.submitted == []
+
+
+@pytest.mark.parametrize("invalid", ["changed", "malformed"])
+def test_return_refusal_keeps_preparations_exact_stage_and_message(h, invalid):
+    bundle, _ = _received(h)
+    if invalid == "changed":
+        with h.store._lock, h.store._transaction() as conn:
+            inputs = json.loads(h.row()["inputs_json"])
+            inputs["manifest_sha256"] = "sha256:" + "0" * 64
+            conn.execute("UPDATE cad_operations SET inputs_json = ? WHERE operation_id = 'cmd-1'", (json.dumps(inputs),))
+        expected = "The return bundle changed after Fusion asked WG to solve it. Send it again from Fusion."
+    else:
+        (h.workspace / bundle / "manifest.json").write_text("{not json")
+        expected = None
+    result = h._loop.run(api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(wait=True), _request(h)))["operation"]
+    assert result["stage"] == "validating" and result["reason"] == "snapshot_invalid"
+    if expected:
+        assert result["message"] == expected
+    else:
+        assert result["message"] and "retained snapshot" not in result["message"]
+
+
+@pytest.mark.parametrize("recovery", ["startup", "delivery"])
+@pytest.mark.parametrize("error", [OSError, sqlite3.OperationalError, RuntimeError, KeyError, TypeError])
+def test_each_row_is_isolated_and_code_failures_are_retried_with_bounded_backoff(h, monkeypatch, caplog, recovery, error):
+    from server.cadlink import job_shims
+    from server.cadlink.preparation import run_delivery_pass
+    from test_cad_preparation import _accept
+    bundle, manifest = _received(h)
+    _accept(h.store, "cmd-2", bundle, manifest)
+    _accept(h.store, "cmd-3", bundle, manifest)
+    h.runtime._ensure_prep_lane = lambda: None
+    real = job_shims.accept_operation_solve
+    async def broken(ctx, op, **kwargs):
+        if op == "cmd-2":
+            raise error("temporary failure")
+        return await real(ctx, op, **kwargs)
+    monkeypatch.setattr(job_shims, "accept_operation_solve", broken)
+    def run():
+        return h._loop.run(sweep_pending_solves(h.context()) if recovery == "startup" else run_delivery_pass(h.context(), spawn=lambda *_: None))
+    run()
+    assert h.jobs_store.latest_cad_job("cmd-1") and h.jobs_store.latest_cad_job("cmd-3")
+    assert h.jobs_store.latest_cad_job("cmd-2") is None
+    assert "cmd-2" in caplog.text
+    attempts, next_retry = h.runtime._cad_admission_retries["cmd-2"]
+    assert attempts == 1 and next_retry <= job_shims.time.monotonic() + 60
+    monkeypatch.setattr(job_shims, "accept_operation_solve", real)
+    h.runtime._cad_admission_retries["cmd-2"] = (attempts, 0)
+    run()
+    assert h.jobs_store.latest_cad_job("cmd-2")["status"] == "preparing"
+
+
+def test_bad_payload_fallback_recovers_a_job_committed_before_the_error(h, monkeypatch):
+    from server.cadlink import job_shims
+    _received(h)
+    h.runtime._ensure_prep_lane = lambda: None
+    real = job_shims.accept_operation_solve
+    async def committed_then_failed(ctx, op, **kwargs):
+        await real(ctx, op, **kwargs)
+        raise job_shims.BadSolvePayload("failure after commit")
+    monkeypatch.setattr(job_shims, "accept_operation_solve", committed_then_failed)
+    assert h._loop.run(sweep_pending_solves(h.context())) == 1
+    assert h.jobs_store.latest_cad_job("cmd-1")["status"] == "preparing"
+    assert h.row()["job_id"] == h.jobs_store.job_for_submission_key("cad-solve:cmd-1")
+
+
+def test_startup_keeps_a_persisted_claim_until_its_file_bound_then_lane_refuses(h, monkeypatch):
+    from server.cadlink import solve_command
+    from server.cadlink.preparation import run_delivery_pass
+    from test_cad_preparation import _deliver_file
+    bundle, manifest = _received(h)
+    (h.workspace / bundle).rename(h.workspace / "gone")
+    delivery = _deliver_file(h, bundle, manifest) / "cmd-1.json"
+    claim = delivery.with_name(solve_command.CLAIM_PREFIX + "restart.json")
+    delivery.rename(claim)
+    assert h._loop.run(sweep_pending_solves(h.context())) == 0
+    assert h.row()["state"] == "received" and h.jobs_store.latest_cad_job("cmd-1") is None
+    monkeypatch.setattr(solve_command, "RETENTION_PASSES", 1)
+    async def expired():
+        await run_delivery_pass(h.context(), spawn=lambda *_: None)
+        await h.runtime.wait_cad_preparations()
+        detail = operation_summary(h.row(), h.jobs_store)
+        assert detail["reason"] == "preparation_failed" and detail["message"]
+        assert detail["stage"] == "validating"
+    h._loop.run(expired())
+    assert not claim.exists() and h.submitted == []
+
+
+def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
+    import shutil
+    from server.cadlink.manual_solve import create_manual_solve
+    from server.cadlink.ingest import retained_snapshot_path
+    from server.cadlink.preparation import retain_operation_snapshot, DAMAGED_COPY_MESSAGE
+    from server.cadlink.job_shims import accept_operation_solve
+    _received(h)
+    retain_operation_snapshot(h.store, h.data_dir, h.workspace, "cmd-1")
+    snapshot = json.loads(h.row()["snapshot_json"])
+    path = retained_snapshot_path(h.data_dir, snapshot["manifest_sha256"])
+    record = h.ingest(path, {}, [], h.store, h.data_dir, prep_options={}, commit_guard=lambda _conn: True, retained_copy=True)
+    create_manual_solve(h.store, h.data_dir, "manual-1", record["ingest_id"])
+    h._loop.run(accept_operation_solve(h.context(), "manual-1", manual=True))
+    shutil.rmtree(path)
+    result = h._loop.run(api.post_prepare_cad_operation("manual-1", api.PrepareOperationRequest(wait=True), _request(h)))["operation"]
+    assert result["state"] == "needs_user_input" and result["stage"] == "validating"
+    assert result["reason"] == "preparation_failed" and result["message"] == DAMAGED_COPY_MESSAGE
+    assert len(h.ingest.calls) == 1 and h.submitted == []
+
+
+@pytest.mark.parametrize("hold", ["live", "claim"])
+def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monkeypatch, hold):
+    import shutil
+    from server.cadlink import solve_command
+    from server.cadlink.preparation import run_delivery_pass
+    from test_cad_preparation import _deliver_file
+    bundle, manifest = _received(h)
+    h.ingest.findings = [{"id": "review", "kind": "warning", "blocking": True}]
+    h.prepare(setup_revision_id=_revision(h.store, _setup()))
+    # The job committed, but its receipt join did not survive. Retention is
+    # unavailable while the delivery still has a live or persisted hold.
+    with h.store._lock, h.store._transaction() as conn:
+        conn.execute("UPDATE cad_operations SET state = 'received', job_id = NULL, snapshot_json = NULL WHERE operation_id = 'cmd-1'")
+    shutil.rmtree(h.data_dir / "imports" / "bundles")
+    original = h.workspace / bundle
+    hidden = original.with_name("gone")
+    original.rename(hidden)
+    if hold == "live":
+        monkeypatch.setattr(solve_command, "_live_waits", {"cmd-1": solve_command._LiveWait(True, None)})
+    else:
+        delivery = _deliver_file(h, bundle, manifest) / "cmd-1.json"
+        delivery.rename(delivery.with_name(solve_command.CLAIM_PREFIX + "dismiss.json"))
+    async def dismiss():
+        assert await sweep_pending_solves(h.context()) == 0
+        assert h.row()["state"] == "received"  # Startup still respects the hold.
+        result = await api.post_cancel_cad_operation("cmd-1", _request(h))
+        assert result["state"] == "cancelled"
+        assert h.row()["job_id"]
+        assert h.jobs_store.latest_cad_job("cmd-1") is None
+        hidden.rename(original)
+        solve_command._live_waits.clear()
+        assert await sweep_pending_solves(h.context()) == 0
+        await run_delivery_pass(h.context(), spawn=lambda *_: None)
+        assert h.jobs_store.latest_cad_job("cmd-1") is None
+    h._loop.run(dismiss())
     assert h.submitted == []

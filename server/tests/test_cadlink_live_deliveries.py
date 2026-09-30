@@ -493,15 +493,12 @@ def test_a_transient_return_is_released_after_the_live_bound(tmp_path: Path, clo
         assert released.status_code == 200, released.text
         assert released.json()["result"] == "recovered"
         assert solve_command.live_held_operation_ids() == frozenset()
-        # The HTTP hold expires, but job acceptance still requires retention.
         assert app.row()["snapshot_json"] is None
-        assert app.run_pass() == []
-        assert app.row()["state"] == "received" and app.row()["job_id"] is None
-        assert app.app.state.jobs_runtime.store.latest_cad_job("op-1") is None
-        (app.workspace / "gone").rename(app.workspace / bundle_path)
         assert app.run_pass() == ["op-1"]
         assert app.row()["state"] == "accepted"
-        assert _retained(app.data_dir, manifest)
+        assert app.app.state.jobs_runtime.store.latest_cad_job("op-1") is not None
+        (app.workspace / "gone").rename(app.workspace / bundle_path)
+        assert app.run_pass() == []  # Refused jobs are never retried by delivery.
 
 
 def test_a_wait_the_client_never_retries_expires_at_the_bound(tmp_path: Path, clock: Clock) -> None:
@@ -514,13 +511,11 @@ def test_a_wait_the_client_never_retries_expires_at_the_bound(tmp_path: Path, cl
         assert app.run_pass() == []
         clock.now += 0.1
 
-        assert app.run_pass() == []
-        assert solve_command.live_held_operation_ids() == frozenset()
-        assert app.row()["state"] == "received" and app.row()["job_id"] is None
-        (app.workspace / "gone").rename(app.workspace / bundle_path)
         assert app.run_pass() == ["op-1"]
-        assert app.row()["state"] == "accepted"
-        assert _retained(app.data_dir, manifest)
+        assert solve_command.live_held_operation_ids() == frozenset()
+        assert app.row()["state"] == "accepted" and app.row()["job_id"] is not None
+        (app.workspace / "gone").rename(app.workspace / bundle_path)
+        assert app.run_pass() == []
 
 
 def test_an_exception_in_accept_operation_clears_the_in_flight_wait(
@@ -1179,20 +1174,18 @@ def test_a_retry_after_the_bound_is_acknowledged_even_after_a_pass_ran(
         token = app.token()
         assert app.deliver(token, _item(bundle_path, manifest)).status_code == 503
         clock.now += 30.0
-        # No longer held, but no job is accepted without its retained return.
-        assert app.run_pass() == []
-        assert app.row()["state"] == "received" and app.row()["job_id"] is None
+        # Once the bound closes, preparation owns the visible refusal.
+        assert app.run_pass() == ["op-1"]
+        assert app.row()["state"] == "accepted" and app.row()["job_id"] is not None
 
         again = app.deliver(token, _item(bundle_path, manifest))
 
         assert again.status_code == 200, again.text
         assert again.json()["result"] == "recovered"
         assert solve_command._live_waits == {}
-        assert again.json()["operation"]["state"] == "received"
+        assert again.json()["operation"]["state"] in {"received", "processing", "needs_user_input"}
         (app.workspace / "gone").rename(app.workspace / bundle_path)
-        assert app.run_pass() == ["op-1"]
-        assert app.row()["state"] == "accepted"
-        assert _retained(app.data_dir, manifest)
+        assert app.run_pass() == []
 
 
 def test_a_passed_deadline_is_forgotten_after_its_memory(tmp_path: Path, clock: Clock) -> None:

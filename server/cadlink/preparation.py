@@ -1899,7 +1899,7 @@ async def run_delivery_pass(
 
 
 async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any) -> list[str]:
-    from .job_shims import accept_operation_solve
+    from .job_shims import accept_operation_solve_isolated
 
     blocked = _restart_pending(ctx)
     if blocked or ctx.workspace_root is None:
@@ -1911,12 +1911,17 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
     loop = asyncio.get_running_loop()
 
     def accept(operation_id: str) -> None:
-        row = ctx.store.get_operation(operation_id)
-        if row and row["kind"] == PREPARE_AND_SOLVE and not row.get("legacy") and operation_id not in running:
-            was_pending = row["state"] not in TERMINAL_STATES
-            asyncio.run_coroutine_threadsafe(accept_operation_solve(ctx, operation_id, schedule=False), loop).result()
-            if was_pending:
-                accepted.append(operation_id)
+        try:
+            row = ctx.store.get_operation(operation_id)
+            if row and row["kind"] == PREPARE_AND_SOLVE and not row.get("legacy") and operation_id not in running:
+                was_pending = row["state"] not in TERMINAL_STATES
+                job_id = asyncio.run_coroutine_threadsafe(
+                    accept_operation_solve_isolated(ctx, operation_id, schedule=False, delivery_released=True), loop
+                ).result()
+                if was_pending and job_id is not None:
+                    accepted.append(operation_id)
+        except Exception:
+            logger.exception("Could not recover CAD delivery %s; retrying on a later pass", operation_id)
 
     held: set[str] = set()
     await asyncio.to_thread(
@@ -1927,9 +1932,12 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
     # Acceptance is durable before acknowledgement, but the lane starts only
     # after collection has finished and can see a restart approved during it.
     for operation_id in accepted:
-        job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id)
-        if job:
-            ctx.runtime.schedule_cad_solve(job["id"])
+        try:
+            job = await asyncio.to_thread(ctx.job_store.latest_cad_job, operation_id)
+            if job:
+                ctx.runtime.schedule_cad_solve(job["id"])
+        except Exception:
+            logger.exception("Could not schedule CAD delivery %s; retrying on a later pass", operation_id)
     blocked = _restart_pending(ctx)
     if blocked:
         if note:
@@ -1947,7 +1955,7 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
         for cursor, row in page:
             op = str(row["operation_id"])
             if not row.get("legacy") and op not in held and op not in running:
-                if await accept_operation_solve(ctx, op) is not None:
+                if await accept_operation_solve_isolated(ctx, op) is not None:
                     accepted.append(op)
     if note:
         note(None)

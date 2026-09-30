@@ -811,15 +811,49 @@ These are recorded, not designed.
      rotating the previous snapshot to `.bak.1` (keep one). Orphan temporary
      files and sidecars are swept. Invalid snapshots are moved aside to
      `.invalid-<timestamp>` with their path logged, then replaced by a fresh copy.
+     Keep only the newest invalid snapshot and its own sidecars. At update start,
+     record only size, mtime and inode; ownership checks hash a snapshot only if
+     those cheap fields match the recorded identity.
    - The new build records `jobsUpgradeSnapshot` in this installation's update
      journal before committing schema 6: the creating transaction id and the
      snapshot's mtime, size, file identity and digest. Automatic rollback restores
-     only that transaction's unchanged snapshot, before relaunching the old build.
-     An explicit rollback that supersedes that update inherits this ownership.
-     The upgraded database and sidecars are preserved as `.schema-6.failed`.
+     only that transaction's unchanged snapshot, after successfully restoring the
+     code layers and before relaunching the old build. It never restores jobs when
+     no layer rollback occurs. An explicit rollback, including the desktop window
+     fallback, that supersedes that update inherits this ownership.
+   - Ownership is bounded: the snapshot must be at most **one hour** old, and no
+     job row may have a `created_at` or `updated_at` newer than the snapshot's mtime.
+     Otherwise automatic jobs restore is skipped and the reason is logged. This prevents
+     an old installed journal from replacing later work.
+   - Before moving any live DB file, flush the staged standalone snapshot and
+     write a `jobsRestore` **in-progress** marker to the journal. It records the
+     identities of the live main and each existing sidecar, the staged restore,
+     and a unique `.schema-6.failed-<timestamp>-<id>` recovery basename. Rename
+     the main and its sidecars into that set, flushing each preserved file and
+     directory. Replace the live main with the standalone snapshot atomically.
+     A replay compares file identities with the recorded original/restored sets;
+     it never infers completed restoration from `user_version` alone. It resumes
+     an interrupted set of renames, or refuses changed files for manual recovery.
+     Each rollback uses a new basename, preserving earlier sets without pairing
+     a new main with a previous rollback's WAL. These failed sets are retained
+     for manual recovery rather than pruned automatically.
+   - A jobs restore failure is logged with the manual recovery remedy and never
+     blocks code rollback. After a handled rename failure, moved files are copied
+     back into the live set while the preserved recovery copies remain. An
+     interrupted helper resumes the in-progress restore even if its layers were
+     already restored. The older release clearly refuses schema 6 until the
+     manual procedure below is completed. Lifecycle ordering remains required:
+     startup finishes recording the snapshot before health; the helper must own
+     a stopped installation before renaming its database files.
+   - **Manual jobs recovery:** stop this installation, preserve `simulations.db`
+     together with its matching `-wal`, `-shm` and `-journal` files (or the complete
+     `schema-6.failed-*` set recorded in `jobsRestore`). Choose the intended
+     pre-schema-6 snapshot, then replace `db/simulations.db` with that standalone
+     copy and move any live sidecars aside. Keep the preserved upgraded set for
+     recovery of newer jobs. Do not mix files from different preserved sets.
      A snapshot from an earlier transaction, or one changed afterwards, is never
-     automatically restored. Later Return to Stable requires the manual recovery
-     procedure if no matching transaction owns its snapshot.
+     automatically restored. Later Return to Stable uses this manual procedure
+     if no recent matching transaction owns its snapshot.
    - Tests: `test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot`
      runs the extracted v0.3.2 store after automatic restore and covers preexisting
      and modified snapshots. The restore/write/re-upgrade regression verifies

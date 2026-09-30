@@ -661,3 +661,19 @@ def test_snapshot_holds_the_upgrade_write_transaction(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_snapshot_before_upgrade", inside_transaction)
     store.initialize()
     store.close()
+
+
+def test_invalid_snapshot_pruning_keeps_only_newest_matching_sidecars(tmp_path):
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    target = store.rollback_snapshot_path
+    old = target.with_name(target.name + ".invalid-20000101000000")
+    old.write_bytes(b"old invalid")
+    Path(str(old) + "-wal").write_bytes(b"old WAL")
+    target.write_bytes(b"new invalid")
+    store.initialize()
+    assert not old.exists() and not Path(str(old) + "-wal").exists()
+    invalid = list(target.parent.glob(target.name + ".invalid-*"))
+    assert len(invalid) == 1 and invalid[0].read_bytes() == b"new invalid"
+    store.close()

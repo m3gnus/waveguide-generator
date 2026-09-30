@@ -2062,16 +2062,24 @@ def stage_recovery_helper(
     return destination
 
 
-def jobs_snapshot_identity(path: Path) -> dict[str, Any] | None:
-    """Identify one immutable snapshot, including its publication time."""
+JOBS_RESTORE_MAX_AGE_S = 60 * 60
+
+
+def jobs_snapshot_identity(path: Path, *, metadata_only: bool = False,
+                           expected: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
+    """Check cheap file identity first; hash only a candidate matching ownership."""
     try:
         info = path.stat()
-        digest = hashlib.sha256()
-        with path.open("rb") as stream:
-            for block in iter(lambda: stream.read(1024 * 1024), b""):
-                digest.update(block)
-        return {"mtimeNs": info.st_mtime_ns, "size": info.st_size,
-                "inode": info.st_ino, "sha256": digest.hexdigest()}
+        identity = {"mtimeNs": info.st_mtime_ns, "size": info.st_size, "inode": info.st_ino}
+        if expected is not None and any(identity[k] != expected.get(k) for k in identity):
+            return None
+        if not metadata_only:
+            digest = hashlib.sha256()
+            with path.open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            identity["sha256"] = digest.hexdigest()
+        return identity
     except FileNotFoundError:
         return None
 
@@ -2085,15 +2093,25 @@ def record_jobs_upgrade_snapshot(data_dir: Path, resources: Path, snapshot: Path
             or not journal_describes(journal, resources)
             or snapshot.resolve() != expected.resolve()):
         return
-    identity = jobs_snapshot_identity(snapshot)
-    if identity is None or identity == journal.get("jobsSnapshotBefore"):
+    metadata = jobs_snapshot_identity(snapshot, metadata_only=True)
+    before = journal.get("jobsSnapshotBefore")
+    if metadata is None or (before and all(metadata[k] == before.get(k) for k in metadata)):
         return
+    identity = jobs_snapshot_identity(snapshot)
     journal["jobsUpgradeSnapshot"] = {"transaction": journal["transaction"], "identity": identity}
     write_journal(data_dir, resources, journal)
 
 
+def sync_jobs_restore_file(path: Path, *, log: LogCallable | None = None) -> bool:
+    with path.open("r+b") as stream:
+        _fsync_descriptor(stream.fileno(), log=log)
+    return True
+
+
 def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCallable | None = None) -> None:
-    """Restore only the unchanged snapshot owned by the update being undone."""
+    """Restore a recent, owned snapshot, with a durable identity-based replay plan."""
+    from contextlib import closing
+
     journal = read_journal(data_dir, resources)
     if journal is None or not journal_describes(journal, resources):
         return
@@ -2102,31 +2120,100 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
         return
     db = Path(data_dir) / "db" / "simulations.db"
     snapshot = db.with_name(db.name + ".pre-schema-6.bak")
-    if jobs_snapshot_identity(snapshot) != owned.get("identity"):
-        _emit_log(log, f"Jobs rollback snapshot changed; not restoring {snapshot}.")
+    expected = owned.get("identity")
+    if not isinstance(expected, dict) or jobs_snapshot_identity(snapshot, expected=expected) != expected:
+        _emit_log(log, "Jobs rollback snapshot changed; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
         return
-    # The helper owns the stopped installation; the relaunch child has exited.
-    # Keep the upgraded file and sidecars together for later recovery.
-    from contextlib import closing
-    with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
-        if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
-            return  # A recovery replay already restored it.
-    temporary = db.with_name(".jobs-rollback-restore")
-    try:
+    plan = journal.get("jobsRestore")
+    if not isinstance(plan, dict):
+        age = time.time() - expected["mtimeNs"] / 1_000_000_000
+        if not 0 <= age <= JOBS_RESTORE_MAX_AGE_S:
+            _emit_log(log, "Jobs snapshot is outside the one-hour restore window; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+            return
+        with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
+                return  # No upgrade to undo; never used to decide an in-progress replay.
+            for created_at, updated_at in conn.execute("SELECT created_at, updated_at FROM simulation_jobs"):
+                if max(datetime.fromisoformat(value).timestamp() for value in (created_at, updated_at)) > expected["mtimeNs"] / 1_000_000_000:
+                    _emit_log(log, "Jobs DB contains rows newer than the snapshot; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+                    return
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f") + "-" + uuid.uuid4().hex
+        temporary = db.with_name(".jobs-rollback-restore-" + stamp)
         shutil.copyfile(snapshot, temporary)
-        sync_file(temporary, log=log)
-        preserved = db.with_name(db.name + ".schema-6.failed")
-        for suffix in ("", "-wal", "-shm", "-journal"):
-            source = Path(str(db) + suffix)
-            if source.exists():
-                shutil.copyfile(source, Path(str(preserved) + suffix))
-                if suffix:
-                    source.unlink()
-        os.replace(temporary, db)
+        if not sync_jobs_restore_file(temporary, log=log):
+            raise OSError("Could not flush the staged jobs restore")
+        plan = {"state": "in-progress", "temporary": temporary.name,
+                "preserved": db.name + ".schema-6.failed-" + stamp,
+                "restoredIdentity": jobs_snapshot_identity(temporary),
+                "sources": {suffix: jobs_snapshot_identity(Path(str(db) + suffix))
+                            for suffix in ("", "-wal", "-shm", "-journal")}}
+        journal["jobsRestore"] = plan
+        # Nothing in the live set moves until the replay plan is durable.
+        write_journal(data_dir, resources, journal)
+    temporary = db.parent / plan["temporary"]
+    preserved = db.parent / plan["preserved"]
+    restored_identity = plan["restoredIdentity"]
+    if jobs_snapshot_identity(db, expected=restored_identity) == restored_identity:
+        # Also finish durability after a crash immediately following replace.
+        for suffix, identity in plan["sources"].items():
+            if identity is not None and not sync_jobs_restore_file(Path(str(preserved) + suffix), log=log):
+                raise OSError("Could not flush the preserved jobs recovery set")
         sync_directory(db.parent, log=log)
-        _emit_log(log, f"Restored this update's jobs rollback snapshot: {snapshot}.")
-    finally:
-        temporary.unlink(missing_ok=True)
+        plan["state"] = "restored"
+        write_journal(data_dir, resources, journal)
+        return
+    if plan["state"] == "restored":
+        _emit_log(log, "Jobs DB changed after restore; skipping replay. Use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+        return
+    if jobs_snapshot_identity(temporary, expected=restored_identity) != restored_identity:
+        raise ApplyUpdateError("The jobs restore staging file changed; manual jobs recovery is required")
+    if plan["state"] == "failed":
+        _emit_log(log, "The jobs restore previously failed; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+        return
+    try:
+        # Move the main first. A crash leaves either the original set, an absent
+        # live main with the recovery set, or the complete restored standalone DB.
+        # In particular a schema-5 main missing its WAL is never called restored.
+        for suffix, identity in plan["sources"].items():
+            if identity is None:
+                continue
+            source, target = Path(str(db) + suffix), Path(str(preserved) + suffix)
+            if jobs_snapshot_identity(target, expected=identity) == identity:
+                if source.exists():
+                    raise ApplyUpdateError("Both live and preserved jobs files exist; manual jobs recovery is required")
+                if not sync_jobs_restore_file(target, log=log):
+                    raise OSError("Could not flush the preserved jobs recovery set")
+                continue
+            if jobs_snapshot_identity(source, expected=identity) != identity:
+                raise ApplyUpdateError("The jobs recovery set changed; manual jobs recovery is required")
+            os.replace(source, target)
+            if not sync_jobs_restore_file(target, log=log):
+                raise OSError("Could not flush the preserved jobs recovery set")
+            sync_directory(db.parent, log=log)
+        os.replace(temporary, db)
+    except Exception:
+        # A handled failure must not relaunch the older code with an absent
+        # main or a missing WAL. Reconstitute the original live set from any
+        # files already moved, while keeping those preserved recovery copies.
+        # A process crash instead leaves the in-progress marker for replay.
+        for suffix, identity in plan["sources"].items():
+            source, target = Path(str(db) + suffix), Path(str(preserved) + suffix)
+            if identity is not None and not source.exists() and target.exists():
+                recovery = db.with_name(".jobs-rollback-abort-" + uuid.uuid4().hex)
+                try:
+                    shutil.copyfile(target, recovery)
+                    sync_jobs_restore_file(recovery, log=log)
+                    os.replace(recovery, source)
+                    sync_directory(db.parent, log=log)
+                finally:
+                    recovery.unlink(missing_ok=True)
+        plan["state"] = "failed"
+        write_journal(data_dir, resources, journal)
+        raise
+    sync_directory(db.parent, log=log)
+    plan["state"] = "restored"
+    write_journal(data_dir, resources, journal)
+    _emit_log(log, f"Restored this update's jobs rollback snapshot; preserved the upgraded set at {preserved}.")
 
 
 def begin_update_transaction(
@@ -2184,7 +2271,7 @@ def begin_update_transaction(
         "startedAt": now,
         "updatedAt": now,
         "directorySync": DIRECTORY_SYNC_SUPPORTED,
-        "jobsSnapshotBefore": jobs_snapshot_identity(Path(data_dir) / "db" / "simulations.db.pre-schema-6.bak"),
+        "jobsSnapshotBefore": jobs_snapshot_identity(Path(data_dir) / "db" / "simulations.db.pre-schema-6.bak", metadata_only=True),
         "layers": [
             {
                 "name": target.name,
@@ -2882,13 +2969,6 @@ def restore_previous_generation(
         return RestoreOutcome(
             restored=False, seal_error=None, detail=detail, attempted=False
         )
-    if data_dir is not None:
-        try:
-            restore_jobs_upgrade_snapshot(data_dir, resources, log=log)
-        except (OSError, ValueError, sqlite3.Error) as exc:
-            detail = f"the jobs snapshot could not be restored before rolling back layers: {exc}"
-            record(ROLLING_BACK_STATE, detail)
-            return RestoreOutcome(restored=False, seal_error=None, detail=detail)
     pending = [
         name for name in BUNDLE_LAYERS if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
     ] + [
@@ -2896,14 +2976,24 @@ def restore_previous_generation(
         for path in sorted(resources.glob(f"*{PREVIOUS_SUFFIX}"))
         if path.is_file() or path.is_symlink()
     ]
-    if not pending:
+    replay = read_journal(data_dir, resources) if data_dir is not None else None
+    jobs_plan = replay.get("jobsRestore") if replay else None
+    resuming_jobs = isinstance(jobs_plan, dict) and jobs_plan.get("state") == "in-progress"
+    if not pending and not resuming_jobs:
         detail = "no previous layer or launcher file was available to restore"
         record(ROLLING_BACK_STATE, detail)
         return RestoreOutcome(restored=False, seal_error=None, detail=detail)
-    if not rollback_previous_layers(resources, renamer=renamer, log=log):
+    if pending and not rollback_previous_layers(resources, renamer=renamer, log=log):
         detail = "the previous version could not be fully restored"
         record(ROLLING_BACK_STATE, detail)
         return RestoreOutcome(restored=False, seal_error=None, detail=detail)
+    if data_dir is not None:
+        try:
+            restore_jobs_upgrade_snapshot(data_dir, resources, log=log)
+        except Exception as exc:
+            # The older code must still be restored if jobs recovery fails.
+            # It refuses schema 6 clearly; the preserved set remains recoverable.
+            _emit_log(log, f"Jobs snapshot restore failed: {exc}. Use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
     if bundle is not None:
         # The missing-layer path has always re-sealed here; the mixed-generation
         # path did not, which left a macOS bundle whose ad-hoc signature no

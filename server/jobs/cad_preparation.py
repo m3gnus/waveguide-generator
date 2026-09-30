@@ -392,6 +392,10 @@ def prepare_job_sync(
             return run.refuse("preparation_failed", DAMAGED_COPY_MESSAGE)
         run.advance(cad={"snapshot": _snapshot_record(store, retained)})
     if retained is None:
+        if intent.bundle_path.startswith("ingest/"):
+            # A manual solve has only WG's retained copy. Losing it is a
+            # recoverable damaged-copy refusal, not an invalid Fusion return.
+            return run.refuse("preparation_failed", DAMAGED_COPY_MESSAGE)
         try:
             retained = _retain_from_return(context, ledger)
         except SnapshotUnavailable as exc:
@@ -740,6 +744,7 @@ async def run_cad_preparation(port: CadJobPort, host: CadPreparationHost, job_id
     port.publish(event)
     logger.info("CAD job %s (operation %s): the lane took it.", job_id, intent.operation_id)
     cad = dict(cad_of(row))
+    cad["last_stage"] = STAGE_VALIDATING
     run = _Run(port=port, job_id=job_id, intent=intent, cad=cad)
     try:
         step, value = await asyncio.to_thread(prepare_job_sync, host, run, intent)

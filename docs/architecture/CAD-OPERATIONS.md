@@ -784,7 +784,9 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   in its installation's transaction journal before committing schema 6. The helper
   restores only that transaction's snapshot when its mtime and identity still match,
   before relaunching the old release. The upgraded file and sidecars are preserved
-  as `.schema-6.failed`. Earlier or changed snapshots are never restored automatically.
+  as a unique `.schema-6.failed-<timestamp>` set. Automatic restore requires a snapshot
+  at most one hour old and no job rows created or updated after it; earlier, changed or stale
+  snapshots are never restored automatically.
   See UPDATE-TRANSACTION-CONTRACT.md §6.
 - **Manual rollback procedure.** Stop WG and every installation using this data directory.
   Keep the upgraded database and its `-wal`/`-shm` sidecars together as recovery
@@ -946,9 +948,10 @@ asked" or silently invents a new request ID.
    - Not readable now (not in the WGLink folder yet, a file another process holds, a drive
      that is not mounted): the claim stays, and the next pass tries again. After 30
      passes (about half a minute while passes succeed; the loop backs off while they
-     fail), WG goes on anyway; the operation then waits for its return
-     (`preparation_failed`), as it would have without the claim. A claim that waits never
-     holds up the files behind it, and its operation is not started while it waits, even
+     fail), WG accepts a job and goes on. The preparation lane refuses that job
+     at `validating` with `preparation_failed` and the specific return-unavailable
+     message. An explicit Prepare press after the bound does the same. A claim that
+     waits never holds up the files behind it, and its operation is not started while it waits, even
      by a pass that stops before it reaches the claim.
 5. **Acknowledge**: publish the outcome as a file (see "Request acknowledgement file").
    It is written after the operation is durable and before the claim is deleted. If it
@@ -1106,9 +1109,11 @@ file does, and is `prepare_and_solve` or `receive_snapshot`.
   the snapshot is retained, or once it can never be retained as named (preparation then
   refuses it). A return that cannot be read now is answered 503 and retried by the
   add-in. The first such answer sets a deadline 30 s later; a retry at or after it is
-  acknowledged (200), and a solve then waits for its return (`preparation_failed`), as a
-  file claim does after its passes. The deadline is remembered for five minutes past
-  it; a retry later than that starts a new 30 s bound.
+  acknowledged (200), and a solve is admitted as a job. Preparation refuses it at
+  `validating` with `preparation_failed` and the specific return-unavailable message,
+  as a file claim does after its passes. Prepare after the bound has the same visible
+  outcome. A refused or dismissed job is never rerun by a delivery pass. The deadline
+  is remembered for five minutes past it; a retry later than that starts a new 30 s bound.
 - **Held while in flight.** Before the route accepts, it records a hold on the operation,
   apart from the file claims' waits. The hold ends with a 200. A 503 keeps it until its
   deadline, after which the operation is no longer held (the delivery pass may start it)

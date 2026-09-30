@@ -377,6 +377,20 @@ def live_held_operation_ids() -> frozenset[str]:
         )
 
 
+def waiting_claim_operation_ids(data_dir: Path) -> frozenset[str]:
+    """Startup respects persisted claims even before collection populates its holds."""
+    folders = (Path(data_dir) / IPC_SUBDIRECTORY, Path(data_dir) / IPC_SUBDIRECTORY / SOLVE_REQUESTS_DIRECTORY)
+    waiting = set()
+    for folder in folders:
+        for claim in folder.glob(f"{CLAIM_PREFIX}*.json"):
+            payload = _read_payload(claim)
+            if isinstance(payload, Mapping):
+                operation_id = payload.get("commandId") or payload.get("operationId")
+                if isinstance(operation_id, str):
+                    waiting.add(operation_id)
+    return frozenset(waiting)
+
+
 LIVE_ACCEPTED = "accepted"
 LIVE_CONFLICT = "conflict"
 LIVE_TRANSIENT = "transient"

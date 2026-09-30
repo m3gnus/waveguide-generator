@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import sqlite3
@@ -1375,8 +1376,9 @@ class CadLinkStore:
             timestamps = [datetime.now(timezone.utc), datetime.fromisoformat(updated_at).astimezone(timezone.utc)]
             if row:
                 timestamps.append(datetime.fromisoformat(row["updated_at"]).astimezone(timezone.utc))
+            latest = datetime.fromtimestamp(math.ceil(max(timestamps).timestamp()), timezone.utc)
             conn.execute("UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?",
-                         (max(timestamps).isoformat(), operation_id))
+                         (latest.strftime("%Y-%m-%dT%H:%M:%SZ"), operation_id))
         self.make_durable()
 
     def request_cancel(self, operation_id: str) -> dict[str, Any] | None:

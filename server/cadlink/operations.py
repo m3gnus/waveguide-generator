@@ -92,6 +92,7 @@ REASON_CODES: Mapping[str, str] = {
     "target_not_exact": REJECTED,
     # A snapshot that fails verification, or contradicts the operation's inputs.
     "snapshot_invalid": REJECTED,
+    "request_payload_invalid": REJECTED,
     # A received snapshot whose bundle stayed unreadable past its bound.
     "snapshot_unavailable": REJECTED,
     # Cannot proceed now: each waits for the user, and the operation is kept.
