@@ -213,6 +213,29 @@ begin
   end;
 end;
 
+function ValidateWgLinkAddInsOverride(Silent: Boolean): Boolean;
+var
+  OverrideDir, Reason: String;
+begin
+  Result := True;
+  if not WgLinkAddInsOverrideSpecified() then
+    exit;
+  OverrideDir := ExpandConstant('{param:WGLINKADDINSDIR|}');
+  if (OverrideDir <> '') and DirExists(OverrideDir) then
+    exit;
+  Reason := 'Refusing /WGLINKADDINSDIR: supply an existing directory. No files have been changed. Value: ' + OverrideDir;
+  Log(Reason);
+  if not Silent then
+    MsgBox(Reason, mbError, MB_OK);
+  Result := False;
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  { Initialization refusal returns a nonzero exit before any uninstall deletion. }
+  Result := ValidateWgLinkAddInsOverride(UninstallSilent());
+end;
+
 function WgLinkAddInsDirectory(): String;
 var
   OverrideDir, Legacy, Current: String;
@@ -617,7 +640,9 @@ function InitializeSetup(): Boolean;
 var
   Dir: String;
 begin
-  Result := True;
+  Result := ValidateWgLinkAddInsOverride(WizardSilent());
+  if not Result then
+    exit;
   Dir := ExpandConstant('{param:DIR|}');
   if (Dir <> '') and (Length(Dir) > MaxRootLength()) then
   begin

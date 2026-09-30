@@ -3456,3 +3456,104 @@ def test_windows_server_verification_retires_provisioning_children(
         builder.verify_bundle(bundle, scratch, platform_name=WINDOWS_PLATFORM)
     assert not child_alive, "parent-only termination leaves the provisioning child alive"
     assert process.waits, "cleanup must reap the verification parent"
+
+
+@pytest.mark.parametrize("platform_name", [build_bundle.MACOS_PLATFORM, WINDOWS_PLATFORM, LINUX_PLATFORM])
+def test_every_verification_child_forces_private_data_and_addins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    """Capture every child, including probes, seal check and Windows tree cleanup."""
+    ambient = tmp_path / "ambient"
+    for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR"):
+        monkeypatch.setenv(name, str(ambient / name))
+    bundle = tmp_path / "bundle"
+    resources = bundle / "Contents" / "Resources" if platform_name == build_bundle.MACOS_PLATFORM else bundle
+    (resources / "app").mkdir(parents=True)
+    scratch = tmp_path / "verification"
+    scratch.mkdir()
+    children = []
+    processes = []
+
+    def check(command, options):
+        environment = options["env"]
+        for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR"):
+            directory = Path(environment[name])
+            assert directory.is_dir()
+            assert directory.is_relative_to(scratch)
+            assert not directory.is_relative_to(ambient)
+        if "--data-dir" in command:
+            assert command[command.index("--data-dir") + 1] == environment[DATA_DIR_ENV]
+        children.append(command)
+
+    def runner(command, **options):
+        check(command, options)
+        if "-c" in command:
+            (scratch / "windows-launcher-probe.txt").write_text("ready")
+        if command[0] == "taskkill":
+            next(p for p in processes if str(p.pid) == command[2]).returncode = 0
+        return subprocess.CompletedProcess(command, 0, "Metal (Apple Silicon): ready\nbempp (cross-platform): ready", "")
+
+    def process_factory(command, **options):
+        check(command, options)
+        process = _FakeLauncherProcess()
+        process.pid += len(processes)
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(BundleBuilder, "_free_port", staticmethod(lambda: 43110))
+    monkeypatch.setattr(BundleBuilder, "_http_status", staticmethod(lambda _url: 200))
+    builder = BundleBuilder(tmp_path, runner=runner, process_factory=process_factory)
+    builder.verify_bundle(bundle, scratch, platform_name=platform_name)
+    assert len(processes) == (1 if platform_name == build_bundle.MACOS_PLATFORM else 2)
+    assert len(children) == (6 if platform_name == WINDOWS_PLATFORM else 3)
+    assert not ambient.exists()
+
+
+@pytest.mark.parametrize("platform_name", [WINDOWS_PLATFORM, LINUX_PLATFORM])
+def test_standalone_bare_launcher_verification_replaces_caller_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
+) -> None:
+    process = _FakeLauncherProcess()
+    builder, launcher, scratch, starts, _commands = _bare_launch_harness(
+        tmp_path, monkeypatch, process=process, status=200
+    )
+    verify = builder.verify_windows_bare_launch if platform_name == WINDOWS_PLATFORM else builder.verify_linux_bare_launch
+    verify(launcher, scratch=scratch, environment={
+        DATA_DIR_ENV: str(tmp_path / "external-data"),
+        "WG2_FUSION_ADDINS_DIR": str(tmp_path / "external-addins"),
+    })
+    environment = starts[0][1]["env"]
+    for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR"):
+        assert Path(environment[name]).is_dir()
+        assert Path(environment[name]).is_relative_to(scratch)
+
+
+def test_build_package_uses_private_state_even_with_installed_ambient_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    work = tmp_path / "build"
+    app = work / "app"
+    app.mkdir(parents=True)
+    external = tmp_path / "external"
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv(DATA_DIR_ENV, str(external))
+    states = []
+
+    def ensure_package(_root, *, state):
+        assert state.is_dir() and state.is_relative_to(work)
+        assert not state.is_relative_to(app)  # The private cache must not ship.
+        states.append(state)
+        package = state / "wglink-pinned.zip"
+        package.write_bytes(b"pinned-package")
+        return package
+
+    installer = SimpleNamespace(
+        ensure_package=ensure_package,
+        shipped_package=lambda *_a: Path("wglink-pinned.zip"),
+    )
+    builder = SimpleNamespace(source_spec=lambda _p: {"commit": "a" * 40}, declared_version=lambda _p: "1.2.3")
+    monkeypatch.setattr(build_bundle, "_load_script", lambda _p, name: installer if name == "wg_install_wglink" else builder)
+    shipped = build_bundle.install_wglink_package(app, repo_root=tmp_path)
+    assert shipped.read_bytes() == b"pinned-package"
+    assert len(states) == 1 and not states[0].exists()
+    assert not external.exists()

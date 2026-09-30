@@ -240,6 +240,13 @@ working-tree edits, tests, caches, and checkout line-ending filters do not enter
 app layer. The macOS build
 requires Apple Silicon macOS, `uv`, Swift, `codesign`, and `hdiutil`.
 
+Verification now creates private data and Fusion AddIns directories and forces both
+`WG2_DATA_DIR` and `WG2_FUSION_ADDINS_DIR` into every verification child environment,
+replacing ambient overrides. Before this fix, a local build with verification enabled
+on a machine with Fusion could touch the real AddIns folder during server startup.
+Until you use a builder containing this fix, pass `--skip-verify` or set
+`WG2_FUSION_ADDINS_DIR` to a private folder before building.
+
 Release builds pass the checksum file beside the SPA tarball automatically:
 
 ```bash

@@ -713,15 +713,20 @@ def install_wglink_package(
     )
     spec = builder.source_spec(repo_root / "integrations" / "wglink" / "source.json")
     version = builder.declared_version(repo_root / "shared" / "version.json")
-    package = installer.ensure_package(repo_root)
-    expected = installer.shipped_package(repo_root, version, str(spec["commit"])).name
-    if package.name != expected:
-        raise BundleError(
-            f"WGLink package {package.name} does not match the pin {expected}"
-        )
-    destination = app_root / "integrations" / "wglink" / "packages" / package.name
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(package, destination)
+    destination = app_root / "integrations" / "wglink" / "packages"
+    # state_root can otherwise fall back to shared user data when an ambient
+    # WG2_BUNDLE marks this build as installed, or the checkout is unwritable.
+    # Package construction owns a private cache alongside the staged app.
+    with tempfile.TemporaryDirectory(prefix="wglink-package-", dir=app_root.parent) as state:
+        package = installer.ensure_package(repo_root, state=Path(state))
+        expected = installer.shipped_package(repo_root, version, str(spec["commit"])).name
+        if package.name != expected:
+            raise BundleError(
+                f"WGLink package {package.name} does not match the pin {expected}"
+            )
+        destination = destination / package.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(package, destination)
     # tree_digest takes the executable bit from Git, and this file is not in
     # Git; a mode with any x bit would fail the layer's own mode assertion.
     destination.chmod(0o644)
@@ -1782,12 +1787,13 @@ class BundleBuilder:
         *,
         cwd: Path | None = None,
         capture: bool = False,
+        environment: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[Any]:
         print("+ " + shlex.join(command), flush=True)
         result = self.runner(
             list(command),
             cwd=cwd or self.repo_root,
-            env=self.command_environment,
+            env=self.command_environment if environment is None else environment,
             check=False,
             capture_output=capture,
             text=capture,
@@ -2528,11 +2534,35 @@ Nothing is sent anywhere; it runs entirely on your machine.
         except (OSError, urllib.error.URLError):
             return None
 
+    @staticmethod
+    def verification_environment(
+        scratch: Path,
+        environment: dict[str, str],
+        *,
+        data_name: str = "data",
+    ) -> dict[str, str]:
+        """Force both side-effect roots into the build's private work area.
+
+        Serve publishes its CLI data directory to WG2_DATA_DIR, while startup
+        WGLink activation resolves AddIns from WG2_FUSION_ADDINS_DIR. Set both
+        before starting any child, including interpreter and backend probes.
+        Never trust the caller's overrides, even for standalone launcher checks.
+        """
+        private = dict(environment)
+        for name, directory in (
+            (DATA_DIR_ENV, scratch / data_name),
+            ("WG2_FUSION_ADDINS_DIR", scratch / "fusion-addins"),
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
+            private[name] = str(directory.resolve())
+        return private
+
     def _terminate_process_tree(
         self,
         process: subprocess.Popen[str],
         *,
         platform_name: str,
+        environment: dict[str, str],
     ) -> None:
         """Stop a verification process together with everything it started.
 
@@ -2553,6 +2583,7 @@ Nothing is sent anywhere; it runs entirely on your machine.
                     capture_output=True,
                     text=True,
                     timeout=PROCESS_TREE_KILL_TIMEOUT,
+                    env=environment,
                 )
             except (OSError, subprocess.SubprocessError):
                 pass
@@ -2591,15 +2622,15 @@ Nothing is sent anywhere; it runs entirely on your machine.
         """
 
         port = self._free_port()
-        data_dir = scratch / "bare-launch-data"
-        data_dir.mkdir(parents=True, exist_ok=True)
+        launch_environment = self.verification_environment(
+            scratch, environment, data_name="bare-launch-data"
+        )
+        data_dir = Path(launch_environment[DATA_DIR_ENV])
         log_path = scratch / "bare-launcher-verification.log"
-        launch_environment = dict(environment)
         # Setting these here would hide the very failure this gate exists to
         # catch: it is the bundled bootstrap's job to establish them.
         launch_environment.pop("WG2_BUNDLE", None)
         launch_environment.pop("WG2_APP_ROOT", None)
-        launch_environment[DATA_DIR_ENV] = str(data_dir)
         launch_environment[PORT_ENV] = str(port)
         print(
             f"+ {shlex.join([str(launcher)])}  "
@@ -2656,7 +2687,9 @@ Nothing is sent anywhere; it runs entirely on your machine.
                     "/health through the bundled bootstrap."
                 )
             finally:
-                self._terminate_process_tree(process, platform_name=WINDOWS_PLATFORM)
+                self._terminate_process_tree(
+                    process, platform_name=WINDOWS_PLATFORM, environment=launch_environment
+                )
 
     def verify_linux_bare_launch(
         self,
@@ -2687,10 +2720,11 @@ Nothing is sent anywhere; it runs entirely on your machine.
         """
 
         port = self._free_port()
-        data_dir = scratch / "bare-launch-data"
-        data_dir.mkdir(parents=True, exist_ok=True)
+        launch_environment = self.verification_environment(
+            scratch, environment, data_name="bare-launch-data"
+        )
+        data_dir = Path(launch_environment[DATA_DIR_ENV])
         log_path = scratch / "bare-launcher-verification.log"
-        launch_environment = dict(environment)
         launch_environment.pop("WG2_BUNDLE", None)
         launch_environment.pop("WG2_APP_ROOT", None)
         command = [
@@ -2746,7 +2780,9 @@ Nothing is sent anywhere; it runs entirely on your machine.
                     "/health from the bundled runtime."
                 )
             finally:
-                self._terminate_process_tree(process, platform_name=LINUX_PLATFORM)
+                self._terminate_process_tree(
+                    process, platform_name=LINUX_PLATFORM, environment=launch_environment
+                )
 
     def verify_bundle(
         self,
@@ -2768,7 +2804,7 @@ Nothing is sent anywhere; it runs entirely on your machine.
             if platform_name == WINDOWS_PLATFORM
             else resources / "runtime" / "bin" / "python3.13"
         )
-        environment = dict(self.command_environment)
+        environment = self.verification_environment(scratch, self.command_environment)
         environment.pop("PYTHONHOME", None)
         environment.pop("PYTHONPATH", None)
         environment["WG2_BUNDLE"] = "1"
@@ -2828,7 +2864,7 @@ Nothing is sent anywhere; it runs entirely on your machine.
             )
 
         port = self._free_port()
-        data_dir = scratch / "data"
+        data_dir = Path(environment[DATA_DIR_ENV])
         log_path = scratch / "server-verification.log"
         command = [
             str(python),
@@ -2888,7 +2924,9 @@ Nothing is sent anywhere; it runs entirely on your machine.
                     # The production server can start Julia provisioning before
                     # serving /health. Kill its tree while the parent is alive;
                     # terminating only Python can leave a child holding app/.
-                    self._terminate_process_tree(process, platform_name=platform_name)
+                    self._terminate_process_tree(
+                        process, platform_name=platform_name, environment=environment
+                    )
                 elif process.poll() is None:
                     process.terminate()
                     try:
@@ -2923,6 +2961,7 @@ Nothing is sent anywhere; it runs entirely on your machine.
             self.run_command(
                 ["codesign", "--verify", "--deep", "--strict", str(copied_bundle)],
                 capture=True,
+                environment=environment,
             )
             print("Seal verification: the bundle is unchanged after running.")
 
