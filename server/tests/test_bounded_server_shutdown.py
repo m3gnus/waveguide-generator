@@ -610,12 +610,43 @@ def test_a_started_server_reconciles_the_add_in_in_its_sandbox(
     saying where it looked.
     """
 
+    from server.cadlink.usage import record_usage
+
+    # Reconciliation is for CAD Link users only, so the proof records that use.
+    # The test below is the other half: no record, nothing touched.
+    record_usage(tmp_path / "data", "install-action")
     server = _launch(tmp_path, started, block=False)
     lock = server.addins_dir / ".WGLink-install.lock"
     _wait_for(lock.is_file, 60.0, "the add-in reconciliation to lock its sandbox", server)
 
     stopped_at = server.request_stop()
     _wait_for_exit(server, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+
+
+def test_a_started_server_leaves_the_add_ins_alone_until_cad_link_is_used(
+    tmp_path: Path, started: list[subprocess.Popen[bytes]]
+) -> None:
+    """A start with no CAD Link use decides, says so, and touches nothing in AddIns.
+
+    The log line is the child saying its pass ran and what it decided; without
+    it an empty directory would only mean the pass had not run yet.
+    """
+
+    server = _launch(tmp_path, started, block=False)
+    log = server.data_dir / "logs" / "server.log"
+
+    def decided() -> bool:
+        try:
+            return "WGLink activation: not-in-use" in log.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return False
+
+    _wait_for(decided, 60.0, "the start-up pass to decide CAD Link is not in use", server)
+    assert list(server.addins_dir.iterdir()) == []
+
+    stopped_at = server.request_stop()
+    _wait_for_exit(server, stopped_at, LAUNCHER_GRACE_SECONDS, "a stop request")
+    assert list(server.addins_dir.iterdir()) == []
 
 
 def test_a_quit_cut_short_mid_budget_still_reads_as_interrupted_by_quit(

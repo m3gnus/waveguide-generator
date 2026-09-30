@@ -330,6 +330,17 @@ def accept_delivery(
     target, inputs = item.request()
     digest = request_digest(item.kind, target, inputs)
     row, result = store.accept_operation(item.operation_id, item.kind, digest, target, inputs)
+    if result != "conflict" and store.data_root is not None:
+        # Only this acceptance boundary knows it came through the add-in's
+        # inbox/live transport. Ingests and ordinary operations do not.
+        # The operation is already stored: a record that cannot be
+        # written must not fail the delivery. The next one writes it.
+        from server.cadlink.usage import record_usage
+
+        try:
+            record_usage(store.data_root, "addin-delivery")
+        except OSError as exc:
+            logger.warning("Could not record CAD Link use for WGLink activation: %s", exc)
     if retain is None:
         return DeliveryAnswer(row=row, result=result, digest=digest, retention=None)
     retention = retain(item.operation_id)

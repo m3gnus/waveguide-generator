@@ -1,13 +1,15 @@
-"""WGLink is always the add-in this build ships, except two installs that are not WG's to change."""
+"""WGLink activation requires CAD Link use and preserves other owners' copies."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 
 import pytest
 
 from server.cadlink import addin_update
+from server.cadlink.usage import cadlink_in_use, record_usage
 
 
 @pytest.fixture(autouse=True)
@@ -22,6 +24,15 @@ def _no_live_fusion_or_shared_state(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(addin_update, "_running_builds", {})
     monkeypatch.setattr(addin_update, "_report", None)
     monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
+    record_usage(tmp_path / "data", "install-action")
+
+
+def _cad_mode(data: Path, mode: str = "cad") -> None:
+    data.mkdir(parents=True, exist_ok=True)
+    (data / "ui_settings.json").write_text(
+        json.dumps({"schemaVersion": 1, "namespaces": {"workspaceMode": mode}}),
+        encoding="utf-8",
+    )
 
 
 def _wg_root(tmp_path: Path, commit: str) -> Path:
@@ -148,7 +159,7 @@ def _recording_installer(monkeypatch, addins: Path, calls: list[dict[str, object
 def test_an_add_in_no_waveguide_generator_manages_is_replaced(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """Decision 4: WG always uses the add-in it ships.
+    """A CAD Link user gets the add-in WG ships.
 
     A WGLink with no WG marker was copied in by hand, before WG managed it; it
     is too old for this WG to talk to. Leaving it would leave the user with a
@@ -191,7 +202,7 @@ def test_an_unmanaged_add_in_is_left_when_no_verified_package_ships(
     assert calls == [] and (target / "WGLink.py").is_file()
 
 
-def test_an_absent_add_in_stays_absent_only_when_asked(tmp_path: Path) -> None:
+def test_a_cad_user_can_still_decline_an_absent_add_in(tmp_path: Path) -> None:
     root = _wg_root(tmp_path, "a" * 40)
 
     assert addin_update.refresh_wglink(
@@ -498,3 +509,53 @@ def test_the_startup_pass_runs_off_the_startup_thread(monkeypatch) -> None:
 
     asyncio.run(drive())
     assert seen == ["ran"]
+
+
+@pytest.mark.parametrize("owned", [False, True])
+def test_cadlink_usage_from_owned_addin(tmp_path: Path, owned: bool) -> None:
+    data = tmp_path / "unused"
+    assert cadlink_in_use(data_dir=data, owned_addin=owned) is owned
+    assert not data.exists()
+
+
+@pytest.mark.parametrize("mode", ["cad", "parametric", "fusion360", None, True])
+def test_saved_mode_never_grants_usage(tmp_path: Path, mode) -> None:
+    data = tmp_path / "mode"
+    _cad_mode(data, mode)
+    before = (data / "ui_settings.json").read_bytes()
+    assert cadlink_in_use(data_dir=data, owned_addin=False) is False
+    assert (data / "ui_settings.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("table", ["exports", "ingests", "cad_operations", "designs", "onshape_links"])
+@pytest.mark.parametrize("has_record", [False, True])
+def test_cadlink_usage_from_records(tmp_path: Path, table: str, has_record: bool) -> None:
+    data = tmp_path / "records"
+    database = data / "db" / "cadlink.db"
+    database.parent.mkdir(parents=True)
+    # A read probe must also work with older schemas that lack other tables.
+    with sqlite3.connect(database) as conn:
+        conn.execute(f"CREATE TABLE {table} (id TEXT)")
+        if has_record:
+            conn.execute(f"INSERT INTO {table} VALUES ('record')")
+    before = database.read_bytes()
+    assert cadlink_in_use(data_dir=data, owned_addin=False) is False
+    assert database.read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", ['{"namespaces":{"preferences":"fusion360"}}', "{", "null"])
+def test_default_or_unreadable_settings_do_not_grant_usage(tmp_path: Path, raw: str) -> None:
+    data = tmp_path / "bad"
+    data.mkdir()
+    (data / "ui_settings.json").write_text(raw, encoding="utf-8")
+    assert not cadlink_in_use(data_dir=data, owned_addin=False)
+    assert (data / "ui_settings.json").read_text(encoding="utf-8") == raw
+
+
+def test_unreadable_database_does_not_grant_usage(tmp_path: Path) -> None:
+    data = tmp_path / "bad-db"
+    (data / "db").mkdir(parents=True)
+    database = data / "db" / "cadlink.db"
+    database.write_bytes(b"not sqlite")
+    assert not cadlink_in_use(data_dir=data, owned_addin=False)
+    assert database.read_bytes() == b"not sqlite"

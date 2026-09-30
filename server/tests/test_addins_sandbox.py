@@ -81,7 +81,9 @@ def test_the_installer_resolves_the_override_before_the_home_directory(tmp_path:
     )
 
 
-def test_the_startup_reconciliation_works_in_the_sandbox(root_conftest: ModuleType) -> None:
+def test_the_startup_reconciliation_works_in_the_sandbox(
+    root_conftest: ModuleType, tmp_path: Path
+) -> None:
     """The positive proof: the lock appears in the sandbox, nothing reached home.
 
     ``refresh_wglink`` directly, with no folder: the suite turns the startup
@@ -96,7 +98,11 @@ def test_the_startup_reconciliation_works_in_the_sandbox(root_conftest: ModuleTy
     lock.unlink(missing_ok=True)
     touched_before = len(root_conftest.REAL_ADDINS_TOUCHES)
 
-    verdict, detail = addin_update.refresh_wglink(install_absent=False)
+    from server.cadlink.usage import record_usage
+
+    # The positive lock proof needs a CAD Link user; other users never lock.
+    record_usage(tmp_path, "install-action")
+    verdict, detail = addin_update.refresh_wglink(install_absent=False, data_dir=tmp_path)
 
     assert root_conftest.REAL_ADDINS_TOUCHES[touched_before:] == []
     assert verdict == "absent", detail

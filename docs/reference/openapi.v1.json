@@ -9327,6 +9327,32 @@
         ]
       }
     },
+    "/api/cadlink/install-addin": {
+      "post": {
+        "description": "Record the explicit choice even if activation must wait or cannot install.",
+        "operationId": "post_install_addin_api_cadlink_install_addin_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Post Install Addin Api Cadlink Install Addin Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Post Install Addin",
+        "tags": [
+          "cadlink"
+        ]
+      }
+    },
     "/api/cadlink/live/deliveries": {
       "post": {
         "description": "Accept or recover one delivered operation once its snapshot is retained.",

@@ -478,3 +478,8 @@ export function ingestReturn(
 export function getIngest(id: string, fetcher: typeof fetch = fetch): Promise<CadReturnIngestRecord> {
   return jsonRequest(`/api/cadlink/ingest/${encodeURIComponent(id)}`, undefined, fetcher);
 }
+
+/** Explicit install/repair choice; usable before any CAD Link setup or delivery. */
+export function installCadLinkAddin(fetcher: typeof fetch = fetch): Promise<{ verdict: string; detail: string }> {
+  return jsonRequest('/api/cadlink/install-addin', { method: 'POST' }, fetcher);
+}

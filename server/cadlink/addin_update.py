@@ -12,12 +12,15 @@ This closes that: compare the commit recorded in the installed add-in's marker
 with the pin, and update when they differ. A release ships the pinned package
 inside the app layer, so the update is a local file copy and needs no network.
 
-WG always uses the add-in it ships: WG and WGLink speak one delivery version
-and WG refuses an older add-in (docs/architecture/CAD-OPERATIONS.md, "Delivery
+For CAD Link users, WG uses the add-in it ships: WG and WGLink speak one delivery
+version and WG refuses an older add-in (docs/architecture/CAD-OPERATIONS.md, "Delivery
 version"). So WG also installs the shipped package where Fusion has no WGLink
 yet, and replaces a WGLink that no Waveguide Generator manages -- one copied in
 by hand, from before WG managed it. Both happen only where Fusion is installed
 for this user, and only from the verified package this build ships.
+Automatic activation requires durable CAD Link use (:func:`cadlink_in_use`),
+including an add-in this installation already owns. Other users' AddIns are
+untouched, including unmanaged copies.
 
 Two installs are deliberately left alone, each for its own reason. One synced
 by ``dev_sync_wglink.py`` belongs to whoever is editing it. One whose marker
@@ -97,6 +100,7 @@ from server.cadlink.fusion_status import (
     read_fusion_status,
 )
 from server.cadlink.live.registry import registry_for
+from server.cadlink.usage import cadlink_in_use
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.warmup import DRAIN_TIMEOUT_SECONDS, BackgroundWarmup
 
@@ -140,7 +144,9 @@ _CHANGE_VERDICTS = {"install": "installed", "update": "updated", "replace": "rep
 #: What the target was when a change was staged, recorded as its ownership.
 _OWNERSHIP = {"install": "absent", "update": "managed", "replace": "unmanaged"}
 _BUILD_KEYS = ("version", "commit", "runtimeId")
-_NEWS = ACTIVATED_VERDICTS | {"failed", "pending", "superseded", "awaiting-startup"}
+#: "not-in-use" is said once per start, so a log can answer why WG left
+#: Fusion's add-in alone.
+_NEWS = ACTIVATED_VERDICTS | {"failed", "pending", "superseded", "awaiting-startup", "not-in-use"}
 
 
 @dataclass(frozen=True)
@@ -827,7 +833,8 @@ def activate_wglink(
 ) -> Activation:
     """One activation pass: bring Fusion's WGLink to this build's pin. Never raises.
 
-    An absent add-in is installed from the verified shipped package where
+    Only CAD Link users qualify, as decided by :func:`cadlink_in_use` on every
+    pass. An absent add-in is installed from the verified shipped package where
     Fusion is installed for this user; ``install_absent=False`` leaves it
     absent. An explicit ``addins_dir`` is treated as a test/setup override of
     that check. ``fusion_running`` answers ``True`` or ``"running"``, ``False``
@@ -879,6 +886,28 @@ def _activate(
     if directory is None:
         return Activation("unsupported", "Fusion is not supported on this platform")
 
+    addins = Path(directory).expanduser().resolve()
+    target = addins / "WGLink"
+
+    def in_use() -> bool:
+        owned = installer.is_managed_target(target, root)
+        if not owned:
+            # A crash can leave our add-in in the transaction workspace.
+            # Validate ownership without recovering (which changes AddIns).
+            journal = addins / installer.TRANSACTION_JOURNAL
+            if journal.exists():
+                try:
+                    installer._read_transaction(journal, addins, root)
+                    owned = True
+                except Exception:  # noqa: BLE001 - invalid evidence grants nothing
+                    pass
+        return cadlink_in_use(data_dir=data, owned_addin=owned)
+
+    unused = Activation("not-in-use", "WGLink automatic activation is off until CAD Link is used")
+    if not in_use():
+        # Even the operation lock creates a file in Fusion's AddIns folder.
+        return unused
+
     ready, why = is_confirmed()
     if not ready:
         return Activation(
@@ -888,8 +917,6 @@ def _activate(
     # The build this process runs, captured the first time anything asks. What
     # is on disk is read, and compared with it, only where it decides.
     started = running_build(root)
-    addins = Path(directory).expanduser().resolve()
-    target = addins / "WGLink"
     record_file = pending_path(data, root)
     bundled = bool(getattr(installer, "_bundled", lambda: False)())
     superseded: list[str] = []
@@ -996,6 +1023,8 @@ def _activate(
             return finish(
                 "awaiting-startup", f"WGLink is changed only once this start is confirmed: {why}"
             )
+        if not in_use():
+            return unused
         read = inputs()
         if isinstance(read, Activation):
             return read

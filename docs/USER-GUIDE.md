@@ -406,6 +406,16 @@ explains the limits of STEP input from another CAD program, startup add-in
 updates and registration checks, exchange folders, multiple placements, waiting
 solve requests, settings continuity and the development-only Onshape setup.
 
+WG installs and updates the add-in at startup only if you chose it in setup,
+installed it from WG, or have received a model from Fusion through the link.
+WG also keeps updating a copy this installation already owns. Otherwise, use
+**Install add-in** in the **CAD Link** panel; that action also repairs the copy.
+Opening the panel, opening or uploading a `.wgreturn` by hand, exporting from WG,
+and link metadata in a design file do not enable automatic installation.
+With no signal, WG leaves Fusion's AddIns folder alone, including hand-copied
+add-ins. Developer copies and copies owned by another WG installation are
+preserved. Close Fusion before an installation or update.
+
 CAD edits arrive as retained geometry snapshots; they do not become editable
 parametric waveguide fields. The CAD Link panel appears in CAD mode. Keep WG
 running, and use Fusion's **Send to WG** or **Solve in WG** after modelling;

@@ -18,10 +18,14 @@ WG and using the results viewer.
    a silent install must opt in with `/TASKS="wglink"`. Setup reports whether
    WGLink was installed, updated, not selected, not detected, preserved or
    failed, and records the outcome in its setup log.
-   The packaged WG application also checks its bundled add-in when
-   it starts and can install it where Fusion is installed and WGLink is absent.
-   On macOS, start the packaged WG application with Fusion closed for that
-   check. No separate scientific Python installation is needed for this copy.
+   WG installs and updates the add-in at startup only if you chose it in setup,
+   installed it from WG, or have received a model from Fusion through the link.
+   It also keeps updating a copy this installation already owns. Otherwise,
+   use **Install add-in** in the **CAD Link** panel, with Fusion closed. This
+   action also repairs the copy and is available before a folder is selected.
+   Merely opening the panel, opening or uploading a `.wgreturn` by hand,
+   exporting from WG, or having link metadata in a design file does not count.
+   No separate scientific Python installation is needed for the packaged copy.
    For a source installation, use WG's installer; the add-in packaging details
    are in the [WGLink integration notes](../integrations/wglink/README.md).
 3. Start Fusion. Under **Utilities → Scripts and Add-Ins → Add-Ins**, select
@@ -38,9 +42,11 @@ WG and using the results viewer.
 
 If WG says **“WGLink activation is pending until Fusion closes”**, close Fusion
 and leave WG running, or restart WG with Fusion closed. Then reopen Fusion.
-After a healthy startup, packaged WG installs or updates WGLink to the exact
-add-in revision bundled with that WG release, without a network connection.
-It replaces a hand-copied add-in that no WG installation manages. A developer
+After a healthy startup, packaged WG installs or updates WGLink for CAD Link
+users to the exact add-in revision bundled with that WG release, without a
+network connection.
+For those users it replaces a hand-copied add-in that no WG installation manages.
+Without a CAD Link signal it leaves Fusion's AddIns folder untouched. A developer
 copy, a symlink or one owned by another WG installation is preserved; resolve
 that installation choice if WG reports an incompatible copy. A displaced
 WG-managed copy is kept in WG's application data folder for rollback; an

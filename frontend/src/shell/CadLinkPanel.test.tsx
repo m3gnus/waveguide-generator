@@ -122,6 +122,25 @@ describe('CadLinkPanel', () => {
   });
   afterEach(() => { act(() => root.unmount()); importedMeshStore.clear(); resetCadOperationsStore(); workspaceModeStore.setMode('parametric'); vi.restoreAllMocks(); vi.clearAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); host.remove(); });
 
+  it('offers install and repair before any signal or selected folder', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/install-addin')) return json({ verdict: 'pending', detail: 'Close Fusion to finish installing WGLink.' });
+      if (path.endsWith('/fusion-status')) return json({ ...closedFusion, cadFolderConfigured: false, addinRefresh: { verdict: 'not-in-use', detail: 'No signal' } });
+      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false, coordination: 'off' });
+      return json(record);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    const install = Array.from(host.querySelectorAll('button')).find((button) => button.textContent === 'Install add-in')!;
+    expect(install).toBeDefined();
+    expect(install.disabled).toBe(false);
+    await act(async () => { install.click(); await Promise.resolve(); await Promise.resolve(); });
+    expect(fetcher).toHaveBeenCalledWith('/api/cadlink/install-addin', { method: 'POST' });
+    expect(host.textContent).toContain('Close Fusion to finish installing WGLink.');
+    expect(install.disabled).toBe(false);
+  });
+
   const openHistory = () => {
     const disclosure = host.querySelector<HTMLButtonElement>('.cad-history > .section-heading button')!;
     if (disclosure.getAttribute('aria-expanded') === 'false') act(() => disclosure.click());

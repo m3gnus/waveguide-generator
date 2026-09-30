@@ -27,6 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from server.cadlink import addin_update
+from server.cadlink.usage import record_usage, usage_path
 
 
 PIN_A = "a" * 40
@@ -60,6 +61,7 @@ def _isolated(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(addin_update, "_retry_task", None)
     monkeypatch.delenv("WG2_BUNDLE", raising=False)
     monkeypatch.setenv("WG2_DATA_DIR", str(tmp_path / "data"))
+    record_usage(tmp_path / "data", "install-action")
 
 
 def _spec(pin: str) -> dict[str, object]:
@@ -186,6 +188,101 @@ def _shipped(root: Path, pin: str, content: bytes = b"verified WGLink package") 
     return archive
 
 
+@pytest.mark.parametrize(
+    "copy,in_use,verdict",
+    [("owned", False, "updated"), ("absent", False, "not-in-use"),
+     ("absent", True, "installed"), ("unmanaged", False, "not-in-use"),
+     ("unmanaged", True, "replaced")],
+)
+def test_activation_requires_durable_cadlink_use(
+    tmp_path: Path, monkeypatch, caplog, copy: str, in_use: bool, verdict: str
+) -> None:
+    root = _populate(tmp_path / "wg")
+    data = tmp_path / "data"
+    if not in_use:
+        usage_path(data).unlink()
+    addins = tmp_path / "AddIns"
+    addins.mkdir()
+    if copy == "owned":
+        _installed(addins, commit=OLD, root=root)
+    elif copy == "unmanaged":
+        target = addins / "WGLink"
+        target.mkdir()
+        (target / "WGLink.py").write_bytes(b"user's add-in")
+    before = {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()}
+    archive = _shipped(root, PIN_A)
+    calls: list[dict[str, object]] = []
+    _fake_installer(monkeypatch, calls)
+    monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
+    with caplog.at_level(logging.WARNING):
+        activation = addin_update.activate_wglink(
+            root=root, addins_dir=addins, data_dir=data,
+            fusion_running=FUSION_CLOSED, confirmed=CONFIRMED,
+        )
+    assert activation.verdict == verdict
+    assert not caplog.records
+    if verdict == "not-in-use":
+        assert calls == []
+        assert {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()} == before
+        assert not addin_update.pending_path(data, root).exists()
+        assert activation.registration is None
+    else:
+        assert len(calls) == 1
+
+
+def test_no_usage_never_creates_an_absent_addins_folder(tmp_path: Path, monkeypatch) -> None:
+    root = _populate(tmp_path / "wg")
+    addins = tmp_path / "missing-AddIns"
+    data = tmp_path / "unused-data"
+    calls: list[dict[str, object]] = []
+    _fake_installer(monkeypatch, calls)
+    activation = addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data, confirmed=CONFIRMED,
+    )
+    assert activation.verdict == "not-in-use"
+    assert not addins.exists() and not data.exists() and calls == []
+
+
+def test_usage_is_checked_again_under_the_install_lock(tmp_path: Path, monkeypatch) -> None:
+    root = _populate(tmp_path / "wg")
+    data = tmp_path / "data"
+    addins = tmp_path / "AddIns"
+    calls: list[dict[str, object]] = []
+    _fake_installer(
+        monkeypatch, calls, held={},
+        on_lock=lambda: usage_path(data).unlink(),
+    )
+    activation = addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data, confirmed=CONFIRMED,
+    )
+    assert activation.verdict == "not-in-use"
+    assert calls == [] and not (addins / "WGLink").exists()
+
+
+def test_old_pending_work_is_not_a_usage_signal(tmp_path: Path, monkeypatch) -> None:
+    root = _populate(tmp_path / "wg")
+    data = tmp_path / "data"
+    addins = tmp_path / "AddIns"
+    calls: list[dict[str, object]] = []
+    _fake_installer(monkeypatch, calls)
+    archive = _shipped(root, PIN_A)
+    monkeypatch.setattr(addin_update, "_verified_shipped_package", lambda *_args: (archive, None))
+    assert addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data,
+        fusion_running=FUSION_OPEN, confirmed=CONFIRMED,
+    ).verdict == "pending"
+    pending = addin_update.pending_path(data, root)
+    before = pending.read_bytes()
+    usage_path(data).unlink()
+    activation = addin_update.activate_wglink(
+        root=root, addins_dir=addins, data_dir=data,
+        fusion_running=FUSION_CLOSED, confirmed=CONFIRMED,
+    )
+    assert activation.verdict == "not-in-use"
+    assert not addins.exists() and calls == []
+    assert pending.read_bytes() == before
+
+
 # -- 1. Only after this start is confirmed ------------------------------------
 
 
@@ -221,7 +318,7 @@ def _bundle_layout(tmp_path: Path) -> tuple[Path, Path]:
     else:
         root = tmp_path / "Waveguide Generator" / "app"
     data = tmp_path / "data"
-    data.mkdir()
+    data.mkdir(exist_ok=True)
     return _populate(root), data.resolve()
 
 
@@ -1689,3 +1786,101 @@ def test_a_retry_runs_only_while_its_verdict_still_holds(tmp_path: Path, monkeyp
     )
     assert addin_update._retry_pass(frozenset({"pending"}), tmp_path) == ("current", "at the pin")
     assert passes == [1]
+
+
+@pytest.mark.parametrize("excluded", ["cad-mode", "hand-opened-return", "export", "design-metadata"])
+def test_excluded_evidence_never_touches_unmanaged_addin(tmp_path, monkeypatch, excluded):
+    from server.cadlink.store import CadLinkStore
+
+    root = _populate(tmp_path / "wg")
+    data = tmp_path / "private-data"
+    store = CadLinkStore.for_data_dir(data)
+    try:
+        if excluded == "cad-mode":
+            data.mkdir(parents=True)
+            (data / "ui_settings.json").write_text(json.dumps({"namespaces": {"workspaceMode": "cad"}}))
+        elif excluded == "hand-opened-return":
+            # The durable result of File -> Open or upload uses this same
+            # allocator. No transport origin is recorded in its row.
+            store.allocate_ingest(manifest_sha256="sha256:" + "a" * 64,
+                                  artifact_sha256="sha256:" + "b" * 64,
+                                  record_builder=lambda *_: json.dumps({"project": {"lineage_id": "cad-project"}}))
+        elif excluded == "export":
+            saved = store.save(requested=None, design_hash="sha256:" + "a" * 64,
+                               filename="export.cfg", snapshot_builder=lambda _: "design")
+            store.allocate_export(design_id=saved["identity"].design_id,
+                                  geometry_hash="sha256:" + "b" * 64,
+                                  artifact_sha256="sha256:" + "c" * 64,
+                                  idempotency_key="allocation", manifest_json="{}")
+        else:
+            data.mkdir(parents=True)
+            (data / "linked.cfg").write_text('[CAD-LINK]\ndesignId = linked\nlineageId = project\n')
+            store.save(requested=None, design_hash="sha256:" + "a" * 64, filename="linked.cfg",
+                       snapshot_builder=lambda _: '[CAD-LINK]\ndesignId = linked\n')
+        addins = tmp_path / "AddIns"
+        target = addins / "WGLink"
+        target.mkdir(parents=True)
+        (target / "WGLink.py").write_bytes(b"unmanaged user's code\x00\xff")
+        (target / "asset.bin").write_bytes(bytes(range(256)))
+        before = {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()}
+        calls = []
+        _fake_installer(monkeypatch, calls, held={},
+                        on_lock=lambda: pytest.fail("unused data must not acquire an AddIns lock"))
+        result = addin_update.activate_wglink(root=root, addins_dir=addins, data_dir=data,
+                                             fusion_running=FUSION_CLOSED, confirmed=CONFIRMED)
+        assert result.verdict == "not-in-use"
+        assert calls == []
+        assert {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()} == before
+    finally:
+        store.close()
+
+
+def test_fresh_private_data_does_not_use_another_directorys_signal(tmp_path, monkeypatch):
+    root = _populate(tmp_path / "wg")
+    # The environment's directory qualifies; the explicitly private one does not.
+    data = tmp_path / "fresh-private"
+    addins = tmp_path / "AddIns"
+    target = addins / "WGLink"
+    target.mkdir(parents=True)
+    (target / "WGLink.py").write_bytes(b"unmanaged real-world add-in")
+    before = {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()}
+    calls = []
+    _fake_installer(monkeypatch, calls, held={},
+                    on_lock=lambda: pytest.fail("private data must not acquire an AddIns lock"))
+    result = addin_update.activate_wglink(root=root, addins_dir=addins, data_dir=data,
+                                         fusion_running=FUSION_CLOSED, confirmed=CONFIRMED)
+    assert result.verdict == "not-in-use"
+    assert not data.exists() and calls == []
+    assert {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.parametrize("owner", ["this-root", "other-root", "invalid"])
+def test_only_validated_interrupted_install_is_ownership(tmp_path, monkeypatch, owner):
+    root = _populate(tmp_path / "wg")
+    data = tmp_path / "no-signal"
+    addins = tmp_path / "AddIns"
+    addins.mkdir()
+    other = _populate(tmp_path / "other-wg")
+    expected = addins / ".WGLink-install-test" / "WGLink"
+    expected.mkdir(parents=True)
+    (expected / "WGLink.py").write_bytes(b"staged add-in")
+    _marker(expected, root=other if owner == "other-root" else root, commit=PIN_A)
+    module = addin_update._installer(root)
+    (expected / module.RUNTIME_FILE).write_text("{}")
+    transaction = {
+        "schema": 1, "managedBy": "waveguide-generator", "phase": "prepared",
+        "waveguideGeneratorRoot": str(other if owner == "other-root" else root),
+        "workspace": ".WGLink-install-test", "hadPrevious": False, "replaceExternal": False,
+        "expectedMarker": json.loads((expected / "wglink_install.json").read_text()),
+        "expectedFiles": module._file_inventory(expected),
+    }
+    if owner == "invalid":
+        transaction["phase"] = "unknown"
+    journal = addins / module.TRANSACTION_JOURNAL
+    journal.write_text(json.dumps(transaction))
+    before = {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()}
+    # An unconfirmed startup proves qualification without recovering the journal.
+    result = addin_update.activate_wglink(root=root, addins_dir=addins, data_dir=data,
+                                         confirmed=lambda: (False, "waiting"))
+    assert result.verdict == ("awaiting-startup" if owner == "this-root" else "not-in-use")
+    assert {p.relative_to(addins): p.read_bytes() for p in addins.rglob("*") if p.is_file()} == before

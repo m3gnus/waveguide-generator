@@ -384,6 +384,19 @@ class SolveCommandOutcome(BaseModel):
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
 
+@router.post("/install-addin")
+async def post_install_addin(request: Request) -> dict[str, str]:
+    """Record the explicit choice even if activation must wait or cannot install."""
+    from server.cadlink.addin_update import refresh_and_log
+    from server.cadlink.usage import record_usage
+
+    data_dir = Path(request.app.state.data_dir)
+    await asyncio.to_thread(record_usage, data_dir, "install-action")
+    verdict, detail = await asyncio.to_thread(refresh_and_log, data_dir)
+    return {"verdict": verdict, "detail": detail}
+
+
+
 def _realized_dimensions_payload(
     status: Mapping[str, Any],
     store: CadLinkStore,

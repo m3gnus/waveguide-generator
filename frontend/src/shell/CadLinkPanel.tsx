@@ -1,5 +1,6 @@
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
+import { installCadLinkAddin } from '../api/cadlink';
 import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '../api/cadlink';
 import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
@@ -527,6 +528,19 @@ export function CadLinkPanel() {
   const [sendingToOnshape, setSendingToOnshape] = useState(false);
   const [unlinkingOnshape, setUnlinkingOnshape] = useState(false);
   const [confirmUnlink, setConfirmUnlink] = useState(false);
+  const [installingAddin, setInstallingAddin] = useState(false);
+  const [addinNotice, setAddinNotice] = useState<string | null>(null);
+  async function installAddin() {
+    setInstallingAddin(true);
+    try {
+      const result = await installCadLinkAddin();
+      setAddinNotice(result.detail);
+    } catch (error) {
+      setAddinNotice(error instanceof Error ? error.message : 'Could not install WGLink. Try again.');
+    } finally {
+      setInstallingAddin(false);
+    }
+  }
   const operations = useCadOperationsStore((current) => current.operations);
   const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
@@ -729,6 +743,13 @@ export function CadLinkPanel() {
 
     {/* 1 · Project: what am I working on? */}
     <CadProjectHeader/>
+    {!onshape && <div className="cad-link-actions">
+      <button className="link-button" disabled={installingAddin} onClick={() => void installAddin()}
+        title="Install or repair WGLink. WG keeps it up to date after you choose this.">
+        {installingAddin ? 'Installing…' : 'Install add-in'}
+      </button>
+      {addinNotice && <span role="status">{addinNotice}</span>}
+    </div>}
 
     {/* 2 · CAD Link: is CAD in sync with WG? One card, both directions. */}
     <section className={`cad-workflow cad-link-card${quietLink ? '' : ' attention'}`}>
