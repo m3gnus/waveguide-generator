@@ -40,11 +40,13 @@
 # integration backups remain beside their destinations as .waveguide-generator.*.backup.*.
 # Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
+# A signal before the traps ends a run that has done nothing; the flag never
+# comes from the environment.
+INTERRUPTED=0
 # Install these before any other executable line. Never replace either trap.
 trap 'INTERRUPTED=1' HUP INT TERM
 trap cleanup EXIT
 trap '' PIPE
-INTERRUPTED=${INTERRUPTED:-0}
 CLEANING=0
 EXIT_STATUS=1
 SWAP_READY=0
@@ -83,7 +85,10 @@ fail() {
 
 # Identity is (device, inode), valid only while the recorded object survives.
 # stat does not follow symlinks, including broken command links.
+# Always called in a command substitution: ignore group signals at once, and
+# callers retry a lookup a signal still managed to kill (status above 128).
 object_id() {
+    trap '' HUP INT TERM
     [ -e "$1" ] || [ -L "$1" ] || return 1
     if [ "$STAT_STYLE" = gnu ]; then
         protected_output stat -c '%d:%i' -- "$1" 2>/dev/null
@@ -93,7 +98,15 @@ object_id() {
 }
 
 same_object() {
-    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+    [ -n "$2" ] || return 1
+    for same_attempt in 1 2 3; do
+        current_id=$(object_id "$1")
+        same_status=$?
+        [ "$same_status" -gt 128 ] && continue
+        [ "$same_status" -eq 0 ] && [ "$current_id" = "$2" ]
+        return
+    done
+    return 1
 }
 
 same_device() {
@@ -121,6 +134,22 @@ protected_output() { trap '' HUP INT TERM; exec "$@"; }
 wait_for_child() {
     while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
     wait "$1"
+}
+
+# Long steps before the swap (copy, signature, library checks): forward a
+# caught signal to the child, and report the interruption rather than the
+# step's own failure.
+run_interruptible() {
+    (trap - HUP INT TERM; exec "$@") &
+    step_pid=$!
+    while kill -0 "$step_pid" 2>/dev/null; do
+        if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$step_pid" 2>/dev/null || :; fi
+        sleep 0.1
+    done
+    wait "$step_pid"
+    step_status=$?
+    check_interrupted
+    return "$step_status"
 }
 
 # Record and reap housekeeping before inspecting its effects.
@@ -157,7 +186,11 @@ lock_busy() {
     printf 'Made: %s, by process %s.\n' "$made" "$owner" >&2
     printf 'If an install was cut off (a crash or power loss) and no installer window is open,\n' >&2
     printf 'remove the lock with this command, then run the installer again:\n' >&2
-    printf "  rm -f '%s/pid' && rmdir '%s'\n" "$quoted" "$quoted" >&2
+    if [ -L "$LOCK_PATH" ]; then
+        printf "  rm -f '%s'\n" "$quoted" >&2
+    else
+        printf "  rm -f '%s/pid' && rmdir '%s'\n" "$quoted" "$quoted" >&2
+    fi
     EXIT_STATUS=4
     exit 4
 }
@@ -171,7 +204,10 @@ acquire_lock() {
         fail "Could not create the installer lock: $LOCK_PATH"
     fi
     LOCK_HELD=1
-    LOCK_ID=$(object_id "$LOCK_PATH") || fail "Could not identify the installer lock."
+    for lock_attempt in 1 2 3; do
+        LOCK_ID=$(object_id "$LOCK_PATH") && break
+    done
+    [ -n "$LOCK_ID" ] || fail "Could not identify the installer lock."
     printf '%s\n' "$$" > "$LOCK_PATH/pid" || fail "Could not record the installer lock owner."
     check_interrupted
 }
@@ -749,7 +785,7 @@ PROBE_ID=""
 
 check_interrupted
 printf 'Staging the application (this takes a moment) ...\n'
-cp -a -- "$SOURCE/." "$STAGED_TARGET" || \
+run_interruptible cp -a -- "$SOURCE/." "$STAGED_TARGET" || \
     fail "Could not stage the application under $PREFIX." \
          "Check that there is enough free space and that $PREFIX is writable."
 check_interrupted

@@ -456,6 +456,36 @@ if destination == {str(install.target)!r} and '.new.' in source:
     assert not install.lock.exists()
 
 
+def test_a_signal_to_the_installer_alone_ends_a_long_copy(install: Install, tmp_path: Path) -> None:
+    """An updater's TERM goes to the installer's PID only; the copy must not outlast it."""
+    directory = tmp_path / "bin"
+    directory.mkdir(exist_ok=True)
+    marker = tmp_path / "copying"
+    tool = "cp" if install.platform == "linux" else "ditto"
+    real = shutil.which(tool)
+    shim = directory / tool
+    long_copy = f'touch "{marker}"; exec sleep 30'
+    if install.platform == "linux":
+        shim.write_text(f'#!/bin/sh\ncase "$1" in -a) {long_copy};; esac\nexec "{real}" "$@"\n')
+    else:
+        shim.write_text(f"#!/bin/sh\n{long_copy}\n")
+    shim.chmod(0o755)
+    original = identity(install.target)
+    proc = spawn(install, {**install.env, "PATH": f"{directory}{os.pathsep}{install.env['PATH']}"})
+    try:
+        wait_marker(proc, marker)
+        started = time.monotonic()
+        os.kill(proc.pid, signal.SIGTERM)
+        output, _ = proc.communicate(timeout=10)
+        assert time.monotonic() - started < 5, output
+        assert proc.returncode == 1, output
+        assert "Could not copy" not in output and "Could not stage" not in output
+        assert identity(install.target) == original and install.version() == "old"
+        assert not install.lock.exists()
+    finally:
+        stop(proc)
+
+
 def test_different_device_staging_refuses_before_displacement(install: Install, tmp_path: Path) -> None:
     directory = tmp_path / "bin"
     directory.mkdir()

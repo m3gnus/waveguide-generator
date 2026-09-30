@@ -41,11 +41,13 @@
 # Look beside the target for .<app basename>.previous.<installer PID>.
 # Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
+# A signal before the traps ends a run that has done nothing; the flag never
+# comes from the environment.
+INTERRUPTED=0
 # Install these before any other executable line. Never replace either trap.
 trap 'INTERRUPTED=1' HUP INT TERM
 trap cleanup 0
 trap '' PIPE
-INTERRUPTED=${INTERRUPTED:-0}
 CLEANING=0
 EXIT_STATUS=1
 SWAP_READY=0
@@ -87,13 +89,24 @@ close_prompt() {
 
 # Identity is (device, inode), valid only while the recorded object survives.
 # stat does not follow symlinks, including broken command links.
+# Always called in a command substitution: ignore group signals at once, and
+# callers retry a lookup a signal still managed to kill (status above 128).
 object_id() {
+    trap '' HUP INT TERM
     [ -e "$1" ] || [ -L "$1" ] || return 1
     protected_output stat -f '%d:%i' "$1" 2>/dev/null
 }
 
 same_object() {
-    [ -n "$2" ] && [ "$(object_id "$1")" = "$2" ]
+    [ -n "$2" ] || return 1
+    for same_attempt in 1 2 3; do
+        current_id=$(object_id "$1")
+        same_status=$?
+        [ "$same_status" -gt 128 ] && continue
+        [ "$same_status" -eq 0 ] && [ "$current_id" = "$2" ]
+        return
+    done
+    return 1
 }
 
 same_device() {
@@ -121,6 +134,22 @@ protected_output() { trap '' HUP INT TERM; exec "$@"; }
 wait_for_child() {
     while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
     wait "$1"
+}
+
+# Long steps before the swap (copy, signature, library checks): forward a
+# caught signal to the child, and report the interruption rather than the
+# step's own failure.
+run_interruptible() {
+    (trap - HUP INT TERM; exec "$@") &
+    step_pid=$!
+    while kill -0 "$step_pid" 2>/dev/null; do
+        if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$step_pid" 2>/dev/null || :; fi
+        sleep 0.1
+    done
+    wait "$step_pid"
+    step_status=$?
+    check_interrupted
+    return "$step_status"
 }
 
 # Record and reap housekeeping before inspecting its effects.
@@ -157,7 +186,11 @@ lock_busy() {
     printf 'Made: %s, by process %s.\n' "$made" "$owner" >&2
     printf 'If an install was cut off (a crash or power loss) and no installer window is open,\n' >&2
     printf 'remove the lock with this command, then run the installer again:\n' >&2
-    printf "  rm -f '%s/pid' && rmdir '%s'\n" "$quoted" "$quoted" >&2
+    if [ -L "$LOCK_PATH" ]; then
+        printf "  rm -f '%s'\n" "$quoted" >&2
+    else
+        printf "  rm -f '%s/pid' && rmdir '%s'\n" "$quoted" "$quoted" >&2
+    fi
     EXIT_STATUS=4
     exit 4
 }
@@ -171,7 +204,10 @@ acquire_lock() {
         fail "Could not create the installer lock: $LOCK_PATH"
     fi
     LOCK_HELD=1
-    LOCK_ID=$(object_id "$LOCK_PATH") || fail "Could not identify the installer lock."
+    for lock_attempt in 1 2 3; do
+        LOCK_ID=$(object_id "$LOCK_PATH") && break
+    done
+    [ -n "$LOCK_ID" ] || fail "Could not identify the installer lock."
     printf '%s\n' "$$" > "$LOCK_PATH/pid" || fail "Could not record the installer lock owner."
     check_interrupted
 }
@@ -512,7 +548,7 @@ check_interrupted
 same_device "$STAGED_PATH" "$LIVE_PATH" || fail "The staging and destination must be on the same device."
 check_interrupted
 printf 'Copying to %s ...\n' "$TARGET_DIR"
-if ! ditto "$SOURCE" "$STAGED"; then
+if ! run_interruptible ditto "$SOURCE" "$STAGED"; then
     fail "Could not copy the app to $TARGET_DIR."
 fi
 
@@ -521,7 +557,7 @@ fi
 # one of its several thousand files until this runs.
 check_interrupted
 printf 'Clearing the download quarantine flag ...\n'
-if ! xattr -dr com.apple.quarantine "$STAGED"; then
+if ! run_interruptible xattr -dr com.apple.quarantine "$STAGED"; then
     fail "Could not clear the quarantine flag from the copy."
 fi
 
@@ -529,7 +565,7 @@ fi
 # few seconds.
 check_interrupted
 printf 'Checking the app signature ...\n'
-if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
+if ! run_interruptible codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
     if [ "$UPDATE" -eq 1 ]; then
         # Never re-sign here. An ad-hoc signature carries no identity, so it
         # would add no authenticity, and a seal that fails after a verified
@@ -541,8 +577,8 @@ if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
     # ad-hoc signature that no longer seals the bundle would leave the app
     # unlaunchable with no explanation.
     printf 'Re-signing the copy (this takes a moment) ...\n'
-    codesign --force --deep --sign - "$STAGED" >/dev/null 2>&1 || true
-    if ! codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
+    run_interruptible codesign --force --deep --sign - "$STAGED" >/dev/null 2>&1 || true
+    if ! run_interruptible codesign --verify --deep --strict "$STAGED" >/dev/null 2>&1; then
         fail "The copy in $TARGET_DIR does not have a valid signature." \
              "macOS will refuse to start it. The previous installation was left in place."
     fi
