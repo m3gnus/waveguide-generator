@@ -3321,7 +3321,7 @@ def test_a_failed_rollback_preserves_and_reports_the_backup_path(tmp_path: Path,
         environment={"PATH": f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"},
     )
 
-    assert again.returncode == 1
+    assert again.returncode == 3
     assert "rollback was incomplete" in again.stderr
     assert "Its backup remains at:" in again.stderr
     assert "Restored the previous installation" not in again.stdout

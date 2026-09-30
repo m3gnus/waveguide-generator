@@ -78,7 +78,7 @@ def run(dmg: Path, *args: str, path_prefix: Path | None = None) -> subprocess.Co
     if path_prefix is not None:
         env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
     return subprocess.run(
-        ["/bin/bash", str(dmg / SCRIPT.name), *args],
+        ["/bin/sh", str(dmg / SCRIPT.name), *args],
         capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120,
     )
 
@@ -86,6 +86,9 @@ def run(dmg: Path, *args: str, path_prefix: Path | None = None) -> subprocess.Co
 def shim(directory: Path, name: str, body: str) -> Path:
     directory.mkdir(exist_ok=True)
     path = directory / name
+    if name == "mv":
+        # Match the source, preserving -n for the real rename underneath.
+        body = 'source="$1"\n[ "$source" = "-n" ] && source="$2"\n' + body.replace('case "$*" in', 'case "$source" in')
     path.write_text("#!/bin/bash\n" + body, encoding="utf-8")
     path.chmod(0o755)
     return directory
@@ -156,7 +159,7 @@ def test_update_never_falls_back_when_the_parent_is_unwritable(dmg: Path, instal
     try:
         env_home = {**os.environ, "HOME": str(home)}
         result = subprocess.run(
-            ["/bin/bash", str(dmg / SCRIPT.name), "--update", str(installed)],
+            ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
             capture_output=True, text=True, env=env_home, stdin=subprocess.DEVNULL,
         )
     finally:
@@ -190,7 +193,7 @@ def test_update_restores_the_old_app_when_the_final_rename_fails(dmg: Path, inst
     bin_dir = shim(
         tmp_path / "bin",
         "mv",
-        'case "$1" in *".new."*) echo "injected failure" >&2; exit 1;; esac\n'
+        'case "$*" in *".new."*) echo "injected failure" >&2; exit 1;; esac\n'
         f'exec "{real_mv}" "$@"\n',
     )
     result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
@@ -244,7 +247,7 @@ def failing_swap_shim(tmp_path: Path, *, restore_too: bool) -> Path:
     return shim(
         tmp_path / "bin",
         "mv",
-        f'case "$1" in {patterns}) echo "injected failure" >&2; exit 1;; esac\n'
+        f'case "$*" in {patterns}) echo "injected failure" >&2; exit 1;; esac\n'
         f'exec "{real_mv}" "$@"\n',
     )
 
@@ -270,12 +273,12 @@ def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, instal
     bin_dir = shim(
         tmp_path / "bin",
         "mv",
-        f'case "$1" in *".new."*) touch "{paused}"; sleep 60; exit 1;; esac\n'
+        f'case "$*" in *".new."*) touch "{paused}"; sleep 60; exit 1;; esac\n'
         f'exec "{real_mv}" "$@"\n',
     )
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
     proc = subprocess.Popen(
-        ["/bin/bash", str(dmg / SCRIPT.name), "--update", str(installed)],
+        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
         stdin=subprocess.DEVNULL, start_new_session=True,
     )
@@ -311,3 +314,157 @@ def test_update_sweeps_stale_hidden_leftovers_but_not_symlinks(dmg: Path, instal
     assert not stale_new.exists() and not stale_prev.exists()
     assert link.is_symlink() and keep.exists()
     assert unrelated.exists()
+
+
+@pytest.mark.parametrize("with_contents", (False, True))
+def test_a_directory_appearing_during_the_final_rename_is_not_success(
+    dmg: Path, installed: Path, tmp_path: Path, with_contents: bool,
+) -> None:
+    real_mv = shutil.which("mv")
+    # Appear after the script's existence check, inside the mv test seam.
+    # A Contents directory alone must not make the post-check accept nesting.
+    create_contents = f'mkdir -p "{installed}/Contents"\n' if with_contents else ""
+    bin_dir = shim(
+        tmp_path / "bin", "mv",
+        'case "$*" in *".new."*)\n'
+        f'mkdir -p "{installed}"\n{create_contents}'
+        f'echo racer > "{installed}/keep.txt"\n;; esac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "Installed:" not in result.stdout
+    assert (installed / "keep.txt").read_text(encoding="utf-8").strip() == "racer"
+    backups = list(installed.parent.glob(f".{APP}.previous.*"))
+    assert len(backups) == 1
+    assert version_of(backups[0]) == "old"
+    assert str(backups[0]) in result.stderr
+
+
+def test_a_no_clobber_rename_that_does_nothing_is_a_clean_failure(
+    dmg: Path, installed: Path, tmp_path: Path,
+) -> None:
+    real_mv = shutil.which("mv")
+    bin_dir = shim(
+        tmp_path / "bin", "mv",
+        'case "$*" in *".new."*) exit 0;; esac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []
+
+
+@pytest.mark.parametrize("kind", ("directory", "symlink"))
+def test_an_occupied_backup_name_is_refused_before_displacing_the_app(
+    dmg: Path, installed: Path, tmp_path: Path, kind: str,
+) -> None:
+    precious = make_app(tmp_path / "precious", version="precious", sign=False)
+    backup_record = tmp_path / "backup-path"
+    occupied = f'{installed.parent}/.{APP}.previous.$PPID'
+    create = f'mkdir -p "{occupied}"' if kind == "directory" else f'ln -s "{precious}" "{occupied}"'
+    # id runs before the sweep and knows its parent installer PID.
+    bin_dir = shim(
+        tmp_path / "bin", "id",
+        f'{create}\nprintf "%s" "{occupied}" > "{backup_record}"\necho 501\n',
+    )
+    real_rm = shutil.which("rm")
+    shim(bin_dir, "rm", 'case "$*" in *".previous."*) exit 1;; esac\n' f'exec "{real_rm}" "$@"\n')
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "still occupied" in result.stdout
+    assert version_of(installed) == "old"
+    backup = Path(backup_record.read_text(encoding="utf-8"))
+    assert backup.exists()
+    assert not (backup / APP).exists()
+    assert version_of(precious) == "precious"
+
+
+def test_failure_to_remove_the_old_backup_warns_after_a_successful_install(
+    dmg: Path, installed: Path, tmp_path: Path,
+) -> None:
+    real_rm = shutil.which("rm")
+    bin_dir = shim(
+        tmp_path / "bin", "rm",
+        'case "$*" in *".previous."*) exit 1;; esac\n'
+        f'exec "{real_rm}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert version_of(installed) == "new"
+    backups = list(installed.parent.glob(f".{APP}.previous.*"))
+    assert len(backups) == 1 and version_of(backups[0]) == "old"
+    assert "WARNING: installed successfully" in result.stderr
+    assert str(backups[0]) in result.stderr
+
+
+@pytest.mark.parametrize("device", ("/dev/disk42s1", "//user@host/My Share"))
+def test_read_only_volume_parsing_preserves_spaces_and_unicode(
+    dmg: Path, tmp_path: Path, device: str,
+) -> None:
+    mountpoint = tmp_path / "My  Disque é"
+    installed = make_app(mountpoint / "Apps" / APP, version="old")
+    bin_dir = shim(
+        tmp_path / "bin", "df",
+        "cat <<'DF'\nFilesystem 1024-blocks Used Available Capacity Mounted on\n"
+        f"{device} 1000 100 900 10% {mountpoint}\nDF\n",
+    )
+    shim(bin_dir, "mount", f"printf '%s\\n' '{device} on {mountpoint} (smbfs, read-only, mounted by user)'\n")
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "read-only volume" in result.stdout
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []
+
+
+def test_unknown_volume_output_refuses_without_touching_the_app(dmg: Path, installed: Path, tmp_path: Path) -> None:
+    bin_dir = shim(tmp_path / "bin", "df", "echo unparseable\nexit 1\n")
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1
+    assert "Could not determine the volume" in result.stdout
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []
+
+
+def test_update_into_a_parent_with_spaces_and_unicode(dmg: Path, tmp_path: Path) -> None:
+    installed = make_app(tmp_path / "Mes  Apps é" / APP, version="old")
+    result = run(dmg, "--update", str(installed))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert version_of(installed) == "new"
+    assert leftovers(installed.parent) == []
+
+
+def test_a_directory_appearing_during_restore_reports_the_actual_backup_location(
+    dmg: Path, installed: Path, tmp_path: Path,
+) -> None:
+    real_mv = shutil.which("mv")
+    bin_dir = shim(
+        tmp_path / "bin", "mv",
+        'case "$*" in\n*".new."*) exit 1;;\n*".previous."*)\n'
+        f'mkdir -p "{installed}/Contents"\necho racer > "{installed}/keep.txt"\n;;\nesac\n'
+        f'exec "{real_mv}" "$@"\n',
+    )
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "Restored the previous installation" not in result.stdout
+    backups = list(installed.glob(f".{APP}.previous.*"))
+    assert len(backups) == 1 and version_of(backups[0]) == "old"
+    assert str(backups[0]) in result.stderr
+    assert (installed / "keep.txt").read_text(encoding="utf-8").strip() == "racer"
+
+
+def test_a_volume_missing_from_mount_output_refuses_without_touching_the_app(
+    dmg: Path, installed: Path, tmp_path: Path,
+) -> None:
+    bin_dir = shim(
+        tmp_path / "bin", "df",
+        "printf '%s\\n' 'Filesystem 1024-blocks Used Available Capacity Mounted on' "
+        "'/dev/disk42s1 1000 100 900 10% /Volumes/Unknown'\n",
+    )
+    shim(bin_dir, "mount", "echo '/dev/disk1 on / (apfs, read-only)'\n")
+    result = run(dmg, "--update", str(installed), path_prefix=bin_dir)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Could not identify the mounted volume" in result.stdout
+    assert version_of(installed) == "old"
+    assert leftovers(installed.parent) == []

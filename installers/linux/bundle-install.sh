@@ -18,6 +18,13 @@
 # tarball, with nothing from the checkout beside it, and its only dependencies
 # are bash and coreutils.
 
+# Exit status:
+#   0  installed
+#   1  failed; the previous installation and desktop integration were kept or
+#      restored (or no previous installation existed), including HUP/INT/TERM
+#   3  ROLLBACK INCOMPLETE: a previous installation or desktop integration
+#      could not be restored. Backup paths are printed and left in place.
+
 set -u
 
 BUNDLE_DIRECTORY="waveguide-generator"
@@ -403,13 +410,16 @@ rollback() {
             fi
         fi
     fi
+    if [ "$RESTORE_FAILED" -ne 0 ]; then
+        status=3
+    fi
     rm -rf -- "$STAGE_ROOT"
     rm -f -- "$STAGED_DESKTOP" "$STAGED_ICON" \
         "$STAGED_DESKTOP_OWNER" "$STAGED_ICON_OWNER"
     exit "$status"
 }
 trap rollback EXIT
-trap 'exit 130' HUP INT TERM
+trap 'exit 1' HUP INT TERM
 
 printf 'Staging the application (this takes a moment) ...\n'
 cp -a -- "$SOURCE" "$STAGED_TARGET" || \

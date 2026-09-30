@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 # Double-click this in Finder to install Waveguide Generator from the disk
 # image. It is shipped INSIDE the .dmg, beside the app; it is not the source
 # installer, which is installers/macos/install-wg.command in the checkout.
@@ -16,7 +16,7 @@
 #
 # It must stay self-contained. It runs from a read-only mounted volume with
 # nothing else from the checkout beside it, and its only dependencies are
-# /bin/bash, ditto, xattr and codesign (plus PlistBuddy in --update mode).
+# /bin/sh, ditto, xattr and codesign (plus PlistBuddy in --update mode).
 
 # Exit status (what an unattended caller can rely on):
 #   0  installed
@@ -73,7 +73,8 @@ fail() {
     printf '  xattr -dr com.apple.quarantine "/Applications/%s"\n' "$APP_NAME"
     printf '\n'
     if [ -t 0 ]; then
-        read -r -p "Press Return to close..." _unused
+        printf 'Press Return to close...'
+        read -r _unused
     fi
     exit 1
 }
@@ -119,8 +120,20 @@ if [ "$UPDATE" -eq 1 ]; then
     if [ -z "$EXPECTED_ID" ] || [ "$(bundle_identifier "$TARGET")" != "$EXPECTED_ID" ]; then
         fail "$TARGET is not a Waveguide Generator app." "Nothing has been changed."
     fi
-    MOUNT_POINT="$(df -P "$TARGET_DIR" 2>/dev/null | awk 'NR==2 { $1=$2=$3=$4=$5=""; sub(/^ +/, ""); print }')"
-    if [ -n "$MOUNT_POINT" ] && mount | grep -F " on $MOUNT_POINT (" | grep -q 'read-only'; then
+    # Remove the numeric columns, without splitting the device or mount name:
+    # both may contain spaces (for example an SMB share). Refuse unknown output
+    # rather than letting a failed parse bypass the read-only check.
+    DF_OUTPUT="$(df -P "$TARGET_DIR" 2>/dev/null)" || \
+        fail "Could not determine the volume containing $TARGET_DIR." "Nothing has been changed."
+    MOUNT_POINT="$(printf '%s\n' "$DF_OUTPUT" | awk 'NR==2 {
+        if (sub(/^.*[[:space:]][0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+%[[:space:]]+/, "")) print
+    }')"
+    [ -n "$MOUNT_POINT" ] || fail "Could not determine the volume containing $TARGET_DIR." \
+                                    "Nothing has been changed."
+    MOUNTS="$(mount)" || fail "Could not inspect mounted volumes." "Nothing has been changed."
+    VOLUME_MOUNT="$(printf '%s\n' "$MOUNTS" | grep -F " on $MOUNT_POINT (")" || \
+        fail "Could not identify the mounted volume containing $TARGET_DIR." "Nothing has been changed."
+    if printf '%s\n' "$VOLUME_MOUNT" | grep -q 'read-only'; then
         fail "$TARGET_DIR is on a read-only volume, so the app cannot be updated there." \
              "Nothing has been changed."
     fi
@@ -170,6 +183,12 @@ done
 STAGED="$TARGET_DIR/.$(basename -- "$TARGET").new.$$"
 DISPLACED="$TARGET_DIR/.$(basename -- "$TARGET").previous.$$"
 rm -rf "$STAGED"
+# A failed sweep (or a leftover symlink) must never turn mv into a nesting
+# operation. Refuse occupied names before touching the current installation.
+if [ -e "$STAGED" ] || [ -L "$STAGED" ] || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
+    fail "A staging or backup path is still occupied." "Nothing has been changed."
+fi
+COMMITTED=0
 
 # A TERM, HUP or INT (or any failure) anywhere from here on must never leave the
 # machine without an app: drop the staged copy, and if the old app was moved
@@ -177,20 +196,28 @@ rm -rf "$STAGED"
 # status is 3 and the backup path is printed.
 cleanup() {
     status=$?
-    trap - EXIT HUP INT TERM
+    trap - 0 HUP INT TERM
     rm -rf "$STAGED"
-    if [ -d "$DISPLACED" ] && [ ! -e "$TARGET" ]; then
-        if mv "$DISPLACED" "$TARGET"; then
+    if [ "$COMMITTED" -eq 0 ] && [ -d "$DISPLACED" ]; then
+        if [ ! -e "$TARGET" ] && [ ! -L "$TARGET" ] && \
+           mv -n "$DISPLACED" "$TARGET" && [ ! -e "$DISPLACED" ] && \
+           [ -d "$TARGET/Contents" ] && [ ! -e "$TARGET/$(basename -- "$DISPLACED")" ]; then
             printf 'Restored the previous installation.\n'
         else
+            # A directory may also appear during the restore's mv. If mv
+            # nested the backup, name its actual location for manual recovery.
+            BACKUP_PATH="$DISPLACED"
+            if [ ! -e "$DISPLACED" ] && [ -d "$TARGET/$(basename -- "$DISPLACED")" ]; then
+                BACKUP_PATH="$TARGET/$(basename -- "$DISPLACED")"
+            fi
             printf 'ERROR: could not restore the previous installation.\n' >&2
-            printf 'The previous app is at: %s\n' "$DISPLACED" >&2
+            printf 'The previous app is at: %s\n' "$BACKUP_PATH" >&2
             status=3
         fi
     fi
     exit "$status"
 }
-trap cleanup EXIT
+trap cleanup 0
 trap 'exit 1' HUP INT TERM
 
 printf 'Copying to %s ...\n' "$TARGET_DIR"
@@ -240,8 +267,18 @@ if [ -e "$TARGET" ]; then
     mv "$TARGET" "$DISPLACED" || fail "Could not move the existing installation aside." \
                                       "Quit Waveguide Generator if it is running, then try again."
 fi
-mv "$STAGED" "$TARGET" || fail "Could not put the new version in place at $TARGET."
-rm -rf "$DISPLACED"
+# BSD mv -n can report success without moving, or nest a source inside an
+# existing directory. Check the exact bundle path and the source after rename.
+if [ -e "$TARGET" ] || [ -L "$TARGET" ] || \
+   ! mv -n "$STAGED" "$TARGET" || [ -e "$STAGED" ] || \
+   [ ! -d "$TARGET/Contents" ] || [ -e "$TARGET/$(basename -- "$STAGED")" ]; then
+    fail "Could not put the new version in place at $TARGET."
+fi
+COMMITTED=1
+if ! rm -rf "$DISPLACED" || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
+    printf 'WARNING: installed successfully, but could not fully remove the previous copy.\n' >&2
+    printf 'The leftover backup is at: %s\n' "$DISPLACED" >&2
+fi
 
 printf '\n'
 printf 'Installed: %s\n' "$TARGET"
