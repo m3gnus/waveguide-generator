@@ -77,8 +77,28 @@ def tests_for_changes(paths: list[str]) -> list[str]:
         matches = [prefix for prefix in areas if path.startswith(prefix)]
         if not matches:
             return FULL_SUITE.copy()
-        selected.update(areas[max(matches, key=len)])
+        prefix = max(matches, key=len)
+        selected.update(areas[prefix])
+        selected.update(_tests_referencing(prefix))
     return sorted(selected)
+
+
+def _tests_referencing(prefix: str) -> list[str]:
+    """Test files that name the changed server package, found at run time.
+
+    The map's globs are the hand-kept part; this keeps a new test that imports
+    the area from being missed without anyone editing the map.
+    """
+
+    if not prefix.startswith("server/"):
+        return []
+    module = prefix.rstrip("/").replace("/", ".")
+    found = []
+    for tests_dir in ("server/tests", "scripts/tests"):
+        for test in sorted((REPO_ROOT / tests_dir).glob("test_*.py")):
+            if module in test.read_text(encoding="utf-8", errors="replace"):
+                found.append(str(test.relative_to(REPO_ROOT)))
+    return found
 
 
 def launcher_targets(argv: list[str]) -> tuple[list[str], bool]:
