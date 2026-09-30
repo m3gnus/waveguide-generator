@@ -59,7 +59,8 @@ describe('live design dimensions', () => {
     expect(dimensions()?.textContent).toContain(expectedMouth);
     expect(dimensions()?.textContent).toContain('Horn overall');
     expect(dimensions()?.textContent).toContain('Enclosure overall');
-    expect(dimensions()?.textContent).toContain('revision 1');
+    expect(dimensions()?.textContent).toContain('Current preview');
+    expect(dimensions()?.textContent).not.toContain('revision');
     const before = dimensions()?.textContent;
     publish({ frame: frame(metadata, 1, 'fine') });
     expect(dimensions()?.textContent).toBe(before);
@@ -73,10 +74,10 @@ describe('live design dimensions', () => {
     act(() => useDesignStore.setState({ designRevision: 2 }));
     publish({ stale: true, error: 'Invalid profile', errorRevision: 2 });
     expect(dimensions()?.textContent).toContain(expectedMouth);
-    expect(dimensions()?.textContent).toContain('Last valid preview · revision 1');
+    expect(dimensions()?.textContent).toContain('Last valid preview');
     expect(dimensions()?.querySelectorAll('dd small')).toHaveLength(3);
     publish({ frame: frame(metadata, 2), displayedRevision: 2, stale: false, error: null, errorRevision: null });
-    expect(dimensions()?.textContent).toContain('Current preview · revision 2');
+    expect(dimensions()?.textContent).toContain('Current preview');
   });
   it('labels values last valid beside an invalid uncommitted NumberField draft', async () => {
     render(); valid();

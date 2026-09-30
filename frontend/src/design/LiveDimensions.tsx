@@ -43,8 +43,7 @@ export function LiveDimensions() {
     && !preview.stale && !preview.error && !invalidDraft;
   return <section ref={host} className="live-dimensions" aria-label="Design dimensions">
     <h3>Design dimensions</h3>
-    <p>W × H × D · {current ? 'Current preview' : 'Last valid preview'}
-      {preview.displayedRevision !== null ? ` · revision ${preview.displayedRevision}` : ''}</p>
+    <p>W × H × D · {current ? 'Current preview' : 'Last valid preview'}</p>
     <dl className="realized-dimension-list">
       {readouts.map(([key, label, count]) => {
         if (key === 'enclosure_overall' && dimensions && !(key in dimensions)) return null;
