@@ -143,7 +143,7 @@ def test_prose_guard_allows_exact_gpu_alternative() -> None:
 
 def test_versioned_contract_and_cpu_runtime_content() -> None:
     guidance = read_guidance()
-    assert set(guidance) == {"version", "title", "labels", "warnings", "reasons", "platforms", "gpu_alternatives"}
+    assert set(guidance) == {"version", "title", "labels", "warnings", "notices", "reasons", "platforms", "gpu_alternatives"}
     assert guidance["gpu_alternatives"] == [{
         "id": "nvidia_beat_cuda", "platforms": ["windows", "linux"],
         "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. BEMPP is for computers without a supported graphics card.",
@@ -485,6 +485,9 @@ APPROVED_GUIDANCE = {'version': 1,
                'platforms': ['windows'],
                'text': 'PoCL on Windows shows up as an OpenCL device but computes nothing, so '
                        'installing it does not help.'}],
+ 'notices': {'infinite_baffle_numba': "Infinite baffle runs on BEMPP's CPU (numba) engine on this "
+                                      'computer. It is correct but slow, and the first solve includes '
+                                      'about a minute of warm-up.'},
  'reasons': {'no_device': 'No CPU OpenCL device was found.',
              'smoke_test_failed': 'The CPU OpenCL runtime failed its test calculation.',
              'smoke_test_timeout': "The CPU OpenCL runtime's test calculation timed out. WG will check again; "

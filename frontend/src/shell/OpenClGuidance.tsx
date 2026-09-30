@@ -2,15 +2,19 @@ import sharedGuidance from '../../../shared/opencl-driver-guidance.v1.json';
 
 export type OpenClGuidancePlatform = 'windows' | 'linux';
 export type OpenClGuidanceReason = 'no_device' | 'smoke_test_failed' | 'smoke_test_timeout' | 'inventory_timeout' | 'pocl_windows';
+export type OpenClGuidanceNotice = 'infinite_baffle_numba';
 export interface OpenClGuidanceProps {
   platform: OpenClGuidancePlatform;
   reason?: OpenClGuidanceReason;
+  /** A situation-specific line shown first, e.g. why this solve is on numba. */
+  notice?: OpenClGuidanceNotice;
 }
 
 interface GuidanceData {
   version: number;
   title: string;
   labels: { heading: string; ariaLabel: string };
+  notices?: Partial<Record<OpenClGuidanceNotice, string>>;
   reasons?: Partial<Record<OpenClGuidanceReason, string>>;
   platforms: Partial<Record<OpenClGuidancePlatform, {
     summary: string;
@@ -30,8 +34,8 @@ export function isOpenClGuidanceData(value: unknown): value is GuidanceData {
   if (!isRecord(value) || value.version !== 1 || !isText(value.title)
     || !isRecord(value.labels) || !isText(value.labels.heading) || !isText(value.labels.ariaLabel)
     || !isRecord(value.platforms)) return false;
-  if (value.reasons !== undefined
-    && (!isRecord(value.reasons) || !Object.values(value.reasons).every(isText))) return false;
+  if (![value.reasons, value.notices].every((lines) => lines === undefined
+    || (isRecord(lines) && Object.values(lines).every(isText)))) return false;
   if (!Object.entries(value.platforms).every(([platform, entry]) => isPlatform(platform)
     && isRecord(entry) && isText(entry.summary)
     && (entry.steps === undefined || (Array.isArray(entry.steps) && entry.steps.every((step: unknown) =>
@@ -46,15 +50,17 @@ export function isOpenClGuidanceData(value: unknown): value is GuidanceData {
 const guidance: GuidanceData | undefined = isOpenClGuidanceData(sharedGuidance) ? sharedGuidance : undefined;
 
 /** Shared CPU runtime guidance for solver settings and the numba fallback notice. */
-export function OpenClGuidance({ platform, reason }: OpenClGuidanceProps) {
+export function OpenClGuidance({ platform, reason, notice }: OpenClGuidanceProps) {
   const entry = guidance?.platforms[platform];
   if (!guidance || !entry) return null;
   const { summary, steps = [] } = entry;
   const reasonLine = reason && guidance.reasons?.[reason];
+  const noticeLine = notice && guidance.notices?.[notice];
   const warnings = (guidance.warnings ?? []).filter((warning) => warning.platforms.includes(platform));
   const alternatives = (guidance.gpu_alternatives ?? []).filter((entry) => entry.platforms.includes(platform));
   return <section className="opencl-guidance" aria-label={guidance.labels.ariaLabel}>
     <h3>{guidance.labels.heading}</h3>
+    {noticeLine && <p>{noticeLine}</p>}
     {reasonLine && <p>{reasonLine}</p>}
     <p>{summary}</p>
     {alternatives.map(({ id, text }) => <p key={id}>{text}</p>)}

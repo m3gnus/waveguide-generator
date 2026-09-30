@@ -54,6 +54,15 @@ describe('OpenClGuidance', () => {
     }
   });
 
+  it('renders the shared infinite-baffle numba notice first, and nothing without the prop', () => {
+    act(() => root.render(<OpenClGuidance platform="windows" notice="infinite_baffle_numba" reason="no_device" />));
+    const paragraphs = [...host.querySelectorAll('section > p')].map((node) => node.textContent);
+    expect(paragraphs[0]).toBe(guidance.notices.infinite_baffle_numba);
+    expect(paragraphs[1]).toBe(guidance.reasons.no_device);
+    act(() => root.render(<OpenClGuidance platform="windows" />));
+    expect(host.textContent).not.toContain(guidance.notices.infinite_baffle_numba);
+  });
+
   it('updates the platform and clears a previous reason without retaining the Windows warning', () => {
     act(() => root.render(<OpenClGuidance platform="windows" reason="no_device" />));
     act(() => root.render(<OpenClGuidance platform="linux" />));

@@ -19,6 +19,9 @@
       "text": "PoCL on Windows shows up as an OpenCL device but computes nothing, so installing it does not help."
     }
   ],
+  "notices": {
+    "infinite_baffle_numba": "Infinite baffle runs on BEMPP's CPU (numba) engine on this computer. It is correct but slow, and the first solve includes about a minute of warm-up."
+  },
   "reasons": {
     "no_device": "No CPU OpenCL device was found.",
     "smoke_test_failed": "The CPU OpenCL runtime failed its test calculation.",
