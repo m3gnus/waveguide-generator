@@ -582,3 +582,50 @@ def test_reviewer_prose_evasions_fail_the_pin(path: tuple, evasion: str) -> None
 
     with pytest.raises(AssertionError):
         _assert_guidance_is_the_approved_text(_with_leaf(APPROVED_GUIDANCE, path, evasion))
+
+
+# -- What only ISCC would otherwise catch -----------------------------------------
+
+
+def test_generated_include_obeys_the_inno_textual_rules() -> None:
+    include = (generator.ROOT / "installers/windows/opencl-guidance.iss").read_text(encoding="utf-8")
+    generator.check_inno_source(include)
+    assert not [line for line in include.split("\n") if line.lstrip().startswith("#")]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "  A = 'x' +\n  #13#10 + 'y';\n",  # a continuation line starting with a character code
+        "#13#10\n",
+        "{ installs beside {app}, never inside it }\n",  # a brace comment closed early by {app}
+        "{ {from, to} }\n",
+        "  A = 'unterminated;\n",
+        "{ unterminated comment\n",
+    ],
+)
+def test_inno_check_refuses_what_iscc_refuses(source: str) -> None:
+    with pytest.raises(ValueError):
+        generator.check_inno_source(source)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "{ a plain comment }\n  A = 'text with {app} and # inside a string';\n",
+        "  A = 'it''s' + #13#10 + 'fine';\n",
+    ],
+)
+def test_inno_check_accepts_valid_source(source: str) -> None:
+    generator.check_inno_source(source)
+
+
+def test_guidance_text_cannot_make_the_include_uncompilable() -> None:
+    """Line breaks and braces in the wording stay inside one quoted line."""
+
+    guidance = json.loads(json.dumps(APPROVED_GUIDANCE))
+    guidance["title"] = "A {title}\n#13 on its own line"
+    guidance["platforms"]["windows"]["summary"] = "First line\n# second line {app}"
+    rendered = generator.render_include(guidance)
+    generator.check_inno_source(rendered)
+    assert len(rendered.split("\n")) == 5  # comment (2 lines), title, text, trailing newline

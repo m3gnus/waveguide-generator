@@ -36,6 +36,44 @@ def pascal_string(text: str) -> str:
     ) + "'"
 
 
+def check_inno_source(text: str) -> None:
+    """Refuse Inno source that ISCC cannot compile, by two textual rules.
+
+    ISPP reads any line whose first non-blank character is ``#`` as a
+    preprocessor directive, so a continuation line that begins with a ``#13``
+    character code fails with "Unknown preprocessor directive". A ``{ ... }``
+    comment ends at the first ``}``, so a ``{`` inside one (an ``{app}``
+    mention, say) closes the comment early and the rest compiles as code.
+    Neither shows up without running the compiler, which only Windows can do.
+    """
+
+    for number, line in enumerate(text.split("\n"), start=1):
+        if line.lstrip().startswith("#"):
+            raise ValueError(f"generated Inno line {number} starts with '#': ISPP would read it as a directive")
+    in_string = in_comment = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            if char == "'":
+                if text[index + 1:index + 2] == "'":
+                    index += 1
+                else:
+                    in_string = False
+        elif in_comment:
+            if char == "{":
+                raise ValueError("generated Inno brace comment contains '{': the comment would end early")
+            if char == "}":
+                in_comment = False
+        elif char == "'":
+            in_string = True
+        elif char == "{":
+            in_comment = True
+        index += 1
+    if in_string or in_comment:
+        raise ValueError("generated Inno source ends inside a string or a comment")
+
+
 def render_include(guidance: dict) -> str:
     platform = guidance["platforms"]["windows"]
     paragraphs = [platform["summary"], *windows_gpu_alternatives(guidance)]
@@ -43,12 +81,14 @@ def render_include(guidance: dict) -> str:
         paragraphs.append(f"{step['label']}: {step['url']}\n{step['note']}")
     paragraphs.extend(windows_warnings(guidance))
     text = "\n\n".join(paragraphs)
-    return (
+    rendered = (
         f"{{ Generated from {SOURCE}.\n"
         "  Regenerate with scripts/gen_opencl_guidance.py --write. }\n"
         f"  OpenClGuidanceTitle = {pascal_string(guidance['title'])};\n"
         f"  OpenClGuidanceText = {pascal_string(text)};\n"
     )
+    check_inno_source(rendered)
+    return rendered
 
 
 def render_help(guidance: dict) -> str:
