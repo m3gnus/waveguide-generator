@@ -15,6 +15,12 @@ them; they are not a current release status dashboard.
   rows are reported unjudged. The placed return and the rear-cap quarter, earlier
   recorded as ingest findings, are now ordinary judged rows.
 
+- [Windows measurements, 2026-09-30](WINDOWS-2026-09-30.md): one GPU-less Windows PC
+  at `47893c0b`. OpenCL device inventory with a compute check; BEMPP numba and OpenCL
+  against BEAT CPU for speed and same-mesh accuracy; what BEAT CPU's time is spent on;
+  the OpenCL-first selection branch; the Windows installer's compile failure, its gates
+  and upgrade protection; RC-style checks on an installed build.
+
 ## Open: the one-pass manual test for the disk-image installer
 
 Everything about the installer script is measured except the part no
