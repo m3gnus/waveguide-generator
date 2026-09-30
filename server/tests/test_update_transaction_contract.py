@@ -3218,17 +3218,15 @@ def test_a_cad_return_ingested_after_restart_approval_is_refused(tmp_path: Path)
 def test_a_cad_preparation_requested_after_restart_approval_is_held(tmp_path: Path) -> None:
     """The latch allows durable acceptance, while the job lane copies and meshes nothing."""
 
-    from server.cadlink.operations import PREPARE_AND_SOLVE, prepare_and_solve_request, request_digest
-
     async def scenario():
         app = create_app(data_dir=tmp_path / "data")
         store = app.state.cadlink_store
-        target, inputs = prepare_and_solve_request(
-            return_id="wgr_1", bundle_path="wgreturn/x.wgreturn", manifest_sha256="sha256:" + "a" * 64
-        )
-        store.accept_operation(
-            "cmd-1", PREPARE_AND_SOLVE, request_digest(PREPARE_AND_SOLVE, target, inputs), target, inputs
-        )
+        from test_cad_preparation import _write_return, _accept
+        from server.cadlink.preparation import retain_operation_snapshot
+        workspace = tmp_path / "exchange"
+        bundle, manifest = _write_return(workspace)
+        _accept(store, "cmd-1", bundle, manifest)
+        retain_operation_snapshot(store, tmp_path / "data", workspace, "cmd-1")
         app.state.update_restart.approve("v2.0.1")
         try:
             status, raw = await _post(app, "/api/cadlink/operations/cmd-1/prepare", {"frameAxis": "+z"})

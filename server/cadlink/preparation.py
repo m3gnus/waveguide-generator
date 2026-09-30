@@ -1947,8 +1947,8 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
         for cursor, row in page:
             op = str(row["operation_id"])
             if not row.get("legacy") and op not in held and op not in running:
-                await accept_operation_solve(ctx, op)
-                accepted.append(op)
+                if await accept_operation_solve(ctx, op) is not None:
+                    accepted.append(op)
     if note:
         note(None)
     return accepted

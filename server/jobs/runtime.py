@@ -3244,7 +3244,7 @@ class JobRuntime:
     async def accept_cad_solve(
         self, intent: CadSolveIntent, submission_key: str, *,
         prepare: bool = True, cad_record: Mapping[str, Any] | None = None,
-        refusal: Mapping[str, str | None] | None = None,
+        refusal: Mapping[str, str | None] | None = None, cancelled: bool = False,
     ) -> str:
         """Accept a CAD solve: a ``preparing`` job, created once for its submission key.
 
@@ -3271,19 +3271,24 @@ class JobRuntime:
             record.update(status="error", stage="error", stage_message=refusal["message"] or "Preparation stopped",
                           error_message=refusal["message"], completed_at=_now_iso())
             record["task_metadata"]["cad"]["refusal"] = dict(refusal)
+        if cancelled:
+            record.update(status="cancelled", stage="cancelled", stage_message="Solve cancelled",
+                          cancellation_requested=True, completed_at=_now_iso())
+        if cancelled:
+            initial_event = ("cancelled", {"message": record["stage_message"]})
+        elif refusal:
+            initial_event = ("error", {"code": refusal["code"], "message": record["stage_message"]})
+        else:
+            initial_event = ("stage", {"stage": "received", "message": record["stage_message"], "progress": 0.0})
         job_id, created, event = await asyncio.to_thread(
             self.store.create_job_idempotent,
             record,
             submission_key=submission_key,
             request_sha256=digest,
-            initial_event=(
-                ("error", {"code": refusal["code"], "message": record["stage_message"]})
-                if refusal else
-                ("stage", {"stage": "received", "message": record["stage_message"], "progress": 0.0})
-            ),
+            initial_event=initial_event,
         )
         if created:
-            if prepare and not refusal:
+            if prepare and not refusal and not cancelled:
                 self._offer_to_prep_lane(job_id, event)
             elif event is not None:
                 self.events.publish(event)

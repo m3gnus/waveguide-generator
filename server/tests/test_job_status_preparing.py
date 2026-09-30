@@ -553,13 +553,111 @@ def test_a_failed_snapshot_aborts_the_upgrade_without_changing_the_database(tmp_
     store.close()
 
 
-def test_an_invalid_existing_snapshot_aborts_the_upgrade(tmp_path):
+@pytest.mark.parametrize("contents", [b"", b"not sqlite"])
+def test_an_invalid_existing_snapshot_is_quarantined_and_upgrade_continues(tmp_path, caplog, contents):
     store = _store(tmp_path)
     _old_shaped_database(store.db_path)
     _fill_old_database(store.db_path)
     before = _snapshot(store.db_path)
-    store.rollback_snapshot_path.touch()
-    with pytest.raises(RuntimeError, match="not restorable"):
+    store.rollback_snapshot_path.write_bytes(contents)
+    store.initialize()
+    invalid = list(store.db_path.parent.glob("*.invalid-*"))
+    assert len(invalid) == 1 and invalid[0].read_bytes() == contents
+    assert str(invalid[0]) in caplog.text
+    assert _snapshot(store.rollback_snapshot_path) == before
+    store.close()
+
+
+def test_snapshot_closes_every_backup_connection_before_replace(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    real_connect, real_replace = sqlite3.connect, store_module.os.replace
+    connections = []
+    def connect(*args, **kwargs):
+        conn = real_connect(*args, **kwargs)
+        connections.append(conn)
+        return conn
+    def replace(source, target):
+        if Path(source).name.startswith(".jobs-rollback-"):
+            for conn in connections:
+                with pytest.raises(sqlite3.ProgrammingError, match="closed"):
+                    conn.execute("SELECT 1")
+            assert not Path(str(source) + "-wal").exists()
+            assert not Path(str(source) + "-shm").exists()
+        return real_replace(source, target)
+    # Open the store's intentionally persistent connection before tracking
+    # only the backup's reader/destination/validation connections.
+    store._connect()
+    monkeypatch.setattr(sqlite3, "connect", connect)
+    monkeypatch.setattr(store_module.os, "replace", replace)
+    for name in (".jobs-rollback-orphan", ".jobs-rollback-orphan-wal", ".jobs-rollback-orphan-shm"):
+        (store.db_path.parent / name).touch()
+    store.initialize()
+    assert not list(store.db_path.parent.glob(".jobs-rollback-*"))
+    with closing(real_connect(store.rollback_snapshot_path)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert not Path(str(store.rollback_snapshot_path) + "-wal").exists()
+    assert not Path(str(store.rollback_snapshot_path) + "-shm").exists()
+    store.close()
+
+
+def test_restore_old_release_write_reupgrade_and_second_rollback_keeps_new_row(tmp_path):
+    tree = _released_server("v0.3.2", tmp_path / "release")
+    driver = tmp_path / "write-old.py"
+    driver.write_text(_RELEASED_JOB_STORE_DRIVER.replace('rows, total = store.list_jobs()',
+        'if store.get_job_row("old-new-row") is None: store.create_job({"id": "old-new-row", "status": "queued", "created_at": "2026-09-02", "updated_at": "2026-09-02", "queued_at": "2026-09-02", "config_json": {}, "config_summary_json": {}})\nrows, total = store.list_jobs()'))
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    original = _snapshot(store.db_path)
+    for attempt in range(3):
+        store = _store(tmp_path)
         store.initialize()
-    assert _snapshot(store.db_path) == before
+        snapshot = store.rollback_snapshot_path
+        store.close()
+        shutil.copyfile(snapshot, store.db_path)
+        result = _run_released(tree, driver, str(store.db_path))
+        assert "old-new-row" in result["ids"]
+        if attempt:
+            assert "old-new-row" in {row[0] for row in _snapshot(snapshot)["simulation_jobs"]}
+    rotated = Path(str(snapshot) + ".1")
+    assert rotated.exists()
+    assert len(list(snapshot.parent.glob(snapshot.name + ".[0-9]*"))) == 1
+    assert original["simulation_jobs"] != _snapshot(snapshot)["simulation_jobs"]
+
+
+def test_refresh_converts_an_earlier_wal_snapshot_before_rotation(tmp_path):
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    shutil.copyfile(store.db_path, store.rollback_snapshot_path)
+    with closing(sqlite3.connect(store.rollback_snapshot_path)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("UPDATE simulation_jobs SET label = 'earlier snapshot' WHERE id = 'a'")
+        conn.commit()
+    store.initialize()
+    store.close()
+    for snapshot in (store.rollback_snapshot_path, Path(str(store.rollback_snapshot_path) + ".1")):
+        with closing(sqlite3.connect(snapshot)) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+            assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert not Path(str(snapshot) + "-wal").exists()
+        assert not Path(str(snapshot) + "-shm").exists()
+
+
+def test_snapshot_holds_the_upgrade_write_transaction(tmp_path, monkeypatch):
+    store = _store(tmp_path)
+    _old_shaped_database(store.db_path)
+    _fill_old_database(store.db_path)
+    snapshot = store._snapshot_before_upgrade
+    def inside_transaction(conn):
+        assert conn.in_transaction
+        with closing(sqlite3.connect(store.db_path, timeout=0)) as other:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                other.execute("BEGIN IMMEDIATE")
+        snapshot(conn)
+    monkeypatch.setattr(store, "_snapshot_before_upgrade", inside_transaction)
+    store.initialize()
     store.close()

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -2061,6 +2062,73 @@ def stage_recovery_helper(
     return destination
 
 
+def jobs_snapshot_identity(path: Path) -> dict[str, Any] | None:
+    """Identify one immutable snapshot, including its publication time."""
+    try:
+        info = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(block)
+        return {"mtimeNs": info.st_mtime_ns, "size": info.st_size,
+                "inode": info.st_ino, "sha256": digest.hexdigest()}
+    except FileNotFoundError:
+        return None
+
+
+def record_jobs_upgrade_snapshot(data_dir: Path, resources: Path, snapshot: Path) -> None:
+    """New-build startup records its snapshot in this installation's update."""
+    journal = read_journal(data_dir, resources)
+    expected = Path(data_dir) / "db" / "simulations.db.pre-schema-6.bak"
+    if (journal is None or journal.get("operation") != "update"
+            or journal.get("state") not in {"swapped", "launchers-refreshed", "installed"}
+            or not journal_describes(journal, resources)
+            or snapshot.resolve() != expected.resolve()):
+        return
+    identity = jobs_snapshot_identity(snapshot)
+    if identity is None or identity == journal.get("jobsSnapshotBefore"):
+        return
+    journal["jobsUpgradeSnapshot"] = {"transaction": journal["transaction"], "identity": identity}
+    write_journal(data_dir, resources, journal)
+
+
+def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCallable | None = None) -> None:
+    """Restore only the unchanged snapshot owned by the update being undone."""
+    journal = read_journal(data_dir, resources)
+    if journal is None or not journal_describes(journal, resources):
+        return
+    owned = journal.get("jobsUpgradeSnapshot")
+    if not isinstance(owned, dict) or owned.get("transaction") not in {journal.get("transaction"), journal.get("supersedes")}:
+        return
+    db = Path(data_dir) / "db" / "simulations.db"
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    if jobs_snapshot_identity(snapshot) != owned.get("identity"):
+        _emit_log(log, f"Jobs rollback snapshot changed; not restoring {snapshot}.")
+        return
+    # The helper owns the stopped installation; the relaunch child has exited.
+    # Keep the upgraded file and sidecars together for later recovery.
+    from contextlib import closing
+    with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
+            return  # A recovery replay already restored it.
+    temporary = db.with_name(".jobs-rollback-restore")
+    try:
+        shutil.copyfile(snapshot, temporary)
+        sync_file(temporary, log=log)
+        preserved = db.with_name(db.name + ".schema-6.failed")
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            source = Path(str(db) + suffix)
+            if source.exists():
+                shutil.copyfile(source, Path(str(preserved) + suffix))
+                if suffix:
+                    source.unlink()
+        os.replace(temporary, db)
+        sync_directory(db.parent, log=log)
+        _emit_log(log, f"Restored this update's jobs rollback snapshot: {snapshot}.")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def begin_update_transaction(
     *,
     data_dir: Path,
@@ -2116,6 +2184,7 @@ def begin_update_transaction(
         "startedAt": now,
         "updatedAt": now,
         "directorySync": DIRECTORY_SYNC_SUPPORTED,
+        "jobsSnapshotBefore": jobs_snapshot_identity(Path(data_dir) / "db" / "simulations.db.pre-schema-6.bak"),
         "layers": [
             {
                 "name": target.name,
@@ -2221,6 +2290,8 @@ def begin_rollback_transaction(
         and str(existing.get("state")) not in UNTRUSTED_JOURNAL_STATES
         and journal_describes(existing, resources)
     ):
+        if existing.get("jobsUpgradeSnapshot"):
+            payload["jobsUpgradeSnapshot"] = existing["jobsUpgradeSnapshot"]
         inherited = journal_staging_roots(existing)
         if inherited:
             payload["supersededStagingRoots"] = inherited
@@ -2811,6 +2882,13 @@ def restore_previous_generation(
         return RestoreOutcome(
             restored=False, seal_error=None, detail=detail, attempted=False
         )
+    if data_dir is not None:
+        try:
+            restore_jobs_upgrade_snapshot(data_dir, resources, log=log)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            detail = f"the jobs snapshot could not be restored before rolling back layers: {exc}"
+            record(ROLLING_BACK_STATE, detail)
+            return RestoreOutcome(restored=False, seal_error=None, detail=detail)
     pending = [
         name for name in BUNDLE_LAYERS if (resources / f"{name}{PREVIOUS_SUFFIX}").is_dir()
     ] + [

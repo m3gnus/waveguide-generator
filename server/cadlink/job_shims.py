@@ -10,15 +10,20 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any
 
 from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
 from server.jobs.models import SolveRequest
 from .operations import PREPARE_AND_SOLVE, TERMINAL_STATES
-from .preparation import PreparationInput, _publish, _submission_refusal_reason, submission_key
+from .preparation import (PreparationInput, _publish, _submission_refusal_reason, submission_key,
+                          retain_operation_snapshot, RETAIN_TRANSIENT, RETAIN_INVALID)
 from .solve_command import record_outcome, live_held_operation_ids
 from .solver_frame import frame_provenance, record_solved_frame_provenance
+
+
+logger = logging.getLogger(__name__)
 
 
 def migration_record(store: Any, row: Mapping[str, Any]) -> dict[str, Any]:
@@ -70,6 +75,15 @@ async def accept_operation_solve(ctx: Any, operation_id: str, press: Preparation
     job_id = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
     if job_id is None and row["state"] in TERMINAL_STATES:
         return row.get("job_id")
+    inputs = json.loads(row["inputs_json"])
+    # Manual intake already persists this distinct ingest address atomically
+    # with the ledger envelope, before the route creates its deferred job.
+    manual = manual or (press is None and str(inputs.get("bundle_path") or "").startswith("ingest/"))
+    cancelled = row["state"] == "cancel_requested"
+    retention = await asyncio.to_thread(retain_operation_snapshot, store, ctx.data_dir, ctx.workspace_root, operation_id)
+    if retention == RETAIN_TRANSIENT and not cancelled:
+        return None
+    row = await asyncio.to_thread(store.get_operation, operation_id)
     if job_id is None:
         record = await asyncio.to_thread(migration_record, store, row)
         if manual:
@@ -84,7 +98,9 @@ async def accept_operation_solve(ctx: Any, operation_id: str, press: Preparation
             approvals=(dict(preparation_id=press.approve_preparation_id, finding_ids=list(press.approve_finding_ids))
                        if press.approve_preparation_id else None),
         )
-        if row.get("request_json"):
+        if cancelled:
+            job_id = await runtime.accept_cad_solve(intent, key, prepare=False, cad_record=record, cancelled=True)
+        elif row.get("request_json"):
             # A legacy bind is immutable, including settings changed since it.
             request = SolveRequest.model_validate_json(row["request_json"])
             request = request.model_copy(update={"client_request_id": key})
@@ -98,13 +114,11 @@ async def accept_operation_solve(ctx: Any, operation_id: str, press: Preparation
                 reason = _submission_refusal_reason(exc, code)
                 job_id = await runtime.accept_cad_solve(
                     intent, key, prepare=False, cad_record=record,
-                    refusal=({"code": reason, "message": str(exc)}
-                             if row["state"] != "cancel_requested" else None),
+                    refusal={"code": reason, "message": str(exc)},
                 )
-                if row["state"] == "cancel_requested":
-                    await runtime.stop(job_id)
         else:
-            refusal = None
+            refusal = ({"code": "snapshot_invalid", "message": "WG could not verify the retained snapshot."}
+                       if retention == RETAIN_INVALID else None)
             if row["state"] == "processing":
                 # A claim can still carry the previous attempt's refusal fields.
                 # It was active when WG stopped, regardless of that stale reason.
@@ -116,9 +130,14 @@ async def accept_operation_solve(ctx: Any, operation_id: str, press: Preparation
                 if row.get("reason") == "update_restart_pending":
                     refusal = None
             job_id = await runtime.accept_cad_solve(intent, key, prepare=not manual and schedule, cad_record=record, refusal=refusal)
-            if row["state"] == "cancel_requested":
-                await runtime.stop(job_id)
+    if cancelled:
+        # Re-derived on every replay, including a job committed before its receipt.
+        job = await asyncio.to_thread(runtime.store.get_job_row, job_id)
+        if job["status"] in {"preparing", "queued", "running"}:
+            await runtime.stop(job_id)
     await asyncio.to_thread(runtime.store.make_durable)
+    if retention == RETAIN_TRANSIENT:
+        return None
     if row["state"] not in TERMINAL_STATES:
         await asyncio.to_thread(record_outcome, store, operation_id, state="accepted", job_id=job_id)
     current = await asyncio.to_thread(store.get_operation, operation_id)
@@ -139,8 +158,24 @@ async def sweep_pending_solves(ctx: Any) -> int:
         held = live_held_operation_ids()
         for cursor, row in page:
             if not row.get("legacy") and row["operation_id"] not in held:
-                await accept_operation_solve(ctx, str(row["operation_id"]))
-                changed += 1
+                try:
+                    job_id = await accept_operation_solve(ctx, str(row["operation_id"]))
+                except (ValueError, KeyError, TypeError) as exc:
+                    logger.warning("Refused malformed CAD solve %s: %s", row["operation_id"], exc)
+                    # Bad legacy payloads are isolated; valid rows behind them
+                    # must still migrate. Keep a durable, inspectable refusal.
+                    key = submission_key(str(row["operation_id"]))
+                    intent = CadSolveIntent(operation_id=str(row["operation_id"]), bundle_path="wgreturn/unavailable.wgreturn",
+                                            manifest_sha256="sha256:" + "0" * 64, return_id="unavailable")
+                    job_id = await ctx.runtime.accept_cad_solve(
+                        intent, key, prepare=False,
+                        refusal={"code": "snapshot_invalid", "message": f"Legacy CAD solve could not be migrated: {exc}"},
+                        cancelled=row["state"] == "cancel_requested",
+                    )
+                    await asyncio.to_thread(ctx.runtime.store.make_durable)
+                    await asyncio.to_thread(record_outcome, ctx.store, str(row["operation_id"]), state="accepted", job_id=job_id)
+                if job_id is not None:
+                    changed += 1
 
 
 def operation_detail(ctx: Any, row: Mapping[str, Any]) -> dict[str, Any]:

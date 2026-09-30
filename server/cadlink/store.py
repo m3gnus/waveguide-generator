@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import hashlib
 import json
 import logging
@@ -1365,6 +1366,18 @@ class CadLinkStore:
                 (operation_id,),
             ).fetchone()
         return self._row(row)
+
+    def record_job_dismissal(self, operation_id: str, updated_at: str) -> None:
+        """Persist dismissal ordering before deleting its newer refusal job."""
+        self.initialize()
+        with self._lock, self._transaction() as conn:
+            row = conn.execute("SELECT updated_at FROM cad_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+            timestamps = [datetime.now(timezone.utc), datetime.fromisoformat(updated_at).astimezone(timezone.utc)]
+            if row:
+                timestamps.append(datetime.fromisoformat(row["updated_at"]).astimezone(timezone.utc))
+            conn.execute("UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?",
+                         (max(timestamps).isoformat(), operation_id))
+        self.make_durable()
 
     def request_cancel(self, operation_id: str) -> dict[str, Any] | None:
         """Dismiss an operation: at once when idle, at the attempt's next step when running.

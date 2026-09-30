@@ -2240,3 +2240,57 @@ def test_a_record_nobody_can_read_never_calls_an_unsealed_bundle_usable(
 
     assert outcome.action == "none"
     assert "/usr/bin/codesign" in [command[0] for command in commands]
+
+
+@pytest.mark.parametrize("snapshot_kind", ["created", "preexisting", "changed"])
+def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_path, monkeypatch, snapshot_kind):
+    import sqlite3
+    from contextlib import closing
+    from server.jobs.store import JobStore
+    from server.jobs import store as job_store_module
+    from test_job_status_preparing import (_old_shaped_database, _fill_old_database, _snapshot,
+                                           _RELEASED_JOB_STORE_DRIVER)
+    from test_cadlink_store_rollback import _released_server, _run_released
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    db = data_dir / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    before = _snapshot(db)
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    if snapshot_kind == "preexisting":
+        store = JobStore(db)
+        store.initialize()
+        store.close()
+    monkeypatch.setattr(job_store_module, "app_root", lambda: resources / "app")
+    calls = []
+    def relaunch(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            store = JobStore(db)
+            store.initialize()
+            store.close()
+            if snapshot_kind == "changed":
+                info = snapshot.stat()
+                os.utime(snapshot, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+        return len(calls)
+    result = apply_update_module.apply_update(
+        bundle=resources, data_dir=data_dir, staged_app=staged_app, staged_runtime=staged_runtime,
+        parent_pid=1, platform_name="linux", relauncher=relaunch,
+        confirm=lambda process: "exited immediately" if process == 1 else None,
+        waiter=lambda _pid: True, failure_reporter=lambda _message: None,
+    )
+    assert result == 5
+    assert (resources / "app" / "marker.txt").read_text() == "old0"
+    with closing(sqlite3.connect(db)) as conn:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if snapshot_kind == "created":
+        assert version == 5 and _snapshot(db) == before
+        journal = read_journal(data_dir, resources)
+        assert journal["jobsUpgradeSnapshot"]["transaction"] == journal["transaction"]
+        assert db.with_name(db.name + ".schema-6.failed").exists()
+        tree = _released_server("v0.3.2", tmp_path / "old-release")
+        driver = tmp_path / "old-driver.py"
+        driver.write_text(_RELEASED_JOB_STORE_DRIVER)
+        assert _run_released(tree, driver, str(db))["ids"] == ["a", "b", "c", "d"]
+    else:
+        assert version == 6

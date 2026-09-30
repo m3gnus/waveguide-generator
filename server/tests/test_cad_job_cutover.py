@@ -345,3 +345,126 @@ def test_dismissal_finishes_a_job_first_receipt_join_before_deleting_the_refusal
     assert h.row()["state"] == "accepted" and h.row()["job_id"] == root
     assert h.jobs_store.latest_cad_job("cmd-1") is None
     assert h._loop.run(sweep_pending_solves(h.context())) == 0
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_bound_pending_cancel_never_submits_and_replays_stop_after_commit(h, monkeypatch, crash):
+    from server.cadlink.job_shims import accept_operation_solve
+    _received(h)
+    generation = h.store.claim("cmd-1", 0)
+    request = solve_request_for(validate_setup(_setup(engine="metal")), ingest_id="wgi_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+                                manifest_sha256="sha256:" + "1" * 64, artifact_sha256="sha256:" + "2" * 64,
+                                acknowledged_findings=[], client_request_id="cad-solve:cmd-1")
+    h.store.bind_request("cmd-1", generation, setup_revision_id=_revision(h.store, _setup()), request_json=request.model_dump_json())
+    h.store.request_cancel("cmd-1")
+    real_durable = h.jobs_store.make_durable
+    committed = []
+    def durable():
+        committed.append(1)
+        if crash and len(committed) == 1:
+            assert h.jobs_store.latest_cad_job("cmd-1")["status"] == "cancelled"
+            raise RuntimeError("crash before stop")
+        return real_durable()
+    async def submit(*args, **kwargs):
+        raise AssertionError("Cancelled bind must never be submitted")
+    monkeypatch.setattr(h.jobs_store, "make_durable", durable)
+    monkeypatch.setattr(h.runtime, "submit", submit)
+    if crash:
+        with pytest.raises(RuntimeError, match="crash before stop"):
+            h._loop.run(accept_operation_solve(h.context(), "cmd-1"))
+        assert h.row()["state"] == "cancel_requested"
+    assert h._loop.run(sweep_pending_solves(h.context())) == 1
+    assert h.jobs_store.latest_cad_job("cmd-1")["status"] == "cancelled"
+    assert h.submitted == []
+    assert h.jobs_store.replay_events(0)[-1]["type"] == "cancelled"
+    assert len(committed) == (2 if crash else 1)
+
+
+def test_startup_recovers_retention_before_accepting_a_persisted_delivery(h):
+    import shutil
+    _received(h)
+    h.runtime._ensure_prep_lane = lambda: None
+    missing = h.workspace.with_name("unmounted")
+    h.workspace.rename(missing)
+    assert h._loop.run(sweep_pending_solves(h.context())) == 0
+    assert h.row()["state"] == "received" and h.row()["snapshot_json"] is None
+    assert h.jobs_store.latest_cad_job("cmd-1") is None
+    missing.rename(h.workspace)
+    assert h._loop.run(sweep_pending_solves(h.context())) == 1
+    assert h.row()["state"] == "accepted" and h.row()["snapshot_json"] is not None
+    shutil.rmtree(h.workspace)
+    assert cad_of(h.jobs_store.latest_cad_job("cmd-1"))["snapshot"]
+
+
+@pytest.mark.parametrize("recovery", ["startup", "delivery"])
+def test_interrupted_manual_intake_waits_for_its_first_prepare(h, recovery):
+    from server.cadlink.manual_solve import create_manual_solve
+    from server.cadlink.preparation import retain_operation_snapshot, run_delivery_pass
+    from server.cadlink.ingest import retained_snapshot_path
+    _received(h)
+    retain_operation_snapshot(h.store, h.data_dir, h.workspace, "cmd-1")
+    snapshot = json.loads(h.row()["snapshot_json"])
+    record = h.ingest(retained_snapshot_path(h.data_dir, snapshot["manifest_sha256"]), {}, [], h.store, h.data_dir,
+                      prep_options={}, commit_guard=lambda conn: True, retained_copy=True)
+    create_manual_solve(h.store, h.data_dir, "manual-1", record["ingest_id"])
+    h.runtime._ensure_prep_lane = lambda: None
+    if recovery == "startup":
+        h._loop.run(sweep_pending_solves(h.context()))
+    else:
+        h._loop.run(run_delivery_pass(h.context(), spawn=lambda *_args: None))
+    job = h.jobs_store.latest_cad_job("manual-1")
+    assert job["status"] == "preparing" and job["started_at"] is None
+    assert cad_of(job)["manual_waiting"] is True
+    assert job["config_json"].get("submit") is False
+    assert job["id"] not in h.runtime._prep_queue
+    assert h.submitted == []
+
+
+@pytest.mark.parametrize("bad_field,bad_value", [("inputs_json", "{"), ("inputs_json", "{}"), ("request_json", "{}")])
+def test_one_malformed_row_between_good_rows_is_refused_and_does_not_block_sweep(h, bad_field, bad_value, caplog):
+    from test_cad_preparation import _accept
+    bundle, manifest = _received(h)
+    _accept(h.store, "cmd-2", bundle, manifest)
+    _accept(h.store, "cmd-3", bundle, manifest)
+    with h.store._lock, h.store._transaction() as conn:
+        conn.execute(f"UPDATE cad_operations SET {bad_field} = ? WHERE operation_id = 'cmd-2'", (bad_value,))
+    h.runtime._ensure_prep_lane = lambda: None
+    assert h._loop.run(sweep_pending_solves(h.context())) == 3
+    for op in ("cmd-1", "cmd-3"):
+        assert h.jobs_store.latest_cad_job(op)["status"] == "preparing"
+    refused = h.jobs_store.latest_cad_job("cmd-2")
+    assert refused["status"] == "error"
+    assert "could not be migrated" in cad_of(refused)["refusal"]["message"]
+    assert "cmd-2" in caplog.text
+    assert h._loop.run(sweep_pending_solves(h.context())) == 0
+
+
+def test_dismissal_timestamp_is_durable_and_at_least_the_refusals_timestamp(h):
+    from datetime import datetime, timezone
+    _received(h)
+    h.ingest.findings = [{"id": "review", "kind": "warning", "blocking": True}]
+    refused = h.prepare(setup_revision_id=_revision(h.store, _setup()))
+    # Exercise ordering even when the refusal is ahead of the ledger clock.
+    job = h.jobs_store.latest_cad_job("cmd-1")
+    h.jobs_store.update_job(job["id"], updated_at="2099-01-01T00:00:00")
+    refused = operation_summary(h.row(), h.jobs_store)
+    dismissed = h._loop.run(api.post_cancel_cad_operation("cmd-1", _request(h)))
+    assert dismissed["state"] == "cancelled"
+    assert dismissed["attemptGeneration"] == refused["attemptGeneration"]
+    assert datetime.fromisoformat(dismissed["updatedAt"]).astimezone(timezone.utc) >= datetime.fromisoformat(refused["updatedAt"]).astimezone(timezone.utc)
+    assert operation_summary(h.row(), h.jobs_store)["updatedAt"] == dismissed["updatedAt"]
+
+
+def test_replay_stops_an_existing_keyed_job_when_the_ledger_still_requests_cancel(h):
+    _received(h)
+    h.store.claim("cmd-1", 0)
+    h.store.request_cancel("cmd-1")
+    h.jobs_store.create_job_idempotent(
+        {"id": "committed-before-stop", "status": "queued", "created_at": "2026-09-01", "updated_at": "2026-09-01",
+         "queued_at": "2026-09-01", "config_json": {}, "config_summary_json": {}},
+        submission_key="cad-solve:cmd-1", request_sha256="legacy-hash",
+    )
+    assert h._loop.run(sweep_pending_solves(h.context())) == 1
+    assert h.jobs_store.get_job_row("committed-before-stop")["status"] == "cancelled"
+    assert h.row()["job_id"] == "committed-before-stop"
+    assert h.submitted == []

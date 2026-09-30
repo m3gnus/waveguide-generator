@@ -6,7 +6,7 @@ The three simulation tables deliberately retain the v1 names and columns from
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timedelta
 from hashlib import sha256
 import json
@@ -406,7 +406,6 @@ class JobStore:
         # table cascades on delete. SQLite ignores ``PRAGMA foreign_keys``
         # inside a transaction, so the decision is made here, before ``BEGIN``,
         # and the enforcement is restored afterwards.
-        self._snapshot_before_upgrade()
         rebuild_needs_foreign_keys_off = self._status_check_is_stale()
         raw = self._connect()
         if rebuild_needs_foreign_keys_off:
@@ -421,48 +420,69 @@ class JobStore:
     def rollback_snapshot_path(self) -> Path:
         return self.db_path.with_name(self.db_path.name + ".pre-schema-6.bak")
 
-    def _snapshot_before_upgrade(self) -> None:
-        """Keep a standalone, restorable SQLite snapshot before the first v6 write.
+    def _snapshot_before_upgrade(self, conn: sqlite3.Connection) -> None:
+        """Snapshot committed pre-upgrade state while BEGIN IMMEDIATE excludes writers.
 
-        SQLite backup includes committed WAL pages. Publish only a complete,
-        flushed file; a failed snapshot aborts initialization before migration.
-        A retry never replaces the original rollback material.
+        Backup uses a separate reader: backing up the connection holding the
+        write transaction would wait on itself. The writer has made no changes
+        yet, so this reader sees exactly the state the migration will replace.
         """
 
-        with self._lock:
-            conn = self._connect()
-            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
-            exists = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'"
-            ).fetchone()
-            if version >= 6 or exists is None:
-                return
-            if self.rollback_snapshot_path.exists():
-                with sqlite3.connect(self.rollback_snapshot_path.resolve().as_uri() + "?mode=ro", uri=True) as snapshot:
-                    if (snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok"
-                            or snapshot.execute("PRAGMA user_version").fetchone()[0] >= 6
-                            or snapshot.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone() is None):
-                        raise RuntimeError("The existing jobs rollback snapshot is not restorable by the older release")
-                return
-            fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=self.db_path.parent)
-            os.close(fd)
-            temporary = Path(name)
+        for orphan in self.db_path.parent.glob(".jobs-rollback-*"):
+            orphan.unlink(missing_ok=True)
+        version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone()
+        if version >= 6 or exists is None:
+            return
+        target = self.rollback_snapshot_path
+        if target.exists():
             try:
-                with sqlite3.connect(temporary) as snapshot:
-                    conn.backup(snapshot)
+                with closing(sqlite3.connect(target)) as snapshot:
+                    valid = (snapshot.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+                             and snapshot.execute("PRAGMA user_version").fetchone()[0] < 6
+                             and snapshot.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone() is not None)
+                    if valid:
+                        # Earlier builds published WAL-mode snapshots. Settle
+                        # their sidecars before rotating the previous copy.
+                        snapshot.execute("PRAGMA journal_mode=DELETE")
+            except sqlite3.Error:
+                valid = False
+            if not valid:
+                invalid = target.with_name(target.name + ".invalid-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
+                os.replace(target, invalid)
+                logger.warning("Moved invalid jobs rollback snapshot to %s", invalid)
+                for suffix in ("-wal", "-shm", "-journal"):
+                    sidecar = Path(str(target) + suffix)
+                    if sidecar.exists():
+                        os.replace(sidecar, Path(str(invalid) + suffix))
+        fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=self.db_path.parent)
+        os.close(fd)
+        temporary = Path(name)
+        try:
+            with closing(sqlite3.connect(self.db_path.resolve().as_uri() + "?mode=ro", uri=True)) as source:
+                with closing(sqlite3.connect(temporary)) as snapshot:
+                    source.backup(snapshot)
+                    snapshot.execute("PRAGMA journal_mode=DELETE")
                     if snapshot.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                         raise RuntimeError("The jobs rollback snapshot failed its integrity check")
-                with temporary.open("rb") as stream:
-                    os.fsync(stream.fileno())
-                os.replace(temporary, self.rollback_snapshot_path)
-                if os.name != "nt":
-                    directory = os.open(self.db_path.parent, os.O_RDONLY)
-                    try:
-                        os.fsync(directory)
-                    finally:
-                        os.close(directory)
-            finally:
-                temporary.unlink(missing_ok=True)
+            with temporary.open("r+b") as stream:
+                os.fsync(stream.fileno())
+            if target.exists():
+                os.replace(target, Path(str(target) + ".1"))
+            os.replace(temporary, target)
+            if os.name != "nt":
+                directory = os.open(self.db_path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            # The installed helper records only a snapshot made by this build
+            # during its own update, before any schema write can commit.
+            from launchers.apply_update import record_jobs_upgrade_snapshot
+            record_jobs_upgrade_snapshot(self.db_path.parent.parent, app_root().parent, target)
+        finally:
+            for suffix in ("", "-wal", "-shm", "-journal"):
+                Path(str(temporary) + suffix).unlink(missing_ok=True)
 
     def _status_check_is_stale(self) -> bool:
         """True when an existing ``simulation_jobs`` predates the ``preparing`` status."""
@@ -584,6 +604,7 @@ class JobStore:
                 raise RuntimeError(
                     self._schema_too_new_message(conn, schema_version)
                 )
+            self._snapshot_before_upgrade(conn)
             for statement in _SCHEMA_STATEMENTS:
                 conn.execute(statement)
             columns = {

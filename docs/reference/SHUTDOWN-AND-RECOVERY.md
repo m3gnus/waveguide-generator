@@ -162,14 +162,24 @@ install-provenance message; they never try to serialize or number its preparing,
 refused or cancelled intents. Settling preparations does not make schema 6
 readable by those releases.
 
-To roll back, stop every WG installation using the data directory. Preserve
+An automatic update rollback restores the jobs snapshot created by that same
+transaction before relaunching the older build. Its journal records the snapshot's
+transaction id, mtime and identity; only an unchanged match is restored. The
+upgraded file and sidecars are preserved as `simulations.db.schema-6.failed`.
+An earlier or modified snapshot is never automatically restored.
+
+For a later manual rollback, stop every WG installation using the data directory. Preserve
 `db/simulations.db` and any `-wal`/`-shm` sidecars together. Restore the adjacent
 `simulations.db.pre-schema-6.bak` over the active jobs database and remove the
 upgraded sidecars from that active path. **Restore first, then start the older
 release.** SQLite backup includes pre-upgrade WAL commits, so the snapshot is
 standalone and opens cleanly under both tags. Never restore while a runtime is
-open. Later starts do not replace the snapshot; a failed backup aborts the
-upgrade. A fresh data directory has no older database to restore.
+open. Every upgrade from a live schema below 6 refreshes the snapshot and rotates
+the previous copy to `.bak.1` (keep one), preserving work from a restored older
+release. Starts already at schema 6 leave it alone. Invalid snapshots are moved
+to `.invalid-<timestamp>` with the path logged; orphan temporary files and sidecars
+are swept. Backup runs under the upgrade's write lock, and a failed backup aborts
+the upgrade. A fresh data directory has no older database to restore.
 
 The restored jobs are exactly the pre-upgrade jobs. Keep the preserved upgraded
 file if runs accepted since the upgrade are needed later. CAD retained bundles

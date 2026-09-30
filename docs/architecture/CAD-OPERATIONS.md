@@ -773,9 +773,20 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   backed up next to itself as `simulations.db.pre-schema-6.bak` (or the database's
   own filename with `.pre-schema-6.bak` appended). SQLite backup includes WAL
   commits; integrity is checked and the file is flushed before publication.
-  A failed snapshot stops the upgrade, and later starts never overwrite it.
+  Backup holds the upgrade's `BEGIN IMMEDIATE` lock and uses a separate reader.
+  Both backup connections close, and the destination uses `journal_mode=DELETE`.
+  A failed snapshot stops the upgrade. Every live schema below 6 refreshes it,
+  rotating the previous copy to `.bak.1` (keep one); starts at 6 leave it alone.
+  Invalid snapshots are moved to `.invalid-<timestamp>` with their path logged;
+  orphan temporary files and sidecars are swept.
   A fresh installation has no older jobs database to snapshot.
-- **Rollback procedure.** Stop WG and every installation using this data directory.
+- **Automatic update rollback.** The new build records the snapshot it creates
+  in its installation's transaction journal before committing schema 6. The helper
+  restores only that transaction's snapshot when its mtime and identity still match,
+  before relaunching the old release. The upgraded file and sidecars are preserved
+  as `.schema-6.failed`. Earlier or changed snapshots are never restored automatically.
+  See UPDATE-TRANSACTION-CONTRACT.md §6.
+- **Manual rollback procedure.** Stop WG and every installation using this data directory.
   Keep the upgraded database and its `-wal`/`-shm` sidecars together as recovery
   material. Replace `db/simulations.db` with its pre-schema-6 snapshot, remove
   the upgraded sidecars from the active database path, **then start the older

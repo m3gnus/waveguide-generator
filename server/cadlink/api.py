@@ -2312,7 +2312,9 @@ async def post_cancel_cad_operation(operation_id: str, request: Request) -> dict
             else:
                 from server.jobs.runtime import JobConflictError
                 try:
+                    await asyncio.to_thread(context.store.record_job_dismissal, operation_id, summary["updatedAt"])
                     await context.runtime.dismiss_cad_solve(operation_id)
+                    ledger = await asyncio.to_thread(context.store.get_operation, operation_id)
                 except JobConflictError as exc:
                     raise HTTPException(status_code=409, detail=str(exc)) from exc
                 summary = operation_summary(ledger, context.job_store)

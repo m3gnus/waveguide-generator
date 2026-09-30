@@ -801,6 +801,29 @@ These are recorded, not designed.
      above 12 (`HIGHEST_READABLE_FORMAT`, the highest value this build opens) and
      needs a restorable snapshot. A later Return to Stable never silently
      restores an old snapshot over newer work.
+   - **Jobs schema 6:** v0.3.2 and v0.3.3-rc.1 refuse the upgraded
+     `db/simulations.db`. Before any upgrade write, with `BEGIN IMMEDIATE`
+     excluding other writers, the new build backs up the authoritative live
+     schema below 6 through a separate reader. The standalone snapshot uses
+     `journal_mode=DELETE`; all backup connections close before publication.
+     A fresh database needs no snapshot. A failed backup aborts migration.
+   - Each upgrade from below 6 refreshes `simulations.db.pre-schema-6.bak`,
+     rotating the previous snapshot to `.bak.1` (keep one). Orphan temporary
+     files and sidecars are swept. Invalid snapshots are moved aside to
+     `.invalid-<timestamp>` with their path logged, then replaced by a fresh copy.
+   - The new build records `jobsUpgradeSnapshot` in this installation's update
+     journal before committing schema 6: the creating transaction id and the
+     snapshot's mtime, size, file identity and digest. Automatic rollback restores
+     only that transaction's unchanged snapshot, before relaunching the old build.
+     An explicit rollback that supersedes that update inherits this ownership.
+     The upgraded database and sidecars are preserved as `.schema-6.failed`.
+     A snapshot from an earlier transaction, or one changed afterwards, is never
+     automatically restored. Later Return to Stable requires the manual recovery
+     procedure if no matching transaction owns its snapshot.
+   - Tests: `test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot`
+     runs the extracted v0.3.2 store after automatic restore and covers preexisting
+     and modified snapshots. The restore/write/re-upgrade regression verifies
+     that a second rollback preserves work added by the older release.
 2. **When the gate starts in the one-step flow:** at the Install click, or when the
    request is written (§4.1).
 3. **A rollback to v0.3.1 or v0.3.2** does not apply suppression, and v0.3.1 ignores
