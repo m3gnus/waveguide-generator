@@ -6,7 +6,8 @@ name: CI
 # hosted runner -- suites, build, and the drift gates that keep generated files
 # honest. The only real solves are server/tests/test_real_pipeline.py: a
 # two-frequency BEMPP smoke test of the whole pipeline on the pinned modules,
-# and a CAD-return variant that runs only where an imported engine is offered.
+# and a CAD-return variant required on Ubuntu with pinned CPU OpenCL (PoCL).
+# Other platforms run the CAD variant only where an imported engine is offered.
 
 # Routine integration is gated by the full local suite, run once per landed
 # batch under the workspace landing policy, so this is never a landing gate. It
@@ -262,6 +263,9 @@ jobs:
     # tags; this step reads that same list rather than repeating it here.
     env:
       WG_REQUIRE_RELEASE_TAGS: "1"
+      # Ubuntu's server job installs PoCL below, so a missing imported engine
+      # must fail the pipeline test rather than silently skip the CAD path.
+      WG_REQUIRE_IMPORTED_PIPELINE: ${{ matrix.os == 'ubuntu-latest' && matrix.suite == 'server' && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -320,6 +324,12 @@ jobs:
           pip install -r server/requirements-lock.txt
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
+      # pyopencl's Linux wheel discovers this CPU ICD. It needs no GPU or Julia
+      # provisioning and adds no Python dependencies or app-lock changes.
+      - name: Install the pinned CPU OpenCL runtime for the CAD pipeline
+        if: runner.os == 'Linux' && matrix.suite == 'server'
+        run: |
+          pip install --no-deps --only-binary=:all: pocl-binary-distribution==3.0
       - name: ${{ matrix.label }} tests
         # -v, not -q: Linux has been dying mid-run with exit 141 (SIGPIPE) and
         # no summary, so the only way to name the test that takes the process

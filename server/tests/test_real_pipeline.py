@@ -24,8 +24,9 @@ application itself uses, with nothing faked:
   the blocking findings for review, and submits to the jobs runtime once they
   are approved. Imported geometry is offered only by an engine that declares
   it: BEMPP on OpenCL (numba is never a shipping backend for imported
-  geometry) or Metal. Hosted CI runners have neither, so there it is skipped
-  with the registry's reasons. Where it is expected (``_imported_engine_expected``)
+  geometry) or Metal. Hosted Ubuntu CI installs a pinned PoCL CPU runtime and
+  requires this solve. Other hosted jobs may skip with the registry's reasons.
+  Where it is expected (``_imported_engine_expected``)
   a missing engine fails instead, and
   ``test_this_host_offers_an_imported_engine_where_one_is_expected`` says so on
   its own.
@@ -39,7 +40,8 @@ with no drift. ``test_installed_modules_are_the_pinned_commits`` holds the
 environment itself to the pins, with no editable checkout and no shadowing
 import path.
 
-This file must be green before any pin move (docs/DEVELOPMENT.md).
+Before any pin move this file must pass with ``WG_REQUIRE_IMPORTED_PIPELINE=1``
+on a capable qualification host, so both paths run (docs/DEVELOPMENT.md).
 """
 
 from __future__ import annotations
@@ -55,6 +57,7 @@ from pathlib import Path
 import platform
 import shutil
 import sys
+import time
 from typing import Any
 
 import pytest
@@ -86,9 +89,12 @@ IMPORTED_FREQUENCIES = [1000.0, 2000.0]
 #: paint, so ``source-paint-missing`` is expected. Anything else that blocks is
 #: a regression, and approving it would hide one.
 EXPECTED_BLOCKING = {"freshness": "missing_design", "source-paint-missing": None}
-#: The wall-clock budget for either solve's job, generous for a cold numba JIT
-#: on a hosted Windows runner; locally each solve takes well under 30 s.
+#: A hang guard for waiting on a job, not the solve's performance budget.
 JOB_TIMEOUT_S = 300.0
+#: Per-solve wall time from submission to results, excluding cleanup. Local
+#: solves measured about 24 s and 3 s; 60 s allows cold JIT/OpenCL compilation
+#: and slower hosted CPUs while still catching a substantial regression.
+SOLVE_BUDGET_S = 60.0
 #: Set to 1 on a host that must run the imported solve, beyond the defaults
 #: in ``_imported_engine_expected``.
 REQUIRE_IMPORTED_ENV = "WG_REQUIRE_IMPORTED_PIPELINE"
@@ -221,10 +227,10 @@ def _imported_engine_expected() -> str | None:
 
     Apple Silicon has Metal, and the pinned hornlab-metal-bem declares imported
     geometry, so a Mac that stops offering it has lost something. Hosted GitHub
-    runners are VMs whose GPU is not a qualified Metal device, so they are not
-    held to it (they still run the solve if the registry offers an engine).
-    ``WG_REQUIRE_IMPORTED_PIPELINE=1`` requires it anywhere else, such as a host
-    with a CPU OpenCL device.
+    runners' Metal devices are not qualified, so they are not held to it (they
+    still run the solve if the registry offers an engine).
+    ``WG_REQUIRE_IMPORTED_PIPELINE=1`` requires it for hosted Ubuntu with PoCL
+    and for the local pin-move gate, whatever the host's platform.
     """
 
     if os.environ.get(REQUIRE_IMPORTED_ENV) == "1":
@@ -349,8 +355,13 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
                 "BEMPP is unavailable, and the pinned requirements install it (numba "
                 f"included) on every host: {getattr(bempp, 'reason', 'not registered')}"
             )
+            started = time.perf_counter()
             accepted = await _call(app, "POST", "/api/solve", PARAMETRIC_BODY)
             result = await _finish(app, accepted["job_id"])
+            elapsed = time.perf_counter() - started
+            assert elapsed < SOLVE_BUDGET_S, (
+                f"parametric solve took {elapsed:.2f} s; budget is {SOLVE_BUDGET_S:.0f} s"
+            )
         finally:
             await _close(app)
 
@@ -481,6 +492,7 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
             assert set(kinds) == set(EXPECTED_BLOCKING) and all(
                 EXPECTED_BLOCKING[kind] in (None, verdict) for kind, verdict in kinds.items()
             ), f"blocking findings {kinds}, expected exactly {EXPECTED_BLOCKING}"
+            started = time.perf_counter()
             submitted = (
                 await _call(
                     app,
@@ -498,7 +510,13 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
             )["operation"]
             assert (submitted["state"], submitted["stage"]) == ("accepted", "submitted"), submitted
             assert submitted["preparationId"] == held["preparationId"], submitted
-            return engine, held["preparationId"], await _finish(app, submitted["jobId"])
+            result = await _finish(app, submitted["jobId"])
+            elapsed = time.perf_counter() - started
+            assert elapsed < SOLVE_BUDGET_S, (
+                f"imported solve on {engine} took {elapsed:.2f} s; "
+                f"budget is {SOLVE_BUDGET_S:.0f} s"
+            )
+            return engine, held["preparationId"], result
         finally:
             await _close(app)
 

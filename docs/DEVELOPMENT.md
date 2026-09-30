@@ -90,10 +90,17 @@ solver qualification; its only real solves are the two tiny ones below.
 
 `server/tests/test_real_pipeline.py` is the one default test with nothing faked: a tiny
 OSSE through `/api/solve` on the pinned mesher and BEMPP, and a committed `.wgreturn`
-through ingest, backend preparation and solve (on BEMPP-OpenCL or Metal, skipped with the
-registry's reasons on a host offering neither), holding the results and the installed
-module commits to `pins.json`. It must be green, in an environment installed from the
-pins, before any pin move.
+through ingest, backend preparation and solve (on BEMPP-OpenCL or Metal), holding the
+results and the installed module commits to `pins.json`. Each solve must finish within
+60 seconds; the separate 300-second job timeout is a hang guard. Hosted Ubuntu's server
+job installs pinned PoCL CPU OpenCL and requires the CAD path; other hosted jobs may skip
+it with the registry's reasons. Before any pin move, run this file on a capable local
+qualification host in an environment installed from the pins, explicitly requiring both
+paths (a missing imported engine must fail):
+
+```bash
+WG_REQUIRE_IMPORTED_PIPELINE=1 .venv/bin/python scripts/run_tests.py server/tests/test_real_pipeline.py -q
+```
 
 Hosted CI runs Linux and Windows on every push to `dev` (a diagnostic after landing,
 not a landing gate), and the full three-platform matrix when dispatched or called by
