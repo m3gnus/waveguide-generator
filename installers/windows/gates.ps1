@@ -14,6 +14,41 @@ $ErrorActionPreference = "Stop"
 # CreateProcess and returns. This cost one 600 s stall before it was believed.
 $results = @()
 
+function Start-SandboxedSetup {
+    param(
+        [Parameter(Mandatory = $true)][string]$Executable,
+        [string[]]$ExtraArguments = @(),
+        [string]$AddIns = $wglinkAddins,
+        [switch]$Wait
+    )
+    if ($Executable -ne $Setup -and $Executable -ne $unins.FullName) {
+        throw "Only setup or the gate's uninstaller may be launched."
+    }
+    if ($env:WG2_DATA_DIR -ne $gateData) {
+        throw "WG2_DATA_DIR must be the gate's private data folder."
+    }
+    if (($AddIns -ne $wglinkAddins -and $AddIns -ne $developerAddins) -or
+        -not (Test-Path -LiteralPath $AddIns -PathType Container)) {
+        throw "AddIns must be an existing private gate folder."
+    }
+    foreach ($argument in $ExtraArguments) {
+        if ($argument -match '^/(VERYSILENT|SUPPRESSMSGBOXES|WGLINKADDINSDIR)(=|$)') {
+            throw "Sandbox arguments belong to Start-SandboxedSetup."
+        }
+    }
+    $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments + @("/WGLINKADDINSDIR=`"$AddIns`"")
+    $p = Start-Process -FilePath $Executable -ArgumentList $arguments -PassThru -Wait:$Wait -NoNewWindow
+    # Force a retained handle so Windows PowerShell 5.1 can report ExitCode.
+    $null = $p.Handle
+    return $p
+}
+
+function Start-StandIn {
+    $p = Start-Process -FilePath "$env:SystemRoot\System32\ping.exe" -ArgumentList "-n", "600", "127.0.0.1" -RedirectStandardOutput (Join-Path $gateRoot "stand-in.log") -RedirectStandardError (Join-Path $gateRoot "stand-in-error.log") -PassThru -NoNewWindow
+    $null = $p.Handle
+    return $p
+}
+
 function Gate($id, $name, $pass, $detail) {
     $script:results += [pscustomobject]@{
         Gate = $id; Name = $name
@@ -57,7 +92,7 @@ $marked = $null -ne (Get-Item -Path $Setup -Stream "Zone.Identifier" -ErrorActio
 
 # --- Gate 4 / 3: a too-long install root must be refused with an exit code -----
 $longDir = "C:\" + ("g" * 200)
-$p = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/DIR=`"$longDir`"", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -NoNewWindow
+$p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/DIR=`"$longDir`""
 $longReturned = $true
 try {
     Wait-Process -Id $p.Id -Timeout 30 -ErrorAction Stop
@@ -80,7 +115,7 @@ Gate 3 "silent run exits with a code, never a modal box" ($longReturned -and $lo
 # exists, so it cannot accidentally create a Fusion-looking directory for a
 # typo in a normal deployment command.
 if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
-$p = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=`"wglink`"", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -Wait -NoNewWindow
+$p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/TASKS=`"wglink`"" -Wait
 $installExit = $p.ExitCode
 
 # --- Gate 2: per-user location, no elevation ----------------------------------
@@ -120,7 +155,7 @@ Gate 10 "setup task installs packaged WGLink into a disposable AddIns directory"
 $silentSentinel = Join-Path $wglinkTarget ".gate-silent-opt-in-sentinel"
 Set-Content -LiteralPath $silentSentinel -Value ([guid]::NewGuid().ToString("N")) -NoNewline
 $beforeSilentUpgrade = TreeFingerprint $wglinkTarget
-$silentUpgrade = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -Wait -NoNewWindow
+$silentUpgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -Wait
 $afterSilentUpgrade = TreeFingerprint $wglinkTarget
 $silentUpgradeOk = ($silentUpgrade.ExitCode -eq 0) -and (Test-Path $silentSentinel) -and ($beforeSilentUpgrade -eq $afterSilentUpgrade) -and -not (Test-Path $journal) -and $staging.Count -eq 0
 Gate 12 "silent upgrade leaves WGLink untouched without current /TASKS opt-in" $silentUpgradeOk `
@@ -136,7 +171,7 @@ Set-Content -LiteralPath $developerMarker -Value '{"sourceCommit":"local"}' -NoN
 Set-Content -LiteralPath $developerFile -Value 'keep me' -NoNewline
 $developerBefore = Get-Content -Raw $developerMarker
 $managedBefore = Get-Content -Raw $managedMarker
-$developerRun = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=`"wglink`"", "/WGLINKADDINSDIR=`"$developerAddins`"" -PassThru -Wait -NoNewWindow
+$developerRun = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/TASKS=`"wglink`"" -AddIns $developerAddins -Wait
 $developerPreserved = ($developerRun.ExitCode -eq 0) -and (Test-Path $developerFile) -and ((Get-Content -Raw $developerMarker) -eq $developerBefore) -and ((Get-Content -Raw $managedMarker) -eq $managedBefore)
 Gate 11 "setup preserves a developer-marked WGLink copy" $developerPreserved `
     "setup exit $($developerRun.ExitCode); developer marker unchanged: $((Get-Content -Raw $developerMarker) -eq $developerBefore); colliding WG marker unchanged: $((Get-Content -Raw $managedMarker) -eq $managedBefore); developer file preserved: $(Test-Path $developerFile)"
@@ -206,7 +241,7 @@ if ($landed) {
     Set-Content "$plantedRecovery\gate.pyc" "planted by the gate run"
     $unins =Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1
     if ($unins) {
-        $p = Start-Process -FilePath $unins.FullName -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -Wait -NoNewWindow
+        $p = Start-SandboxedSetup -Executable $unins.FullName -ExtraArguments "/NORESTART" -Wait
         Start-Sleep -Seconds 3
         $left = if (Test-Path $installRoot) { (Get-ChildItem -Recurse -File $installRoot -ErrorAction SilentlyContinue).Count } else { 0 }
         $managedAddinRemoved = -not (Test-Path $wglinkTarget)

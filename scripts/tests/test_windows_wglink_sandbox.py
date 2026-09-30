@@ -8,15 +8,13 @@ RC DMG mount/ditto and Linux install --no-launch do not start WG or WGLink;
 imported-same-mesh/ingest qualifiers only run fixture jobs. Backend/interpreter,
 process-table, memory and sweep probes are checked separately from app starts.
 
-PowerShell below is a deliberately bounded parser, not a general interpreter.
-It tokenizes commands/assignments and tracks path values and directory lifetime
-at each process boundary. Unknown launch syntax fails closed rather than making
-an invocation disappear from the inventory. Python launch environments are
-captured in test_build_bundle and the qualifier process-boundary tests.
+PowerShell command positions, types and member calls are allowlisted. Only the
+checked helper bodies may start processes; sandbox inputs and environment writes
+are fixed contracts. Python launch environments are captured in test_build_bundle
+and the qualifier process-boundary tests.
 """
 
 import ast
-from dataclasses import dataclass
 from pathlib import Path
 import re
 import shlex
@@ -26,167 +24,313 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# Strings stay atomic, including escaped quotes, so comment/command words in
-# strings cannot introduce a fake invocation. Parenthesized argument arrays and
-# backtick continuations remain part of the same statement.
-TOKEN = re.compile(
-    r'"(?:`.|[^"`])*"|\'(?:\'\'|[^\'])*\'|'
-    r'\$[\w:]+(?:\.[\w]+)*(?:\[\d+\])?(?:\.[\w]+)*|'
-    r'[^\s(){}\[\],;=|&]+|[^\s]', re.I
+# This is a deliberately small, fail-closed PowerShell grammar. It discovers
+# command positions independently of command names, including nested pipelines
+# and expandable-string subexpressions. Unsupported syntax needs review.
+LEXEME = re.compile(
+    r'\[(?:[\w.]+(?:\[\])?|Parameter\(Mandatory\s*=\s*\$true\))\]|'
+    r'\$[\w:]+|\.[A-Za-z_]\w*|::|[+\-*/]?=|\+\+|--|'
+    r'[^\s(){}\[\],;=|&\'"`]+|[^\s]', re.I
 )
+COMMANDS = frozenset('''
+    Get-Item Get-ChildItem Test-Path Join-Path New-Item Remove-Item Wait-Process
+    Stop-Process Get-Content Get-FileHash Sort-Object Where-Object ForEach-Object
+    Group-Object Out-Null Set-Content ConvertFrom-Json ConvertTo-Json Select-Object
+    New-Object Split-Path Rename-Item Start-Sleep Unblock-File
+    Start-SandboxedSetup Start-StandIn Gate TreeFingerprint
+'''.lower().split())
+TYPES = {'[io.path]', '[guid]', '[pscustomobject]', '[string]', '[string[]]',
+         '[switch]', '[parameter(mandatory = $true)]'}
+METHODS = {'::getfullpath', '::newguid', '.tostring', '.trimend', '.substring',
+           '.refresh', '.createshortcut'}
+KEYWORDS = {'param', 'if', 'elseif', 'else', 'foreach', 'try', 'catch', 'finally',
+            'return', 'throw', 'exit'}
+FUNCTIONS = {'gate', 'treefingerprint', 'start-sandboxedsetup', 'start-standin'}
 
 
-def statements(source: str) -> list[list[str]]:
-    result, current = [], []
-    depth = 0
-    # Tokenize newlines as separators outside strings/comments.
-    lexer = re.compile(TOKEN.pattern + r'|\n', re.I)
-    for line in source.splitlines(keepends=True):
-        tokens = list(lexer.finditer(line))
-        for index, match in enumerate(tokens):
-            token = match.group()
-            if token.startswith('#'):
-                break
-            if token == '`' and index + 1 == len(tokens) - 1:
-                continue
-            if token == '\n':
-                continued = line.rstrip('\n').rstrip().endswith(('`', '|'))
-                if depth == 0 and not continued:
-                    if current:
-                        result.append(current)
-                    current = []
-            elif token in (';', '{', '}') and depth == 0:
-                if current:
-                    result.append(current)
-                current = []
+def powershell_tokens(source: str) -> list[str]:
+    """Keep strings atomic; expose their executable $() contents for checking."""
+    tokens = []
+    pos = 0
+    while pos < len(source):
+        char = source[pos]
+        if char in ' \t\r':
+            pos += 1
+        elif source.startswith('`\n', pos) or source.startswith('`\r\n', pos):
+            pos += 2 if source[pos + 1] == '\n' else 3
+        elif char == '#':
+            end = source.find('\n', pos)
+            pos = len(source) if end < 0 else end
+        elif char in '\"\'':
+            start, quote = pos, char
+            pos += 1
+            expansions = []
+            while pos < len(source):
+                if quote == '"' and source[pos] == '`':
+                    pos += 2
+                elif quote == "'" and source.startswith("''", pos):
+                    pos += 2
+                elif source[pos] == quote:
+                    pos += 1
+                    break
+                elif quote == '"' and source.startswith('$(', pos):
+                    # Quoted arguments may contain nested subexpressions.
+                    end = expression_end(source, pos + 2)
+                    expansions.extend([';'] + powershell_tokens(source[pos + 2:end]) + [';'])
+                    pos = end + 1
+                else:
+                    pos += 1
             else:
-                current.append(token)
-                if token in ('(', '['):
-                    depth += 1
-                elif token in (')', ']'):
-                    depth -= 1
-        # A comment consumes its newline too.
-        if tokens and any(m.group().startswith('#') for m in tokens) and depth == 0:
-            if current:
-                result.append(current)
-            current = []
-    if current:
-        result.append(current)
-    return result
-
-
-@dataclass(frozen=True)
-class PrivatePath:
-    root: str
-    parts: tuple[str, ...] = ()
-
-    def child(self, name: str) -> 'PrivatePath':
-        parts = tuple(part for part in re.split(r'[\\/]', name) if part)
-        assert '..' not in parts and not any('$' in part or ':' in part for part in parts), 'unresolved or escaping sandbox path'
-        return PrivatePath(self.root, self.parts + parts)
-
-    def contains(self, other: 'PrivatePath') -> bool:
-        return self.root == other.root and other.parts[:len(self.parts)] == self.parts
-
-
-def path_value(tokens: list[str], values: dict[str, PrivatePath]) -> PrivatePath | None:
-    if not tokens:
-        return None
-    if tokens[0].lower() == 'join-path':
-        parent = values.get(tokens[1].lower())
-        if parent and len(tokens) == 3 and tokens[2][0] in ('"', "'"):
-            return parent.child(tokens[2][1:-1])
-        if tokens[1].lower() in ('$env:temp', '$env:runner_temp'):
-            # Only a per-run unique root qualifies, not an ambient directory.
-            if any('newguid' in token.lower() for token in tokens):
-                return PrivatePath(' '.join(tokens).lower())
-        return None
-    if len(tokens) == 1:
-        token = tokens[0].lower()
-        if token in values:
-            return values[token]
-        if token.startswith('"$') and token.endswith('"'):
-            match = re.fullmatch(r'"(\$[\w:]+)(.*)"', token)
-            if match and match[1] in values:
-                return values[match[1]].child(match[2])
-    return None
-
-
-def assert_private_launches(source: str, *, expected: int = 5) -> None:
-    values: dict[str, PrivatePath] = {}
-    directories: set[PrivatePath] = set()
-    launches = []
-    for tokens in statements(source):
-        lower = [token.lower() for token in tokens]
-        if len(tokens) > 2 and tokens[0].startswith('$') and tokens[1] == '=':
-            name = lower[0]
-            value = path_value(tokens[2:], values)
-            values.pop(name, None)
-            if value:
-                values[name] = value
-        if 'new-item' in lower and '-itemtype' in lower:
-            if lower[lower.index('-itemtype') + 1] == 'directory':
-                # Recognize variable paths and parenthesized Join-Path values.
-                for token in lower[lower.index('new-item') + 1:]:
-                    if token in values:
-                        directories.add(values[token])
-                if '(' in tokens:
-                    start = tokens.index('(') + 1
-                    value = path_value(tokens[start:tokens.index(')', start)], values)
-                    if value:
-                        directories.add(value)
-        if 'remove-item' in lower:
-            removed = [path for token in tokens if (path := path_value([token], values))]
-            directories = {path for path in directories if not any(p.contains(path) for p in removed)}
-        if len(tokens) > 2 and tokens[0].startswith('$') and tokens[1] in ('+', '-') and tokens[2] == '=':
-            values.pop(lower[0], None)
-        # Changes whose filesystem/variable semantics this bounded parser does
-        # not model must be reviewed instead of silently passing.
-        if ('invoke-expression' in lower or
-            any(command in lower for command in ('set-variable', 'clear-variable', 'remove-variable')) or
-            (any(command in lower for command in ('move-item', 'rename-item', 'clear-item')) and
-             any(token in values for token in lower))):
-            raise AssertionError('unmodelled sandbox mutation or execution')
-        if 'start-process' in lower:
-            start = lower.index('start-process')
-            command = tokens[start:]
-        elif '&' in tokens:
-            command = tokens[tokens.index('&'):]
-        elif tokens[0].startswith('$') and len(tokens) > 1 and tokens[1].startswith(('/', '-')):
-            command = tokens
+                raise AssertionError('unclosed PowerShell string')
+            tokens.append(source[start:pos])
+            tokens.extend(expansions)
+        elif source.startswith(('@(', '$('), pos):
+            tokens.append(source[pos:pos + 2])
+            pos += 2
+        elif source.startswith('@{', pos):
+            tokens.append('@{')
+            pos += 2
+        elif char == '\n':
+            # A pipeline or a binary operator continues across a newline.
+            if not tokens or tokens[-1] not in {'|', '-or', '-and', '+', ','}:
+                tokens.append(';')
+            pos += 1
         else:
+            match = LEXEME.match(source, pos)
+            assert match, f'unknown PowerShell syntax at {source[pos:pos + 40]!r}'
+            token = match.group()
+            assert token != '`', 'unreviewed escaped command spelling'
+            tokens.append(token)
+            pos = match.end()
+    return tokens
+
+
+def expression_end(source: str, pos: int) -> int:
+    depth, quote = 1, None
+    while pos < len(source):
+        char = source[pos]
+        if char == '`':
+            pos += 2
             continue
-        launches.append(command)
-        flags = [token.lower() for token in command]
-        if flags[0] == 'start-process':
-            allowed = {'-filepath', '-argumentlist', '-passthru', '-wait', '-nonewwindow'}
-            assert all(not token.startswith('-') or token in allowed for token in flags), 'unreviewed process option'
-            target_index = flags.index('-filepath') + 1 if '-filepath' in flags else 1
-            assert flags[target_index] in ('$setup', '$unins.fullname'), 'unreviewed executable identity'
-        else:
-            assert flags[1] in ('$setup', '$unins.fullname'), 'unreviewed executable identity'
-        assert not set(flags) & {'-usenewenvironment', '-environment', '-credential', '-verb'}, 'child environment replaced'
-        assert not any(token.startswith('@') and token != '@' for token in command), 'unmodelled splatted launch'
-        data = values.get('$env:wg2_data_dir')
-        assert data and data in directories, 'private data must exist at launch'
-        overrides = [re.fullmatch(r'/wglinkaddinsdir=(?:`")?(\$[\w:]+)(?:`")?',
-                                  token[1:-1].lower() if token.startswith('"') else token.lower())
-                     for token in command]
-        overrides = [match for match in overrides if match]
-        assert len(overrides) == 1, f'AddIns isolation missing: {command}'
-        addins = values.get(overrides[0][1])
-        assert addins and addins in directories, 'private AddIns must exist at launch'
-        assert addins.root == data.root, 'data/AddIns must share the private work area'
-        # Silent setup skips [Run], which otherwise launches with user defaults.
-        assert any('/verysilent' in token.lower() for token in command), 'interactive setup may launch WG'
-    assert len(launches) == expected, f'unreviewed process inventory: {launches}'
+        if quote:
+            if char == quote:
+                if quote == "'" and source[pos:pos + 2] == "''":
+                    pos += 2
+                    continue
+                quote = None
+        elif char in '\"\'':
+            quote = char
+        elif char == '(':
+            depth += 1
+        elif char == ')':
+            depth -= 1
+            if not depth:
+                return pos
+        pos += 1
+    raise AssertionError('unclosed PowerShell subexpression')
+
+
+def command_elements(tokens: list[str]) -> list[list[str]]:
+    """First word at each statement/pipeline/expression boundary, generically."""
+    commands = []
+    head = True
+    for index, token in enumerate(tokens):
+        lower = token.lower()
+        following = tokens[index + 1] if index + 1 < len(tokens) else ''
+        if token in {';', '|', '(', '@(', '$(', '{', '@{', '}', '='}:
+            head = True
+        elif token in {')', ']', ','}:
+            head = False
+        elif lower == 'function':
+            assert following.lower() in FUNCTIONS, f'unreviewed function {following}'
+            head = False
+        elif head and lower in KEYWORDS:
+            head = lower in {'return', 'throw', 'exit'}
+        elif head:
+            head = False
+            if (token.startswith(('$', '"', "'", '[', '-')) or
+                    token in {'@', '!', '+', '::'} or token[0].isdigit() or
+                    following == '='):
+                continue  # expression, parameter declaration or hashtable key
+            end, depth = index + 1, 0
+            while end < len(tokens):
+                if depth == 0 and tokens[end] in {';', '|', '{', '}', ')'}:
+                    break
+                depth += (tokens[end] in {'(', '@(', '$('}) - (tokens[end] == ')')
+                end += 1
+            commands.append(tokens[index:end])
+    return commands
+
+
+def assert_allowed_powershell(tokens: list[str], *, extra_commands: set[str] = frozenset(),
+                              delegated: set[str] = frozenset()) -> list[list[str]]:
+    for index, token in enumerate(tokens):
+        lower = token.lower()
+        if lower.startswith('$') and ':' in lower and not lower.startswith('$env:'):
+            assert lower == '$script:results', f'unreviewed scoped variable: {token}'
+        if token in {'&', '.'}:
+            assert token == '&' and tokens[index + 1].lower() in delegated, 'unreviewed call operator'
+        if token.startswith('[') and not re.fullmatch(r'\[\d+\]', token):
+            assert lower in TYPES, f'unreviewed .NET type: {token}'
+        if lower.startswith('.') and index + 1 < len(tokens) and tokens[index + 1] == '(':
+            assert lower in METHODS, f'unreviewed member call: {token}'
+        if token == '::':
+            assert '::' + tokens[index + 1].lower() in METHODS, 'unreviewed static member'
+    commands = command_elements(tokens)
+    for command in commands:
+        assert command[0].lower() in COMMANDS | extra_commands | delegated | {'&'}, f'unknown command: {command}'
+        if command[0].lower() == 'new-object':
+            assert [t.lower() for t in command] == ['new-object', '-comobject', 'wscript.shell'], 'unreviewed object factory'
+        if command[0].lower() in {'new-item', 'remove-item', 'set-content'}:
+            assert not any(t.strip('"\'').lower().startswith('env:') for t in command), 'environment provider write'
+    return commands
+
+
+def function_body(tokens: list[str], name: str) -> tuple[list[str], list[str]]:
+    starts = [i for i, t in enumerate(tokens[:-1]) if t.lower() == 'function' and tokens[i + 1].lower() == name.lower()]
+    assert len(starts) == 1, f'{name} must be defined once'
+    start = starts[0]
+    opening = tokens.index('{', start)
+    assert compact(tokens[start:opening]) == ['function', name.lower()], 'unreviewed helper parameters'
+    depth = 1
+    end = opening + 1
+    while depth:
+        assert end < len(tokens), 'unclosed helper'
+        depth += (tokens[end] in {'{', '@{'}) - (tokens[end] == '}')
+        end += 1
+    return tokens[opening + 1:end - 1], tokens[:start] + tokens[end:]
+
+
+def compact(tokens: list[str]) -> list[str]:
+    return [t.lower() for t in tokens if t != ';']
+
+
+def assert_fragment(tokens: list[str], fragment: str) -> None:
+    actual, expected = compact(tokens), compact(powershell_tokens(fragment))
+    assert any(actual[i:i + len(expected)] == expected for i in range(len(actual))), fragment
+
+
+def assert_environment_pair(tokens: list[str], expected: list[str]) -> None:
+    writes = []
+    for i, token in enumerate(tokens[:-1]):
+        if token.lower().startswith('$env:'):
+            assert not (i and tokens[i - 1] in {'++', '--'}), 'environment increment'
+            if tokens[i + 1] == ',':
+                tail = tokens[i + 1:]
+                boundary = next((j for j, t in enumerate(tail) if t in {';', '|', '{', '}'}), len(tail))
+                assert '=' not in tail[:boundary], 'environment tuple assignment'
+        if token.lower().startswith('$env:') and tokens[i + 1] in {'=', '+=', '-=', '++', '--'}:
+            end = i + 2
+            while end < len(tokens) and tokens[end] not in {';', '}'}:
+                end += 1
+            writes.append(compact(tokens[i:end]))
+    assert writes == [compact(powershell_tokens(line)) for line in expected], 'unreviewed environment writes'
+
+
+def assert_gate_allowlist(source: str) -> None:
+    tokens = powershell_tokens(source)
+    setup_body, outside = function_body(tokens, 'Start-SandboxedSetup')
+    standin_body, outside = function_body(outside, 'Start-StandIn')
+    commands = assert_allowed_powershell(outside)
+    # The helper bodies are a closed statement allowlist as well. Merely finding
+    # guard text would let a surrounding `if ($false)` disable the guard, or an
+    # extra assignment replace the checked arguments before Start-Process.
+    setup_contract = """
+        param([Parameter(Mandatory = $true)][string]$Executable,
+              [string[]]$ExtraArguments = @(), [string]$AddIns = $wglinkAddins, [switch]$Wait)
+        if ($Executable -ne $Setup -and $Executable -ne $unins.FullName) { throw "refused" }
+        if ($env:WG2_DATA_DIR -ne $gateData) { throw "refused" }
+        if (($AddIns -ne $wglinkAddins -and $AddIns -ne $developerAddins) -or
+            -not (Test-Path -LiteralPath $AddIns -PathType Container)) { throw "refused" }
+        foreach ($argument in $ExtraArguments) {
+            if ($argument -match '^/(VERYSILENT|SUPPRESSMSGBOXES|WGLINKADDINSDIR)(=|$)') { throw "refused" }
+        }
+        $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments + @("/WGLINKADDINSDIR=`"$AddIns`"")
+        $p = Start-Process -FilePath $Executable -ArgumentList $arguments -PassThru -Wait:$Wait -NoNewWindow
+        $null = $p.Handle
+        return $p
+    """
+    standin_contract = '''
+        $p = Start-Process -FilePath "$env:SystemRoot\\System32\\ping.exe" -ArgumentList "-n", "600", "127.0.0.1" -RedirectStandardOutput (Join-Path $gateRoot "stand-in.log") -RedirectStandardError (Join-Path $gateRoot "stand-in-error.log") -PassThru -NoNewWindow
+        $null = $p.Handle
+        return $p
+    '''
+    for body, contract in ((setup_body, setup_contract), (standin_body, standin_contract)):
+        helper_commands = assert_allowed_powershell(body, extra_commands={'start-process'})
+        assert sum(c[0].lower() == 'start-process' for c in helper_commands) == 1
+        normalized = compact(body)
+        # Failure message wording does not affect the boundary contract.
+        for i, token in enumerate(normalized[:-1]):
+            if token == 'throw':
+                assert normalized[i + 1].startswith(('"', "'"))
+                normalized[i + 1] = '"refused"'
+        assert normalized == compact(powershell_tokens(contract)), 'unreviewed helper body'
+    assert_environment_pair(tokens, ['$env:WG2_DATA_DIR = $gateData', '$env:WG2_DATA_DIR = $previousDataDir'])
+    # The inputs to the helper are immutable private fixtures, created before
+    # the first call. Pin their definitions rather than infer arbitrary PS code.
+    fixtures = {
+        '$installRoot': '"$env:LOCALAPPDATA\\Programs\\Waveguide Generator"',
+        '$gateRoot': 'Join-Path $env:TEMP ("WaveguideGenerator-installer-gates-" + [guid]::NewGuid().ToString("N"))',
+        '$wglinkAddins': 'Join-Path $gateRoot "Fusion\\API\\AddIns"',
+        '$developerAddins': 'Join-Path $gateRoot "Developer\\API\\AddIns"',
+        '$gateData': 'Join-Path $gateRoot "data"',
+        '$previousDataDir': '$env:WG2_DATA_DIR',
+        '$unins': 'Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1',
+        '$planted': '"$installRoot\\app\\__pycache__"',
+        '$plantedRecovery': '"$installRoot\\recovery\\__pycache__"',
+    }
+    for variable, value in fixtures.items():
+        assert_fragment(outside, f'{variable} = {value}')
+        assert sum(t.lower() == variable.lower() and outside[i + 1] in {'=', '+=', '-=', '++', '--'}
+                   for i, t in enumerate(outside[:-1])) == 1, f'reassigned sandbox input {variable}'
+    assert not any(t.lower() == '$setup' and outside[i + 1] in {'=', '+=', '-=', '++', '--'}
+                   for i, t in enumerate(outside[:-1])), 'setup reassignment'
+    mkdir = 'New-Item -ItemType Directory -Force $wglinkAddins, $developerAddins, $gateData | Out-Null'
+    assert_fragment(outside, mkdir)
+    assert_fragment(outside, '$previousDataDir = $env:WG2_DATA_DIR; $env:WG2_DATA_DIR = $gateData; try {')
+    assert_fragment(outside, '} finally { $env:WG2_DATA_DIR = $previousDataDir }')
+    assert outside.index('New-Item') < outside.index('Start-SandboxedSetup')
+    assert outside.index('$env:WG2_DATA_DIR', outside.index('$previousDataDir') + 1) < outside.index('Start-SandboxedSetup')
+    # Only the two existing cleanup roots are permitted; neither command may
+    # operate on the private AddIns/data fixtures or an indirect provider path.
+    removable = {'$gateroot', '$installroot'}
+    directory_commands = [compact(powershell_tokens(line)) for line in (
+        mkdir.split(' | ')[0],
+        'New-Item -ItemType Directory -Force (Join-Path $developerAddins "WGLink")',
+        'New-Item -ItemType Directory -Force $planted',
+        'New-Item -ItemType Directory -Force $plantedRecovery',
+    )]
+    for command in commands:
+        lower = compact(command)
+        if lower[0] == 'new-item':
+            assert lower in directory_commands, f'unreviewed directory creation: {command}'
+        if lower[0] == 'remove-item':
+            targets = [t for t in lower[1:] if not t.startswith('-')]
+            assert targets and all(t in removable for t in targets), f'unreviewed removal: {command}'
+        if lower[0] == 'rename-item':
+            assert len(lower) == 5 and lower[3:] == ['-erroraction', 'stop']
+            assert (lower[1], lower[2]) in {
+                ('"$installroot\\app"', '"app.gatetest"'), ('"$installroot\\app.gatetest"', '"app"'),
+                ('"$installroot\\runtime"', '"runtime.gatetest"'), ('"$installroot\\runtime.gatetest"', '"runtime"'),
+            }, 'unreviewed rename target'
+        if lower[0] == 'start-standin':
+            assert len(lower) == 1, 'stand-in takes no executable argument'
+        if lower[0] == 'start-sandboxedsetup':
+            assert lower[1] == '-executable' and (lower[2] == '$setup' or lower[2:4] == ['$unins', '.fullname'])
+            assert all(not t.startswith('-') or t in {'-executable', '-extraarguments', '-wait', '-addins'} for t in lower)
+            assert not any(re.search(r'/(VERYSILENT|SUPPRESSMSGBOXES|WGLINKADDINSDIR)', t, re.I) for t in command)
+            if '-addins' in lower:
+                assert lower[lower.index('-addins') + 1] == '$developeraddins'
+    root_cleanup = [c for c in commands if c[0].lower() == 'remove-item' and '$gateroot' in compact(c)]
+    assert len(root_cleanup) == 1, 'only one final private-root cleanup is allowed'
+    cleanup = root_cleanup[0]
+    cleanup_index = next(i for i in range(len(outside)) if outside[i:i + len(cleanup)] == cleanup)
+    assert cleanup_index > max(i for i, t in enumerate(outside) if t.lower() == 'start-sandboxedsetup')
+
 
 
 def test_every_gate_setup_and_uninstall_is_sandboxed() -> None:
-    source = (ROOT / 'installers/windows/gates.ps1').read_text()
-    assert_private_launches(source)
-    assert 'finally {' in source
-    assert '$env:WG2_DATA_DIR = $previousDataDir' in source
+    assert_gate_allowlist((ROOT / 'installers/windows/gates.ps1').read_text())
 
 
 ENTRYPOINTS = ('build_bundle.py', 'gates.ps1', 'qualify_installed_cpu.py', 'qualify_installed_quit.py')
@@ -201,19 +345,19 @@ def test_workflow_execution_inventory(workflow_name: str, counts: tuple[int, ...
         for step in job.get('steps', []):
             source = step.get('run', '')
             if step.get('shell') == 'pwsh':
-                commands = statements(source)
-                launches = [t for t in commands if any(x.lower() == 'start-process' for x in t)]
-                if launches:
-                    assert_private_launches(source, expected=1)
+                tokens = powershell_tokens(source)
+                direct_setup = step.get('name') == INLINE_SETUP
+                commands = assert_allowed_powershell(
+                    tokens,
+                    extra_commands={'uv', 'choco', 'out-file', 'write-host'} | ({'start-process'} if direct_setup else set()),
+                    delegated={'./installers/windows/gates.ps1', './scripts/ci/verify_inno_setup.ps1'},
+                )
+                if direct_setup:
+                    assert_inline_setup_allowlist(source)
                     installer_count += 1
-                for tokens in commands:
-                    # Every call-operator invocation must delegate to an inventoried
-                    # boundary; aliases/positional native starts are not exemptions.
-                    if '&' in tokens:
-                        target = tokens[tokens.index('&') + 1]
-                        assert target.lower() in ('./installers/windows/gates.ps1', './scripts/ci/verify_inno_setup.ps1'), f'unreviewed launch: {tokens}'
-                    if tokens[0].startswith('$') and len(tokens) > 1 and tokens[1].startswith(('/', '-')):
-                        raise AssertionError(f'unreviewed positional launch: {tokens}')
+                # Inventory all tokens, including script paths passed as native
+                # arguments and nested expression calls, once per occurrence.
+                commands = [tokens]
             else:
                 commands = [shlex.split(line, comments=True) for line in source.replace('\\\n', ' ').splitlines()]
             for tokens in commands:
@@ -233,32 +377,100 @@ def test_workflow_execution_inventory(workflow_name: str, counts: tuple[int, ...
     assert installer_count == (1 if workflow_name == 'rc-build' else 0)
 
 
-@pytest.mark.parametrize('mutation', ['missing-override', 'missing-data', 'late-data', 'missing-mkdir',
-                                     'candidate', 'call-operator', 'real-reassignment', 'new-environment', 'deleted-addins'])
-def test_sandbox_check_rejects_unsafe_invocations(mutation: str) -> None:
+INLINE_SETUP = 'Qualify BEAT CPU on the candidate the Windows installer installed'
+
+
+def assert_inline_setup_allowlist(source: str) -> None:
+    tokens = powershell_tokens(source)
+    commands = assert_allowed_powershell(tokens, extra_commands={'start-process', 'uv', 'out-file'})
+    assert sum(c[0].lower() == 'start-process' for c in commands) == 1
+    assert_environment_pair(tokens, ['$env:WG2_DATA_DIR = Join-Path $root "data"'])
+    for fragment in (
+        '$root = Join-Path $env:RUNNER_TEMP ("cpu-gate-" + [guid]::NewGuid().ToString("N"))',
+        '$install = Join-Path $root "app"', '$installLog = Join-Path $root "inno-install.log"',
+        '$addins = Join-Path $root "fusion-addins"',
+        '$env:WG2_DATA_DIR = Join-Path $root "data"; New-Item -ItemType Directory -Path $addins, $env:WG2_DATA_DIR | Out-Null',
+        '$process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/DIR=$install", "/LOG=$installLog", "/WGLINKADDINSDIR=$addins")',
+    ):
+        assert_fragment(tokens, fragment)
+    for variable in ('$root', '$install', '$installLog', '$addins', '$setup', '$process'):
+        assert sum(t.lower() == variable.lower() and tokens[i + 1] == '='
+                   for i, t in enumerate(tokens[:-1])) == 1, f'reassigned inline input {variable}'
+    assert_fragment(tokens, '$setup = (Get-ChildItem -File build/bundle/Waveguide.Generator-*-windows-x86_64-setup.exe | Select-Object -First 1).FullName')
+    assert tokens.index('New-Item', tokens.index('$env:WG2_DATA_DIR')) < tokens.index('Start-Process')
+    assert not any(c[0].lower() == 'remove-item' for c in commands), 'inline fixture removal'
+    directories = [compact(powershell_tokens(line)) for line in (
+        'New-Item -ItemType Directory -Path $root',
+        'New-Item -ItemType Directory -Path $addins, $env:WG2_DATA_DIR',
+    )]
+    assert all(compact(c) in directories for c in commands if c[0].lower() == 'new-item')
+    launch = next(c for c in commands if c[0].lower() == 'start-process')
+    assert compact(launch) == compact(powershell_tokens(
+        'Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @('
+        '"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", '
+        '"/DIR=$install", "/LOG=$installLog", "/WGLINKADDINSDIR=$addins")'))
+
+
+UNSAFE_LINES = [
+    'saps $Setup', 'start $Setup /VERYSILENT', '& $Setup /VERYSILENT',
+    '. $Setup', 'iex "$Setup"', 'Invoke-Expression "$Setup"',
+    '[Diagnostics.Process]::Start($Setup)', 'cmd /c $Setup',
+    'Set-Item Env:WG2_DATA_DIR $env:APPDATA', '$env:WG2_DATA_DIR = $env:APPDATA',
+    "[Environment]::SetEnvironmentVariable('WG2_DATA_DIR', $env:APPDATA)",
+    'ri $wglinkAddins -Recurse', 'rm $gateData -Recurse',
+    'Remove-Item $wglinkAddins -Recurse', 'Start-Process $Setup',
+]
+
+
+@pytest.mark.parametrize('line', UNSAFE_LINES)
+def test_sandbox_check_rejects_unsafe_invocations(line: str) -> None:
     source = (ROOT / 'installers/windows/gates.ps1').read_text()
-    boundary = '$p = Start-Process'
-    if mutation == 'missing-override':
-        source = re.sub(r', "/WGLINKADDINSDIR=[^\n]+?"(?= -PassThru)', '', source, count=1)
-    elif mutation in ('missing-data', 'late-data'):
-        source = source.replace('$env:WG2_DATA_DIR = $gateData', '')
-        if mutation == 'late-data':
-            source += '\n$env:WG2_DATA_DIR = $gateData\n'
-    elif mutation == 'missing-mkdir':
-        source = source.replace('New-Item -ItemType Directory -Force $wglinkAddins, $developerAddins, $gateData | Out-Null', '')
-    elif mutation == 'candidate':
-        source = source.replace(boundary, '$candidate = $Setup\nStart-Process -FilePath $candidate -Wait\n' + boundary, 1)
-    elif mutation == 'call-operator':
-        source = source.replace(boundary, '& $Setup /VERYSILENT\n' + boundary, 1)
-    elif mutation == 'real-reassignment':
-        source = source.replace(boundary, '$wglinkAddins = "$env:APPDATA\\Autodesk\\Autodesk Fusion 360\\API\\AddIns"\n' + boundary, 1)
-    elif mutation == 'new-environment':
-        source = source.replace('Start-Process -FilePath', 'Start-Process -UseNewEnvironment -FilePath', 1)
-    else:
-        source = source.replace(boundary, 'Remove-Item -Recurse -Force $wglinkAddins\n' + boundary, 1)
-    assert source != (ROOT / 'installers/windows/gates.ps1').read_text()
+    changed = source.replace('# --- Gate 1:', line + '\n# --- Gate 1:', 1)
+    assert changed != source
     with pytest.raises(AssertionError):
-        assert_private_launches(source)
+        assert_gate_allowlist(changed)
+
+
+@pytest.mark.parametrize('old,new', [
+    ('"/VERYSILENT", ', ''),
+    ('"/SUPPRESSMSGBOXES"', '"/NORESTART"'),
+    ('/WGLINKADDINSDIR=', '/OTHER='),
+    ('$env:WG2_DATA_DIR = $gateData', ''),
+    ('New-Item -ItemType Directory -Force $wglinkAddins, $developerAddins, $gateData | Out-Null', ''),
+    ('Start-Process -FilePath', 'Start-Process -UseNewEnvironment -FilePath'),
+    ('$null = $p.Handle', ''),
+    ('# --- Gate 1:', '$wglinkAddins = "$env:APPDATA"\n# --- Gate 1:'),
+    ('# --- Gate 1:', 'Remove-Item $gateData -Recurse\n# --- Gate 1:'),
+    ('# --- Gate 1:', '$shell.Run($Setup)\n# --- Gate 1:'),
+    ('# --- Gate 1:', '"$(saps $Setup)"\n# --- Gate 1:'),
+    ('# --- Gate 1:', 'Get-Item $Setup | saps $Setup\n# --- Gate 1:'),
+    ('# --- Gate 1:', 'if ($true) { saps $Setup }\n# --- Gate 1:'),
+    ('# --- Gate 1:', '$script:wglinkAddins = "$env:APPDATA"\n# --- Gate 1:'),
+    ('# --- Gate 1:', '$setup = "other.exe"\n# --- Gate 1:'),
+    ('# --- Gate 1:', '$target = "Env:WG2_DATA_DIR"; New-Item $target -Value $env:APPDATA\n# --- Gate 1:'),
+    ('# --- Gate 1:', 'Remove-Item $gateRoot -Recurse\n# --- Gate 1:'),
+    ('# --- Gate 1:', '--$env:WG2_DATA_DIR\n# --- Gate 1:'),
+    ('# --- Gate 1:', '$env:WG2_DATA_DIR, $other = $env:APPDATA, 1\n# --- Gate 1:'),
+    ('# --- Gate 1:', '$planted = "Env:WG2_DATA_DIR"\n# --- Gate 1:'),
+    ('# --- Gate 1:', 'Rename-Item Env:WG2_DATA_DIR OTHER\n# --- Gate 1:'),
+    ('$arguments = @(', '$arguments = @("/WGLINKADDINSDIR=other") ; $arguments = @('),
+    ('if ($env:WG2_DATA_DIR -ne $gateData)', 'if ($false -and $env:WG2_DATA_DIR -ne $gateData)'),
+])
+def test_sandbox_contract_rejects_bypasses(old: str, new: str) -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    changed = source.replace(old, new, 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_gate_allowlist(changed)
+
+
+@pytest.mark.parametrize('line', UNSAFE_LINES)
+def test_inline_setup_rejects_unsafe_invocations(line: str) -> None:
+    workflow = yaml.safe_load((ROOT / '.github/workflows/rc-build.yml').read_text())
+    source = next(step['run'] for job in workflow['jobs'].values() for step in job.get('steps', [])
+                  if step.get('name') == INLINE_SETUP)
+    with pytest.raises(AssertionError):
+        assert_inline_setup_allowlist(source + '\n' + line)
 
 
 def test_python_app_launch_inventory() -> None:

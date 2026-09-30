@@ -10,6 +10,8 @@ installers\windows\gates.ps1 -Setup path\to\Waveguide.Generator-<version>-window
 
 It installs, inspects, and uninstalls. Every setup and uninstall uses private data
 and pre-created Fusion AddIns directories, including the long-path rejection.
+All setup and uninstaller launches go through `Start-SandboxedSetup`, which
+checks those private folders and supplies the silent and AddIns arguments.
 The gate still uses and deletes the default application root at
 `%LOCALAPPDATA%\Programs\Waveguide Generator`, and setup writes per-user shortcuts
 and uninstall registration. Use a disposable Windows machine; this is not a
