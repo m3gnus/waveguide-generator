@@ -252,7 +252,7 @@ def test_map_covers_tests_that_directly_reference_each_server_area(area):
     covered = {Path(path) for target in targets for path in run_tests.resolve_target(target)}
     tests = [* (run_tests.REPO_ROOT / "server/tests").glob("test_*.py"),
              * (run_tests.REPO_ROOT / "scripts/tests").glob("test_*.py")]
-    missing = [str(test.relative_to(run_tests.REPO_ROOT)) for test in tests
+    missing = [test.relative_to(run_tests.REPO_ROOT).as_posix() for test in tests
                if f"server.{area}" in test.read_text(encoding="utf-8") and test not in covered]
     assert not missing, f"add these tests to the {area} map: {missing}"
 
@@ -335,7 +335,7 @@ def test_every_mapped_python_file_selects_the_tests_that_import_it():
                 continue
             for test, text in texts.items():
                 if f"import {dotted}" in text or f"from {dotted} import" in text:
-                    name = str(test.relative_to(run_tests.REPO_ROOT))
+                    name = test.relative_to(run_tests.REPO_ROOT).as_posix()
                     if name not in selected:
                         missing.append((relative.as_posix(), name))
     assert not missing, missing
