@@ -198,12 +198,14 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
   </>;
 }
 
-export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null }: {
+export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null, showOpenclGuidance = true }: {
   mode?: WorkspaceMode;
   ingestRecord?: CadReturnIngestRecord | null;
+  /** The parameter panel already shows this block beside its IB numba notice. */
+  showOpenclGuidance?: boolean;
 } = {}) {
   const store = useSolveOptionsStore();
-  const { engines, engineSelection, error, isLoading: capabilitiesLoading } = useCapabilities();
+  const { engines, engineSelection, hostPlatform, error, isLoading: capabilitiesLoading } = useCapabilities();
   const backendEngines = engines;
   // For imported geometry the server says, per engine, whether it can take
   // this return, and where the user's choice resolves. Before a return is
@@ -273,7 +275,8 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <p className={`cad-solve-fact${importedEngine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{runsOn}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
-    <OpenclUnavailableHook reason={engines.find((engine) => engine.name === 'bempp')?.opencl_unavailable_reason} />
+    {showOpenclGuidance && <OpenclUnavailableHook platform={hostPlatform}
+      engine={engines.find((engine) => engine.name === 'bempp')} />}
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
     {mode === 'parametric' && <GroundPlaneControls />}
     <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />

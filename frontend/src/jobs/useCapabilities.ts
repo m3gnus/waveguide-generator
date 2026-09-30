@@ -48,6 +48,7 @@ const NO_ENGINE_SELECTION: Readonly<EngineSelection> = Object.freeze({
 const plannerSupportByClient = new WeakMap<QueryClient, string>();
 
 export interface CapabilitiesSnapshot {
+  hostPlatform: string | null;
   engines: readonly EngineCapability[];
   engineSelection: Readonly<EngineSelection>;
   /** A human-readable reason, or null while loading or once loaded. */
@@ -84,6 +85,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
     plannerSupportByClient.set(client, plannerSupport);
   }, [client, plannerSupport]);
   return {
+    hostPlatform: data?.hostPlatform ?? null,
     engines: data?.engines ?? NO_ENGINES,
     engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,
     error: isError ? (error instanceof Error ? error.message : String(error)) : null,

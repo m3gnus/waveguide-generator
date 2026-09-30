@@ -2,6 +2,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import guidance from '../../../shared/opencl-driver-guidance.v1.json';
+import type { OpenClGuidanceReason } from '../shell/OpenClGuidance';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import type { ImportedSolvePlan } from '../jobs/actions';
@@ -85,15 +87,34 @@ describe('solve and directivity control help', () => {
     expect(host.querySelector('.paste-meta')?.textContent).toContain('Output: 3 points');
   });
 
-  it('passes the structured OpenCL reason to the solver-settings hook', () => {
+  it.each(Object.keys(guidance.reasons) as OpenClGuidanceReason[])('shows shared %s guidance in solver settings', (reason) => {
     queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      hostPlatform: 'windows',
       engines: [{ name: 'bempp', available: true, reason: 'unparsed prose', version: null,
-        fast_paths: [], assembly_backend: 'numba', opencl_unavailable_reason: 'no_device' }],
+        fast_paths: [], assembly_backend: 'numba', opencl_unavailable_reason: reason }],
       engineSelection: { default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['bempp'] },
       cpuPreparationInFlight: false,
     });
     render(<SolveOptionsControls />);
-    expect(host.querySelector('[data-opencl-unavailable-reason="no_device"]')).not.toBeNull();
+    const blocks = host.querySelectorAll('.opencl-guidance');
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].textContent).toContain(guidance.platforms.windows.summary);
+    expect(blocks[0].querySelector('p')?.textContent).toBe(guidance.reasons[reason]);
+    expect(blocks[0].previousElementSibling?.querySelector('#solve-engine')).not.toBeNull();
+  });
+
+  it.each([
+    ['windows', 'opencl'], ['darwin', 'numba'], [undefined, 'numba'],
+  ])('omits solver-settings guidance for host %s and backend %s', (hostPlatform, backend) => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      hostPlatform,
+      engines: [{ name: 'bempp', available: true, reason: null, version: null,
+        fast_paths: [], assembly_backend: backend, opencl_unavailable_reason: 'no_device' }],
+      engineSelection: { default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['bempp'] },
+      cpuPreparationInFlight: false,
+    });
+    render(<SolveOptionsControls />);
+    expect(host.querySelector('.opencl-guidance')).toBeNull();
   });
 
   it('documents every solve option', () => {

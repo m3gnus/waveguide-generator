@@ -1,13 +1,14 @@
-import type { ReactNode } from 'react';
-import type { OpenclUnavailableReason } from '../jobs/actions';
+import guidance from '../../../shared/opencl-driver-guidance.v1.json';
+import type { EngineCapability } from '../jobs/actions';
+import { OpenClGuidance, type OpenClGuidancePlatform } from '../shell/OpenClGuidance';
 
-/** Driver-guidance integration hook shared by the numba notice and solver settings.
- * The future component receives this structured reason together with platform;
- * it owns all driver guidance. Never derive a reason from capability prose.
- */
-export function OpenclUnavailableHook({ reason, children }: {
-  reason: OpenclUnavailableReason | null | undefined;
-  children?: ReactNode;
+/** Show shared driver guidance only for BEMPP's numba fallback on supported hosts. */
+export function OpenclUnavailableHook({ platform, engine }: {
+  platform: string | null | undefined;
+  engine: EngineCapability | undefined;
 }) {
-  return <div data-opencl-unavailable-reason={reason ?? undefined}>{children}</div>;
+  if (engine?.name !== 'bempp' || engine.assembly_backend !== 'numba'
+    || !platform || !Object.hasOwn(guidance.platforms, platform)) return null;
+  return <OpenClGuidance platform={platform as OpenClGuidancePlatform}
+    reason={engine.opencl_unavailable_reason ?? undefined} />;
 }

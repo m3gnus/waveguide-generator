@@ -9,6 +9,7 @@ bug report -- the one nobody re-reads until it is already wrong.
 from __future__ import annotations
 
 import asyncio
+import platform
 from dataclasses import asdict
 from typing import Any, Protocol
 
@@ -52,6 +53,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
     pinned = pinned_dependency_shas()
     installed, drift = measure_installed_stack(pinned)
     return {
+        "hostPlatform": platform.system().lower(),
         "engines": engines,
         "cpuPreparationInFlight": bool(
             getattr(engine_registry, "cpu_preparation_in_flight", lambda: False)()

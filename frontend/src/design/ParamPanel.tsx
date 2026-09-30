@@ -388,7 +388,7 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
   // AUTO can skip a mounting-incompatible default and use another advertised
   // candidate; an explicit selection remains limited to that one backend.
   const backendPlan = usePlannedBackendCapabilities();
-  const { engines: hostEngines } = useCapabilities();
+  const { engines: hostEngines, hostPlatform } = useCapabilities();
   const updateValue = useDesignStore((state) => state.updateValue);
   const updateValues = useDesignStore((state) => state.updateValues);
   const updateExpression = useDesignStore((state) => state.updateExpression);
@@ -440,7 +440,8 @@ function FieldControl({ field, design, serverError }: { field: ParameterDefiniti
         </select>
       </HelpTipRow>
       {ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba' &&
-        <OpenclUnavailableHook reason={ibEngine.opencl_unavailable_reason}><div className="field-warning" role="status">Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.</div></OpenclUnavailableHook>}
+        <><div className="field-warning" role="status">Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.</div>
+          <OpenclUnavailableHook platform={hostPlatform} engine={ibEngine} /></>}
       {/* Listed but disabled: no engine on this host can run it. Say why here,
           because a title tooltip on a disabled option is easy to miss. */}
       {options.filter((option) => option.unavailableReason).map((option) => <div key={`unavailable-${String(option.value)}`} className="field-warning" role="status">{option.label}: {option.unavailableReason}</div>)}
@@ -1059,6 +1060,8 @@ function CadSimulationEmpty() {
 }
 
 export function ParamPanel({ tab }: { tab: ParameterTab }) {
+  const ibEngine = usePlannedBackendCapabilities().find((engine) => engine.mountings?.includes('infinite-baffle'));
+  const ibNumbaNotice = ibEngine?.name === 'bempp' && ibEngine.assembly_backend === 'numba';
   const design = useDesignStore((state) => state.design);
   const designRevision = useDesignStore((state) => state.designRevision);
   const previewErrorFields = useSyncExternalStore(
@@ -1251,7 +1254,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
           {renderRegistrySection(definition)}
           {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}
-          {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." forceOpen={false}><SolveOptionsControls /></Section>}
+          {!searching && definition.title === 'Source Definition' && <Section title="Solve options" description="Backend engine, validation, which frequencies get solved, and diagnostic output controls." forceOpen={false}><SolveOptionsControls showOpenclGuidance={!ibNumbaNotice} /></Section>}
         </div>)
         : <>
           {definitions.map(renderRegistrySection)}

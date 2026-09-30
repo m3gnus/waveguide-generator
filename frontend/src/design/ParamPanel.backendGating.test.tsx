@@ -2,6 +2,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import guidance from '../../../shared/opencl-driver-guidance.v1.json';
+import type { OpenClGuidanceReason } from '../shell/OpenClGuidance';
 import { CAPABILITIES_QUERY_KEY } from '../jobs/useCapabilities';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetDesignStore, useDesignStore } from '../stores/design';
@@ -28,6 +30,7 @@ const engine = (
 });
 
 const capabilities = (metalAvailable: boolean) => ({
+  hostPlatform: 'windows',
   engines: [
     engine('metal', metalAvailable, ['free-standing', 'infinite-baffle']),
     engine('bempp', true, ['free-standing', 'infinite-baffle']),
@@ -117,6 +120,7 @@ describe('solver-backend parameter gating', () => {
 
   it('lets AUTO skip BEAT for BEMPP coupled IB, but keeps explicit BEAT gated', async () => {
     const payload = {
+      hostPlatform: 'windows',
       engines: [
         engine('metal', false, ['free-standing', 'infinite-baffle']),
         engine('beat', true, ['free-standing']),
@@ -148,6 +152,7 @@ describe('solver-backend parameter gating', () => {
 
   it('shows infinite baffle disabled, with a reason, when no engine on the host can run it', async () => {
     await mount({
+      hostPlatform: 'windows',
       engines: [
         engine('metal', false, ['free-standing', 'infinite-baffle']),
         engine('beat-cpu', true, ['free-standing']),
@@ -189,13 +194,18 @@ describe('solver-backend parameter gating', () => {
     expect(warningsFor('simulation.sim_type')).toEqual([]);
   });
 
-  it.each(['freestanding', 'infinite-baffle'] as const)('shows the numba notice when IB is offered or selected (%s)', async (simType) => {
+  it.each(['freestanding', 'infinite-baffle'].flatMap((simType) =>
+    (Object.keys(guidance.reasons) as OpenClGuidanceReason[]).map((reason) => ({ simType, reason }))))(
+    'shows one shared guidance block in the IB numba notice ($simType, $reason)', async ({ simType, reason }) => {
     useDesignStore.getState().updateValue('simulation.sim_type', simType);
     const payload = capabilities(false);
     payload.engines[1].assembly_backend = 'numba';
-    payload.engines[1].opencl_unavailable_reason = 'smoke_test_failed';
+    payload.engines[1].opencl_unavailable_reason = reason;
     await mount(payload);
-    expect(host.querySelector('[data-opencl-unavailable-reason="smoke_test_failed"]')).not.toBeNull();
+    expect(host.querySelectorAll('.opencl-guidance')).toHaveLength(1);
+    const block = host.querySelector('[data-parameter-id="simulation.sim_type"] .opencl-guidance')!;
+    expect(block.textContent).toContain(guidance.platforms.windows.summary);
+    expect(block.querySelector('p')?.textContent).toBe(guidance.reasons[reason]);
     expect(warningsFor('simulation.sim_type').join(' ')).toContain("Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.");
   });
 
@@ -204,6 +214,17 @@ describe('solver-backend parameter gating', () => {
     payload.engines[1].assembly_backend = backend;
     await mount(payload);
     expect(warningsFor('simulation.sim_type')).toEqual([]);
+    expect(host.querySelector('.opencl-guidance')).toBeNull();
+  });
+
+  it('keeps the short IB numba notice without driver guidance on macOS', async () => {
+    const payload = capabilities(false);
+    payload.hostPlatform = 'darwin';
+    payload.engines[1].assembly_backend = 'numba';
+    payload.engines[1].opencl_unavailable_reason = 'no_device';
+    await mount(payload);
+    expect(warningsFor('simulation.sim_type').join(' ')).toContain('correct but slow');
+    expect(host.querySelector('.opencl-guidance')).toBeNull();
   });
 
   it('omits the notice when AUTO routes IB to Metal ahead of numba', async () => {
