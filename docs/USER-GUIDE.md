@@ -140,7 +140,7 @@ has not been solved has no measured rig to show, and WG does not guess one.
 
 WG uses Full 3D solving with ordinary AUTO, half, and quarter symmetry reduction.
 The backend selector chooses **Metal** (Apple GPU), one of the **BEAT**
-engines, or **BEMPP** (CPU/OpenCL).
+engines, or **BEMPP** (CPU OpenCL, with numba fallback).
 
 BEAT is one solver with four interchangeable execution backends, and the Solver
 backend list offers each of them separately:
@@ -177,14 +177,19 @@ BEMPP as the CPU route.
 AUTO walks the same order on every platform: Metal, then the BEAT GPU engines,
 then BEMPP, then BEAT · CPU. So on Windows and Linux, once no GPU engine is
 available, AUTO takes BEMPP ahead of a provisioned BEAT · CPU, because BEMPP is
-the faster CPU engine over a full wide-band sweep. BEMPP assembles on an OpenCL
-device when it finds one and otherwise falls back to numba.
+the faster CPU engine over a full wide-band sweep. BEMPP prefers a CPU OpenCL
+runtime whose device passes a real assembly/solve smoke test. It never uses
+GPU OpenCL devices. CPU vendor does not decide eligibility: Intel's CPU runtime
+can work on AMD CPUs too, and PoCL on Linux is another CPU runtime. Enumeration
+alone does not qualify a device; zero, incorrect or timed-out compute probes
+are rejected. If no CPU device passes, BEMPP falls back to numba: correct but
+slow, with about a minute of first-solve compilation.
 
 Imported CAD geometry follows the same order with two differences: AUTO does
 not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
 Accurate), and BEMPP offers it only where it assembles on OpenCL. On such a
 machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return too, although
-BEMPP's imported path is not yet qualified against Metal; BEAT · CPU's is. Without an OpenCL device, AUTO passes BEMPP over for imported geometry
+BEMPP's imported path is not yet qualified against Metal; BEAT · CPU's is. Without a compute-qualified OpenCL device, AUTO passes BEMPP over for imported geometry
 and takes BEAT · CPU, which it can only reach on a machine where that 1 kHz
 solve has already run. Choosing an engine yourself always overrides AUTO: an
 explicit BEMPP stays BEMPP, an explicit BEAT · CPU stays BEAT · CPU, and an
@@ -199,7 +204,10 @@ for that formulation; Metal can also use half/quarter domains. BEAT does not yet
 support coupled infinite baffle, so choosing it, or a BEMPP without coupled
 support, for an infinite-baffle design refuses the solve before it starts and never
 switches engine or mounting silently. No backend substitutes an image/double-horn
-approximation for a flush-mounted waveguide.
+approximation for a flush-mounted waveguide. Infinite baffle uses the same
+CPU-OpenCL-first rule. If no CPU device passes, the numba fallback remains
+available and the IB selector shows the “correct but slow” notice. Imported
+CAD still requires a compute-qualified CPU OpenCL device.
 
 The **ground plane** in Solve options is a different boundary, not another name
 for the baffle, and the difference matters because picking the wrong one still

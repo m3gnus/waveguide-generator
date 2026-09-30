@@ -85,6 +85,17 @@ describe('solve and directivity control help', () => {
     expect(host.querySelector('.paste-meta')?.textContent).toContain('Output: 3 points');
   });
 
+  it('passes the structured OpenCL reason to the solver-settings hook', () => {
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [{ name: 'bempp', available: true, reason: 'unparsed prose', version: null,
+        fast_paths: [], assembly_backend: 'numba', opencl_unavailable_reason: 'no_device' }],
+      engineSelection: { default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['bempp'] },
+      cpuPreparationInFlight: false,
+    });
+    render(<SolveOptionsControls />);
+    expect(host.querySelector('[data-opencl-unavailable-reason="no_device"]')).not.toBeNull();
+  });
+
   it('documents every solve option', () => {
     render(<SolveOptionsControls />);
     for (const id of ['solve-accuracy', 'solve-engine', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {

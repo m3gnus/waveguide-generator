@@ -457,7 +457,7 @@ jobs:
             --build-manifest $manifest `
             --imported-engine beat-cpu `
             --ib-engine bempp `
-            --ib-expect-backend numba
+            --ib-expect-backend any
           # PowerShell does not turn a native command's non-zero exit into a
           # terminating error: $ErrorActionPreference governs PowerShell errors,
           # not exit codes, so without this the qualifier could fail and the step
@@ -627,7 +627,7 @@ jobs:
             --build-manifest "$manifest" \
             --imported-engine beat-cpu \
             --ib-engine bempp \
-            --ib-expect-backend numba
+            --ib-expect-backend any
 
       - name: Qualify Quit during a blocked mesh build on the same candidate
         # See the macOS job.

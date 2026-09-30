@@ -1,3 +1,4 @@
+import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
@@ -272,6 +273,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
       <p className={`cad-solve-fact${importedEngine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{runsOn}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
+    <OpenclUnavailableHook reason={engines.find((engine) => engine.name === 'bempp')?.opencl_unavailable_reason} />
     <HelpTipRow className="select-row" text="What happens when the solver mesh fails its topology check. Warn solves anyway and reports the problem; Strict refuses to solve a mesh that is not watertight; Off hides the warning entirely. Results from an invalid mesh cannot be trusted, so leave this on Warn unless you know why."><label htmlFor="mesh-validation-mode">Mesh validation policy</label><select id="mesh-validation-mode" value={store.meshValidationMode} onChange={(event) => store.setMeshValidationMode(event.target.value as MeshValidationMode)}><option value="warn">Warn</option><option value="strict">Strict</option><option value="off">Off</option></select></HelpTipRow>
     {mode === 'parametric' && <GroundPlaneControls />}
     <FrequencySweepControls idPrefix={mode === 'cad' ? 'cad-solve' : 'design-solve'} context={mode === 'cad' ? 'imported' : 'design'} />

@@ -22,7 +22,8 @@ const engine = (
   mountings: string[],
 ) => ({
   name, available, reason: available ? 'ok' : `${name} unavailable`, version: null, fast_paths: [],
-  assembly_backend: null as string | null,
+  assembly_backend: null as 'opencl' | 'numba' | null,
+  opencl_unavailable_reason: null as import('../jobs/actions').OpenclUnavailableReason | null,
   formulations: ['full-3d'], mountings, geometry_sources: ['parametric'],
 });
 
@@ -192,11 +193,13 @@ describe('solver-backend parameter gating', () => {
     useDesignStore.getState().updateValue('simulation.sim_type', simType);
     const payload = capabilities(false);
     payload.engines[1].assembly_backend = 'numba';
+    payload.engines[1].opencl_unavailable_reason = 'smoke_test_failed';
     await mount(payload);
+    expect(host.querySelector('[data-opencl-unavailable-reason="smoke_test_failed"]')).not.toBeNull();
     expect(warningsFor('simulation.sim_type').join(' ')).toContain("Infinite baffle runs on BEMPP's CPU (numba) backend on this machine: correct but slow; the first solve includes about a minute of warm-up.");
   });
 
-  it.each(['opencl', null])('omits the notice for a BEMPP backend of %s', async (backend) => {
+  it.each(['opencl', null] as const)('omits the notice for a BEMPP backend of %s', async (backend) => {
     const payload = capabilities(false);
     payload.engines[1].assembly_backend = backend;
     await mount(payload);

@@ -1,4 +1,4 @@
-"""Guarded CPU fallback adapter for ``hornlab-bempp-bem``.
+"""Guarded CPU-OpenCL-first adapter for ``hornlab-bempp-bem``.
 
 The import/load behavior, symmetry, source-motion feature detection, staged
 frequency solve, and result mapping port v1
@@ -27,6 +27,7 @@ from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
+from .bempp_opencl import bind_device, clear_cache as clear_opencl_cache, qualified_opencl
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -84,9 +85,8 @@ except (ImportError, OSError):
 
 
 #: What this adapter can solve (``EngineInfo.geometry_sources``). Imported CAD
-#: geometry is declared only while BEMPP assembles on OpenCL: numba is never a
-#: shipping backend, so a host that would fall back to it does not offer
-#: imported geometry at all (:func:`geometry_sources_for`).
+#: geometry requires a compute-qualified OpenCL device. The numba shipping
+#: exception covers parametric geometry, including IB, but not imported CAD.
 GEOMETRY_SOURCES: tuple[str, ...] = ("parametric", "imported")
 
 
@@ -341,190 +341,61 @@ def _missing_windows_runtime_dlls() -> list[str]:
 PREFERRED_ASSEMBLY_BACKEND = "opencl"
 FALLBACK_ASSEMBLY_BACKEND = "numba"
 
-#: The device type the solve really asks bempp-cl for, below. The probe has to
-#: look for the same one: bempp-cl's dense assembly does not run on a GPU-only
-#: inventory, and reporting a GPU as proof that OpenCL works is how Apple
-#: Silicon got a READY capability report and then an ``OpenCL cpu device could
-#: not be initialized`` in the middle of every solve.
+#: Owner decision: BEMPP serves CPU-only computers; GPU OpenCL drivers
+#: do not work well with BEMPP and must never be selected.
 OPENCL_DEVICE_TYPE = "cpu"
-
-#: Named per distribution rather than left as "install pocl", because the
-#: package name is the part a blocked user cannot guess: a Fedora host reads
-#: advice for a package manager it does not have. These are the packages that
-#: register a CPU ICD, which is the device bempp-cl assembles on -- a vendor GPU
-#: ICD does not substitute, however capable the card.
-_OPENCL_GUIDANCE = (
-    "Install an OpenCL CPU runtime and start again: on Windows the Intel CPU "
-    "Runtime for OpenCL registers an ICD under "
-    "HKLM\\SOFTWARE\\Khronos\\OpenCL\\Vendors; on Fedora `sudo dnf install "
-    "pocl`, on Debian/Ubuntu `sudo apt install pocl-opencl-icd`, on Arch "
-    "`sudo pacman -S pocl`, or install your CPU vendor's ICD. Apple Silicon "
-    "has no CPU OpenCL device at all, so BEMPP assembles on numba there and "
-    "Metal is the engine to prefer."
-)
-
 
 def _describe(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"
 
 
-def _bempp_default_cpu_device() -> Any:
-    """Return the concrete device bempp-cl will use for ``opencl_device='cpu'``."""
+def _opencl_status() -> tuple[bool, str, dict[str, Any] | None, str | None]:
+    """Only CPU devices passing a bounded real assembly/solve qualify."""
+    result = qualified_opencl()
+    reason = str(result["reason"])
+    return bool(result.get("ok")), reason, result.get("device"), result.get("opencl_unavailable_reason")
 
-    from bempp_cl.core.opencl_kernels import default_cpu_device
 
-    return default_cpu_device()
-
-
-def _opencl_status() -> tuple[bool, str]:
-    """Is there a device to assemble on, not merely a pyopencl import?
-
-    pyopencl imports cleanly with no ICD installed and only fails when something
-    asks for a platform, which would be the solve. Enumerating here keeps a
-    missing runtime a capability answer instead of a mid-solve crash.
-
-    The device has to be of the type the solve will ask for -- see
-    ``OPENCL_DEVICE_TYPE``. Accepting any device made this probe answer a
-    different question from the one the solve asks, which on Apple Silicon,
-    whose ICD exposes the GPU and no CPU, meant a READY report followed by a
-    failure inside every solve.
-
-    What this deliberately does *not* do is assemble anything, so it says
-    "selected", not "assembles". Assembling a 32-element sphere here would
-    catch a runtime that enumerates but cannot build its kernel -- measured on
-    PoCL 7.0.0 on Windows 2026-09-02, which reported a healthy CPU device with
-    fp64 and then returned an all-zero operator, because its kernel needs an
-    MSVC linker to become loadable and bempp-cl never checks the build status.
-    But that assembly was measured at 13.9 s cold and 12.2 s warm on the
-    reference AMD host: pyopencl's on-disk program cache does not make the
-    second interpreter cheap, so the cost would be paid again by the API
-    process and by every worker child, not moved. A capability probe cannot
-    spend that.
-
-    The all-zero runtime is therefore caught where an assembly is already
-    being paid for -- see ``_refuse_silent_zero_result``, on the solve path.
-    """
-
-    try:
-        import pyopencl
-    except BaseException as exc:  # noqa: BLE001 - a broken build raises more than ImportError
-        return False, f"pyopencl cannot load ({_describe(exc)}). {_OPENCL_GUIDANCE}"
-
-    try:
-        platforms = pyopencl.get_platforms()
-    except Exception as exc:  # noqa: BLE001 - pyopencl raises its own LogicError
-        return False, f"no OpenCL platform is usable ({_describe(exc)}). {_OPENCL_GUIDANCE}"
-    try:
-        wanted = getattr(pyopencl.device_type, OPENCL_DEVICE_TYPE.upper())
-    except AttributeError as exc:  # a partial build is unusable, not fatal
-        return False, f"pyopencl exposes no device types ({_describe(exc)}). {_OPENCL_GUIDANCE}"
-    seen: list[str] = []
-    for platform_entry in platforms:
-        try:
-            devices = platform_entry.get_devices(device_type=wanted)
-        except Exception:  # noqa: BLE001 - DEVICE_NOT_FOUND, and broken ICDs, are both "no"
-            devices = []
-        if devices:
-            try:
-                selected = _bempp_default_cpu_device()
-            except BaseException as exc:  # noqa: BLE001 - native loaders raise broad failures
-                return False, (
-                    "bempp-cl cannot initialize its default OpenCL cpu device "
-                    f"({_describe(exc)}). {_OPENCL_GUIDANCE}"
-                )
-            selected_type = getattr(selected, "type", None)
-            try:
-                selected_is_wanted = bool(int(selected_type) & int(wanted))
-            except (TypeError, ValueError):
-                selected_is_wanted = selected_type == wanted
-            selected_name = str(getattr(selected, "name", "unknown device")).strip()
-            selected_platform = str(
-                getattr(getattr(selected, "platform", None), "name", platform_entry.name)
-            ).strip()
-            if not selected_is_wanted:
-                return False, (
-                    f"bempp-cl selected OpenCL device {selected_name} ({selected_platform}), "
-                    f"which is not a {OPENCL_DEVICE_TYPE} device. {_OPENCL_GUIDANCE}"
-                )
-            return True, (
-                f"bempp-cl selected OpenCL device {selected_name} "
-                f"({selected_platform})"
-            )
-        try:
-            seen.extend(device.name.strip() for device in platform_entry.get_devices())
-        except Exception:  # noqa: BLE001 - naming what is there is a courtesy, not a contract
-            continue
-    inventory = f" Devices found: {', '.join(seen)}." if seen else ""
-    return False, (
-        f"an OpenCL runtime is present but exposes no {OPENCL_DEVICE_TYPE} device, "
-        f"which is the one bempp-cl assembles on.{inventory} A GPU OpenCL device "
-        "does not substitute: BEMPP is this application's CPU engine and has no "
-        "GPU assembly path, and the GPU engines are separate ones (BEAT · CUDA "
-        f"on an NVIDIA card, Metal on Apple Silicon). {_OPENCL_GUIDANCE}"
-    )
+def bind_assembly_device(status: Mapping[str, Any]) -> None:
+    """Call only in the killable solve/warmup process, after qualification."""
+    if status.get("assembly_backend") == PREFERRED_ASSEMBLY_BACKEND and status.get("assembly_device"):
+        bind_device(status["assembly_device"])
 
 
 def numba_fallback_warning(opencl_reason: str) -> str:
-    """Say which backend is really running and exactly what to fix."""
+    """Say which backend is really running and why."""
 
     return (
         "Falling back to the numba assembly backend because OpenCL is unusable: "
         f"{opencl_reason} Until that is fixed, solves assemble on numba, which is "
-        "slower, and the first solve after each start spends roughly a minute "
+        "correct but slow, and the first solve after each start spends roughly a minute "
         "compiling kernels. Stop remains prompt because WG runs native BEMPP in "
         "an isolated worker; cancelling during compilation discards that worker "
         "and the replacement must compile again on the next solve."
     )
 
 
-def _assembly_backend_status() -> tuple[bool, str, str | None, str | None]:
-    """Resolve the backend a solve would really use: (usable, reason, backend, warning).
-
-    ``hornlab_bempp_bem`` is a thin pure-Python wrapper, so it imports happily
-    on a host where bempp-cl's engine cannot load at all. v1 hit exactly this on
-    clean Windows: the installer said "Bempp ready", the preflight said READY,
-    and every solve then died on ``ImportError: Numba could not be imported``
-    because the compiled extensions need a redistributable Windows does not
-    install by default. Reporting importability as availability reproduces that
-    bug, so probe the backend the solve path really uses.
-
-    OpenCL is the production backend and is preferred. numba remains a working
-    fallback rather than a hard failure, but it is never chosen silently: the
-    reason it was chosen, and the remedy, travel with the capability report.
-
-    This still stops short of assembling an operator: a kernel that only fails
-    once it is built would get past it.
-    """
-
-    try:
-        importlib.import_module("bempp_cl.api")
-    except BaseException as exc:  # noqa: BLE001 - these raise bare ImportError chains
-        detail = _describe(exc)
-        missing = _missing_windows_runtime_dlls()
-        if missing:
-            return False, f"bempp_cl cannot load ({detail}). Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}", None, None
-        return False, f"bempp_cl cannot load, so no assembly backend can run a solve ({detail}).", None, None
-
-    opencl_usable, opencl_reason = _opencl_status()
+def _assembly_backend_status() -> tuple[bool, str, str | None, str | None, dict[str, Any] | None, str | None]:
+    """Resolve the compute-qualified OpenCL device, otherwise explicit numba."""
+    opencl_usable, opencl_reason, device, unavailable_reason = _opencl_status()
     if opencl_usable:
-        return True, opencl_reason, PREFERRED_ASSEMBLY_BACKEND, None
+        return True, opencl_reason, PREFERRED_ASSEMBLY_BACKEND, None, device, None
 
-    try:
-        importlib.import_module("numba")
-    except BaseException as exc:  # noqa: BLE001 - numba raises bare ImportError chains
-        detail = _describe(exc)
+    # bempp-cl imports and ICD enumeration run in the bounded probe child.
+    # An actual engine import error is different from absent/broken OpenCL.
+    probe = qualified_opencl()
+    if probe.get("stage") == "engine":
         missing = _missing_windows_runtime_dlls()
         remedy = f" Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}" if missing else ""
-        return (
-            False,
-            f"no assembly backend can run a solve. OpenCL: {opencl_reason} numba also "
-            f"failed ({detail}).{remedy}",
-            None,
-            None,
-        )
-
+        return False, f"bempp_cl cannot load ({probe['reason']}).{remedy}", None, None, None, unavailable_reason
+    try:
+        importlib.import_module("numba")
+    except BaseException as exc:  # noqa: BLE001 - native loaders raise broad failures
+        missing = _missing_windows_runtime_dlls()
+        remedy = f" Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}" if missing else ""
+        return False, f"no assembly backend can run a solve. OpenCL: {opencl_reason} numba also failed ({_describe(exc)}).{remedy}", None, None, None, unavailable_reason
     warning = numba_fallback_warning(opencl_reason)
-    return True, warning, FALLBACK_ASSEMBLY_BACKEND, warning
+    return True, warning, FALLBACK_ASSEMBLY_BACKEND, warning, None, unavailable_reason
 
 
 def _probe_ground_plane_axes() -> tuple[str, ...]:
@@ -599,9 +470,11 @@ def _probe_bempp_status() -> dict[str, Any]:
             "reason": "hornlab-bempp-bem is not importable (optional CPU fallback not installed).",
             "version": _version(),
             "assembly_backend": None,
+            "assembly_device": None,
+            "opencl_unavailable_reason": "no_device",
             "warning": None,
         }
-    usable, reason, backend, warning = _assembly_backend_status()
+    usable, reason, backend, warning, device, unavailable_reason = _assembly_backend_status()
     coupled_infinite_baffle = False
     if SolveConfig is not None:
         try:
@@ -615,6 +488,8 @@ def _probe_bempp_status() -> dict[str, Any]:
         "reason": reason,
         "version": _version(),
         "assembly_backend": backend,
+        "assembly_device": device,
+        "opencl_unavailable_reason": unavailable_reason,
         "warning": warning,
         "coupled_infinite_baffle": coupled_infinite_baffle,
         "ground_plane_axes": _probe_ground_plane_axes(),
@@ -627,8 +502,8 @@ def _cached_successful_bempp_status() -> dict[str, Any]:
     status = _probe_bempp_status()
     if not status["available"]:
         # functools does not cache exceptions, so an unavailable result is
-        # re-probed next time -- installing an OpenCL runtime must take effect
-        # without restarting the server.
+        # re-probed next time. Device verdicts stay cached for this process;
+        # installing or replacing an ICD requires restarting the server.
         raise _BemppProbeUnavailable(status)
     return status
 
@@ -638,8 +513,9 @@ def bempp_status() -> dict[str, Any]:
 
     Successful probes are cached, following ``server/solver/metal.py``. The
     probe imports ``bempp_cl.api``, enumerates every OpenCL platform and its
-    devices -- which loads ICD DLLs -- and reads distribution metadata, and it
-    was being run again at the start of every single solve.
+    devices in bounded children, computes a tiny reference problem, and reads
+    distribution metadata. Neither successes nor rejected devices are retried
+    during subsequent solves in this process.
     """
 
     try:
@@ -650,7 +526,12 @@ def bempp_status() -> dict[str, Any]:
 
 
 # The public cache-maintenance hook, matching metal_status.
-bempp_status.cache_clear = _cached_successful_bempp_status.cache_clear  # type: ignore[attr-defined]
+def _clear_bempp_cache() -> None:
+    _cached_successful_bempp_status.cache_clear()
+    clear_opencl_cache()
+
+
+bempp_status.cache_clear = _clear_bempp_cache  # type: ignore[attr-defined]
 
 
 def _closed_mode(context: SolverContext) -> bool:
@@ -681,8 +562,8 @@ def _refuse_silent_zero_result(result: Any, backend: str | None) -> None:
     A driven radiator cannot be silent at every frequency and every angle, so an
     entirely zero pressure field is never a physical answer -- it only ever
     means the assembly did not run. Checking it costs one pass over an array
-    that has already been computed, which is why the check lives here rather
-    than in the capability probe, where it would have cost ~12 s per process.
+    that has already been computed. This remains defense in depth after the
+    startup smoke: a qualified runtime can still fail on the actual model.
 
     Only the OpenCL path can fail this way; numba raises when it cannot compile.
     """
@@ -705,7 +586,6 @@ def _refuse_silent_zero_result(result: Any, backend: str | None) -> None:
         "but every pressure is zero, which no driven source can be. The OpenCL "
         "runtime installed here builds a kernel object it cannot load; the "
         "runtime usually reports that on stderr rather than through the API. "
-        f"{_OPENCL_GUIDANCE}"
     )
 
 
@@ -823,6 +703,7 @@ def solve_bempp_from_msh_text(
         if stage_callback:
             stage_callback("setup", 0.0, retention_detail)
     backend = status.get("assembly_backend") or PREFERRED_ASSEMBLY_BACKEND
+    bind_assembly_device(status)
     started = time.time()
     if status.get("warning"):
         # The user asked for a solve, not for a lecture, but silently assembling
@@ -878,10 +759,12 @@ def solve_bempp_from_msh_text(
     requested_workers = _resolved_workers()
     workers = (
         1
-        if force_serial or context.frequencies_hz is not None or aperture_tag is not None
+        if force_serial or backend == PREFERRED_ASSEMBLY_BACKEND or context.frequencies_hz is not None or aperture_tag is not None
         else requested_workers
     )
-    if force_serial and requested_workers != 1:
+    # Spawned native sweep workers cannot inherit the qualified device slot.
+    # Keep OpenCL in the bound, killable worker instead of selecting another ICD.
+    if (force_serial or backend == PREFERRED_ASSEMBLY_BACKEND) and requested_workers != 1:
         # ``force_serial`` is now only set by callers that genuinely cannot
         # split -- not by the killable worker, which used to set it for every
         # solve and so made this override unreachable.
@@ -1036,6 +919,8 @@ def solve_bempp_from_msh_text(
         "phase_time_convention": PHASE_TIME_CONVENTION,
         "assembly_backend": backend,
         "assemblyBackend": backend,
+        "assembly_device": status.get("assembly_device"),
+        "opencl_unavailable_reason": status.get("opencl_unavailable_reason"),
         "assembly_backend_warning": status.get("warning"),
         "device_interface": {
             "selected": f"bempp-cl-{backend}",

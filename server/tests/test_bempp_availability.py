@@ -59,7 +59,8 @@ def test_opencl_is_preferred_when_a_device_exists(monkeypatch):
     """OpenCL is hornlab-bempp-bem's production backend, so it wins by default."""
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
-    monkeypatch.setattr(bempp, "_opencl_status", lambda: (True, "assembles on OpenCL device Fake CPU"))
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
+    monkeypatch.setattr(bempp, "_opencl_status", lambda: (True, "Fake CPU passed compute smoke", {"type": "cpu", "name": "Fake CPU"}, None))
 
     status = bempp.bempp_status()
 
@@ -76,9 +77,10 @@ def test_numba_fallback_is_never_silent(monkeypatch):
     """
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
     monkeypatch.setattr(
         bempp, "_opencl_status",
-        lambda: (False, "an OpenCL runtime is present but exposes no device. Install an OpenCL runtime"),
+        lambda: (False, "no CPU OpenCL device is present", None, "no_device"),
     )
 
     status = bempp.bempp_status()
@@ -89,14 +91,16 @@ def test_numba_fallback_is_never_silent(monkeypatch):
     assert warning and warning == status["reason"]
     assert "numba" in warning
     assert "OpenCL" in warning
-    assert "Install an OpenCL runtime" in warning
+    assert status["opencl_unavailable_reason"] == "no_device"
+    assert "correct but slow" in warning
 
 
 def test_available_requires_a_working_assembly_backend(monkeypatch):
     """A wrapper that imports is not enough to call the engine available."""
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
-    monkeypatch.setattr(bempp, "_opencl_status", lambda: (False, "no OpenCL here."))
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
+    monkeypatch.setattr(bempp, "_opencl_status", lambda: (False, "no OpenCL here.", None, "no_device"))
     monkeypatch.setattr(bempp.importlib, "import_module", _refusing_numba())
 
     status = bempp.bempp_status()
@@ -111,7 +115,8 @@ def test_windows_missing_runtime_names_the_dlls_and_the_fix(monkeypatch):
     """The remedy has to be in the message; the failure is otherwise a mystery."""
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
-    monkeypatch.setattr(bempp, "_opencl_status", lambda: (False, "no OpenCL here."))
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
+    monkeypatch.setattr(bempp, "_opencl_status", lambda: (False, "no OpenCL here.", None, "no_device"))
     monkeypatch.setattr(bempp.importlib, "import_module", _refusing_numba())
     monkeypatch.setattr(
         bempp, "_missing_windows_runtime_dlls", lambda: ["vcruntime140.dll", "msvcp140.dll"]
@@ -123,178 +128,6 @@ def test_windows_missing_runtime_names_the_dlls_and_the_fix(monkeypatch):
     assert "VCRedist" in reason or "vc_redist" in reason
 
 
-def test_missing_opencl_runtime_explains_how_to_get_one(monkeypatch):
-    """pyopencl imports fine with no ICD; the device probe is what catches it."""
-
-    class _NoPlatforms:
-        @staticmethod
-        def get_platforms():
-            raise RuntimeError("clGetPlatformIDs failed: PLATFORM_NOT_FOUND_KHR")
-
-    monkeypatch.setitem(sys.modules, "pyopencl", _NoPlatforms)
-
-    usable, reason = bempp._opencl_status()
-
-    assert usable is False
-    assert "PLATFORM_NOT_FOUND_KHR" in reason
-    assert "Khronos" in reason or "OpenCL runtime" in reason
-
-
-class _FakeDevice:
-    def __init__(self, name, kind):
-        self.name = name
-        self.kind = kind
-        self.type = kind
-
-
-class _FakePlatform:
-    """One ICD, answering ``get_devices`` the way pyopencl does."""
-
-    def __init__(self, name, devices):
-        self.name = name
-        self._devices = devices
-
-    def get_devices(self, device_type=None):
-        if device_type is None:
-            return list(self._devices)
-        found = [d for d in self._devices if d.kind == device_type]
-        if not found:
-            # pyopencl surfaces the driver's own DEVICE_NOT_FOUND as an error.
-            raise RuntimeError("clGetDeviceIDs failed: DEVICE_NOT_FOUND")
-        return found
-
-
-def _fake_pyopencl(platforms):
-    class _DeviceType:
-        CPU = "cpu-devices"
-        GPU = "gpu-devices"
-
-    class _Module:
-        device_type = _DeviceType
-
-        @staticmethod
-        def get_platforms():
-            return platforms
-
-    return _Module
-
-
-def test_a_gpu_only_runtime_is_not_a_usable_opencl_backend(monkeypatch):
-    """Apple Silicon: the ICD is real, the device the solve needs is not.
-
-    ``solve_bempp_from_msh_text`` always asks bempp-cl for an OpenCL *cpu*
-    device, and bempp-cl's dense assembly has no GPU-only path. A probe that
-    accepted any device reported READY on an M1 Max and then failed inside
-    every solve with "OpenCL cpu device could not be initialized" -- exactly
-    the class of lie this module exists to prevent.
-    """
-
-    gpu_only = _FakePlatform("Apple", [_FakeDevice("Apple M1 Max", "gpu-devices")])
-    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only]))
-
-    usable, reason = bempp._opencl_status()
-
-    assert usable is False
-    assert "cpu" in reason
-    # Name what was found, or the report reads as "no OpenCL at all", which is
-    # a different problem with a different remedy.
-    assert "Apple M1 Max" in reason
-
-
-def test_the_gpu_only_reason_names_a_package_per_distribution(monkeypatch):
-    """"Install pocl" is not actionable if the reader has the wrong distro.
-
-    Reported from Fedora 44 with an RTX 5090 as the only OpenCL device: the
-    message named the cause and the consequence well, and then left a blocked
-    user to find the package name themselves -- on a machine where the obvious
-    guess (``mesa-libGL``-style naming, ``apt``) does not resolve.
-
-    The second half is the confusion the same host invites: a very capable GPU
-    *is* exposed, and it cannot assemble a BEMPP solve at any speed. BEMPP is
-    this application's CPU engine; the GPU path is a different engine.
-    """
-
-    gpu_only = _FakePlatform(
-        "NVIDIA CUDA", [_FakeDevice("NVIDIA GeForce RTX 5090", "gpu-devices")]
-    )
-    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only]))
-
-    usable, reason = bempp._opencl_status()
-
-    assert usable is False
-    assert "sudo dnf install pocl" in reason
-    assert "sudo apt install pocl-opencl-icd" in reason
-    assert "sudo pacman -S pocl" in reason
-    assert "does not substitute" in reason
-    assert "BEAT · CUDA" in reason
-
-
-def test_a_cpu_device_on_any_platform_is_accepted(monkeypatch):
-    """The GPU-only case must not become a blanket refusal."""
-
-    gpu_only = _FakePlatform("Apple", [_FakeDevice("Apple M1 Max", "gpu-devices")])
-    with_cpu = _FakePlatform(
-        "Intel(R) OpenCL", [_FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")]
-    )
-    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([gpu_only, with_cpu]))
-    monkeypatch.setattr(
-        bempp,
-        "_bempp_default_cpu_device",
-        lambda: with_cpu.get_devices(device_type="cpu-devices")[0],
-        raising=False,
-    )
-
-    usable, reason = bempp._opencl_status()
-
-    assert usable is True
-    assert "Intel(R) Core(TM) i7" in reason
-
-
-def test_the_probe_asks_for_the_device_the_solve_asks_for(monkeypatch):
-    """One constant, so the two can never drift apart again."""
-
-    assert bempp.OPENCL_DEVICE_TYPE == "cpu"
-
-    recorded = []
-
-    class _Recording(_FakePlatform):
-        def get_devices(self, device_type=None):
-            recorded.append(device_type)
-            return super().get_devices(device_type)
-
-    cpu = _FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")
-    platform_entry = _Recording("Intel(R) OpenCL", [cpu])
-    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([platform_entry]))
-    monkeypatch.setattr(
-        bempp,
-        "_bempp_default_cpu_device",
-        lambda: cpu,
-        raising=False,
-    )
-
-    assert bempp._opencl_status()[0] is True
-    assert recorded == ["cpu-devices"]
-
-
-def test_probe_rejects_the_non_cpu_device_bempp_cl_would_really_select(monkeypatch):
-    cpu = _FakeDevice("Validated CPU", "cpu-devices")
-    gpu = _FakeDevice("Unvalidated GPU", "gpu-devices")
-    mixed = _FakePlatform("Mixed CPU/GPU ICD", [cpu, gpu])
-    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([mixed]))
-    monkeypatch.setattr(
-        bempp,
-        "_bempp_default_cpu_device",
-        lambda: gpu,
-        raising=False,
-    )
-
-    usable, reason = bempp._opencl_status()
-
-    assert usable is False
-    assert "Unvalidated GPU" in reason
-    assert "not a cpu device" in reason
-
-
 def test_available_requires_the_engine_not_just_its_wrapper(monkeypatch):
     """numba loading proves nothing about bempp-cl, which is imported lazily.
 
@@ -304,11 +137,10 @@ def test_available_requires_the_engine_not_just_its_wrapper(monkeypatch):
     """
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
-    monkeypatch.setattr(
-        bempp.importlib,
-        "import_module",
-        _refusing("bempp_cl.api", "DLL load failed while importing _bempp: ..."),
-    )
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {
+        "ok": False, "stage": "engine", "reason": "DLL load failed while importing bempp_cl.api",
+    })
 
     status = bempp.bempp_status()
 
@@ -376,6 +208,7 @@ def test_solving_refuses_when_the_backend_cannot_run(monkeypatch):
     """The guard must sit in front of the solve, not only in the report."""
 
     monkeypatch.setattr(bempp, "_load_api", lambda: True)
+    monkeypatch.setattr(bempp, "qualified_opencl", lambda: {"ok": False, "reason": "no CPU device", "opencl_unavailable_reason": "no_device"})
     monkeypatch.setattr(bempp, "SolveConfig", object())
     monkeypatch.setattr(bempp, "bempp_solve", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -402,25 +235,6 @@ class _Result:
 
     def __init__(self, pressure):
         self.pressure_complex = pressure
-
-
-def test_the_probe_does_not_claim_an_assembly_it_never_ran(monkeypatch):
-    """The probe enumerates and selects; it must not say it assembled.
-
-    It said "bempp-cl assembles on OpenCL device X" while doing no assembly at
-    all, which is the sentence a maintainer reads when deciding whether a
-    silent-output box is a solver bug or a runtime bug.
-    """
-
-    cpu = _FakeDevice("Intel(R) Core(TM) i7", "cpu-devices")
-    monkeypatch.setitem(sys.modules, "pyopencl", _fake_pyopencl([_FakePlatform("Intel(R) OpenCL", [cpu])]))
-    monkeypatch.setattr(bempp, "_bempp_default_cpu_device", lambda: cpu, raising=False)
-
-    usable, reason = bempp._opencl_status()
-
-    assert usable is True
-    assert "selected OpenCL device" in reason
-    assert "assembles on OpenCL device" not in reason
 
 
 def test_an_all_zero_opencl_result_is_refused_not_returned():

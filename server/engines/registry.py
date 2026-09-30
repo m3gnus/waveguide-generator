@@ -126,6 +126,8 @@ class EngineInfo:
     label: str = ""
     # Structured BEMPP probe result; the UI must not parse the warning prose.
     assembly_backend: str | None = None
+    assembly_device: dict[str, Any] | None = None
+    opencl_unavailable_reason: str | None = None
 
     def display_label(self) -> str:
         return self.label or self.name
@@ -278,6 +280,8 @@ def detect_engines(*, environ: Mapping[str, str] | None = None) -> list[EngineIn
                 name=name,
                 label=label,
                 assembly_backend=status.get("assembly_backend") if name == "bempp" else None,
+                assembly_device=status.get("assembly_device") if name == "bempp" else None,
+                opencl_unavailable_reason=status.get("opencl_unavailable_reason") if name == "bempp" else None,
                 available=bool(status.get("available")),
                 reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
                 version=(str(status["version"]) if status.get("version") is not None else None),

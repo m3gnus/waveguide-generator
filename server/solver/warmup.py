@@ -258,6 +258,9 @@ def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
     host it was already populated.
     """
 
+    from .bempp import bind_assembly_device
+
+    bind_assembly_device(status)
     backend = status.get("assembly_backend") or "opencl"
     from hornlab_bempp_bem import ObservationConfig, SolveConfig, solve
 

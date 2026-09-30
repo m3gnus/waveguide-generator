@@ -1677,6 +1677,8 @@ def test_bempp_assembly_backend_reaches_capabilities(monkeypatch, backend) -> No
             "available": backend is not None,
             "reason": "probe",
             "assembly_backend": backend,
+            "assembly_device": {"type": "cpu", "vendor": "AMD", "name": "Ryzen"} if backend == "opencl" else None,
+            "opencl_unavailable_reason": None if backend == "opencl" else "no_device",
             "coupled_infinite_baffle": True,
         },
     )
@@ -1685,4 +1687,10 @@ def test_bempp_assembly_backend_reaches_capabilities(monkeypatch, backend) -> No
     payload = asyncio.run(capabilities_payload(engine_registry))
     rows = {row["name"]: row for row in payload["engines"]}
     assert rows["bempp"]["assembly_backend"] == backend
+    assert rows["bempp"]["assembly_device"] == ({"type": "cpu", "vendor": "AMD", "name": "Ryzen"} if backend == "opencl" else None)
+    assert "infinite-baffle" in rows["bempp"]["mountings"]
+    assert ("imported" in rows["bempp"]["geometry_sources"]) == (backend == "opencl")
     assert rows["metal"]["assembly_backend"] is None
+    assert rows["metal"]["assembly_device"] is None
+    assert rows["bempp"]["opencl_unavailable_reason"] == (None if backend == "opencl" else "no_device")
+    assert rows["metal"]["opencl_unavailable_reason"] is None

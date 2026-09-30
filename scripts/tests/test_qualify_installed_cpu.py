@@ -858,7 +858,8 @@ class StubApplication:
                  "reason": "ready" if available else "preparing"},
                 {"name": "bempp", "available": self.settings.get("ib_available", True),
                  "reason": "ready", "mountings": self.settings.get("ib_mountings", ["free-standing", "infinite-baffle"]),
-                 "assembly_backend": "numba"},
+                 "assembly_backend": self.settings.get("ib_backend", "numba"),
+                 "assembly_device": self.settings.get("ib_device")},
                 {"name": "beat-metal", "available": False, "reason": "no GPU here"},
                 {"name": "metal", "available": metal,
                  "reason": "ready" if metal else "no Metal device on this runner"},
@@ -2759,25 +2760,50 @@ def test_rc_ib_qualification_only_on_windows_and_linux(job: str) -> None:
     )
     expected = job != "macos-bundle"
     assert ("--ib-engine bempp" in command) is expected
-    assert ("--ib-expect-backend numba" in command) is expected
+    assert ("--ib-expect-backend any" in command) is expected
 
 
-@pytest.mark.parametrize("flag", ["--ib-engine", "--ib-expect-backend"])
-def test_ib_flags_must_be_supplied_together(tmp_path: Path, flag: str) -> None:
+def test_ib_backend_expectation_requires_engine(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as raised:
-        gate.main(
-            [
-                "--payload",
-                str(tmp_path),
-                "--work",
-                str(tmp_path),
-                "--output",
-                str(tmp_path),
-                flag,
-                "bempp" if flag == "--ib-engine" else "numba",
-            ]
-        )
+        gate.main(["--payload", str(tmp_path), "--work", str(tmp_path),
+                   "--output", str(tmp_path), "--ib-expect-backend", "numba"])
     assert raised.value.code == 2
+
+
+@pytest.mark.parametrize("backend", ["numba", "opencl"])
+@pytest.mark.parametrize("expected", ["any", "matching"])
+def test_ib_accepts_each_qualified_route(tmp_path, backend, expected, capsys):
+    result = _ib_result()
+    device = {"type": "cpu", "vendor": "AMD", "name": "Ryzen", "platform": "Intel(R) OpenCL"} if backend == "opencl" else None
+    result["metadata"].update(assembly_backend=backend, assembly_device=device)
+    class Server:
+        base = "stub"
+        def capabilities(self):
+            return {"engines": [{"name": "bempp", "available": True,
+                                "mountings": ["infinite-baffle"], "assembly_backend": backend,
+                                "assembly_device": device}]}
+        def completed(self, job):
+            return result
+    section = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(gate, "api", lambda *a, **k: {"job_id": "ib"})
+        gate.qualify_infinite_baffle(Server(), tmp_path, PINS, "bempp", "any" if expected == "any" else backend, section)
+    assert section["solve"]["assembly_backend"] == backend
+    assert section["solve"]["assembly_device"] == device
+    assert f"IB assembly backend: {backend}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("backend", [None, "auto", "cuda"])
+def test_ib_any_still_refuses_an_unknown_route(backend):
+    result = _ib_result()
+    result["metadata"]["assembly_backend"] = backend
+    with pytest.raises(gate.QualificationError, match="assembly_backend"):
+        gate.check_ib_solve(result, PINS, "any")
+
+
+def test_ib_expectation_defaults_to_any():
+    args = gate.build_parser().parse_args(["--payload", "/tmp", "--work", "/tmp", "--output", "/tmp", "--ib-engine", "bempp"])
+    assert args.ib_expect_backend == "any"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the stub interpreter is a shebang script")

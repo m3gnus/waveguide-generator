@@ -2,6 +2,8 @@ import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
 
+export type OpenclUnavailableReason = 'no_device' | 'smoke_test_failed' | 'smoke_test_timeout' | 'pocl_windows';
+
 export interface EngineCapability {
   name: string;
   /** What to call it in the interface. `name` is a wire identifier and reads
@@ -13,7 +15,9 @@ export interface EngineCapability {
   reason: string | null;
   version: string | null;
   fast_paths: string[];
-  assembly_backend?: string | null;
+  assembly_backend?: 'opencl' | 'numba' | null;
+  assembly_device?: { type: 'cpu'; vendor: string; name: string; platform: string; fp64: boolean } | null;
+  opencl_unavailable_reason?: OpenclUnavailableReason | null;
   formulations?: string[];
   mountings?: string[];
   /** Single axes this engine can bound with a rigid half space, e.g. ['y']. */

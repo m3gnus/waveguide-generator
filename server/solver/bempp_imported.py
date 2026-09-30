@@ -18,8 +18,8 @@ this module is only the adapter half:
   where Metal leaves it free, so the two disagree on an open rim. A cut rim on
   a mirror plane is not free. Any other open edge is refused before a job exists
   (:func:`imported_bempp_preflight`), and so is a record too old to say.
-* **OpenCL only.** numba is never a shipping backend. BEMPP declares imported
-  geometry only while its assembly backend is OpenCL
+* **OpenCL only.** The numba exception does not cover imported CAD. BEMPP
+  declares imported geometry only with a compute-qualified OpenCL device
   (``bempp.geometry_sources_for``), and a solve that would assemble on anything
   else is refused here as well.
 """
@@ -334,6 +334,7 @@ def solve_imported_bempp_from_msh_text(
     if not status["available"]:
         raise BemppUnavailable(status["reason"])
     backend = _require_opencl(status)
+    bempp.bind_assembly_device(status)
     refusal = imported_bempp_preflight(record, geometry.drive_channels)
     if refusal is not None:
         raise BemppUnavailable(f"BEMPP cannot solve this CAD return: {refusal}")
@@ -612,6 +613,7 @@ def solve_imported_bempp_from_msh_text(
             "engine": "hornlab-bempp-bem",
             "phase_time_convention": PHASE_TIME_CONVENTION,
             "assembly_backend": backend,
+            "assembly_device": status.get("assembly_device"),
             "mesh_validation": {
                 "mode": context.mesh_validation_mode,
                 "backend": "hornlab-bempp-bem",
@@ -711,6 +713,7 @@ def solve_imported_bempp_from_msh_text(
             "package_version": status.get("version"),
             "device": OPENCL_DEVICE_TYPE,
             "assembly_backend": backend,
+            "assembly_device": status.get("assembly_device"),
             "formulation": json_safe_native_value(formulation),
             "complex_k_shift": DEFAULT_COMPLEX_K_SHIFT,
         },

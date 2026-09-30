@@ -593,6 +593,8 @@ def test_capability_probe_runs_off_thread_and_is_cached(
                     "cancellation_granularity": "between-frequencies",
                     "label": "",
                     "assembly_backend": None,
+                    "assembly_device": None,
+                    "opencl_unavailable_reason": None,
                 }
             ],
             "engineSelection": {

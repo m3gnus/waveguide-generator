@@ -1130,10 +1130,10 @@ def check_ib_solve(
     contract = {
         "engine": "hornlab-bempp-bem",
         "solver_backend": "bempp",
-        "assembly_backend": expected_backend,
+        "assembly_backend": metadata.get("assembly_backend") if expected_backend == "any" else expected_backend,
     }
     actual = {key: metadata.get(key) for key in contract}
-    if actual != contract:
+    if actual != contract or actual["assembly_backend"] not in {"opencl", "numba"}:
         raise QualificationError(f"an IB solve reported {actual!r}, expected {contract!r}")
     ib = metadata.get("infinite_baffle") or {}
     bempp = metadata.get("bempp") or {}
@@ -1183,6 +1183,7 @@ def check_ib_solve(
                 )
     return {
         **actual,
+        "assembly_device": metadata.get("assembly_device"),
         "infinite_baffle": ib,
         "formulation": bempp["formulation"],
         **provenance,
@@ -1235,6 +1236,12 @@ def qualify_infinite_baffle(
     result = server.completed(job)
     (output / "ib-result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     section["solve"] = check_ib_solve(result, expected_pins, expected_backend)
+    if section["solve"]["assembly_backend"] != row.get("assembly_backend"):
+        raise QualificationError("IB solve assembly_backend differs from the offered route")
+    if section["solve"].get("assembly_device") != row.get("assembly_device"):
+        raise QualificationError("IB solve assembly_device differs from the offered device")
+    print(f"IB assembly backend: {section['solve']['assembly_backend']}; "
+          f"device: {json.dumps(section['solve']['assembly_device'], sort_keys=True)}", flush=True)
 
 
 def stop_our_workers(
@@ -2164,8 +2171,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--ib-engine", choices=("bempp",),
                         help="also qualify a two-frequency coupled infinite-baffle solve")
-    parser.add_argument("--ib-expect-backend", choices=("numba", "opencl"),
-                        help="assembly backend the IB result must report (requires --ib-engine)")
+    parser.add_argument("--ib-expect-backend", choices=("any", "numba", "opencl"), default="any",
+                        help="assembly backend the IB result must report (default: any qualified route)")
     parser.add_argument("--expected-version")
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-tree-sha256")
@@ -2204,8 +2211,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
     check_imported_arguments(parser, arguments)
-    if bool(arguments.ib_engine) != bool(arguments.ib_expect_backend):
-        parser.error("--ib-engine and --ib-expect-backend must be supplied together")
+    if not arguments.ib_engine and arguments.ib_expect_backend != "any":
+        parser.error("--ib-expect-backend requires --ib-engine")
     arguments.expected_pin = parse_pins(arguments.expected_pin)
     arguments.cleanup = None
     started = time.time()
