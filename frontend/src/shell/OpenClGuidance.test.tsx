@@ -1,8 +1,9 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import guidance from '../../../shared/opencl-driver-guidance.v1.json';
-import { OpenClGuidance, type OpenClGuidancePlatform, type OpenClGuidanceReason } from './OpenClGuidance';
+import componentSource from './OpenClGuidance.tsx?raw';
+import { OpenClGuidance, isOpenClGuidanceData, type OpenClGuidancePlatform, type OpenClGuidanceReason } from './OpenClGuidance';
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -19,13 +20,16 @@ describe('OpenClGuidance', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    vi.doUnmock('../../../shared/opencl-driver-guidance.v1.json');
+    vi.resetModules();
   });
 
   it.each<OpenClGuidancePlatform>(['windows', 'linux'])('renders the %s summary, steps and applicable warnings', (platform) => {
     act(() => root.render(<OpenClGuidance platform={platform} />));
     const block = guidance.platforms[platform];
     const warnings = guidance.warnings.filter((warning) => warning.platforms.includes(platform));
-    expect(host.querySelector('section')?.getAttribute('aria-label')).toBe('CPU OpenCL runtime');
+    expect(host.querySelector('section')?.getAttribute('aria-label')).toBe(guidance.labels.ariaLabel);
+    expect(host.querySelector('h3')?.textContent).toBe(guidance.labels.heading);
     expect([...host.querySelectorAll('p')].map((p) => p.textContent))
       .toEqual([block.summary, ...block.steps.map((step) => step.note), ...warnings.map((warning) => warning.text)]);
     const links = [...host.querySelectorAll('a')];
@@ -55,5 +59,96 @@ describe('OpenClGuidance', () => {
     expect(host.textContent).not.toContain(guidance.reasons.no_device);
     expect(host.textContent).not.toContain(guidance.warnings[0].text);
     expect(host.querySelectorAll('a')).toHaveLength(guidance.platforms.linux.steps.length);
+  });
+
+  it('validates the shipped JSON shape', () => {
+    expect(isOpenClGuidanceData(guidance)).toBe(true);
+  });
+
+  it.each<OpenClGuidancePlatform>(['windows', 'linux'])('renders exactly the JSON step URLs for %s', (platform) => {
+    act(() => root.render(<OpenClGuidance platform={platform} />));
+    expect([...host.querySelectorAll('[href]')].map((link) => link.getAttribute('href')))
+      .toEqual(guidance.platforms[platform].steps.map((step) => step.url));
+  });
+
+  it('reads distinct heading and accessibility wording from JSON', async () => {
+    const data = structuredClone(guidance);
+    data.title = 'Updated title';
+    data.labels = { heading: 'Updated heading', ariaLabel: 'Updated accessibility label' };
+    vi.doMock('../../../shared/opencl-driver-guidance.v1.json', () => ({ default: data }));
+    const { OpenClGuidance: Component } = await import('./OpenClGuidance');
+    act(() => root.render(<Component platform="windows" />));
+    expect(host.querySelector('h3')?.textContent).toBe(data.labels.heading);
+    expect(host.querySelector('section')?.getAttribute('aria-label')).toBe(data.labels.ariaLabel);
+  });
+
+  it('keeps visible wording and all URL literals out of the component source', () => {
+    const source = componentSource;
+    for (const text of [guidance.title, ...Object.values(guidance.labels), ...Object.values(guidance.reasons)]) {
+      expect(source).not.toContain(text);
+    }
+    expect(source).not.toMatch(/(?:[a-z][a-z0-9+.-]*:)?\/\/[^\s]/i);
+    expect(source).not.toMatch(/(?:aria-label|title|alt|placeholder)\s*=\s*["']/);
+    const start = source.indexOf('return <section');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const jsx = source.slice(start);
+    expect(jsx).not.toMatch(/>\s*[A-Za-z][^<>{}]*</);
+    expect(jsx).not.toMatch(/\{\s*["'`]/);
+  });
+
+  const omissions: [string, (data: typeof guidance) => void][] = [
+    ['platform entry', (data) => { Reflect.deleteProperty(data.platforms, 'windows'); }],
+    ['warnings', (data) => { Reflect.deleteProperty(data, 'warnings'); }],
+    ['steps', (data) => { Reflect.deleteProperty(data.platforms.windows, 'steps'); }],
+    ['reason line', (data) => { Reflect.deleteProperty(data.reasons, 'no_device'); }],
+    ['reasons', (data) => { Reflect.deleteProperty(data, 'reasons'); }],
+  ];
+
+  it.each(omissions)('handles a missing %s without throwing or empty paragraphs', async (name, omit) => {
+    const data = structuredClone(guidance);
+    omit(data);
+    vi.doMock('../../../shared/opencl-driver-guidance.v1.json', () => ({ default: data }));
+    const { OpenClGuidance: Component } = await import('./OpenClGuidance');
+    act(() => root.render(<Component platform="windows" reason="no_device" />));
+    const paragraphs = [...host.querySelectorAll('p')].map((p) => p.textContent);
+    expect(paragraphs.every((text) => text && text.trim().length > 0)).toBe(true);
+    if (name === 'platform entry') {
+      expect(host.innerHTML).toBe('');
+      act(() => root.render(<Component platform="linux" />));
+      expect(host.textContent).toContain(guidance.platforms.linux.summary);
+      return;
+    }
+    const expected = [
+      ...(name === 'reason line' || name === 'reasons' ? [] : [guidance.reasons.no_device]),
+      guidance.platforms.windows.summary,
+      ...(name === 'steps' ? [] : guidance.platforms.windows.steps.map((step) => step.note)),
+      ...(name === 'warnings' ? [] : guidance.warnings.map((warning) => warning.text)),
+    ];
+    expect(paragraphs).toEqual(expected);
+    expect([...host.querySelectorAll('a')].map((link) => link.getAttribute('href')))
+      .toEqual(name === 'steps' ? [] : guidance.platforms.windows.steps.map((step) => step.url));
+    if (name === 'steps') expect(host.querySelector('ul')).toBeNull();
+  });
+
+  const malformed: [string, unknown][] = [
+    ['null', null],
+    ['title', { ...guidance, title: 123 }],
+    ['labels', { ...guidance, labels: null }],
+    ['platforms', { ...guidance, platforms: null }],
+    ['platform entry', { ...guidance, platforms: { windows: null } }],
+    ['steps', { ...guidance, platforms: { windows: { summary: 'summary', steps: {} } } }],
+    ['step', { ...guidance, platforms: { windows: { summary: 'summary', steps: [null] } } }],
+    ['warnings', { ...guidance, warnings: {} }],
+    ['warning', { ...guidance, warnings: [null] }],
+    ['warning platforms', { ...guidance, warnings: [{ id: 'warning', text: 'warning', platforms: [null] }] }],
+    ['reason', { ...guidance, reasons: { no_device: 123 } }],
+  ];
+
+  it.each(malformed)('rejects malformed %s at module load without crashing the app', async (_name, data) => {
+    expect(isOpenClGuidanceData(data)).toBe(false);
+    vi.doMock('../../../shared/opencl-driver-guidance.v1.json', () => ({ default: data }));
+    const { OpenClGuidance: Component } = await import('./OpenClGuidance');
+    act(() => root.render(<Component platform="windows" reason="no_device" />));
+    expect(host.innerHTML).toBe('');
   });
 });

@@ -16,7 +16,6 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "shared/opencl-driver-guidance.v1.json"
-TITLE = "CPU OpenCL runtime"
 
 
 def windows_warnings(guidance: dict) -> list[str]:
@@ -24,9 +23,12 @@ def windows_warnings(guidance: dict) -> list[str]:
 
 
 def pascal_string(text: str) -> str:
-    """Quote Pascal strings, including apostrophes and line breaks."""
-    return "'" + text.replace("'", "''").replace("\r\n", "\n").replace(
-        "\n", "' + #13#10 + '"
+    """Quote Pascal strings, including apostrophes and control characters."""
+    text = text.replace("\r\n", "\n")
+    return "'" + "".join(
+        "''" if char == "'" else "' + #13#10 + '" if char == "\n"
+        else f"' + #{ord(char)} + '" if ord(char) < 32 else char
+        for char in text
     ) + "'"
 
 
@@ -40,14 +42,15 @@ def render_include(guidance: dict) -> str:
     return (
         f"{{ Generated from {SOURCE}.\n"
         "  Regenerate with scripts/gen_opencl_guidance.py --write. }\n"
-        f"  OpenClGuidanceTitle = {pascal_string(TITLE)};\n"
+        f"  OpenClGuidanceTitle = {pascal_string(guidance['title'])};\n"
         f"  OpenClGuidanceText = {pascal_string(text)};\n"
     )
 
 
 def render_help(guidance: dict) -> str:
     platform = guidance["platforms"]["windows"]
-    title = escape(TITLE)
+    title = escape(guidance["title"])
+    heading = escape(guidance["labels"]["heading"])
     summary = escape(platform["summary"])
     warnings = "\n".join(f"  <p>{escape(text)}</p>" for text in windows_warnings(guidance))
     links = "\n".join(
@@ -69,7 +72,7 @@ def render_help(guidance: dict) -> str:
   </style>
 </head>
 <body>
-  <h1>{title}</h1>
+  <h1>{heading}</h1>
   <p>{summary}</p>
   <ul>
 {links}
@@ -98,8 +101,8 @@ def main(argv: list[str] | None = None) -> int:
     stale = []
     for path, rendered in generated_files(ROOT).items():
         if args.write:
-            path.write_text(rendered, encoding="utf-8")
-        elif not path.exists() or path.read_text(encoding="utf-8") != rendered:
+            path.write_text(rendered, encoding="utf-8", newline="\n")
+        elif not path.exists() or path.read_bytes() != rendered.encode("utf-8"):
             stale.append(path.relative_to(ROOT).as_posix())
     if stale:
         print(

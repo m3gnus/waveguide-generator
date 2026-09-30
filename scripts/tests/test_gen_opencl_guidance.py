@@ -10,7 +10,12 @@ import pytest
 from scripts import gen_opencl_guidance as generator
 
 ARTIFACTS = ["installers/windows/opencl-guidance.iss", "shared/opencl-guidance.html"]
-FORBIDDEN = re.compile(r"nvidia|amd\.com|geforce|radeon|gpu driver", re.IGNORECASE)
+COMPONENT = "frontend/src/shell/OpenClGuidance.tsx"
+CPU_RUNTIME_URLS = {
+    "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html",
+    "https://portablecl.org/",
+}
+URL = re.compile(r"(?:[a-z][a-z0-9+.-]*:)?//[^\s\"'<>]+", re.IGNORECASE)
 
 
 def read_guidance() -> dict:
@@ -19,7 +24,19 @@ def read_guidance() -> dict:
 
 def assert_cpu_only_guidance(root: Path) -> None:
     for name in [generator.SOURCE, *ARTIFACTS]:
-        assert not FORBIDDEN.search((root / name).read_text(encoding="utf-8")), name
+        content = (root / name).read_text(encoding="utf-8")
+        if name == generator.SOURCE:
+            guidance = json.loads(content)
+            for platform in guidance["platforms"].values():
+                assert all(step["url"] in CPU_RUNTIME_URLS for step in platform["steps"]), name
+            content = json.dumps(guidance, ensure_ascii=False)
+        urls = URL.findall(content)
+        if name.endswith(".html"):
+            parser = HelpContent()
+            parser.feed(content)
+            urls.extend(parser.links)
+        assert set(urls) <= CPU_RUNTIME_URLS, f"{name}: unexpected URLs {set(urls) - CPU_RUNTIME_URLS}"
+    assert not URL.search((root / COMPONENT).read_text(encoding="utf-8")), COMPONENT
 
 
 def test_guidance_contains_no_gpu_driver_links_or_instructions() -> None:
@@ -28,7 +45,9 @@ def test_guidance_contains_no_gpu_driver_links_or_instructions() -> None:
 
 def test_versioned_contract_and_cpu_runtime_content() -> None:
     guidance = read_guidance()
-    assert set(guidance) == {"version", "warnings", "reasons", "platforms"}
+    assert set(guidance) == {"version", "title", "labels", "warnings", "reasons", "platforms"}
+    assert guidance["title"] == "CPU OpenCL runtime"
+    assert guidance["labels"] == {"heading": guidance["title"], "ariaLabel": guidance["title"]}
     assert guidance["version"] == 1
     assert set(guidance["reasons"]) == {"no_device", "smoke_test_failed", "smoke_test_timeout", "pocl_windows"}
     assert guidance["reasons"]["no_device"] == "No CPU OpenCL device was found."
@@ -57,7 +76,7 @@ def test_versioned_contract_and_cpu_runtime_content() -> None:
 
 def test_committed_guidance_matches_the_shared_json() -> None:
     for path, rendered in generator.generated_files(generator.ROOT).items():
-        assert path.read_text(encoding="utf-8") == rendered, (
+        assert path.read_bytes() == rendered.encode("utf-8"), (
             f"{path.name} is stale; run scripts/gen_opencl_guidance.py --write"
         )
     assert generator.main(["--check"]) == 0
@@ -67,6 +86,8 @@ def test_committed_guidance_matches_the_shared_json() -> None:
 def isolated_guidance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "shared").mkdir()
     (tmp_path / "installers/windows").mkdir(parents=True)
+    (tmp_path / COMPONENT).parent.mkdir(parents=True)
+    (tmp_path / COMPONENT).write_bytes((generator.ROOT / COMPONENT).read_bytes())
     source = tmp_path / generator.SOURCE
     source.write_text(
         (generator.ROOT / generator.SOURCE).read_text(encoding="utf-8"),
@@ -93,11 +114,15 @@ def test_check_rejects_missing_or_edited_outputs(
     assert generator.main(["--check"]) == 0
 
 
-@pytest.mark.parametrize("field", ["summary", "label", "url", "note", "warning"])
+@pytest.mark.parametrize("field", ["title", "heading", "summary", "label", "url", "note", "warning"])
 def test_source_changes_require_regeneration(isolated_guidance: Path, field: str) -> None:
     assert generator.main(["--write"]) == 0
     guidance = json.loads(isolated_guidance.read_text(encoding="utf-8"))
-    if field == "summary":
+    if field == "title":
+        guidance["title"] += " Updated."
+    elif field == "heading":
+        guidance["labels"][field] += " Updated."
+    elif field == "summary":
         guidance["platforms"]["windows"]["summary"] += " Updated."
     elif field == "warning":
         guidance["warnings"][0]["text"] += " Updated."
@@ -110,14 +135,85 @@ def test_source_changes_require_regeneration(isolated_guidance: Path, field: str
 
 
 @pytest.mark.parametrize("name", [generator.SOURCE, *ARTIFACTS])
-@pytest.mark.parametrize("mutation", ["NVIDIA", "https://www.amd.com/drivers", "GeForce", "Radeon", "GPU driver"])
-def test_cpu_only_guard_rejects_forbidden_content(isolated_guidance: Path, name: str, mutation: str) -> None:
+@pytest.mark.parametrize("mutation", [
+    "https://www.nvidia.com/Download/index.aspx",
+    "https://www.amd.com/drivers",
+    "https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html",
+    "https://example.com/unreviewed-runtime",
+])
+def test_cpu_only_guard_rejects_unapproved_urls(isolated_guidance: Path, name: str, mutation: str) -> None:
     assert generator.main(["--write"]) == 0
     # Use an isolated copy: neither source nor checked-in outputs are mutated.
     path = generator.ROOT / name
-    path.write_text(path.read_text(encoding="utf-8") + mutation, encoding="utf-8")
+    content = path.read_text(encoding="utf-8")
+    if name == generator.SOURCE:
+        guidance = json.loads(content)
+        guidance["review_mutation"] = mutation
+        content = json.dumps(guidance)
+    else:
+        content += mutation
+    path.write_text(content, encoding="utf-8")
     with pytest.raises(AssertionError, match=re.escape(name)):
         assert_cpu_only_guidance(generator.ROOT)
+
+
+def test_reviewer_linux_intel_graphics_mutation_fails(isolated_guidance: Path) -> None:
+    guidance = json.loads(isolated_guidance.read_text(encoding="utf-8"))
+    guidance["platforms"]["linux"]["steps"][1]["url"] = (
+        "https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html"
+    )
+    isolated_guidance.write_text(json.dumps(guidance), encoding="utf-8")
+    assert generator.main(["--write"]) == 0
+    assert generator.main(["--check"]) == 0
+    with pytest.raises(AssertionError, match=re.escape(generator.SOURCE)):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.nvidia.com/Download/index.aspx",
+    "javascript:alert(1)",
+])
+def test_cpu_only_guard_checks_decoded_step_urls(isolated_guidance: Path, url: str) -> None:
+    guidance = json.loads(isolated_guidance.read_text(encoding="utf-8"))
+    guidance["platforms"]["linux"]["steps"][1]["url"] = url
+    isolated_guidance.write_text(json.dumps(guidance).replace("/", r"\u002f"), encoding="utf-8")
+    assert generator.main(["--write"]) == 0
+    with pytest.raises(AssertionError, match=re.escape(generator.SOURCE)):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
+@pytest.mark.parametrize("url", ["https://www.nvidia.com/Download/index.aspx", *sorted(CPU_RUNTIME_URLS)])
+def test_component_rejects_even_cpu_url_literals(isolated_guidance: Path, url: str) -> None:
+    assert generator.main(["--write"]) == 0
+    component = generator.ROOT / COMPONENT
+    component.write_text(component.read_text(encoding="utf-8") + f'\nconst link = <a href="{url}">Download</a>;\n', encoding="utf-8")
+    with pytest.raises(AssertionError, match=re.escape(COMPONENT)):
+        assert_cpu_only_guidance(generator.ROOT)
+
+
+@pytest.mark.parametrize("name", ARTIFACTS)
+def test_write_pins_lf_and_check_rejects_crlf_bytes(isolated_guidance: Path, name: str, capsys: pytest.CaptureFixture) -> None:
+    assert generator.main(["--write"]) == 0
+    output = generator.ROOT / name
+    expected = generator.generated_files(generator.ROOT)[output].encode("utf-8")
+    assert output.read_bytes() == expected
+    assert b"\r" not in expected
+    output.write_bytes(expected.replace(b"\n", b"\r\n"))
+    # Text-mode reading hides the corruption that the byte check must catch.
+    assert output.read_text(encoding="utf-8") == expected.decode("utf-8")
+    assert generator.main(["--check"]) == 1
+    assert name in capsys.readouterr().err
+    assert generator.main(["--write"]) == 0
+    assert output.read_bytes() == expected
+    assert generator.main(["--check"]) == 0
+
+
+def test_wording_is_only_in_json() -> None:
+    guidance = read_guidance()
+    for name in [COMPONENT, "scripts/gen_opencl_guidance.py"]:
+        source = (generator.ROOT / name).read_text(encoding="utf-8")
+        for text in [guidance["title"], *guidance["labels"].values(), *guidance["reasons"].values()]:
+            assert text not in source, name
 
 
 class HelpContent(HTMLParser):
@@ -160,7 +256,7 @@ def test_include_quotes_apostrophes_and_line_breaks() -> None:
     assert generator.pascal_string("Intel's runtime\r\nNext line") == "'Intel''s runtime' + #13#10 + 'Next line'"
     guidance = read_guidance()
     rendered = generator.render_include(guidance)
-    assert "OpenClGuidanceTitle = 'CPU OpenCL runtime';" in rendered
+    assert f"OpenClGuidanceTitle = {generator.pascal_string(guidance['title'])};" in rendered
     for text in [guidance["platforms"]["windows"]["summary"], guidance["warnings"][0]["text"],
                  *guidance["platforms"]["windows"]["steps"][0].values()]:
         if text != "intel":
@@ -168,3 +264,14 @@ def test_include_quotes_apostrophes_and_line_breaks() -> None:
     assert guidance["platforms"]["linux"]["steps"][0]["url"] not in rendered
     guidance["warnings"][0]["platforms"] = ["linux"]
     assert guidance["warnings"][0]["text"] not in generator.render_include(guidance)
+
+
+@pytest.mark.parametrize(("text", "expected"), [
+    ("before\rafter", "'before' + #13 + 'after'"),
+    ("before\nafter", "'before' + #13#10 + 'after'"),
+    ("before\r\nafter", "'before' + #13#10 + 'after'"),
+    ("before\tafter", "'before' + #9 + 'after'"),
+    ("before\0after", "'before' + #0 + 'after'"),
+])
+def test_pascal_escapes_control_characters(text: str, expected: str) -> None:
+    assert generator.pascal_string(text) == expected
