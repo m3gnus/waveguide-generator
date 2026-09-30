@@ -1912,6 +1912,7 @@ def _rename(
     timeout: float = RENAME_RETRY_SECONDS,
     clock: Callable[[], float] = time.monotonic,
     sleeper: Callable[[float], None] = time.sleep,
+    strict_flush: bool = False,
 ) -> None:
     """Move a layer into place, waiting out a Windows directory lock.
 
@@ -1931,7 +1932,8 @@ def _rename(
     Both parent directories are flushed after a successful rename. A flush
     failure reduces durability but must not report that the move failed:
     callers record completed moves only after this function returns. Jobs DB
-    restore separately requires a strict directory flush in its recovery handler.
+    restore passes ``strict_flush``: there a flush failure is a handled failure
+    that recovers the live set, even when a later flush would succeed.
     """
 
     deadline = clock() + timeout
@@ -1954,6 +1956,8 @@ def _rename(
         try:
             sync_directory(parent)
         except OSError as exc:
+            if strict_flush:
+                raise
             _emit_log(
                 logging.getLogger(__name__).warning,
                 f"Moved {source} to {destination}, but could not flush {parent}: "
@@ -2224,14 +2228,14 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
                     copying = preserved.with_name(preserved.name + ".copying")
                     shutil.copy2(source, copying)
                     sync_jobs_restore_file(copying, log=log)
-                    _rename(copying, target)
+                    _rename(copying, target, strict_flush=True)
                 else:
-                    _rename(source, target)
+                    _rename(source, target, strict_flush=True)
                 # Unlike layer moves, jobs restore treats a real directory
                 # flush failure as a handled failure and recovers the live set.
                 sync_directory(db.parent, log=log)
                 sync_jobs_restore_file(target, log=log)
-            _rename(temporary, db)
+            _rename(temporary, db, strict_flush=True)
         # Also required when replay finds the final replacement already done.
         sync_directory(db.parent, log=log)
         plan["state"] = "restored"

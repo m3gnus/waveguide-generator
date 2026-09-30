@@ -2701,13 +2701,14 @@ def test_jobs_restore_retries_transient_windows_sharing_violation(tmp_path, monk
     # _rename's sleeper is bound at definition; supply a test clock through a wrapper.
     real_rename = apply_update_module._rename
     monkeypatch.setattr(apply_update_module.os, "replace", held)
-    monkeypatch.setattr(apply_update_module, "_rename", lambda a, b: real_rename(a, b, sleeper=sleeps.append))
+    monkeypatch.setattr(apply_update_module, "_rename", lambda a, b, **k: real_rename(a, b, sleeper=sleeps.append, **k))
     apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
     assert calls == 3 and len(sleeps) == 2
     assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored"
 
 
-@pytest.mark.parametrize("age,restored", [(-60, True), (-61, False)])
+# Half a second from the -60 s bound: float timestamps round at the edge itself.
+@pytest.mark.parametrize("age,restored", [(-59.5, True), (-60.5, False)])
 def test_jobs_restore_tolerates_small_backward_clock_steps(tmp_path, monkeypatch, age, restored):
     resources, data_dir, _db = _jobs_rollback_installation(tmp_path, monkeypatch)
     snapshot_time = read_journal(data_dir, resources)["jobsUpgradeSnapshot"]["identity"]["mtimeNs"] / 1e9
@@ -2834,7 +2835,8 @@ def test_directory_flush_is_optional_on_windows(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("error,point", [("EIO", "preservation"), ("EIO", "replacement"),
-                                         ("EIO", "replay"), ("ENOTSUP", "preservation")])
+                                         ("EIO", "replay"), ("ENOTSUP", "preservation"),
+                                         ("EIO", "preservation-once"), ("EIO", "replacement-once")])
 def test_jobs_restore_handles_directory_flush_errors(tmp_path, monkeypatch, error, point):
     import errno
     import stat
@@ -2846,8 +2848,8 @@ def test_jobs_restore_handles_directory_flush_errors(tmp_path, monkeypatch, erro
         real_rename = apply_update_module._rename
         class Crash(BaseException):
             pass
-        def crash_after_replace(source, target):
-            real_rename(source, target)
+        def crash_after_replace(source, target, **kwargs):
+            real_rename(source, target, **kwargs)
             if target == db:
                 raise Crash
         with monkeypatch.context() as crash_patch:
@@ -2862,7 +2864,10 @@ def test_jobs_restore_handles_directory_flush_errors(tmp_path, monkeypatch, erro
         info = os.fstat(fd)
         replaced = int.from_bytes(db.read_bytes()[60:64], "big") == 5
         if (stat.S_ISDIR(info.st_mode) and info.st_ino == directory_inode
-                and (point == "preservation" or replaced)):
+                and (point.startswith("preservation") or replaced)
+                and not (point.endswith("-once") and failures)):
+            # A one-shot failure must still fail: a later flush succeeding
+            # does not make the earlier move durable.
             failures.append(error)
             raise OSError(getattr(errno, error), error)
         return real_fsync(fd)
