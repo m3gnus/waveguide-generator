@@ -416,8 +416,9 @@ jobs:
         shell: pwsh
         # Installed by the real installer, unattended and per-user: the .iss
         # sets PrivilegesRequired=lowest, so /DIR into a private directory needs
-        # no elevation and touches nothing outside it. What is qualified is
-        # therefore the installer's output, which is what a user receives.
+        # no elevation. Data and Fusion AddIns are redirected too; setup still
+        # writes per-user shortcuts and uninstall registration. What is
+        # qualified is the installer's output, which is what a user receives.
         #
         # After the upload on purpose; see the macOS job.
         #
@@ -435,9 +436,12 @@ jobs:
                     Select-Object -First 1).FullName
           $install = Join-Path $root "app"
           $installLog = Join-Path $root "inno-install.log"
+          $addins = Join-Path $root "fusion-addins"
+          $env:WG2_DATA_DIR = Join-Path $root "data"
+          New-Item -ItemType Directory -Path $addins, $env:WG2_DATA_DIR | Out-Null
           $process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
             "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS",
-            "/DIR=$install", "/LOG=$installLog"
+            "/DIR=$install", "/LOG=$installLog", "/WGLINKADDINSDIR=$addins"
           )
           if ($process.ExitCode -ne 0) {
             throw "The unattended installer exited $($process.ExitCode); see $installLog"

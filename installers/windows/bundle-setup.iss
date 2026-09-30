@@ -195,6 +195,24 @@ begin
     Log('WGLink stdout: ' + S);
 end;
 
+function WgLinkAddInsOverrideSpecified(): Boolean;
+var
+  Index: Integer;
+  Argument: String;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    Argument := Uppercase(ParamStr(Index));
+    if (Argument = '/WGLINKADDINSDIR') or
+       (Pos('/WGLINKADDINSDIR=', Argument) = 1) then
+    begin
+      Result := True;
+      exit;
+    end;
+  end;
+end;
+
 function WgLinkAddInsDirectory(): String;
 var
   OverrideDir, Legacy, Current: String;
@@ -205,9 +223,13 @@ begin
     already exist: ordinary setup never creates a Fusion-looking tree merely
     because a command-line value was misspelled. }
   OverrideDir := ExpandConstant('{param:WGLINKADDINSDIR|}');
-  if (OverrideDir <> '') and DirExists(OverrideDir) then
+  if WgLinkAddInsOverrideSpecified() then
   begin
-    Result := OverrideDir;
+    Result := '';
+    if (OverrideDir <> '') and DirExists(OverrideDir) then
+      Result := OverrideDir
+    else
+      Log('WGLink: invalid /WGLINKADDINSDIR; skipping install or uninstall without Fusion fallback: ' + OverrideDir);
     exit;
   end;
 
@@ -287,6 +309,14 @@ begin
   AddInsDirectory := WgLinkAddInsDirectory();
   if AddInsDirectory = '' then
   begin
+    if WgLinkAddInsOverrideSpecified() then
+    begin
+      WgLinkStatus :=
+        'WGLink could not be installed because /WGLINKADDINSDIR is not an existing directory.' + #13#10 +
+        'Create a usable directory, then run the installer again and select WGLink.';
+      Log('WGLink: failed; invalid AddIns override.');
+      exit;
+    end;
     WgLinkStatus :=
       'WGLink was not installed because Autodesk Fusion was not detected.' + #13#10 +
       'Install Fusion first, then run this installer again and select WGLink.';

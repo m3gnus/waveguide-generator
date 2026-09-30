@@ -13,6 +13,7 @@ import importlib.util
 import os
 from pathlib import Path
 import sys
+import subprocess
 from types import ModuleType
 
 import pytest
@@ -66,7 +67,7 @@ def test_the_process_table_sees_this_process_and_its_parent() -> None:
 
 
 @pytest.mark.slow
-def test_the_gate_passes_against_this_checkout(tmp_path: Path) -> None:
+def test_the_gate_passes_against_this_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = _gate()
     # What the suite's own WG2_* settings say describes this process, not the
     # server the gate starts; the gate says exactly what the server gets.
@@ -75,10 +76,27 @@ def test_the_gate_passes_against_this_checkout(tmp_path: Path) -> None:
     }
     report: dict[str, object] = {}
 
+    launches = []
+    original_popen = subprocess.Popen
+
+    def checked_popen(command, **kwargs):
+        if len(command) > 1 and str(command[1]).endswith("serve.py"):
+            child_environment = kwargs["env"]
+            data = Path(command[command.index("--data-dir") + 1])
+            addins = Path(child_environment["WG2_FUSION_ADDINS_DIR"])
+            assert data == Path(child_environment["WG2_DATA_DIR"])
+            assert data.is_dir() and addins.is_dir()
+            assert data.is_relative_to(tmp_path / "work")
+            assert addins.is_relative_to(tmp_path / "work")
+            launches.append(data)
+        return original_popen(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", checked_popen)
     gate.run_gate(
         REPO_ROOT, Path(sys.executable), environment, tmp_path / "work", tmp_path / "out", report
     )
 
+    assert launches == [tmp_path / "work" / "data"] * 2
     grace = report["launcher_grace_seconds"]
     assert isinstance(grace, float)
     quit_ = report["quit"]
@@ -99,8 +117,6 @@ def test_the_gate_passes_against_this_checkout(tmp_path: Path) -> None:
 
 def test_the_sweep_the_gate_runs_removes_a_dead_session(tmp_path: Path) -> None:
     """The branch the gate takes when a clean stop leaves its own session behind."""
-
-    import subprocess
 
     gate = _gate()
     temporary = tmp_path / "tmp"

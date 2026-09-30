@@ -1034,15 +1034,9 @@ def _uninstall_unlocked(
     if not is_managed_target(target, root):
         return "preserved-external", target if _path_present(target) else None
     shutil.rmtree(target)
-    # Both, because where the payloads live depends on whether this root was
-    # writable when they were installed, and an uninstall must not leave the
-    # other one behind.
-    for runtime in {
-        root / "integrations" / "wglink" / "runtime",
-        state_root(root, data_dir=data_dir),
-    }:
-        if runtime.exists():
-            shutil.rmtree(runtime)
+    # Payload identity is version + source commit, not this installation.
+    # Another AddIns registration may still reference these payloads, so leave
+    # runtime state (including the package cache) in place even for the last copy.
     return "removed", target
 
 
@@ -1135,7 +1129,7 @@ def main(argv: list[str] | None = None) -> int:
     elif status == "preserved-external":
         print(f"WGLink: preserved the existing non-WG install at {target}.")
     elif status == "removed":
-        print(f"WGLink: removed {target}.")
+        print(f"WGLink: removed {target}; preserved shared runtime payloads and package cache.")
     else:
         print(f"WGLink: installed {target}. Restart Fusion and enable Run on Startup.")
     return 0

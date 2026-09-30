@@ -467,7 +467,7 @@ def test_a_failure_writes_a_report_and_exits_non_zero(tmp_path: Path) -> None:
     assert "--payload" in written["error"]
 
 
-def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: Path) -> None:
+def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Nothing this gate runs may write into the machine it ran on.
 
     The cache redirections are the launchers' own, and on macOS they are not
@@ -478,12 +478,15 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     app = _app_layer(tmp_path)
     work = tmp_path / "work"
 
+    monkeypatch.setenv("WG2_FUSION_ADDINS_DIR", str(tmp_path / "external-addins"))
     environment = gate.isolated_environment(app, work)
 
+    assert Path(environment["WG2_FUSION_ADDINS_DIR"]).is_dir()
     assert environment["WG2_BUNDLE"] == "1"
     assert environment["WG2_APP_ROOT"] == str(app)
     for name in ("PYTHONPYCACHEPREFIX", "NUMBA_CACHE_DIR", "MPLCONFIGDIR",
-                 "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR"):
+                 "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR",
+                 "WG2_FUSION_ADDINS_DIR"):
         assert environment[name].startswith(str(work)), name
     assert "PYTHONPATH" not in environment
     # The name is not a detail. `worker_registry.py` reads WORKER_DIR_ENV_VAR
@@ -1904,7 +1907,7 @@ def _imported_requests(tmp_path: Path) -> list[dict[str, object]]:
 
 @pytest.mark.skipif(sys.platform == "win32", reason="see the harness test above")
 def test_a_fresh_install_ingests_solves_and_reopens_an_imported_return(
-    tmp_path: Path, _quick_timeouts: None
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _quick_timeouts: None
 ) -> None:
     """The whole sequence, through the real entry point and real processes.
 
@@ -1915,12 +1918,31 @@ def test_a_fresh_install_ingests_solves_and_reopens_an_imported_return(
     runner. Every failure mode below drives the same phase in this process.
     """
 
+    launches = []
+    original_popen = subprocess.Popen
+
+    def checked_popen(command, **kwargs):
+        if str(command[1]).endswith("serve.py"):
+            environment = kwargs["env"]
+            data = Path(command[command.index("--data-dir") + 1])
+            addins = Path(environment["WG2_FUSION_ADDINS_DIR"])
+            assert data == Path(environment["WG2_DATA_DIR"])
+            assert data.is_dir() and addins.is_dir()
+            assert data.is_relative_to(tmp_path / "work")
+            assert addins.is_relative_to(tmp_path / "work")
+            launches.append(data)
+        return original_popen(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", checked_popen)
     code, report = _run_imported(
         tmp_path, "--imported-engine", "beat-cpu", "--imported-engine-when-offered", "metal",
         metal_available=True,
     )
 
     assert code == 0, report.get("error")
+    assert launches == [tmp_path / "work" / "data"] + [
+        tmp_path / "work" / gate.IMPORTED_DATA_DIR_NAME
+    ] * 2
     section = report["imported_return"]
     work = tmp_path / "work"
     data_dir = work / gate.IMPORTED_DATA_DIR_NAME

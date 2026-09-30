@@ -450,7 +450,10 @@ remembers between sessions. That last one lives there rather than in the browser
 on purpose: browser storage is tied to the exact address a window was opened from,
 so a shifted port, a browser set to clear site data on exit, or simply opening WG
 in a different browser used to lose the lot. The uninstallers preserve the data
-directory unless `--data` is explicitly requested.
+directory unless `--data` is explicitly requested. WGLink uninstall removes only
+the add-in registration owned by that installation. It preserves shared runtime
+payloads and the package cache, even when no other installation remains, because
+another add-in can reference the same payloads.
 
 ### Driver library
 

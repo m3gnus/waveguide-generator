@@ -724,7 +724,50 @@ def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(short_tmp_path:
 
     assert status == "removed"
     assert not target.exists()
-    assert not (root / "integrations" / "wglink" / "runtime").exists()
+    assert (root / "integrations" / "wglink" / "runtime").is_dir()
+
+
+@pytest.mark.parametrize("other_installation", [False, True])
+def test_uninstall_preserves_shared_payloads_and_cache(
+    short_tmp_path: Path, monkeypatch, capsys, other_installation: bool
+):
+    installer = _load_installer()
+    root, archive = _package(short_tmp_path, "a" * 40)
+    data = short_tmp_path / "data"
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("WG2_DATA_DIR", str(data))
+    addins = short_tmp_path / "AddIns-a"
+    installer.install(root=root, addins_dir=addins, archive_path=archive)
+    state = installer.state_root(root, data_dir=data)
+    cache = installer._cache_path(state, "9.8.7", "a" * 40)
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(archive, cache)
+
+    def fingerprint(directory):
+        return {p.relative_to(directory): p.read_bytes() for p in directory.rglob("*") if p.is_file()}
+
+    if other_installation:
+        other_root = _wg_root(short_tmp_path / "other", "a" * 40)
+        other_addins = short_tmp_path / "AddIns-b"
+        installer.install(root=other_root, addins_dir=other_addins, archive_path=archive)
+        other_target = other_addins / "WGLink"
+        before_other = fingerprint(other_target)
+        first_pointer = json.loads((addins / "WGLink" / "wglink_runtime.json").read_text())
+        other_pointer = json.loads((other_target / "wglink_runtime.json").read_text())
+        assert first_pointer["root"] == other_pointer["root"]
+    before_state = fingerprint(state)
+    assert before_state
+
+    assert installer.main([
+        "--uninstall", "--yes", "--root", str(root), "--addins-dir", str(addins)
+    ]) == 0
+
+    assert not (addins / "WGLink").exists()
+    assert state.is_dir() and fingerprint(state) == before_state
+    assert "preserved shared runtime payloads and package cache" in capsys.readouterr().out
+    if other_installation:
+        assert fingerprint(other_target) == before_other
+        assert Path(other_pointer["root"]).is_dir()
 
 
 def test_fetch_uses_a_disposable_checkout_of_the_exact_commit(tmp_path: Path):

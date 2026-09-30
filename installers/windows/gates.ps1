@@ -34,9 +34,14 @@ function TreeFingerprint([string]$root) {
 }
 
 $installRoot = "$env:LOCALAPPDATA\Programs\Waveguide Generator"
-$gateRoot = Join-Path $env:TEMP "WaveguideGenerator-installer-gates"
+$gateRoot = Join-Path $env:TEMP ("WaveguideGenerator-installer-gates-" + [guid]::NewGuid().ToString("N"))
 $wglinkAddins = Join-Path $gateRoot "Fusion\API\AddIns"
 $developerAddins = Join-Path $gateRoot "Developer\API\AddIns"
+$gateData = Join-Path $gateRoot "data"
+New-Item -ItemType Directory -Force $wglinkAddins, $developerAddins, $gateData | Out-Null
+$previousDataDir = $env:WG2_DATA_DIR
+$env:WG2_DATA_DIR = $gateData
+try {
 
 # --- Gate 1: the installer exists and carries a build-supplied payload budget --
 $setupItem = Get-Item $Setup
@@ -52,7 +57,7 @@ $marked = $null -ne (Get-Item -Path $Setup -Stream "Zone.Identifier" -ErrorActio
 
 # --- Gate 4 / 3: a too-long install root must be refused with an exit code -----
 $longDir = "C:\" + ("g" * 200)
-$p = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/DIR=`"$longDir`"" -PassThru -NoNewWindow
+$p = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/DIR=`"$longDir`"", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -NoNewWindow
 $longReturned = $true
 try {
     Wait-Process -Id $p.Id -Timeout 30 -ErrorAction Stop
@@ -74,8 +79,6 @@ Gate 3 "silent run exits with a code, never a modal box" ($longReturned -and $lo
 # /WGLINKADDINSDIR hook is intentionally accepted only when this directory
 # exists, so it cannot accidentally create a Fusion-looking directory for a
 # typo in a normal deployment command.
-if (Test-Path $gateRoot) { Remove-Item -Recurse -Force $gateRoot }
-New-Item -ItemType Directory -Force $wglinkAddins | Out-Null
 if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
 $p = Start-Process -FilePath $Setup -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/TASKS=`"wglink`"", "/WGLINKADDINSDIR=`"$wglinkAddins`"" -PassThru -Wait -NoNewWindow
 $installExit = $p.ExitCode
@@ -217,9 +220,8 @@ if ($landed) {
 }
 Gate 9 "uninstall clears the tree including planted bytecode" $uninstallOk $uninstallDetail
 
-# WGLink belongs to Fusion, not the app installation. Remove only the
-# disposable gate fixture after inspecting it; an ordinary uninstall must keep
-# a managed add-in available to the installed application's next version.
+# Remove the private fixtures after inspecting managed AddIns cleanup.
+# Ordinary uninstall preserves the shared runtime payloads and package cache.
 if (Test-Path $gateRoot) { Remove-Item -Recurse -Force $gateRoot }
 
 # Leave the installer as the gates found it. The RC workflow's next step
@@ -237,4 +239,8 @@ Gate 7 "SmartScreen / first-run experience" $null `
 
 if ($results.Result -contains "FAIL") {
     throw "One or more Windows installer gates failed."
+}
+
+} finally {
+    $env:WG2_DATA_DIR = $previousDataDir
 }

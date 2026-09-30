@@ -331,6 +331,7 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         caches / "matplotlib",
         documents,
         work / "julia-depot",
+        work / "fusion-addins",
     ):
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -340,6 +341,7 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
     environment.update(
         WG2_BUNDLE="1",
         WG2_APP_ROOT=str(app),
+        WG2_FUSION_ADDINS_DIR=str(work / "fusion-addins"),
         PYTHONPYCACHEPREFIX=str(caches / "pycache"),
         NUMBA_CACHE_DIR=str(caches / "numba"),
         MPLCONFIGDIR=str(caches / "matplotlib"),
@@ -569,6 +571,8 @@ class Server:
         control: Path,
         log_path: Path,
     ) -> None:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        environment = dict(environment, WG2_DATA_DIR=str(data_dir))
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.log_path = log_path

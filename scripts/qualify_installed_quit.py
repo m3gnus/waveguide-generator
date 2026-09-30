@@ -303,6 +303,8 @@ class Run:
         data_dir: Path,
         root: Path,
     ) -> Run:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        environment = dict(environment, WG2_DATA_DIR=str(data_dir))
         control_dir = root / "control"
         control_dir.mkdir(parents=True)
         output = root / "server.out"

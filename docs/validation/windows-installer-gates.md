@@ -8,7 +8,13 @@ What to check before a release that ships `Waveguide.Generator-<version>-windows
 installers\windows\gates.ps1 -Setup path\to\Waveguide.Generator-<version>-windows-x86_64-setup.exe
 ```
 
-It installs, inspects, and uninstalls. Run it on a machine you are willing to have the app installed on for a minute.
+It installs, inspects, and uninstalls. Every setup and uninstall uses private data
+and pre-created Fusion AddIns directories, including the long-path rejection.
+The gate still uses and deletes the default application root at
+`%LOCALAPPDATA%\Programs\Waveguide Generator`, and setup writes per-user shortcuts
+and uninstall registration. Use a disposable Windows machine; this is not a
+complete machine sandbox. Before and after a gate run, verify that
+`%APPDATA%\WaveguideGenerator` and the real Fusion AddIns trees are byte-identical.
 
 ## Building the installer to test
 
