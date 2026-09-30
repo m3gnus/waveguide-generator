@@ -1,0 +1,302 @@
+"""Offline acquisition tests: reference truth is accessed only at requested rows."""
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+from scipy.signal import find_peaks
+
+from server.jobs.models import SolveOptions
+from server.jobs.result_contracts import ParametricResultEnvelope
+from server.jobs.runtime import merge_provisional_results
+from server.solver.adaptive_rational import SweepModel, aaa
+from server.solver.adaptive_sweep import SweepPlanner, enabled, solve_native_adaptively
+from server.solver.context import SolverContext
+from server.solver.result_mapping import build_solver_response
+
+
+def reference():
+    with np.load(Path(__file__).parent / "fixtures" / "adaptive-ref-S.npz") as data:
+        return data["frequencies_hz"], data["values"]
+
+
+def test_reference_fit_and_batched_acquisition():
+    f, truth = reference()
+    planner = SweepPlanner(f, delays_s=np.r_[np.full(37, 2 / 343), 0])
+    batches = []
+    while len(planner.pending):
+        ids = planner.pending.copy()
+        batches.append(ids)
+        planner.add(ids, truth[ids])
+    assert batches[0].size == 8
+    assert batches[0][0] == 0 and batches[0][-1] == len(f) - 1
+    assert all(0 < len(ids) <= 4 for ids in batches[1:])
+    assert sum(map(len, batches)) == len(planner.observed) <= 32
+    assert planner.stop_reason == "estimated_convergence"
+    ids = np.array(sorted(planner.observed))
+    np.testing.assert_array_equal(planner.prediction[ids], truth[ids])
+    errors = abs(20 * np.log10(abs(planner.prediction[:, :-1]) / abs(truth[:, :-1])))
+    mask = abs(truth[:, :-1]) >= abs(truth[:, :-1]).max(axis=0) * 10 ** (-30 / 20)
+    assert errors[mask].max() < 0.1
+    for a, b in [
+        (abs(truth[:, 0]), abs(planner.prediction[:, 0])),
+        (abs(truth[:, -1]), abs(planner.prediction[:, -1])),
+        (truth[:, -1].real, planner.prediction[:, -1].real),
+    ]:
+        for sign in [-1, 1]:
+            np.testing.assert_array_equal(find_peaks(sign * a)[0], find_peaks(sign * b)[0])
+    assert planner.status[0] == planner.status[-1] == "solved"
+    assert "interpolated" in planner.status
+
+
+def test_real_axis_and_wrong_half_plane_poles_are_rejected():
+    f = np.linspace(200, 1000, 24)
+    for pole in [600 + 0j, 600 + 20j]:
+        values = (1 / (f - pole))[:, None]
+        # Move the exact real pole off sample points.
+        model = SweepModel(f, values, (200, 1000), 5, 0)
+        assert not model.safe()
+    values = (1 / (f - (600 - 20j)))[:, None]
+    assert SweepModel(f, values, (200, 1000), 5, 0).safe()
+    # The same guard and interpolation work after conjugating time convention.
+    model = SweepModel(f, values.conj(), (200, 1000), 5, 0, time_sign=1)
+    assert model.safe()
+    np.testing.assert_allclose(model(f), values.conj(), rtol=1e-10)
+
+
+def test_unphysical_data_falls_back_to_full_sweep():
+    f = np.geomspace(200, 1000, 24)
+    truth = (1 / (f - (600 + 20j)))[:, None]
+    planner = SweepPlanner(f, delays_s=0)
+    while len(planner.pending):
+        planner.add(planner.pending, truth[planner.pending])
+    assert len(planner.observed) == len(f)
+    assert planner.status == ["solved"] * len(f)
+    np.testing.assert_array_equal(planner.prediction, truth)
+
+
+def test_shared_weights_and_froissart_cleanup_keep_samples():
+    x = np.linspace(-1, 1, 32)
+    y = np.column_stack([1 / (x - 2j), 3 / (x - 2j), np.zeros(len(x))])
+    model = aaa(x, y, max_support=12)
+    np.testing.assert_allclose(model(x), y, atol=1e-12)
+    assert len(model.support) < 12
+    assert model.values.shape[1] == 3
+
+
+@pytest.mark.parametrize("f", [[0, 1], [1, 1], [2, 1], [1, np.nan]])
+def test_bad_grid_is_refused(f):
+    with pytest.raises(ValueError):
+        SweepPlanner(f, delays_s=0)
+
+
+def test_preference_off_small_sweeps_and_other_formulations():
+    assert not SolveOptions().adaptive_frequency_sampling
+    context = SolverContext(None, (200, 1000), 24)
+    assert not enabled(context)
+    context.adaptive_frequency_sampling = True
+    assert enabled(context)
+    context.num_frequencies = 23
+    assert not enabled(context)
+    context.num_frequencies = 24
+    context.sim_type = 1
+    assert not enabled(context)
+
+
+def test_native_batches_reconstruct_auxiliary_fields_and_stream_full_grid():
+    f, truth = reference()
+    context = SolverContext(
+        None, (f[0], f[-1]), len(f), frequencies_hz=tuple(f), adaptive_frequency_sampling=True
+    )
+    batches = []
+    snapshots = []
+
+    def solve(batch):
+        ids = np.searchsorted(f, batch)
+        batches.append(ids)
+        pressure = truth[ids, :-1, None].transpose(0, 2, 1)
+        return SimpleNamespace(
+            frequencies_hz=np.asarray(batch),
+            pressure_complex=pressure,
+            directivity_db=np.zeros_like(pressure.real),
+            impedance=truth[ids, -1],
+            observation_angles_deg=np.arange(37) * 5,
+            observation_planes=["horizontal"],
+            surface_pressure_complex=truth[ids, -1, None],
+            surface_neumann_complex=truth[ids, -1, None] * 2,
+            surface_pressure_avg={2: truth[ids, -1]},
+            timings={"solve": len(ids)},
+            solver_log=[{"count": len(ids)}],
+        )
+
+    result = solve_native_adaptively(
+        context, solve, distance_m=2, sound_speed=343, publish=snapshots.append
+    )
+    assert len(batches) > 1 and snapshots
+    np.testing.assert_array_equal(result.frequencies_hz, f)
+    assert result.surface_pressure_complex.shape == (len(f), 1)
+    np.testing.assert_allclose(result.surface_pressure_avg[2], result.impedance)
+    assert result.timings["solve"] == sum(map(len, batches))
+    assert all(len(s.frequency_status) == len(f) for s in snapshots)
+    config = SimpleNamespace(observation=SimpleNamespace(distance_m=2, origin="mouth"))
+    payload = build_solver_response(
+        result=result,
+        config=config,
+        context=context,
+        start_time=0,
+        metadata={},
+        sound_speed_m_per_s=343,
+    )
+    assert payload["frequency_status"] == result.frequency_status
+    assert payload["metadata"]["adaptive_sampling"]["solved_count"] == sum(map(len, batches))
+
+
+def test_snapshot_merge_replaces_rows_and_keeps_other_channels():
+    current = {"channels": {"a": {"frequencies": [1, 2], "spl_on_axis": {"spl": [0, 1]}}}}
+    delta = {
+        "channels": {
+            "b": {
+                "frequencies": [1, 2],
+                "frequency_status": ["solved", "interpolated"],
+                "spl_on_axis": {"spl": [5, 6]},
+            }
+        }
+    }
+    current = merge_provisional_results(current, delta)
+    delta["channels"]["b"]["spl_on_axis"]["spl"] = [7, 8]
+    result = merge_provisional_results(current, delta)
+    assert result["channels"]["a"]["frequencies"] == [1, 2]
+    assert result["channels"]["b"]["frequencies"] == [1, 2]
+    assert result["channels"]["b"]["spl_on_axis"]["spl"] == [7, 8]
+
+
+def test_result_schema_flags_are_optional_and_aligned():
+    schema = ParametricResultEnvelope.model_json_schema()
+    assert "frequency_status" in schema["properties"]
+    digest = "a" * 64
+    provenance = dict(
+        schema_version=1,
+        wg_version="test",
+        dependency_shas={},
+        request_identity="execution",
+        resolved_engine="beat-metal",
+    )
+    for key in (
+        "request_sha256",
+        "geometry_sha256",
+        "solve_options_sha256",
+        "execution_request_sha256",
+        "execution_geometry_sha256",
+        "execution_solve_options_sha256",
+        "effective_request_sha256",
+        "effective_geometry_sha256",
+        "effective_solve_options_sha256",
+    ):
+        provenance[key] = digest
+    payload = dict(
+        result_kind="parametric",
+        result_contract_version=1,
+        frequencies=[1, 2],
+        metadata={},
+        client_request_id=None,
+        client_metadata={},
+        provenance=provenance,
+    )
+    assert ParametricResultEnvelope.model_validate(payload).frequency_status is None
+    payload["frequency_status"] = ["solved", "interpolated"]
+    assert (
+        ParametricResultEnvelope.model_validate(payload).frequency_status
+        == payload["frequency_status"]
+    )
+    for bad in [["solved"], ["solved", "unknown"]]:
+        with pytest.raises(ValueError):
+            ParametricResultEnvelope.model_validate({**payload, "frequency_status": bad})
+
+
+def test_channel_bases_keep_flags_across_recombination():
+    from server.solver.combine import (
+        serialize_channel_bases,
+        deserialize_channel_bases,
+        combine_drive_channels,
+    )
+
+    f = np.geomspace(100, 1000, 24)
+    bases = {}
+    for name, flags in [
+        ("a", ["solved"] * 24),
+        ("b", ["solved"] + ["interpolated"] * 22 + ["solved"]),
+    ]:
+        bases[name] = SimpleNamespace(
+            frequencies_hz=f,
+            observation_angles_deg=np.array([0.0, 5.0]),
+            observation_planes=["horizontal"],
+            pressure_complex=np.ones((24, 1, 2), complex),
+            frequency_status=flags,
+        )
+    restored = deserialize_channel_bases(serialize_channel_bases(bases))["results_by_id"]
+    assert restored["b"].frequency_status == bases["b"].frequency_status
+    combined, _ = combine_drive_channels(
+        restored, members=["a", "b"], crossovers_hz=[500.0], level_match=False, align=False
+    )
+    assert combined.frequency_status == bases["b"].frequency_status
+
+
+def test_many_trace_channels_use_the_same_shared_fit():
+    x = np.linspace(-1, 1, 24)
+    y = (1 / (x - 2j))[:, None] * np.linspace(1, 3, 300)[None, :]
+    fit = aaa(x, y, max_support=10)
+    np.testing.assert_allclose(fit(x), y, atol=1e-11)
+
+
+def test_nonuniform_grid_still_starts_with_eight_distinct_requested_points():
+    f = np.r_[np.linspace(200, 201, 23), 20000.0]
+    planner = SweepPlanner(f, delays_s=0, batch_size=1)
+    assert len(planner.pending) == 8
+    assert planner.pending[0] == 0 and planner.pending[-1] == len(f) - 1
+    ids = planner.pending.copy()
+    planner.add(ids, (1 / (f[ids] - 400j))[:, None])
+    assert len(planner.pending) == 1
+    assert planner.pending[0] not in ids
+
+
+def test_svd_failure_falls_back_to_exact_full_sweep(monkeypatch):
+    f = np.geomspace(200, 1000, 24)
+    truth = (1 / (f - (600 - 20j)))[:, None]
+
+    def fail(*args, **kwargs):
+        raise np.linalg.LinAlgError("injected SVD failure")
+
+    monkeypatch.setattr(np.linalg, "svd", fail)
+    planner = SweepPlanner(f, delays_s=0)
+    while len(planner.pending):
+        planner.add(planner.pending, truth[planner.pending])
+    assert planner.stop_reason == "full_sweep"
+    assert planner.estimate_db == 0
+    assert planner.status == ["solved"] * len(f)
+    np.testing.assert_array_equal(planner.prediction, truth)
+
+
+@pytest.mark.parametrize("failure", ["nan", "batch", "cancel"])
+def test_native_invalid_rows_batch_failure_and_cancellation_propagate(failure):
+    context = SolverContext(None, (200, 1000), 24, adaptive_frequency_sampling=True)
+    batches = []
+
+    def solve(batch):
+        batches.append(batch)
+        if failure == "batch" and len(batches) == 2:
+            raise RuntimeError("batch failed")
+        f = np.asarray(batch)
+        pressure = (np.exp(2j * np.pi * f * 2 / 343) / (f - 600j))[:, None, None]
+        if failure == "nan" and len(batches) == 2:
+            pressure[:] = np.nan
+        return SimpleNamespace(frequencies_hz=f, pressure_complex=pressure)
+
+    def cancel():
+        if failure == "cancel" and batches:
+            raise RuntimeError("cancelled")
+
+    with pytest.raises(ValueError if failure == "nan" else RuntimeError,
+                       match={"nan": "invalid rows", "batch": "batch failed", "cancel": "cancelled"}[failure]):
+        solve_native_adaptively(context, solve, distance_m=2, sound_speed=343, cancel=cancel)
+    assert len(batches) == (1 if failure == "cancel" else 2)

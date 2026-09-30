@@ -248,6 +248,8 @@ def _sort_provisional_frequencies(result: dict[str, Any]) -> None:
         if order != list(range(len(frequencies))):
             count = len(frequencies)
             result["frequencies"] = [frequencies[index] for index in order]
+            if isinstance(result.get("frequency_status"), list):
+                result["frequency_status"] = [result["frequency_status"][index] for index in order]
             for block_name in ("directivity", "directivity_phase"):
                 block = result.get(block_name)
                 if not isinstance(block, dict):
@@ -284,7 +286,15 @@ def _extend_provisional_results(
         else:
             container[key] = copy.deepcopy(incoming)
 
+    if isinstance(delta.get("frequency_status"), list):
+        for key in ("frequencies", "frequency_status", "directivity", "directivity_phase",
+                    "spl_on_axis", "impedance", "di", "balloon", "beam_shape"):
+            current.pop(key, None)
+        for key in ("balloon", "beam_shape"):
+            if key in delta:
+                current[key] = copy.deepcopy(delta[key])
     append_list(current, delta, "frequencies")
+    append_list(current, delta, "frequency_status")
     for block_name in ("directivity", "directivity_phase"):
         incoming_block = delta.get(block_name)
         if not isinstance(incoming_block, Mapping):
@@ -344,6 +354,8 @@ def _extend_provisional_results(
 def _unshare_provisional_rows(result: dict[str, Any]) -> None:
     """Give every list the accumulator appends to an object of its own."""
 
+    if isinstance(result.get("frequency_status"), list):
+        result["frequency_status"] = list(result["frequency_status"])
     if isinstance(result.get("frequencies"), list):
         result["frequencies"] = list(result["frequencies"])
     for block_name in ("directivity", "directivity_phase", "spl_on_axis", "impedance", "di"):
@@ -608,6 +620,9 @@ def _submission_identity(request: SolveRequest) -> dict[str, Any]:
     """
 
     identity = request.model_dump(mode="json")
+    # Preserve durable identities from before this default-off option existed.
+    if not request.options.adaptive_frequency_sampling:
+        identity["options"].pop("adaptive_frequency_sampling", None)
     design = getattr(request, "design", None)
     if design is not None and design.root.simulation.sim_type == "infinite-baffle":
         bem = bem_formulation(coupled_infinite_baffle=True)

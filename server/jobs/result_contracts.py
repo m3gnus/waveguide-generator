@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
 
 from server.jobs.models import CadIdentityProvenance
 
@@ -42,12 +42,22 @@ class ResultProvenance(BaseModel):
 
 
 class ParametricResultEnvelope(ExtensibleResultModel):
+    frequencies: list[float] | None = None
+    frequency_status: list[Literal["solved", "interpolated"]] | None = None
     result_kind: Literal["parametric"]
     result_contract_version: Literal[1]
     client_request_id: str | None
     client_metadata: dict[str, JsonValue]
     provenance: ResultProvenance
     metadata: dict[str, Any]
+
+    @model_validator(mode="after")
+    def validate_frequency_status(self):
+        if self.frequency_status is not None and (
+            self.frequencies is None or len(self.frequency_status) != len(self.frequencies)
+        ):
+            raise ValueError("frequency_status must align with frequencies")
+        return self
 
 
 class MultiChannelResultEnvelope(ExtensibleResultModel):
@@ -73,6 +83,7 @@ class MultiChannelResultEnvelope(ExtensibleResultModel):
     #: Sorted union of every channel's frequency grid. Optional: envelopes
     #: persisted before the field existed remain valid without it.
     frequencies: list[float] | None = None
+    frequency_status: list[Literal["solved", "interpolated"]] | None = None
 
 
 ResultEnvelope = Annotated[

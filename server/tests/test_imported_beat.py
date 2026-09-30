@@ -764,3 +764,168 @@ def test_parametric_beat_envelope_uses_the_shared_phase_tag(recording_beat, monk
     msh = Path(beat.__file__).with_name("warmup_mesh.msh").read_text()
     response = beat.solve_beat_from_msh_text(msh, context, backend="cpu")
     assert response["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
+
+
+def test_adaptive_off_keeps_the_original_single_batch_and_stream(recording_beat, monkeypatch):
+    from server.solver.frequency_sweep import live_execution_frequencies
+    request = _request()
+    request.options.frequencies_hz = np.geomspace(100, 1000, 24).tolist()
+    request.options.adaptive_frequency_sampling = False
+    seen = []
+    native_solve = recording_beat.solve_frequencies
+
+    def record(path, frequencies, config, **kwargs):
+        seen.append(list(frequencies))
+        return native_solve(path, frequencies, config, **kwargs)
+
+    monkeypatch.setattr(recording_beat, "solve_frequencies", record)
+    monkeypatch.setattr(beat_imported, "solve_native_adaptively",
+                        lambda *args, **kwargs: pytest.fail("off must not invoke the planner"))
+    streamed = []
+    outcome = _run(request, _record(), streamed)
+    context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")
+    assert seen == [live_execution_frequencies(context).tolist()]*2
+    assert len(streamed) == 48
+    assert "frequency_status" not in outcome.results["channels"]["left"]
+
+
+def test_adaptive_imported_batches_publish_replaceable_channel_snapshots(recording_beat, monkeypatch):
+    from server.jobs.runtime import merge_provisional_results
+    request = _request()
+    request.options.frequencies_hz = np.geomspace(100, 1000, 48).tolist()
+    request.options.adaptive_frequency_sampling = True
+    native_solve = recording_beat.solve_frequencies
+
+    def smooth(path, frequencies, config, **kwargs):
+        result = native_solve(path, frequencies, config, **kwargs)
+        result.pressure_complex = (np.exp(2j*np.pi*np.asarray(frequencies)*2/343)[:, None, None]
+                                   * np.ones((len(frequencies), 1, 3)) * 20e-6)
+        result.impedance[:] = 1j*REFERENCE_RHO_C
+        return result
+
+    monkeypatch.setattr(recording_beat, "solve_frequencies", smooth)
+    streamed = []
+    outcome = _run(request, _record(), streamed)
+    assert len(recording_beat.solves) >= 6
+    merged = None
+    for index, delta in streamed:
+        assert index == streamed.index((index, delta))
+        merged = merge_provisional_results(merged, delta)
+    for channel in ["left", "right"]:
+        payload = outcome.results["channels"][channel]
+        assert payload["frequencies"] == request.options.frequencies_hz
+        assert payload["frequency_status"][0] == payload["frequency_status"][-1] == "solved"
+        assert "interpolated" in payload["frequency_status"]
+        assert merged["channels"][channel]["frequencies"] == request.options.frequencies_hz
+    assert merged["frequencies"] == request.options.frequencies_hz
+
+
+def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(recording_beat, monkeypatch):
+    # Review reproduction: S in WG's unit-acceleration convention, with a
+    # small, smooth damped response added to the negative axial group.
+    from server.tests.test_adaptive_sweep import reference
+
+    f, values = reference()
+    values = values / (-2j * np.pi * f[:, None])
+    delay = np.exp(2j * np.pi * f * 2 / 343)
+    residual = (abs(values[:, :-1]).max() * 1e-4 * 80
+                / (f - (750 - 80j)) * delay)[:, None] * np.ones((1, 37))
+    # Independently converged group fits reproduce the cancellation failure.
+    from server.solver.adaptive_sweep import SweepPlanner
+
+    independent = []
+    for perturbation in [0, residual]:
+        group_truth = values.copy()
+        group_truth[:, :-1] += perturbation
+        planner = SweepPlanner(f, delays_s=np.r_[np.full(37, 2 / 343), 0])
+        while len(planner.pending):
+            planner.add(planner.pending, group_truth[planner.pending])
+        assert len(planner.observed) == 28
+        assert planner.estimate_db < 0.1
+        independent.append(planner.prediction[:, 0])
+    group_sum = independent[0] - independent[1]
+    assert np.max(abs(20 * np.log10(abs(group_sum) / abs(residual[:, 0])))) > 1
+    request = _request(drive_channels=[{
+        "id": "sum", "source_ids": ["source-a", "source-b"], "motion": "axial",
+    }], mesh={"rigid_size_mm": 8.0, "transition_mm": 20.0,
+              "source_size_mm": {"source-a": 3.0, "source-b": 3.0}})
+    request.options.frequencies_hz = f.tolist()
+    request.options.adaptive_frequency_sampling = True
+    native_solve = recording_beat.solve_frequencies
+    batches = {"positive": [], "negative": []}
+
+    def cancelling(path, frequencies, config, **kwargs):
+        result = native_solve(path, frequencies, config, **kwargs)
+        ids = np.searchsorted(f, frequencies)
+        negative = _elements(Path(path).read_text())[2] == beat_imported.VELOCITY_TAG
+        batches["negative" if negative else "positive"].append(ids.tolist())
+        pressure = values[ids, :-1] + (residual[ids] if negative else 0)
+        result.pressure_complex = pressure[:, None, :]
+        result.observation_angles_deg = np.arange(37) * 5
+        result.impedance = values[ids, -1]
+        return result
+
+    monkeypatch.setattr(recording_beat, "solve_frequencies", cancelling)
+    streamed = []
+    outcome = _run(request, _record(msh_text=MESH_Z), streamed)
+    response = outcome.results["channels"]["sum"]
+    assert batches["positive"] == batches["negative"]
+    truth_db = 20 * np.log10(abs(residual[:, 0]) / 20e-6)
+    np.testing.assert_allclose(response["spl_on_axis"]["spl"], truth_db, atol=0.1)
+    sampling = response["metadata"]["adaptive_sampling"]
+    assert sampling["solved_count"] == sum(map(len, batches["positive"]))
+    assert sampling["estimate_db"] < sampling["tolerance_db"]
+    assert streamed[-1][1]["channels"]["sum"]["metadata"]["adaptive_sampling"] == sampling
+
+
+def test_adaptive_imported_live_frame_progress_counts_and_channel_intersection(recording_beat, monkeypatch):
+    from server.jobs.runtime import merge_provisional_results
+
+    request = _request()
+    request.options.frequencies_hz = np.geomspace(100, 1000, 48).tolist()
+    request.options.adaptive_frequency_sampling = True
+    native_solve = recording_beat.solve_frequencies
+    progress = []
+
+    def smooth(path, frequencies, config, **kwargs):
+        if kwargs.get("status_callback"):
+            kwargs["status_callback"]("Starting batch")
+        result = native_solve(path, frequencies, config, **kwargs)
+        f = np.asarray(frequencies)
+        left = _elements(Path(path).read_text())[2] == beat_imported.VELOCITY_TAG
+        pole = (250 - 90j) if left else (750 - 90j)
+        result.pressure_complex = (np.exp(2j*np.pi*f*2/343) / (f - pole))[:, None, None] * np.ones((1, 1, 3))
+        result.impedance[:] = 1j * REFERENCE_RHO_C
+        return result
+
+    monkeypatch.setattr(recording_beat, "solve_frequencies", smooth)
+    streamed = []
+    outcome = asyncio.run(beat.BeatEngine("cpu").run(
+        request, cancel_cb=lambda: None,
+        stage_cb=lambda stage, fraction, *_: progress.append((stage, fraction)),
+        result_cb=lambda index, payload: streamed.append((index, payload)),
+        imported_record=_record(frame=SIDEWAYS_FRAME, msh_text=MESH_X),
+    ))
+    fractions = [fraction for stage, fraction in progress if stage == "frequency_solve"]
+    assert len(fractions) > 16
+    assert fractions == sorted(fractions)
+    assert max(fractions) <= 1
+    merged = None
+    selections = {}
+    for _, delta in streamed:
+        channel_id, payload = next(iter(delta["channels"].items()))
+        assert payload["metadata"]["observation_frame_basis"] == outcome.results["channels"][channel_id]["metadata"]["observation_frame_basis"]
+        assert delta["metadata"]["observation_frame_basis"]["axis"] == [1, 0, 0]
+        assert delta["metadata"]["observation_frame_basis"]["origin_m"] == [0.05, 0.02, 0.03]
+        counts = delta["metadata"]["provisional"]
+        assert counts["completed_frequency_count"] == payload["frequency_status"].count("solved")
+        assert counts["expected_frequency_count"] == 48
+        selections[channel_id] = payload["frequency_status"]
+        expected = ["solved" if all(selections.get(c, ["interpolated"] * 48)[i] == "solved"
+                                         for c in ["left", "right"]) else "interpolated" for i in range(48)]
+        assert delta["frequency_status"] == expected
+        merged = merge_provisional_results(merged, delta)
+        assert merged["frequency_status"] == expected
+    assert streamed[0][1]["metadata"]["provisional"]["completed_frequency_count"] == 8
+    assert selections["left"] != selections["right"]
+    assert merged["frequency_status"] == outcome.results["frequency_status"]

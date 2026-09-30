@@ -146,6 +146,7 @@ class SolveOptions(JobModel):
 
     engine: str = "auto"
     accuracy: Literal["fast", "accurate"] = "fast"
+    adaptive_frequency_sampling: bool = False
     # ``auto`` remains accepted for old clients but resolves as Full 3D.
     # ``circsym`` stays decodable so historical Axisymmetric requests load;
     # planning, submission, retry and execution refuse it.
@@ -263,6 +264,7 @@ class SolveOptionsResponse(SolveOptions):
 
     engine: str
     accuracy: Literal["fast", "accurate"]
+    adaptive_frequency_sampling: bool
     solver_mode: Literal["auto", "full_3d", "circsym"]
     symmetry: str
     frequency_range: list[float] | None

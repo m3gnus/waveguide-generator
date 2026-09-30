@@ -1210,6 +1210,10 @@ def build_solver_response(
         "metadata": metadata,
     }
 
+    if getattr(result, "frequency_status", None) is not None:
+        response["frequency_status"] = list(result.frequency_status)
+        metadata["adaptive_sampling"] = dict(result.adaptive_sampling)
+
     requested = bool(context.polar_config.get("spherical_sampling"))
     configured = requested and getattr(config.observation, "sphere_grid", None) is not None
     balloon_available = requested and balloon is not None

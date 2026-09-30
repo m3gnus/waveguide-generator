@@ -1386,3 +1386,37 @@ def test_snapshot_cursor_and_rows_are_from_one_store_view(tmp_path: Path) -> Non
     rows, cursor = store.snapshot_jobs()
     assert cursor == 1
     assert [row["id"] for row in rows] == ["snapshot"]
+
+
+def test_default_off_adaptive_option_replays_a_stored_pre_change_submission_hash(tmp_path):
+    from server.integration.provenance import canonical_json_sha256
+    from server.jobs.models import SolveRequest
+    from server.jobs.runtime import _submission_identity
+
+    old_json = {
+        "design": {"formula": "OSSE", "L": 120, "a": 45,
+                   "enclosure": {"depth": 0}, "simulation": {"sim_type": "freestanding"}},
+        "options": {"engine": "metal"},
+        "client_request_id": "legacy-adaptive-replay",
+    }
+    # Frozen identity from the request model before the adaptive field existed.
+    stored_hash = "fb55fd57fafbabf45fab26a0efd54b8b204cedf51f3f8485c7df07d3882be534"
+    store = JobStore(tmp_path / "legacy.db")
+    store.initialize()
+    try:
+        store.create_job_idempotent(
+            _job("legacy"), submission_key="legacy-adaptive-replay",
+            request_sha256=stored_hash, initial_event=("queued", {}),
+        )
+        request = SolveRequest.model_validate(old_json)
+        for explicit_off in [False, True]:
+            if explicit_off:
+                request.options.adaptive_frequency_sampling = False
+            digest = canonical_json_sha256(_submission_identity(request))
+            assert digest == stored_hash
+            assert store.resolve_submission("legacy-adaptive-replay", digest) == "legacy"
+        request.options.adaptive_frequency_sampling = True
+        with pytest.raises(SubmissionConflictError):
+            store.resolve_submission("legacy-adaptive-replay", canonical_json_sha256(_submission_identity(request)))
+    finally:
+        store.close()

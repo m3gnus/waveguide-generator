@@ -46,6 +46,7 @@ from .field_traces_store import (
     build_field_trace_artifact,
     field_trace_retention_plan,
 )
+from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
 from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
@@ -619,9 +620,14 @@ def solve_beat_from_msh_text(
             "(source-tagged Gmsh 2.2 artifact)."
         )
 
+    completed = [0]
+
     def progress(index: int, total: int, frequency_hz: float) -> None:
         if cancellation_callback:
             cancellation_callback()
+        if adaptive_enabled(context):
+            completed[0] += 1
+            index, total = completed[0] - 1, context.num_frequencies
         fraction = (index + 1) / max(1, total)
         if progress_callback:
             progress_callback(fraction)
@@ -680,7 +686,12 @@ def solve_beat_from_msh_text(
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
-            stage_callback("setup", 0.0, message)
+            adaptive = adaptive_enabled(context)
+            stage_callback(
+                "frequency_solve" if adaptive else "setup",
+                completed[0] / max(1, context.num_frequencies) if adaptive else 0.0,
+                message,
+            )
 
     path: Path | None = None
     try:
@@ -691,12 +702,35 @@ def solve_beat_from_msh_text(
             path = Path(handle.name)
             handle.write(msh_text)
         try:
-            result = package.solve_frequencies(
-                str(path),
-                live_execution_frequencies(context).tolist(),
-                config,
-                status_callback=stage_status,
-            )
+            if adaptive_enabled(context):
+                config.on_frequency_result = None
+                revision = [0]
+
+                def publish(native):
+                    if result_callback:
+                        snapshot = build_solver_response(
+                            result=native, config=config, context=context,
+                            start_time=started, metadata={},
+                            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+                        )
+                        result_callback(revision[0], snapshot)
+                        revision[0] += 1
+
+                result = solve_native_adaptively(
+                    context,
+                    lambda frequencies: package.solve_frequencies(
+                        str(path), frequencies, config, status_callback=stage_status),
+                    distance_m=config.observation.distance_m,
+                    sound_speed=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+                    publish=publish, cancel=cancellation_callback,
+                )
+            else:
+                result = package.solve_frequencies(
+                    str(path),
+                    live_execution_frequencies(context).tolist(),
+                    config,
+                    status_callback=stage_status,
+                )
         except NotImplementedError as exc:
             raise BeatUnavailable(str(exc)) from exc
         sort_native_result_frequencies(result)

@@ -39,6 +39,7 @@ frame or the tag merge.
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from copy import copy
 from dataclasses import dataclass
 import logging
@@ -74,6 +75,7 @@ from .field_traces_store import (
     build_field_trace_artifact,
     field_trace_retention_plan,
 )
+from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
 from .frequency_sweep import live_execution_frequencies, sort_native_result_frequencies
 from .imported import (
     imported_anchor_frame,
@@ -396,11 +398,13 @@ def _drive_groups(
 
 
 def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
-    """One channel's result from its signed group solves, by linearity."""
+    """Sum native group rows by linearity, before any adaptive fit."""
 
     first_sign, first = parts[0]
     if len(parts) == 1 and first_sign == 1.0:
         return first
+    if any(getattr(result, "frequency_status", None) is not None for _, result in parts):
+        raise ValueError("signed groups must be summed before adaptive fitting")
     combined = copy(first)
 
     def total(name: str) -> Any:
@@ -421,6 +425,13 @@ def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
     ):
         if hasattr(first, name):
             setattr(combined, name, total(name))
+    averages = [getattr(result, "surface_pressure_avg", None) for _, result in parts]
+    if all(isinstance(value, dict) for value in averages):
+        combined.surface_pressure_avg = {
+            tag: sum(sign * np.asarray(values[tag])
+                     for (sign, _), values in zip(parts, averages, strict=True))
+            for tag in set.intersection(*(set(value) for value in averages))
+        }
     with np.errstate(divide="ignore"):
         combined.spl_db = 20.0 * np.log10(
             np.abs(np.asarray(combined.pressure_complex)) / 20.0e-6
@@ -431,6 +442,10 @@ def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
             if isinstance(value, (int, float)):
                 timings[key] = timings.get(key, 0.0) + float(value)
     combined.timings = timings
+    if hasattr(first, "solver_log"):
+        combined.solver_log = [
+            entry for _, result in parts for entry in (getattr(result, "solver_log", []) or [])
+        ]
     return combined
 
 
@@ -763,9 +778,15 @@ def solve_imported_beat_from_msh_text(
         1, frequency_count * sum(len(groups) for groups in channel_groups.values())
     )
 
+    adaptive = adaptive_enabled(context)
+
     def stage_status(message: str) -> None:
         if stage_callback and message:
-            stage_callback("setup", 0.0, message)
+            stage_callback(
+                "frequency_solve" if adaptive else "setup",
+                work_done / total_work if adaptive else 0.0,
+                message,
+            )
 
     sorted_results: dict[str, Any] = {}
     configs: dict[str, Any] = {}
@@ -773,6 +794,7 @@ def solve_imported_beat_from_msh_text(
     # The runtime keeps one revision per streamed frame and drops any that
     # does not advance it, so frames are numbered across channels.
     next_revision = [0]
+    live_channel_status: dict[str, list[str]] = {}
     for channel_index, channel in enumerate(geometry.drive_channels):
         channel_context = SolverContext.from_imported_request(
             request, quadrants=quadrants, source_motion=channel.motion
@@ -783,7 +805,9 @@ def solve_imported_beat_from_msh_text(
         earlier: dict[int, dict[str, Any]] = {}
         parts: list[tuple[float, Any]] = []
         holder: dict[str, Any] = {}
-        for group_index, (sign, group_tags) in enumerate(groups):
+        # One planner owns the returned channel, including signed cancellation.
+        solve_groups = groups[:1] if adaptive else groups
+        for group_index, (sign, group_tags) in enumerate(solve_groups):
             last_group = group_index == len(groups) - 1
 
             def progress(
@@ -795,13 +819,17 @@ def solve_imported_beat_from_msh_text(
                 _channel_index: int = channel_index,
                 _channel_id: str = channel.id,
             ) -> None:
+                nonlocal work_done
                 del frequency_hz
+                if adaptive:
+                    work_done += 1
+                completed = work_done if adaptive else _offset + index + 1
                 if cancellation_callback:
                     cancellation_callback()
                 if stage_callback:
                     stage_callback(
                         "frequency_solve",
-                        (_offset + index + 1) / total_work,
+                        completed / total_work,
                         f"Solving frequency {index + 1}/{total} of drive channel "
                         f"{_channel_index + 1}/{channel_count} ({_channel_id}) "
                         "with BEAT Engine",
@@ -924,9 +952,84 @@ def solve_imported_beat_from_msh_text(
                     path = Path(handle.name)
                     handle.write(mesh.text(group_tags))
                 try:
-                    result = package.solve_frequencies(
-                        str(path), frequencies, config, status_callback=stage_status
-                    )
+                    if adaptive:
+                        config.on_frequency_result = None
+
+                        def publish(native):
+                            if result_callback is None:
+                                return
+                            snapshot = build_solver_response(
+                                result=native, config=config, context=channel_context,
+                                start_time=started,
+                                metadata={**channel_identity[channel.id],
+                                          "observation_frame_basis": dict(frame_basis)},
+                                sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+                            )
+                            if len(channel.source_ids) > 1:
+                                snapshot.pop("impedance", None)
+                            live_channel_status[channel.id] = snapshot["frequency_status"]
+                            # Unpublished channels have no solved rows yet.
+                            flags = [
+                                "solved" if all(
+                                    member in live_channel_status
+                                    and live_channel_status[member][i] == "solved"
+                                    for member in channel_order
+                                ) else "interpolated"
+                                for i in range(frequency_count)
+                            ]
+                            frame = {
+                                "result_kind": "multi_channel", "result_contract_version": 2,
+                                "channels": {channel.id: snapshot}, "channel_order": channel_order,
+                                "frequencies": snapshot["frequencies"], "frequency_status": flags,
+                                "metadata": {
+                                    "geometry_type": "imported",
+                                    "observation_frame_basis": dict(frame_basis),
+                                    "provisional": {
+                                        "completed_frequency_count": native.adaptive_sampling["solved_count"],
+                                        "expected_frequency_count": frequency_count,
+                                        "channel": {"id": channel.id, "index": channel_index + 1,
+                                                    "count": channel_count},
+                                    },
+                                },
+                            }
+                            result_callback(next_revision[0], frame)
+                            next_revision[0] += 1
+
+                        with ExitStack() as cleanup:
+                            group_paths = [(groups[0][0], path)]
+                            for group_sign, tags in groups[1:]:
+                                with tempfile.NamedTemporaryFile(
+                                    mode="w", suffix=".msh", delete=False, encoding="utf-8",
+                                    dir=temporary_directory_root(),
+                                ) as handle:
+                                    group_path = Path(handle.name)
+                                    cleanup.callback(group_path.unlink, missing_ok=True)
+                                    handle.write(mesh.text(tags))
+                                group_paths.append((group_sign, group_path))
+
+                            def solve_batch(batch):
+                                rows = []
+                                for group_sign, group_path in group_paths:
+                                    if cancellation_callback:
+                                        cancellation_callback()
+                                    native = package.solve_frequencies(
+                                        str(group_path), batch, config, status_callback=stage_status
+                                    )
+                                    if not np.array_equal(native.frequencies_hz, batch):
+                                        raise ValueError("adaptive batch returned a different frequency grid")
+                                    rows.append((group_sign, native))
+                                return _signed_sum(rows)
+
+                            result = solve_native_adaptively(
+                                context, solve_batch,
+                                distance_m=config.observation.distance_m,
+                                sound_speed=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+                                publish=publish, cancel=cancellation_callback,
+                            )
+                    else:
+                        result = package.solve_frequencies(
+                            str(path), frequencies, config, status_callback=stage_status
+                        )
                 except NotImplementedError as exc:
                     raise BeatUnavailable(str(exc)) from exc
             finally:
@@ -938,8 +1041,9 @@ def solve_imported_beat_from_msh_text(
                             "Could not remove temporary BEAT mesh %s: %s", path, exc
                         )
             sort_native_result_frequencies(result)
-            parts.append((sign, result))
-            work_done += frequency_count
+            parts.append((1.0 if adaptive else sign, result))
+            if not adaptive:
+                work_done += frequency_count
         sorted_results[channel.id] = _signed_sum(parts)
         configs[channel.id] = holder["config"]
 
@@ -1149,6 +1253,11 @@ def solve_imported_beat_from_msh_text(
     )
     if envelope_frequencies:
         envelope["frequencies"] = envelope_frequencies
+    if adaptive_enabled(context):
+        envelope["frequency_status"] = [
+            "solved" if all(payload["frequency_status"][i] == "solved" for payload in channels.values())
+            else "interpolated" for i in range(len(envelope_frequencies))
+        ]
     if channel_bases_npz is not None:
         envelope["_channel_bases_npz"] = channel_bases_npz
     # Surface traces are per vertex and per face, and the rotation moved no

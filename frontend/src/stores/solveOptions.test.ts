@@ -307,3 +307,16 @@ describe('explicit frequency lists', () => {
     expect(stored.state?.frequencyListText).toBe('500 1000');
   });
 });
+
+describe('adaptive sweep preference', () => {
+  it('defaults off, persists only a boolean and omits the off wire option', () => {
+    resetSolveOptionsStore();
+    expect(useSolveOptionsStore.getState().adaptiveFrequencySampling).toBe(false);
+    expect(useSolveOptionsStore.getState().options()).not.toHaveProperty('adaptive_frequency_sampling');
+    useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
+    expect(useSolveOptionsStore.getState().options().adaptive_frequency_sampling).toBe(true);
+    expect(normalizePersistedSolveOptions({ adaptiveFrequencySampling: 'true' }).adaptiveFrequencySampling).toBe(false);
+    expect(normalizePersistedSolveOptions({ adaptiveFrequencySampling: true }).adaptiveFrequencySampling).toBe(true);
+    resetSolveOptionsStore();
+  });
+});

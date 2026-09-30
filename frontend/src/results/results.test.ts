@@ -694,3 +694,59 @@ describe('excursion Xmax reference line', () => {
     expect(traces.map(({ name }) => name)).toEqual(['Excursion', 'Xmax 4.5 mm']);
   });
 });
+
+describe('adaptive frequency sampling', () => {
+  it('validates frequency flags and preserves legacy envelopes', () => {
+    const legacy = result();
+    expect(parseFinalResultEnvelope(legacy)).toEqual(legacy);
+    expect(parseFinalResultEnvelope({ ...legacy, frequency_status: null }).frequency_status).toBeNull();
+    const adaptive = { ...legacy, frequency_status: ['solved', 'interpolated'] as const };
+    expect(parseFinalResultEnvelope(adaptive).frequency_status).toEqual(['solved', 'interpolated']);
+    expect(() => parseFinalResultEnvelope({ ...legacy, frequency_status: ['solved'] })).toThrow();
+    expect(() => parseFinalResultEnvelope({ ...legacy, frequency_status: ['solved', 'unknown'] })).toThrow();
+  });
+
+  it('replaces fitted snapshots while preserving other imported channels', () => {
+    const current: ResultData = { frequencies: [1, 2], channels: { a: { frequencies: [1, 2] } } };
+    const delta: ResultData = { frequencies: [2, 1], frequency_status: ['interpolated', 'solved'], spl_on_axis: { spl: [6, 5] } };
+    const first = mergeProvisionalResults(current, delta);
+    const second = mergeProvisionalResults(first, { ...delta, spl_on_axis: { spl: [8, 7] } });
+    expect(second.frequencies).toEqual([1, 2]);
+    expect(second.frequency_status).toEqual(['solved', 'interpolated']);
+    expect(second.spl_on_axis?.spl).toEqual([7, 8]);
+    expect(second.channels?.a.frequencies).toEqual([1, 2]);
+  });
+
+  it('replaces imported wrapper flags with the channel intersection and keeps provisional counts', () => {
+    const frequencies = [100, 200, 400];
+    const left: ResultData = { frequencies, frequency_status: ['solved', 'solved', 'solved'] };
+    const right: ResultData = { frequencies, frequency_status: ['solved', 'interpolated', 'solved'] };
+    const first = mergeProvisionalResults(undefined, {
+      frequencies, frequency_status: ['interpolated', 'interpolated', 'interpolated'],
+      channels: { left }, channel_order: ['left', 'right'],
+      metadata: { provisional: { completed_frequency_count: 3, expected_frequency_count: 3 } },
+    });
+    const second = mergeProvisionalResults(first, {
+      frequencies, frequency_status: ['solved', 'interpolated', 'solved'],
+      channels: { right }, channel_order: ['left', 'right'],
+      metadata: { provisional: { completed_frequency_count: 2, expected_frequency_count: 3 } },
+    });
+    expect(second.frequencies).toEqual(frequencies);
+    expect(second.frequency_status).toEqual(right.frequency_status);
+    expect(second.channels?.left).toEqual(left);
+    expect(second.channels?.right).toEqual(right);
+    expect(second.metadata?.provisional).toEqual({ completed_frequency_count: 2, expected_frequency_count: 3 });
+    expect(first.frequency_status).toEqual(['interpolated', 'interpolated', 'interpolated']);
+  });
+
+  it('marks only interpolated SPL points with hollow circles', () => {
+    const payload = result();
+    payload.frequency_status = ['solved', 'interpolated'];
+    const [series] = splSeries([{ id: 'adaptive', label: 'adaptive', result: payload }]);
+    expect(series.showSymbol).toBe(true);
+    expect(series.symbol).toBe('emptyCircle');
+    expect(series.symbolSize(null, { dataIndex: 0 })).toBe(0);
+    expect(series.symbolSize(null, { dataIndex: 1 })).toBe(4);
+    expect(splSeries([{ id: 'legacy', label: 'legacy', result: result() }])[0].showSymbol).toBe(false);
+  });
+});

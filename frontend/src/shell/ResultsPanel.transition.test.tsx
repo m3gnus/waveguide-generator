@@ -311,6 +311,42 @@ describe('atomic results display transitions', () => {
     expect(provisionalResults.get('live')).toBeUndefined();
   });
 
+  it('labels adaptive snapshots with acquired frequencies instead of snapshot revisions', async () => {
+    await act(async () => { root.render(<ResultsPanel/>); });
+    await act(async () => { pending.get('old')!(response([100])); });
+    const liveJob = job('adaptive');
+    Object.assign(liveJob, {
+      status: 'running', progress: .4, has_results: false, completed_at: null,
+      solve_options: { num_frequencies: 48 } as JobItem['solve_options'],
+    });
+    const frequencies = Array.from({ length: 48 }, (_, i) => 100 + i * 10);
+    await act(async () => {
+      compareSelection.awaitRun('adaptive');
+      publishJobs([liveJob]);
+      provisionalResults.apply('adaptive', 1, {
+        frequencies,
+        frequency_status: frequencies.map((_, i) => i < 8 ? 'solved' : 'interpolated'),
+        metadata: { provisional: { completed_frequency_count: 8, expected_frequency_count: 48 } },
+      });
+      await Promise.resolve();
+    });
+    expect(host.textContent).toContain('Live · 8/48 frequencies');
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        provisionalResults.apply('adaptive', 2, {
+          frequencies,
+          frequency_status: frequencies.map((_, i) => i < 12 ? 'solved' : 'interpolated'),
+          metadata: { provisional: { completed_frequency_count: 12, expected_frequency_count: 48 } },
+        });
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(host.textContent).toContain('Live · 12/48 frequencies');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('writes the Results toolbar export through the selected Workspace', async () => {
     preferencesStore.update({ exportFormats: ['csv'] });
     const patchMetadata = vi.spyOn(jobsSocket, 'patchMetadata').mockResolvedValue(undefined);

@@ -66,7 +66,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[JobRuntime, JobStore]:
         "metal", True, "ok", "1", mountings=("free-standing", "infinite-baffle")
     )
     engine_registry = registry.EngineRegistry(
-        detector=lambda: [metal], factory=lambda _n: object(), cpu_refresh=False
+        detector=lambda: [metal], factory=lambda _n: _FakeEngine(), cpu_refresh=False
     )
     store = JobStore(tmp_path / "jobs.db")
     return JobRuntime(store, engine_registry=engine_registry), store
@@ -84,7 +84,11 @@ def _stored_hash(store: JobStore, key: str) -> str:
 def _pretend_it_was_stored_by_the_complex_k_build(store: JobStore, key: str, request) -> None:
     """Rewrite the row to the hash the previous build stored: the plain request."""
 
-    legacy = canonical_json_sha256(request.model_dump(mode="json"))
+    # Today's model dump includes new defaults that the complex-k build never
+    # serialized. Keep this independent of the production identity function.
+    legacy_wire = request.model_dump(mode="json")
+    legacy_wire["options"].pop("adaptive_frequency_sampling", None)
+    legacy = canonical_json_sha256(legacy_wire)
     with store._transaction() as conn:  # noqa: SLF001
         conn.execute(
             "UPDATE job_submissions SET request_sha256 = ? WHERE submission_key = ?",
@@ -101,6 +105,7 @@ def test_an_old_complex_k_infinite_baffle_job_is_not_replayed_for_a_real_k_reque
     async def scenario() -> None:
         job_id = await runtime.submit(request)
         await runtime.wait_idle()
+        assert store.get_job_row(job_id)["status"] == "complete"
         # Same key, same request: a genuine transport replay still returns the job.
         assert await runtime.submit(request) == job_id
 
@@ -123,11 +128,25 @@ def test_the_identity_of_other_mountings_is_unchanged(tmp_path: Path, monkeypatc
     async def scenario() -> None:
         job_id = await runtime.submit(request)
         await runtime.wait_idle()
+        assert store.get_job_row(job_id)["status"] == "complete"
         _pretend_it_was_stored_by_the_complex_k_build(store, "fs-1", request)
         assert await runtime.submit(request) == job_id
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("explicit_off", [False, True])
+def test_default_off_identity_matches_base_bytes(explicit_off: bool) -> None:
+    from server.integration.provenance import _canonical_json
+    from server.jobs.runtime import _submission_identity
+
+    request = _request(sim_type="freestanding", key="fs-1")
+    if explicit_off:
+        request.options.adaptive_frequency_sampling = False
+    # Canonical bytes produced by 44226173's models and identity function.
+    legacy = (Path(__file__).parent / "fixtures" / "fs-1-legacy-identity.json").read_bytes()
+    assert _canonical_json(_submission_identity(request)) == legacy
 
 
 def test_the_infinite_baffle_identity_names_the_real_k_formulation() -> None:

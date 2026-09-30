@@ -20,6 +20,86 @@ def _context(**overrides) -> SolverContext:
     return SolverContext(**values)
 
 
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_native_batch_status_preserves_parametric_progress(monkeypatch, adaptive) -> None:
+    import asyncio
+    from types import SimpleNamespace
+
+    import numpy as np
+
+    from server.jobs.runtime import JobRuntime
+
+    batches = []
+    stages = []
+    progress = []
+
+    def solve(path, frequencies, config, *, status_callback):
+        batches.append(list(frequencies))
+        status_callback("Submitting solve request")
+        f = np.asarray(frequencies)
+        pressure = (np.exp(-2j * np.pi * f * 2 / 343) / (f - (600 - 20j)))[:, None, None]
+        for index, frequency in enumerate(f):
+            config.progress_callback(index, len(f), frequency)
+            status_callback("Native frequency complete")
+        return SimpleNamespace(
+            frequencies_hz=f,
+            pressure_complex=pressure,
+            directivity_db=np.zeros_like(pressure.real),
+            impedance=1 / (f - (600 - 20j)),
+            observation_angles_deg=np.array([0.0]),
+            observation_planes=["horizontal"],
+            solver_log=[], timings={},
+        )
+
+    package = SimpleNamespace(
+        ObservationConfig=SimpleNamespace, ObservationFrame=SimpleNamespace,
+        SolveConfig=SimpleNamespace,
+        reject_unsupported_native_symmetry=lambda config: None,
+        solve_frequencies=solve,
+    )
+    monkeypatch.setattr(beat, "_load_api", lambda: package)
+    monkeypatch.setattr(beat, "beat_status", lambda: {
+        "available": True, "backend": "metal", "surface_traces": False,
+    })
+    monkeypatch.setattr(beat, "observation_config", lambda *args, **kwargs: SimpleNamespace(
+        distance_m=2.0, origin="mouth",
+    ))
+    monkeypatch.setattr(beat, "native_observation_frame", lambda *args: SimpleNamespace())
+    response = beat.solve_beat_from_msh_text(
+        "$MeshFormat\n", _context(num_frequencies=48, adaptive_frequency_sampling=adaptive),
+        progress_callback=progress.append,
+        stage_callback=lambda *args: stages.append(args),
+    )
+    assert len(response["frequencies"]) == 48
+    submissions = [stage for stage in stages if stage[2] == "Submitting solve request"]
+    if adaptive:
+        assert len(batches) >= 3  # Initial acquisition and multiple refinements.
+        assert submissions[1][0] == "frequency_solve"
+        assert submissions[1][1] == pytest.approx(8 / 48)
+        assert submissions[2][1] == pytest.approx(12 / 48)
+        assert progress == pytest.approx([i / 48 for i in range(1, sum(map(len, batches)) + 1)])
+
+        # Exercise the runtime's actual mapping to public job progress too.
+        public = []
+
+        async def record(job_id, stage, fraction, message, delay):
+            public.append(fraction)
+
+        runtime = SimpleNamespace(_stage=record)
+
+        async def report():
+            for stage in stages:
+                await JobRuntime._report_real_stage(runtime, "job", *stage)
+
+        asyncio.run(report())
+        assert public == sorted(public)
+    else:
+        assert len(batches) == 1 and len(batches[0]) == 48
+        assert all(stage[:2] == ("setup", 0.0) for stage in stages if stage[2] in {
+            "Submitting solve request", "Native frequency complete",
+        })
+
+
 def test_probe_reports_missing_package_as_capability_state(monkeypatch) -> None:
     monkeypatch.setattr(beat, "_load_api", lambda: None)
     beat.beat_status.cache_clear()

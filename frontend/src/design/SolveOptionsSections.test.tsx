@@ -56,6 +56,16 @@ describe('solve and directivity control help', () => {
     return text;
   };
 
+  it('shares the adaptive preference between parametric and imported controls', () => {
+    render(<SolveOptionsControls />);
+    const checkbox = host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!;
+    expect(checkbox.checked).toBe(false);
+    act(() => checkbox.click());
+    expect(useSolveOptionsStore.getState().options().adaptive_frequency_sampling).toBe(true);
+    render(<SolveOptionsControls mode="cad" />);
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.checked).toBe(true);
+  });
+
   it('documents every solve option', () => {
     render(<SolveOptionsControls />);
     for (const id of ['solve-accuracy', 'solve-engine', 'mesh-validation-mode', 'design-solve-frequency-mode', 'solve-verbose']) {

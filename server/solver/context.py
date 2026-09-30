@@ -49,6 +49,7 @@ class SolverContext:
     # need no special case.
     frequencies_hz: tuple[float, ...] | None = None
     mesh_validation_mode: str = "warn"
+    adaptive_frequency_sampling: bool = False
     verbose: bool = False
     solver_mode: str = "full_3d"
     quadrants: int = FULL_DOMAIN_QUADRANTS
@@ -160,6 +161,7 @@ class SolverContext:
             frequency_spacing=request.options.frequency_spacing,
             frequencies_hz=explicit,
             mesh_validation_mode=request.options.mesh_validation_mode,
+            adaptive_frequency_sampling=request.options.adaptive_frequency_sampling,
             verbose=request.options.verbose,
             solver_mode=solver_mode,
             quadrants=quadrants,
@@ -220,6 +222,7 @@ class SolverContext:
             frequency_spacing=request.options.frequency_spacing,
             frequencies_hz=explicit,
             mesh_validation_mode=request.options.mesh_validation_mode,
+            adaptive_frequency_sampling=request.options.adaptive_frequency_sampling,
             verbose=request.options.verbose,
             solver_mode="full_3d",
             quadrants=int(quadrants),

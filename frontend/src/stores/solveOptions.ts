@@ -61,6 +61,7 @@ export interface GroundPlaneConfig {
 export interface SolveOptions {
   engine: string;
   accuracy?: SolveAccuracy;
+  adaptive_frequency_sampling?: boolean;
   solver_mode?: SolverMode;
   symmetry: SymmetryMode;
   mesh_validation_mode: MeshValidationMode;
@@ -207,6 +208,7 @@ export function polarUiFromConfig(config: unknown): PolarUiState | null {
 export interface PersistedSolveOptions {
   engine: string;
   accuracy: SolveAccuracy;
+  adaptiveFrequencySampling: boolean;
   solverMode: SolverMode;
   symmetry: SymmetryMode;
   meshValidationMode: MeshValidationMode;
@@ -223,6 +225,7 @@ export interface PersistedSolveOptions {
 export const DEFAULT_SOLVE_OPTIONS: Readonly<PersistedSolveOptions> = Object.freeze({
   engine: DEFAULT_SOLVER.engine,
   accuracy: DEFAULT_SOLVER.accuracy,
+  adaptiveFrequencySampling: false,
   solverMode: DEFAULT_SOLVER.solverMode,
   symmetry: DEFAULT_SOLVER.symmetry,
   meshValidationMode: DEFAULT_SOLVER.meshValidationMode,
@@ -320,6 +323,7 @@ export function normalizePersistedSolveOptions(
   return {
     engine: removedEngine ? 'auto' : typeof stored.engine === 'string' && ENGINE_PATTERN.test(stored.engine) ? stored.engine : fallback.engine,
     accuracy: oneOf(stored.accuracy, ['fast', 'accurate'], 'fast'),
+    adaptiveFrequencySampling: stored.adaptiveFrequencySampling === true,
     // AUTO historically opted eligible designs into Axisymmetric. It is now a
     // legacy spelling of Full 3D so old machine-local settings cannot silently
     // select a different formulation after upgrade. A stored `circsym` would
@@ -355,6 +359,7 @@ function normalizeGroundPlane(
 interface SolveOptionsStore extends PersistedSolveOptions {
   setEngine: (engine: string) => void;
   setAccuracy: (accuracy: SolveAccuracy) => void;
+  setAdaptiveFrequencySampling: (enabled: boolean) => void;
   setSolverMode: (solverMode: SolverMode) => void;
   setSymmetry: (symmetry: SymmetryMode) => void;
   setMeshValidationMode: (mode: MeshValidationMode) => void;
@@ -371,7 +376,7 @@ interface SolveOptionsStore extends PersistedSolveOptions {
 
 /** The setters a person drives, including the advanced engine override. */
 const SOLVE_OPTION_EDITS: ReadonlyArray<keyof SolveOptionsStore> = [
-  'setEngine', 'setAccuracy', 'setSolverMode', 'setSymmetry', 'setMeshValidationMode', 'setVerbose', 'setFrequencySpacing',
+  'setEngine', 'setAccuracy', 'setAdaptiveFrequencySampling', 'setSolverMode', 'setSymmetry', 'setMeshValidationMode', 'setVerbose', 'setFrequencySpacing',
   'setFrequencyMode', 'setFrequencyListText', 'updatePolar', 'updateGroundPlane', 'toggleAxis',
 ];
 
@@ -379,6 +384,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   ...defaultSolveOptions(),
   setEngine: (engine) => set({ engine, ...(engine === 'auto' ? {} : { accuracy: 'fast' }) }),
   setAccuracy: (accuracy) => set({ accuracy, engine: 'auto' }),
+  setAdaptiveFrequencySampling: (adaptiveFrequencySampling) => set({ adaptiveFrequencySampling }),
   setSolverMode: (solverMode) => set({ solverMode }),
   setSymmetry: (symmetry) => set({ symmetry }),
   setMeshValidationMode: (meshValidationMode) => set({ meshValidationMode }),
@@ -406,6 +412,7 @@ export const useSolveOptionsStore = create<SolveOptionsStore>()(persist((set, ge
   options: () => {
     const base: SolveOptions = {
       engine: get().engine,
+      ...(get().adaptiveFrequencySampling ? { adaptive_frequency_sampling: true } : {}),
       ...(get().accuracy === 'accurate' ? { accuracy: 'accurate' } : {}),
       solver_mode: get().solverMode,
       symmetry: get().symmetry,

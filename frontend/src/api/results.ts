@@ -18,6 +18,7 @@ export interface ResultData {
    * consumers that are only ever handed frequency-shaped payloads.
    */
   frequencies: number[];
+  frequency_status?: Array<'solved' | 'interpolated'> | null;
   directivity?: {
     horizontal?: PolarSample[][];
     vertical?: PolarSample[][];
@@ -73,6 +74,11 @@ function isResultData(value: unknown, depth = 0): value is ResultData {
   // may omit it, so validate the field only when present.
   if ('frequencies' in value && !(
     Array.isArray(value.frequencies) && value.frequencies.every(isFiniteNumber)
+  )) return false;
+  if ('frequency_status' in value && value.frequency_status !== null && !(
+    Array.isArray(value.frequency_status) && Array.isArray(value.frequencies)
+    && value.frequency_status.length === value.frequencies.length
+    && value.frequency_status.every((status) => status === 'solved' || status === 'interpolated')
   )) return false;
   if ('metadata' in value && !isRecord(value.metadata)) return false;
   if ('channel_order' in value && !(
@@ -151,6 +157,7 @@ function sortFrequencyShapedRows(result: ResultData): ResultData {
     if (order.some((value, index) => value !== index)) {
       const count = frequencies.length;
       record.frequencies = order.map((index) => frequencies[index]) as number[];
+      if (record.frequency_status) record.frequency_status = order.map((index) => record.frequency_status![index]);
       for (const blockName of ['directivity', 'directivity_phase']) {
         const block = record[blockName];
         if (!block || typeof block !== 'object' || Array.isArray(block)) continue;
@@ -183,7 +190,12 @@ export function mergeProvisionalResults(current: ResultData | undefined, delta: 
     target[key] = [...(Array.isArray(target[key]) ? target[key] as unknown[] : []), ...structuredClone(source[key] as unknown[])];
   };
 
+  if (delta.frequency_status) {
+    for (const key of ['frequencies', 'frequency_status', 'directivity', 'directivity_phase', 'spl_on_axis', 'impedance', 'di', 'balloon', 'beam_shape']) delete merged[key];
+    for (const key of ['balloon', 'beam_shape']) if (key in incoming) merged[key] = structuredClone(incoming[key]);
+  }
   append(merged, incoming, 'frequencies');
+  append(merged, incoming, 'frequency_status');
   for (const blockName of ['directivity', 'directivity_phase']) {
     const source = incoming[blockName];
     if (!source || typeof source !== 'object' || Array.isArray(source)) continue;

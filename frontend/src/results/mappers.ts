@@ -86,9 +86,11 @@ export function splSeries(items: NamedResult[], smoothing: SmoothingMode = 'none
     const frequencies = frequencyAxis(result, result.spl_on_axis?.frequencies);
     const spl = applySmoothing(frequencies, result.spl_on_axis?.spl ?? [], smoothing);
     return {
-      name: label,
+      name: label + (result.frequency_status?.includes('interpolated') ? ' · ○ interpolated' : ''),
       type: 'line' as const,
-      showSymbol: false,
+      showSymbol: Boolean(result.frequency_status),
+      symbol: 'emptyCircle',
+      symbolSize: (_value: unknown, params: { dataIndex: number }) => result.frequency_status?.[params.dataIndex] === 'interpolated' ? 4 : 0,
       connectNulls: false,
       data: frequencies.map((frequency, index) => [frequency, spl[index] ?? null]),
     };

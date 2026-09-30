@@ -6139,6 +6139,24 @@
             ],
             "title": "Frequencies"
           },
+          "frequency_status": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "solved",
+                    "interpolated"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Status"
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
@@ -6929,6 +6947,38 @@
               }
             ],
             "title": "Client Request Id"
+          },
+          "frequencies": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequencies"
+          },
+          "frequency_status": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "solved",
+                    "interpolated"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frequency Status"
           },
           "metadata": {
             "additionalProperties": true,
@@ -8048,6 +8098,11 @@
             "title": "Accuracy",
             "type": "string"
           },
+          "adaptive_frequency_sampling": {
+            "default": false,
+            "title": "Adaptive Frequency Sampling",
+            "type": "boolean"
+          },
           "engine": {
             "default": "auto",
             "title": "Engine",
@@ -8171,6 +8226,10 @@
             "title": "Accuracy",
             "type": "string"
           },
+          "adaptive_frequency_sampling": {
+            "title": "Adaptive Frequency Sampling",
+            "type": "boolean"
+          },
           "engine": {
             "title": "Engine",
             "type": "string"
@@ -8274,6 +8333,7 @@
         "required": [
           "engine",
           "accuracy",
+          "adaptive_frequency_sampling",
           "solver_mode",
           "symmetry",
           "frequency_range",

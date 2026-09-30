@@ -3914,6 +3914,8 @@ export interface components {
             client_request_id: string | null;
             /** Frequencies */
             frequencies?: number[] | null;
+            /** Frequency Status */
+            frequency_status?: ("solved" | "interpolated")[] | null;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -4122,6 +4124,10 @@ export interface components {
             };
             /** Client Request Id */
             client_request_id: string | null;
+            /** Frequencies */
+            frequencies?: number[] | null;
+            /** Frequency Status */
+            frequency_status?: ("solved" | "interpolated")[] | null;
             /** Metadata */
             metadata: {
                 [key: string]: unknown;
@@ -4531,6 +4537,11 @@ export interface components {
              */
             accuracy?: "fast" | "accurate";
             /**
+             * Adaptive Frequency Sampling
+             * @default false
+             */
+            adaptive_frequency_sampling?: boolean;
+            /**
              * Engine
              * @default auto
              */
@@ -4593,6 +4604,8 @@ export interface components {
              * @enum {string}
              */
             accuracy: "fast" | "accurate";
+            /** Adaptive Frequency Sampling */
+            adaptive_frequency_sampling: boolean;
             /** Engine */
             engine: string;
             /** Frequencies Hz */

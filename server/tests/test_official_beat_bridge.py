@@ -527,3 +527,58 @@ def test_installed_official_contract_accepts_compiled_request_if_present(tmp_pat
         backend="cpu", precision="float32",
     )
     contract.validate_solve_request(request)
+
+
+def test_adaptive_official_batches_keep_requested_grid_and_close_every_worker(monkeypatch):
+    import json
+    _fake_package(monkeypatch)
+    context = _context(num_frequencies=48, frequency_range=(500., 600.),
+                       adaptive_frequency_sampling=True)
+    workers = []
+    paths = []
+    _, planes, angles, _ = bridge.build_compiled_request(
+        Path('/fake/surface.msh'), Path('/fake/cancel'), context, MESH.read_text(),
+        backend='cpu', precision='float32')
+
+    class Stream:
+        def __init__(self, frequencies):
+            self.frequencies = frequencies
+            self.closed = False
+
+        def __iter__(self):
+            for f in self.frequencies:
+                yield {'type': 'result', 'result': _result(f, planes, angles)}
+            yield {'type': 'completed', 'solved_count': len(self.frequencies)}
+
+        def close(self):
+            self.closed = True
+
+    class Worker:
+        worker_info = {'ready': True}
+
+        def __init__(self, **kwargs):
+            self.terminated = False
+            workers.append(self)
+
+        def ensure_started(self):
+            pass
+
+        def submit(self, path):
+            paths.append(path)
+            self.stream = Stream(json.loads(path.read_text())['frequencies_hz'])
+            return self.stream
+
+        def terminate(self):
+            self.terminated = True
+
+    snapshots = []
+    result = bridge.solve_official_beat_from_msh_text(
+        MESH.read_text(), context, worker_factory=Worker,
+        result_callback=lambda revision, payload: snapshots.append((revision, payload)))
+    assert len(workers) >= 3
+    assert all(worker.terminated and worker.stream.closed for worker in workers)
+    assert all(not path.exists() for path in paths)
+    assert result['frequencies'] == np.geomspace(500, 600, 48).tolist()
+    assert result['frequency_status'][0] == result['frequency_status'][-1] == 'solved'
+    assert [revision for revision, _ in snapshots] == list(range(len(snapshots)))
+    assert all(len(payload['frequencies']) == 48 for _, payload in snapshots)

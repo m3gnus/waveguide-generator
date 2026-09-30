@@ -84,6 +84,8 @@ def serialize_channel_bases(
         arrays[f"pressure::{name}"] = np.asarray(
             result.pressure_complex, dtype=np.complex128
         )
+        if getattr(result, "frequency_status", None) is not None:
+            arrays[f"frequency_status::{name}"] = np.asarray(result.frequency_status, dtype=str)
         if spheres_present:
             arrays[f"sphere::{name}"] = np.asarray(
                 result.sphere_pressure_complex, dtype=np.complex128
@@ -132,6 +134,12 @@ def deserialize_channel_bases(data: bytes) -> dict[str, Any]:
                 sphere_theta_deg=sphere_theta,
                 sphere_phi_deg=sphere_phi,
             )
+            status_key = f"frequency_status::{name}"
+            if status_key in bundle:
+                flags = bundle[status_key].tolist()
+                if len(flags) != frequencies.size or any(flag not in {"solved", "interpolated"} for flag in flags):
+                    raise ValueError("invalid channel-bases frequency_status")
+                results[name].frequency_status = flags
     return {
         "channel_ids": channel_ids,
         "frequencies_hz": frequencies,
@@ -1225,4 +1233,15 @@ def combine_drive_channels(
                 f"maximum output is unknown wherever {named} sets the level: "
                 "no Xmax, rated power or amplifier ceiling is known for it"
             )
+    if any(getattr(results_by_id[name], "frequency_status", None) is not None for name in members):
+        combined.frequency_status = [
+            "solved" if all(
+                getattr(results_by_id[name], "frequency_status", ["solved"]*len(freqs))[i] == "solved"
+                for name in members
+            ) else "interpolated" for i in range(len(freqs))
+        ]
+        combined.adaptive_sampling = {
+            "derived": True, "requested_count": len(freqs),
+            "solved_count": combined.frequency_status.count("solved"),
+        }
     return combined, payload

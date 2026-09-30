@@ -38,6 +38,7 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
 from .frequency_sweep import live_execution_frequencies
 from .quadrants import FULL_DOMAIN_QUADRANTS
 from .result_mapping import (
@@ -299,6 +300,7 @@ def solve_official_beat_from_msh_text(
     stage_callback: StageCallback | None = None, cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None, worker_factory: Any | None = None,
     julia_executable: str | None = None, mesh_scale_to_m: float = 1.0,
+    _native_only: bool = False,
 ) -> dict[str, Any]:
     """Run one installed official worker, closing the stream before file cleanup."""
 
@@ -311,6 +313,50 @@ def solve_official_beat_from_msh_text(
     julia = resolve_julia_executable(julia_executable)
     if not julia and worker_factory is None:
         raise OfficialBeatUnavailable("Julia executable is unavailable")
+    if adaptive_enabled(context):
+        from dataclasses import replace
+        started = time.time()
+        frame = native_observation_frame(
+            context, _scaled_frame_mesh(msh_text, mesh_scale_to_m), SimpleNamespace)
+        config = SimpleNamespace(observation=SimpleNamespace(
+            distance_m=context.polar_config["distance"],
+            origin=context.polar_config["observation_origin"]), frame_override=frame)
+        revision = [0]
+
+        def package_result(native):
+            return build_solver_response(
+                result=native, config=config, context=context, start_time=started,
+                metadata={"solver_backend": "beat", "solver_mode": "full_3d",
+                          "engine": "official-beat-engine", "beat_backend": backend,
+                          "phase_time_convention": PHASE_TIME_CONVENTION,
+                          "phasor_convention": PHASOR,
+                          "performance": {"total_time_seconds": time.time()-started}},
+                sound_speed_m_per_s=SOUND_SPEED_M_PER_S)
+
+        def batch(frequencies):
+            subset = replace(context, adaptive_frequency_sampling=False,
+                             frequencies_hz=tuple(frequencies), num_frequencies=len(frequencies),
+                             frequency_range=(frequencies[0], frequencies[-1]))
+            return solve_official_beat_from_msh_text(
+                msh_text, subset, backend=backend, precision=precision,
+                stage_callback=stage_callback, cancellation_callback=cancellation_callback,
+                worker_factory=worker_factory, julia_executable=julia_executable,
+                mesh_scale_to_m=mesh_scale_to_m, _native_only=True)
+
+        def publish(native):
+            if result_callback:
+                result_callback(revision[0], package_result(native))
+                revision[0] += 1
+
+        native = solve_native_adaptively(
+            context, batch, distance_m=config.observation.distance_m,
+            sound_speed=SOUND_SPEED_M_PER_S, publish=publish, cancel=cancellation_callback)
+        response = package_result(native)
+        response["_field_trace_unavailable_reason"] = (
+            "Official BEAT compiled bridge does not yet translate boundary field traces")
+        response["metadata"]["directivity_index_unavailable_reason"] = (
+            "Official BEAT compiled bridge has not yet translated spherical pressure sampling")
+        return response
     started = time.time()
     worker = None
     stream = None
@@ -457,6 +503,8 @@ def solve_official_beat_from_msh_text(
         impedance = np.asarray(impedance_rows, dtype=np.complex128)
         order = np.argsort(frequencies, kind="stable")
         native = _native_result(frequencies[order], angles, planes, pressure[order], impedance[order])
+        if _native_only:
+            return native
         response = build_solver_response(
             result=native, config=config, context=context, start_time=started,
             metadata={"solver_backend": "beat", "solver_mode": "full_3d", "engine": "official-beat-engine",
