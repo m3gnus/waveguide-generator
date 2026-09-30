@@ -298,3 +298,44 @@ def test_changed_git_includes_branch_staged_unstaged_and_untracked(tmp_path, mon
     assert run_tests.changed_paths(base) == ["base.py", "branch.py", "staged.py", "untracked name.py"]
     with pytest.raises(SystemExit):
         run_tests.changed_paths("missing-revision")
+
+
+@pytest.mark.parametrize(
+    ("changed", "expected"),
+    [
+        # Direct consumers the review found missing (lander batch-5 review).
+        ("launchers/apply_update.py", "server/tests/test_apply_update.py"),
+        ("launchers/apply_update.py", "server/tests/test_bundle_recovery.py"),
+        ("launchers/apply_update.py", "scripts/tests/test_build_bundle.py"),
+        ("launch/serve.py", "server/tests/test_update_transaction_contract.py"),
+        ("server/mesh/builder.py", "server/tests/test_real_pipeline.py"),
+    ],
+)
+def test_changed_selects_direct_consumers(changed, expected):
+    assert expected in run_tests.tests_for_changes([changed])
+
+
+def test_every_mapped_python_file_selects_the_tests_that_import_it():
+    """For each source module in a mapped area, any test that imports it by
+    dotted name is selected when that module changes."""
+
+    areas = run_tests.tomllib.loads(run_tests.TEST_MAP.read_text(encoding="utf-8"))["areas"]
+    tests = [*(run_tests.REPO_ROOT / "server/tests").glob("test_*.py"),
+             *(run_tests.REPO_ROOT / "scripts/tests").glob("test_*.py")]
+    texts = {test: test.read_text(encoding="utf-8", errors="replace") for test in tests}
+    missing = []
+    for prefix in areas:
+        for source in sorted((run_tests.REPO_ROOT / prefix).rglob("*.py")):
+            relative = source.relative_to(run_tests.REPO_ROOT)
+            if "tests" in relative.parts or source.name == "__init__.py":
+                continue
+            dotted = ".".join(relative.with_suffix("").parts)
+            selected = set(run_tests.tests_for_changes([relative.as_posix()]))
+            if selected == set(run_tests.FULL_SUITE):
+                continue
+            for test, text in texts.items():
+                if f"import {dotted}" in text or f"from {dotted} import" in text:
+                    name = str(test.relative_to(run_tests.REPO_ROOT))
+                    if name not in selected:
+                        missing.append((relative.as_posix(), name))
+    assert not missing, missing

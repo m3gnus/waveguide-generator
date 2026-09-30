@@ -31,11 +31,12 @@ command always puts ``--`` before the resolved targets. Refusals exit with 2.
 from __future__ import annotations
 
 import glob
+import re
 import os
 import subprocess
 import sys
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FULL_SUITE = ["server/tests", "scripts/tests"]
@@ -79,24 +80,50 @@ def tests_for_changes(paths: list[str]) -> list[str]:
             return FULL_SUITE.copy()
         prefix = max(matches, key=len)
         selected.update(areas[prefix])
-        selected.update(_tests_referencing(prefix))
+        selected.update(_tests_referencing(path, prefix))
+        if path.endswith(".py") and path.startswith(SPINE_SOURCES):
+            selected.update(t for t in SPINE_TESTS if (REPO_ROOT / t).is_file())
     return sorted(selected)
 
 
-def _tests_referencing(prefix: str) -> list[str]:
-    """Test files that name the changed server package, found at run time.
+#: The real pipeline test exercises the app end to end through its public
+#: entry points, so it names almost no module; select it for any change to
+#: the code it runs.
+SPINE_SOURCES = ("server/", "launch/")
+SPINE_TESTS = ("server/tests/test_real_pipeline.py",)
+_IMPORT_LINE = re.compile(r"^\s*(?:from\s+[\w.]+\s+)?import\s", re.M)
 
-    The map's globs are the hand-kept part; this keeps a new test that imports
-    the area from being missed without anyone editing the map.
+
+def _tests_referencing(path: str, prefix: str) -> list[str]:
+    """Test files that name the changed module or its area, found at run time.
+
+    The map's globs are the hand-kept part. This keeps a test that imports the
+    changed file (by dotted name, by path, or by bare module name on an import
+    line) from being missed without anyone editing the map. Over-selection is
+    harmless; missing a direct consumer is not.
     """
 
-    if not prefix.startswith("server/"):
-        return []
-    module = prefix.rstrip("/").replace("/", ".")
+    changed = PurePosixPath(path)
+    needles = {prefix.rstrip("/").replace("/", ".")}
+    if changed.suffix == ".py":
+        dotted = ".".join(changed.with_suffix("").parts)
+        needles |= {dotted, changed.with_suffix("").as_posix()}
+        stem = changed.stem
+        stem_re = re.compile(rf"\b{re.escape(stem)}\b") if stem != "__init__" else None
+    else:
+        stem_re = None
     found = []
     for tests_dir in ("server/tests", "scripts/tests"):
         for test in sorted((REPO_ROOT / tests_dir).glob("test_*.py")):
-            if module in test.read_text(encoding="utf-8", errors="replace"):
+            text = test.read_text(encoding="utf-8", errors="replace")
+            hit = any(needle in text for needle in needles)
+            if not hit and stem_re is not None:
+                hit = any(
+                    stem_re.search(line)
+                    for line in text.splitlines()
+                    if _IMPORT_LINE.match(line)
+                )
+            if hit:
                 found.append(str(test.relative_to(REPO_ROOT)))
     return found
 
