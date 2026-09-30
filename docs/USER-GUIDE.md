@@ -443,6 +443,8 @@ WG installs and updates the add-in at startup only if you chose it in setup,
 installed it from WG, or have received a model from Fusion through the link.
 WG also keeps updating a copy this installation already owns. Otherwise, use
 **Install add-in** in the **CAD Link** panel; that action also repairs the copy.
+The Windows WGLink setup task records your choice even if Fusion is absent or
+the add-in installation fails; leaving it unticked on a later upgrade preserves that choice.
 Opening the panel, opening or uploading a `.wgreturn` by hand, exporting from WG,
 and link metadata in a design file do not enable automatic installation.
 With no signal, WG leaves Fusion's AddIns folder alone, including hand-copied

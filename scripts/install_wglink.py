@@ -26,6 +26,7 @@ _IMPORT_ROOT = Path(
 if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
+from server.cadlink.usage import record_usage  # noqa: E402
 from server.platform.paths import app_root, data_paths  # noqa: E402
 from server.platform.staging import publish_staging_directory  # noqa: E402
 from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
@@ -1077,6 +1078,8 @@ def _managed_target_unlocked(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
+    actions = parser.add_mutually_exclusive_group()
+    actions.add_argument("--record-setup-choice", action="store_true", help="record the selected setup task without installing WGLink")
     parser.add_argument("--archive", type=Path, help="install a locally built package")
     parser.add_argument(
         "--offline-only",
@@ -1086,8 +1089,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--addins-dir", type=Path, help="override Fusion's AddIns directory")
     parser.add_argument("--platform", choices=("auto", "macos", "windows", "linux"), default="auto")
     parser.add_argument("--replace-external", action="store_true", help="replace a non-WG-managed WGLink")
-    parser.add_argument("--uninstall", action="store_true", help="remove only this WG install's managed copy")
-    parser.add_argument("--print-managed-target", action="store_true", help=argparse.SUPPRESS)
+    actions.add_argument("--uninstall", action="store_true", help="remove only this WG install's managed copy")
+    actions.add_argument("--print-managed-target", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--yes", action="store_true", help="confirm --uninstall")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
     parser.add_argument("--python", type=Path, help=argparse.SUPPRESS)
@@ -1095,7 +1098,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.record_setup_choice:
+        if args.archive or args.offline_only or args.replace_external or args.python or args.yes:
+            parser.error("--record-setup-choice cannot be combined with install/uninstall options")
+        try:
+            record_usage(data_paths().root, "setup-task")
+        except OSError as exc:
+            print(f"Could not record WGLink setup choice: {exc}", file=sys.stderr)
+            return 1
+        print("WGLink: recorded the setup task choice.")
+        return 0
     try:
         if args.print_managed_target:
             target = managed_target(

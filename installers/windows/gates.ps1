@@ -4,7 +4,9 @@
 # including a negative one, would be untrustworthy.
 
 param(
-    [Parameter(Mandatory = $true)][string]$Setup
+    [Parameter(Mandatory = $true)][string]$Setup,
+    # Manual opt-in: exercises the production 120 s cap, with no test override.
+    [switch]$RunWaitPidTimeout
 )
 
 $ErrorActionPreference = "Stop"
@@ -68,6 +70,24 @@ function TreeFingerprint([string]$root) {
     }) -join "`n")
 }
 
+# The two bundle layers, without bytecode. The layers are compared before and
+# after an upgrade, and running the bundled Python (WGLink install, ownership
+# queries) legitimately writes __pycache__ beside its sources, which is not a
+# difference between two packages.
+function LayerFingerprint([string]$root) {
+    $parts = foreach ($layer in @("app", "runtime")) {
+        $layerRoot = Join-Path $root $layer
+        if (-not (Test-Path -LiteralPath $layerRoot)) { "${layer}: MISSING"; continue }
+        $prefix = [IO.Path]::GetFullPath($layerRoot).TrimEnd('\') + '\'
+        Get-ChildItem -LiteralPath $layerRoot -Recurse -File |
+            Where-Object { $_.FullName -notmatch '\\__pycache__\\' -and $_.Extension -ne ".pyc" } |
+            Sort-Object FullName | ForEach-Object {
+                "$layer/$($_.FullName.Substring($prefix.Length))|$((Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash)"
+            }
+    }
+    return ($parts -join "`n")
+}
+
 $installRoot = "$env:LOCALAPPDATA\Programs\Waveguide Generator"
 $gateRoot = Join-Path $env:TEMP ("WaveguideGenerator-installer-gates-" + [guid]::NewGuid().ToString("N"))
 $wglinkAddins = Join-Path $gateRoot "Fusion\API\AddIns"
@@ -117,6 +137,9 @@ Gate 3 "silent run exits with a code, never a modal box" ($longReturned -and $lo
 if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
 $p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/TASKS=`"wglink`"" -Wait
 $installExit = $p.ExitCode
+# The package as installed on a clean machine: what every later upgrade of the
+# same setup must reproduce, whatever was left in the layers beforehand.
+$layerBaseline = if ($installExit -eq 0) { LayerFingerprint $installRoot } else { $null }
 
 # --- Gate 2: per-user location, no elevation ----------------------------------
 $landed = Test-Path $installRoot
@@ -143,8 +166,12 @@ $runtimePointerOk = $null -ne $runtimeData -and $runtimeData.python -eq (Join-Pa
 $journal = Join-Path $wglinkAddins ".WGLink-install-transaction.json"
 $staging = @(Get-ChildItem -LiteralPath $wglinkAddins -Directory -Filter ".WGLink-install-*" -ErrorAction SilentlyContinue)
 $settled = -not (Test-Path $journal) -and $staging.Count -eq 0
-$wglinkOk = ($installExit -eq 0) -and (Test-Path (Join-Path $wglinkTarget "WGLink.py")) -and (Test-Path $wglinkMarker) -and (Test-Path $wglinkRuntime) -and $markerRootOk -and $fullPinOk -and $runtimePointerOk -and $settled
-$wglinkDetail = "setup exit $installExit; target: $wglinkTarget; marker root: $markerRootOk; full pin: $fullPinOk; runtime pointer: $runtimePointerOk; journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count)"
+$usageRecord = Join-Path $gateData "integrations\wglink\cadlink-in-use.json"
+$usageBefore = if (Test-Path $usageRecord) { Get-Content -Raw $usageRecord } else { $null }
+$usageData = if ($null -ne $usageBefore) { $usageBefore | ConvertFrom-Json } else { $null }
+$setupChoiceOk = $null -ne $usageData -and $usageData.schemaVersion -eq 1 -and $usageData.reason -eq "setup-task"
+$wglinkOk = ($installExit -eq 0) -and (Test-Path (Join-Path $wglinkTarget "WGLink.py")) -and (Test-Path $wglinkMarker) -and (Test-Path $wglinkRuntime) -and $markerRootOk -and $fullPinOk -and $runtimePointerOk -and $settled -and $setupChoiceOk
+$wglinkDetail = "setup exit $installExit; target: $wglinkTarget; marker root: $markerRootOk; full pin: $fullPinOk; runtime pointer: $runtimePointerOk; journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count); setup choice recorded: $setupChoiceOk"
 Gate 10 "setup task installs packaged WGLink into a disposable AddIns directory" $wglinkOk $wglinkDetail
 
 # --- Gate 12: a silent upgrade must name WGLink again -------------------------
@@ -157,9 +184,185 @@ Set-Content -LiteralPath $silentSentinel -Value ([guid]::NewGuid().ToString("N")
 $beforeSilentUpgrade = TreeFingerprint $wglinkTarget
 $silentUpgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART" -Wait
 $afterSilentUpgrade = TreeFingerprint $wglinkTarget
-$silentUpgradeOk = ($silentUpgrade.ExitCode -eq 0) -and (Test-Path $silentSentinel) -and ($beforeSilentUpgrade -eq $afterSilentUpgrade) -and -not (Test-Path $journal) -and $staging.Count -eq 0
+$usageUnchanged = $setupChoiceOk -and (Test-Path $usageRecord) -and ((Get-Content -Raw $usageRecord) -eq $usageBefore)
+$silentUpgradeOk = ($silentUpgrade.ExitCode -eq 0) -and (Test-Path $silentSentinel) -and ($beforeSilentUpgrade -eq $afterSilentUpgrade) -and -not (Test-Path $journal) -and $staging.Count -eq 0 -and $usageUnchanged
 Gate 12 "silent upgrade leaves WGLink untouched without current /TASKS opt-in" $silentUpgradeOk `
-    "setup exit $($silentUpgrade.ExitCode); sentinel preserved: $(Test-Path $silentSentinel); tree unchanged: $($beforeSilentUpgrade -eq $afterSilentUpgrade); journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count)"
+    "setup exit $($silentUpgrade.ExitCode); sentinel preserved: $(Test-Path $silentSentinel); tree unchanged: $($beforeSilentUpgrade -eq $afterSilentUpgrade); journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count); setup choice unchanged: $usageUnchanged"
+
+# --- Gate 13: an upgrade leaves exactly the package, and reports it ----------
+# The layers are renamed aside and replaced, so a file the package no longer
+# carries must not survive (Inno's [Files] alone only ever overlays). Plant a
+# module in app\ and a package in runtime\, as if the previous version had
+# shipped them, upgrade with the same setup, and require app\ and runtime\ to
+# equal the freshly installed package again, with no renamed-aside folder or
+# marker left behind and a successful outcome record.
+$removedModule = Join-Path $installRoot "app\gate_removed_module.py"
+$removedPackage = Join-Path $installRoot "runtime\Lib\site-packages\gate_removed_package"
+Set-Content -LiteralPath $removedModule -Value "removed = True" -NoNewline
+New-Item -ItemType Directory -Force $removedPackage | Out-Null
+Set-Content -LiteralPath (Join-Path $removedPackage "__init__.py") -Value "removed = True" -NoNewline
+$outcomeFile = Join-Path $gateRoot "outcome-upgrade.json"
+$plantedBefore = (Test-Path $removedModule) -and (Test-Path $removedPackage)
+$upgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/OUTCOME=`"$outcomeFile`"" -Wait
+$layerAfter = LayerFingerprint $installRoot
+$removedGone = -not (Test-Path $removedModule) -and -not (Test-Path $removedPackage)
+$layersMatch = ($null -ne $layerBaseline) -and ($layerAfter -eq $layerBaseline)
+$asideLeft = @(".app.old", ".runtime.old", ".upgrade-in-progress" | Where-Object { Test-Path (Join-Path $installRoot $_) })
+$manifestPresent = Test-Path (Join-Path $installRoot "app\APP-MANIFEST.json")
+$outcome = if (Test-Path $outcomeFile) { Get-Content -Raw $outcomeFile | ConvertFrom-Json } else { $null }
+$outcomeOk = $null -ne $outcome -and $outcome.result -eq "ok" -and -not [string]::IsNullOrEmpty($outcome.to) -and -not [string]::IsNullOrEmpty($outcome.from) -and -not [string]::IsNullOrEmpty($outcome.when)
+Gate 13 "upgrade removes files the package dropped and writes an outcome" ($plantedBefore -and ($upgrade.ExitCode -eq 0) -and $removedGone -and $layersMatch -and ($asideLeft.Count -eq 0) -and $manifestPresent -and $outcomeOk) `
+    "setup exit $($upgrade.ExitCode); planted files present before: $plantedBefore; gone after: $removedGone; app+runtime equal the installed package: $layersMatch; renamed-aside leftovers: $($asideLeft.Count); manifest present: $manifestPresent; outcome result: $(if ($outcome) { $outcome.result } else { 'MISSING' }) from $(if ($outcome) { $outcome.from }) to $(if ($outcome) { $outcome.to })"
+
+# --- Gate 14: /WAITPID holds setup before any layer is replaced -------------
+# Wait for the setup log to confirm the wait was entered, rather than assuming
+# that a slow-to-start setup is waiting. Plant a file rename-aside must remove
+# only after the stand-in exits; the layers must be unchanged during the wait.
+$waitOutcome = Join-Path $gateRoot "outcome-waitpid.json"
+$waitLog = Join-Path $gateRoot "waitpid-setup.log"
+$waitSentinel = Join-Path $installRoot "app\gate_waitpid_sentinel.py"
+Set-Content -LiteralPath $waitSentinel -Value "keep_until_process_exits = True" -NoNewline
+$beforeWait = LayerFingerprint $installRoot
+$standIn = Start-StandIn
+$waiting = $null; $contender = $null
+$heldWhileAlive = $false; $finishedAfter = $false; $waitExit = $null
+$waitingLogged = $false; $mutexPresent = $false; $contenderBlocked = $false
+$contenderRoot = Join-Path $gateRoot "mutex-contender"
+$contenderOutcome = Join-Path $gateRoot "outcome-contender.json"
+$contenderSettled = $false
+try {
+    $waiting = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/DIR=`"$installRoot`"", "/WAITPID=$($standIn.Id)", "/OUTCOME=`"$waitOutcome`"", "/LOG=`"$waitLog`""
+    $null = $waiting.Handle  # so ExitCode is readable under Windows PowerShell 5.1 (see gate 4)
+    $readyDeadline = [DateTime]::UtcNow.AddSeconds(30)
+    do {
+        if (Test-Path $waitLog) {
+            $waitingLogged = $null -ne (Select-String -LiteralPath $waitLog -SimpleMatch "/WAITPID: waiting up to")
+        }
+        if ($waitingLogged -or $waiting.HasExited) { break }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $readyDeadline)
+    Start-Sleep -Seconds 8
+    $heldWhileAlive = $waitingLogged -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome) -and (Test-Path $waitSentinel) -and ($beforeWait -eq (LayerFingerprint $installRoot))
+    foreach ($aside in @(".app.old", ".runtime.old", ".upgrade-in-progress")) {
+        if (Test-Path (Join-Path $installRoot $aside)) { $heldWhileAlive = $false }
+    }
+
+    # --- Gate 15: a second setup cannot proceed while the first waits --------
+    # OpenExisting probes the exact mutex the launcher checks. Dispose the probe
+    # immediately so the gate itself cannot keep the mutex alive after setup.
+    try {
+        $probe = [Threading.Mutex]::OpenExisting("WaveguideGeneratorSetup")
+        $mutexPresent = $true
+        $probe.Dispose()
+    } catch [Threading.WaitHandleCannotBeOpenedException] {
+        $mutexPresent = $false
+    }
+    # A separate disposable /DIR makes any premature extraction observable.
+    $contender = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/DIR=`"$contenderRoot`"", "/OUTCOME=`"$contenderOutcome`""
+    $null = $contender.Handle
+    $contenderReturned = $contender.WaitForExit(8000)
+    $contender.Refresh()
+    $contenderData = if (Test-Path $contenderOutcome) { Get-Content -Raw $contenderOutcome | ConvertFrom-Json } else { $null }
+    $contenderBlocked = $waitingLogged -and $mutexPresent -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome) -and -not (Test-Path $contenderRoot) -and ($null -eq $contenderData -or $contenderData.result -eq "failed") -and ((-not $contenderReturned) -or ($null -ne $contender.ExitCode -and $contender.ExitCode -ne 0))
+    Stop-Process -Id $standIn.Id -Force
+    $finishedAfter = $waiting.WaitForExit(90000)
+    if ($finishedAfter) { $waiting.Refresh(); $waitExit = $waiting.ExitCode }
+    # If the second setup waited instead of failing, let it finish after release.
+    $contenderSettled = $contender.WaitForExit(90000)
+} finally {
+    if (-not $standIn.HasExited) { Stop-Process -Id $standIn.Id -Force }
+    if ($waiting -and -not $waiting.HasExited) { Stop-Process -Id $waiting.Id -Force }
+    if ($contender -and -not $contender.HasExited) { Stop-Process -Id $contender.Id -Force }
+}
+$waitData = if (Test-Path $waitOutcome) { Get-Content -Raw $waitOutcome | ConvertFrom-Json } else { $null }
+$waitSucceeded = $finishedAfter -and ($waitExit -eq 0) -and ($null -ne $waitData) -and ($waitData.result -eq "ok") -and -not (Test-Path $waitSentinel) -and ((LayerFingerprint $installRoot) -eq $layerBaseline)
+Gate 14 "/WAITPID waits before replacing layers, then installs" ($heldWhileAlive -and $waitSucceeded) `
+    "wait reached: $waitingLogged; layers intact while process lived: $heldWhileAlive; finished after exit: $finishedAfter; exit $waitExit; outcome: $(if ($waitData) { $waitData.result } else { 'MISSING' }); sentinel removed: $(-not (Test-Path $waitSentinel))"
+Gate 15 "setup mutex excludes a second setup throughout /WAITPID" ($contenderBlocked -and $finishedAfter -and $waitSucceeded -and $contenderSettled) `
+    "mutex visible during wait: $mutexPresent; second setup refused or held without extraction: $contenderBlocked; second setup settled: $contenderSettled; first setup exit: $waitExit"
+
+# --- Gate 16: a silent timeout must exit by itself, without a window ----------
+if ($RunWaitPidTimeout) {
+    # Enumerate all visible top-level windows, including owned modal dialogs.
+    # The setup loader spawns a .tmp child, so checking only its MainWindowHandle
+    # would miss the very dialog this gate must catch. Track descendants by PID.
+    if (-not ("WgGateWindows" -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class WgGateWindows {
+    private delegate bool EnumProc(IntPtr window, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback, IntPtr parameter);
+    [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr window);
+    [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    public static bool HasVisibleWindow(int[] processIds) {
+        var ids = new HashSet<int>(processIds);
+        bool found = false;
+        EnumWindows(delegate(IntPtr window, IntPtr parameter) {
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
+            if (ids.Contains((int)processId) && IsWindowVisible(window)) found = true;
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
+}
+'@
+    }
+    $timeoutOutcome = Join-Path $gateRoot "outcome-timeout.json"
+    $timeoutLog = Join-Path $gateRoot "timeout-setup.log"
+    $beforeTimeout = LayerFingerprint $installRoot
+    $timeoutStandIn = Start-StandIn
+    $timingOut = $null; $timeoutReturned = $false; $timeoutExit = $null
+    $timeoutWindowSeen = $false; $timeoutProcessIds = @()
+    $timeoutClock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $timingOut = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/DIR=`"$installRoot`"", "/WAITPID=$($timeoutStandIn.Id)", "/OUTCOME=`"$timeoutOutcome`"", "/LOG=`"$timeoutLog`"", "/RELAUNCH"
+        $null = $timingOut.Handle
+        $timeoutProcessIds = @($timingOut.Id)
+        # 120 s cap plus 30 s for startup and termination. Never kill a setup
+        # to count it as returned; forced cleanup below leaves the gate failed.
+        do {
+            $processes = @(Get-CimInstance Win32_Process)
+            do {
+                $children = @($processes | Where-Object { $_.ParentProcessId -in $timeoutProcessIds -and $_.ProcessId -notin $timeoutProcessIds })
+                $timeoutProcessIds += @($children | ForEach-Object { [int]$_.ProcessId })
+            } while ($children.Count -gt 0)
+            if ([WgGateWindows]::HasVisibleWindow([int[]]$timeoutProcessIds)) { $timeoutWindowSeen = $true }
+            $timeoutReturned = $timingOut.WaitForExit(250)
+        } while (-not $timeoutReturned -and $timeoutClock.Elapsed.TotalSeconds -lt 150)
+        if ($timeoutReturned) { $timingOut.Refresh(); $timeoutExit = $timingOut.ExitCode }
+        $standInSurvived = -not $timeoutStandIn.HasExited
+    } finally {
+        $timeoutClock.Stop()
+        # Only processes launched above, identified by recorded parentage/PID.
+        foreach ($processId in $timeoutProcessIds) {
+            $owned = Get-Process -Id $processId -ErrorAction SilentlyContinue
+            if ($owned -and -not $owned.HasExited) { Stop-Process -Id $processId -Force }
+        }
+        if (-not $timeoutStandIn.HasExited) { Stop-Process -Id $timeoutStandIn.Id -Force }
+    }
+    $timeoutData = if (Test-Path $timeoutOutcome) { Get-Content -Raw $timeoutOutcome | ConvertFrom-Json } else { $null }
+    $timeoutText = if (Test-Path $timeoutLog) { Get-Content -Raw $timeoutLog } else { "" }
+    $failureWrites = ([regex]::Matches($timeoutText, 'Outcome: wrote .* \(failed\)\.')).Count
+    $timeoutAside = @(".app.old", ".runtime.old", ".upgrade-in-progress" | Where-Object { Test-Path (Join-Path $installRoot $_) })
+    $timeoutUntouched = ($beforeTimeout -eq (LayerFingerprint $installRoot)) -and $timeoutAside.Count -eq 0 -and $timeoutText -notmatch 'Protection: (renamed|restored)'
+    $noRelaunch = $timeoutText -notmatch '-- Run entry --'
+    $timeoutOk = $timeoutReturned -and $timeoutClock.Elapsed.TotalSeconds -le 150 -and $null -ne $timeoutExit -and $timeoutExit -ne 0 -and -not $timeoutWindowSeen -and $standInSurvived -and $timeoutText -match 'was still running after 120 s' -and $null -ne $timeoutData -and $timeoutData.result -eq "failed" -and $failureWrites -eq 1 -and $timeoutUntouched -and $noRelaunch
+    Gate 16 "silent timeout exits without a window or relaunch" $timeoutOk `
+        "Abort at ssInstall exit: $timeoutExit (expected 3, to be measured on Windows); self-exit: $timeoutReturned; elapsed: $($timeoutClock.Elapsed.TotalSeconds) s (cap + margin: 150 s); visible window seen: $timeoutWindowSeen; stand-in still alive: $standInSurvived; outcome: $(if ($timeoutData) { $timeoutData.result } else { 'MISSING' }); failed writes: $failureWrites; layers untouched: $timeoutUntouched; no Run entry: $noRelaunch"
+    # Keep native timeout evidence outside the fixture removed at the end.
+    $timeoutEvidence = Join-Path $env:TEMP ("WaveguideGenerator-timeout-evidence-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory $timeoutEvidence | Out-Null
+    foreach ($evidenceFile in @($timeoutLog, $timeoutOutcome)) {
+        if (Test-Path $evidenceFile) { Copy-Item -LiteralPath $evidenceFile -Destination $timeoutEvidence }
+    }
+    "       timeout log/outcome retained at: $timeoutEvidence"
+} else {
+    Gate 16 "silent timeout exits without a window or relaunch" $null `
+        "Manual opt-in required: rerun with -RunWaitPidTimeout; uses the real 120 s cap plus a 30 s margin."
+}
 
 # --- Gate 11: a developer marker is never overwritten ------------------------
 New-Item -ItemType Directory -Force (Join-Path $developerAddins "WGLink") | Out-Null

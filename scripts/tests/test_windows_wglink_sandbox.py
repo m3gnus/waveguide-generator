@@ -15,6 +15,7 @@ and the qualifier process-boundary tests.
 """
 
 import ast
+import hashlib
 from pathlib import Path
 import re
 import shlex
@@ -29,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # and expandable-string subexpressions. Unsupported syntax needs review.
 LEXEME = re.compile(
     r'\[(?:[\w.]+(?:\[\])?|Parameter\(Mandatory\s*=\s*\$true\))\]|'
-    r'\$[\w:]+|\.[A-Za-z_]\w*|::|[+\-*/]?=|\+\+|--|'
+    r'\$[\w:]+|\.[A-Za-z_]\w*|::|(?<=::)[A-Za-z_]\w*|[+\-*/]?=|\+\+|--|'
     r'[^\s(){}\[\],;=|&\'"`]+|[^\s]', re.I
 )
 COMMANDS = frozenset('''
@@ -37,15 +38,25 @@ COMMANDS = frozenset('''
     Stop-Process Get-Content Get-FileHash Sort-Object Where-Object ForEach-Object
     Group-Object Out-Null Set-Content ConvertFrom-Json ConvertTo-Json Select-Object
     New-Object Split-Path Rename-Item Start-Sleep Unblock-File
-    Start-SandboxedSetup Start-StandIn Gate TreeFingerprint
+    Get-Process Get-CimInstance Select-String Copy-Item
+    Start-SandboxedSetup Start-StandIn Gate TreeFingerprint LayerFingerprint
 '''.lower().split())
 TYPES = {'[io.path]', '[guid]', '[pscustomobject]', '[string]', '[string[]]',
-         '[switch]', '[parameter(mandatory = $true)]'}
+         '[switch]', '[parameter(mandatory = $true)]', '[datetime]',
+         '[diagnostics.stopwatch]', '[threading.mutex]',
+         '[threading.waithandlecannotbeopenedexception]', '[regex]', '[int]',
+         '[int[]]', '[type]', '[wggatewindows]'}
 METHODS = {'::getfullpath', '::newguid', '.tostring', '.trimend', '.substring',
-           '.refresh', '.createshortcut'}
+           '.refresh', '.createshortcut', '::utcnow', '::startnew',
+           '::openexisting', '::matches', '::isnullorempty', '::hasvisiblewindow',
+           '.addseconds', '.dispose', '.waitforexit', '.stop'}
 KEYWORDS = {'param', 'if', 'elseif', 'else', 'foreach', 'try', 'catch', 'finally',
-            'return', 'throw', 'exit'}
-FUNCTIONS = {'gate', 'treefingerprint', 'start-sandboxedsetup', 'start-standin'}
+            'return', 'throw', 'exit', 'do', 'while', 'break', 'continue'}
+FUNCTIONS = {'gate', 'treefingerprint', 'layerfingerprint', 'start-sandboxedsetup', 'start-standin'}
+
+# Reviewed user32 window/PID queries only. Pin the entire literal C# body;
+# Add-Type is never part of the general command allowlist.
+WINDOW_PROBE_SHA256 = '0995b50d5e29146ca645957c33e0ec0f6a1632a9b7a01427b9b129c5eace14b6'
 
 
 def powershell_tokens(source: str) -> list[str]:
@@ -58,6 +69,14 @@ def powershell_tokens(source: str) -> list[str]:
             pos += 1
         elif source.startswith('`\n', pos) or source.startswith('`\r\n', pos):
             pos += 2 if source[pos + 1] == '\n' else 3
+        elif source.startswith("@'", pos):
+            # A literal here-string cannot interpolate or execute its contents.
+            assert re.match(r"@'\r?\n", source[pos:]), 'invalid here-string opening'
+            closing = re.search(r"^'@(?=\r?$)", source[pos + 2:], re.M)
+            assert closing, 'unclosed PowerShell here-string'
+            end = pos + 2 + closing.end()
+            tokens.append(source[pos:end])
+            pos = end
         elif char == '#':
             end = source.find('\n', pos)
             pos = len(source) if end < 0 else end
@@ -172,6 +191,8 @@ def assert_allowed_powershell(tokens: list[str], *, extra_commands: set[str] = f
             assert token == '&' and tokens[index + 1].lower() in delegated, 'unreviewed call operator'
         if token.startswith('[') and not re.fullmatch(r'\[\d+\]', token):
             assert lower in TYPES, f'unreviewed .NET type: {token}'
+            if lower == '[wggatewindows]':
+                assert compact(tokens[index + 1:index + 3]) == ['::', 'hasvisiblewindow'], 'unreviewed window probe'
         if lower.startswith('.') and index + 1 < len(tokens) and tokens[index + 1] == '(':
             assert lower in METHODS, f'unreviewed member call: {token}'
         if token == '::':
@@ -231,7 +252,16 @@ def assert_gate_allowlist(source: str) -> None:
     tokens = powershell_tokens(source)
     setup_body, outside = function_body(tokens, 'Start-SandboxedSetup')
     standin_body, outside = function_body(outside, 'Start-StandIn')
-    commands = assert_allowed_powershell(outside)
+    commands = assert_allowed_powershell(outside, extra_commands={'add-type'})
+    compilations = [c for c in commands if c[0].lower() == 'add-type']
+    assert len(compilations) == 1, 'exactly one reviewed Add-Type is allowed'
+    compilation = compilations[0]
+    assert len(compilation) == 3 and compact(compilation[:2]) == ['add-type', '-typedefinition']
+    literal = compilation[2].replace('\r\n', '\n')
+    assert literal.startswith("@'\n") and literal.endswith("\n'@"), 'only literal C# is allowed'
+    body = literal[2:-2].strip()
+    assert not re.search(r'\b(?:Process|CreateProcess|ShellExecute|WinExec|Environment)\b|System\.Diagnostics', body, re.I), 'unsafe C# API'
+    assert hashlib.sha256(body.encode()).hexdigest() == WINDOW_PROBE_SHA256, 'changed window probe C#'
     # The helper bodies are a closed statement allowlist as well. Merely finding
     # guard text would let a surrounding `if ($false)` disable the guard, or an
     # extra assignment replace the checked arguments before Start-Process.
@@ -278,6 +308,8 @@ def assert_gate_allowlist(source: str) -> None:
         '$unins': 'Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1',
         '$planted': '"$installRoot\\app\\__pycache__"',
         '$plantedRecovery': '"$installRoot\\recovery\\__pycache__"',
+        '$removedPackage': 'Join-Path $installRoot "runtime\\Lib\\site-packages\\gate_removed_package"',
+        '$timeoutEvidence': 'Join-Path $env:TEMP ("WaveguideGenerator-timeout-evidence-" + [guid]::NewGuid().ToString("N"))',
     }
     for variable, value in fixtures.items():
         assert_fragment(outside, f'{variable} = {value}')
@@ -299,11 +331,17 @@ def assert_gate_allowlist(source: str) -> None:
         'New-Item -ItemType Directory -Force (Join-Path $developerAddins "WGLink")',
         'New-Item -ItemType Directory -Force $planted',
         'New-Item -ItemType Directory -Force $plantedRecovery',
+        'New-Item -ItemType Directory -Force $removedPackage',
+        'New-Item -ItemType Directory $timeoutEvidence',
     )]
     for command in commands:
         lower = compact(command)
         if lower[0] == 'new-item':
             assert lower in directory_commands, f'unreviewed directory creation: {command}'
+        if lower[0] == 'copy-item':
+            assert lower == ['copy-item', '-literalpath', '$evidencefile', '-destination', '$timeoutevidence'], 'unreviewed evidence copy'
+        if lower[0] == 'get-ciminstance':
+            assert lower == ['get-ciminstance', 'win32_process'], 'unreviewed process inventory'
         if lower[0] == 'remove-item':
             targets = [t for t in lower[1:] if not t.startswith('-')]
             assert targets and all(t in removable for t in targets), f'unreviewed removal: {command}'
@@ -331,6 +369,40 @@ def assert_gate_allowlist(source: str) -> None:
 
 def test_every_gate_setup_and_uninstall_is_sandboxed() -> None:
     assert_gate_allowlist((ROOT / 'installers/windows/gates.ps1').read_text())
+
+
+def test_reviewed_add_type_is_required_once_even_with_windows_line_endings() -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    assert_gate_allowlist(source.replace('\n', '\r\n'))
+    compilation = next(c for c in command_elements(powershell_tokens(source)) if c[0].lower() == 'add-type')
+    with pytest.raises(AssertionError, match='exactly one'):
+        assert_gate_allowlist(source + '\n' + ' '.join(compilation) + '\n')
+
+
+def test_literal_here_string_is_atomic() -> None:
+    literal = "@'\n{ & $Setup; [Diagnostics.Process]::Start($Setup) }\n'@"
+    assert powershell_tokens(literal) == [literal]
+    with pytest.raises(AssertionError, match='unclosed'):
+        powershell_tokens("@'\nbody\n  '@")
+    assert powershell_tokens('[DateTime]::UtcNow.AddSeconds(30)') == [
+        '[DateTime]', '::', 'UtcNow', '.AddSeconds', '(', '30', ')',
+    ]
+
+
+@pytest.mark.parametrize('old,new', [
+    ('return found;', 'return false;'),
+    ('return found;', 'System.Diagnostics.Process.Start("setup.exe"); return found;'),
+    ("Add-Type -TypeDefinition @'", "Add-Type -TypeDefinition 'public class X {}'; Add-Type -TypeDefinition @'"),
+    ('[WgGateWindows]::HasVisibleWindow', '[WgGateWindows]::Anything'),
+    ('Get-CimInstance Win32_Process', 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create'),
+    ('Copy-Item -LiteralPath $evidenceFile -Destination $timeoutEvidence', 'Copy-Item -LiteralPath $evidenceFile -Destination Env:WG2_DATA_DIR'),
+])
+def test_window_probe_and_inventory_reject_mutations(old: str, new: str) -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    changed = source.replace(old, new, 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_gate_allowlist(changed)
 
 
 ENTRYPOINTS = ('build_bundle.py', 'gates.ps1', 'qualify_installed_cpu.py', 'qualify_installed_quit.py')
@@ -419,6 +491,14 @@ UNSAFE_LINES = [
     "[Environment]::SetEnvironmentVariable('WG2_DATA_DIR', $env:APPDATA)",
     'ri $wglinkAddins -Recurse', 'rm $gateData -Recurse',
     'Remove-Item $wglinkAddins -Recurse', 'Start-Process $Setup',
+    "Add-Type -TypeDefinition 'public class X {}'",
+    'do { [Diagnostics.Process]::Start($Setup) } while ($false)',
+    "Add-Type -MemberDefinition '...' -Name N -Namespace W",
+    'Start-Job { & $Setup }', 'Invoke-Command { & $Setup }',
+    'Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$Setup}',
+    'Invoke-WmiMethod -Class Win32_Process -Name Create -ArgumentList $Setup',
+    '[WgGateWindows]::Anything($Setup)',
+    'Set-CimInstance -ClassName Win32_Process -Property @{CommandLine=$Setup}',
 ]
 
 

@@ -22,6 +22,11 @@
 ;      which is a single dialog at the moment the user chose to run something.
 ;
 ;   2. Extract to a short path. See the length check below.
+;
+; /WAITPID times out before rename-aside at CurStepChanged(ssInstall). It
+; writes a failed outcome, shows a MsgBox only interactively, then calls Abort.
+; Abort at ssInstall exits with code 3: measured on Windows 11 with Inno Setup 6.7.3, 2026-09-30 (gate 16).
+; Abort raises a silent exception; no timeout dialog or /RELAUNCH in silent mode.
 
 #ifndef AppVersion
   #error AppVersion must be defined by the build
@@ -81,6 +86,12 @@ UsePreviousAppDir=yes
 ; interactive wizard still makes a fresh Fusion-aware recommendation below;
 ; silent deployment must opt in on every invocation.
 UsePreviousTasks=no
+; One setup per user at a time, and the name the launcher looks for: the
+; per-user launcher refuses to start while this mutex exists (OpenMutexW), so
+; an application cannot be started on a tree that setup is replacing. Inno
+; creates it after InitializeSetup returns and holds it until setup exits.
+; /WAITPID therefore runs at the start of ssInstall, with the mutex held.
+SetupMutex=WaveguideGeneratorSetup
 
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -134,6 +145,11 @@ Name: "{autodesktop}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.
 
 [Run]
 Filename: "{app}\Waveguide Generator.exe"; Description: "Start Waveguide Generator"; Flags: nowait postinstall skipifsilent
+; The in-app updater runs this setup silently and asks for /RELAUNCH so the
+; application comes back. Setup still holds SetupMutex while [Run] executes, and
+; the launcher refuses to start under that mutex, so the start goes through a
+; short delay that lets setup exit first.
+Filename: "{cmd}"; Parameters: "/C ping -n 4 127.0.0.1 >nul & start """" ""{app}\Waveguide Generator.exe"""; Flags: nowait runhidden; Check: RelaunchRequested
 
 [UninstallDelete]
 ; Bytecode the installer never wrote, and so does not know to remove. The
@@ -154,11 +170,16 @@ Filename: "{app}\Waveguide Generator.exe"; Description: "Start Waveguide Generat
 ; left that folder behind, and {app} with it.
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\app"
+; Left by an upgrade that was killed mid-copy; see BeginProtectedReplace.
+Type: filesandordirs; Name: "{app}\.app.old"
+Type: filesandordirs; Name: "{app}\.runtime.old"
+Type: files; Name: "{app}\.upgrade-in-progress"
 Type: filesandordirs; Name: "{app}\recovery"
 Type: dirifempty; Name: "{app}"
 
 [Code]
 const
+#include "opencl-guidance.iss"
   WgLinkTaskName = 'wglink';
   WgLinkMarkerName = 'wglink_install.json';
   WgLinkDeveloperMarkerName = 'wglink_dev.json';
@@ -170,9 +191,32 @@ const
     second declaration is a "Duplicate identifier" compile error there. }
   WG_FILE_ATTRIBUTE_REPARSE_POINT = $400;
   INVALID_FILE_ATTRIBUTES = -1;
+  { The Inno uninstall key of this product (AppId above, plus "_is1"). Setup
+    is per-user, so it lives in HKCU. Read only to report the version being
+    replaced in the outcome record. }
+  UninstallRegistryKey =
+    'Software\Microsoft\Windows\CurrentVersion\Uninstall\{D8F99D24-D991-4FB0-91FE-E86D79128D2B}_is1';
+  { Rename-aside names for install-time protection (BeginProtectedReplace). }
+  AppLayerName = 'app';
+  RuntimeLayerName = 'runtime';
+  AppAsideName = '.app.old';
+  RuntimeAsideName = '.runtime.old';
+  ProtectionMarkerName = '.upgrade-in-progress';
+  SYNCHRONIZE = $00100000;
+  WAIT_OBJECT_0 = 0;
+  WaitForProcessLimitMs = 120000;
 
 var
+  OpenClHelpButton: TNewButton;
+  OpenClNotice: TNewMemo;
   WgLinkStatus: String;
+  PreviousVersion: String;
+  { True once replacement began at ssInstall: this run owns the layer folders. }
+  ProtectionStarted: Boolean;
+  { True once ssPostInstall was reached: the new tree is complete and the old
+    one may be deleted. Nothing may be restored after this. }
+  ProtectionCommitted: Boolean;
+  OutcomeWritten: Boolean;
 
 function SetEnvironmentVariable(Name, Value: String): Boolean;
   { No setuponly/uninstallonly qualifier: this process-local Windows API is
@@ -186,6 +230,24 @@ function GetFileAttributesW(lpFileName: String): Integer;
     never be followed and deleted; this is how RemoveUpdateStagingRoot below
     tells one apart from an ordinary directory before touching it. }
   external 'GetFileAttributesW@kernel32.dll stdcall';
+
+function OpenProcess(DesiredAccess: Integer; InheritHandle: Integer; ProcessId: Integer): Integer;
+  external 'OpenProcess@kernel32.dll stdcall setuponly';
+
+function WaitForSingleObject(Handle: Integer; Milliseconds: Integer): Integer;
+  external 'WaitForSingleObject@kernel32.dll stdcall setuponly';
+
+function CloseHandle(Handle: Integer): Integer;
+  external 'CloseHandle@kernel32.dll stdcall setuponly';
+
+function IsReparsePoint(const Path: String): Boolean;
+var
+  Attributes: Integer;
+begin
+  Attributes := GetFileAttributesW(Path);
+  Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
+    ((Attributes and WG_FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
+end;
 
 procedure WgLinkOutput(const S: String; const Error, FirstLine: Boolean);
 begin
@@ -320,6 +382,39 @@ end;
 function FusionDetected(): Boolean;
 begin
   Result := WgLinkAddInsDirectory() <> '';
+end;
+
+procedure RecordWGLinkSetupChoice();
+var
+  Parameters: String;
+  ExitCode: Integer;
+  PreviousBundleFlag, PreviousAppRoot: String;
+begin
+  if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
+  begin
+    Log('WGLink setup choice: bundled runtime python.exe is missing; continuing setup.');
+    exit;
+  end;
+  PreviousBundleFlag := GetEnv('WG2_BUNDLE');
+  PreviousAppRoot := GetEnv('WG2_APP_ROOT');
+  SetEnvironmentVariable('WG2_BUNDLE', '1');
+  SetEnvironmentVariable('WG2_APP_ROOT', ExpandConstant('{app}\app'));
+  try
+    Parameters :=
+      AddQuotes(ExpandConstant('{app}\app\scripts\install_wglink.py')) +
+      ' --record-setup-choice';
+    Log('WGLink setup choice: recording the selected task.');
+    if not ExecAndLogOutput(
+      ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
+      SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
+    ) then
+      Log('WGLink setup choice: could not start the recording command; continuing setup.')
+    else if ExitCode <> 0 then
+      Log('WGLink setup choice: recording failed with exit code ' + IntToStr(ExitCode) + '; continuing setup.');
+  finally
+    SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
+    SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
+  end;
 end;
 
 procedure InstallWGLink();
@@ -498,8 +593,37 @@ begin
   end;
 end;
 
+procedure OpenClHelpClick(Sender: TObject);
+var
+  ErrorCode: Integer;
+begin
+  if WizardSilent() then
+    exit;
+  { Opening help is optional and never a condition of finishing setup. }
+  if not ShellExec('open', ExpandConstant('{app}\app\shared\opencl-guidance.html'),
+    '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+    Log('OpenCL: could not open the help page; error ' + IntToStr(ErrorCode) + '.');
+end;
+
 procedure InitializeWizard();
 begin
+  if not WizardSilent() then
+  begin
+    OpenClNotice := TNewMemo.Create(WizardForm);
+    OpenClNotice.Parent := WizardForm.FinishedPage;
+    OpenClNotice.ReadOnly := True;
+    OpenClNotice.WordWrap := True;
+    OpenClNotice.ScrollBars := ssVertical;
+    OpenClNotice.Anchors := [akLeft, akTop, akRight, akBottom];
+    OpenClHelpButton := TNewButton.Create(WizardForm);
+    OpenClHelpButton.Parent := WizardForm.FinishedPage;
+    OpenClHelpButton.Caption := OpenClGuidanceTitle;
+    OpenClHelpButton.SetBounds(WizardForm.FinishedLabel.Left,
+      WizardForm.FinishedPage.ClientHeight - WizardForm.NextButton.Height - ScaleY(8),
+      ScaleX(180), WizardForm.NextButton.Height);
+    OpenClHelpButton.Anchors := [akLeft, akBottom];
+    OpenClHelpButton.OnClick := @OpenClHelpClick;
+  end;
   { A normal interactive setup may make the Fusion-aware recommendation. A
     silent invocation has no user to make that choice, so it must opt in with
     /TASKS="wglink" instead. }
@@ -513,12 +637,319 @@ begin
     Log('WGLink: no Fusion AddIns directory detected; task remains unchecked.');
 end;
 
+{ ---- Outcome record, /WAITPID and /RELAUNCH for the in-app updater ----------
+
+  The updater starts this setup silently and detached. Nothing of WG's own
+  Python is involved, so setup is also the helper: /WAITPID=<pid> waits for
+  the application to exit, /OUTCOME=<file> reports what happened for the next
+  start to show, /LOG=<file> is Inno's own switch and its path is echoed in the
+  record, and /RELAUNCH starts the application again afterwards. All are
+  optional; an ordinary interactive install ignores every one of them. }
+
+function JsonEscape(const S: String): String;
+begin
+  Result := S;
+  StringChangeEx(Result, '\', '\\', True);
+  StringChangeEx(Result, '"', '\"', True);
+end;
+
+function JsonStringOrNull(const S: String): String;
+begin
+  if S = '' then
+    Result := 'null'
+  else
+    Result := '"' + JsonEscape(S) + '"';
+end;
+
+{ The record holds from, to, result, when and log; "when" is local wall-clock
+  time, ISO 8601 without an offset. Written once, to a temporary name and then
+  renamed, so a reader never sees half a file. No braces in this comment: a
+  Pascal comment ends at the first closing brace. }
+procedure WriteOutcome(const Verdict: String);
+var
+  Path, Tmp: String;
+  Lines: TArrayOfString;
+begin
+  if OutcomeWritten then
+    exit;
+  Path := ExpandConstant('{param:OUTCOME|}');
+  if Path = '' then
+    exit;
+  OutcomeWritten := True;
+  SetArrayLength(Lines, 1);
+  Lines[0] :=
+    '{"from": ' + JsonStringOrNull(PreviousVersion) +
+    ', "to": ' + JsonStringOrNull('{#AppVersion}') +
+    ', "result": ' + JsonStringOrNull(Verdict) +
+    ', "when": ' + JsonStringOrNull(GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':')) +
+    ', "log": ' + JsonStringOrNull(ExpandConstant('{param:LOG|}')) + '}';
+  ForceDirectories(ExtractFileDir(Path));
+  Tmp := Path + '.tmp';
+  if not SaveStringsToUTF8FileWithoutBOM(Tmp, Lines, False) then
+  begin
+    Log('Outcome: could not write ' + Tmp + '.');
+    exit;
+  end;
+  DeleteFile(Path);
+  if RenameFile(Tmp, Path) then
+    Log('Outcome: wrote ' + Path + ' (' + Verdict + ').')
+  else
+    Log('Outcome: could not move ' + Tmp + ' to ' + Path + '.');
+end;
+
+{ False when the process named by /WAITPID is still running after the cap. A
+  process that cannot be opened is treated as gone: it already exited, or it
+  never existed. }
+function WaitForApplicationExit(): Boolean;
+var
+  Pid, Handle: Integer;
+begin
+  Result := True;
+  Pid := StrToIntDef(ExpandConstant('{param:WAITPID|0}'), 0);
+  if Pid <= 0 then
+    exit;
+  Handle := OpenProcess(SYNCHRONIZE, 0, Pid);
+  if Handle = 0 then
+  begin
+    Log('/WAITPID: process ' + IntToStr(Pid) + ' is not running.');
+    exit;
+  end;
+  try
+    Log('/WAITPID: waiting up to ' + IntToStr(WaitForProcessLimitMs div 1000) +
+        ' s for process ' + IntToStr(Pid) + '.');
+    if WaitForSingleObject(Handle, WaitForProcessLimitMs) = WAIT_OBJECT_0 then
+      Log('/WAITPID: process ' + IntToStr(Pid) + ' exited.')
+    else
+    begin
+      Log('/WAITPID: process ' + IntToStr(Pid) + ' was still running after ' +
+          IntToStr(WaitForProcessLimitMs div 1000) + ' s.');
+      Result := False;
+    end;
+  finally
+    CloseHandle(Handle);
+  end;
+end;
+
+function RelaunchRequested(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if (CompareText(ParamStr(I), '/RELAUNCH') = 0) or
+       (CompareText(ParamStr(I), '/RELAUNCH=1') = 0) then
+      Result := True;
+end;
+
+{ ---- Install-time protection of the two bundle layers ------------------------
+
+  Inno's [Files] section overlays: it writes the new files over the old tree,
+  never removes a file the new package dropped, and does not restore a file it
+  already overwrote if setup is stopped half way. So an upgrade could leave a
+  tree that is neither version, and a module deleted from the package survived
+  every upgrade.
+
+  Therefore, at the start of ssInstall <app>\app and <app>\runtime are renamed
+  aside (a rename inside one directory, so it is atomic and fails cleanly when
+  something still holds a file open -- a running application, say). Setup then
+  writes complete new layers into empty folders. Only at ssPostInstall, when
+  every file is in place, are the renamed-aside folders deleted. If setup ends
+  before that (a failure, a cancel, an error), DeinitializeSetup deletes the
+  partial new layers and renames the old ones back.
+
+  A killed setup runs no DeinitializeSetup at all. So the run also leaves
+  ProtectionMarkerName in <app>: present means "an earlier run died before it
+  committed", and the next setup restores from the renamed-aside folders before
+  doing anything else. The marker is deleted first when committing, so a run
+  killed while deleting the old folders never mistakes complete new layers for
+  partial ones.
+
+  Deliberately NOT an [InstallDelete] section: Inno processes [InstallDelete]
+  after CurStepChanged(ssInstall), so an entry naming the renamed-aside folders
+  would delete the very copies that this run has just made to restore from. }
+
+procedure DeleteTreeSafely(const Path: String);
+begin
+  if not DirExists(Path) then
+    exit;
+  { Never follow a junction or symlink out of the install root. }
+  if IsReparsePoint(Path) then
+  begin
+    Log('Left alone because it is a reparse point: ' + Path);
+    exit;
+  end;
+  if DelTree(Path, True, True, True) then
+    Log('Removed ' + Path)
+  else
+    Log('Could not remove ' + Path);
+end;
+
+function AppSubPath(const Name: String): String;
+begin
+  Result := AddBackslash(ExpandConstant('{app}')) + Name;
+end;
+
+{ Returns False only when the layer exists and could not be renamed aside.
+  Moved reports whether a rename happened. }
+function MoveLayerAside(const Layer, Aside: String; var Moved: Boolean): Boolean;
+var
+  Source, Target: String;
+begin
+  Moved := False;
+  Result := True;
+  Source := AppSubPath(Layer);
+  Target := AppSubPath(Aside);
+  if not DirExists(Source) then
+    exit;
+  if IsReparsePoint(Source) then
+  begin
+    Log('Protection: refusing to rename a reparse point at ' + Source + '.');
+    Result := False;
+    exit;
+  end;
+  if not RenameFile(Source, Target) then
+  begin
+    Log('Protection: could not rename ' + Source + ' to ' + Target + '.');
+    Result := False;
+    exit;
+  end;
+  Moved := True;
+  Log('Protection: renamed ' + Source + ' to ' + Target + '.');
+end;
+
+{ Puts a renamed-aside layer back, removing whatever partial copy is in its
+  place. Nothing to do (and True) when there is no renamed-aside folder. }
+function RestoreLayer(const Layer, Aside: String): Boolean;
+var
+  Source, Target: String;
+begin
+  Result := True;
+  Source := AppSubPath(Aside);
+  Target := AppSubPath(Layer);
+  if not DirExists(Source) then
+    exit;
+  if DirExists(Target) then
+  begin
+    if IsReparsePoint(Target) then
+    begin
+      Log('Protection: cannot restore over a reparse point at ' + Target + '.');
+      Result := False;
+      exit;
+    end;
+    DeleteTreeSafely(Target);
+    if DirExists(Target) then
+    begin
+      Result := False;
+      exit;
+    end;
+  end;
+  if RenameFile(Source, Target) then
+    Log('Protection: restored ' + Target + '.')
+  else
+  begin
+    Log('Protection: could not restore ' + Target + ' from ' + Source + '.');
+    Result := False;
+  end;
+end;
+
+procedure RollBackProtectedReplace();
+var
+  AppOk, RuntimeOk: Boolean;
+begin
+  AppOk := RestoreLayer(AppLayerName, AppAsideName);
+  RuntimeOk := RestoreLayer(RuntimeLayerName, RuntimeAsideName);
+  { Only forget the marker once both layers are back. If one could not be
+    restored, the marker stays so that the next setup tries again. }
+  if AppOk and RuntimeOk then
+    DeleteFile(AppSubPath(ProtectionMarkerName))
+  else
+    Log('Protection: the previous version could not be fully restored; the marker is kept for the next setup.');
+end;
+
+procedure BeginProtectedReplace();
+var
+  AppMoved, RuntimeMoved, Moved: Boolean;
+begin
+  ProtectionStarted := True;
+  ForceDirectories(ExpandConstant('{app}'));
+
+  { An earlier setup that was killed before it committed left the marker and
+    the renamed-aside folders: put those back first, so that this run
+    protects a whole tree and not a half-written one. }
+  if FileExists(AppSubPath(ProtectionMarkerName)) then
+  begin
+    Log('Protection: an earlier upgrade did not finish; restoring the previous version first.');
+    RollBackProtectedReplace();
+    if FileExists(AppSubPath(ProtectionMarkerName)) then
+    begin
+      WriteOutcome('failed');
+      RaiseException('Waveguide Generator could not restore the version left by an interrupted upgrade. Nothing was changed; see the setup log.');
+    end;
+  end
+  else
+  begin
+    { No marker: these are leftovers of an upgrade that did finish. }
+    DeleteTreeSafely(AppSubPath(AppAsideName));
+    DeleteTreeSafely(AppSubPath(RuntimeAsideName));
+  end;
+
+  { A first install has nothing to protect. }
+  if not (DirExists(AppSubPath(AppLayerName)) or DirExists(AppSubPath(RuntimeLayerName))) then
+    exit;
+
+  if not SaveStringToFile(AppSubPath(ProtectionMarkerName), 'upgrade in progress', False) then
+  begin
+    Log('Protection: could not write the marker; not touching the installed version.');
+    WriteOutcome('failed');
+    RaiseException('Waveguide Generator could not prepare the folder for the upgrade. The installed version was not changed.');
+  end;
+
+  Moved := MoveLayerAside(AppLayerName, AppAsideName, AppMoved);
+  if Moved then
+    Moved := MoveLayerAside(RuntimeLayerName, RuntimeAsideName, RuntimeMoved);
+  if not Moved then
+  begin
+    { Most often the running application still holds a file. Put back
+      whatever was moved and stop before anything is written. }
+    RollBackProtectedReplace();
+    WriteOutcome('failed');
+    RaiseException('Waveguide Generator could not replace its files because they are in use. Close Waveguide Generator and run setup again. The installed version was not changed.');
+  end;
+end;
+
+procedure CommitProtectedReplace();
+begin
+  if not ProtectionStarted then
+    exit;
+  ProtectionCommitted := True;
+  { The marker goes first: a run killed while deleting the old folders must
+    not later be read as "the new layers are partial". }
+  DeleteFile(AppSubPath(ProtectionMarkerName));
+  DeleteTreeSafely(AppSubPath(AppAsideName));
+  DeleteTreeSafely(AppSubPath(RuntimeAsideName));
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
+  if CurStep = ssInstall then
+  begin
+    if not WaitForApplicationExit() then
+    begin
+      WriteOutcome('failed');
+      if not WizardSilent() then
+        MsgBox('Waveguide Generator is still running. Close it and run setup again.', mbError, MB_OK);
+      Abort;
+    end;
+    BeginProtectedReplace();
+  end;
   if CurStep = ssPostInstall then
   begin
+    CommitProtectedReplace();
     if WizardIsTaskSelected(WgLinkTaskName) then
-      InstallWGLink()
+    begin
+      RecordWGLinkSetupChoice();
+      InstallWGLink();
+    end
     else
     begin
       WgLinkStatus := 'WGLink was not installed because it was not selected.';
@@ -542,15 +973,6 @@ begin
   AppDir := RemoveBackslashUnlessRoot(ExpandConstant('{app}'));
   Result := AddBackslash(ExtractFileDir(AppDir)) + '.' + ExtractFileName(AppDir) +
     UpdateStagingRootSuffix;
-end;
-
-function IsReparsePoint(const Path: String): Boolean;
-var
-  Attributes: Integer;
-begin
-  Attributes := GetFileAttributesW(Path);
-  Result := (Attributes <> INVALID_FILE_ATTRIBUTES) and
-    ((Attributes and WG_FILE_ATTRIBUTE_REPARSE_POINT) <> 0);
 end;
 
 procedure RemoveUpdateStagingRoot();
@@ -594,9 +1016,22 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
-  if (CurPageID = wpFinished) and (WgLinkStatus <> '') then
+  if (CurPageID <> wpFinished) or WizardSilent() then
+    exit;
+  if WgLinkStatus <> '' then
     WizardForm.FinishedLabel.Caption :=
       'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;
+  OpenClNotice.Text := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+    OpenClGuidanceTitle + #13#10 + OpenClGuidanceText;
+  { The complete runtime step and warning can exceed the finish page height.
+    Keep them scrollable, with room below for the single launch checkbox and
+    help button. All coordinates use the wizard's DPI scale. }
+  WizardForm.FinishedLabel.Visible := False;
+  WizardForm.RunList.Height := ScaleY(28);
+  WizardForm.RunList.Top := OpenClHelpButton.Top - WizardForm.RunList.Height - ScaleY(8);
+  OpenClNotice.SetBounds(WizardForm.FinishedLabel.Left,
+    WizardForm.FinishedLabel.Top, WizardForm.FinishedLabel.Width,
+    WizardForm.RunList.Top - WizardForm.FinishedLabel.Top - ScaleY(8));
 end;
 
 { The bundle's own deepest relative path is measured at build time and passed
@@ -643,6 +1078,8 @@ begin
   Result := ValidateWgLinkAddInsOverride(WizardSilent());
   if not Result then
     exit;
+  if not RegQueryStringValue(HKCU, UninstallRegistryKey, 'DisplayVersion', PreviousVersion) then
+    PreviousVersion := '';
   Dir := ExpandConstant('{param:DIR|}');
   if (Dir <> '') and (Length(Dir) > MaxRootLength()) then
   begin
@@ -653,6 +1090,20 @@ begin
       MsgBox(TooLongMessage(Dir), mbError, MB_OK);
     Result := False;
   end;
+  if not Result then
+    WriteOutcome('failed');
+end;
+
+{ Runs at the very end of every setup that reached it, whatever the outcome.
+  Roll back first: the record must describe the state the disk is left in. }
+procedure DeinitializeSetup();
+begin
+  if ProtectionStarted and not ProtectionCommitted then
+    RollBackProtectedReplace();
+  if ProtectionCommitted then
+    WriteOutcome('ok')
+  else
+    WriteOutcome('failed');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

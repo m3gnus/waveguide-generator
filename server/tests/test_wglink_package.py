@@ -55,6 +55,58 @@ def _load_installer():
     return module
 
 
+def test_setup_choice_records_usage_without_touching_addins(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from server.cadlink.usage import read_usage
+
+    installer = _load_installer()
+    data = tmp_path / "WG data"
+    addins = tmp_path / "absent Fusion" / "AddIns"
+    monkeypatch.setenv("WG2_DATA_DIR", str(data))
+    monkeypatch.setenv("WG2_FUSION_ADDINS_DIR", str(addins))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("recording a setup choice reached an add-in operation")
+
+    for name in ("default_addins_dir", "install", "uninstall", "managed_target", "state_root", "_load_builder"):
+        monkeypatch.setattr(installer, name, forbidden)
+    assert installer.main(["--record-setup-choice"]) == 0
+    record = read_usage(data)
+    assert record is not None and record["reason"] == "setup-task"
+    assert not addins.parent.exists()
+    assert sorted(p.relative_to(data).as_posix() for p in data.rglob("*") if p.is_file()) == [
+        "integrations/wglink/cadlink-in-use.json",
+    ]
+    output = capsys.readouterr()
+    assert len(output.out.splitlines()) == 1 and not output.err
+
+
+def test_setup_choice_write_failure_returns_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    installer = _load_installer()
+    blocked = tmp_path / "not a directory"
+    blocked.write_text("keep", encoding="utf-8")
+    monkeypatch.setenv("WG2_DATA_DIR", str(blocked))
+    assert installer.main(["--record-setup-choice"]) == 1
+    output = capsys.readouterr()
+    assert not output.out and "Could not record WGLink setup choice:" in output.err
+    assert str(blocked) in output.err
+    assert blocked.read_text(encoding="utf-8") == "keep"
+
+
+@pytest.mark.parametrize('other', [
+    ['--uninstall', '--yes'], ['--archive', 'package.zip'], ['--offline-only'],
+    ['--replace-external'], ['--print-managed-target'], ['--python', 'python.exe'],
+])
+def test_setup_choice_is_exclusive_with_addin_actions(other: list[str]) -> None:
+    installer = _load_installer()
+    with pytest.raises(SystemExit) as exc:
+        installer.main(['--record-setup-choice', *other])
+    assert exc.value.code == 2
+
+
 def _source(tmp_path: Path, commit: str) -> Path:
     root = tmp_path / "hornlab-fusion-addin"
     addin = root / "fusion-addins" / "WGLink"
