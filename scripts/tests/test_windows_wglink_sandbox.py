@@ -38,18 +38,21 @@ COMMANDS = frozenset('''
     Stop-Process Get-Content Get-FileHash Sort-Object Where-Object ForEach-Object
     Group-Object Out-Null Set-Content ConvertFrom-Json ConvertTo-Json Select-Object
     New-Object Split-Path Rename-Item Start-Sleep Unblock-File
-    Get-Process Get-CimInstance Select-String Copy-Item
+    Get-Process Get-CimInstance Select-String Copy-Item Get-ItemProperty
     Start-SandboxedSetup Start-StandIn Gate TreeFingerprint LayerFingerprint
 '''.lower().split())
 TYPES = {'[io.path]', '[guid]', '[pscustomobject]', '[string]', '[string[]]',
          '[switch]', '[parameter(mandatory = $true)]', '[datetime]',
          '[diagnostics.stopwatch]', '[threading.mutex]',
          '[threading.waithandlecannotbeopenedexception]', '[regex]', '[int]',
-         '[int[]]', '[type]', '[wggatewindows]'}
+         '[int[]]', '[type]', '[wggatewindows]',
+         '[security.principal.windowsprincipal]', '[security.principal.windowsidentity]',
+         '[security.principal.windowsbuiltinrole]'}
 METHODS = {'::getfullpath', '::newguid', '.tostring', '.trimend', '.substring',
            '.refresh', '.createshortcut', '::utcnow', '::startnew',
            '::openexisting', '::matches', '::isnullorempty', '::hasvisiblewindow',
-           '.addseconds', '.dispose', '.waitforexit', '.stop'}
+           '.addseconds', '.dispose', '.waitforexit', '.stop',
+           '::getcurrent', '::administrator', '.isinrole'}
 KEYWORDS = {'param', 'if', 'elseif', 'else', 'foreach', 'try', 'catch', 'finally',
             'return', 'throw', 'exit', 'do', 'while', 'break', 'continue'}
 FUNCTIONS = {'gate', 'treefingerprint', 'layerfingerprint', 'start-sandboxedsetup', 'start-standin'}
@@ -340,6 +343,10 @@ def assert_gate_allowlist(source: str) -> None:
             assert lower in directory_commands, f'unreviewed directory creation: {command}'
         if lower[0] == 'copy-item':
             assert lower == ['copy-item', '-literalpath', '$evidencefile', '-destination', '$timeoutevidence'], 'unreviewed evidence copy'
+        if lower[0] == 'get-itemproperty':
+            assert lower == ['get-itemproperty', '-literalpath',
+                             '"hklm:\\software\\microsoft\\windows\\currentversion\\policies\\system"',
+                             '-name', '"enablelua"', '-erroraction', 'silentlycontinue'], 'unreviewed registry read'
         if lower[0] == 'get-ciminstance':
             assert lower == ['get-ciminstance', 'win32_process'], 'unreviewed process inventory'
         if lower[0] == 'remove-item':

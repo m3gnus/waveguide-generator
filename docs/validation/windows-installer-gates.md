@@ -150,7 +150,7 @@ the add-in install, even if Fusion is absent or installation fails; gates 10 and
 
 ## Gate 7 needs a different machine, and a human
 
-Where `EnableLUA=0`, every process runs at High integrity and **any** SmartScreen or mark-of-the-web result from that box is untrustworthy — including a negative one. A false "SmartScreen is fine" is exactly the finding that ships a bad installer, so the script skips this gate and says so rather than producing a green line. It needs a machine with UAC enabled, and it is the one gate no CI can answer either: what a first-time user actually sees.
+Where `EnableLUA=0`, every process runs at High integrity and **any** SmartScreen or mark-of-the-web result from that box is untrustworthy — including a negative one. A false "SmartScreen is fine" is exactly the finding that ships a bad installer, so the script never runs this gate and says so rather than producing a green line; its line reports whether UAC is on and whether the session is elevated. It needs UAC on and an unelevated session, and it is the one gate no CI can answer either: what a first-time user actually sees.
 
 Three things have to hold at once, and each one silently voids the gate on its own:
 

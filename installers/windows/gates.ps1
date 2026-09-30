@@ -1,7 +1,7 @@
 # Windows installer gates against a freshly built bundle.
-# Gate 7's SmartScreen half is deliberately NOT run: UAC is disabled on this box
-# (EnableLUA=0), so every process is High integrity and any SmartScreen result,
-# including a negative one, would be untrustworthy.
+# Gate 7 (SmartScreen / first run) is never run by this script: the prompt shows
+# only to a person opening a downloaded setup in an unelevated session, which a
+# script cannot observe. The gate reports what it found about UAC and elevation.
 
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
@@ -469,8 +469,11 @@ if (Test-Path $gateRoot) { Remove-Item -Recurse -Force $gateRoot }
 Unblock-File -LiteralPath $Setup
 
 # --- Gate 7: not run, and why -------------------------------------------------
+$uacPolicy = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -ErrorAction SilentlyContinue
+$uacOn = $null -ne $uacPolicy -and $uacPolicy.EnableLUA -eq 1
+$elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Gate 7 "SmartScreen / first-run experience" $null `
-    "NOT RUN: UAC is disabled here (EnableLUA=0), so every process is High integrity and any result, including a negative one, would be untrustworthy. Needs a box with UAC enabled."
+    "NOT RUN: a script cannot see the SmartScreen prompt; check it by hand by opening the downloaded setup from an unelevated session with UAC on. Here: UAC on: $uacOn; this session elevated: $elevated; installer marked ZoneId=3: $marked."
 
 ""
 "summary: " + (($results | Group-Object Result | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join "  ")
