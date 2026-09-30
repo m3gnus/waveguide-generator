@@ -207,8 +207,10 @@ def _assert_exactly_once(wg: JobsWg, request: dict[str, Any], submissions: int) 
     if request.get("kind", PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE:
         assert row["kind"] == PREPARE_AND_SOLVE
         assert len(jobs) == 1 and row["job_id"] == jobs[0]
+        assert (ack["outcome"], ack["jobId"]) == ("accepted", jobs[0])
         assert submissions == 1
     else:
+        assert ack["jobId"] is None
         assert row["kind"] == RECEIVE_SNAPSHOT
         assert jobs == [] and submissions == 0
 

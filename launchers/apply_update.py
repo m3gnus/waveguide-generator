@@ -272,8 +272,8 @@ def sync_directory(path: Path, *, log: LogCallable | None = None) -> bool:
     False: opening a directory needs ``FILE_FLAG_BACKUP_SEMANTICS``, which
     ``os.open`` does not offer, and ``FlushFileBuffers`` is not documented to do
     anything useful for a directory handle even if one is obtained. POSIX
-    returns False when the flush itself failed. Both are real, both are
-    reported to the caller, and neither is papered over.
+    returns False only when directory flushing is unsupported (EINVAL,
+    ENOTSUP or EBADF). Real I/O failures propagate to the recovery handler.
 
     **What this does and does not buy.** Flushing a directory is how a *rename*
     -- including the rename that publishes the journal -- is made durable; a
@@ -292,12 +292,16 @@ def sync_directory(path: Path, *, log: LogCallable | None = None) -> bool:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     except OSError as exc:
         _emit_log(log, f"Could not open {path} to flush its directory entries: {exc}")
-        return False
+        if exc.errno in {errno.EINVAL, errno.ENOTSUP, errno.EBADF}:
+            return False
+        raise
     try:
         _fsync_descriptor(fd, log=log)
     except OSError as exc:
         _emit_log(log, f"Could not flush the directory entries of {path}: {exc}")
-        return False
+        if exc.errno in {errno.EINVAL, errno.ENOTSUP, errno.EBADF}:
+            return False
+        raise
     finally:
         os.close(fd)
     return True
@@ -2133,11 +2137,17 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
             if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
                 return  # No upgrade to undo; never used to decide an in-progress replay.
             for created_at, updated_at in conn.execute("SELECT created_at, updated_at FROM simulation_jobs"):
-                # Compare naive legacy times as UTC, independent of the
-                # helper's current time zone or a DST transition.
-                times = [datetime.fromisoformat(value) for value in (created_at, updated_at)]
-                if max(value.replace(tzinfo=timezone.utc).timestamp() if value.tzinfo is None
-                       else value.astimezone(timezone.utc).timestamp() for value in times) > expected["mtimeNs"] / 1_000_000_000:
+                # The store writes naive local times. Legacy UTC times are
+                # indistinguishable, so either interpretation can veto restore.
+                try:
+                    times = [datetime.fromisoformat(value) for value in (created_at, updated_at)]
+                    timestamps = [value.timestamp() for value in times]
+                    timestamps.extend(value.replace(tzinfo=timezone.utc).timestamp()
+                                      for value in times if value.tzinfo is None)
+                except (TypeError, ValueError, OverflowError, OSError):
+                    _emit_log(log, "Jobs DB contains an unparseable timestamp; skipping automatic restore. Use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+                    return
+                if max(timestamps) > expected["mtimeNs"] / 1_000_000_000:
                     _emit_log(log, "Jobs DB contains rows newer than the snapshot; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
                     return
         # Schema 6 may itself still be only in the WAL after an unclean exit.
@@ -2163,77 +2173,83 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
     temporary = db.parent / plan["temporary"]
     preserved = db.parent / plan["preserved"]
     restored_identity = plan["restoredIdentity"]
-    if jobs_snapshot_identity(db, expected=restored_identity) == restored_identity:
-        # Also finish durability after a crash immediately following replace.
-        for suffix, identity in plan["sources"].items():
-            if identity is not None:
-                sync_jobs_restore_file(Path(str(preserved) + suffix), log=log)
-        sync_directory(db.parent, log=log)
-        plan["state"] = "restored"
-        write_journal(data_dir, resources, journal)
-        return
-    if plan["state"] == "restored":
-        _emit_log(log, "Jobs DB changed after restore; skipping replay. Use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
-        return
+    already_replaced = jobs_snapshot_identity(db, expected=restored_identity) == restored_identity
     if plan["state"] == "failed":
         _emit_log(log, "The jobs restore previously failed; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
         return
-    if jobs_snapshot_identity(temporary, expected=restored_identity) != restored_identity:
+    if plan["state"] == "restored" and not already_replaced:
+        _emit_log(log, "Jobs DB changed after restore; skipping replay. Use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+        return
+    if not already_replaced and jobs_snapshot_identity(temporary, expected=restored_identity) != restored_identity:
         raise ApplyUpdateError("The jobs restore staging file changed; manual jobs recovery is required")
     try:
-        # Keep a live schema-6 main until the last atomic replace. An old
-        # launcher ignores this plan: it must never find an orphaned live WAL
-        # beside a missing main and create an empty database.
-        for suffix, identity in plan["sources"].items():
-            if identity is None:
-                continue
-            source, target = Path(str(db) + suffix), Path(str(preserved) + suffix)
-            target_identity = jobs_snapshot_identity(target)
-            # A main copy has a new inode; renamed sidecars keep theirs.
-            matches = target_identity == identity if suffix else (
-                target_identity is not None and all(target_identity[k] == identity[k]
-                                                    for k in ("mtimeNs", "size", "sha256")))
-            if matches:
-                if suffix and source.exists():
-                    raise ApplyUpdateError("Both live and preserved jobs sidecars exist; manual jobs recovery is required")
-                if not suffix and jobs_snapshot_identity(source, expected=identity) != identity:
-                    raise ApplyUpdateError("The live jobs main changed; manual jobs recovery is required")
+        if already_replaced:
+            # Also finish durability after a crash immediately following replace.
+            for suffix, identity in plan["sources"].items():
+                if identity is not None:
+                    sync_jobs_restore_file(Path(str(preserved) + suffix), log=log)
+        else:
+            # Keep a live schema-6 main until the last atomic replace. An old
+            # launcher ignores this plan: it must never find an orphaned live WAL
+            # beside a missing main and create an empty database.
+            for suffix, identity in plan["sources"].items():
+                if identity is None:
+                    continue
+                source, target = Path(str(db) + suffix), Path(str(preserved) + suffix)
+                target_identity = jobs_snapshot_identity(target)
+                # A main copy has a new inode; renamed sidecars keep theirs.
+                matches = target_identity == identity if suffix else (
+                    target_identity is not None and all(target_identity[k] == identity[k]
+                                                        for k in ("mtimeNs", "size", "sha256")))
+                if matches:
+                    if suffix and source.exists():
+                        raise ApplyUpdateError("Both live and preserved jobs sidecars exist; manual jobs recovery is required")
+                    if not suffix and jobs_snapshot_identity(source, expected=identity) != identity:
+                        raise ApplyUpdateError("The live jobs main changed; manual jobs recovery is required")
+                    sync_jobs_restore_file(target, log=log)
+                    continue
+                if target.exists() or jobs_snapshot_identity(source, expected=identity) != identity:
+                    raise ApplyUpdateError("The jobs recovery set changed; manual jobs recovery is required")
+                if not suffix:
+                    copying = preserved.with_name(preserved.name + ".copying")
+                    shutil.copy2(source, copying)
+                    sync_jobs_restore_file(copying, log=log)
+                    _rename(copying, target)
+                else:
+                    _rename(source, target)
                 sync_jobs_restore_file(target, log=log)
-                continue
-            if target.exists() or jobs_snapshot_identity(source, expected=identity) != identity:
-                raise ApplyUpdateError("The jobs recovery set changed; manual jobs recovery is required")
-            if not suffix:
-                copying = preserved.with_name(preserved.name + ".copying")
-                shutil.copy2(source, copying)
-                sync_jobs_restore_file(copying, log=log)
-                _rename(copying, target)
-            else:
-                _rename(source, target)
-            sync_jobs_restore_file(target, log=log)
-            sync_directory(db.parent, log=log)
-        _rename(temporary, db)
+                sync_directory(db.parent, log=log)
+            _rename(temporary, db)
+        sync_directory(db.parent, log=log)
+        plan["state"] = "restored"
+        write_journal(data_dir, resources, journal)
     except Exception:
         # A handled failure must not relaunch the older code with an absent
         # main or a missing WAL. Reconstitute the original live set from any
         # files already moved, while keeping those preserved recovery copies.
         # A crash leaves a schema-6 main that older releases refuse safely.
+        replaced = jobs_snapshot_identity(db, expected=restored_identity) == restored_identity
         for suffix, identity in plan["sources"].items():
             source, target = Path(str(db) + suffix), Path(str(preserved) + suffix)
-            if identity is not None and not source.exists() and target.exists():
+            if identity is not None and (not source.exists() or (not suffix and replaced)) and target.exists():
                 recovery = db.with_name(".jobs-rollback-abort-" + uuid.uuid4().hex)
                 try:
                     shutil.copyfile(target, recovery)
                     sync_jobs_restore_file(recovery, log=log)
                     _rename(recovery, source)
                     sync_directory(db.parent, log=log)
+                except OSError as exc:
+                    # Keep recovering the other sidecars even if flushing a
+                    # published recovery copy also fails.
+                    _emit_log(log, f"Could not recover jobs file {source}: {exc}")
                 finally:
                     recovery.unlink(missing_ok=True)
         plan["state"] = "failed"
-        write_journal(data_dir, resources, journal)
+        try:
+            write_journal(data_dir, resources, journal)
+        except OSError as exc:
+            _emit_log(log, f"Could not persist the failed jobs restore: {exc}")
         raise
-    sync_directory(db.parent, log=log)
-    plan["state"] = "restored"
-    write_journal(data_dir, resources, journal)
     _emit_log(log, f"Restored this update's jobs rollback snapshot; preserved the upgraded set at {preserved}.")
 
 

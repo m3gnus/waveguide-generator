@@ -823,7 +823,10 @@ These are recorded, not designed.
      fallback, that supersedes that update inherits this ownership.
    - Ownership is bounded: the snapshot must be at most **one hour** old, and no
      job row may have a `created_at` or `updated_at` newer than the snapshot's mtime
-     (compared in UTC). A backwards clock step of up to 60 seconds is tolerated.
+     (aware timestamps use their offset; naive timestamps are checked as both
+     local time and UTC, with either interpretation able to prevent restore).
+     An unparseable timestamp also prevents automatic restore. The jobs store's
+     timestamp format is unchanged. A backwards clock step of up to 60 seconds is tolerated.
      Otherwise automatic jobs restore is skipped and the reason is logged. This prevents
      an old installed journal from replacing later work.
    - Before moving any live DB file, flush the staged standalone snapshot and
@@ -845,8 +848,12 @@ These are recorded, not designed.
      a new main with a previous rollback's WAL. These failed sets are retained
      for manual recovery rather than pruned automatically.
    - A jobs restore failure is logged with the manual recovery remedy and never
-     blocks code rollback. After a handled rename failure, moved files are copied
-     back into the live set while the preserved recovery copies remain. An
+     blocks code rollback. Unsupported directory flushing (Windows, or EINVAL,
+     ENOTSUP or EBADF on opening/flushing a directory) is allowed; real I/O
+     errors propagate and the restore is marked failed. After a handled rename
+     or flush failure, moved files are copied back into the live set, including
+     the original main if the final replacement already happened, while the
+     preserved recovery copies remain. A
      new recovery helper can resume the in-progress plan, but an older launcher
      ignores it after code rollback. The file ordering remains safe for that
      launcher: the older release clearly refuses schema 6 until the

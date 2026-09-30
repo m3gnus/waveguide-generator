@@ -2623,29 +2623,53 @@ def test_jobs_restore_tolerates_small_backward_clock_steps(tmp_path, monkeypatch
     assert ("jobsRestore" in read_journal(data_dir, resources)) is restored
 
 
-def test_jobs_restore_compares_naive_row_times_in_utc(tmp_path, monkeypatch):
-    import sqlite3
-    from contextlib import closing
-    from datetime import datetime, timezone
-    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
-    snapshot_time = read_journal(data_dir, resources)["jobsUpgradeSnapshot"]["identity"]["mtimeNs"] / 1e9
-    newer = datetime.fromtimestamp(snapshot_time + 3600, timezone.utc).replace(tzinfo=None).isoformat()
-    with closing(sqlite3.connect(db)) as conn:
-        conn.execute("UPDATE simulation_jobs SET updated_at=? WHERE id='a'", (newer,))
-        conn.commit()
-    # A timezone with +12 offset would incorrectly place the naive newer row
-    # before the snapshot if timestamp() used the helper's local timezone.
+@pytest.mark.parametrize("interpretation,tz", [("local", "Etc/GMT+4"), ("utc", "Etc/GMT-12")])
+def test_jobs_restore_checks_both_naive_time_interpretations_in_non_utc_process(tmp_path, monkeypatch, interpretation, tz):
     import time
     if not hasattr(time, "tzset"):
         pytest.skip("tzset is unavailable")
-    monkeypatch.setenv("TZ", "Etc/GMT-12")
-    time.tzset()
-    try:
-        apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
-        assert "jobsRestore" not in read_journal(data_dir, resources)
-    finally:
-        monkeypatch.undo()
-        time.tzset()
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    subprocess.run(
+        [sys.executable, "-c", textwrap.dedent("""
+            import sqlite3, sys, time
+            from datetime import datetime, timezone
+            from pathlib import Path
+            from launchers.apply_update import read_journal, restore_jobs_upgrade_snapshot
+            from server.jobs.store import JobStore
+            time.tzset()
+            data, resources, db = map(Path, sys.argv[1:4])
+            if sys.argv[4] == "local":
+                store = JobStore(db)
+                store.initialize()
+                store.update_job("a", label="new local work")
+                store.close()
+            else:
+                snapshot_time = read_journal(data, resources)["jobsUpgradeSnapshot"]["identity"]["mtimeNs"] / 1e9
+                newer = datetime.fromtimestamp(snapshot_time + 3600, timezone.utc).replace(tzinfo=None).isoformat()
+                with sqlite3.connect(db) as conn:
+                    conn.execute("UPDATE simulation_jobs SET updated_at=? WHERE id='a'", (newer,))
+            logs = []
+            restore_jobs_upgrade_snapshot(data, resources, log=logs.append)
+            assert "jobsRestore" not in read_journal(data, resources)
+            assert "newer" in " ".join(logs)
+        """), str(data_dir), str(resources), str(db), interpretation],
+        env={**os.environ, "TZ": tz}, check=True, capture_output=True, text=True,
+        stdin=subprocess.DEVNULL,
+    )
+
+
+@pytest.mark.parametrize("column", ["created_at", "updated_at"])
+@pytest.mark.parametrize("value", ["not-a-time", ""])
+def test_jobs_restore_skips_unparseable_row_times(tmp_path, monkeypatch, column, value):
+    import sqlite3
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    with sqlite3.connect(db) as conn:
+        conn.execute(f"UPDATE simulation_jobs SET {column}=? WHERE id='a'", (value,))
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert "jobsRestore" not in read_journal(data_dir, resources)
+    assert "unparseable timestamp" in " ".join(logs)
+    assert "manual" in " ".join(logs)
 
 
 def test_jobs_restore_file_flush_propagates_failures_and_allows_logged_fallback(tmp_path, monkeypatch):
@@ -2682,3 +2706,91 @@ def test_jobs_restore_keeps_original_set_when_schema_upgrade_is_only_in_wal(tmp_
     with closing(sqlite3.connect(db)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         assert conn.execute("SELECT label FROM simulation_jobs WHERE id='a'").fetchone()[0] == "wal-only-upgrade"
+
+
+@pytest.mark.parametrize("operation", ["open", "fsync"])
+@pytest.mark.parametrize("error", ["EINVAL", "ENOTSUP", "EBADF", "EIO", "ENOSPC", "EROFS"])
+def test_directory_flush_distinguishes_unsupported_operations_from_io_errors(tmp_path, monkeypatch, operation, error):
+    import errno
+    number = getattr(errno, error)
+    monkeypatch.setattr(apply_update_module, "DIRECTORY_SYNC_SUPPORTED", True)
+    def failed(*args, **kwargs):
+        raise OSError(number, error)
+    if operation == "open":
+        monkeypatch.setattr(apply_update_module.os, "open", failed)
+    else:
+        # Inject the flush error independently of whether this host can open
+        # directories (Windows cannot). The helper closes this stand-in handle.
+        fd = os.open(tmp_path / "directory-handle", os.O_CREAT | os.O_RDWR, 0o600)
+        monkeypatch.setattr(apply_update_module.os, "open", lambda *_a, **_k: fd)
+        monkeypatch.setattr(apply_update_module, "_fsync_descriptor", failed)
+    logs = []
+    if error in {"EINVAL", "ENOTSUP", "EBADF"}:
+        assert apply_update_module.sync_directory(tmp_path, log=logs.append) is False
+    else:
+        with pytest.raises(OSError) as raised:
+            apply_update_module.sync_directory(tmp_path, log=logs.append)
+        assert raised.value.errno == number
+    assert error in " ".join(logs)
+
+
+def test_directory_flush_is_optional_on_windows(tmp_path, monkeypatch):
+    monkeypatch.setattr(apply_update_module, "DIRECTORY_SYNC_SUPPORTED", False)
+    monkeypatch.setattr(apply_update_module.os, "open", lambda *_a, **_k: pytest.fail("directory open"))
+    assert apply_update_module.sync_directory(tmp_path) is False
+
+
+@pytest.mark.parametrize("error,point", [("EIO", "preservation"), ("EIO", "replacement"),
+                                         ("EIO", "replay"), ("ENOTSUP", "preservation")])
+def test_jobs_restore_handles_directory_flush_errors(tmp_path, monkeypatch, error, point):
+    import errno
+    import stat
+    import sqlite3
+    if not apply_update_module.DIRECTORY_SYNC_SUPPORTED:
+        pytest.skip("host does not flush directories")
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    if point == "replay":
+        real_rename = apply_update_module._rename
+        class Crash(BaseException):
+            pass
+        def crash_after_replace(source, target):
+            real_rename(source, target)
+            if target == db:
+                raise Crash
+        with monkeypatch.context() as crash_patch:
+            crash_patch.setattr(apply_update_module, "_rename", crash_after_replace)
+            with pytest.raises(Crash):
+                apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
+        assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "in-progress"
+    real_fsync = apply_update_module.os.fsync
+    directory_inode = db.parent.stat().st_ino
+    failures = []
+    def fsync(fd):
+        info = os.fstat(fd)
+        replaced = int.from_bytes(db.read_bytes()[60:64], "big") == 5
+        if (stat.S_ISDIR(info.st_mode) and info.st_ino == directory_inode
+                and (point == "preservation" or replaced)):
+            failures.append(error)
+            raise OSError(getattr(errno, error), error)
+        return real_fsync(fd)
+    monkeypatch.setattr(apply_update_module, "_HOST_IS_MACOS", False)
+    monkeypatch.setattr(apply_update_module.os, "fsync", fsync)
+    logs = []
+    if error == "EIO":
+        with pytest.raises(OSError, match="EIO"):
+            apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+        assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "failed"
+        assert not any("Restored this update" in line for line in logs)
+        with sqlite3.connect(db) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+        # Failed replay cannot declare success, even after flushing recovers.
+        monkeypatch.setattr(apply_update_module.os, "fsync", real_fsync)
+        apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+        assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "failed"
+        assert "previously failed" in " ".join(logs)
+    else:
+        apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+        assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored"
+        with sqlite3.connect(db) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    assert failures

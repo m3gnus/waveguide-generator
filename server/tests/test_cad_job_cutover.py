@@ -790,3 +790,25 @@ def test_prepare_during_claim_retention_is_visibly_refused_with_settings(h):
     assert caught.value.status_code == 409
     assert "press Prepare again with these settings" in caught.value.detail
     assert h.jobs_store.latest_cad_job("cmd-1") is None
+
+
+def test_real_cancel_before_admission_is_refused_when_delivery_is_collected(h):
+    from server.cadlink import solve_command
+    from server.cadlink.preparation import run_delivery_pass
+    from test_cad_preparation import _deliver_file
+    bundle, manifest = _received(h)
+    inbox = _deliver_file(h, bundle, manifest)
+    async def cancel_then_collect():
+        result = await api.post_cancel_cad_operation("cmd-1", _request(h))
+        assert result["state"] == "cancelled"
+        assert h.row()["job_id"] is None
+        assert await run_delivery_pass(h.context(), spawn=lambda *_: None) == []
+    h._loop.run(cancel_then_collect())
+    ack_path = h.data_dir / "ipc" / "wglink" / solve_command.SOLVE_ACKS_DIRECTORY / "cmd-1.json"
+    ack = json.loads(ack_path.read_text())
+    assert ack["outcome"] == "refused" and ack["jobId"] is None
+    assert ack["reason"] == "This solve was cancelled before admission."
+    assert h.row()["state"] == "cancelled"
+    assert not list(inbox.iterdir())
+    assert h.jobs_store.list_jobs()[1] == 0
+    assert h.ingest.calls == h.submitted == []

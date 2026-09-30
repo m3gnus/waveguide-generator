@@ -930,8 +930,14 @@ def write_acknowledgement(
     replace that meets a reader holding the target (Windows raises
     ``PermissionError``) is retried briefly. A command id that is not a plain
     operation id names no safe file and is not acknowledged (True: nothing owed).
+    A solve acceptance without a job is converted to a refusal with its reason.
+    A retained receive_snapshot is accepted without making a job. An omitted
+    kind uses the legacy solve convention.
     """
 
+    if outcome == ACK_ACCEPTED and (kind or PREPARE_AND_SOLVE) == PREPARE_AND_SOLVE and not job_id:
+        outcome = ACK_REFUSED
+        reason = reason or "WG did not admit this request to a job."
     if not _OPERATION_ID.fullmatch(command_id):
         # Nothing to publish under: not a failure, and never a reason to keep
         # the request.
@@ -1228,14 +1234,20 @@ def _publish_acknowledgement(
             command.command_id, exc_info=True,
         )
         return None
-    # Only a rejected row is a refusal; received, processing and accepted rows
-    # are operations WG holds.
-    refused_outcome = row["state"] == REJECTED
+    # Cancellation before admission has no job and must retain its reason.
+    refused_outcome = row["state"] in {REJECTED, "cancelled"} or (
+        row["kind"] == RECEIVE_SNAPSHOT and row["state"] != ACCEPTED
+    )
+    reason = _entry(row)["reason"] if refused_outcome else None
+    if row["kind"] == RECEIVE_SNAPSHOT and refused_outcome and not reason:
+        reason = "WG has not retained this snapshot."
+    if row["state"] == "cancelled" and not reason:
+        reason = "This solve was cancelled before admission."
     return write_acknowledgement(
         data_dir,
         command.command_id,
         ACK_REFUSED if refused_outcome else ACK_ACCEPTED,
-        reason=_entry(row)["reason"] if refused_outcome else None,
+        reason=reason,
         job_id=row["job_id"],
         digest=row.get("request_digest"),
         manifest_sha256=_row_manifest(row) or command.manifest_sha256,

@@ -1922,7 +1922,10 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
                 ).result()
                 if was_pending and job_id is not None:
                     accepted.append(operation_id)
-                return job_id is not None or not was_pending
+                # A terminal refusal can be consumed, but only a job is an
+                # admission. Re-read because Cancel may have won during retention.
+                current = ctx.store.get_operation(operation_id)
+                return job_id is not None or bool(current and current["state"] in TERMINAL_STATES)
             return True
         except Exception:
             logger.exception("Could not recover CAD delivery %s; retrying on a later pass", operation_id)
