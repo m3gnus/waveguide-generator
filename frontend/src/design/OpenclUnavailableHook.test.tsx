@@ -33,7 +33,9 @@ describe('OpenclUnavailableHook', () => {
       engine={{ ...engine, opencl_unavailable_reason: reason }} />));
     const block = guidance.platforms.windows;
     expect([...host.querySelectorAll('p')].map((p) => p.textContent)).toEqual([
-      guidance.reasons[reason], block.summary, ...block.steps.map((step) => step.note),
+      guidance.reasons[reason], block.summary,
+      ...guidance.gpu_alternatives.filter((entry) => entry.platforms.includes('windows')).map((entry) => entry.text),
+      ...block.steps.map((step) => step.note),
       ...guidance.warnings.filter((warning) => warning.platforms.includes('windows')).map((warning) => warning.text),
     ]);
     expect([...host.querySelectorAll('a')].map((a) => ({ label: a.textContent, url: a.getAttribute('href') })))
@@ -44,7 +46,9 @@ describe('OpenclUnavailableHook', () => {
     act(() => root.render(<OpenclUnavailableHook platform={platform} engine={engine} />));
     const block = guidance.platforms[platform];
     expect([...host.querySelectorAll('p')].map((p) => p.textContent)).toEqual([
-      block.summary, ...block.steps.map((step) => step.note),
+      block.summary,
+      ...guidance.gpu_alternatives.filter((entry) => entry.platforms.includes(platform)).map((entry) => entry.text),
+      ...block.steps.map((step) => step.note),
       ...guidance.warnings.filter((warning) => warning.platforms.includes(platform)).map((warning) => warning.text),
     ]);
     expect([...host.querySelectorAll('a')].map((a) => a.getAttribute('href')))
