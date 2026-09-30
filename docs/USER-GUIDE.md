@@ -399,178 +399,29 @@ the command prints a retention warning.
 
 ## CAD link
 
-Choose the CAD application under **Settings → CAD Link**, then complete its numbered
-one-time setup.
+Follow [Finish a speaker in Fusion and solve it in WG](CAD-LINK-GUIDE.md) for
+WGLink installation, explicit Send and Solve, source-face marking, driver data,
+ports, full/half/quarter symmetry, solver choice and refusal remedies. It also
+explains the limits of STEP input from another CAD program.
 
-For Fusion 360:
+CAD edits arrive as retained geometry snapshots; they do not become editable
+parametric waveguide fields. The CAD Link panel appears in CAD mode. Keep WG
+running, and use Fusion's **Send to WG** or **Solve in WG** after modelling;
+continuous geometry transfers are off by default.
 
-1. On Windows, Setup offers **Install the WGLink add-in for Autodesk Fusion**.
-   It is preselected when Fusion's AddIns directory is detected; uncheck it to
-   leave Fusion untouched. Silent deployment must opt in explicitly with
-   `/TASKS="wglink"`. Setup installs the exact compatible AGPL source revision
-   from the verified package carried by the release, without Git or network
-   access, and connects WGLink to WG's pinned scientific environment, so no
-   `hornlab-fusion-addin` checkout or second Python environment is needed.
-   The macOS disk image does not yet perform this initial registration; use the
-   source-checkout installer there for the first WGLink installation.
-   Restart Fusion after installing WG and confirm **Run on Startup** is ticked under
-   **Utilities → Scripts and Add-Ins**; Fusion's own record of that toggle
-   overrides the add-in manifest, so a copy once started by hand stays manual
-   until the box is ticked. After that, WG keeps the add-in current by itself.
-   Once a start of WG is confirmed healthy, it compares the installed copy with
-   the add-in commit that release pins and brings it to that commit from the
-   package the release carries, with no network and no second installer run;
-   where Fusion is installed and has no WGLink yet, it installs one the same way.
-   It never changes the add-in while Fusion is open: the CAD Link panel then says
-   **WGLink activation is pending until Fusion closes**, and WG finishes it when
-   you close Fusion while WG is running, or at its next start. Fusion loads the
-   new copy the next time it starts. A WGLink no Waveguide Generator manages
-   (copied in by hand) is replaced; one managed by another WG installation, and
-   one synced by a developer, are left exactly as they are. The managed copy a
-   replacement displaced is kept in WG's data folder for a later rollback; a
-   hand-copied one is not kept. WG
-   reads Fusion's own list of add-ins and tells you when WGLink is registered
-   twice, registered from another folder, or not set to run on startup; it never
-   edits that list. Install from exactly one location — a second copy
-   loads a second module instance and the two fight over the panel. The installer
-   preserves a developer-managed copy instead of overwriting it. Setup reports
-   whether WGLink was installed, updated, not selected, not detected, preserved,
-   or failed, and records the same result in its setup log.
-2. Choose a stable local **WGLink folder** in WG. This is intentionally separate from
-   the run-output folder, so changing where runs are written cannot disconnect Fusion;
-   the picker offers `Documents/Waveguide Generator/cadlink` beside the runs folder.
-   WG creates `wglink/` and `wgreturn/` beneath it, and the Fusion add-in reads the
-   same setting automatically. Each return also carries a copy of the Fusion document
-   it was taken from, which WG files under `runs/<design>/cad/`.
-3. Choose **Send to CAD** in the design file menu (or **Open in Fusion 360** on the
-   Geometry rail's linked-design card in CAD mode). WG writes the bundle, starts or
-   raises Fusion, and the CAD Link panel reports when the add-in heartbeat is online.
-
-If the active Fusion document contains more than one placement of the same WG
-design, the linked-design card asks which managed instance you mean. Choose the
-instance ID before checking its body freshness, requesting a return, or sending an
-update. WG never silently chooses the first copy. A returned multi-instance assembly
-also carries an explicit solver-anchor instance; preparation refuses a repeated
-design when that identity is missing or contradicts the selected instance.
-
-For Onshape (not in release builds; it is switched off until the Fusion path is
-stable, and only development runs with `WG2_ENABLE_ONSHAPE=1` offer it):
-
-1. In Onshape, open **My account → Developer → API keys** and create a personal API
-   key pair.
-2. Save the pair in the private file path shown in WG's settings. Keep this file
-   outside the repository and restrict it to your user account. WG never asks for the
-   secret in a browser field or returns it through its API.
-3. Choose **Check connection** and confirm the reported account and plan before
-   sending a design. Free-plan documents are public, and WG asks for explicit consent
-   before creating one.
-
-Fusion uses the selected local folder for a bidirectional `.wglink`/`.wgreturn`
-exchange. Onshape materializes an internal `.wglink` bundle and uploads it directly;
-it does not need or use the Fusion folder. Returned CAD assemblies are treated as
-imported geometry with their own viewport and solve path; they are not converted back
-into editable parametric waveguide fields. The CAD Link panel is therefore shown only
-in CAD mode — for either CAD application — and one-way parametric sends use the
-design or run export menus. The menus' **Send to CAD** writes Fusion's `.wglink`
-transport, so it appears only while Fusion 360 is the selected CAD application;
-Onshape sends live in the CAD Link panel.
-
-Once a design is linked, the round trip can be started from either side:
-
-- **From Fusion**, **Solve in WG** exports the assembly and asks WG to prepare and
-  solve that exact bundle, so WG is already solving when you switch to it.
-- **In WG**, when the Fusion heartbeat reports that Fusion has moved past the
-  geometry WG prepared, the top-bar action becomes **Pull from Fusion & Solve**,
-  with the already-prepared solve beside it. The same pull is in the command
-  palette and in the CAD Link panel.
-
-Both paths stop where a manual solve stops: an ingestion with unacknowledged
-blocking findings or missing drive channels is reported and left for you, never
-solved around. Anything arriving from CAD — a return, a preparation, a solve
-request — switches the workspace to CAD mode and focuses the CAD Link panel,
-because that panel is where the status, the findings and the request itself are
-shown.
-
-A Fusion request that stops at one of those gates is **parked** rather than
-discarded: the CAD Link panel shows "Fusion asked for a solve" with what it is
-waiting on, an action that acknowledges the findings and starts it, and a
-Dismiss. Solving that return — from the parked banner or with the ordinary
-Solve command — consumes the request and records the run against it, so it
-cannot later replay into a duplicate solve; dismissing it retires it just as
-finally. A request that arrives while no engine that solves imported geometry
-is available -- BEAT · CPU still preparing its runtime, say -- stays parked with
-that reason until one is. A request for a return no engine here can solve, or
-for an engine you chose that cannot solve it, is refused with the reason.
-
-A newly arriving return — and a return you manually select from the History
-list — is prepared automatically. On startup, WG selects the newest existing
-return without preparing it; its summary says **Ready to prepare**, and you must
-choose **Prepare simulation**. That action also remains available to retry a
-failed preparation. Preparing a new return keeps the mesh sizing, channel
-mapping, drivers, combine settings and sweep from the previous one whenever the
-source inventory is unchanged. Findings acknowledgements persist per design the
-same way: evidence you have already acknowledged stays acknowledged when it
-reappears unchanged, and only new or changed findings ask again.
+A newly arriving return — and a return you manually select from the History list —
+is prepared automatically. On startup, WG selects the newest existing return
+without preparing it; its summary says **Ready to prepare**, and you must choose
+**Prepare simulation**. That action also remains available to retry a failed
+preparation.
 
 ### Starting from a model drawn in Fusion
 
-A model drawn from scratch in Fusion — never inserted from a WG design — can be
-sent and solved the same way. Three things make it a valid return:
-
-1. **Mark the drive face.** Use the WGLink panel's **Set WG Source…** to mark
-   the throat or diaphragm face as `LF`, `MF`, `HF`, or `PORT_EXIT` (it applies
-   a Fusion appearance with exactly that name, which is also accepted when
-   painted by hand). A model with no marked face cannot be exported, and the
-   Send/Solve dialog says so before OK.
-2. **Model closed solids.** An open surface body must be classified with
-   **Declare Body…** — `exterior-shell` to include it, `exclude` to leave it
-   out — or the export refuses it as unclassified.
-3. **Confirm its solver frame.** With no WG link to anchor it, nothing in the
-   model says which way it radiates. The first time WG is asked to solve a
-   model from a project — **Solve in WG** in Fusion, **Solve** in WG, or a
-   retry — it prepares the model and then waits with **needs its solver frame
-   confirmed**. Choose the model axis that points out of the mouth (+X, -X, +Y,
-   -Y, +Z or -Z) and check the side and top views: they show the model as WG
-   will solve it, radiating along the solver +Z (blue) from the model's
-   origin, with the drive sources in orange. Nothing is chosen for you: pick
-   an axis, then **Confirm … and solve** remembers the choice for the project,
-   so later exports of it solve without asking again. WG asks again when the
-   export is written in another component's coordinates. **If you reorient the
-   model in CAD, change its frame too**: the CAD Link panel's **Solver frame**
-   section shows the confirmed axis, and **Change solver frame** picks another
-   with the same preview. A change applies to later preparations only — runs
-   already solved keep the frame they were solved in — so prepare the model
-   again to solve it in the new frame. A model from an unsaved Fusion document belongs to no project,
-   so its frame is confirmed for that one export only. Model the throat at the
-   origin and centre the model on the two planes across that axis so symmetry
-   can be detected; the dialog's pre-flight summary still warns when the model
-   appears to violate the +Z convention. A model declared as a half or
-   quarter (next item) is solved only along +Z, as modelled.
-4. **A model already cut in half.** WG reads the domain itself and never
-   asks; the model card says what it solves ("Half model · cut at x = 0
-   (Split Body 3) · Change", "Solved as shown · looks cut at x = 0 · Change").
-   A model cut in Fusion on the YZ or XZ origin plane (Split Body or a cut,
-   recorded by the add-in when it sends) is mirrored automatically. The
-   geometry alone never is: a model that only *looks* cut — it could be a real
-   opening — is solved as shown, and **Change** on the card solves it mirrored
-   (WG checks the cut first and remembers your choice for the project).
-   **Change** also turns a mirrored model back to "as shown". Keep the retained
-   side on x ≥ 0 / y ≥ 0, and leave the cut plane open — a face left on the
-   plane meshes as a wall, not as a mirror, and WG refuses it rather than
-   solving it. **Force full domain** is refused for a mirrored return: the
-   other half is not in the file.
-
-**Solve in WG** then works as for a linked design. The return arrives marked
-as an imported CAD model — an informational note states that WG has no design
-identity for it — and mesh sizing and drive channels are set in the CAD Link
-panel as for any import. Only the solver frame confirmation above stands
-between it and the solve; no path solves it before that. Such a return is
-solved exactly as sent: there are no parametric formulas behind it to edit in
-WG.
-
-The detailed CAD-link implementation plan is still active workspace material. Treat
-the UI and checked-in tests as the current behavior until that plan is closed and its
-public contract is added here.
+A model drawn entirely in Fusion uses the same workflow. Mark its sources with
+**Set WG Source…**, check the bodies in the Send/Solve pre-flight, and inspect
+**Radiates along** and the domain line in WG. A confident automatic axis can be
+used directly; WG asks when it cannot decide. See the detailed guide before
+cutting a model in CAD or assigning several drivers to one source.
 
 ## Updates
 

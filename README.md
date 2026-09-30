@@ -10,6 +10,8 @@ original application.
 
 The [documentation index](docs/README.md) separates the user and development guides,
 current contracts, accepted design gates, legacy notes, and dated validation evidence.
+To add flanges, ports or drivers in Fusion and solve the finished speaker, follow
+the [CAD Link and driver setup guide](docs/CAD-LINK-GUIDE.md).
 
 ## Install
 
