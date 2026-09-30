@@ -459,3 +459,120 @@ def test_include_quotes_apostrophes_and_line_breaks() -> None:
 ])
 def test_pascal_escapes_control_characters(text: str, expected: str) -> None:
     assert generator.pascal_string(text) == expected
+
+
+# -- The approved wording, pinned ------------------------------------------------
+#
+# This is the guarantee that the guidance never sends anyone to a GPU OpenCL
+# driver: the complete approved content of shared/opencl-driver-guidance.v1.json
+# is held here, and the file must equal it exactly. A word list cannot be
+# complete (a reviewer got "AMD video card driver", "GPU runtime" and "Use BEAT
+# with CUDA on an NVIDIA GPU. Install its OpenCL driver." past one), so the prose
+# patterns above are only a secondary check. Any change to the wording, however
+# small, fails here until this copy is changed in the same commit, which makes
+# every wording change an explicit, reviewable act. The installer text and the
+# help page are generated from the JSON and drift-checked, so pinning the JSON
+# pins them too.
+APPROVED_GUIDANCE = {'version': 1,
+ 'title': 'CPU OpenCL runtime',
+ 'labels': {'heading': 'CPU OpenCL runtime', 'ariaLabel': 'CPU OpenCL runtime'},
+ 'gpu_alternatives': [{'id': 'nvidia_beat_cuda',
+                       'platforms': ['windows', 'linux'],
+                       'text': "On a computer with an NVIDIA graphics card, choose WG's BEAT "
+                               'solver with CUDA instead of BEMPP. BEMPP is for computers without '
+                               'a supported graphics card.'}],
+ 'warnings': [{'id': 'pocl_windows',
+               'platforms': ['windows'],
+               'text': 'PoCL on Windows shows up as an OpenCL device but computes nothing, so '
+                       'installing it does not help.'}],
+ 'reasons': {'no_device': 'No CPU OpenCL device was found.',
+             'smoke_test_failed': 'The CPU OpenCL runtime failed its test calculation.',
+             'smoke_test_timeout': "The CPU OpenCL runtime's test calculation timed out.",
+             'pocl_windows': 'PoCL on Windows cannot run BEMPP calculations.'},
+ 'platforms': {'windows': {'summary': "On computers without a supported graphics-card solver, WG's "
+                                      'BEMPP solver runs on the CPU. Installing a CPU OpenCL '
+                                      'runtime makes it much faster. It still works without one, '
+                                      'more slowly.',
+                           'steps': [{'vendor': 'intel',
+                                      'label': 'Intel CPU OpenCL runtime',
+                                      'url': 'https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html',
+                                      'note': "Intel's CPU runtime officially supports Intel "
+                                              'processors; it has also worked on AMD processors in '
+                                              'our testing. If no OpenCL device works, WG falls '
+                                              'back to its slower numba engine.'}]},
+               'linux': {'summary': "On computers without a supported graphics-card solver, WG's "
+                                    'BEMPP solver runs on the CPU. Installing a CPU OpenCL runtime '
+                                    'makes it much faster. It still works without one, more '
+                                    'slowly.',
+                         'steps': [{'vendor': 'pocl',
+                                    'label': 'PoCL CPU OpenCL runtime',
+                                    'url': 'https://portablecl.org/',
+                                    'note': "Install your distribution's PoCL CPU runtime "
+                                            'package.'},
+                                   {'vendor': 'intel',
+                                    'label': 'Intel CPU OpenCL runtime',
+                                    'url': 'https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html',
+                                    'note': "Alternatively, install Intel's CPU runtime through "
+                                            "your distribution or Intel's packages."}]}}}
+
+
+def _assert_guidance_is_the_approved_text(data: object) -> None:
+    assert data == APPROVED_GUIDANCE, (
+        "shared/opencl-driver-guidance.v1.json differs from the approved wording "
+        "pinned in this test. If the change is intended and approved, update "
+        "APPROVED_GUIDANCE in the same commit."
+    )
+
+
+def _text_leaves(node: object, path: tuple = ()) -> list[tuple]:
+    if isinstance(node, dict):
+        return [leaf for key, value in node.items() for leaf in _text_leaves(value, path + (key,))]
+    if isinstance(node, list):
+        return [leaf for index, value in enumerate(node) for leaf in _text_leaves(value, path + (index,))]
+    return [path] if isinstance(node, str) else []
+
+
+def _with_leaf(data: object, path: tuple, value: str) -> object:
+    clone = json.loads(json.dumps(data))
+    node = clone
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    return clone
+
+
+def test_guidance_json_is_exactly_the_approved_wording() -> None:
+    data = json.loads((generator.ROOT / generator.SOURCE).read_text(encoding="utf-8"))
+    _assert_guidance_is_the_approved_text(data)
+
+
+@pytest.mark.parametrize("path", _text_leaves(APPROVED_GUIDANCE), ids=lambda p: "/".join(map(str, p)))
+def test_any_edit_to_a_text_field_fails_the_pin(path: tuple) -> None:
+    original = APPROVED_GUIDANCE
+    for key in path:
+        original = original[key]
+    with pytest.raises(AssertionError):
+        _assert_guidance_is_the_approved_text(_with_leaf(APPROVED_GUIDANCE, path, original + " "))
+
+
+_LINUX_INTEL_NOTE = ("platforms", "linux", "steps", 1, "note")
+_GPU_ALTERNATIVE = ("gpu_alternatives", 0, "text")
+
+
+@pytest.mark.parametrize(
+    ("path", "evasion"),
+    [
+        (_LINUX_INTEL_NOTE, "Install the AMD video card driver."),
+        (_LINUX_INTEL_NOTE, "Install the Intel Arc / Intel Iris OpenCL driver."),
+        (_LINUX_INTEL_NOTE, "Install a GPU runtime."),
+        (_LINUX_INTEL_NOTE, "Update your video card driver."),
+        (_GPU_ALTERNATIVE, "Use BEAT with CUDA on an NVIDIA GPU. Install its OpenCL driver."),
+        (_GPU_ALTERNATIVE, "Use BEAT with CUDA on an NVIDIA GPU and set up the driver."),
+        (_GPU_ALTERNATIVE, "On a computer with an NVIDIA graphics card, choose BEMPP instead of BEAT with CUDA."),
+    ],
+)
+def test_reviewer_prose_evasions_fail_the_pin(path: tuple, evasion: str) -> None:
+    """The seven evasions that passed the word-list guard (lander review round 3)."""
+
+    with pytest.raises(AssertionError):
+        _assert_guidance_is_the_approved_text(_with_leaf(APPROVED_GUIDANCE, path, evasion))
