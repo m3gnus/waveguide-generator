@@ -31,6 +31,7 @@ import { DirectivityMapControls, SolveOptionsControls, ToggleRow } from './Solve
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
+import { LiveDimensions } from './LiveDimensions';
 import { HelpTipRow } from './HelpTip';
 import { Icon } from '../shell/icons';
 import {
@@ -1240,6 +1241,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       </div>
       {workspaceMode === 'cad' && tab === 'geometry' && cadSectionMatches(CAD_CONTROLS.linkedDesign.section) && <LinkedDesignCard forceOpen={searching}/>}
       {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
+      {workspaceMode === 'parametric' && tab === 'geometry' && <LiveDimensions />}
       {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
           {renderRegistrySection(definition)}
           {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}

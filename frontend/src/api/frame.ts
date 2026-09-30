@@ -40,7 +40,16 @@ export interface FrameHeader {
    * coverage solver cannot reach, a clamped sampling budget — that the scene
    * cannot show on its own because the geometry still renders.
    */
-  previewMetadata?: { warnings?: string[] };
+  previewMetadata?: {
+    warnings?: string[];
+    dimensions_mm?: {
+      mouth_opening?: [number, number];
+      horn_overall?: [number, number, number];
+      enclosure_overall?: [number, number, number];
+    } | null;
+    dimensions_error?: string;
+    dimensions_sampling?: { method: string; lod_independent: boolean };
+  };
   surfaces?: FrameSurface[];
   sections: Array<{
     name: string;

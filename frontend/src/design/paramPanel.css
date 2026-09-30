@@ -84,6 +84,9 @@
 .realized-dimension-row dt code { margin-top: 1px; color: var(--fg4); font-size: var(--text-micro); }
 .realized-dimension-row dd { margin: 0; color: var(--fg); font: 600 var(--text-base) var(--mono); }
 .realized-dimension-row dd small { margin-left: 4px; color: var(--fg3); font: var(--text-micro) var(--ui); }
+.live-dimensions { margin: 8px; }
+.live-dimensions h3 { margin: 0 0 4px; font-size: var(--text-base); }
+.live-dimensions p { margin: 0 0 6px; color: var(--fg3); font-size: var(--text-micro); }
 .cad-mode-empty { display: grid; gap: 6px; margin: 10px 8px; padding: 14px; border: 1px solid color-mix(in srgb, var(--acc) 38%, var(--hair)); background: color-mix(in srgb, var(--acc) 6%, var(--surface-panel)); }
 .cad-mode-empty span { color: var(--fg3); font-size: var(--text-micro); }
 .cad-mode-empty button { justify-content: center; min-height: 30px; }

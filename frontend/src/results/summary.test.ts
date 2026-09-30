@@ -3,6 +3,7 @@ import type { JobItem } from '../api/jobsSocket';
 import { summaryGroups, summaryText, type SummaryGroup } from './summary';
 import { RECOVERED_NEGATIVE_HALF, REFUSED_CUT, summaryOf, WG_QUARTER } from '../api/domainDecision.fixtures';
 import type { ResultPayload } from './types';
+import { resetDesignStore, useDesignStore } from '../stores/design';
 
 /** Group a count the way the summary does — in the runner's locale, not en-US.
  *
@@ -490,4 +491,19 @@ describe('what a CAD run solved', () => {
     expect(summaryGroups({ result, job: job({ cad_source: cadSource(null) }) }).find(({ title }) => title === 'Domain')).toBeUndefined();
     expect(summaryGroups({ result, job: job() }).find(({ title }) => title === 'Domain')).toBeUndefined();
   });
+});
+
+
+it('keeps a completed run size when the live design changes', () => {
+  resetDesignStore();
+  const result = { frequencies: [1000], metadata: { mesh_stats: {
+    dimensions_m: { width: 0.4, height: 0.25, depth: 0.12 },
+  } } } as ResultPayload;
+  const before = row(summaryGroups({ result, job: job() }), 'Mesh', 'Size');
+  expect(before?.value).toContain('400');
+  const design = structuredClone(useDesignStore.getState().design);
+  design.enclosure.depth = 900;
+  useDesignStore.setState({ design, designRevision: 99 });
+  expect(row(summaryGroups({ result, job: job() }), 'Mesh', 'Size')).toEqual(before);
+  resetDesignStore();
 });

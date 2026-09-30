@@ -256,6 +256,7 @@ export class PreviewSocketManager {
       const fields = validatedErrorFields(message.fields);
       const errorRevision = Number.isInteger(message.designRevision) ? message.designRevision! : null;
       const errorSeq = Number.isInteger(message.seq) ? message.seq! : null;
+      if (errorSeq !== null && errorSeq < this.loadFloorSeq) return;
       // A successful newer frame, or a newer failure already on screen, has
       // superseded this response. The coarse and fine lanes can finish out of
       // order, so accepting it would resurrect a field error the user fixed.
@@ -353,8 +354,14 @@ export class PreviewSocketManager {
     // document is older than the one on screen and gets dropped. The viewport
     // then keeps showing the previous design, permanently stale, until the user
     // makes as many edits as the old document had revisions.
-    if (event.reason === 'load' && event.revision < (this.snapshot.displayedRevision ?? 0)) {
-      this.update({ displayedRevision: null });
+    // New can also replace a document at the SAME revision (1 -> 1).
+    // Its retained frame belongs to the previous document until the load's
+    // own request returns, even though the numeric revisions compare equal.
+    if (event.reason === 'load') {
+      this.update({
+        displayedRevision: null, lastValidRevision: null,
+        error: null, errorFields: null, errorRevision: null,
+      });
     }
     this.update({ stale: event.revision !== this.snapshot.displayedRevision });
     if (event.immediate) {

@@ -420,3 +420,62 @@ describe('preview socket state machine', () => {
     manager.stop();
   });
 });
+
+it('keeps canonical dimensions attached to the newest displayed design despite late frames and errors', () => {
+  const metadata = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-metadata.json')));
+  resetDesignStore(); useDesignStore.setState({ designRevision: 58 });
+  const socket = new MockSocket();
+  const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+  manager.start(); socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+  socket.message(fixtureWithHeader({ designRevision: 58, seq: 2, previewMetadata: metadata }));
+  const accepted = manager.getSnapshot().frame;
+  const staleMetadata = structuredClone(metadata);
+  staleMetadata.dimensions_mm.mouth_opening = [10, 20];
+  socket.message(fixtureWithHeader({ designRevision: 57, seq: 1, previewMetadata: staleMetadata }));
+  socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 1, designRevision: 57, code: 'INVALID' }));
+  expect(manager.getSnapshot().frame).toBe(accepted);
+  expect(manager.getSnapshot().frame?.header.previewMetadata).toEqual(metadata);
+  expect(manager.getSnapshot().displayedRevision).toBe(58);
+  expect(manager.getSnapshot().error).toBeNull();
+  manager.stop(); resetDesignStore();
+});
+
+it('marks dimensions last valid when New replaces a document at the same revision number', () => {
+  const metadata = JSON.parse(new TextDecoder().decode(readFileSync('../shared/preview-fixtures/c2-dimensions-metadata.json')));
+  resetDesignStore();
+  const socket = new MockSocket();
+  const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+  manager.start(); socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+  socket.message(fixtureWithHeader({ seq: 1, designRevision: 1, previewMetadata: metadata }));
+  const previous = manager.getSnapshot().frame;
+  expect(manager.getSnapshot().stale).toBe(false);
+  resetDesignStore();
+  expect(manager.getSnapshot().stale).toBe(true);
+  expect(manager.getSnapshot().displayedRevision).toBeNull();
+  socket.message(fixtureWithHeader({ seq: 1, designRevision: 1, previewMetadata: metadata }));
+  expect(manager.getSnapshot().frame).toBe(previous);
+  expect(manager.getSnapshot().stale).toBe(true);
+  socket.message(fixtureWithHeader({ seq: 2, designRevision: 1, previewMetadata: metadata }));
+  expect(manager.getSnapshot().displayedRevision).toBe(1);
+  expect(manager.getSnapshot().stale).toBe(false);
+  manager.stop(); resetDesignStore();
+});
+
+it('resets document-scoped error floors on New and rejects late previous-document failures', () => {
+  resetDesignStore(); useDesignStore.setState({ designRevision: 58 });
+  const socket = new MockSocket();
+  const manager = new PreviewSocketManager(() => socket, 'ws://test/ws/preview');
+  manager.start(); socket.message(JSON.stringify({ v: 1, kind: 'hello', epoch: 3, heartbeatSec: 15 }));
+  socket.message(fixtureWithHeader({ seq: 1, designRevision: 58 }));
+  socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 1, designRevision: 59, code: 'INVALID', message: 'Previous document failure' }));
+  expect(manager.getSnapshot().errorRevision).toBe(59);
+  resetDesignStore();
+  expect(manager.getSnapshot()).toMatchObject({ error: null, errorFields: null, errorRevision: null, lastValidRevision: null, stale: true });
+  socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 1, designRevision: 59, code: 'INVALID', message: 'Late old failure' }));
+  expect(manager.getSnapshot().error).toBeNull();
+  socket.message(JSON.stringify({ v: 1, kind: 'error', epoch: 3, seq: 2, designRevision: 1, code: 'INVALID', message: 'New document failure' }));
+  expect(manager.getSnapshot()).toMatchObject({ errorRevision: 1, error: 'New document failure' });
+  socket.message(fixtureWithHeader({ seq: 2, designRevision: 1 }));
+  expect(manager.getSnapshot()).toMatchObject({ error: null, errorRevision: null, stale: false, displayedRevision: 1, lastValidRevision: 1 });
+  manager.stop(); resetDesignStore();
+});

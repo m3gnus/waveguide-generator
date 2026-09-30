@@ -438,3 +438,20 @@ Every new document must state its audience or status. Repository plans must reco
 accepted design decision, not a personal task list. Dated measurements include the
 machine and tested state. Moving a contract requires updating any test or docstring that
 reads it directly.
+
+### Live design dimensions (C2)
+
+The parametric geometry panel reads the accepted preview frame's
+`previewMetadata.dimensions_mm`: `mouth_opening` is `[W, H]`,
+`horn_overall` is `[W, H, D]`, and optional `enclosure_overall` is `[W, H, D]`,
+all in millimetres. The mesher measures full canonical control geometry,
+including the modelled wall; origin, symmetry reduction and render LOD do not
+change these extents. No frontend profile formula or separate request is used.
+
+Older pins without the key display no dimension card. A current frame displays
+its revision; pending edits, failures and invalid local field drafts label the
+accepted values as last valid. A null or malformed readout says unavailable.
+Completed run summaries continue using that run's `mesh_stats.dimensions_m`.
+The producer metadata captured in `shared/preview-fixtures/c2-dimensions-metadata.json`
+tests this contract before a pin move. The real server pass-through test skips
+with an explicit reason until the installed mesher emits the dimension keys.

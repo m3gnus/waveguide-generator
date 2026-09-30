@@ -162,3 +162,25 @@ def test_incomplete_enclosure_fidelity_remains_unmeasured_in_aggregate() -> None
     assert fidelity["unmeasuredChordIntervals"] == 2
     assert fidelity["minSilhouetteSegmentsAchieved"] == 4
     assert set(fidelity["surfaces"]) == {"horn.inner", "enclosure.front"}
+
+
+def test_real_mesher_dimensions_pass_through_preview_frame_unchanged() -> None:
+    """Automatically exercises the additive contract after the mesher pin moves."""
+    geometry = build_preview_geometry(
+        {
+            "formula": "OSSE",
+            "mode": "enclosure",
+            "profile": {"L_mm": 120, "r0_mm": 12.7, "a_deg": 55, "a0_deg": 15.5, "k": 1, "q": 0.995},
+            "enclosure": {"depth_mm": 150, "edge_mm": 18},
+        },
+        preview_options("coarse"),
+    )
+    if "dimensions_mm" not in geometry.metadata:
+        pytest.skip("Pinned mesher 0.2.3 has no C2 dimensions metadata; runs after the mesher pin moves")
+    assert set(geometry.metadata["dimensions_mm"]) == {
+        "mouth_opening", "horn_overall", "enclosure_overall",
+    }
+    header, _ = decode(encode_preview_geometry(
+        geometry, epoch=7, seq=11, design_revision=19, lod="coarse", eval_ms=4.2,
+    ))
+    assert header["previewMetadata"] == geometry.metadata
