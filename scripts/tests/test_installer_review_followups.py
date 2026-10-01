@@ -1362,3 +1362,235 @@ pathlib.Path({str(marker)!r}).write_text(str(int(signal.getsignal({int(interrupt
         assert time.monotonic() < deadline, 'installed application did not run'
         time.sleep(.01)
     assert marker.read_text() == str(int(signal.SIG_DFL)), 'application inherited cleanup signal ignores'
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('scope', ('parent', 'group'))
+@pytest.mark.parametrize('model', ('restore-stat', 'cleanup-rm', 'cleanup-rmdir', 'commit-rm', 'restore-mv', 'commit-cache'))
+def test_cleanup_commit_blocked_commands_have_deadlines(install: Install, tmp_path: Path, model: str, scope: str) -> None:
+    """Round-4 gated blockers, without releasing the gate to finish cleanup."""
+    if model == 'commit-cache' and install.platform != 'linux':
+        pytest.skip('Linux desktop cache refresh')
+    ready, failed = tmp_path / 'blocked-command', tmp_path / 'failed-forward'
+    original = {path: identity(path) for path in install.paths}
+    rollback = not model.startswith('commit')
+    env = install.env
+    if rollback:
+        env = fail_app_install(tmp_path, install, f'''
+if destination == {str(install.target)!r} and ('.install.' in source or '.new.' in source):
+    pathlib.Path({str(failed)!r}).touch()
+''')
+    tool = {'restore-stat': 'stat', 'cleanup-rm': 'rm', 'cleanup-rmdir': 'rmdir',
+            'commit-rm': 'rm', 'restore-mv': 'mv', 'commit-cache': 'update-desktop-database'}[model]
+    directory = tmp_path / 'bin'
+    directory.mkdir(exist_ok=True)
+    wrapper = directory / tool
+    real = shutil.which(tool)
+    if model == 'restore-stat':
+        match = f"pathlib.Path({str(failed)!r}).exists() and any('.previous.' in x for x in sys.argv[1:])"
+    elif model == 'restore-mv':
+        match = "any('.previous.' in x for x in sys.argv[1:-1])"
+    elif model == 'commit-rm':
+        match = "any('.previous.' in x for x in sys.argv[1:])"
+    elif model == 'cleanup-rmdir':
+        # macOS has no separate staging root: block just one lock removal,
+        # so its safe retry proves that lock release still completes.
+        match = "not ready.exists() and any('.install.lock' in x or '.install.' in x for x in sys.argv[1:])"
+    elif model == 'cleanup-rm':
+        match = "'-rf' in sys.argv and any('.new.' in x or '.install.' in x for x in sys.argv[1:])"
+    else:
+        match = 'True'
+    if model.startswith('cleanup'):
+        match = f"pathlib.Path({str(failed)!r}).exists() and ({match})"
+    forward_failure = ''
+    if model == 'restore-mv':
+        forward_failure = f'''
+if sys.argv[-1] == {str(install.target)!r} and ('.install.' in sys.argv[-2] or '.new.' in sys.argv[-2]):
+    pathlib.Path({str(failed)!r}).touch()
+    sys.exit(1)
+'''
+    wrapper.write_text(f'''#!{sys.executable}
+import os, pathlib, signal, sys, time
+ready = pathlib.Path({str(ready)!r})
+{forward_failure}
+if {match}:
+    # Python installs default_int_handler on entry when SIGINT was SIG_DFL.
+    dispositions = [0 if signal.getsignal(s) == signal.default_int_handler else int(signal.getsignal(s))
+                    for s in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT)]
+    for s in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT): signal.signal(s, signal.SIG_IGN)
+    ready.write_text(str(os.getpid()) + '\\n' + repr(dispositions))
+    while True: time.sleep(.01)
+''' + (f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n' if real else 'sys.exit(0)\n'))
+    wrapper.chmod(0o755)
+    env = {**env, 'PATH': str(directory) + os.pathsep + env['PATH']}
+    proc = spawn(install, env)
+    try:
+        wait_marker(proc, ready)
+        start = time.monotonic()
+        for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
+            (os.kill if scope == 'parent' else os.killpg)(proc.pid, sig)
+            time.sleep(.01)
+        output, _ = proc.communicate(timeout=18)
+        assert time.monotonic() - start < 18, output
+        assert not install.lock.exists(), output
+        assert proc.returncode == (3 if model in ('restore-stat', 'restore-mv') else 1 if rollback else 0), output
+        if model in ('restore-stat', 'restore-mv'):
+            backups = list(install.target.parent.glob('.*.previous.*'))
+            assert len(backups) == 1 and identity(backups[0]) == original[install.target]
+            assert str(backups[0]) in output, output
+            assert 'could not restore' in output.lower(), output
+        elif rollback:
+            assert {path: identity(path) for path in install.paths} == original, output
+            assert 'Restored the previous installation' in output, output
+        else:
+            assert install.version() == 'new' and 'Installed:' in output, output
+        if model == 'commit-cache':
+            assert ready.read_text().splitlines()[1] == '[0, 0, 0, 0]', 'optional step inherited ignored signals'
+            assert time.monotonic() - start < 5, output
+        if model == 'cleanup-rm' or model == 'commit-rm':
+            assert 'could not remove staging/backup object:' in output, output
+    finally:
+        stop(proc)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('phase', ('render-after-write', 'emit-before-write', 'emit-after-write'))
+def test_printer_retries_preserve_complete_records(install: Install, tmp_path: Path, phase: str) -> None:
+    killed = tmp_path / 'printer-killed'
+    body = install.script.read_text()
+    if phase == 'render-after-write':
+        key = '(command printf "$@")'
+        assert body.count(key) == 1
+        body = body.replace(key, f'''(
+            command printf "$@"
+            case "$1" in 'Restored the previous installation'*)
+                if [ ! -e '{killed}' ]; then
+                    touch '{killed}'
+                    exec '{sys.executable}' -c 'import os, signal; os.kill(os.getpid(), signal.SIGKILL)'
+                fi ;;
+            esac
+        )''', 1)
+        install.script.write_text(body)
+        env = fail_app_install(tmp_path, install)
+    else:
+        env = fail_app_install(tmp_path, install)
+        real = shutil.which('cat')
+        wrapper = tmp_path / 'bin' / 'cat'
+        wrapper.write_text(f'''#!{sys.executable}
+import os, pathlib, signal, sys
+contents = pathlib.Path(sys.argv[1]).read_bytes()
+marker = pathlib.Path({str(killed)!r})
+if contents.startswith(b'Restored the previous installation') and not marker.exists():
+    marker.touch()
+    if {phase == 'emit-after-write'!r}: os.write(1, contents)
+    os.kill(os.getpid(), signal.SIGKILL)
+os.execv({real!r}, [{real!r}, *sys.argv[1:]])
+''')
+        wrapper.chmod(0o755)
+    result = install.run(env)
+    output = result.stdout + result.stderr
+    assert result.returncode == 1 and install.version() == 'old', output
+    assert killed.exists(), 'printer fault injection did not execute'
+    count = sum(line.startswith('Restored the previous installation') for line in output.splitlines())
+    assert count == (2 if phase == 'emit-after-write' else 1), output
+    assert 'parsers must tolerate a' in install.script.read_text()
+    assert_no_staging(install)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('interrupt', (signal.SIGINT, signal.SIGHUP))
+@pytest.mark.parametrize('scope', ('parent', 'group'))
+def test_close_prompt_cancellation_keeps_decided_status(install: Install, tmp_path: Path, interrupt, scope: str) -> None:
+    if install.platform != 'macos':
+        pytest.skip('Finder close prompt')
+    import pty
+    master, slave = pty.openpty()
+    original = identity(install.target)
+    proc = spawn(install, fail_app_install(tmp_path, install), stdin=slave, interactive=True)
+    os.close(slave)
+    output = b''
+    try:
+        deadline = time.monotonic() + 15
+        while b'Press Return to close...' not in output:
+            assert time.monotonic() < deadline and proc.poll() is None, output
+            if select.select([proc.stdout], [], [], .1)[0]:
+                output += os.read(proc.stdout.fileno(), 4096)
+        assert not install.lock.exists() and identity(install.target) == original
+        started = time.monotonic()
+        (os.kill if scope == 'parent' else os.killpg)(proc.pid, interrupt)
+        proc.communicate(timeout=2)
+        assert time.monotonic() - started < 2 and proc.returncode == 1
+    finally:
+        stop(proc)
+        os.close(master)
+
+
+def test_gatekeeper_header_allows_both_approval_routes(install: Install) -> None:
+    if install.platform != 'macos':
+        pytest.skip('Gatekeeper')
+    header = install.script.read_text().split('INTERRUPTED=0')[0]
+    assert 'Both the app and this script' in header and 'Privacy & Security' in header
+    assert 'clear the quarantine flag' in header
+    assert 'app is not' not in header and 'nothing to attach an exception' not in header
+
+
+@pytest.mark.slow
+def test_cleanup_shared_budget_bounds_repeated_restore_timeouts(install: Install, tmp_path: Path) -> None:
+    # Install all rows, then request rollback. The shared budget must cap a
+    # series of five-second movers, rather than spending five seconds per row.
+    body = install.script.read_text()
+    assert body.count('exec sleep 20') == 1
+    install.script.write_text(body.replace('exec sleep 20', 'exec sleep 2').replace('COMMITTED=1\n', 'exit 1\n', 1))
+    ready = tmp_path / 'restore-blocked'
+    original = {path: identity(path) for path in install.paths}
+    env = move_shim(tmp_path, install, f'''
+if '.previous.' in source or '.backup.' in source:
+    pathlib.Path({str(ready)!r}).touch()
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    while True: time.sleep(.01)
+''')
+    proc = spawn(install, env)
+    try:
+        wait_marker(proc, ready)
+        started = time.monotonic()
+        output, _ = proc.communicate(timeout=7)
+        assert time.monotonic() - started < 7 and proc.returncode == 3, output
+        assert not install.lock.exists(), output
+        for path in install.paths:
+            backups = [candidate for candidate in path.parent.iterdir()
+                       if ('.previous.' in candidate.name or '.backup.' in candidate.name)
+                       and identity(candidate) == original[path]]
+            assert len(backups) == 1 and str(backups[0]) in output, output
+    finally:
+        stop(proc)
+
+
+def test_fifo_owner_is_never_opened(install: Install, tmp_path: Path) -> None:
+    # Keep the unchanged real-FIFO/no-shim timing reproduction above. Since cat
+    # is now bounded too, additionally observe the forbidden open attempt itself.
+    install.lock.mkdir()
+    fifo = install.lock / 'pid'
+    os.mkfifo(fifo)
+    before = (identity(install.lock), identity(fifo), fifo.lstat().st_mode)
+    opened = tmp_path / 'fifo-open-attempt'
+    directory = tmp_path / 'bin'
+    directory.mkdir()
+    real_cat = shutil.which('cat')
+    wrapper = directory / 'cat'
+    wrapper.write_text(f'''#!{sys.executable}
+import os, pathlib, sys
+if {str(fifo)!r} in sys.argv[1:]:
+    pathlib.Path({str(opened)!r}).touch()
+os.execv({real_cat!r}, [{real_cat!r}, *sys.argv[1:]])
+''')
+    wrapper.chmod(0o755)
+    env = {**install.env, 'PATH': str(directory) + os.pathsep + install.env['PATH']}
+    proc = spawn(install, env)
+    try:
+        output, _ = proc.communicate(timeout=3)
+        assert proc.returncode == 4 and 'unreadable or missing' in output, output
+        assert not opened.exists(), 'diagnostic attempted to open the FIFO'
+        assert (identity(install.lock), identity(fifo), fifo.lstat().st_mode) == before
+        assert install.version() == 'old'
+    finally:
+        stop(proc)

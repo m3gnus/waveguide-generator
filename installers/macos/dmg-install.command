@@ -4,16 +4,10 @@
 # image. It is shipped INSIDE the .dmg, beside the app; it is not the source
 # installer, which is installers/macos/install-wg.command in the checkout.
 #
-# Why it exists. The app is ad-hoc signed rather than notarized, and a
-# quarantined ad-hoc bundle assesses as `rejected` with NO source line at all,
-# so Gatekeeper has nothing to attach an exception to and Privacy & Security
-# lists nothing to approve. An unsigned script assesses as
-# `rejected  source=no usable signature`, which is the state that does get an
-# override. Measured 2026-09-02 on macOS 26.5.2; see docs/validation/2026-09/MACOS-GATEKEEPER.md.
-#
-# So this script is approvable where the app is not, and once it runs it does by
-# hand what the user would otherwise open Terminal for: copy the app to
-# Applications and clear the quarantine flag from the copy.
+# The app is ad-hoc signed rather than notarized. Both the app and this script
+# can be approved through Privacy & Security. This script offers another route:
+# copy the app to Applications and clear the quarantine flag from the copy.
+# See docs/validation/2026-09/MACOS-GATEKEEPER.md.
 #
 # It must stay self-contained. It runs from a read-only mounted volume with
 # nothing else from the checkout beside it, and its only dependencies are
@@ -42,6 +36,11 @@
 # Look beside the target for .<app basename>.previous.<installer PID>.
 # A hard kill can also leave a half-copied .<app basename>.new.<installer PID>;
 # after checking no installer is running, that staging copy is safe to delete.
+# Cleanup finishes within 300 seconds unless the kernel itself blocks a kill
+# (excluding the macOS close prompt's intentional user wait). Work has a shared
+# 20-second budget; metadata/housekeeping/output steps have short polling
+# deadlines, moves a five-second watchdog, then KILL and reap. Lock release and recovery
+# reporting also use bounded steps. A timed-out restore is status 3.
 # Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
 # A signal before the traps ends a run that has done nothing; the flag never
@@ -60,17 +59,40 @@ LOCK_PATH=""
 LOCK_ID=""
 LOCK_HELD=0
 MOVE_PID=""
+WORK_CLOCK=""
+PRINT_CLOCK=""
 PROMPT_ON_FAILURE=0
 set -u
-# Isolate writes so a closed reader cannot contaminate identity substitutions.
+# Render once to a private file. A killed renderer can safely be retried;
+# only emission is retried after rendering. cat emits each short record at once.
+# A KILL during emission can race its completed write: parsers must tolerate a
+# repeated line. Catchable cleanup signals cannot interrupt the emitter.
 printf() {
-    # Bash 3.2 can kill a fork made while a trapped signal is pending, before
-    # the child executes anything. Retry that case; never retry an I/O error.
+    print_file=$(OUTPUT_BOUND=independent protected_output mktemp "${TMPDIR:-/tmp}/wg-installer-message.XXXXXX") || return 1
+    (trap '' HUP INT TERM QUIT; exec sleep 1) &
+    PRINT_CLOCK=$!
     for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
-        (command printf "$@")
+        (command printf "$@") > "$print_file" &
+        render_pid=$!
+        wait_for_child "$render_pid" 100 message
         print_status=$?
-        [ "$print_status" -gt 128 ] || return "$print_status"
+        [ "$print_status" -gt 128 ] || break
     done
+    if [ "$print_status" -eq 0 ]; then
+        for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
+            (trap '' HUP INT TERM QUIT; exec cat "$print_file") &
+            print_pid=$!
+            wait_for_child "$print_pid" 100 message
+            print_status=$?
+            [ "$print_status" -gt 128 ] || break
+        done
+    fi
+    kill -KILL "$PRINT_CLOCK" 2>/dev/null || :
+    wait_for_child "$PRINT_CLOCK" 100 independent 2>/dev/null || :
+    PRINT_CLOCK=""
+    (trap '' HUP INT TERM QUIT; exec rm -f "$print_file") &
+    print_remove_pid=$!
+    wait_for_child "$print_remove_pid" 100 independent "remove message $print_file" || :
     return "$print_status"
 }
 
@@ -95,6 +117,10 @@ fail() {
 
 close_prompt() {
     if [ "$PROMPT_ON_FAILURE" -eq 1 ] && [ -t 0 ]; then
+        # Recovery and lock release are finished. Resume ordinary cancellation
+        # before displaying the prompt; retain the already-decided status rather
+        # than replacing it with the shell's 128+signal default exit code.
+        trap 'exit "$status"' HUP INT TERM QUIT
         printf 'Press Return to close...' || :
         read -r _unused || :
     fi
@@ -138,15 +164,69 @@ same_device() {
     fi
 }
 
-# Call only inside command substitutions: protect the capturing shell itself,
-# then exec, so group signals cannot discard a newly created object's name.
-protected_output() { trap '' HUP INT TERM QUIT; exec "$@"; }
+# Capturing shells and children ignore group cancellation while registering
+# resources. The same deadline covers metadata, housekeeping and emission.
+protected_output() {
+    trap '' HUP INT TERM QUIT
+    (exec "$@") &
+    output_pid=$!
+    wait_for_child "$output_pid" 100 "${OUTPUT_BOUND:-budgeted}" "$*"
+}
 
-# Poll while a child runs, then reap it after exit. This keeps the parent's
-# blocking wait out of the signal burst; short sleep interruptions are harmless.
+# One bounded wait: deadline, KILL, reap, then report. Only kernel-blocked KILL
+# can prevent reaping. 100 slow polls allow one second plus dispatch overhead;
+# moves retain their five-second watchdog.
 wait_for_child() {
-    while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
+    bound_ticks=0
+    bound_fast=0
+    bound_limit=${2:-100}
+    bound_timeout=0
+    while kill -0 "$1" 2>/dev/null; do
+        if [ "$bound_ticks" -ge "$bound_limit" ] ||
+           { [ "${3:-budgeted}" = message ] && ! kill -0 "$PRINT_CLOCK" 2>/dev/null; } ||
+           { [ "${3:-budgeted}" = budgeted ] && [ -n "$WORK_CLOCK" ] && ! kill -0 "$WORK_CLOCK" 2>/dev/null; }; then
+            bound_timeout=1
+            kill -KILL "$1" 2>/dev/null || :
+            break
+        fi
+        if [ "$1" = "$MOVE_PID" ] && [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
+            kill -TERM "$1" 2>/dev/null || :
+        fi
+        # Most native tools finish in milliseconds. Avoid adding a full poll
+        # interval to every stat/print while retaining the slow-step deadline.
+        if [ "$bound_fast" -lt 5 ]; then
+            sleep 0.001
+            bound_fast=$((bound_fast + 1))
+        else
+            sleep 0.01
+            bound_ticks=$((bound_ticks + 1))
+        fi
+    done
     wait "$1"
+    bound_status=$?
+    if [ "$bound_timeout" -eq 1 ]; then
+        if [ "${5:-report}" != silent ]; then
+            (trap '' HUP INT TERM QUIT; command printf 'WARNING: installer step timed out: %s (process %s).\n' "${4:-child}" "$1" >&2) &
+            warning_pid=$!
+            wait_for_child "$warning_pid" 100 independent warning silent 2>/dev/null || :
+        fi
+        return 124
+    fi
+    return "$bound_status"
+}
+
+# Share a twenty-second work budget across all cleanup/committed steps,
+# including capturing subshells. Reserve bounded lock release/reporting after it.
+start_work_clock() {
+    [ -z "$WORK_CLOCK" ] || return 0
+    (trap '' HUP INT TERM QUIT; exec sleep 20) &
+    WORK_CLOCK=$!
+}
+stop_work_clock() {
+    [ -n "$WORK_CLOCK" ] || return 0
+    kill -KILL "$WORK_CLOCK" 2>/dev/null || :
+    wait_for_child "$WORK_CLOCK" 100 independent 2>/dev/null || :
+    WORK_CLOCK=""
 }
 
 # Long steps before the swap (copy, signature, library checks): forward a
@@ -185,20 +265,14 @@ run_interruptible() {
 # A cancelled watchdog must never hold the lock indefinitely. Give it one
 # second to stop its timer, then KILL it and reap. Polls may end early on signals.
 reap_cancelled_watchdog() {
-    watchdog_ticks=0
-    while kill -0 "$1" 2>/dev/null && [ "$watchdog_ticks" -lt 100 ]; do
-        sleep 0.01
-        watchdog_ticks=$((watchdog_ticks + 1))
-    done
-    kill -KILL "$1" 2>/dev/null || :
-    wait_for_child "$1"
+    wait_for_child "$1" 100 independent
 }
 
 # Record and reap housekeeping before inspecting its effects.
 run_housekeeping() {
     (trap '' HUP INT TERM QUIT; exec "$@") &
     housekeeping_pid=$!
-    wait_for_child "$housekeeping_pid"
+    wait_for_child "$housekeeping_pid" 100 budgeted "$*"
 }
 
 release_lock() {
@@ -222,9 +296,9 @@ lock_busy() {
     owner="unreadable or missing"
     # Never open a FIFO/device/socket (or a symlink to one) for the diagnostic.
     if [ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ]; then
-        owner=$(cat "$LOCK_PATH/pid" 2>/dev/null) || owner="unreadable or missing"
+        owner=$(protected_output cat "$LOCK_PATH/pid" 2>/dev/null) || owner="unreadable or missing"
     fi
-    made=$(stat -f '%Sm' "$LOCK_PATH" 2>/dev/null) || made="unknown"
+    made=$(protected_output stat -f '%Sm' "$LOCK_PATH" 2>/dev/null) || made="unknown"
     # Single-quoted for the shell the user pastes it into.
     quoted=$(printf '%s' "$LOCK_PATH" | sed "s/'/'\\\\''/g")
     printf 'Not installed: another installation seems to be running. Nothing was changed.\n' >&2
@@ -280,7 +354,11 @@ remove_owned() {
         fi
         run_housekeeping rm -rf "$1"
     done
-    [ ! -e "$1" ] && [ ! -L "$1" ]
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        printf 'WARNING: could not remove staging/backup object: %s\n' "$1" >&2
+        return 1
+    fi
+    return 0
 }
 
 # Forward moves obey the flag; cleanup moves ignore catchable signals.
@@ -317,16 +395,12 @@ bounded_move() {
     move_status=1
     # A caught signal interrupts wait before the child exits. Reap that child
     # before inspecting paths, retrying, or stopping its watchdog.
-    while kill -0 "$MOVE_PID" 2>/dev/null; do
-        if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$MOVE_PID" 2>/dev/null || :; fi
-        sleep 0.01
-    done
-    wait "$MOVE_PID"
+    wait_for_child "$MOVE_PID" 500 budgeted "move $*"
     move_status=$?
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
     reap_cancelled_watchdog "$watchdog_pid" 2>/dev/null || :
     if same_object "$2" "$move_identity" && same_object "$1" "$move_identity"; then
-        rm -f "$1"
+        run_housekeeping rm -f "$1"
     fi
     move_identity=""
     MOVE_PID=""
@@ -413,6 +487,7 @@ cleanup() {
     # The interruption flag is already recorded. Ignore in the parent before
     # forking: Bash 3.2 may resend a pending trapped signal in a new child.
     trap '' HUP INT TERM QUIT
+    start_work_clock
     status="$EXIT_STATUS"
     if [ "$INTERRUPTED" -ne 0 ] && [ "$COMMITTED" -eq 0 ]; then
         printf 'Installation interrupted.\n' >&2
@@ -425,10 +500,10 @@ cleanup() {
             [ -z "$OLD_ID" ] || [ "$STATE" != restored ] || printf 'Restored the previous installation.\n'
         else
             printf 'ERROR: could not restore the previous installation.\n' >&2
-            if locate_old; then
+            if OUTPUT_BOUND=independent locate_old; then
                 printf 'The previous app is at: %s\n' "$OLD_PATH" >&2
             else
-                printf 'ERROR: recorded previous app is missing from its recovery paths.\n' >&2
+                printf 'ERROR: recorded previous app could not be verified at its recovery paths.\n' >&2
                 if [ -e "$BACKUP_PATH" ] || [ -L "$BACKUP_PATH" ]; then
                     printf 'The unrecognized displaced object is at: %s\n' "$BACKUP_PATH" >&2
                 fi
@@ -438,6 +513,7 @@ cleanup() {
         remove_owned "$STAGED_PATH" "$NEW_ID"
         NEW_ID=""
     fi
+    stop_work_clock
     release_lock
     close_prompt
     exit "$status"
@@ -574,7 +650,7 @@ for stale in "$TARGET_DIR"/".$TARGET_BASE".new.* "$TARGET_DIR"/".$TARGET_BASE".p
     contains_app=0
     for app in "$stale"/*.app; do [ ! -d "$app" ] || contains_app=1; done
     [ "$contains_app" -eq 0 ] || continue
-    rmdir "$stale" 2>/dev/null || :
+    run_housekeeping rmdir "$stale" 2>/dev/null || :
 done
 
 # The copy is made and verified BESIDE the final name first, on the same volume,
@@ -693,6 +769,7 @@ check_interrupted
 COMMITTED=1
 # Once committed, finish the success message and removal of this run's backups.
 trap '' HUP INT TERM QUIT
+start_work_clock
 if ! remove_owned "$DISPLACED" "$OLD_ID" || [ -e "$DISPLACED" ] || [ -L "$DISPLACED" ]; then
     printf 'WARNING: installed successfully, but could not fully remove the previous copy.\n' >&2
     printf 'The leftover backup is at: %s\n' "$DISPLACED" >&2
@@ -711,7 +788,7 @@ printf 'You can eject the Waveguide Generator disk image now.\n'
 # asked to install it, not to run it, and the tests rely on that.
 if [ "$#" -eq 0 ]; then
     printf 'Starting Waveguide Generator ...\n'
-    open "$TARGET" || printf 'Could not start it automatically; open it from %s.\n' "$TARGET_DIR"
+    run_housekeeping open "$TARGET" || printf 'Could not start it automatically; open it from %s.\n' "$TARGET_DIR"
 fi
 check_interrupted
 exit 0

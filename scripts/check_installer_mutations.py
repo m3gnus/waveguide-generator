@@ -31,7 +31,7 @@ MUTATIONS = [
     ('lock_acquisition_unprotected', 'group_signals_during_resource_registration and lock_mkdir',
      'if ! run_housekeeping mkdir "$LOCK_PATH"', 'if ! mkdir "$LOCK_PATH"'),
     ('reservation_unconditionally_deleted', 'foreign_backup_reservation',
-     'same_object "${BACKUP[i]}" "${RESERVATION_ID[i]}" && rmdir "${BACKUP[i]}" || fail "The rollback reservation is occupied or replaced: ${BACKUP[i]}"',
+     'same_object "${BACKUP[i]}" "${RESERVATION_ID[i]}" && run_housekeeping rmdir "${BACKUP[i]}" || fail "The rollback reservation is occupied or replaced: ${BACKUP[i]}"',
      'rm -rf -- "${BACKUP[i]}"'),
     ('move_sigpipe_ignored', 'move_children_have_default_sigpipe',
      'else\n            trap - HUP INT TERM QUIT PIPE', 'else\n            trap - HUP INT TERM QUIT'),
@@ -50,10 +50,10 @@ MUTATIONS = [
      "if [ \"$CLEANING\" -eq 1 ]; then\n            trap '' HUP INT TERM QUIT",
      "if [ \"$CLEANING\" -eq 1 ]; then\n            trap - HUP INT TERM QUIT"),
     ('cancelled_watchdog_unbounded', 'cancelled_watchdog_has_bounded_reap',
-     'reap_cancelled_watchdog "$watchdog_pid"', 'wait_for_child "$watchdog_pid"'),
+     'reap_cancelled_watchdog "$watchdog_pid"', 'while kill -0 "$watchdog_pid" 2>/dev/null; do sleep 0.01; done; wait "$watchdog_pid"'),
     ('long_step_no_kill', 'term_ignoring_long_step',
      'kill -KILL "$step_pid" 2>/dev/null || :', ': # escalation disabled'),
-    ('fifo_owner_opened', 'fifo_lock_owner_refuses',
+    ('fifo_owner_opened', 'fifo_lock_owner_refuses or fifo_owner_is_never_opened',
      '[ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ]', ':'),
     ('preflight_foreground', 'preflight_pid_only_term',
      'run_interruptible --capture-output "$PREFLIGHT_CAPTURE/output" "$SOURCE/runtime/bin/python3.13" -c \'import gmsh\'',
@@ -69,7 +69,23 @@ MUTATIONS = [
      'case "$recovery_status" in 129|130|131|143) ;; *) return "$recovery_status" ;; esac',
      'return "$recovery_status"'),
     ('message_signal_not_retried', 'signal_killed_restore_and_message',
-     '[ "$print_status" -gt 128 ] || return "$print_status"', 'return "$print_status"'),
+     '        [ "$print_status" -gt 128 ] || break\n    done', '        break\n    done'),
+    ('cleanup_total_budget_missing', 'shared_budget_bounds_repeated_restore_timeouts',
+     '[ -n "$WORK_CLOCK" ] && ! kill -0 "$WORK_CLOCK" 2>/dev/null', '[ -n "$WORK_CLOCK" ] && false'),
+    ('housekeeping_unbounded', 'blocked_commands_have_deadlines and cleanup-rm and parent',
+     'wait_for_child "$housekeeping_pid" 100 budgeted "$*"',
+     'while kill -0 "$housekeeping_pid" 2>/dev/null; do sleep 0.01; done; wait "$housekeeping_pid"'),
+    ('stat_unbounded', 'blocked_commands_have_deadlines and restore-stat and parent',
+     'wait_for_child "$output_pid" 100 "${OUTPUT_BOUND:-budgeted}" "$*"',
+     'while kill -0 "$output_pid" 2>/dev/null; do sleep 0.01; done; wait "$output_pid"'),
+    ('cache_refresh_unbounded', 'blocked_commands_have_deadlines and commit-cache and parent',
+     'run_optional update-desktop-database "$APPLICATIONS"', 'update-desktop-database "$APPLICATIONS"'),
+    ('printer_emits_while_rendering', 'printer_retries and render-after-write',
+     '(command printf "$@") > "$print_file"', '(command printf "$@") | tee "$print_file"'),
+    ('prompt_ignores_signals', 'close_prompt_cancellation',
+     "trap 'exit \"$status\"' HUP INT TERM QUIT", "trap '' HUP INT TERM QUIT"),
+    ('gatekeeper_header_disallows_app', 'gatekeeper_header',
+     'Both the app and this script', 'Only this script'),
     ('write_failure_blames_account', 'unwritable_parent',
      '${LOCK_PATH%/*} cannot be written.', '${LOCK_PATH%/*} is not writable by this account.'),
     ('staging_not_documented', 'cleanup_documentation',
@@ -96,6 +112,8 @@ def main() -> int:
                 if mode == 'mutant' and old in body:
                     assert body.count(old) == 1 or platform == 'bundle', (name, filename)
                     body = body.replace(old, new)
+                    if name == 'later_forward_move_unbounded':
+                        body = body.replace('wait_for_child "$MOVE_PID" 500', 'wait_for_child "$MOVE_PID" 6000')
                     changed += 1
                 suffix = 'py' if platform == 'bundle' else 'sh'
                 (directory / f'{platform}.{suffix}').write_text(body)

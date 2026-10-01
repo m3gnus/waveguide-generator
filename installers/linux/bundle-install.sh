@@ -42,6 +42,11 @@
 # A hard kill can also leave a half-copied .waveguide-generator.install.*
 # staging folder beside the target; after checking no installer is running,
 # that staging folder is safe to delete.
+# Cleanup finishes within 300 seconds unless the kernel itself blocks a kill
+# during rollback or after commit. Work has a shared
+# 20-second budget; metadata/housekeeping/output steps have short polling
+# deadlines, moves a five-second watchdog, then KILL and reap. Lock release and recovery
+# reporting also use bounded steps. A timed-out restore is status 3.
 # Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
 # A signal before the traps ends a run that has done nothing; the flag never
@@ -60,20 +65,43 @@ LOCK_PATH=""
 LOCK_ID=""
 LOCK_HELD=0
 MOVE_PID=""
+WORK_CLOCK=""
+PRINT_CLOCK=""
 PREFLIGHT_CAPTURE=""
 PREFLIGHT_CAPTURE_ID=""
 STAGE_ROOT=""
 STAGE_ROOT_ID=""
 set -u
-# Isolate writes so a closed reader cannot contaminate identity substitutions.
+# Render once to a private file. A killed renderer can safely be retried;
+# only emission is retried after rendering. cat emits each short record at once.
+# A KILL during emission can race its completed write: parsers must tolerate a
+# repeated line. Catchable cleanup signals cannot interrupt the emitter.
 printf() {
-    # Bash 3.2 can kill a fork made while a trapped signal is pending, before
-    # the child executes anything. Retry that case; never retry an I/O error.
+    print_file=$(OUTPUT_BOUND=independent protected_output mktemp "${TMPDIR:-/tmp}/wg-installer-message.XXXXXX") || return 1
+    (trap '' HUP INT TERM QUIT; exec sleep 1) &
+    PRINT_CLOCK=$!
     for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
-        (command printf "$@")
+        (command printf "$@") > "$print_file" &
+        render_pid=$!
+        wait_for_child "$render_pid" 100 message
         print_status=$?
-        [ "$print_status" -gt 128 ] || return "$print_status"
+        [ "$print_status" -gt 128 ] || break
     done
+    if [ "$print_status" -eq 0 ]; then
+        for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
+            (trap '' HUP INT TERM QUIT; exec cat "$print_file") &
+            print_pid=$!
+            wait_for_child "$print_pid" 100 message
+            print_status=$?
+            [ "$print_status" -gt 128 ] || break
+        done
+    fi
+    kill -KILL "$PRINT_CLOCK" 2>/dev/null || :
+    wait_for_child "$PRINT_CLOCK" 100 independent 2>/dev/null || :
+    PRINT_CLOCK=""
+    (trap '' HUP INT TERM QUIT; exec rm -f "$print_file") &
+    print_remove_pid=$!
+    wait_for_child "$print_remove_pid" 100 independent "remove message $print_file" || :
     return "$print_status"
 }
 
@@ -141,15 +169,69 @@ same_device() {
     fi
 }
 
-# Call only inside command substitutions: protect the capturing shell itself,
-# then exec, so group signals cannot discard a newly created object's name.
-protected_output() { trap '' HUP INT TERM QUIT; exec "$@"; }
+# Capturing shells and children ignore group cancellation while registering
+# resources. The same deadline covers metadata, housekeeping and emission.
+protected_output() {
+    trap '' HUP INT TERM QUIT
+    (exec "$@") &
+    output_pid=$!
+    wait_for_child "$output_pid" 100 "${OUTPUT_BOUND:-budgeted}" "$*"
+}
 
-# Poll while a child runs, then reap it after exit. This keeps the parent's
-# blocking wait out of the signal burst; short sleep interruptions are harmless.
+# One bounded wait: deadline, KILL, reap, then report. Only kernel-blocked KILL
+# can prevent reaping. 100 slow polls allow one second plus dispatch overhead;
+# moves retain their five-second watchdog.
 wait_for_child() {
-    while kill -0 "$1" 2>/dev/null; do sleep 0.01; done
+    bound_ticks=0
+    bound_fast=0
+    bound_limit=${2:-100}
+    bound_timeout=0
+    while kill -0 "$1" 2>/dev/null; do
+        if [ "$bound_ticks" -ge "$bound_limit" ] ||
+           { [ "${3:-budgeted}" = message ] && ! kill -0 "$PRINT_CLOCK" 2>/dev/null; } ||
+           { [ "${3:-budgeted}" = budgeted ] && [ -n "$WORK_CLOCK" ] && ! kill -0 "$WORK_CLOCK" 2>/dev/null; }; then
+            bound_timeout=1
+            kill -KILL "$1" 2>/dev/null || :
+            break
+        fi
+        if [ "$1" = "$MOVE_PID" ] && [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
+            kill -TERM "$1" 2>/dev/null || :
+        fi
+        # Most native tools finish in milliseconds. Avoid adding a full poll
+        # interval to every stat/print while retaining the slow-step deadline.
+        if [ "$bound_fast" -lt 5 ]; then
+            sleep 0.001
+            bound_fast=$((bound_fast + 1))
+        else
+            sleep 0.01
+            bound_ticks=$((bound_ticks + 1))
+        fi
+    done
     wait "$1"
+    bound_status=$?
+    if [ "$bound_timeout" -eq 1 ]; then
+        if [ "${5:-report}" != silent ]; then
+            (trap '' HUP INT TERM QUIT; command printf 'WARNING: installer step timed out: %s (process %s).\n' "${4:-child}" "$1" >&2) &
+            warning_pid=$!
+            wait_for_child "$warning_pid" 100 independent warning silent 2>/dev/null || :
+        fi
+        return 124
+    fi
+    return "$bound_status"
+}
+
+# Share a twenty-second work budget across all cleanup/committed steps,
+# including capturing subshells. Reserve bounded lock release/reporting after it.
+start_work_clock() {
+    [ -z "$WORK_CLOCK" ] || return 0
+    (trap '' HUP INT TERM QUIT; exec sleep 20) &
+    WORK_CLOCK=$!
+}
+stop_work_clock() {
+    [ -n "$WORK_CLOCK" ] || return 0
+    kill -KILL "$WORK_CLOCK" 2>/dev/null || :
+    wait_for_child "$WORK_CLOCK" 100 independent 2>/dev/null || :
+    WORK_CLOCK=""
 }
 
 # Long steps before the swap (copy, signature, library checks): forward a
@@ -188,20 +270,26 @@ run_interruptible() {
 # A cancelled watchdog must never hold the lock indefinitely. Give it one
 # second to stop its timer, then KILL it and reap. Polls may end early on signals.
 reap_cancelled_watchdog() {
-    watchdog_ticks=0
-    while kill -0 "$1" 2>/dev/null && [ "$watchdog_ticks" -lt 100 ]; do
-        sleep 0.01
-        watchdog_ticks=$((watchdog_ticks + 1))
-    done
-    kill -KILL "$1" 2>/dev/null || :
-    wait_for_child "$1"
+    wait_for_child "$1" 100 independent
 }
 
 # Record and reap housekeeping before inspecting its effects.
 run_housekeeping() {
     (trap '' HUP INT TERM QUIT; exec "$@") &
     housekeeping_pid=$!
-    wait_for_child "$housekeeping_pid"
+    wait_for_child "$housekeeping_pid" 100 budgeted "$*"
+}
+
+# Optional post-commit refreshes have default signal dispositions and one second.
+# Their failure cannot change the committed status.
+run_optional() {
+    # Bash otherwise forces INT/QUIT ignored for asynchronous commands, even
+    # after trap -. Monitor mode gives this optional child ordinary defaults.
+    set -m
+    (trap - HUP INT TERM QUIT PIPE; exec "$@") &
+    optional_pid=$!
+    set +m
+    wait_for_child "$optional_pid" 100 budgeted "$*" || :
 }
 
 release_lock() {
@@ -225,9 +313,9 @@ lock_busy() {
     owner="unreadable or missing"
     # Never open a FIFO/device/socket (or a symlink to one) for the diagnostic.
     if [ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ]; then
-        owner=$(cat "$LOCK_PATH/pid" 2>/dev/null) || owner="unreadable or missing"
+        owner=$(protected_output cat "$LOCK_PATH/pid" 2>/dev/null) || owner="unreadable or missing"
     fi
-    made=$(stat -c '%y' "$LOCK_PATH" 2>/dev/null || stat -f '%Sm' "$LOCK_PATH" 2>/dev/null) || made="unknown"
+    made=$(protected_output stat -c '%y' "$LOCK_PATH" 2>/dev/null || protected_output stat -f '%Sm' "$LOCK_PATH" 2>/dev/null) || made="unknown"
     # Single-quoted for the shell the user pastes it into.
     quoted=$(printf '%s' "$LOCK_PATH" | sed "s/'/'\\\\''/g")
     printf 'Not installed: another installation seems to be running. Nothing was changed.\n' >&2
@@ -330,7 +418,11 @@ remove_owned() {
         fi
         run_housekeeping rm -rf -- "$1"
     done
-    [ ! -e "$1" ] && [ ! -L "$1" ]
+    if [ -e "$1" ] || [ -L "$1" ]; then
+        printf 'WARNING: could not remove staging/backup object: %s\n' "$1" >&2
+        return 1
+    fi
+    return 0
 }
 
 # Forward moves obey the flag; cleanup moves ignore catchable signals.
@@ -371,18 +463,14 @@ bounded_move() {
     move_status=1
     # A caught signal interrupts wait before the child exits. Reap that child
     # before inspecting paths, retrying, or stopping its watchdog.
-    while kill -0 "$MOVE_PID" 2>/dev/null; do
-        if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$MOVE_PID" 2>/dev/null || :; fi
-        sleep 0.01
-    done
-    wait "$MOVE_PID"
+    wait_for_child "$MOVE_PID" 500 budgeted "move $*"
     move_status=$?
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
     reap_cancelled_watchdog "$watchdog_pid" 2>/dev/null || :
     # A file transfer has two temporary aliases; unlink only after verifying
     # the destination. The identity stays live at the destination after unlink.
     if same_object "$2" "$move_identity" && same_object "$1" "$move_identity"; then
-        rm -f -- "$1"
+        run_housekeeping rm -f -- "$1"
     fi
     move_identity=""
     MOVE_PID=""
@@ -481,6 +569,7 @@ cleanup() {
     # The interruption flag is already recorded. Ignore in the parent before
     # forking: Bash 3.2 may resend a pending trapped signal in a new child.
     trap '' HUP INT TERM QUIT
+    start_work_clock
     local status="$EXIT_STATUS" i
     if [ "$INTERRUPTED" -ne 0 ] && [ "$COMMITTED" -eq 0 ]; then
         printf 'Installation interrupted.\n' >&2
@@ -494,10 +583,10 @@ cleanup() {
                 [ -z "${OLD_ID[i]}" ] || HAD_PREVIOUS=1
                 if ! restore_row; then
                     printf 'ERROR: could not restore the previous %s.\n' "${DESCRIPTION[i]}" >&2
-                    if locate_old; then
+                    if OUTPUT_BOUND=independent locate_old; then
                         printf 'Its backup remains at: %s\n' "$OLD_PATH" >&2
                     else
-                        printf 'ERROR: recorded previous object is missing from its recovery paths.\n' >&2
+                        printf 'ERROR: recorded previous object could not be verified at its recovery paths.\n' >&2
                         if [ -e "${BACKUP[i]}" ] || [ -L "${BACKUP[i]}" ]; then
                             printf 'The unrecognized displaced object is at: %s\n' "${BACKUP[i]}" >&2
                         fi
@@ -534,6 +623,7 @@ cleanup() {
         done
     fi
     remove_owned "$PREFLIGHT_CAPTURE" "$PREFLIGHT_CAPTURE_ID"
+    stop_work_clock
     release_lock
     exit "$status"
 }
@@ -560,7 +650,7 @@ PREFLIGHT=1
 UPDATE=0
 
 STAT_STYLE=gnu
-stat -c '%d:%i' -- / >/dev/null 2>&1 || STAT_STYLE=bsd
+(protected_output stat -c '%d:%i' -- /) >/dev/null 2>&1 || STAT_STYLE=bsd
 
 while [ "$#" -gt 0 ]; do
     check_interrupted
@@ -932,7 +1022,7 @@ for ((i=0; i<${#LIVE[@]}; i++)); do
     esac
     BACKUP[i]=$(protected_output mktemp -d "$template") || fail "Could not reserve ${DESCRIPTION[i]} rollback."
     RESERVATION_ID[i]=$(object_id "${BACKUP[i]}") || fail "Could not identify rollback reservation."
-    same_object "${BACKUP[i]}" "${RESERVATION_ID[i]}" && rmdir "${BACKUP[i]}" || fail "The rollback reservation is occupied or replaced: ${BACKUP[i]}"
+    same_object "${BACKUP[i]}" "${RESERVATION_ID[i]}" && run_housekeeping rmdir "${BACKUP[i]}" || fail "The rollback reservation is occupied or replaced: ${BACKUP[i]}"
     RESERVATION_ID[i]=""
     check_interrupted
 done
@@ -977,6 +1067,7 @@ check_interrupted
 COMMITTED=1
 # Once committed, finish the success message and removal of this run's backups.
 trap '' HUP INT TERM QUIT
+start_work_clock
 for ((i=0; i<${#BACKUP[@]}; i++)); do
     remove_owned "${BACKUP[i]}" "${OLD_ID[i]}"
     OLD_ID[i]=""
@@ -985,10 +1076,10 @@ done
 # Best effort, and genuinely optional: every current desktop notices a new
 # .desktop file on its own, and these tools are absent on minimal systems.
 if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database "$APPLICATIONS" >/dev/null 2>&1 || true
+    run_optional update-desktop-database "$APPLICATIONS" >/dev/null 2>&1 || true
 fi
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q -t -f "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
+    run_optional gtk-update-icon-cache -q -t -f "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || true
 fi
 
 printf '\n'
