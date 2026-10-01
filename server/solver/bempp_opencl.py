@@ -8,6 +8,7 @@ rejections persist for the process.
 """
 from __future__ import annotations
 
+from contextlib import suppress
 from contextvars import ContextVar
 from functools import lru_cache
 import importlib
@@ -256,6 +257,11 @@ _probe_lock = threading.Lock()
 _probe_owner: ContextVar[threading.Event | None] = ContextVar("opencl_probe_owner", default=None)
 _attempt_deadline: ContextVar[float] = ContextVar("opencl_attempt_deadline", default=float("inf"))
 _active_probes: dict[_ProbeHandle, threading.Event | None] = {}
+# Each run's result directory, by owner. A stop waits for the runs to remove
+# their own; a run still busy when the wait ends has its directory removed here.
+_active_channels: dict[Any, threading.Event | None] = {}
+_channels_idle = threading.Condition(_probe_lock)
+SHUTDOWN_CLEANUP_SECONDS = 3.0
 
 
 class ProbeCancelled(RuntimeError):
@@ -318,6 +324,20 @@ def shutdown_qualification(owner: threading.Event) -> None:
             _active_probes.pop(handle, None)
         # Cancellation is checked before this synthetic EOF is consumed.
         handle.events.put((None, time.monotonic()))
+    # The run's own finally removes its result directory after the child is
+    # reaped. Wait for that, so a clean stop leaves nothing in the session
+    # directory; whatever is still registered after the wait is removed here.
+    deadline = time.monotonic() + SHUTDOWN_CLEANUP_SECONDS
+    with _channels_idle:
+        while any(token is owner for token in _active_channels.values()):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            _channels_idle.wait(remaining)
+        leftovers = [channel for channel, token in _active_channels.items() if token is owner]
+    for channel in leftovers:
+        with suppress(OSError):
+            channel.cleanup()
 
 
 def _read_probe_output(stream: Any, events: Any) -> None:
@@ -380,6 +400,8 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
     channel = None
     try:
         channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=temporary_directory_root())
+        with _probe_lock:
+            _active_channels[channel] = _probe_owner.get()
         result_path = Path(channel.name) / "result.json"
         # Independent readers avoid backpressure on both pipes, on every OS.
         # The result travels through an atomic file, never through library logs.
@@ -434,7 +456,8 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
     except ProbeCancelled:
         raise
     except Exception as exc:
-        response = {"ok": False, "opencl_unavailable_reason": "probe_error", "reason": f"WG's OpenCL {mode} check could not complete (internal error: {type(exc).__name__}).",
+        detail = str(exc).splitlines()[0][:200] if str(exc) else ""
+        response = {"ok": False, "opencl_unavailable_reason": "probe_error", "reason": f"WG's OpenCL {mode} check could not complete (internal error: {type(exc).__name__}{': ' + detail if detail else ''}).",
                     "_active_seconds": 0.0 if ready_at is None else min(timeout, time.monotonic() - ready_at)}
         return response
     finally:
@@ -456,12 +479,24 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
         finally:
             if channel is not None:
                 channel.cleanup()
+                with _channels_idle:
+                    _active_channels.pop(channel, None)
+                    _channels_idle.notify_all()
 
 
 def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
     if device_json in _device_verdict_cache:
         return {**_device_verdict_cache[device_json], "_active_seconds": 0.0}
     verdict = _run_probe("smoke", json.loads(device_json), timeout)
+    if verdict.get("opencl_unavailable_reason") == "probe_error":
+        # WG's own check failing is not a verdict on the device. One immediate
+        # second run lets a one-off failure (a child that died while PoCL
+        # compiled its kernels, say) end on the device's real answer.
+        first = verdict
+        verdict = _run_probe("smoke", json.loads(device_json), timeout)
+        verdict["_active_seconds"] = verdict.get("_active_seconds", 0.0) + first.get("_active_seconds", 0.0)
+        if verdict.get("opencl_unavailable_reason") == "probe_error":
+            verdict["reason"] = f"{verdict['reason']} First attempt: {first['reason']}"
     if verdict.get("opencl_unavailable_reason") not in TRANSIENT_REASONS:
         _device_verdict_cache[device_json] = verdict
     return verdict
@@ -480,6 +515,11 @@ def _qualified_opencl() -> dict[str, Any]:
 def _probe_devices() -> dict[str, Any]:
     active_seconds = 0.0
     found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
+    if found.get("opencl_unavailable_reason") == "probe_error":
+        # As for the smoke check: one immediate second run before reporting.
+        first_seconds = found.get("_active_seconds", 0.0)
+        found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
+        found["_active_seconds"] = found.get("_active_seconds", 0.0) + first_seconds
     active_seconds += found.pop("_active_seconds", 0.0)
     if not found.get("ok"):
         return {**found, "opencl_unavailable_reason": found.get("opencl_unavailable_reason", "no_device")}

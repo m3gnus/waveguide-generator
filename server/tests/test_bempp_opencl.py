@@ -440,9 +440,12 @@ def test_transient_failure_is_retried_then_pass_is_cached(monkeypatch, stage, er
     clock = [0.0]
     monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
     calls = []
+    # A probe error is run again at once, so it must fail both runs here to
+    # stay unresolved; a timeout is not run again.
+    failing_runs = 2 if error else 1
     def run(mode, device, timeout):
         calls.append(mode)
-        if mode == stage and calls.count(stage) == 1:
+        if mode == stage and calls.count(stage) <= failing_runs:
             return {'ok': False, 'reason': 'under load',
                     'opencl_unavailable_reason': 'probe_error' if error else (f'{stage}_test_timeout' if stage == 'smoke' else 'inventory_timeout')}
         return {'ok': True, 'devices': [CPU]} if mode == 'inventory' else {'ok': True, 'smoke': {}}
@@ -452,7 +455,7 @@ def test_transient_failure_is_retried_then_pass_is_cached(monkeypatch, stage, er
     assert probe._cached_verdict is None
     assert not probe._device_verdict_cache
     assert not probe.qualified_opencl()['ok']  # throttled
-    assert calls == ([stage] if stage == 'inventory' else ['inventory', 'smoke'])
+    assert calls == ([stage] * failing_runs if stage == 'inventory' else ['inventory'] + ['smoke'] * failing_runs)
     clock[0] += probe.RETRY_INTERVAL_SECONDS
     assert probe.qualified_opencl()['device'] == CPU
     assert not probe.retry_pending()
@@ -491,6 +494,7 @@ def test_transient_retries_have_interval_and_terminal_cap(monkeypatch, stage, er
     monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
     attempts = []
     code = 'probe_error' if error else ('inventory_timeout' if stage == 'inventory' else 'smoke_test_timeout')
+    runs = 2 if error else 1  # a probe error is run again at once
     def run(mode, device, timeout):
         if mode == 'inventory' and stage == 'smoke':
             return {'ok': True, 'devices': [CPU]}
@@ -507,14 +511,14 @@ def test_transient_retries_have_interval_and_terminal_cap(monkeypatch, stage, er
         assert payload['engines'][0]['opencl_retry_pending'] is (attempt + 1 < probe.MAX_TIMEOUT_ATTEMPTS)
         for _ in range(20):
             assert not probe.qualified_opencl()['ok']
-        assert len(attempts) == attempt + 1
+        assert len(attempts) == (attempt + 1) * runs
         clock[0] += probe.RETRY_INTERVAL_SECONDS - 0.01
         assert not probe.qualified_opencl()['ok']
-        assert len(attempts) == attempt + 1
+        assert len(attempts) == (attempt + 1) * runs
         clock[0] += 0.01
     clock[0] += 100
     assert probe.qualified_opencl()['opencl_unavailable_reason'] == code
-    assert len(attempts) == probe.MAX_TIMEOUT_ATTEMPTS
+    assert len(attempts) == probe.MAX_TIMEOUT_ATTEMPTS * runs
     assert not probe.retry_pending()
 
 

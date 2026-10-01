@@ -55,6 +55,10 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
             assert release_probe.wait(5)
             return {'ok': False, 'reason': 'slow inventory after ready',
                     'opencl_unavailable_reason': code}
+        if mode == 'inventory' and code == 'probe_error' and calls.count('inventory') == 2:
+            # A probe error is run again at once; keep that run failing too, so
+            # this test still exercises recovery by the later retry.
+            return {'ok': False, 'reason': 'still failing', 'opencl_unavailable_reason': code}
         return {'ok': True, 'devices': [CPU]} if mode == 'inventory' else {'ok': True, 'smoke': {}}
     monkeypatch.setattr(probe, '_run_probe', run)
     monkeypatch.setattr(metal, 'metal_status', lambda: {
@@ -109,7 +113,9 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                     assert first['reason'] == ("WG's OpenCL check could not complete (internal error); "
                                                "using the slower numba engine for now and retrying.")
                 assert tuple(first['geometry_sources']) == ('parametric',)
-                assert calls == ['inventory']
+                # A probe error is run again at once before it is reported.
+                first_runs = ['inventory'] * (2 if code == 'probe_error' else 1)
+                assert calls == first_runs
                 assert registry._opencl_retry_task is not None
                 clock[0] += probe.RETRY_INTERVAL_SECONDS
                 if recovery == 'idle':
@@ -132,7 +138,7 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                 assert await registry.resolve('auto', solver_mode=None, mounting='infinite-baffle') == 'metal'
                 assert await registry.resolve('bempp', solver_mode=None) == 'bempp'
                 assert probe.execution_route() == ('opencl', CPU)
-                assert calls == ['inventory', 'inventory', 'smoke']
+                assert calls == first_runs + ['inventory', 'smoke']
                 assert next(item for item in registry._cache if item.name == 'metal') is other
             finally:
                 release_probe.set()

@@ -4,7 +4,9 @@ import json
 import subprocess
 import sys
 import threading
+import tempfile
 import time
+from pathlib import Path
 
 import pytest
 
@@ -193,10 +195,47 @@ def test_real_child_protocol_error_is_transient_and_retried(monkeypatch, case, m
     assert not probe._device_verdict_cache
     assert probe.retry_pending()
     assert probe.qualified_opencl() == first
-    assert len(children) == 1
+    # One immediate second run before a probe error is reported.
+    assert len(children) == 2
     monkeypatch.setattr(probe, "_retry_after", 0)
     assert probe.qualified_opencl()["opencl_unavailable_reason"] == "probe_error"
+    assert len(children) == 4
+
+
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_a_one_off_probe_error_ends_on_the_device_answer(monkeypatch, mode):
+    """A check that fails once (a child that died while PoCL compiled, say)
+    is run again at once, so a working device still ends on OpenCL."""
+    good = (f"print({probe._READY_MARKER!r}, flush=True); import sys; open(sys.argv[1], 'w').write("
+            + repr(json.dumps({"ok": True, "smoke": {}} if mode == "smoke" else {"ok": True, "devices": [
+                {"platform_index": 0, "device_index": 0, "type": "cpu", "platform": "Portable Computing Language",
+                 "name": "pthread", "vendor": "PoCL"}]})) + ")")
+    scripts = iter(["import os; os._exit(-11 % 256)", good])
+    children = []
+    original_spawn = subprocess.Popen
+    def spawn(argv, **kwargs):
+        child = original_spawn([sys.executable, "-c", next(scripts), argv[-1]], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(probe.subprocess, "Popen", spawn)
+    real_run = probe._run_probe
+    def run(stage, device, timeout):
+        if stage != mode:
+            return {"ok": True, "smoke": {}} if stage == "smoke" else {"ok": True, "devices": [
+                {"platform_index": 0, "device_index": 0, "type": "cpu", "platform": "Portable Computing Language",
+                 "name": "pthread", "vendor": "PoCL"}]}
+        return real_run(stage, device, timeout)
+    monkeypatch.setattr(probe, "_run_probe", run)
+    verdict = probe.qualified_opencl()
+    assert verdict["ok"], verdict
     assert len(children) == 2
+
+
+def test_a_probe_error_names_what_failed(monkeypatch):
+    child_for(monkeypatch, "import os; os._exit(19)")
+    verdict = probe._run_probe("smoke", None, 5)
+    assert verdict["opencl_unavailable_reason"] == "probe_error"
+    assert "internal error: ValueError: Child exited with status 19" in verdict["reason"]
 
 
 @pytest.mark.parametrize("damage", ["wrong", "error"])
@@ -244,3 +283,57 @@ def test_real_probe_channel_belongs_to_the_session_and_is_cleaned(monkeypatch, t
         assert not result_path.parent.exists()
     finally:
         session.close(remove=True)
+
+
+def test_a_stop_leaves_no_probe_directory_in_the_session(monkeypatch, tmp_path):
+    """The run removes its result directory after its child is reaped; a
+    stop waits for that, so a clean stop leaves the session directory empty."""
+    from server.platform.temp_session import TemporarySession
+
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    owner = threading.Event()
+    ready = threading.Event()
+    original_reader = probe._read_probe_output
+    def read(stream, events):
+        class Observed:
+            def put(self, item):
+                events.put(item)
+                if item[0] == probe._READY_MARKER:
+                    ready.set()
+        original_reader(stream, Observed())
+    monkeypatch.setattr(probe, "_read_probe_output", read)
+    child_for(monkeypatch, f"import time; print({probe._READY_MARKER!r}, flush=True); time.sleep(60)")
+    outcome = []
+    def qualify():
+        try:
+            outcome.append(probe.owned_qualification(owner, probe._run_probe, "smoke", None, 30))
+        except probe.ProbeCancelled as exc:
+            outcome.append(exc)
+    worker = threading.Thread(target=qualify)
+    try:
+        worker.start()
+        assert ready.wait(10), "child never printed READY"
+        assert list(session.path.glob("wg2-opencl-*")), "the run should own a result directory"
+        probe.shutdown_qualification(owner)
+        assert not list(session.path.glob("wg2-opencl-*")), "a clean stop left the probe directory"
+        assert not probe._active_channels
+    finally:
+        worker.join(10)
+        session.close(remove=True)
+
+
+def test_a_stop_removes_a_directory_its_run_did_not_get_to(monkeypatch, tmp_path):
+    owner = threading.Event()
+    channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=tmp_path)
+    monkeypatch.setattr(probe, "SHUTDOWN_CLEANUP_SECONDS", 0.2)
+    with probe._probe_lock:
+        probe._active_channels[channel] = owner
+    try:
+        started = time.monotonic()
+        probe.shutdown_qualification(owner)
+        assert time.monotonic() - started < 2
+        assert not Path(channel.name).exists()
+    finally:
+        with probe._probe_lock:
+            probe._active_channels.pop(channel, None)
