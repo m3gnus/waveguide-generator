@@ -164,11 +164,10 @@ function accurateHelp(
 }
 
 /**
- * Sweep-point source: a generated grid, or the exact frequencies to solve.
+ * Output-point source: a generated grid, or an explicit frequency list.
  *
- * The note about runtime is deliberate. Every point costs the same in this BEM
- * (same-size matrix at every frequency), so a list is a tool for placing detail
- * where it matters -- not a way to make a sweep cheaper by thinning the top end.
+ * Runtime follows native solves (same-size matrix at every frequency).
+ * Adaptive acquisition can interpolate listed points and add coverage queries.
  */
 export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string; context: 'design' | 'imported' }) {
   const store = useSolveOptionsStore();
@@ -177,22 +176,23 @@ export function FrequencySweepControls({ idPrefix, context }: { idPrefix: string
   const spacingId = `${idPrefix}-frequency-spacing`;
   const listId = `${idPrefix}-frequency-list`;
   const modeHelp = context === 'design'
-    ? "Where the solved frequencies come from. Generated grid spreads them between the design's sweep start and end; Explicit list solves exactly the frequencies you type, ignoring the design's range and count."
-    : "Where the solved frequencies come from. Generated grid uses the imported solve range below; Explicit list solves exactly the frequencies you type, ignoring that range and count.";
+    ? "Where the output frequencies come from. Generated grid spreads them between the design's sweep start and end; Explicit list returns exactly the frequencies you type, ignoring the design's range and count."
+    : "Where the output frequencies come from. Generated grid uses the imported solve range below; Explicit list returns exactly the frequencies you type, ignoring that range and count.";
+  const samplingHelp = ' With adaptive sampling enabled for a supported BEAT sweep, some requested rows may be interpolated and extra frequencies solved to fill coverage gaps.';
   const listHelp = context === 'design'
     ? 'These frequencies replace the range and count from the design, and sweep spacing no longer applies.'
     : 'These frequencies replace the imported solve range and count, and sweep spacing no longer applies.';
   return <>
-    <HelpTipRow className="select-row" text={modeHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></HelpTipRow>
+    <HelpTipRow className="select-row" text={modeHelp + samplingHelp}><label htmlFor={modeId}>Sweep points</label><select id={modeId} value={store.frequencyMode} onChange={(event) => store.setFrequencyMode(event.target.value as FrequencyMode)}><option value="range">Generated grid</option><option value="list">Explicit list</option></select></HelpTipRow>
     {store.frequencyMode === 'range'
       ? <HelpTipRow className="select-row" text="How the generated frequencies are spread across the range. Logarithmic gives even spacing per octave, which matches how the response is read; Linear spends most of the points on the top octave."><label htmlFor={spacingId}>Sweep spacing</label><select id={spacingId} value={store.frequencySpacing} onChange={(event) => store.setFrequencySpacing(event.target.value as FrequencySpacing)}><option value="log">Logarithmic</option><option value="linear">Linear</option></select></HelpTipRow>
       : <div className="point-paste">
           <textarea id={listId} aria-label="Solver frequencies in Hz" rows={4} value={store.frequencyListText} onChange={(event) => store.setFrequencyListText(event.target.value)} placeholder={'500, 630, 800, 1000\n1250 1600 2000'} />
           <div className="paste-meta">{frequencies
-            ? <>Solving <b>{frequencies.length}</b> points · <b>{frequencies[0]}</b> to <b>{frequencies[frequencies.length - 1]}</b> Hz</>
+            ? <>Output: <b>{frequencies.length}</b> points · <b>{frequencies[0]}</b> to <b>{frequencies[frequencies.length - 1]}</b> Hz</>
             : <>Ascending Hz, separated by commas, spaces, or newlines · up to {MAX_FREQUENCY_POINTS}</>}</div>
           {error && <div className="field-error" role="alert">{error}</div>}
-          <p className="section-note">{listHelp} Solve time scales with how many points you list, not where they sit — every frequency costs about the same.</p>
+          <p className="section-note">{listHelp} Solve time follows the number of native frequency solves. Adaptive sampling may interpolate listed points and add coverage solves.</p>
         </div>}
   </>;
 }
@@ -241,7 +241,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null 
   return <>
     <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
-    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Narrow resonances can be missed."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
+    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
     {mode === 'parametric' ? <>

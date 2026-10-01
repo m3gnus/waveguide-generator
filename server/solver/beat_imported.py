@@ -54,7 +54,11 @@ from server.contracts.conventions import (
     ENGINEERING_PHASE_CONVENTION,
     PHASE_TIME_CONVENTION,
 )
-from server.contracts.geometry import CUT_PLANES_BY_QUADRANTS, PLANE_BY_QUADRANTS, symmetry_plane_axes_for_quadrants
+from server.contracts.geometry import (
+    CUT_PLANES_BY_QUADRANTS,
+    PLANE_BY_QUADRANTS,
+    symmetry_plane_axes_for_quadrants,
+)
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import temporary_directory_root
 
@@ -75,7 +79,11 @@ from .field_traces_store import (
     build_field_trace_artifact,
     field_trace_retention_plan,
 )
-from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
+from .adaptive_sweep import (
+    enabled as adaptive_enabled,
+    native_acquisition_frequencies,
+    solve_native_adaptively,
+)
 from .frequency_sweep import live_execution_frequencies, sort_native_result_frequencies
 from .imported import (
     imported_anchor_frame,
@@ -161,9 +169,7 @@ def _vector_text(vector: np.ndarray) -> str:
     return "(" + ", ".join(f"{float(value):.6g}" for value in vector) + ")"
 
 
-def beat_imported_frame(
-    record: Mapping[str, Any], native_plane: str | None
-) -> BeatImportedFrame:
+def beat_imported_frame(record: Mapping[str, Any], native_plane: str | None) -> BeatImportedFrame:
     """Rotate the record's anchor frame onto BEAT's, or say why it cannot be."""
 
     if native_plane not in _MIRROR_AXES:
@@ -175,9 +181,10 @@ def beat_imported_frame(
         )
     parts = imported_anchor_frame(record)
     rotation = np.vstack([parts["u"], parts["v"], parts["axis"]]).astype(float)
-    if not np.allclose(
-        rotation @ rotation.T, np.eye(3), atol=FRAME_TOLERANCE
-    ) or np.linalg.det(rotation) <= 0.0:
+    if (
+        not np.allclose(rotation @ rotation.T, np.eye(3), atol=FRAME_TOLERANCE)
+        or np.linalg.det(rotation) <= 0.0
+    ):
         raise ImportedBeatRefusal(
             "BEAT rotates an imported mesh into its own +z frame, which needs "
             "the record's anchor throat frame to be a right-handed orthonormal "
@@ -251,9 +258,7 @@ class _Gmsh22Mesh:
         node_ids: list[str] = []
         coordinates = np.empty((node_count, 3), dtype=float)
         try:
-            for row_index, row in enumerate(
-                lines[nodes_start + 2 : nodes_start + 2 + node_count]
-            ):
+            for row_index, row in enumerate(lines[nodes_start + 2 : nodes_start + 2 + node_count]):
                 parts = row.split()
                 node_ids.append(parts[0])
                 coordinates[row_index] = [float(value) for value in parts[1:4]]
@@ -390,11 +395,7 @@ def _drive_groups(
     if motion != "axial":
         return [(1.0, tags)]
     backward = frozenset(tag for tag in tags if signs.get(tag, 1.0) < 0.0)
-    return [
-        (sign, group)
-        for sign, group in ((1.0, tags - backward), (-1.0, backward))
-        if group
-    ]
+    return [(sign, group) for sign, group in ((1.0, tags - backward), (-1.0, backward)) if group]
 
 
 def _signed_sum(parts: Sequence[tuple[float, Any]], *, adaptive: bool = False) -> Any:
@@ -428,14 +429,14 @@ def _signed_sum(parts: Sequence[tuple[float, Any]], *, adaptive: bool = False) -
     averages = [getattr(result, "surface_pressure_avg", None) for _, result in parts]
     if adaptive and all(isinstance(value, dict) for value in averages):
         combined.surface_pressure_avg = {
-            tag: sum(sign * np.asarray(values[tag])
-                     for (sign, _), values in zip(parts, averages, strict=True))
+            tag: sum(
+                sign * np.asarray(values[tag])
+                for (sign, _), values in zip(parts, averages, strict=True)
+            )
             for tag in set.intersection(*(set(value) for value in averages))
         }
     with np.errstate(divide="ignore"):
-        combined.spl_db = 20.0 * np.log10(
-            np.abs(np.asarray(combined.pressure_complex)) / 20.0e-6
-        )
+        combined.spl_db = 20.0 * np.log10(np.abs(np.asarray(combined.pressure_complex)) / 20.0e-6)
     timings: dict[str, float] = {}
     for _, result in parts:
         for key, value in dict(getattr(result, "timings", {}) or {}).items():
@@ -591,15 +592,12 @@ def _combined_channel_response(
         reference=resolved["reference"],
         member_validity_hz=member_validity_hz,
         member_roles={
-            member: channel_identity.get(member, {}).get("role")
-            for member in spec.members
+            member: channel_identity.get(member, {}).get("role") for member in spec.members
         },
         member_limits=member_limits,
     )
     source_ids = [
-        source_id
-        for member in spec.members
-        for source_id in channels_by_id[member].source_ids
+        source_id for member in spec.members for source_id in channels_by_id[member].source_ids
     ]
     metadata = {
         "solver_backend": "beat",
@@ -670,8 +668,7 @@ def solve_imported_beat_from_msh_text(
         raise ValueError("imported BEAT solve requires imported geometry")
     if request.options.ground_plane.enabled:
         raise BeatUnavailable(
-            "The HornLab BEAT adapter cannot apply a rigid ground plane to "
-            "imported geometry."
+            "The HornLab BEAT adapter cannot apply a rigid ground plane to imported geometry."
         )
     if geometry.passive_cardioid_enabled:
         raise BeatUnavailable(PASSIVE_CARDIOID_REFUSAL)
@@ -722,9 +719,7 @@ def solve_imported_beat_from_msh_text(
     channel_order = [channel.id for channel in geometry.drive_channels]
     started = time.time()
     if stage_callback:
-        stage_callback(
-            "setup", 0.0, f"Configuring imported BEAT Engine BEM solve ({backend})"
-        )
+        stage_callback("setup", 0.0, f"Configuring imported BEAT Engine BEM solve ({backend})")
     announce_beat_warmup_wait(stage_callback)
 
     motions = {channel.motion for channel in geometry.drive_channels}
@@ -736,13 +731,9 @@ def solve_imported_beat_from_msh_text(
     mesh_record = record.get("mesh")
     mesh_record = mesh_record if isinstance(mesh_record, Mapping) else {}
     imported_mesh_stats = mesh_record.get("stats")
-    imported_mesh_stats = (
-        imported_mesh_stats if isinstance(imported_mesh_stats, Mapping) else None
-    )
+    imported_mesh_stats = imported_mesh_stats if isinstance(imported_mesh_stats, Mapping) else None
     frequencies = live_execution_frequencies(context).tolist()
-    field_plane_enabled = (
-        getattr(context, "polar_config", {}).get("field_plane", True) is True
-    )
+    field_plane_enabled = getattr(context, "polar_config", {}).get("field_plane", True) is True
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
         field_trace_retention_plan(
             msh_text,
@@ -774,11 +765,11 @@ def solve_imported_beat_from_msh_text(
     }
     frequency_count = len(frequencies)
     channel_count = len(geometry.drive_channels)
-    total_work = max(
-        1, frequency_count * sum(len(groups) for groups in channel_groups.values())
-    )
-
     adaptive = adaptive_enabled(context)
+    acquisition_count = (
+        len(native_acquisition_frequencies(context)) if adaptive else frequency_count
+    )
+    total_work = max(1, acquisition_count * sum(len(groups) for groups in channel_groups.values()))
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
@@ -823,6 +814,7 @@ def solve_imported_beat_from_msh_text(
                 del frequency_hz
                 if adaptive:
                     work_done += 1
+                    index, total = work_done - _offset - 1, acquisition_count * len(groups)
                 completed = work_done if adaptive else _offset + index + 1
                 if cancellation_callback:
                     cancellation_callback()
@@ -832,7 +824,7 @@ def solve_imported_beat_from_msh_text(
                         completed / total_work,
                         f"Solving frequency {index + 1}/{total} of drive channel "
                         f"{_channel_index + 1}/{channel_count} ({_channel_id}) "
-                        "with BEAT Engine",
+                        "with BEAT Engine" + (" (native acquisition)" if adaptive else ""),
                     )
 
             def on_frequency_result(
@@ -946,7 +938,10 @@ def solve_imported_beat_from_msh_text(
             path: Path | None = None
             try:
                 with tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".msh", delete=False, encoding="utf-8",
+                    mode="w",
+                    suffix=".msh",
+                    delete=False,
+                    encoding="utf-8",
                     dir=temporary_directory_root(),
                 ) as handle:
                     path = Path(handle.name)
@@ -959,10 +954,14 @@ def solve_imported_beat_from_msh_text(
                             if result_callback is None:
                                 return
                             snapshot = build_solver_response(
-                                result=native, config=config, context=channel_context,
+                                result=native,
+                                config=config,
+                                context=channel_context,
                                 start_time=started,
-                                metadata={**channel_identity[channel.id],
-                                          "observation_frame_basis": dict(frame_basis)},
+                                metadata={
+                                    **channel_identity[channel.id],
+                                    "observation_frame_basis": dict(frame_basis),
+                                },
                                 sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
                             )
                             if len(channel.source_ids) > 1:
@@ -970,25 +969,35 @@ def solve_imported_beat_from_msh_text(
                             live_channel_status[channel.id] = snapshot["frequency_status"]
                             # Unpublished channels have no solved rows yet.
                             flags = [
-                                "solved" if all(
+                                "solved"
+                                if all(
                                     member in live_channel_status
                                     and live_channel_status[member][i] == "solved"
                                     for member in channel_order
-                                ) else "interpolated"
+                                )
+                                else "interpolated"
                                 for i in range(frequency_count)
                             ]
                             frame = {
-                                "result_kind": "multi_channel", "result_contract_version": 2,
-                                "channels": {channel.id: snapshot}, "channel_order": channel_order,
-                                "frequencies": snapshot["frequencies"], "frequency_status": flags,
+                                "result_kind": "multi_channel",
+                                "result_contract_version": 2,
+                                "channels": {channel.id: snapshot},
+                                "channel_order": channel_order,
+                                "frequencies": snapshot["frequencies"],
+                                "frequency_status": flags,
                                 "metadata": {
                                     "geometry_type": "imported",
                                     "observation_frame_basis": dict(frame_basis),
                                     "provisional": {
-                                        "completed_frequency_count": native.adaptive_sampling["solved_count"],
+                                        "completed_frequency_count": native.adaptive_sampling[
+                                            "solved_count"
+                                        ],
                                         "expected_frequency_count": frequency_count,
-                                        "channel": {"id": channel.id, "index": channel_index + 1,
-                                                    "count": channel_count},
+                                        "channel": {
+                                            "id": channel.id,
+                                            "index": channel_index + 1,
+                                            "count": channel_count,
+                                        },
                                     },
                                 },
                             }
@@ -999,7 +1008,10 @@ def solve_imported_beat_from_msh_text(
                             group_paths = [(groups[0][0], path)]
                             for group_sign, tags in groups[1:]:
                                 with tempfile.NamedTemporaryFile(
-                                    mode="w", suffix=".msh", delete=False, encoding="utf-8",
+                                    mode="w",
+                                    suffix=".msh",
+                                    delete=False,
+                                    encoding="utf-8",
                                     dir=temporary_directory_root(),
                                 ) as handle:
                                     group_path = Path(handle.name)
@@ -1016,15 +1028,19 @@ def solve_imported_beat_from_msh_text(
                                         str(group_path), batch, config, status_callback=stage_status
                                     )
                                     if not np.array_equal(native.frequencies_hz, batch):
-                                        raise ValueError("adaptive batch returned a different frequency grid")
+                                        raise ValueError(
+                                            "adaptive batch returned a different frequency grid"
+                                        )
                                     rows.append((group_sign, native))
                                 return _signed_sum(rows, adaptive=True)
 
                             result = solve_native_adaptively(
-                                context, solve_batch,
+                                context,
+                                solve_batch,
                                 distance_m=config.observation.distance_m,
                                 sound_speed=solver_sound_speed_m_per_s("hornlab_beat_bem"),
-                                publish=publish, cancel=cancellation_callback,
+                                publish=publish,
+                                cancel=cancellation_callback,
                             )
                     else:
                         result = package.solve_frequencies(
@@ -1037,9 +1053,7 @@ def solve_imported_beat_from_msh_text(
                     try:
                         path.unlink(missing_ok=True)
                     except OSError as exc:
-                        logger.warning(
-                            "Could not remove temporary BEAT mesh %s: %s", path, exc
-                        )
+                        logger.warning("Could not remove temporary BEAT mesh %s: %s", path, exc)
             sort_native_result_frequencies(result)
             parts.append((1.0 if adaptive else sign, result))
             if not adaptive:
@@ -1112,10 +1126,7 @@ def solve_imported_beat_from_msh_text(
                 merged_tags=sorted(channel_tags[channel.id]),
                 result=result,
                 reversed_tags=sorted(
-                    tag
-                    for sign, group in channel_groups[channel.id]
-                    if sign < 0.0
-                    for tag in group
+                    tag for sign, group in channel_groups[channel.id] if sign < 0.0 for tag in group
                 ),
             ),
         }
@@ -1207,9 +1218,7 @@ def solve_imported_beat_from_msh_text(
         "tag_map": json_safe_native_value(record.get("tag_map") or {}),
         "per_source_frequency_validity": per_source_validity,
         "symmetry_planes_used": sorted(domain_planes),
-        "polar_grid_derivation": json_safe_native_value(
-            record.get("polar_grid_derivation") or {}
-        ),
+        "polar_grid_derivation": json_safe_native_value(record.get("polar_grid_derivation") or {}),
         "observation_origin_effective": "throat",
         "observation_frame_basis": dict(frame_basis),
         "beat_solver_frame": {
@@ -1255,8 +1264,10 @@ def solve_imported_beat_from_msh_text(
         envelope["frequencies"] = envelope_frequencies
     if adaptive_enabled(context):
         envelope["frequency_status"] = [
-            "solved" if all(payload["frequency_status"][i] == "solved" for payload in channels.values())
-            else "interpolated" for i in range(len(envelope_frequencies))
+            "solved"
+            if all(payload["frequency_status"][i] == "solved" for payload in channels.values())
+            else "interpolated"
+            for i in range(len(envelope_frequencies))
         ]
     if channel_bases_npz is not None:
         envelope["_channel_bases_npz"] = channel_bases_npz

@@ -65,22 +65,32 @@ $Elements
 $EndElements
 """
 
-def _mesh(nodes: list[tuple[float, float, float]], triangles: list[tuple[int, tuple[int, int, int]]]) -> str:
+
+def _mesh(
+    nodes: list[tuple[float, float, float]], triangles: list[tuple[int, tuple[int, int, int]]]
+) -> str:
     """A Gmsh 2.2 surface of ``(tag, (node, node, node))`` triangles.
 
     The winding is the outward normal: (b - a) x (c - a).
     """
 
     rows = [
-        "$MeshFormat", "2.2 0 8", "$EndMeshFormat",
-        "$PhysicalNames", "4",
+        "$MeshFormat",
+        "2.2 0 8",
+        "$EndMeshFormat",
+        "$PhysicalNames",
+        "4",
         '2 1 "wg-import-v1|rigid"',
         '2 101 "wg-import-v1|tag=101|source_id=source-a|instance_id=i|role=HF"',
         '2 102 "wg-import-v1|tag=102|source_id=source-b|instance_id=i|role=MF"',
         '2 103 "wg-import-v1|tag=103|source_id=source-c|instance_id=null|role=LF"',
-        "$EndPhysicalNames", "$Nodes", str(len(nodes)),
+        "$EndPhysicalNames",
+        "$Nodes",
+        str(len(nodes)),
         *(f"{index} {x} {y} {z}" for index, (x, y, z) in enumerate(nodes, start=1)),
-        "$EndNodes", "$Elements", str(len(triangles)),
+        "$EndNodes",
+        "$Elements",
+        str(len(triangles)),
         *(
             f"{index} 2 2 {tag} {tag} {a} {b} {c}"
             for index, (tag, (a, b, c)) in enumerate(triangles, start=1)
@@ -99,7 +109,15 @@ MESH_Z = _mesh(
 
 #: The same, along x: tag 103 faces -x, so in SIDEWAYS_FRAME (axis +x) it is -z.
 MESH_X = _mesh(
-    [(0.01, 0, 0), (0, 0.02, 0), (0, 0, 0.03), (0.01, 0.02, 0.03), (0.01, 0, 0), (0.01, 0.02, 0), (0.01, 0, 0.03)],
+    [
+        (0.01, 0, 0),
+        (0, 0.02, 0),
+        (0, 0, 0.03),
+        (0.01, 0.02, 0.03),
+        (0.01, 0, 0),
+        (0.01, 0.02, 0),
+        (0.01, 0, 0.03),
+    ],
     [(1, (1, 2, 3)), (101, (1, 2, 4)), (102, (2, 3, 4)), (103, (5, 7, 6))],
 )
 
@@ -137,9 +155,7 @@ def _at(origin: list[float], frame: dict[str, Any] | None = None) -> dict[str, A
 def _symmetry(planes: list[str]) -> dict[str, Any]:
     return {
         "cut_planes": list(planes),
-        "planes": {
-            name: {"accepted": name in planes} for name in ("x0", "y0", "z0")
-        },
+        "planes": {name: {"accepted": name in planes} for name in ("x0", "y0", "z0")},
     }
 
 
@@ -238,9 +254,7 @@ class _RecordingBeat:
     ) -> SimpleNamespace:
         del status_callback
         scale = float(len(self.solves) + 1)
-        self.solves.append(
-            {"text": Path(path).read_text(encoding="utf-8"), "config": config}
-        )
+        self.solves.append({"text": Path(path).read_text(encoding="utf-8"), "config": config})
         count = len(frequencies)
         result = SimpleNamespace(
             frequencies_hz=np.asarray(frequencies, dtype=float),
@@ -350,9 +364,7 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
 
     # The mesh is rotated rigidly so the anchor frame (u, v, axis) lands on
     # BEAT's (+x, +y, +z); BEAT's frame is then a pure translation.
-    rotation = np.asarray(
-        [SIDEWAYS_FRAME["u"], SIDEWAYS_FRAME["v"], SIDEWAYS_FRAME["axis"]]
-    )
+    rotation = np.asarray([SIDEWAYS_FRAME["u"], SIDEWAYS_FRAME["v"], SIDEWAYS_FRAME["axis"]])
     original = _nodes(MESH_X)
     np.testing.assert_allclose(_nodes(left["text"]), original @ rotation.T, atol=1e-15)
     frame = left["config"].frame_override
@@ -399,16 +411,16 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
     left_basis = bases["results_by_id"]["left"].pressure_complex
     right_basis = bases["results_by_id"]["right"].pressure_complex
     np.testing.assert_allclose(right_basis, -2.0 * left_basis)
-    assert response["channels"]["right"]["metadata"]["beat"][
-        "axially_reversed_source_tags"
-    ] == [103]
+    assert response["channels"]["right"]["metadata"]["beat"]["axially_reversed_source_tags"] == [
+        103
+    ]
 
     # Streamed frames are numbered across channels, so the runtime's
     # one-revision-per-frame rule keeps every one of them.
     assert [index for index, _ in streamed] == list(range(6))
-    assert [list(payload["channels"]) for _, payload in streamed] == [
-        ["left"]
-    ] * 3 + [["right"]] * 3
+    assert [list(payload["channels"]) for _, payload in streamed] == [["left"]] * 3 + [
+        ["right"]
+    ] * 3
     # Channels arrive one after another: the live count is the current
     # channel's, out of the sweep, and the envelope's frequency axis comes
     # from the first channel only, so each frequency appears once.
@@ -522,7 +534,11 @@ def test_a_tilted_source_within_half_a_degree_of_z_snaps_and_beyond_it_is_refuse
         # A triangle whose normal is tilted about y by ``tilt``.
         base = np.asarray([[0.0, 0.0, 0.0], [0.01, 0.0, 0.0], [0.0, 0.01, 0.0]])
         rotation = np.asarray(
-            [[math.cos(tilt), 0.0, math.sin(tilt)], [0.0, 1.0, 0.0], [-math.sin(tilt), 0.0, math.cos(tilt)]]
+            [
+                [math.cos(tilt), 0.0, math.sin(tilt)],
+                [0.0, 1.0, 0.0],
+                [-math.sin(tilt), 0.0, math.cos(tilt)],
+            ]
         )
         nodes = [tuple(float(v) for v in row) for row in base @ rotation.T]
         nodes += [(0.0, 0.0, 0.05), (0.01, 0.0, 0.05), (0.0, 0.01, 0.05)]
@@ -531,9 +547,16 @@ def test_a_tilted_source_within_half_a_degree_of_z_snaps_and_beyond_it_is_refuse
     request = _axial_request("source-a")
     channels = request.geometry.drive_channels
     near = cap(0.3)
-    assert beat.BeatEngine("cpu").imported_preflight(_record(msh_text=near), near, drive_channels=channels) is None
+    assert (
+        beat.BeatEngine("cpu").imported_preflight(
+            _record(msh_text=near), near, drive_channels=channels
+        )
+        is None
+    )
     far = cap(0.8)
-    refusal = beat.BeatEngine("cpu").imported_preflight(_record(msh_text=far), far, drive_channels=channels)
+    refusal = beat.BeatEngine("cpu").imported_preflight(
+        _record(msh_text=far), far, drive_channels=channels
+    )
     assert refusal is not None and "tag 101" in refusal
 
 
@@ -545,7 +568,9 @@ def test_a_closed_source_cannot_be_driven_axially() -> None:
         [(1, (1, 2, 3)), (101, (1, 3, 2)), (101, (1, 2, 4)), (101, (2, 3, 4)), (101, (3, 1, 4))],
     )
     refusal = beat.BeatEngine("cpu").imported_preflight(
-        _record(msh_text=tetra), tetra, drive_channels=_axial_request("source-a").geometry.drive_channels
+        _record(msh_text=tetra),
+        tetra,
+        drive_channels=_axial_request("source-a").geometry.drive_channels,
     )
     assert refusal is not None and "tag 101" in refusal
 
@@ -613,7 +638,10 @@ def test_an_unused_node_on_the_negative_side_does_not_refuse_a_half() -> None:
         "$EndNodes", "5 -0.05 0 0\n$EndNodes"
     )
 
-    assert beat.BeatEngine("cpu").imported_preflight(_record(planes=["x0"], msh_text=orphan), orphan) is None
+    assert (
+        beat.BeatEngine("cpu").imported_preflight(_record(planes=["x0"], msh_text=orphan), orphan)
+        is None
+    )
 
 
 def test_a_one_tag_triangle_row_is_written_with_both_tags() -> None:
@@ -670,10 +698,14 @@ def test_imported_adapter_passes_selected_backend_to_beat(
     # accuracy, so Metal takes the identical solve in Fast.
     if backend in ("cuda", "rocm"):
         with pytest.raises(beat.BeatUnavailable, match="only in Accurate"):
-            asyncio.run(engine.run(
-                request, cancel_cb=lambda: None, stage_cb=lambda *_: None,
-                imported_record=_record(),
-            ))
+            asyncio.run(
+                engine.run(
+                    request,
+                    cancel_cb=lambda: None,
+                    stage_cb=lambda *_: None,
+                    imported_record=_record(),
+                )
+            )
         assert recording_beat.solves == []
         request.options.accuracy = "accurate"
     result = asyncio.run(
@@ -745,9 +777,7 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
 
     engines = {info.name: info for info in registry.detect_engines(environ={})}
 
-    imported = sorted(
-        name for name, info in engines.items() if "imported" in info.geometry_sources
-    )
+    imported = sorted(name for name, info in engines.items() if "imported" in info.geometry_sources)
     assert imported == ["beat-cpu", "metal"]
     assert engines["beat-cpu"].symmetry_domains == ("full", "half-yz", "quarter")
     assert engines["metal"].imported_features == ("passive-cardioid",)
@@ -768,6 +798,7 @@ def test_parametric_beat_envelope_uses_the_shared_phase_tag(recording_beat, monk
 
 def test_adaptive_off_keeps_the_original_single_batch_and_stream(recording_beat, monkeypatch):
     from server.solver.frequency_sweep import live_execution_frequencies
+
     request = _request()
     request.options.frequencies_hz = np.geomspace(100, 1000, 24).tolist()
     request.options.adaptive_frequency_sampling = False
@@ -779,18 +810,24 @@ def test_adaptive_off_keeps_the_original_single_batch_and_stream(recording_beat,
         return native_solve(path, frequencies, config, **kwargs)
 
     monkeypatch.setattr(recording_beat, "solve_frequencies", record)
-    monkeypatch.setattr(beat_imported, "solve_native_adaptively",
-                        lambda *args, **kwargs: pytest.fail("off must not invoke the planner"))
+    monkeypatch.setattr(
+        beat_imported,
+        "solve_native_adaptively",
+        lambda *args, **kwargs: pytest.fail("off must not invoke the planner"),
+    )
     streamed = []
     outcome = _run(request, _record(), streamed)
     context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")
-    assert seen == [live_execution_frequencies(context).tolist()]*2
+    assert seen == [live_execution_frequencies(context).tolist()] * 2
     assert len(streamed) == 48
     assert "frequency_status" not in outcome.results["channels"]["left"]
 
 
-def test_adaptive_imported_batches_publish_replaceable_channel_snapshots(recording_beat, monkeypatch):
+def test_adaptive_imported_batches_publish_replaceable_channel_snapshots(
+    recording_beat, monkeypatch
+):
     from server.jobs.runtime import merge_provisional_results
+
     request = _request()
     request.options.frequencies_hz = np.geomspace(100, 1000, 48).tolist()
     request.options.adaptive_frequency_sampling = True
@@ -798,9 +835,12 @@ def test_adaptive_imported_batches_publish_replaceable_channel_snapshots(recordi
 
     def smooth(path, frequencies, config, **kwargs):
         result = native_solve(path, frequencies, config, **kwargs)
-        result.pressure_complex = (np.exp(2j*np.pi*np.asarray(frequencies)*2/343)[:, None, None]
-                                   * np.ones((len(frequencies), 1, 3)) * 20e-6)
-        result.impedance[:] = 1j*REFERENCE_RHO_C
+        result.pressure_complex = (
+            np.exp(2j * np.pi * np.asarray(frequencies) * 2 / 343)[:, None, None]
+            * np.ones((len(frequencies), 1, 3))
+            * 20e-6
+        )
+        result.impedance[:] = 1j * REFERENCE_RHO_C
         return result
 
     monkeypatch.setattr(recording_beat, "solve_frequencies", smooth)
@@ -820,7 +860,9 @@ def test_adaptive_imported_batches_publish_replaceable_channel_snapshots(recordi
     assert merged["frequencies"] == request.options.frequencies_hz
 
 
-def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(recording_beat, monkeypatch):
+def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(
+    recording_beat, monkeypatch
+):
     # Review reproduction: S in WG's unit-acceleration convention, with a
     # small, smooth damped response added to the negative axial group.
     from server.tests.test_adaptive_sweep import reference
@@ -828,8 +870,9 @@ def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(rec
     f, values = reference()
     values = values / (-2j * np.pi * f[:, None])
     delay = np.exp(2j * np.pi * f * 2 / 343)
-    residual = (abs(values[:, :-1]).max() * 1e-4 * 80
-                / (f - (750 - 80j)) * delay)[:, None] * np.ones((1, 37))
+    residual = (abs(values[:, :-1]).max() * 1e-4 * 80 / (f - (750 - 80j)) * delay)[
+        :, None
+    ] * np.ones((1, 37))
     # Independently converged group fits reproduce the cancellation failure.
     from server.solver.adaptive_sweep import SweepPlanner
 
@@ -845,10 +888,20 @@ def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(rec
         independent.append(planner.prediction[:, 0])
     group_sum = independent[0] - independent[1]
     assert np.max(abs(20 * np.log10(abs(group_sum) / abs(residual[:, 0])))) > 1
-    request = _request(drive_channels=[{
-        "id": "sum", "source_ids": ["source-a", "source-b"], "motion": "axial",
-    }], mesh={"rigid_size_mm": 8.0, "transition_mm": 20.0,
-              "source_size_mm": {"source-a": 3.0, "source-b": 3.0}})
+    request = _request(
+        drive_channels=[
+            {
+                "id": "sum",
+                "source_ids": ["source-a", "source-b"],
+                "motion": "axial",
+            }
+        ],
+        mesh={
+            "rigid_size_mm": 8.0,
+            "transition_mm": 20.0,
+            "source_size_mm": {"source-a": 3.0, "source-b": 3.0},
+        },
+    )
     request.options.frequencies_hz = f.tolist()
     request.options.adaptive_frequency_sampling = True
     native_solve = recording_beat.solve_frequencies
@@ -878,11 +931,19 @@ def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(rec
     assert streamed[-1][1]["channels"]["sum"]["metadata"]["adaptive_sampling"] == sampling
 
 
-def test_adaptive_imported_live_frame_progress_counts_and_channel_intersection(recording_beat, monkeypatch):
+@pytest.mark.parametrize("coverage, signed_groups", [(False, False), (True, False), (True, True)])
+def test_adaptive_imported_live_frame_progress_counts_and_channel_intersection(
+    recording_beat, monkeypatch, coverage, signed_groups
+):
     from server.jobs.runtime import merge_provisional_results
+    from server.solver.adaptive_sweep import native_acquisition_frequencies
 
     request = _request()
-    request.options.frequencies_hz = np.geomspace(100, 1000, 48).tolist()
+    if signed_groups:
+        request.geometry.drive_channels[0].motion = "axial"
+    request.options.frequencies_hz = (
+        np.geomspace(100, 20000, 24).tolist() if coverage else np.geomspace(100, 1000, 48).tolist()
+    )
     request.options.adaptive_frequency_sampling = True
     native_solve = recording_beat.solve_frequencies
     progress = []
@@ -894,40 +955,81 @@ def test_adaptive_imported_live_frame_progress_counts_and_channel_intersection(r
         f = np.asarray(frequencies)
         left = _elements(Path(path).read_text())[2] == beat_imported.VELOCITY_TAG
         pole = (250 - 90j) if left else (750 - 90j)
-        result.pressure_complex = (np.exp(2j*np.pi*f*2/343) / (f - pole))[:, None, None] * np.ones((1, 1, 3))
+        result.pressure_complex = (np.exp(2j * np.pi * f * 2 / 343) / (f - pole))[
+            :, None, None
+        ] * np.ones((1, 1, 3))
         result.impedance[:] = 1j * REFERENCE_RHO_C
         return result
 
     monkeypatch.setattr(recording_beat, "solve_frequencies", smooth)
     streamed = []
-    outcome = asyncio.run(beat.BeatEngine("cpu").run(
-        request, cancel_cb=lambda: None,
-        stage_cb=lambda stage, fraction, *_: progress.append((stage, fraction)),
-        result_cb=lambda index, payload: streamed.append((index, payload)),
-        imported_record=_record(frame=SIDEWAYS_FRAME, msh_text=MESH_X),
-    ))
-    fractions = [fraction for stage, fraction in progress if stage == "frequency_solve"]
+    outcome = asyncio.run(
+        beat.BeatEngine("cpu").run(
+            request,
+            cancel_cb=lambda: None,
+            stage_cb=lambda *args: progress.append(args),
+            result_cb=lambda index, payload: streamed.append((index, payload)),
+            imported_record=_record(msh_text=MESH_Z)
+            if signed_groups
+            else _record(frame=SIDEWAYS_FRAME, msh_text=MESH_X),
+        )
+    )
+    fractions = [fraction for stage, fraction, *_ in progress if stage == "frequency_solve"]
     assert len(fractions) > 16
     assert fractions == sorted(fractions)
     assert max(fractions) <= 1
+    context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="normal")
+    target = len(native_acquisition_frequencies(context)) * (3 if signed_groups else 2)
+    solves = [entry for entry in progress if entry[2].startswith("Solving frequency")]
+    assert [entry[1] for entry in solves] == pytest.approx(
+        [i / target for i in range(1, len(solves) + 1)]
+    )
+    per_channel = {"left": 0, "right": 0}
+    for _, _, message in solves:
+        channel = "left" if "(left)" in message else "right"
+        per_channel[channel] += 1
+        channel_target = len(native_acquisition_frequencies(context)) * (
+            2 if signed_groups and channel == "left" else 1
+        )
+        assert per_channel[channel] <= channel_target
+        assert message.startswith(
+            f"Solving frequency {per_channel[channel]}/{channel_target} of drive channel "
+        )
+        assert message.endswith("(native acquisition)")
+    if coverage:
+        assert target == 47 * (3 if signed_groups else 2)
+        assert len(solves) > 24 * (3 if signed_groups else 2)
     merged = None
     selections = {}
     for _, delta in streamed:
         channel_id, payload = next(iter(delta["channels"].items()))
-        assert payload["metadata"]["observation_frame_basis"] == outcome.results["channels"][channel_id]["metadata"]["observation_frame_basis"]
-        assert delta["metadata"]["observation_frame_basis"]["axis"] == [1, 0, 0]
-        assert delta["metadata"]["observation_frame_basis"]["origin_m"] == [0.05, 0.02, 0.03]
+        assert (
+            payload["metadata"]["observation_frame_basis"]
+            == outcome.results["channels"][channel_id]["metadata"]["observation_frame_basis"]
+        )
+        if not signed_groups:
+            assert delta["metadata"]["observation_frame_basis"]["axis"] == [1, 0, 0]
+            assert delta["metadata"]["observation_frame_basis"]["origin_m"] == [0.05, 0.02, 0.03]
         counts = delta["metadata"]["provisional"]
         assert counts["completed_frequency_count"] == payload["frequency_status"].count("solved")
-        assert counts["expected_frequency_count"] == 48
+        count = len(request.options.frequencies_hz)
+        assert counts["expected_frequency_count"] == count
         selections[channel_id] = payload["frequency_status"]
-        expected = ["solved" if all(selections.get(c, ["interpolated"] * 48)[i] == "solved"
-                                         for c in ["left", "right"]) else "interpolated" for i in range(48)]
+        expected = [
+            "solved"
+            if all(
+                selections.get(c, ["interpolated"] * count)[i] == "solved"
+                for c in ["left", "right"]
+            )
+            else "interpolated"
+            for i in range(count)
+        ]
         assert delta["frequency_status"] == expected
         merged = merge_provisional_results(merged, delta)
         assert merged["frequency_status"] == expected
-    assert streamed[0][1]["metadata"]["provisional"]["completed_frequency_count"] == 8
-    assert selections["left"] != selections["right"]
+    if not coverage:
+        assert streamed[0][1]["metadata"]["provisional"]["completed_frequency_count"] == 8
+        assert selections["left"] != selections["right"]
     assert merged["frequency_status"] == outcome.results["frequency_status"]
 
 
@@ -936,12 +1038,19 @@ def test_signed_sum_auxiliary_aggregation_is_only_adaptive(parts):
     """Off preserves base's first-group averages/logs; fits need signed traces."""
     from types import SimpleNamespace
 
-    groups = [(sign, SimpleNamespace(
-        pressure_complex=np.full((2, 1, 1), value, dtype=complex),
-        impedance=np.full(2, value, dtype=complex),
-        surface_pressure_avg={2: np.full(2, value, dtype=complex)},
-        solver_log=[{"group": value}], timings={"solve": value},
-    )) for sign, value in parts]
+    groups = [
+        (
+            sign,
+            SimpleNamespace(
+                pressure_complex=np.full((2, 1, 1), value, dtype=complex),
+                impedance=np.full(2, value, dtype=complex),
+                surface_pressure_avg={2: np.full(2, value, dtype=complex)},
+                solver_log=[{"group": value}],
+                timings={"solve": value},
+            ),
+        )
+        for sign, value in parts
+    ]
     legacy = beat_imported._signed_sum(groups)
     adaptive = beat_imported._signed_sum(groups, adaptive=True)
     expected = sum(sign * value for sign, value in parts)

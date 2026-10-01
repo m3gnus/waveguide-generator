@@ -146,7 +146,7 @@ class SweepPlanner:
             oversized = np.argsort(np.diff(np.log2(f[coverage_ids])))[::-1]
             candidate = None
             for gap in oversized:
-                left, right = coverage_ids[gap:gap + 2]
+                left, right = coverage_ids[gap : gap + 2]
                 if np.log2(f[right] / f[left]) <= MAX_SOLVED_GAP_OCTAVES + 1e-12:
                     break
                 candidates = np.arange(left + 1, right)
@@ -191,6 +191,17 @@ _COMPLEX_FIELDS = (
 )
 
 
+def native_acquisition_frequencies(context) -> np.ndarray:
+    """Requested rows plus geometric coverage queries; also the progress budget."""
+    requested = canonical_frequencies(context)
+    coverage = []
+    for left, right in zip(requested[:-1], requested[1:], strict=True):
+        intervals = int(np.ceil(np.log2(right / left) / MAX_SOLVED_GAP_OCTAVES - 1e-12))
+        if intervals > 1:
+            coverage.extend(np.geomspace(left, right, intervals + 1)[1:-1])
+    return np.unique(np.r_[requested, coverage])
+
+
 def solve_native_adaptively(
     context,
     solve_batch: Callable,
@@ -204,12 +215,7 @@ def solve_native_adaptively(
     requested = canonical_frequencies(context)
     # Sparse explicit/linear requests can themselves exceed the density floor.
     # Add native coverage queries, then publish only the original requested grid.
-    coverage = []
-    for left, right in zip(requested[:-1], requested[1:], strict=True):
-        intervals = int(np.ceil(np.log2(right / left) / MAX_SOLVED_GAP_OCTAVES - 1e-12))
-        if intervals > 1:
-            coverage.extend(np.geomspace(left, right, intervals + 1)[1:-1])
-    f = np.unique(np.r_[requested, coverage])
+    f = native_acquisition_frequencies(context)
     requested_ids = np.searchsorted(f, requested)
     planner = None
     template = None

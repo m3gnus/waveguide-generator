@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from types import SimpleNamespace
+import zipfile
 
 import numpy as np
 import pytest
 
 from server.solver.combine import serialize_channel_bases
+from server.tests.npz_assertions import assert_npz_contents_equal
 from server.solver.pressure_basis import (
     PRESSURE_PHASE_CONVENTION,
     export_pressure_basis,
@@ -45,10 +48,13 @@ def test_pressure_basis_export_conjugates_and_tags_retained_solver_fields() -> N
         artifact,
         {"channels": {"mf drive": {"metadata": {"impedance_drive": "voltage"}}}},
     )
-    assert exported.content == export_pressure_basis(
-        artifact,
-        {"channels": {"mf drive": {"metadata": {"impedance_drive": "voltage"}}}},
-    ).content
+    assert_npz_contents_equal(
+        exported.content,
+        export_pressure_basis(
+            artifact,
+            {"channels": {"mf drive": {"metadata": {"impedance_drive": "voltage"}}}},
+        ).content,
+    )
 
     assert exported.channel_id == "mf drive"
     with np.load(io.BytesIO(exported.content), allow_pickle=False) as data:
@@ -78,9 +84,12 @@ def test_pressure_basis_export_requires_a_channel_when_artifact_has_many() -> No
 def test_pressure_basis_export_discloses_reconstructed_rows_only_when_flagged():
     native = _native_basis()
     native.frequency_status = ["interpolated"]
-    artifact = serialize_channel_bases({"drive": native}, metadata_by_id={
-        "drive": {"source_motion": "normal"},
-    })
+    artifact = serialize_channel_bases(
+        {"drive": native},
+        metadata_by_id={
+            "drive": {"source_motion": "normal"},
+        },
+    )
     exported = export_pressure_basis(artifact, {})
     with np.load(io.BytesIO(exported.content), allow_pickle=False) as data:
         assert data["frequency_status"].tolist() == ["interpolated"]
@@ -89,18 +98,65 @@ def test_pressure_basis_export_discloses_reconstructed_rows_only_when_flagged():
         assert data["solved_frequencies_hz"].size == 0
         assert "narrow resonances can be missed" in data["warning"].item()
     del native.frequency_status
-    legacy = export_pressure_basis(serialize_channel_bases({"drive": native}, metadata_by_id={
-        "drive": {"source_motion": "normal"},
-    }), {})
+    legacy = export_pressure_basis(
+        serialize_channel_bases(
+            {"drive": native},
+            metadata_by_id={
+                "drive": {"source_motion": "normal"},
+            },
+        ),
+        {},
+    )
     with np.load(io.BytesIO(legacy.content), allow_pickle=False) as data:
         assert "frequency_status" not in data and "warning" not in data
 
 
-def test_unflagged_pressure_basis_matches_frozen_base_44226173_bytes():
-    from pathlib import Path
+def test_unflagged_pressure_basis_matches_frozen_base_44226173_contents():
+    artifact = serialize_channel_bases(
+        {"drive": _native_basis()},
+        metadata_by_id={
+            "drive": {"source_motion": "normal"},
+        },
+    )
+    expected = (
+        Path(__file__).parent / "fixtures" / "adaptive-legacy-pressure-basis.npz"
+    ).read_bytes()
+    assert_npz_contents_equal(export_pressure_basis(artifact, {}).content, expected)
 
-    artifact = serialize_channel_bases({"drive": _native_basis()}, metadata_by_id={
-        "drive": {"source_motion": "normal"},
-    })
-    expected = (Path(__file__).parent / "fixtures" / "adaptive-legacy-pressure-basis.npz").read_bytes()
-    assert export_pressure_basis(artifact, {}).content == expected
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED])
+def test_frozen_pressure_basis_comparison_ignores_zip_packaging(compression):
+    expected = (
+        Path(__file__).parent / "fixtures" / "adaptive-legacy-pressure-basis.npz"
+    ).read_bytes()
+    repacked = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(expected)) as source, zipfile.ZipFile(repacked, "w") as target:
+        for name in reversed(source.namelist()):
+            member = zipfile.ZipInfo(name, date_time=(2026, 10, 1, 12, 34, 56))
+            member.compress_type = compression
+            member.create_system = 0  # Windows rather than the frozen macOS ZIP attributes.
+            target.writestr(member, source.read(name))
+    assert_npz_contents_equal(repacked.getvalue(), expected)
+
+
+@pytest.mark.parametrize("change", ["member", "dtype", "shape", "value", "metadata"])
+def test_pressure_basis_content_comparison_rejects_payload_changes(change):
+    expected = (
+        Path(__file__).parent / "fixtures" / "adaptive-legacy-pressure-basis.npz"
+    ).read_bytes()
+    with np.load(io.BytesIO(expected), allow_pickle=False) as source:
+        arrays = {name: source[name] for name in source.files}
+    if change == "member":
+        del arrays["pressure_complex"]
+    elif change == "dtype":
+        arrays["pressure_complex"] = arrays["pressure_complex"].astype(np.complex64)
+    elif change == "shape":
+        arrays["pressure_complex"] = arrays["pressure_complex"].reshape(-1)
+    elif change == "value":
+        arrays["pressure_complex"] = arrays["pressure_complex"] + 1
+    else:
+        arrays["source_motion"] = np.asarray("axial!")  # Same dtype/shape, changed metadata.
+    changed = io.BytesIO()
+    np.savez(changed, **arrays)
+    with pytest.raises(AssertionError):
+        assert_npz_contents_equal(changed.getvalue(), expected)

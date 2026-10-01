@@ -46,7 +46,11 @@ from .field_traces_store import (
     build_field_trace_artifact,
     field_trace_retention_plan,
 )
-from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
+from .adaptive_sweep import (
+    enabled as adaptive_enabled,
+    native_acquisition_frequencies,
+    solve_native_adaptively,
+)
 from .frequency_sweep import (
     live_execution_frequencies,
     sort_native_result_frequencies,
@@ -150,14 +154,9 @@ def _probe_reason_is_about(backend: str, reason: str) -> bool:
     lowered = reason.lower()
     mine = _BEAT_BACKEND_KEYWORDS.get(backend, ())
     others = {
-        word
-        for name, words in _BEAT_BACKEND_KEYWORDS.items()
-        if name != backend
-        for word in words
+        word for name, words in _BEAT_BACKEND_KEYWORDS.items() if name != backend for word in words
     }
-    return any(word in lowered for word in mine) and not any(
-        word in lowered for word in others
-    )
+    return any(word in lowered for word in mine) and not any(word in lowered for word in others)
 
 
 def beat_engine_name(backend: str) -> str:
@@ -186,6 +185,7 @@ def is_beat_engine(engine: str) -> bool:
 
     normalized = str(engine or "").strip().lower()
     return normalized == LEGACY_BEAT_ENGINE or beat_engine_backend(normalized) is not None
+
 
 logger = logging.getLogger(__name__)
 
@@ -395,9 +395,7 @@ def beat_backend_statuses() -> dict[str, dict[str, Any]]:
 
     package = _load_api()
     if package is None:
-        reason = (
-            "hornlab-beat-bem is not importable (optional BEAT engine not installed)."
-        )
+        reason = "hornlab-beat-bem is not importable (optional BEAT engine not installed)."
         return {
             backend: {
                 "available": False,
@@ -580,14 +578,11 @@ def solve_beat_from_msh_text(
         status = beat_backend_statuses().get(backend)
         if status is None:
             raise BeatUnavailable(
-                f"Unknown BEAT backend {backend!r}; expected one of "
-                + ", ".join(BEAT_BACKENDS)
+                f"Unknown BEAT backend {backend!r}; expected one of " + ", ".join(BEAT_BACKENDS)
             )
         if not status["available"]:
             raise BeatUnavailable(status["reason"])
-    field_plane_enabled = (
-        getattr(context, "polar_config", {}).get("field_plane", True) is True
-    )
+    field_plane_enabled = getattr(context, "polar_config", {}).get("field_plane", True) is True
     retain_traces, trace_reason, trace_estimated_bytes, trace_cap_bytes = (
         field_trace_retention_plan(
             msh_text,
@@ -621,13 +616,17 @@ def solve_beat_from_msh_text(
         )
 
     completed = [0]
+    adaptive = adaptive_enabled(context)
+    acquisition_count = (
+        len(native_acquisition_frequencies(context)) if adaptive else context.num_frequencies
+    )
 
     def progress(index: int, total: int, frequency_hz: float) -> None:
         if cancellation_callback:
             cancellation_callback()
-        if adaptive_enabled(context):
+        if adaptive:
             completed[0] += 1
-            index, total = completed[0] - 1, context.num_frequencies
+            index, total = completed[0] - 1, acquisition_count
         fraction = (index + 1) / max(1, total)
         if progress_callback:
             progress_callback(fraction)
@@ -635,7 +634,8 @@ def solve_beat_from_msh_text(
             stage_callback(
                 "frequency_solve",
                 fraction,
-                f"Solving frequency {index + 1}/{total} with BEAT Engine",
+                f"Solving frequency {index + 1}/{total} with BEAT Engine"
+                + (" (native acquisition)" if adaptive else ""),
             )
 
     def on_frequency_result(index: int, frequency_hz: float, entry: dict[str, Any]) -> bool:
@@ -676,9 +676,7 @@ def solve_beat_from_msh_text(
             source_motion=context.source_motion,
             **({"surface_traces": True} if retain_traces else {}),
             progress_callback=progress,
-            on_frequency_result=(
-                on_frequency_result if result_callback is not None else None
-            ),
+            on_frequency_result=(on_frequency_result if result_callback is not None else None),
         )
         package.reject_unsupported_native_symmetry(config)
     except NotImplementedError as exc:
@@ -686,17 +684,19 @@ def solve_beat_from_msh_text(
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
-            adaptive = adaptive_enabled(context)
             stage_callback(
                 "frequency_solve" if adaptive else "setup",
-                completed[0] / max(1, context.num_frequencies) if adaptive else 0.0,
+                completed[0] / max(1, acquisition_count) if adaptive else 0.0,
                 message,
             )
 
     path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".msh", delete=False, encoding="utf-8",
+            mode="w",
+            suffix=".msh",
+            delete=False,
+            encoding="utf-8",
             dir=temporary_directory_root(),
         ) as handle:
             path = Path(handle.name)
@@ -709,10 +709,15 @@ def solve_beat_from_msh_text(
                 def publish(native):
                     if result_callback:
                         snapshot = build_solver_response(
-                            result=native, config=config, context=context,
-                            start_time=started, metadata={
+                            result=native,
+                            config=config,
+                            context=context,
+                            start_time=started,
+                            metadata={
                                 "provisional": {
-                                    "completed_frequency_count": native.adaptive_sampling["solved_count"],
+                                    "completed_frequency_count": native.adaptive_sampling[
+                                        "solved_count"
+                                    ],
                                     "expected_frequency_count": context.num_frequencies,
                                 },
                             },
@@ -724,10 +729,12 @@ def solve_beat_from_msh_text(
                 result = solve_native_adaptively(
                     context,
                     lambda frequencies: package.solve_frequencies(
-                        str(path), frequencies, config, status_callback=stage_status),
+                        str(path), frequencies, config, status_callback=stage_status
+                    ),
                     distance_m=config.observation.distance_m,
                     sound_speed=solver_sound_speed_m_per_s("hornlab_beat_bem"),
-                    publish=publish, cancel=cancellation_callback,
+                    publish=publish,
+                    cancel=cancellation_callback,
                 )
             else:
                 result = package.solve_frequencies(
@@ -832,8 +839,7 @@ class BeatEngine:
     def __init__(self, backend: str | None = None) -> None:
         if backend is not None and backend not in BEAT_BACKENDS:
             raise ValueError(
-                f"Unknown BEAT backend {backend!r}; expected one of "
-                + ", ".join(BEAT_BACKENDS)
+                f"Unknown BEAT backend {backend!r}; expected one of " + ", ".join(BEAT_BACKENDS)
             )
         self.backend = backend
         self.name = LEGACY_BEAT_ENGINE if backend is None else beat_engine_name(backend)
@@ -921,10 +927,7 @@ class BeatEngine:
         if self.backend in (BEAT_CPU_BACKEND, "metal") or accuracy == "accurate":
             return None
         label = BEAT_BACKEND_LABELS.get(self.backend or "", self.name)
-        return (
-            f"{label} solves CAD returns only in Accurate. "
-            "Choose Accurate or another engine."
-        )
+        return f"{label} solves CAD returns only in Accurate. Choose Accurate or another engine."
 
     async def _run_imported(
         self,

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { preferencesStore, type Preferences } from '../prefs/preferences';
 import type { ResultPayload } from './types';
 import { buildFrequencyCsv, buildFullResultsJson, buildImpedanceCsv, buildPolarCsv, buildSummaryText } from './exporters';
@@ -46,10 +46,29 @@ describe('adaptive numeric export disclosure and base bytes', () => {
   it('preserves all unflagged numeric exports byte for byte against base 44226173', () => {
     const preferences = { ...preferencesStore.getSnapshot(), smoothing: 'none' as const };
     const smoothed = { ...preferences, smoothing: '1/6' as Preferences['smoothing'] };
-    const fixture = JSON.parse(new TextDecoder().decode(readFileSync(fixturePath)));
+    // UTF-8 and escaped LF strings survive checkout on Windows. Fixed UTC dates
+    // and non-localized number formatting keep the text contract independent of
+    // the host locale/time zone; do not normalize the actual export bytes.
+    const fixture = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(fixturePath)));
     expect(fixture.base).toBe('44226173');
-    expect(outputs(fixture.input, preferences)).toEqual(fixture.outputs);
-    expect(outputs(fixture.input, smoothed)).toEqual(fixture.smoothed);
+    const localized = () => { throw new Error('Exports must use locale-independent formatting'); };
+    const spies = [
+      vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(localized),
+      vi.spyOn(Date.prototype, 'toLocaleString').mockImplementation(localized),
+      vi.spyOn(Date.prototype, 'toLocaleDateString').mockImplementation(localized),
+      vi.spyOn(Date.prototype, 'toLocaleTimeString').mockImplementation(localized),
+    ];
+    try {
+      const utf8 = new TextEncoder();
+      for (const [settings, expected] of [[preferences, fixture.outputs], [smoothed, fixture.smoothed]] as const) {
+        for (const [format, content] of Object.entries(outputs(fixture.input, settings))) {
+          expect(content, format).not.toContain('\r');
+          expect(utf8.encode(content), format).toEqual(utf8.encode(expected[format]));
+        }
+      }
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 
   it('warns and includes counts and solved frequencies in every adaptive numeric export', () => {

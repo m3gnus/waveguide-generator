@@ -21,9 +21,15 @@ def encoded(value):
 
 def artifacts(directory, engine, *, explicit_off=False):
     wire = {
-        "design": {"formula": "OSSE", "L": 120, "a": 45,
-                   "enclosure": {"depth": 0}, "simulation": {"sim_type": "freestanding"}},
-        "options": {"engine": engine}, "client_request_id": "legacy-adaptive-replay",
+        "design": {
+            "formula": "OSSE",
+            "L": 120,
+            "a": 45,
+            "enclosure": {"depth": 0},
+            "simulation": {"sim_type": "freestanding"},
+        },
+        "options": {"engine": engine},
+        "client_request_id": "legacy-adaptive-replay",
     }
     if explicit_off:
         wire["options"]["adaptive_frequency_sampling"] = False
@@ -31,24 +37,33 @@ def artifacts(directory, engine, *, explicit_off=False):
     store = JobStore(directory / f"{engine}.db")
     store.initialize()
     try:
-        store.create_job({
-            "id": "legacy", "status": "queued", "progress": 0.0,
-            "created_at": "2026-08-12T00:00:00", "queued_at": "2026-08-12T00:00:00",
-            "updated_at": "2026-08-12T00:00:00", "config_json": request.model_dump(mode="json"),
-            "config_summary_json": {}, "task_metadata": {},
-        })
+        store.create_job(
+            {
+                "id": "legacy",
+                "status": "queued",
+                "progress": 0.0,
+                "created_at": "2026-08-12T00:00:00",
+                "queued_at": "2026-08-12T00:00:00",
+                "updated_at": "2026-08-12T00:00:00",
+                "config_json": request.model_dump(mode="json"),
+                "config_summary_json": {},
+                "task_metadata": {},
+            }
+        )
         row = store.get_job_row("legacy")
         response = JobItem.model_validate(JobRuntime._serialize_job(row))
         detailed = JobStatusResponse.model_validate(JobRuntime._serialize_job(row, detailed=True))
         provenance = enrich_result_contract({}, request)["provenance"]
         return {
             "model_json": request.model_dump_json(),
-            "stored_config_json": store._connect().execute(
-                "SELECT config_json FROM simulation_jobs WHERE id = 'legacy'"
-            ).fetchone()[0],
+            "stored_config_json": store._connect()
+            .execute("SELECT config_json FROM simulation_jobs WHERE id = 'legacy'")
+            .fetchone()[0],
             "response_json": response.model_dump_json(),
             "detailed_response_json": detailed.model_dump_json(),
-            "provenance_digests": encoded({k: v for k, v in provenance.items() if k.endswith("sha256")}),
+            "provenance_digests": encoded(
+                {k: v for k, v in provenance.items() if k.endswith("sha256")}
+            ),
         }
     finally:
         store.close()
@@ -57,15 +72,17 @@ def artifacts(directory, engine, *, explicit_off=False):
 @pytest.mark.parametrize("engine", sorted(SELECTABLE_ENGINE_NAMES))
 @pytest.mark.parametrize("explicit_off", [False, True])
 def test_full_default_off_artifacts_match_base_bytes(tmp_path, engine, explicit_off):
-    fixture = json.loads(FIXTURE.read_text())
+    fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
     assert fixture["base"] == "44226173"
     assert artifacts(tmp_path, engine, explicit_off=explicit_off) == fixture["artifacts"][engine]
 
 
 def test_enabled_option_survives_every_model_encoding():
-    request = SolveRequest.model_validate({
-        "design": {"formula": "OSSE", "L": 120, "a": 45},
-        "options": {"adaptive_frequency_sampling": True},
-    })
+    request = SolveRequest.model_validate(
+        {
+            "design": {"formula": "OSSE", "L": 120, "a": 45},
+            "options": {"adaptive_frequency_sampling": True},
+        }
+    )
     assert request.model_dump(mode="json")["options"]["adaptive_frequency_sampling"] is True
     assert json.loads(request.model_dump_json())["options"]["adaptive_frequency_sampling"] is True

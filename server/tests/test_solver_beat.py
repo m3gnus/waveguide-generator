@@ -20,14 +20,25 @@ def _context(**overrides) -> SolverContext:
     return SolverContext(**values)
 
 
-@pytest.mark.parametrize("adaptive", [False, True])
-def test_native_batch_status_preserves_parametric_progress(monkeypatch, adaptive) -> None:
+@pytest.mark.parametrize(
+    "adaptive, count, spacing",
+    [
+        (False, 48, "log"),
+        (True, 48, "log"),
+        (True, 24, "log"),
+        (True, 24, "linear"),
+    ],
+)
+def test_native_batch_status_preserves_parametric_progress(
+    monkeypatch, adaptive, count, spacing
+) -> None:
     import asyncio
     from types import SimpleNamespace
 
     import numpy as np
 
     from server.jobs.runtime import JobRuntime
+    from server.solver.adaptive_sweep import native_acquisition_frequencies
 
     batches = []
     snapshots = []
@@ -49,42 +60,76 @@ def test_native_batch_status_preserves_parametric_progress(monkeypatch, adaptive
             impedance=1 / (f - (600 - 20j)),
             observation_angles_deg=np.array([0.0]),
             observation_planes=["horizontal"],
-            solver_log=[], timings={},
+            solver_log=[],
+            timings={},
         )
 
     package = SimpleNamespace(
-        ObservationConfig=SimpleNamespace, ObservationFrame=SimpleNamespace,
+        ObservationConfig=SimpleNamespace,
+        ObservationFrame=SimpleNamespace,
         SolveConfig=SimpleNamespace,
         reject_unsupported_native_symmetry=lambda config: None,
         solve_frequencies=solve,
     )
     monkeypatch.setattr(beat, "_load_api", lambda: package)
-    monkeypatch.setattr(beat, "beat_status", lambda: {
-        "available": True, "backend": "metal", "surface_traces": False,
-    })
-    monkeypatch.setattr(beat, "observation_config", lambda *args, **kwargs: SimpleNamespace(
-        distance_m=2.0, origin="mouth",
-    ))
+    monkeypatch.setattr(
+        beat,
+        "beat_status",
+        lambda: {
+            "available": True,
+            "backend": "metal",
+            "surface_traces": False,
+        },
+    )
+    monkeypatch.setattr(
+        beat,
+        "observation_config",
+        lambda *args, **kwargs: SimpleNamespace(
+            distance_m=2.0,
+            origin="mouth",
+        ),
+    )
     monkeypatch.setattr(beat, "native_observation_frame", lambda *args: SimpleNamespace())
+    context = _context(
+        num_frequencies=count,
+        adaptive_frequency_sampling=adaptive,
+        frequency_spacing=spacing,
+        frequency_range=(100.0, 20000.0) if count == 24 else (500.0, 2000.0),
+    )
+    target = len(native_acquisition_frequencies(context)) if adaptive else count
     response = beat.solve_beat_from_msh_text(
-        "$MeshFormat\n", _context(num_frequencies=48, adaptive_frequency_sampling=adaptive),
+        "$MeshFormat\n",
+        context,
         progress_callback=progress.append,
         result_callback=lambda revision, snapshot: snapshots.append((revision, snapshot)),
         stage_callback=lambda *args: stages.append(args),
     )
-    assert len(response["frequencies"]) == 48
+    assert len(response["frequencies"]) == count
     submissions = [stage for stage in stages if stage[2] == "Submitting solve request"]
     if adaptive:
         assert snapshots
         for revision, snapshot in snapshots:
             provisional = snapshot["metadata"]["provisional"]
-            assert provisional["completed_frequency_count"] == snapshot["frequency_status"].count("solved")
-            assert provisional["expected_frequency_count"] == 48
+            assert provisional["completed_frequency_count"] == snapshot["frequency_status"].count(
+                "solved"
+            )
+            assert provisional["expected_frequency_count"] == count
         assert len(batches) >= 3  # Initial acquisition and multiple refinements.
         assert submissions[1][0] == "frequency_solve"
-        assert submissions[1][1] == pytest.approx(8 / 48)
-        assert submissions[2][1] == pytest.approx(12 / 48)
-        assert progress == pytest.approx([i / 48 for i in range(1, sum(map(len, batches)) + 1)])
+        assert submissions[1][1] == pytest.approx(8 / target)
+        assert submissions[2][1] == pytest.approx(12 / target)
+        solved = sum(map(len, batches))
+        assert progress == pytest.approx([i / target for i in range(1, solved + 1)])
+        assert max(progress) <= 1
+        messages = [stage[2] for stage in stages if stage[2].startswith("Solving frequency")]
+        assert messages == [
+            f"Solving frequency {i}/{target} with BEAT Engine (native acquisition)"
+            for i in range(1, solved + 1)
+        ]
+        if count == 24:
+            assert solved > count  # Off-grid coverage must outgrow the requested output grid.
+            if spacing == "log":
+                assert target == 47
 
         # Exercise the runtime's actual mapping to public job progress too.
         public = []
@@ -102,9 +147,15 @@ def test_native_batch_status_preserves_parametric_progress(monkeypatch, adaptive
         assert public == sorted(public)
     else:
         assert len(batches) == 1 and len(batches[0]) == 48
-        assert all(stage[:2] == ("setup", 0.0) for stage in stages if stage[2] in {
-            "Submitting solve request", "Native frequency complete",
-        })
+        assert all(
+            stage[:2] == ("setup", 0.0)
+            for stage in stages
+            if stage[2]
+            in {
+                "Submitting solve request",
+                "Native frequency complete",
+            }
+        )
 
 
 def test_probe_reports_missing_package_as_capability_state(monkeypatch) -> None:
@@ -122,7 +173,12 @@ def test_unavailable_status_refuses_solve(monkeypatch) -> None:
     monkeypatch.setattr(
         beat,
         "beat_status",
-        lambda: {"available": False, "reason": "no supported GPU", "version": None, "backend": None},
+        lambda: {
+            "available": False,
+            "reason": "no supported GPU",
+            "version": None,
+            "backend": None,
+        },
     )
     monkeypatch.setattr(beat, "_load_api", lambda: object())
     with pytest.raises(beat.BeatUnavailable, match="no supported GPU"):
@@ -198,9 +254,7 @@ def test_the_warmup_publishes_that_it_holds_the_worker(monkeypatch) -> None:
     def warm_up(**kwargs) -> None:
         seen.append(solver_warmup.beat_warmup_in_progress())
 
-    monkeypatch.setitem(
-        sys.modules, "hornlab_beat_bem", types.SimpleNamespace(warm_up=warm_up)
-    )
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", types.SimpleNamespace(warm_up=warm_up))
 
     assert solver_warmup.beat_warmup_in_progress() is False
     solver_warmup._warm_beat("metal")
@@ -210,9 +264,7 @@ def test_the_warmup_publishes_that_it_holds_the_worker(monkeypatch) -> None:
     def explode(**kwargs) -> None:
         raise RuntimeError("Julia would not start")
 
-    monkeypatch.setitem(
-        sys.modules, "hornlab_beat_bem", types.SimpleNamespace(warm_up=explode)
-    )
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", types.SimpleNamespace(warm_up=explode))
     with pytest.raises(RuntimeError):
         solver_warmup._warm_beat("metal")
     assert solver_warmup.beat_warmup_in_progress() is False
@@ -259,6 +311,7 @@ def test_a_solve_during_the_warmup_says_what_it_is_waiting_for(monkeypatch) -> N
     assert "Configuring BEAT Engine BEM solve (metal)" in messages
     assert solver_warmup.BEAT_WARMUP_STAGE_MESSAGE in messages
     assert messages.index(solver_warmup.BEAT_WARMUP_STAGE_MESSAGE) == 1
+
 
 def _probe(available: bool, backend: str | None, reason: str) -> dict[str, object]:
     return {
@@ -320,16 +373,12 @@ def test_backend_statuses_report_the_probe_reason_when_nothing_was_selected(
     # on no single row: each already states its own prerequisite, and that
     # generic message also advises that BEAT is GPU-only, which stopped being
     # true when the CPU backend became a user-facing engine.
-    assert statuses["rocm"]["reason"] == (
-        "Needs an AMD ROCm runtime with a functional AMDGPU.jl."
-    )
+    assert statuses["rocm"]["reason"] == ("Needs an AMD ROCm runtime with a functional AMDGPU.jl.")
 
 
 def test_forced_cpu_probe_still_requires_cpu_readiness(monkeypatch) -> None:
     monkeypatch.setattr(beat, "_load_api", lambda: object())
-    monkeypatch.setattr(
-        beat, "beat_status", lambda: _probe(True, "cpu", "CPU forced")
-    )
+    monkeypatch.setattr(beat, "beat_status", lambda: _probe(True, "cpu", "CPU forced"))
     monkeypatch.setattr(
         beat, "_cpu_backend_status", lambda _package: (False, "runtime unprovisioned")
     )
@@ -365,9 +414,7 @@ def test_a_diagnostic_about_one_family_is_quoted_on_that_row_only(monkeypatch) -
 
     assert "CUDA.functional() is false" in statuses["cuda"]["reason"]
     assert "CUDA" not in statuses["metal"]["reason"]
-    assert statuses["metal"]["reason"] == (
-        "Needs an Apple Silicon GPU with a functional Metal.jl."
-    )
+    assert statuses["metal"]["reason"] == ("Needs an Apple Silicon GPU with a functional Metal.jl.")
 
 
 @pytest.fixture(autouse=True)
@@ -530,7 +577,9 @@ def test_engine_names_and_backends_round_trip() -> None:
 def test_unavailable_package_backends_are_probed_once_per_request(monkeypatch):
     calls = []
     statuses = {"cuda": {"available": False}, "cpu": {"available": False}}
-    monkeypatch.setattr(beat, "_probe_package_backend_statuses", lambda: calls.append(1) or statuses)
+    monkeypatch.setattr(
+        beat, "_probe_package_backend_statuses", lambda: calls.append(1) or statuses
+    )
     beat.beat_backend_statuses.cache_clear()
     assert beat._package_backend_statuses() == statuses
     assert beat._package_backend_statuses() == statuses

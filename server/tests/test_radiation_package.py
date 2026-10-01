@@ -11,6 +11,8 @@ import zipfile
 import numpy as np
 import pytest
 
+from server.tests.npz_assertions import assert_npz_contents_equal
+
 from server.cli.args import main
 from server.design.conventions import artifact_conventions
 from server.exports.radiation_package import (
@@ -78,9 +80,7 @@ def _artifact(
     if multi:
         channels = [
             FieldTraceChannel("left", LEFT_P[:count], LEFT_Q[:count]),
-            FieldTraceChannel(
-                "right", LEFT_P[:count] * (2 - 1j), LEFT_Q[:count] * (2 - 1j)
-            ),
+            FieldTraceChannel("right", LEFT_P[:count] * (2 - 1j), LEFT_Q[:count] * (2 - 1j)),
         ]
     return FieldTraceArtifact(
         mesh_text=MESH_TEXT,
@@ -237,9 +237,7 @@ def test_happy_path_package_carries_manifest_mesh_and_raw_traces(
         assert data["frequencies_hz"].tolist() == FREQUENCIES
         assert data["pressure_p1"].dtype == np.complex64
         assert data["neumann_dp0"].dtype == np.complex64
-        np.testing.assert_allclose(
-            data["pressure_p1"][:, 0, :], LEFT_P.astype(np.complex64)
-        )
+        np.testing.assert_allclose(data["pressure_p1"][:, 0, :], LEFT_P.astype(np.complex64))
         np.testing.assert_allclose(
             data["pressure_p1"][:, 1, :], (LEFT_P * (2 - 1j)).astype(np.complex64)
         )
@@ -276,7 +274,7 @@ def test_bempp_backend_is_recorded(tmp_path: Path) -> None:
     store.close()
 
 
-def test_two_builds_of_one_job_are_byte_identical(tmp_path: Path) -> None:
+def test_two_builds_of_one_job_have_identical_contents(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _create_job(store, multi=True)
 
@@ -285,7 +283,14 @@ def test_two_builds_of_one_job_are_byte_identical(tmp_path: Path) -> None:
     assert build_radiation_package(store, "job-1", first).ok
     assert build_radiation_package(store, "job-1", second).ok
 
-    assert first.read_bytes() == second.read_bytes()
+    first_members, second_members = _members(first), _members(second)
+    assert first_members.keys() == second_members.keys()
+    for name in first_members:
+        if name == TRACES_MEMBER:
+            assert_npz_contents_equal(first_members[name], second_members[name])
+        else:
+            # The manifest and mesh are UTF-8 text with canonical formatting.
+            assert first_members[name] == second_members[name], name
     store.close()
 
 
@@ -377,9 +382,7 @@ def test_missing_destination_directory_is_refused(tmp_path: Path) -> None:
     store = _store(tmp_path)
     _create_job(store)
 
-    result = build_radiation_package(
-        store, "job-1", tmp_path / "absent" / "package.zip"
-    )
+    result = build_radiation_package(store, "job-1", tmp_path / "absent" / "package.zip")
 
     assert _codes(result) == ["destination_directory_missing"]
     store.close()
@@ -447,9 +450,7 @@ def test_validation_rejects_a_foreign_or_unreadable_archive(tmp_path: Path) -> N
     not_a_zip.write_bytes(b"nope")
     assert _codes(validate_radiation_package(not_a_zip)) == ["package_unreadable"]
 
-    assert _codes(validate_radiation_package(tmp_path / "absent.zip")) == [
-        "package_unreadable"
-    ]
+    assert _codes(validate_radiation_package(tmp_path / "absent.zip")) == ["package_unreadable"]
 
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -522,10 +523,7 @@ def test_cli_argument_refusals(tmp_path: Path, capsys) -> None:
     assert main(["export-package", "job-1"]) == 1
     assert "--output PATH are both required" in capsys.readouterr().err
 
-    assert (
-        main(["export-package", "job-1", "--output", str(tmp_path / "package.tar")])
-        == 1
-    )
+    assert main(["export-package", "job-1", "--output", str(tmp_path / "package.tar")]) == 1
     assert "must name a .zip path" in capsys.readouterr().err
 
     assert (

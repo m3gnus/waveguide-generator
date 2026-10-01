@@ -64,6 +64,25 @@ describe('solve and directivity control help', () => {
     expect(useSolveOptionsStore.getState().options().adaptive_frequency_sampling).toBe(true);
     render(<SolveOptionsControls mode="cad" />);
     expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.checked).toBe(true);
+    const help = hoverText(host.querySelector('#adaptive-frequency-sampling')!.closest('.toggle-row')!);
+    expect(help).toContain('gaps no wider than 1/6 octave');
+    expect(help).toContain('Narrow resonances can be missed when narrower than the largest solved-frequency gap');
+    expect(help).toContain('does not guarantee interpolation accuracy');
+  });
+
+  it.each(['design', 'imported'] as const)('describes explicit output rows and adaptive acquisition for %s', (context) => {
+    act(() => {
+      useSolveOptionsStore.getState().setFrequencyMode('list');
+      useSolveOptionsStore.getState().setFrequencyListText('100, 200, 400');
+      useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
+    });
+    render(<FrequencySweepControls idPrefix="test" context={context} />);
+    const help = hoverText(host.querySelector('#test-frequency-mode')!.closest('.select-row')!);
+    expect(help).toContain('Explicit list returns exactly the frequencies you type');
+    expect(help).toContain('some requested rows may be interpolated');
+    expect(help).toContain('extra frequencies solved to fill coverage gaps');
+    expect(help).not.toContain('solves exactly');
+    expect(host.querySelector('.paste-meta')?.textContent).toContain('Output: 3 points');
   });
 
   it('documents every solve option', () => {
