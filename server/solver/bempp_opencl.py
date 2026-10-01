@@ -415,7 +415,7 @@ def _validate_probe_result(result: Any, mode: str) -> None:
 
 def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
     # Parent-only import: the standalone native child never allocates a channel.
-    from server.platform.temp_session import spawned_directory_root
+    from server.platform.temp_session import parent_session_lost, spawned_directory_root
 
     handle = None
     ready_at = None
@@ -430,6 +430,11 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
         # stop either sees this directory or the run is refused before making it.
         with _probe_lock:
             _check_cancelled()
+            if parent_session_lost():
+                # A worker outliving the server's session: the server is
+                # stopping. Make nothing, rather than a directory loose in the
+                # system temporary directory that nothing would remove.
+                raise ProbeCancelled("the server's temporary session is gone")
             # In the BEMPP solve worker too, which the server spawns: the
             # parent's session, never the bare temporary directory.
             channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=spawned_directory_root())

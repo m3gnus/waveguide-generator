@@ -537,6 +537,7 @@ def test_the_bempp_worker_is_spawned_into_the_servers_session(monkeypatch, tmp_p
     from server.platform import temp_session
     from server.solver import bempp_process
 
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(tmp_path))
     session = _active_session(tmp_path)
     started = {}
     class Context:

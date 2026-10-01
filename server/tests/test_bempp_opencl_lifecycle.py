@@ -413,6 +413,8 @@ def test_a_spawned_worker_puts_its_probe_directory_in_the_servers_session(monkey
 
     session = tmp_path / "wg2-run-123-abc"
     session.mkdir()
+    (session / temp_session.OWNER_LOCK_NAME).write_text("")
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(tmp_path))
     monkeypatch.setattr(temp_session, "_active_root", None)
     monkeypatch.setattr(temp_session, "_parent_root", None)
     temp_session.adopt_parent_session(str(session))
@@ -425,6 +427,58 @@ def test_a_spawned_worker_puts_its_probe_directory_in_the_servers_session(monkey
     # Anything but an existing session directory is ignored.
     temp_session.adopt_parent_session(str(tmp_path / "elsewhere"))
     assert temp_session.spawned_directory_root() is None
+
+
+def test_only_a_real_session_is_adopted(monkeypatch, tmp_path):
+    """A wg2-run-* symlink to an unrelated directory, a directory without its
+    owner lock, or one outside the temporary directory is never adopted: the
+    probe would create where no session cleanup or sweep removes it."""
+    from server.platform import temp_session
+
+    base = tmp_path / "tmp"
+    base.mkdir()
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(base))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    unrelated = tmp_path / "unrelated"
+    unrelated.mkdir()
+    (unrelated / temp_session.OWNER_LOCK_NAME).write_text("")
+    link = base / "wg2-run-1-link"
+    link.symlink_to(unrelated, target_is_directory=True)
+    unlocked = base / "wg2-run-2-unlocked"
+    unlocked.mkdir()
+    elsewhere = tmp_path / "wg2-run-3-elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / temp_session.OWNER_LOCK_NAME).write_text("")
+    real = base / "wg2-run-4-real"
+    real.mkdir()
+    (real / temp_session.OWNER_LOCK_NAME).write_text("")
+    for refused in (link, unlocked, elsewhere):
+        temp_session.adopt_parent_session(str(refused))
+        assert temp_session.spawned_directory_root() is None, refused
+    temp_session.adopt_parent_session(str(real))
+    assert temp_session.spawned_directory_root() == str(real)
+
+
+def test_a_worker_whose_session_is_gone_makes_nothing(monkeypatch, tmp_path):
+    """A worker that outlives the server's session (the server is stopping)
+    refuses the probe rather than writing loose in the system temp directory."""
+    from server.platform import temp_session
+
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    session = tmp_path / "wg2-run-5-gone"
+    session.mkdir()
+    (session / temp_session.OWNER_LOCK_NAME).write_text("")
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    temp_session.adopt_parent_session(str(session))
+    (session / temp_session.OWNER_LOCK_NAME).unlink()
+    session.rmdir()
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *a, **k: pytest.fail("spawn without a session"))
+    with pytest.raises(probe.ProbeCancelled):
+        probe._run_probe("smoke", None, 5)
+    assert not [p for p in tmp_path.iterdir() if p.name.startswith("wg2-opencl-")]
+    assert not probe._active_channels
 
 
 def test_a_held_probe_directory_is_retried_then_logged(monkeypatch, tmp_path, caplog):

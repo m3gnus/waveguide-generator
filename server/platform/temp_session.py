@@ -92,9 +92,32 @@ def adopt_parent_session(root: str | None) -> None:
     """
 
     global _parent_root
-    _parent_root = (
-        root if root and Path(root).name.startswith(SESSION_PREFIX) and Path(root).is_dir() else None
-    )
+    _parent_root = root if root and _is_session_directory(root) else None
+
+
+def _is_session_directory(root: str) -> bool:
+    """A real session directory: named like one, not itself a symlink, directly
+    in this process's temporary directory (where the server made it and where
+    the sweep looks), and holding its owner lock. Anything else, such as a link
+    to an unrelated directory that the sweep would never remove, is refused."""
+
+    path = Path(root)
+    try:
+        if not path.name.startswith(SESSION_PREFIX) or path.is_symlink():
+            return False
+        if os.path.realpath(path.parent) != os.path.realpath(tempfile.gettempdir()):
+            return False
+        return path.is_dir() and (path / OWNER_LOCK_NAME).is_file()
+    except OSError:
+        return False
+
+
+def parent_session_lost() -> bool:
+    """True in a spawned child whose adopted parent session no longer exists:
+    the server is stopping, and nothing should be made in the bare system
+    temporary directory instead."""
+
+    return _active_root is None and _parent_root is not None and not Path(_parent_root).is_dir()
 
 
 def spawned_directory_root() -> str | None:
