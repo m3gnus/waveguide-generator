@@ -17,10 +17,12 @@ valid design remains possible. The pin is identified by its capabilities, since
 mesher development commits may still declare an older package version.
 
 ATH text imports read s1 and s2 from the selected OSSE or R-OSSE block. `ROSSE`
-is an alias for R-OSSE when it supplies a nonzero stretch coefficient; when
-both spellings are present, `R-OSSE` wins. Legacy ROSSE blocks with absent or
-all-zero coefficients keep WG's existing OSSE interpretation and passthrough
-block, including in WG-native documents. A flat
+is an alias for R-OSSE when both stretch coefficients are nonzero; when
+both spellings are present, `R-OSSE` wins. Legacy ROSSE blocks with either
+coefficient zero or absent keep WG's existing family interpretation and
+passthrough block, including in WG-native documents. Canonical OSSE and
+R-OSSE profiles still import a lone coefficient and require the mesher
+capability for any nonzero coefficient. A flat
 OSSE config without a profile block reads them at top level. Top-level values
 beside a profile block are ignored, matching the mesher, and the import report
 names them. Invalid supplied coefficients are refused even in ignored sections.

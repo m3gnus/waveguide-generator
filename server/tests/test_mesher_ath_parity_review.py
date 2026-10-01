@@ -41,11 +41,15 @@ def _translate_or_pin_refusal(design):
     return None
 
 
-@pytest.mark.parametrize("family", ["R-OSSE", "ROSSE"])
 @pytest.mark.parametrize("top", ["", "Coverage.Angle = 50", "Term.n = 6",
                                  "Coverage.Angle = 50\nTerm.n = 6"])
-@pytest.mark.parametrize("coefficients", ["s1 = .5", "s2 = .2", "s1 = .5\ns2 = .2"])
+@pytest.mark.parametrize("family,coefficients", [
+    ("R-OSSE", "s1 = .5"), ("R-OSSE", "s2 = .2"),
+    ("R-OSSE", "s1 = .5\ns2 = .2"), ("ROSSE", "s1 = .5\ns2 = .2"),
+])
 def test_rosse_alias_selects_same_family_and_reaches_capability_gate(family, top, coefficients):
+    # Canonical R-OSSE follows the mesher even with one coefficient. ROSSE
+    # promotion requires active stretch; dormant legacy documents use base WG.
     text = _profile(family, coefficients=coefficients) + "\n" + top
     parsed = parse(text)
     assert parsed.design.formula == "R-OSSE"

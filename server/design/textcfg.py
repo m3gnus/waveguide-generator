@@ -441,12 +441,12 @@ def _formula(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> str:
         key.startswith("Freeform.") for key in blocks
     ):
         return "FREEFORM"
-    # ROSSE was historically an unconsumed passthrough block. Only a new,
-    # nonzero stretch coefficient opts it into the mesher's R-OSSE alias.
+    # ROSSE was historically an unconsumed passthrough block. Only effective
+    # stretch (both coefficients nonzero) opts it into the mesher's R-OSSE alias.
     from .throat_stretch import text_number
 
     alias = blocks.get("ROSSE")
-    if "R-OSSE" in blocks or (alias is not None and any(
+    if "R-OSSE" in blocks or (alias is not None and all(
         text_number(alias.items.get(key, "0")) != 0 for key in ("s1", "s2")
     )):
         return "R-OSSE"
