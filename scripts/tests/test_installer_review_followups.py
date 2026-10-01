@@ -129,8 +129,8 @@ def spawn(install: Install, env: dict[str, str] | None = None, *, stdin=subproce
                             text=True, start_new_session=True)
 
 
-def wait_marker(proc, marker: Path) -> None:
-    deadline = time.monotonic() + 15
+def wait_marker(proc, marker: Path, timeout: float = 15) -> None:
+    deadline = time.monotonic() + timeout
     while not marker.exists():
         assert proc.poll() is None, proc.communicate()[0]
         assert time.monotonic() < deadline, "intended operation never reached"
@@ -1536,7 +1536,10 @@ if {match}:
     env = {**env, 'PATH': str(directory) + os.pathsep + env['PATH']}
     proc = spawn(install, env)
     try:
-        wait_marker(proc, ready)
+        # Every poll in the script is slowed to 0.25 s above, so the forward
+        # install alone takes about 15.5 s for the Linux script with BSD tools on
+        # macOS, just over the usual 15 s marker wait (measured 2026-10-01).
+        wait_marker(proc, ready, timeout=90)
         start = time.monotonic()
         for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
             (os.kill if scope == 'parent' else os.killpg)(proc.pid, sig)
