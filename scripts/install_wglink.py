@@ -1097,6 +1097,19 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _os_error_text(exc: OSError) -> str:
+    """The reason and the plain path(s), as a person reads them.
+
+    ``str(OSError)`` quotes the path with repr(), which doubles every
+    backslash in a Windows path.
+    """
+
+    if not exc.strerror:
+        return str(exc)
+    paths = [str(name) for name in (exc.filename, exc.filename2) if name is not None]
+    return ": ".join([exc.strerror, *paths])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -1106,7 +1119,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             record_usage(data_paths().root, "setup-task")
         except OSError as exc:
-            print(f"Could not record WGLink setup choice: {exc}", file=sys.stderr)
+            print(f"Could not record WGLink setup choice: {_os_error_text(exc)}", file=sys.stderr)
             return 1
         print("WGLink: recorded the setup task choice.")
         return 0
