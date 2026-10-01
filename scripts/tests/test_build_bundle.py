@@ -3389,8 +3389,7 @@ def test_the_rc_build_offers_every_platform_the_release_page_does() -> None:
     """The hand-test gate has to cover what a user will actually download.
 
     rc-build.yml exists so the maintainer tries the installers before a version is
-    spent (hornlab-policy/PLAN.md step 5). A platform that ships on the release
-    page and has no RC artifact is one nobody can try first, and that gap is
+    spent. A platform that ships on the release page and has no RC artifact is one nobody can try first, and that gap is
     invisible -- the workflow still goes green.
     """
 

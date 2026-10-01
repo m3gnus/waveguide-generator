@@ -3,8 +3,8 @@
 For the release owner. This is the walk-through that a local test suite cannot
 do for you: it runs against a real Fusion 360 and a real, packaged WG
 candidate, and it is what closes the "live-Fusion acceptance still owed" gap
-named in `hornlab-policy/CADLINK-ARCHITECTURE-PLAN.md` and
-`hornlab-policy/CADLINK-M1-M4-TRIAGE.md`. It does not replace
+named in `hornlab-policy/archive/261001-plan-cleanup/CADLINK-ARCHITECTURE-PLAN.md` and
+`hornlab-policy/archive/261001-plan-cleanup/CADLINK-M1-M4-TRIAGE.md`. It does not replace
 `server/tests` or `scripts/tests`, which cover the same contracts against
 fakes; it is the proof that the real add-in and the real WG agree with them.
 
@@ -66,7 +66,7 @@ blank until you run the step; do not mark a row done from memory.
 ## 1. Clean-room walk-through
 
 One continuous run, in order — later steps depend on state earlier steps
-created. `hornlab-policy/CADLINK-ARCHITECTURE-PLAN.md` §6 is the source for
+created. `hornlab-policy/archive/261001-plan-cleanup/CADLINK-ARCHITECTURE-PLAN.md` §6 is the source for
 this sequence.
 
 | # | Step | What must be true | Result | Evidence |
@@ -74,11 +74,11 @@ this sequence.
 | 1 | Start WG with Fusion closed, then start Fusion. | WGLink installs itself into Fusion's AddIns while Fusion is closed; once Fusion opens, WG's `.fusion-status.json` reports a heartbeat at `deliveryVersion` 3 (`server/cadlink/fusion_delivery.py` `DELIVERY_VERSION`). | ☐ pass ☐ fail ☐ blocked | |
 | 2 | Hand-install an **older** WGLink into Fusion's AddIns, restart Fusion; then restart WG. | With the older add-in running, WG's heartbeat read shows the outdated state and WG surfaces `ADDIN_OUTDATED_MESSAGE` (`server/cadlink/fusion_status.py`). After WG restarts, the older add-in is replaced; after a further Fusion restart, the current add-in loads and works. | ☐ pass ☐ fail ☐ blocked | |
 | 3 | Send a source to WG as an **insert**, then as an **update**. Create two copies of the linked instance in one assembly and update only one. | Insert and update both complete and the returned bundle validates (`server/cadlink/wgreturn.py`). Updating one copy touches only that copy's instance — the other's `assembly_from_link` and body are unchanged. | ☐ pass ☐ fail ☐ blocked | |
-| 4 | While an update is in flight, edit the linked body in Fusion; separately, kill Fusion immediately after an update **applies** (before WG can observe it) and restart Fusion. | The concurrent edit is refused as a baseline conflict, not silently overwritten. The update that applied before the kill is later recognised as `accepted`/reconciled, not re-run, once Fusion is back (0B.1/0B.6, `hornlab-policy/CADLINK-ARCHITECTURE-PLAN.md`). | ☐ pass ☐ fail ☐ blocked | |
+| 4 | While an update is in flight, edit the linked body in Fusion; separately, kill Fusion immediately after an update **applies** (before WG can observe it) and restart Fusion. | The concurrent edit is refused as a baseline conflict, not silently overwritten. The update that applied before the kill is later recognised as `accepted`/reconciled, not re-run, once Fusion is back (0B.1/0B.6, `hornlab-policy/archive/261001-plan-cleanup/CADLINK-ARCHITECTURE-PLAN.md`). | ☐ pass ☐ fail ☐ blocked | |
 | 5 | Kill Fusion **during** an update (mid-apply), then restart WG (not Fusion) before doing anything else. | Both Fusion (on its next open) and WG report "recovery required" for that operation. The recovery state survives the WG restart — it is read from durable storage, not memory. Undo in Fusion and Dismiss in WG both behave as documented (README's Undo limitation). | ☐ pass ☐ fail ☐ blocked | |
 | 6 | With document A open and unsaved changes pending, run Solve in WG for document B. Then use "Send to WG" from Fusion for A. | A's unsaved edits are untouched — WG solves B with the engine WG selected, never A. "Send to WG" from Fusion does not create a new WG job (it is a data delivery, not a solve trigger — CL05 in `hornlab-policy` planning). | ☐ pass ☐ fail ☐ blocked | |
 | 7 | Close Fusion. Delete the return from the WGLink exchange folder on disk. Restart WG. Solve the design again. | WG solves from its own retained snapshot (`prepare_and_solve`, `docs/architecture/CAD-OPERATIONS.md`) without needing Fusion running or the file present. | ☐ pass ☐ fail ☐ blocked | |
-| 8 | Create two root-fallback linked instances in one assembly with different placement offsets. Then mirror one linked component in Fusion and send it. | The two root-fallback links resolve to their own, distinct source axes (not one axis reused for both — M2, `hornlab-policy/CADLINK-M1-M4-TRIAGE.md`). The mirrored instance is refused at validation, naming the offending instance (M1; `server/cadlink/wgreturn.py` `_validate_instance`) — not silently accepted and solved backwards. | ☐ pass ☐ fail ☐ blocked | |
+| 8 | Create two root-fallback linked instances in one assembly with different placement offsets. Then mirror one linked component in Fusion and send it. | The two root-fallback links resolve to their own, distinct source axes (not one axis reused for both — M2, `hornlab-policy/archive/261001-plan-cleanup/CADLINK-M1-M4-TRIAGE.md`). The mirrored instance is refused at validation, naming the offending instance (M1; `server/cadlink/wgreturn.py` `_validate_instance`) — not silently accepted and solved backwards. | ☐ pass ☐ fail ☐ blocked | |
 | 9 | Publish an insert from Fusion, then quit Fusion and wait more than 30 minutes before starting it again. | The insert is not applied — it expired before Fusion ever saw it, and WG's operation record for it shows `cancelled`/`expired`, not a silent drop (`INSERT_HANDOFF_TTL`, CL01a in the CAD Link planning docs). | ☐ pass ☐ fail ☐ blocked | |
 | 10 | Install this candidate over an existing **0.3.2** install that has a mix of completed, pending and retained CAD items. | Nothing already completed replays. A pending item resumes rather than restarting. Retained snapshots remain solvable (step 7's contract, against pre-existing data). | ☐ pass ☐ fail ☐ blocked | |
 
@@ -136,9 +136,9 @@ release's CAD Link surface accepted:
 
 ## References
 
-- `hornlab-policy/CADLINK-ARCHITECTURE-PLAN.md` — the CAD Link architecture
+- `hornlab-policy/archive/261001-plan-cleanup/CADLINK-ARCHITECTURE-PLAN.md` — the CAD Link architecture
   and phase plan this checklist is derived from.
-- `hornlab-policy/CADLINK-M1-M4-TRIAGE.md` — M1-M4 issue triage (chirality,
+- `hornlab-policy/archive/261001-plan-cleanup/CADLINK-M1-M4-TRIAGE.md` — M1-M4 issue triage (chirality,
   root-fallback datum ownership, update reconciliation ordering, distinct
   capabilities).
 - `docs/architecture/CAD-OPERATIONS.md` — the operation-kind contract between
