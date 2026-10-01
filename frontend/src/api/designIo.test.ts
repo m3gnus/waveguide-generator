@@ -3,6 +3,18 @@ import { convertDesignToFreeform, exportGeometryToOutputFolder, freeformFromProf
 import { designForFamily, serializeDesign } from '../stores/design';
 
 describe('design hydration', () => {
+  it.each(['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as const)(
+    'uses the new sweep defaults for omitted or null fields in %s',
+    (formula) => {
+      for (const fields of [{}, { simulation: { f1: null, f2: null, num_frequencies: null } }]) {
+        const design = hydrateDesignDocument({ formula, ...fields });
+        expect(design.simulation).toMatchObject({ f1: 50, f2: 16_000, num_frequencies: 32 });
+      }
+      const explicit = hydrateDesignDocument({ formula, simulation: { f1: 400, f2: 8000, num_frequencies: 20 } });
+      expect(explicit.simulation).toMatchObject({ f1: 400, f2: 8000, num_frequencies: 20 });
+    },
+  );
+
   it('decodes ATH quadrant digits and derives custom zmap sampling', () => {
     const design = hydrateDesignDocument({
       formula: 'OSSE',
@@ -22,7 +34,7 @@ describe('design hydration', () => {
     expect(design.R).toBe(140);
     expect(design.source.radius).toBe(-1);
     expect(design.source.velocity).toBe(1);
-    expect(design.simulation.f1).toBe(400);
+    expect(design.simulation.f1).toBe(50);
     expect(design._absent).toEqual(expect.arrayContaining(['R', 'source.radius', 'source.velocity', 'simulation.f1']));
   });
 

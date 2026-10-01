@@ -613,6 +613,8 @@ class SourceConfig(StrictModel):
 
 
 class SimulationConfig(StrictModel):
+    # Omitted sweep fields resolve at use: 50 Hz start, with the editor or
+    # headless entry point supplying its own end and frequency count.
     f1: Expr | None = None
     f2: Expr | None = None
     num_frequencies: Expr | None = None

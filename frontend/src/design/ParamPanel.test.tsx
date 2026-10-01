@@ -1053,7 +1053,7 @@ describe('ParamPanel inventory UX', () => {
     });
     expect(input.getAttribute('aria-invalid')).toBe('true');
     act(() => input.blur());
-    expect(useDesignStore.getState().design.simulation.f1).toBe(400);
+    expect(useDesignStore.getState().design.simulation.f1).toBe(50);
   });
 
   it('enforces the legacy Source.Velocity 1/2 domain', () => {

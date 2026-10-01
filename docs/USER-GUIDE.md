@@ -32,6 +32,10 @@ cannot alter an existing run.
 
 ## Solve, jobs, and results
 
+New designs and default sweeps start at 50 Hz with 32 points (was 400 Hz with 20); the sweep end is unchanged. New parametric designs end at 16 kHz. CAD retains its 20 kHz end and four points per octave (36 points). Sparse headless requests retain their 20 kHz end and 24-point fallback.
+
+Opening a design that omits `Simulation.F1` (or ATH's `ABEC.f1`) uses the new 50 Hz default. Stated frequencies and explicit frequency lists remain authoritative.
+
 Choose the backend or leave it on automatic selection, set the frequency and polar
 options, then run the design. Automatic symmetry evaluates the actual geometry and
 uses the smallest valid domain. The stored job records the requested and resolved

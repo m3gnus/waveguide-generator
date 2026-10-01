@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 import math
 from typing import Any
 
+from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
 from server.jobs.models import ImportedGeometrySource, PolarConfig, SolveRequest
 
@@ -132,12 +133,12 @@ class SolverContext:
             if request.options.frequency_range is not None:
                 start, end = request.options.frequency_range
             else:
-                start = _number(simulation.f1, 200.0)
+                start = _number(simulation.f1, default_sweep_start_hz())
                 end = _number(simulation.f2, 20_000.0)
             if not math.isfinite(start) or not math.isfinite(end):
                 raise ValueError("solver frequency bounds must be finite")
             if start <= 0.0 or end <= start:
-                start, end = 200.0, 20_000.0
+                start, end = default_sweep_start_hz(), 20_000.0
             count = request.options.num_frequencies
             if count is None:
                 count = int(round(_number(simulation.num_frequencies, 24.0)))

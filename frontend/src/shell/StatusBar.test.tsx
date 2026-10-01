@@ -69,7 +69,7 @@ describe('StatusBar workspace modes', () => {
   it('replaces every parametric next-solve fact in CAD mode', () => {
     expect(host.textContent).toContain('BEMPP · 2.0');
     expect(host.textContent).toContain('preview no frame');
-    expect(host.textContent).toContain('next solve 400 Hz – 16 kHz · 20 f');
+    expect(host.textContent).toContain('next solve 50 Hz – 16 kHz · 32 f');
     expect(host.textContent).toContain('parametric-design.cfg');
 
     act(() => {

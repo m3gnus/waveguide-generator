@@ -1,5 +1,5 @@
 {
-  "about": "WG's default solve settings, stated once. The frontend's initial solve settings and the backend's default CAD setup both read this file; change a default here and both follow. Directivity, solver and spacing are shared by parametric and CAD; the sweep range and points and everything under cad are CAD's (a parametric design carries its own f1, f2 and number of frequencies).",
+  "about": "WG's default solve settings, stated once. The frontend's initial solve settings and the backend's default CAD setup both read this file; change a default here and both follow. Directivity, solver, sweep start and spacing are shared by parametric and CAD; the sweep end and points and everything under cad are CAD's (a parametric design carries its own f1, f2 and number of frequencies).",
   "sweep": {
     "start_hz": 50,
     "end_hz": 20000,

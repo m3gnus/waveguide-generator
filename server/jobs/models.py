@@ -10,6 +10,7 @@ from typing import Annotated, Any, Literal
 from pydantic import Field, field_validator, model_serializer, model_validator
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
+from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig
 
 
@@ -1096,7 +1097,7 @@ class SolveRequest(JobModel):
             self.options.frequencies_hz is None
             and self.options.frequency_range is None
         ):
-            start = scalar(simulation.f1, 200.0, "f1")
+            start = scalar(simulation.f1, default_sweep_start_hz(), "f1")
             end = scalar(simulation.f2, 20_000.0, "f2")
             if start <= 0.0 or end <= start:
                 raise ValueError(

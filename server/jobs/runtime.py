@@ -45,6 +45,7 @@ from server.cadlink.domain_interpretation import (
 from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
 from server.cadlink.solver_frame import REASON as FRAME_CONFIRMATION_REQUIRED, record_frame_refusal
 from server.cadlink.store import CadLinkStore
+from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig, Expr
 from server.design.textcfg import parse
 from server.engines.registry import (
@@ -5290,7 +5291,7 @@ class JobRuntime:
             if isinstance(request.geometry, ImportedGeometrySource):
                 raise ValueError("imported geometry requires an explicit frequency range")
             assert simulation is not None
-            start = numeric(simulation.f1, 200.0)
+            start = numeric(simulation.f1, default_sweep_start_hz())
             end = numeric(simulation.f2, 20_000.0)
         if not math.isfinite(start) or not math.isfinite(end):
             raise ValueError("frequency bounds must be finite")
@@ -5302,7 +5303,7 @@ class JobRuntime:
             count = int(round(numeric(simulation.num_frequencies, 24.0)))
         count = max(1, min(401, count))
         if start <= 0 or end <= start:
-            start, end = 200.0, 20_000.0
+            start, end = default_sweep_start_hz(), 20_000.0
         return float(start), float(end), count
 
     @staticmethod

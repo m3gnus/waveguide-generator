@@ -45,6 +45,16 @@ sections cover scale, throat, morphing, mesh/sizing, sampling, enclosure, source
 frequency, and simulation options. `MORPH`, `Mesh`, `Source`, and `Simulation` blocks
 are accepted alongside their flat dotted spellings.
 
+## Sweep defaults
+
+New editor designs use `Simulation.F1 = 50`, `Simulation.F2 = 16000`, and
+`Simulation.NumFrequencies = 32`. ATH's `ABEC.f1`, `ABEC.f2`, and
+`ABEC.NumFrequencies` aliases retain stated values. An omitted F1 uses 50 Hz
+in both the editor and headless solve; no migration is applied for this default.
+The editor fills omitted end/count fields with 16 kHz/32, while headless
+requests retain their 20 kHz/24 fallback. Solve options can override the range,
+count, or supply an explicit frequency list.
+
 ## Directivity / ATH polar blocks
 
 Portable directivity settings use the same blocks as v1 and ATH:

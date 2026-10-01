@@ -3,6 +3,7 @@ import { temporal } from 'zundo';
 import { findParameterByPath } from '../design/parameterRegistry';
 import { replaceAthPolarBlocks } from './athPolars';
 import { advanceEditorMutation } from './editorMutation';
+import { DEFAULT_SWEEP } from './solveDefaults';
 
 export type DesignFamily = 'OSSE' | 'R-OSSE' | 'ICW' | 'FREEFORM';
 export type MutationReason = 'edit' | 'drag' | 'undo' | 'redo' | 'load' | 'family';
@@ -218,7 +219,7 @@ const common = {
     aperture_resolution_scale: 1, max_triangles: 50_000, allow_large_mesh: 0,
   },
   simulation: {
-    f1: 400, f2: 16_000, num_frequencies: 20,
+    f1: DEFAULT_SWEEP.startHz, f2: 16_000, num_frequencies: 32,
     sim_type: 'freestanding' as const, solver_mode: 'full_3d',
   },
   output: { stl: 0, msh: 0 },

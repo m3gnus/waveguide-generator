@@ -3546,10 +3546,10 @@
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
-        "R-OSSE": 400,
-        "OSSE": 400,
-        "ICW": 400,
-        "FREEFORM": 400
+        "R-OSSE": 50,
+        "OSSE": 50,
+        "ICW": 50,
+        "FREEFORM": 50
       },
       "editor_bounds": {
         "minimum": 20,
@@ -3558,7 +3558,7 @@
       "step": 10,
       "precision": 0,
       "options": [],
-      "description": "Lowest frequency of the generated sweep. Ignored when Solve options is set to an explicit frequency list."
+      "description": "Lowest frequency of the generated sweep; defaults to 50 Hz. Ignored when Solve options is set to an explicit frequency list."
     },
     {
       "id": "simulation.f2",
@@ -3612,10 +3612,10 @@
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {
-        "R-OSSE": 20,
-        "OSSE": 20,
-        "ICW": 20,
-        "FREEFORM": 20
+        "R-OSSE": 32,
+        "OSSE": 32,
+        "ICW": 32,
+        "FREEFORM": 32
       },
       "editor_bounds": {
         "minimum": 10,
@@ -3624,7 +3624,7 @@
       "step": 1,
       "precision": 0,
       "options": [],
-      "description": "How many frequencies are solved between the start and end. Every frequency costs about the same, so this sets solve time almost directly. Spacing is chosen under Solve options, which also overrides this entirely when an explicit list is used."
+      "description": "How many frequencies are solved between the start and end; new designs use 32. Every frequency costs about the same, so this sets solve time almost directly. Spacing is chosen under Solve options, which also overrides this entirely when an explicit list is used."
     },
     {
       "id": "simulation.sim_type",

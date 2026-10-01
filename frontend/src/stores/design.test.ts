@@ -550,3 +550,14 @@ describe('family transitions', () => {
     expect(design.R).toBe(defaults.R);
   });
 });
+
+describe('new design sweeps', () => {
+  it.each(['R-OSSE', 'OSSE', 'ICW', 'FREEFORM'] as DesignFamily[])(
+    'starts a new %s design at 50 Hz with 32 points and the unchanged end',
+    (family) => {
+      const design = designForFamily(family);
+      expect(design.simulation).toMatchObject({ f1: 50, f2: 16_000, num_frequencies: 32 });
+      expect(serializeDesign(design).simulation).toMatchObject({ f1: 50, f2: 16_000, num_frequencies: 32 });
+    },
+  );
+});

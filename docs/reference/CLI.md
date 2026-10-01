@@ -36,6 +36,11 @@ array, and adds stable `errors` with `code`, `stage`, `message`, `retryable`, an
 `details`. Unless `--no-mesh` is set, validation compiles the real solver mesh without
 creating a durable job.
 
+A text design or JSON request with no sweep start uses 50 Hz. Omitted sweep
+end and count retain the headless defaults of 20 kHz and 24 points. New editor
+designs state 50 Hz–16 kHz with 32 points. Stated design values, overlay range
+and count, and explicit frequency lists follow the precedence above.
+
 ## Event and terminal contract
 
 `--events text` is the human default. `--events ndjson` and the compatibility spelling
