@@ -399,8 +399,11 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
     stderr_tail = [""]
     channel = None
     try:
-        channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=temporary_directory_root())
+        # Created and registered in one step under the lock a stop takes, so a
+        # stop either sees this directory or the run is refused before making it.
         with _probe_lock:
+            _check_cancelled()
+            channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=temporary_directory_root())
             _active_channels[channel] = _probe_owner.get()
         result_path = Path(channel.name) / "result.json"
         # Independent readers avoid backpressure on both pipes, on every OS.
@@ -492,8 +495,12 @@ def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
         # WG's own check failing is not a verdict on the device. One immediate
         # second run lets a one-off failure (a child that died while PoCL
         # compiled its kernels, say) end on the device's real answer.
+        # One budget across both runs: the second gets only what the first left.
         first = verdict
-        verdict = _run_probe("smoke", json.loads(device_json), timeout)
+        remaining = timeout - first.get("_active_seconds", 0.0)
+        if remaining <= 0:
+            return first
+        verdict = _run_probe("smoke", json.loads(device_json), remaining)
         verdict["_active_seconds"] = verdict.get("_active_seconds", 0.0) + first.get("_active_seconds", 0.0)
         if verdict.get("opencl_unavailable_reason") == "probe_error":
             verdict["reason"] = f"{verdict['reason']} First attempt: {first['reason']}"
@@ -514,12 +521,15 @@ def _qualified_opencl() -> dict[str, Any]:
 
 def _probe_devices() -> dict[str, Any]:
     active_seconds = 0.0
-    found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
+    inventory_budget = min(INVENTORY_SECONDS, TOTAL_SECONDS)
+    found = _run_probe("inventory", None, inventory_budget)
     if found.get("opencl_unavailable_reason") == "probe_error":
-        # As for the smoke check: one immediate second run before reporting.
+        # As for the smoke check: one immediate second run before reporting,
+        # within the same inventory budget.
         first_seconds = found.get("_active_seconds", 0.0)
-        found = _run_probe("inventory", None, min(INVENTORY_SECONDS, TOTAL_SECONDS))
-        found["_active_seconds"] = found.get("_active_seconds", 0.0) + first_seconds
+        if inventory_budget - first_seconds > 0:
+            found = _run_probe("inventory", None, inventory_budget - first_seconds)
+            found["_active_seconds"] = found.get("_active_seconds", 0.0) + first_seconds
     active_seconds += found.pop("_active_seconds", 0.0)
     if not found.get("ok"):
         return {**found, "opencl_unavailable_reason": found.get("opencl_unavailable_reason", "no_device")}

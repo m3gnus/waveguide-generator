@@ -337,3 +337,69 @@ def test_a_stop_removes_a_directory_its_run_did_not_get_to(monkeypatch, tmp_path
     finally:
         with probe._probe_lock:
             probe._active_channels.pop(channel, None)
+
+
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_the_immediate_second_run_spends_the_same_budget(monkeypatch, mode):
+    """A probe error's second run gets only what the first left of its
+    budget, so qualification keeps its documented active-time ceiling."""
+    timeouts = []
+    budget = min(probe.INVENTORY_SECONDS, probe.TOTAL_SECONDS) if mode == "inventory" else min(
+        probe.PROBE_SECONDS, probe.TOTAL_SECONDS)
+    first_active = 0.6 * budget
+    def run(stage, device, timeout):
+        if stage != mode:
+            return {"ok": True, "devices": [{"platform_index": 0, "device_index": 0, "type": "cpu",
+                    "platform": "CPU OpenCL", "name": "CPU", "vendor": "CPU"}], "_active_seconds": 0.0}
+        timeouts.append(timeout)
+        return {"ok": False, "opencl_unavailable_reason": "probe_error", "reason": "internal error",
+                "_active_seconds": first_active if len(timeouts) == 1 else 1.0}
+    monkeypatch.setattr(probe, "_run_probe", run)
+    probe.qualified_opencl()
+    assert len(timeouts) == 2
+    assert timeouts[0] == pytest.approx(budget)
+    assert timeouts[1] == pytest.approx(budget - first_active)
+    assert first_active + timeouts[1] <= budget + 1e-9
+
+
+def test_no_second_run_when_the_first_spent_the_budget(monkeypatch):
+    calls = []
+    def run(stage, device, timeout):
+        calls.append((stage, timeout))
+        return {"ok": False, "opencl_unavailable_reason": "probe_error", "reason": "internal error",
+                "_active_seconds": timeout}
+    monkeypatch.setattr(probe, "_run_probe", run)
+    assert probe.qualified_opencl()["opencl_unavailable_reason"] == "probe_error"
+    assert [stage for stage, _ in calls] == ["inventory"]
+
+
+def test_a_stop_refuses_a_run_before_it_makes_its_directory(monkeypatch, tmp_path):
+    """The directory is made and registered under the lock a stop takes, so
+    a stop never returns while an unregistered directory exists."""
+    made, locked, registered_at_creation = [], [], []
+    real = tempfile.TemporaryDirectory
+    def directory(*args, **kwargs):
+        locked.append(probe._probe_lock.locked())
+        made.append(real(*args, dir=tmp_path, **{k: v for k, v in kwargs.items() if k != "dir"}))
+        return made[-1]
+    monkeypatch.setattr(probe.tempfile, "TemporaryDirectory", directory)
+    def no_spawn(*args, **kwargs):
+        registered_at_creation.append(made[-1] in probe._active_channels)
+        raise OSError("no child in this test")
+    monkeypatch.setattr(probe.subprocess, "Popen", no_spawn)
+    # An ordinary run: the directory is made under the lock and is already
+    # registered by the time anything else happens.
+    assert probe._run_probe("smoke", None, 5)["opencl_unavailable_reason"] == "probe_error"
+    assert locked == [True] and registered_at_creation == [True]
+    assert not list(tmp_path.iterdir()) and not probe._active_channels
+    # After a stop, a run is refused before it makes anything.
+    owner = threading.Event()
+    probe.shutdown_qualification(owner)
+    token = probe._probe_owner.set(owner)
+    try:
+        with pytest.raises(probe.ProbeCancelled):
+            probe._run_probe("smoke", None, 5)
+    finally:
+        probe._probe_owner.reset(token)
+    assert len(made) == 1 and not list(tmp_path.iterdir())
+    assert not probe._active_channels
