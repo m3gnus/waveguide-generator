@@ -457,8 +457,12 @@ New/Open retains the previous viewport frame as a fallback while hiding its
 readouts, even when live updates are paused. An accepted replacement carries a
 client document identity so the viewport and card can replace a high revision
 from the old document with a lower revision from the new one. Matching error-only
-responses end the document wait with unavailable sizes. Document observation
-while paused and document-scoped error filtering apply only to dimension metadata.
+responses end the document wait with unavailable sizes. Retained readout
+ownership also tracks the client's connection generation:
+backend restarts may repeat a server epoch and reset request sequences. An
+accepted replacement connection without dimension keys clears the old readouts.
+Document observation while paused and document-scoped error filtering apply only
+to dimension metadata.
 With older meshers that omit dimension keys, shared errors, badges, stale fields
 and subscriber notifications follow the established behavior, and the card stays hidden.
 A coarse `dimensions_status: "pending"` frame shows the same document's previous

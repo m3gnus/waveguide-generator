@@ -13,6 +13,8 @@ export function selectPreferredFrame(current: DecodedFrame | null, incoming: Dec
   if (!current) return incoming;
   if (incoming.documentLoad !== undefined && current.documentLoad !== undefined
       && incoming.documentLoad !== current.documentLoad) return incoming;
+  if (incoming.connectionGeneration !== undefined && current.connectionGeneration !== undefined
+      && incoming.connectionGeneration !== current.connectionGeneration) return incoming;
   // Sequence numbers restart with each socket epoch. An accepted frame from a
   // new epoch must replace the retained reconnect fallback even at a lower seq.
   if (incoming.header.epoch !== current.header.epoch) return incoming;

@@ -66,6 +66,8 @@ export interface FrameHeader {
 export interface DecodedFrame {
   /** Client-only document identity; revision counters reset on New/Open. */
   documentLoad?: number;
+  /** Client-only socket identity; server epochs can repeat after a restart. */
+  connectionGeneration?: number;
   header: FrameHeader;
   sections: Record<string, FrameArray>;
 }

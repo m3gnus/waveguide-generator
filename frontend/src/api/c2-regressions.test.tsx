@@ -53,6 +53,56 @@ describe('document-scoped design size regressions',()=>{
     msg(JSON.stringify({v:1,kind:'hello',epoch:4,heartbeatSec:15}));answer(NEW);
     expect(host.textContent).toContain('777.0 × 888.0');
   });
+  it.each(['New','Open'])('repeated-epoch older reconnect clears readouts before paused %s',(action)=>{
+    act(()=>resetDesignStore());answer(OLD,{lod:'fine'});
+    for(let i=0;i<5;i++)act(()=>manager.refresh());
+    answer(OLD,{lod:'fine'});
+    expect(request().seq).toBe(7);
+    act(()=>manager.stop());act(()=>manager.start());
+    msg(JSON.stringify({v:1,kind:'hello',epoch:3,heartbeatSec:15}));
+    answer(undefined);
+    act(()=>vi.advanceTimersByTime(140));answer(undefined,{lod:'fine'});
+    expect(manager.getSnapshot().frame?.header.previewMetadata?.dimensions_mm).toBeUndefined();
+    act(()=>manager.stop());act(()=>{
+      if(action==='New')resetDesignStore();
+      else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}
+    });
+    expect(host.textContent).not.toContain('111.0 × 222.0');
+    expect(host.querySelector('section')).toBeNull();
+    expect(manager.getSnapshot().lastCanonicalDimensions).toBeUndefined();
+    expect(manager.getSnapshot().dimensionsFrame?.header.previewMetadata?.dimensions_mm).toBeUndefined();
+  });
+  it.each(['New','Open'])('%s before repeated-epoch older reconnect keeps the card hidden',(action)=>{
+    answer(OLD,{lod:'fine'});
+    act(()=>manager.stop());act(()=>{
+      if(action==='New')resetDesignStore();
+      else {const design=structuredClone(useDesignStore.getState().design);design.scale=2;useDesignStore.getState().loadDesign(design)}
+    });
+    expect(host.querySelector('section')).toBeNull();
+    act(()=>manager.start());msg(JSON.stringify({v:1,kind:'hello',epoch:3,heartbeatSec:15}));
+    answer(undefined);act(()=>vi.advanceTimersByTime(140));answer(undefined,{lod:'fine'});
+    expect(manager.getSnapshot().awaitingDocumentFrame).toBe(false);
+    expect(host.querySelector('section')).toBeNull();
+    expect(host.textContent).not.toContain('111.0');
+  });
+  it('repeated-epoch replacement owns the pending lane and cannot reuse cached numbers',()=>{
+    for(let i=0;i<5;i++)act(()=>manager.refresh());answer(OLD,{lod:'fine'});
+    const old=manager.getSnapshot().dimensionsFrame;
+    act(()=>manager.stop());act(()=>manager.start());msg(JSON.stringify({v:1,kind:'hello',epoch:3,heartbeatSec:15}));
+    answer(PENDING);
+    expect(manager.getSnapshot().dimensionsFrame).not.toBe(old);
+    expect(host.textContent).toContain('Updating dimensions');
+    expect(host.textContent).not.toContain('111.0');
+    act(()=>vi.advanceTimersByTime(140));answer(NEW);
+    expect(host.textContent).toContain('777.0 × 888.0');
+    expect(host.textContent).toContain('Current preview');
+    msg(frame({epoch:3,seq:1,designRevision:1,lod:'coarse',previewMetadata:PENDING}));
+    expect(host.textContent).toContain('Current preview');
+    expect(host.textContent).toContain('777.0 × 888.0');
+    // A callback from the replaced socket is ignored even when its epoch matches.
+    msg(frame({epoch:3,seq:99,designRevision:1,lod:'fine',previewMetadata:OLD}),0);
+    expect(host.textContent).not.toContain('111.0');
+  });
   it('late coarse cannot turn an already settled current readout back into pending',()=>{
     const coarse=request();act(()=>vi.advanceTimersByTime(140));answer(NEW);
     expect(host.textContent).toContain('Current preview');

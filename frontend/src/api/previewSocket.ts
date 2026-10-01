@@ -97,6 +97,7 @@ function previewUrl(): string {
 
 export class PreviewSocketManager {
   private socket: WebSocketLike | null = null;
+  private connectionGeneration = 0;
   private seq = 0;
   /** Newest request outcome seen on this connection, across coarse/fine lanes. */
   private latestOutcomeSeq = 0;
@@ -154,13 +155,21 @@ export class PreviewSocketManager {
 
   private observeRevisions(): void {
     if (!this.unsubscribeRevision) this.unsubscribeRevision = subscribeRevision((event) => this.onRevision(event));
-    if (this.documentLoad !== currentDocumentLoad() && this.hasDimensions()) {
-      this.onRevision({ reason: 'load', revision: useDesignStore.getState().designRevision, immediate: true });
+    if (this.documentLoad !== currentDocumentLoad()) {
+      if (this.hasDimensions()) {
+        this.onRevision({ reason: 'load', revision: useDesignStore.getState().designRevision, immediate: true });
+      } else {
+        this.documentLoad = currentDocumentLoad();
+      }
     }
   }
 
   private hasDimensions(): boolean {
-    return this.snapshot.frame?.header.previewMetadata?.dimensions_mm !== undefined;
+    // The preferred lane can retain a fine frame after the shared coarse lane
+    // has changed. Document cleanup must include every retained readout.
+    return this.snapshot.frame?.header.previewMetadata?.dimensions_mm !== undefined
+      || this.snapshot.dimensionsFrame?.header.previewMetadata?.dimensions_mm !== undefined
+      || this.snapshot.lastCanonicalDimensions != null;
   }
 
   private stopObservingRevisions(): void {
@@ -235,6 +244,7 @@ export class PreviewSocketManager {
     this.update({ connection: reconnecting ? 'reconnecting' : 'connecting', error: null, errorFields: null, errorRevision: null });
     const socket = this.factory(this.url);
     this.socket = socket;
+    this.connectionGeneration += 1;
     this.seq = 0;
     this.latestOutcomeSeq = 0;
     this.loadFloorSeq = 0;
@@ -369,11 +379,17 @@ export class PreviewSocketManager {
       || frameRevision >= this.snapshot.errorRevision
     );
     this.latestOutcomeSeq = Math.max(this.latestOutcomeSeq, frameSeq);
+    frame.connectionGeneration = this.connectionGeneration;
     if (supported) frame.documentLoad = this.documentLoad;
-    const dimensionsFrame = selectPreferredFrame(this.snapshot.dimensionsFrame ?? this.snapshot.frame, frame);
+    const retained = this.snapshot.dimensionsFrame ?? this.snapshot.frame;
+    const sameOwner = retained?.documentLoad === frame.documentLoad
+      && retained?.connectionGeneration === frame.connectionGeneration;
+    // seq and server epoch are process-local. Only this client's connection
+    // generation and document identity can own a retained dimension readout.
+    const dimensionsFrame = selectPreferredFrame(sameOwner ? retained : null, frame);
     const metadata = dimensionsFrame?.header.previewMetadata;
     const lastCanonicalDimensions = metadata?.dimensions_status === 'pending'
-      ? this.snapshot.lastCanonicalDimensions
+      ? sameOwner ? this.snapshot.lastCanonicalDimensions : undefined
       : metadata?.dimensions_status === 'unavailable' ? null : metadata?.dimensions_mm;
     this.update({
       frame,

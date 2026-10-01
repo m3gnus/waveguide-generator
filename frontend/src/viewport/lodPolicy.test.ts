@@ -35,4 +35,18 @@ describe('selectPreferredFrame', () => {
     reconnected.header.epoch = 8;
     expect(selectPreferredFrame(retained, reconnected)).toBe(reconnected);
   });
+
+  it('accepts a replacement connection even when the server repeats its epoch', () => {
+    const retained = { ...frame(12, 'fine', 900), documentLoad: 3, connectionGeneration: 1 };
+    retained.header.epoch = 7;
+    const reconnected = { ...frame(1, 'coarse', 1), documentLoad: 4, connectionGeneration: 2 };
+    reconnected.header.epoch = 7;
+    expect(selectPreferredFrame(retained, reconnected)).toBe(reconnected);
+    // The generation alone also distinguishes a reconnect of the same document.
+    reconnected.documentLoad = retained.documentLoad;
+    expect(selectPreferredFrame(retained, reconnected)).toBe(reconnected);
+    const lateCoarse = { ...frame(1, 'coarse', 3), documentLoad: 3, connectionGeneration: 2 };
+    const fine = { ...frame(1, 'fine', 2), documentLoad: 3, connectionGeneration: 2 };
+    expect(selectPreferredFrame(fine, lateCoarse)).toBe(fine);
+  });
 });

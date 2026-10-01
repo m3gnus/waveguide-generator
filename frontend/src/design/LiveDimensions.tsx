@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { previewSocket } from '../api/previewSocket';
-import { useDesignStore } from '../stores/design';
+import { currentDocumentLoad, useDesignStore } from '../stores/design';
 
 const readouts = [
   ['mouth_opening', 'Mouth opening', 2],
@@ -30,7 +30,9 @@ export function LiveDimensions() {
   const frame = preview.dimensionsFrame ?? preview.frame;
   const metadata = frame?.header.previewMetadata;
   const supported = metadata !== undefined && 'dimensions_mm' in metadata;
-  const visible = supported && !preview.awaitingDocumentFrame;
+  const ownsDocument = frame?.documentLoad === undefined || frame.documentLoad === currentDocumentLoad();
+  const visible = supported && !preview.awaitingDocumentFrame
+    && (ownsDocument || preview.dimensionsUnavailable);
 
   // NumberField keeps rejected drafts outside the design store. Observe its
   // public validity state so dimensions cannot look current beside an invalid
