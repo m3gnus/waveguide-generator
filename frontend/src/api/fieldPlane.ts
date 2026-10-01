@@ -41,6 +41,7 @@ export interface FieldPlaneHeader {
   geometry_sha256: string;
   synthesis_revision: string | null;
   symmetry_plane: string | null;
+  frequency_status?: 'solved' | 'interpolated';
 }
 
 export interface DecodedFieldPlane {
@@ -179,6 +180,8 @@ function validateHeader(value: unknown): FieldPlaneHeader {
     geometry_sha256: requiredString(value, 'geometry_sha256'),
     synthesis_revision: optionalString(value, 'synthesis_revision'),
     symmetry_plane: symmetryPlane(value),
+    ...(value.frequency_status === 'solved' || value.frequency_status === 'interpolated'
+      ? { frequency_status: value.frequency_status } : {}),
   };
 }
 

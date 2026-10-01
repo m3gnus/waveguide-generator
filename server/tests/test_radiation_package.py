@@ -555,3 +555,19 @@ def test_cli_argument_refusals(tmp_path: Path, capsys) -> None:
         == 1
     )
     assert "[job_not_found]" in capsys.readouterr().err
+
+
+def test_radiation_package_discloses_reconstructed_surface_traces(tmp_path):
+    store = _store(tmp_path)
+    _create_job(store)
+    results = store.get_results("job-1")
+    results["frequency_status"] = ["solved", "interpolated"]
+    store.store_results("job-1", results)
+    exported = build_radiation_package(store, "job-1", tmp_path / "adaptive.zip")
+    assert exported.ok
+    sampling = exported.manifest["sampling"]
+    assert sampling["solved_count"] == sampling["interpolated_count"] == 1
+    assert sampling["frequency_status"] == results["frequency_status"]
+    assert sampling["solved_frequencies_hz"] == [FREQUENCIES[0]]
+    assert "narrow resonances can be missed" in sampling["warning"]
+    store.close()

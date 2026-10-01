@@ -311,7 +311,8 @@ describe('atomic results display transitions', () => {
     expect(provisionalResults.get('live')).toBeUndefined();
   });
 
-  it('labels adaptive snapshots with acquired frequencies instead of snapshot revisions', async () => {
+  it.each([true, false])('labels adaptive snapshots with acquired frequencies, with provisional metadata=%s', async (withMetadata) => {
+    preferencesStore.update({ chartTypes: ['summary', 'phase_response', 'impedance', 'directivity_index'] });
     await act(async () => { root.render(<ResultsPanel/>); });
     await act(async () => { pending.get('old')!(response([100])); });
     const liveJob = job('adaptive');
@@ -326,18 +327,26 @@ describe('atomic results display transitions', () => {
       provisionalResults.apply('adaptive', 1, {
         frequencies,
         frequency_status: frequencies.map((_, i) => i < 8 ? 'solved' : 'interpolated'),
-        metadata: { provisional: { completed_frequency_count: 8, expected_frequency_count: 48 } },
+        ...(withMetadata ? { metadata: { provisional: { completed_frequency_count: 8, expected_frequency_count: 48 } } } : {}),
       });
       await Promise.resolve();
     });
     expect(host.textContent).toContain('Live · 8/48 frequencies');
+    const cards = [...host.querySelectorAll('.result-card')];
+    expect(cards.length).toBeGreaterThan(1);
+    for (const card of cards) {
+      const disclosure = card.querySelector('[role="note"][title*="Adaptive sampling"]');
+      expect(disclosure?.textContent).toContain('reconstructed estimates');
+      expect(disclosure?.getAttribute('title')).toContain('8 solved, 40 interpolated');
+      expect(disclosure?.getAttribute('title')).toContain('narrow resonances can be missed');
+    }
     vi.useFakeTimers();
     try {
       await act(async () => {
         provisionalResults.apply('adaptive', 2, {
           frequencies,
           frequency_status: frequencies.map((_, i) => i < 12 ? 'solved' : 'interpolated'),
-          metadata: { provisional: { completed_frequency_count: 12, expected_frequency_count: 48 } },
+          ...(withMetadata ? { metadata: { provisional: { completed_frequency_count: 12, expected_frequency_count: 48 } } } : {}),
         });
         await vi.advanceTimersByTimeAsync(250);
       });

@@ -30,6 +30,7 @@ def test_native_batch_status_preserves_parametric_progress(monkeypatch, adaptive
     from server.jobs.runtime import JobRuntime
 
     batches = []
+    snapshots = []
     stages = []
     progress = []
 
@@ -68,11 +69,17 @@ def test_native_batch_status_preserves_parametric_progress(monkeypatch, adaptive
     response = beat.solve_beat_from_msh_text(
         "$MeshFormat\n", _context(num_frequencies=48, adaptive_frequency_sampling=adaptive),
         progress_callback=progress.append,
+        result_callback=lambda revision, snapshot: snapshots.append((revision, snapshot)),
         stage_callback=lambda *args: stages.append(args),
     )
     assert len(response["frequencies"]) == 48
     submissions = [stage for stage in stages if stage[2] == "Submitting solve request"]
     if adaptive:
+        assert snapshots
+        for revision, snapshot in snapshots:
+            provisional = snapshot["metadata"]["provisional"]
+            assert provisional["completed_frequency_count"] == snapshot["frequency_status"].count("solved")
+            assert provisional["expected_frequency_count"] == 48
         assert len(batches) >= 3  # Initial acquisition and multiple refinements.
         assert submissions[1][0] == "frequency_solve"
         assert submissions[1][1] == pytest.approx(8 / 48)

@@ -1,3 +1,4 @@
+import { samplingComments, samplingProvenance } from './sampling';
 import { downloadBlob, downloadText } from '../api/designIo';
 import {
   collisionFrom,
@@ -178,11 +179,11 @@ export function buildFrequencyCsv(result: ResultPayload, preferences: Preference
   joinSeries(smoothedSeries(result, preferences)).forEach((row) => rows.push([
     row.frequency, csvCell(row.spl), csvCell(row.di), csvCell(row.impedanceReal), csvCell(row.impedanceImaginary),
   ].join(',')));
-  return `${preferences.smoothing === 'none' ? '' : `# Smoothing: ${preferences.smoothing}\n`}${rows.join('\n')}\n`;
+  return `${samplingComments(result)}${preferences.smoothing === 'none' ? '' : `# Smoothing: ${preferences.smoothing}\n`}${rows.join('\n')}\n`;
 }
 
 export function buildFullResultsJson(result: ResultPayload, preferences: Preferences, now = new Date()): string {
-  return JSON.stringify({ timestamp: now.toISOString(), smoothing: preferences.smoothing, results: result }, null, 2);
+  return JSON.stringify({ ...(samplingProvenance(result) ? { sampling: samplingProvenance(result) } : {}), timestamp: now.toISOString(), smoothing: preferences.smoothing, results: result }, null, 2);
 }
 
 function stats(values: Array<number | null>): { min: number; max: number; average: number } | null {
@@ -211,7 +212,7 @@ export function buildSummaryText(result: ResultPayload, preferences: Preferences
   if (impedance) lines.push('IMPEDANCE SUMMARY', '-----------------', `Average Real Part ${impedanceUnit}: ${impedance.average.toFixed(2)}`, '');
   lines.push('DETAILED DATA', '=============', impedanceColumns);
   rows.forEach((row) => lines.push([row.frequency, row.spl, row.di, row.impedanceReal, row.impedanceImaginary].map((value) => finite(value)?.toFixed(2) ?? 'n/a').join('  ')));
-  return `${lines.join('\n')}\n`;
+  return `${samplingComments(result)}${lines.join('\n')}\n`;
 }
 
 function patternDb(value: unknown): number | null {
@@ -266,7 +267,7 @@ export function buildPolarCsv(result: ResultPayload): string {
       pattern.forEach(([angle, value]) => rows.push(`${frequencies[frequencyIndex]},${plane},${angle},${patternDb(value) ?? ''}`));
     });
   });
-  return `${rows.join('\n')}\n`;
+  return `${samplingComments(result)}${rows.join('\n')}\n`;
 }
 
 export function buildImpedanceCsv(result: ResultPayload): string {
@@ -274,7 +275,7 @@ export function buildImpedanceCsv(result: ResultPayload): string {
   const suffix = impedanceUnits(result).electrical ? 'Ohm' : 'Z_over_rho_c';
   const rows = [`Freq_Hz,Z_Real_${suffix},Z_Imag_${suffix}`];
   frequencies.forEach((frequency, index) => rows.push(`${frequency},${csvCell(result.impedance?.real?.[index])},${csvCell(result.impedance?.imaginary?.[index])}`));
-  return `${rows.join('\n')}\n`;
+  return `${samplingComments(result)}${rows.join('\n')}\n`;
 }
 
 function quotedCsv(value: unknown): string {

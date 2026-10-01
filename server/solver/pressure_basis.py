@@ -27,6 +27,7 @@ from server.contracts.conventions import (
 )
 
 from .combine import deserialize_channel_bases
+from .sampling_provenance import sampling_provenance
 from .imported import LEGACY_AXIAL_CONTRACT
 
 
@@ -132,6 +133,10 @@ def export_pressure_basis(
         "source_normalization": np.asarray(normalization),
         "surface_pressure_avg_available": np.asarray(False),
     }
+    flags = getattr(result, "frequency_status", None)
+    if flags is not None:
+        sampling = sampling_provenance({"frequencies": result.frequencies_hz, "frequency_status": flags})
+        arrays.update({key: np.asarray(value) for key, value in sampling.items()})
     motion = str(
         stored.get("source_motion")
         or public_metadata.get("source_motion")

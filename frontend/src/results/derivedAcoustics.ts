@@ -1,3 +1,4 @@
+import { samplingComments, samplingProvenance } from './sampling';
 import { groupDelayMilliseconds, propagationReference } from './phaseAnalysis';
 import { radiatedPowerMetadata } from './radiatedPower';
 import type { ResultPayload } from './types';
@@ -24,6 +25,7 @@ export interface DerivedAcousticsPayload {
   schema_version: number;
   rows: DerivedAcousticsRow[];
   metadata: {
+    sampling?: NonNullable<ReturnType<typeof samplingProvenance>>;
     power_response_formula: string;
     power_agreement_formula: string;
     radiated_power_definition: string | null;
@@ -128,6 +130,7 @@ export function buildDerivedAcoustics(result: ResultPayload): DerivedAcousticsPa
     schema_version: DERIVED_ACOUSTICS_SCHEMA_VERSION,
     rows,
     metadata: {
+      ...(samplingProvenance(result) ? { sampling: samplingProvenance(result)! } : {}),
       power_response_formula: 'on_axis_spl_db - directivity_index_db',
       power_agreement_formula: '10 * log10(radiated_power_sphere_w / radiated_power_surface_w)',
       radiated_power_definition: radiatedPower?.definition || null,
@@ -172,7 +175,7 @@ export function buildDerivedAcousticsCsv(result: ResultPayload): string {
     'beam_shape_exponent',
     'beam_fit_residual_percent',
   ] as const;
-  return `${[
+  return `${samplingComments(result)}${[
     keys.join(','),
     ...payload.rows.map((row) => keys.map((key) => csvCell(row[key])).join(',')),
   ].join('\n')}\n`;

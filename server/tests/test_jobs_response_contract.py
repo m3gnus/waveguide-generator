@@ -20,7 +20,7 @@ NULLABLE_FIELDS = (
     "auto_export_completed_at", "raw_results_file", "mesh_artifact_file",
 )
 OPTION_FIELDS = (
-    "engine", "accuracy", "adaptive_frequency_sampling", "solver_mode", "symmetry", "frequency_range",
+    "engine", "accuracy", "solver_mode", "symmetry", "frequency_range",
     "num_frequencies", "frequency_spacing", "frequencies_hz", "verbose",
     "mesh_ladder", "mesh_validation_mode", "polar_config", "ground_plane",
     "stage_delay_ms",
@@ -176,7 +176,7 @@ def test_schema_uses_response_option_requirements_without_changing_requests():
     assert {"solve_execution", "channel_solve_executions", "design_availability", "client_metadata"} <= set(schema["required"])
     response_options = schema["$defs"]["SolveOptionsResponse"]
     assert set(OPTION_FIELDS) == set(response_options["required"])
-    assert set(response_options["properties"]) == set(response_options["required"])
+    assert set(response_options["properties"]) == set(response_options["required"]) | {"adaptive_frequency_sampling"}
     assert set(schema["$defs"]["DesignAvailability"]["properties"]) == set(
         schema["$defs"]["DesignAvailability"]["required"]
     )

@@ -710,7 +710,12 @@ def solve_beat_from_msh_text(
                     if result_callback:
                         snapshot = build_solver_response(
                             result=native, config=config, context=context,
-                            start_time=started, metadata={},
+                            start_time=started, metadata={
+                                "provisional": {
+                                    "completed_frequency_count": native.adaptive_sampling["solved_count"],
+                                    "expected_frequency_count": context.num_frequencies,
+                                },
+                            },
                             sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
                         )
                         result_callback(revision[0], snapshot)

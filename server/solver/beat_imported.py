@@ -397,7 +397,7 @@ def _drive_groups(
     ]
 
 
-def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
+def _signed_sum(parts: Sequence[tuple[float, Any]], *, adaptive: bool = False) -> Any:
     """Sum native group rows by linearity, before any adaptive fit."""
 
     first_sign, first = parts[0]
@@ -426,7 +426,7 @@ def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
         if hasattr(first, name):
             setattr(combined, name, total(name))
     averages = [getattr(result, "surface_pressure_avg", None) for _, result in parts]
-    if all(isinstance(value, dict) for value in averages):
+    if adaptive and all(isinstance(value, dict) for value in averages):
         combined.surface_pressure_avg = {
             tag: sum(sign * np.asarray(values[tag])
                      for (sign, _), values in zip(parts, averages, strict=True))
@@ -442,7 +442,7 @@ def _signed_sum(parts: Sequence[tuple[float, Any]]) -> Any:
             if isinstance(value, (int, float)):
                 timings[key] = timings.get(key, 0.0) + float(value)
     combined.timings = timings
-    if hasattr(first, "solver_log"):
+    if adaptive and hasattr(first, "solver_log"):
         combined.solver_log = [
             entry for _, result in parts for entry in (getattr(result, "solver_log", []) or [])
         ]
@@ -1018,7 +1018,7 @@ def solve_imported_beat_from_msh_text(
                                     if not np.array_equal(native.frequencies_hz, batch):
                                         raise ValueError("adaptive batch returned a different frequency grid")
                                     rows.append((group_sign, native))
-                                return _signed_sum(rows)
+                                return _signed_sum(rows, adaptive=True)
 
                             result = solve_native_adaptively(
                                 context, solve_batch,

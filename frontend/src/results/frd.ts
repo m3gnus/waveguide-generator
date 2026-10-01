@@ -1,3 +1,4 @@
+import { samplingNotes } from './sampling';
 import { ARTIFACT_CONVENTIONS, ENGINEERING_NPZ_PHASOR } from '../api/conventions';
 import type { Preferences } from '../prefs/preferences';
 import { applySmoothing, type SmoothingValue } from './smoothing';
@@ -177,6 +178,7 @@ export function buildOnAxisFrd(
 
   return fileText([
     'HornLab on-axis frequency response',
+    ...samplingNotes(result),
     ...PHASE_CONVENTION_NOTES,
     ...observationNotes(result),
     normalizationNote(result, false),
@@ -300,6 +302,7 @@ export function buildPolarFrdSet(
         text: fileText([
           ...(includesPhase ? ['HornLab polar frequency response'] : []),
           `Plane: ${plane}, angle ${angle} deg`,
+          ...samplingNotes(result),
           ...PHASE_CONVENTION_NOTES,
           ...observationNotes(result),
           normalizationNote(result, true),

@@ -38,6 +38,7 @@ from .field_traces_store import (
     METAL_FIELD_TRACE_BACKEND,
 )
 from .metal_permit import MetalLease, MetalPermit
+from .sampling_provenance import sampling_provenance
 
 
 logger = logging.getLogger(__name__)
@@ -93,6 +94,7 @@ class FieldPlaneEvaluation:
     geometry_sha256: str
     synthesis_revision: str
     symmetry_plane: str | None
+    sampling: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +216,9 @@ def encode_field_plane_response(
         "synthesis_revision": evaluation.synthesis_revision,
         "symmetry_plane": evaluation.symmetry_plane,
     }
+    if evaluation.sampling is not None:
+        header["sampling"] = evaluation.sampling
+        header["frequency_status"] = evaluation.sampling["frequency_status"][request.frequency_index]
     header_bytes = json.dumps(
         header,
         separators=(",", ":"),
@@ -412,12 +417,17 @@ class FieldPlaneService:
             raise RuntimeError(
                 "field evaluator returned an unexpected pressure grid shape"
             )
+        results = self.store.get_results(job_id)
+        selected = results if isinstance(results, Mapping) else {}
+        if request.response.id.startswith("channel:"):
+            selected = selected.get("channels", {}).get(request.response.id.removeprefix("channel:"), {})
         return FieldPlaneEvaluation(
             frequency_hz=float(frequency_hz),
             pressure=np.ascontiguousarray(values, dtype=np.complex64),
             geometry_sha256=geometry_sha256,
             synthesis_revision=synthesis_revision,
             symmetry_plane=symmetry_plane,
+            sampling=sampling_provenance(selected),
         )
 
     def _load_response_traces(

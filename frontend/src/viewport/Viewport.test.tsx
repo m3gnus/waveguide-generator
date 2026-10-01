@@ -267,6 +267,21 @@ describe('Viewport preview errors', () => {
     expect(host.querySelector('[aria-label="Invert field-plane clip side"]')).not.toBeNull();
   });
 
+  it('discloses fields evaluated from reconstructed surface traces', () => {
+    act(() => {
+      compareSelection.setPrimary('available');
+      publishJobs([completeJob('available', true)]);
+      useFieldPlaneStore.setState({
+        enabled: true, jobId: 'available', plane: fieldPlane, status: 'ready',
+        frequenciesHz: [500, 1000, 2000], frequencyIndex: 1,
+        frequencyStatus: ['solved', 'interpolated', 'solved'],
+      });
+    });
+    expect(host.textContent).toContain('Adaptive sampling · interpolated frequency');
+    expect(host.textContent).toContain('reconstructed surface traces');
+    expect(host.textContent).toContain('narrow resonances can be missed');
+  });
+
   it('scrubs solved frequencies with a slider instead of a dropdown', () => {
     act(() => {
       compareSelection.setPrimary('available');

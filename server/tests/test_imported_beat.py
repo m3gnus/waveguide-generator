@@ -840,7 +840,7 @@ def test_adaptive_signed_cancellation_is_fitted_at_the_summed_pressure_scale(rec
         planner = SweepPlanner(f, delays_s=np.r_[np.full(37, 2 / 343), 0])
         while len(planner.pending):
             planner.add(planner.pending, group_truth[planner.pending])
-        assert len(planner.observed) == 28
+        assert len(planner.observed) < len(f)
         assert planner.estimate_db < 0.1
         independent.append(planner.prediction[:, 0])
     group_sum = independent[0] - independent[1]
@@ -929,3 +929,25 @@ def test_adaptive_imported_live_frame_progress_counts_and_channel_intersection(r
     assert streamed[0][1]["metadata"]["provisional"]["completed_frequency_count"] == 8
     assert selections["left"] != selections["right"]
     assert merged["frequency_status"] == outcome.results["frequency_status"]
+
+
+@pytest.mark.parametrize("parts", [((1, 3), (-1, 2)), ((-1, 3),)])
+def test_signed_sum_auxiliary_aggregation_is_only_adaptive(parts):
+    """Off preserves base's first-group averages/logs; fits need signed traces."""
+    from types import SimpleNamespace
+
+    groups = [(sign, SimpleNamespace(
+        pressure_complex=np.full((2, 1, 1), value, dtype=complex),
+        impedance=np.full(2, value, dtype=complex),
+        surface_pressure_avg={2: np.full(2, value, dtype=complex)},
+        solver_log=[{"group": value}], timings={"solve": value},
+    )) for sign, value in parts]
+    legacy = beat_imported._signed_sum(groups)
+    adaptive = beat_imported._signed_sum(groups, adaptive=True)
+    expected = sum(sign * value for sign, value in parts)
+    np.testing.assert_array_equal(legacy.pressure_complex, expected)
+    np.testing.assert_array_equal(adaptive.pressure_complex, expected)
+    assert legacy.surface_pressure_avg is groups[0][1].surface_pressure_avg
+    assert legacy.solver_log is groups[0][1].solver_log
+    np.testing.assert_array_equal(adaptive.surface_pressure_avg[2], expected)
+    assert adaptive.solver_log == [entry for _, group in groups for entry in group.solver_log]

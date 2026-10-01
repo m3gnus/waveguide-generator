@@ -7,7 +7,7 @@ import math
 import re
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from server.contracts import DriverSpec as DriverSpec, JobModel as JobModel
 from server.design.schema import DesignConfig
@@ -147,6 +147,15 @@ class SolveOptions(JobModel):
     engine: str = "auto"
     accuracy: Literal["fast", "accurate"] = "fast"
     adaptive_frequency_sampling: bool = False
+
+    @model_serializer(mode="wrap")
+    def serialize_sampling_option(self, handler):
+        """Keep every legacy wire encoding unchanged when sampling is off."""
+        wire = handler(self)
+        if not self.adaptive_frequency_sampling:
+            wire.pop("adaptive_frequency_sampling", None)
+        return wire
+
     # ``auto`` remains accepted for old clients but resolves as Full 3D.
     # ``circsym`` stays decodable so historical Axisymmetric requests load;
     # planning, submission, retry and execution refuse it.
@@ -264,7 +273,7 @@ class SolveOptionsResponse(SolveOptions):
 
     engine: str
     accuracy: Literal["fast", "accurate"]
-    adaptive_frequency_sampling: bool
+    adaptive_frequency_sampling: bool = False
     solver_mode: Literal["auto", "full_3d", "circsym"]
     symmetry: str
     frequency_range: list[float] | None

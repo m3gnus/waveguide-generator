@@ -15,6 +15,11 @@ from .adaptive_rational import SweepModel
 from .frequency_sweep import _set_frequency_shaped_field, canonical_frequencies
 
 
+# A geometric coverage floor, independent of fit agreement. Kept here so the
+# acquisition grid, planner and published metadata use the same bound.
+MAX_SOLVED_GAP_OCTAVES = 1 / 6
+
+
 def enabled(context) -> bool:
     return (
         context.adaptive_frequency_sampling
@@ -32,10 +37,11 @@ def difference_db(a, b):
 
 
 class SweepPlanner:
-    """Acquire only requested frequencies, starting with eight log-spaced points.
+    """Acquire rows on a density-ready grid, starting with eight log-spaced points.
 
     Four queries per refinement round: three disagreement maxima and a largest
-    log-gap midpoint. Accept convergence only after two stable, guarded rounds.
+    log-gap midpoint. Oversized gaps take priority over disagreement queries.
+    Accept convergence only after two stable, guarded rounds and the density floor.
     All returned solved rows are restored exactly from the observations.
     """
 
@@ -120,18 +126,41 @@ class SweepPlanner:
             self.safe = False
             self.stable = 0
             estimate = np.ones(len(f))
-        if self.stable >= 2:
+        gaps_octaves = np.diff(np.log2(f[ids]))
+        density_met = bool(np.all(gaps_octaves <= MAX_SOLVED_GAP_OCTAVES + 1e-12))
+        if self.stable >= 2 and density_met:
             self.stop_reason = "estimated_convergence"
             self.pending = np.array([], dtype=int)
             return
         remaining = set(range(len(f))) - set(ids)
         selected = []
         # Coverage is based on log-frequency distances, including explicit and
-        # linear grids. It never queries a frequency outside the request.
+        # linear grids. It never queries a frequency outside the acquisition grid.
         gaps = np.diff(np.log(f[ids]))
+        # Fill every oversized refinable gap before tolerance-driven queries.
+        # Include pending queries when splitting so a batch can fill one large
+        # gap several times, without wasting queries on smaller gaps.
+        coverage_ids = list(ids)
+        while len(selected) < min(self.batch_size, len(remaining)):
+            coverage_ids.sort()
+            oversized = np.argsort(np.diff(np.log2(f[coverage_ids])))[::-1]
+            candidate = None
+            for gap in oversized:
+                left, right = coverage_ids[gap:gap + 2]
+                if np.log2(f[right] / f[left]) <= MAX_SOLVED_GAP_OCTAVES + 1e-12:
+                    break
+                candidates = np.arange(left + 1, right)
+                if len(candidates):
+                    target = (np.log(f[left]) + np.log(f[right])) / 2
+                    candidate = int(candidates[np.argmin(abs(np.log(f[candidates]) - target))])
+                    break
+            if candidate is None:
+                break
+            selected.append(candidate)
+            coverage_ids.append(candidate)
         for gap in np.argsort(gaps)[::-1]:
             candidates = np.arange(ids[gap] + 1, ids[gap + 1])
-            if len(candidates):
+            if len(candidates) and not selected:
                 target = (np.log(f[ids[gap]]) + np.log(f[ids[gap + 1]])) / 2
                 selected.append(int(candidates[np.argmin(abs(np.log(f[candidates]) - target))]))
                 break
@@ -172,7 +201,16 @@ def solve_native_adaptively(
     cancel: Callable | None = None,
 ) -> Any:
     """Reuse the native batch solver; publish complete replacement snapshots."""
-    f = canonical_frequencies(context)
+    requested = canonical_frequencies(context)
+    # Sparse explicit/linear requests can themselves exceed the density floor.
+    # Add native coverage queries, then publish only the original requested grid.
+    coverage = []
+    for left, right in zip(requested[:-1], requested[1:], strict=True):
+        intervals = int(np.ceil(np.log2(right / left) / MAX_SOLVED_GAP_OCTAVES - 1e-12))
+        if intervals > 1:
+            coverage.extend(np.geomspace(left, right, intervals + 1)[1:-1])
+    f = np.unique(np.r_[requested, coverage])
+    requested_ids = np.searchsorted(f, requested)
     planner = None
     template = None
     layout = []
@@ -223,12 +261,14 @@ def solve_native_adaptively(
                 timings[key] = timings.get(key, 0) + value
         if planner.safe:
             current = copy(template)
-            current.frequencies_hz = f.copy()
+            current.frequencies_hz = requested.copy()
             offset = 0
             if isinstance(getattr(template, "surface_pressure_avg", None), dict):
                 current.surface_pressure_avg = {}
             for name, shape, width, _ in layout:
-                values = planner.prediction[:, offset : offset + width].reshape((len(f), *shape))
+                values = planner.prediction[requested_ids, offset : offset + width].reshape(
+                    (len(requested), *shape)
+                )
                 if isinstance(name, str):
                     setattr(current, name, values)
                 else:
@@ -248,10 +288,14 @@ def solve_native_adaptively(
                 for name in dir(current)
                 if not name.startswith("_") and not callable(getattr(current, name))
             }
-            fields["frequency_status"] = planner.status
+            fields["frequency_status"] = [planner.status[i] for i in requested_ids]
             fields["adaptive_sampling"] = dict(
-                solved_count=len(planner.observed),
-                requested_count=len(f),
+                solved_count=sum(i in planner.observed for i in requested_ids),
+                requested_count=len(requested),
+                native_solved_count=len(planner.observed),
+                solved_frequencies_hz=f[sorted(planner.observed)].tolist(),
+                max_gap_octaves=float(np.max(np.diff(np.log2(f[sorted(planner.observed)])))),
+                max_allowed_gap_octaves=MAX_SOLVED_GAP_OCTAVES,
                 tolerance_db=planner.tolerance_db,
                 estimate_db=planner.estimate_db,
                 stop_reason=planner.stop_reason,

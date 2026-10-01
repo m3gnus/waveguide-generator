@@ -8,9 +8,20 @@ explicit lists. Accurate selects BEAT; an explicit BEAT backend also qualifies.
 Other engines, smaller sweeps, and non-exterior formulations keep their existing
 execution. No engine, dependency pin, or solver precision changes.
 
-The planner starts at eight log-spaced requested frequencies, always including
+The planner starts at eight log-spaced acquisition frequencies, always including
 both endpoints. It selects batches of four using rational fit disagreement and
-a largest log-gap coverage query. A shared-denominator, set-valued AAA fit uses
+log-gap coverage queries. Oversized gaps take priority. Completed acquisition
+requires every gap between adjacent solved frequencies to be **<= 1/6 octave**
+(`log2(f_right / f_left) <= 1/6`). The single constant
+`MAX_SOLVED_GAP_OCTAVES` in `server/solver/adaptive_sweep.py` defines this floor.
+If an explicit or linear requested grid already has wider adjacent gaps, the
+native acquisition grid adds geometric coverage frequencies inside those gaps;
+publication still uses exactly the original requested grid. Live coarse-to-fine
+snapshots can precede completion of the density floor and remain provisional.
+
+In-between frequencies are reconstructed with a **set-valued AAA barycentric
+rational fit**, with shared supports and weights across channels: each channel
+has its own numerator and all channels share one scalar denominator. This uses
 complex pressure and impedance, spherical pressure when requested, and retained
 boundary traces. Known observation propagation delay is removed before fitting
 and restored afterward. Each channel is scaled separately. SciPy (already pinned)
@@ -25,11 +36,29 @@ and all numerators refitted from solved rows. A fit is published only after its
 poles and evaluated values pass the guard. Its sample residual, degree
 comparison, previous-fit comparison and three leave-one-out comparisons all
 participate in the stopping estimate. Two guarded refinement rounds below
-0.1 dB equivalent disagreement end acquisition. Otherwise acquisition continues
-to the complete request. Solved rows are restored exactly before publication.
+0.1 dB equivalent disagreement, together with the density floor, end acquisition.
+The per-frequency disagreement between complex vectors `a` and `b` is the
+maximum over channels of `20*log10(1 + abs(a-b)/denominator)`, where the denominator
+is `max(abs(a), abs(b), channel_peak*10**(-30/20), 1e-30)` and `channel_peak` is
+the larger peak magnitude of the two predictions on the acquisition grid. The
+stopping estimate is the maximum on unsolved acquisition rows over reduced-degree,
+previous-fit and three leave-one-out disagreements, plus the largest solved-row
+residual. The 30 dB floor avoids singular relative errors near response nulls.
+These are fit consistency checks using only acquired data, not a comparison with
+unsolved truth.
 
-**The disagreement tolerance is not a certified error bound.** A narrow resonance
-between sampled frequencies can be missed. Mesh, quadrature and solver errors
+If a fit fails, becomes nonfinite, fails its pole guard, or cannot meet the
+stopping criteria, more native rows are acquired. The fallback is the full
+acquisition grid (requested rows plus any needed geometric coverage rows), with
+exact native values and no interpolation. Unsafe fitted snapshots are withheld.
+Solved requested rows are restored exactly before every publication.
+
+**The disagreement tolerance is not a certified error bound.** A resonance
+narrower than the largest gap between sampled frequencies can be missed, even
+when all fits agree below 0.1 dB. With the density floor the largest gap in a
+completed acquisition is <= 1/6 octave; this bounds sample spacing, not resonance
+height, location, width or interpolation error. It does not guarantee detection
+of every sharp resonance between samples. Mesh, quadrature and solver errors
 are separate. This preference is suitable for exploratory dense sweeps; validate
 features of interest with a full sweep. Batched requests can repeat native setup
 cost, so fewer solves do not imply the same factor of wall-time improvement.
@@ -53,10 +82,21 @@ use the reconstructed complex bases afterward.
 `metadata.adaptive_sampling` records `solved_count`, `requested_count`,
 `tolerance_db`, `estimate_db` and `stop_reason` (`estimated_convergence` or
 `full_sweep`). For signed groups, `solved_count` counts common solved frequencies;
-it is not the total number of native group solves. Native timings and logs retain
-all batches. Derived combinations report `derived: true` with their frequency
-counts instead of a fit tolerance. The frontend marks interpolated on-axis SPL points with small hollow
-circles and labels that convention in the series name.
+it is not the total number of native group solves. `native_solved_count` also
+counts extra coverage frequencies on sparse requests;
+`solved_frequencies_hz`, `max_gap_octaves` and `max_allowed_gap_octaves` describe
+the complete native acquisition. Native timings and logs retain all batches.
+Derived combinations report `derived: true` with their frequency
+counts instead of a fit tolerance. The frontend marks interpolated on-axis SPL
+points with small hollow
+circles and labels that convention in the series name. Every result chart and
+field-plane controls also disclose
+adaptive reconstruction. Numeric CSV, summary, FRD, ZMA, derived acoustics,
+full JSON, static reports, pressure-basis NPZ and portable radiation packages
+carry a warning, solved/interpolated requested-row counts, and row flags or a
+solved-frequency list. Historical/unflagged exports retain their exact bytes.
+False/unset request options are omitted from model serialization, stored configs,
+job responses and provenance digests for every engine.
 
 Live adaptive messages use complete fitted frequency snapshots. The presence of
 `frequency_status` replaces the channel's previous frequency-shaped rows rather
@@ -84,3 +124,20 @@ unit-acceleration rescaling. The source reference used BEAT Metal float32,
 Burton–Miller, four Julia threads, sound speed 343 m/s and density 1.2041 kg/m³.
 Mesh SHA-256: `9f8ff975d49d492384f13e3bdeff3917719f03d4b6ddd89a61f32417fa09f864`.
 The fixture is repository-relative and contains no machine or runtime paths.
+
+## Density-floor replay (fix round 3)
+
+Offline `../w4/measure.py` replay on 2026-10-01, using only acquired stored rows:
+
+| Stored reference | Requested | Native solves, velocity | Native solves, acceleration | Largest gap (octaves) | Worst arc magnitude error within 30 dB of each angle's peak, velocity / acceleration |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| S, quarter OSSE, 200–1051 Hz | 193 | 32 | 32 | 0.162073 | 0.000240 / 0.000208 dB |
+| C, imported CAD, 200–2106 Hz | 193 | 44 | 44 | 0.123828 | 0.008870 / 0.018822 dB |
+
+The 24-requested-row subsets each solve all 24 rows. These counts and errors
+are fixture measurements, not guarantees for other geometry or a wall-time
+speedup measurement. On C, worst unmasked arc errors are 1.8694 / 3.5555 dB,
+including deep nulls, so the masked numbers must not be read as a universal
+0.1 dB error bound. Retained surface traces are not in these S/C fixtures and
+can increase acquisition counts. The new coverage query order can reduce the
+count for one fixture while increasing it for another.

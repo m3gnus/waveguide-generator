@@ -4604,8 +4604,11 @@ export interface components {
              * @enum {string}
              */
             accuracy: "fast" | "accurate";
-            /** Adaptive Frequency Sampling */
-            adaptive_frequency_sampling: boolean;
+            /**
+             * Adaptive Frequency Sampling
+             * @default false
+             */
+            adaptive_frequency_sampling?: boolean;
             /** Engine */
             engine: string;
             /** Frequencies Hz */

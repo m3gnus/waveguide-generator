@@ -1221,3 +1221,21 @@ def test_a_grounded_solve_refuses_the_field_plane_with_a_remedy(
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+def test_field_plane_binary_header_labels_interpolated_traces():
+    from server.solver.sampling_provenance import sampling_provenance
+
+    request = FieldPlaneRequest.model_validate(_body())
+    evaluation = field_plane.FieldPlaneEvaluation(
+        frequency_hz=1000, pressure=np.zeros(request.plane.nx * request.plane.ny),
+        geometry_sha256="a" * 64, synthesis_revision="revision", symmetry_plane=None,
+        sampling=sampling_provenance({"frequencies": [1000], "frequency_status": ["interpolated"]}),
+    )
+    raw = field_plane.encode_field_plane_response("job", request, evaluation)
+    size = struct.unpack("<I", raw[:4])[0]
+    header = json.loads(raw[4:4 + size])
+    assert header["frequency_status"] == "interpolated"
+    assert header["sampling"]["solved_count"] == 0
+    assert header["sampling"]["interpolated_count"] == 1
+    assert "narrow resonances can be missed" in header["sampling"]["warning"]

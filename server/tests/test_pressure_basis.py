@@ -73,3 +73,34 @@ def test_pressure_basis_export_requires_a_channel_when_artifact_has_many() -> No
         export_pressure_basis(artifact, {"channels": {}})
     with pytest.raises(ValueError, match="not available"):
         export_pressure_basis(artifact, {"channels": {}}, "missing")
+
+
+def test_pressure_basis_export_discloses_reconstructed_rows_only_when_flagged():
+    native = _native_basis()
+    native.frequency_status = ["interpolated"]
+    artifact = serialize_channel_bases({"drive": native}, metadata_by_id={
+        "drive": {"source_motion": "normal"},
+    })
+    exported = export_pressure_basis(artifact, {})
+    with np.load(io.BytesIO(exported.content), allow_pickle=False) as data:
+        assert data["frequency_status"].tolist() == ["interpolated"]
+        assert data["solved_count"].item() == 0
+        assert data["interpolated_count"].item() == 1
+        assert data["solved_frequencies_hz"].size == 0
+        assert "narrow resonances can be missed" in data["warning"].item()
+    del native.frequency_status
+    legacy = export_pressure_basis(serialize_channel_bases({"drive": native}, metadata_by_id={
+        "drive": {"source_motion": "normal"},
+    }), {})
+    with np.load(io.BytesIO(legacy.content), allow_pickle=False) as data:
+        assert "frequency_status" not in data and "warning" not in data
+
+
+def test_unflagged_pressure_basis_matches_frozen_base_44226173_bytes():
+    from pathlib import Path
+
+    artifact = serialize_channel_bases({"drive": _native_basis()}, metadata_by_id={
+        "drive": {"source_motion": "normal"},
+    })
+    expected = (Path(__file__).parent / "fixtures" / "adaptive-legacy-pressure-basis.npz").read_bytes()
+    assert export_pressure_basis(artifact, {}).content == expected

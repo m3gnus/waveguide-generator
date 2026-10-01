@@ -8227,6 +8227,7 @@
             "type": "string"
           },
           "adaptive_frequency_sampling": {
+            "default": false,
             "title": "Adaptive Frequency Sampling",
             "type": "boolean"
           },
@@ -8333,7 +8334,6 @@
         "required": [
           "engine",
           "accuracy",
-          "adaptive_frequency_sampling",
           "solver_mode",
           "symmetry",
           "frequency_range",

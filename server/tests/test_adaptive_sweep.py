@@ -300,3 +300,41 @@ def test_native_invalid_rows_batch_failure_and_cancellation_propagate(failure):
                        match={"nan": "invalid rows", "batch": "batch failed", "cancel": "cancelled"}[failure]):
         solve_native_adaptively(context, solve, distance_m=2, sound_speed=343, cancel=cancel)
     assert len(batches) == (1 if failure == "cancel" else 2)
+
+
+@pytest.mark.parametrize("f", [np.geomspace(100, 20000, 193), np.linspace(1000, 20000, 401)])
+def test_density_floor_blocks_early_agreement(f):
+    from server.solver.adaptive_sweep import MAX_SOLVED_GAP_OCTAVES
+
+    planner = SweepPlanner(f, delays_s=0)
+    while len(planner.pending):
+        ids = planner.pending.copy()
+        # Exactly smooth data still must meet the independent geometric floor.
+        planner.add(ids, np.ones((len(ids), 2), dtype=complex))
+    solved = f[sorted(planner.observed)]
+    assert np.max(np.diff(np.log2(solved))) <= MAX_SOLVED_GAP_OCTAVES + 1e-12
+    assert planner.stop_reason == "estimated_convergence"
+    assert len(solved) > 16
+
+
+@pytest.mark.parametrize("f", [np.geomspace(100, 20000, 24), np.linspace(100, 20000, 401)])
+def test_sparse_requests_add_native_density_queries_and_keep_requested_output(f):
+    from server.solver.adaptive_sweep import MAX_SOLVED_GAP_OCTAVES
+
+    batches = []
+    context = SolverContext(None, (f[0], f[-1]), len(f), frequencies_hz=tuple(f),
+                            adaptive_frequency_sampling=True)
+
+    def solve(batch):
+        batches.extend(batch)
+        return SimpleNamespace(frequencies_hz=np.asarray(batch),
+            pressure_complex=np.ones((len(batch), 1, 1), dtype=complex),
+            impedance=np.ones(len(batch), dtype=complex), timings={}, solver_log=[])
+
+    result = solve_native_adaptively(context, solve, distance_m=0, sound_speed=343)
+    np.testing.assert_array_equal(result.frequencies_hz, f)
+    assert len(result.frequency_status) == len(f)
+    assert set(batches) - set(f)  # Native queries fill gaps in a sparse request.
+    assert np.max(np.diff(np.log2(sorted(batches)))) <= MAX_SOLVED_GAP_OCTAVES + 1e-12
+    assert result.adaptive_sampling["native_solved_count"] == len(batches)
+    assert result.adaptive_sampling["solved_count"] == result.frequency_status.count("solved")

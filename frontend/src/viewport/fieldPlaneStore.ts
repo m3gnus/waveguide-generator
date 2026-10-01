@@ -47,6 +47,7 @@ export interface FieldPlaneStore {
   plane: FieldPlaneSpec | null;
   frequencyIndex: number;
   frequenciesHz: number[];
+  frequencyStatus: Array<'solved' | 'interpolated'> | null;
   responseId: FieldPlaneResponseId;
   memberResponses: FieldPlaneMemberResponse[];
   generation: number;
@@ -586,6 +587,7 @@ export function createFieldPlaneStore(
         plane,
         frequencyIndex: saved?.frequencyIndex ?? 0,
         frequenciesHz: [],
+        frequencyStatus: null,
         responseId: 'system',
         memberResponses: [],
         status: 'loading',
@@ -609,7 +611,7 @@ export function createFieldPlaneStore(
           const memberResponses = fieldPlaneMemberResponses(results);
           const responseId = validResponseId(saved?.responseId ?? 'system', memberResponses);
           remember(jobId, plane, frequencyIndex, responseId);
-          set({ frequenciesHz, frequencyIndex, memberResponses, responseId });
+          set({ frequenciesHz, frequencyStatus: results.frequency_status ?? null, frequencyIndex, memberResponses, responseId });
           load(jobId, plane, frequencyIndex, responseId);
         })
         .catch((reason: unknown) => {
@@ -632,6 +634,7 @@ export function createFieldPlaneStore(
       plane: null,
       frequencyIndex: 0,
       frequenciesHz: [],
+      frequencyStatus: null,
       responseId: 'system',
       memberResponses: [],
       generation: 0,
@@ -667,6 +670,7 @@ export function createFieldPlaneStore(
           plane: null,
           frequencyIndex: 0,
           frequenciesHz: [],
+          frequencyStatus: null,
           responseId: 'system',
           memberResponses: [],
           status: 'idle',
@@ -777,6 +781,7 @@ export function createFieldPlaneStore(
           synthesisRevision: null,
           plane: null,
           frequenciesHz: [],
+          frequencyStatus: null,
           responseId: 'system',
           memberResponses: [],
           status: 'error',

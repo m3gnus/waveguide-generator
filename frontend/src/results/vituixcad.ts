@@ -1,3 +1,4 @@
+import { samplingNotes } from './sampling';
 import type { Preferences } from '../prefs/preferences';
 import { familyOrders, isFilterFamily, type FilterFamily } from './crossoverSpec';
 import { buildOnAxisFrd } from './frd';
@@ -160,6 +161,7 @@ export function buildZma(result: ResultPayload, channelId?: string): string {
   if (!rows.length) throw new Error('ZMA export refused: the electrical impedance curve has no complete finite samples.');
   return `${[
     '* HornLab electrical input impedance',
+    ...samplingNotes(result).map((note) => `* ${note}`),
     `* Phase convention: ${phaseRule.note}`,
     `* ${['Freq(Hz)', 'Magnitude(ohms)', 'Phase(degrees)'].join(DELIMITER)}`,
     ...rows.map(({ line }) => line),

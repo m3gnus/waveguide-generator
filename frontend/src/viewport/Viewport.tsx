@@ -402,6 +402,7 @@ export function Viewport() {
   const fieldMaskState = useFieldPlaneMaskStore((state) => state);
   const fieldFrequencyIndex = useFieldPlaneStore((state) => state.frequencyIndex);
   const fieldFrequencies = useFieldPlaneStore((state) => state.frequenciesHz);
+  const fieldFrequencyStatus = useFieldPlaneStore((state) => state.frequencyStatus);
   const fieldResponseId = useFieldPlaneStore((state) => state.responseId);
   const fieldMemberResponses = useFieldPlaneStore((state) => state.memberResponses);
   const [fieldFrequencySnap, setFieldFrequencySnap] = useState<{ requestedHz: number; index: number } | null>(null);
@@ -1108,9 +1109,10 @@ export function Viewport() {
         <b>Field plane</b>
         <span>{fieldFrequencyHz === null ? '—' : `${Math.round(fieldFrequencyHz).toLocaleString()} Hz`}</span>
       </div>
+      {fieldFrequencyStatus && <p role="note">Adaptive sampling · {fieldFrequencyStatus[fieldFrequencyIndex]} frequency. Fields use reconstructed surface traces at interpolated frequencies; narrow resonances can be missed.</p>}
       {fieldFrequencies.length > 1 && <div className="field-plane-frequency">
-        {/* The slider indexes solved frequencies, so it snaps to what the
-            solver actually evaluated rather than interpolating between them.
+        {/* The slider indexes requested frequencies. Adaptive rows can use
+            reconstructed traces, as the disclosure above states.
             The numeric cell snaps a typed frequency to the nearest solved one
             and says so when they differ; it never solves new frequencies. */}
         <div className="field-plane-frequency-row">

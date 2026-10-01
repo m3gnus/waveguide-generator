@@ -1,3 +1,4 @@
+import { samplingNotes } from '../results/sampling';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import type { EChartsOption } from 'echarts';
@@ -2010,6 +2011,11 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
   // a combined sum are not a comparison and are not counted here.
   const compared = named.filter(({ secondary }) => !secondary);
   const comparisonIgnored = compared.length > 1 && !COMPARABLE_CHARTS.has(chartType);
+  const samplingDisclosure = (COMPARABLE_CHARTS.has(chartType) && named.length
+    ? named : [{ label: 'Shown result', result }])
+    .flatMap(({ label, result: entry }) => samplingNotes(entry).length
+      ? [`${label}: ${samplingNotes(entry)[1]}. ${samplingNotes(entry)[0]}`] : [])
+    .join('\n');
   // Subscribed rather than read from the snapshot: the subtitle names the angle
   // the map is referenced to, and that has to follow the field as it is typed.
   const cardNormAngle = useSolveOptionsStore((state) => state.polar.normAngle);
@@ -2133,6 +2139,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
           <select aria-label={`Panel ${index + 1} chart type`} value={chartType} onChange={(event) => preferencesStore.setChartType(index, event.target.value as ChartType)}>{CHART_TYPES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</select>
         </span>
         {subtitle && density !== 'compact' && <span className="result-subtitle">{subtitle}</span>}
+        {samplingDisclosure && <span className="result-unqualified" role="note" title={samplingDisclosure}>Adaptive · reconstructed estimates</span>}
         {unqualifiedNote && <span className="result-unqualified" role="note" title={`${unqualifiedNote}. ${unqualifiedMessage(unqualifiedFormulation)}`}>{density === 'compact' ? 'Unqualified' : unqualifiedNote}</span>}
         {comparisonIgnored && density !== 'compact' && <span className="result-single-run" title={`This chart shows one run at a time. Showing ${activeLabel}.`}>1 of {compared.length}</span>}
         <span className="result-chrome-spacer"/>
@@ -2159,7 +2166,7 @@ function ChartCard({ index, chartType, result, named, tokens, live, beamShapeAct
           {imageStatus && <span className="result-image-status" role="status">{imageStatus}</span>}
           <button aria-label="Close detail view" onClick={() => setExpanded(false)}><Icon name="close"/></button>
         </header>
-        <div className="result-detail-chart"><ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/></div>
+        <div className="result-detail-chart">{samplingDisclosure && <p role="note">{samplingDisclosure}</p>}<ResultChart chartType={chartType} result={result} named={named} tokens={tokens} density="full" live={live} beamShapeAction={beamShapeAction} radiationArtifact={radiationArtifact} wrapper={wrapper} job={job} channelId={channelId}/></div>
       </section>
     </div>, document.body)}
   </>;
@@ -2568,8 +2575,9 @@ export function ResultsPanel() {
     ? provisionalMetadata as Record<string, unknown>
     : {};
   const liveCompleted = Number(provisionalRecord.completed_frequency_count)
-    || (display?.primaryId ? provisional.entries[display.primaryId]?.revision : 0)
-    || primaryRaw?.frequencies?.length
+    || (primaryRaw?.frequency_status ? primaryRaw.frequency_status.filter((status) => status === 'solved').length : 0)
+    || (primaryRaw?.frequency_status ? 0 : (display?.primaryId ? provisional.entries[display.primaryId]?.revision : 0))
+    || (primaryRaw?.frequency_status ? 0 : primaryRaw?.frequencies?.length)
     || 0;
   const liveExpected = Number(provisionalRecord.expected_frequency_count)
     || Number(selectedJob?.solve_options.num_frequencies)
@@ -2763,6 +2771,7 @@ export function ResultsPanel() {
         const comparing = preferences.chartTypes.filter((chart) => COMPARABLE_CHARTS.has(chart)).length;
         return <span className="result-single-run" title={`${comparing} of ${preferences.chartTypes.length} charts overlay every selected run. The rest describe one run at a time and show ${labelFor(ids[0], jobs)}.`}>{comparing}/{preferences.chartTypes.length} compare</span>;
       })()}
+      {shown && samplingNotes(shown).length > 0 && <span className="pill accent" role="note" title={samplingNotes(shown).join("\n")}>{samplingNotes(shown)[1]} · reconstructed estimates; narrow resonances can be missed</span>}
       {primaryIsProvisional && <span className="pill accent" role="status">Live · {liveCompleted}{liveExpected ? `/${liveExpected}` : ''} frequencies</span>}
       <select className="result-compare-add" aria-label="Add comparison result" value="" onChange={(event) => { if (event.target.value) compareSelection.toggleOverlay(event.target.value); }}><option value="">+ compare</option>{available.map((job) => {
         const marker = runContextMarker(job, coherenceContext);

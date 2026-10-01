@@ -212,6 +212,15 @@ def build_radiation_package(
         created_at=provenance_instant,
         payload=payload,
     )
+    from server.solver.sampling_provenance import sampling_provenance
+
+    sampling = sampling_provenance(results or {})
+    if sampling is not None:
+        manifest["sampling"] = sampling
+        manifest["channel_sampling"] = {
+            name: details for name, channel in results.get("channels", {}).items()
+            if (details := sampling_provenance(channel)) is not None
+        }
     manifest_bytes = _encode_json(manifest)
     archive = _zip_bytes(
         [

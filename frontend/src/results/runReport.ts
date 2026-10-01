@@ -1,3 +1,4 @@
+import { samplingNotes } from './sampling';
 import { buildDerivedAcoustics, type DerivedAcousticsRow } from './derivedAcoustics';
 import { groupDelayValue } from './mappers';
 import { radiatedPowerMetadata } from './radiatedPower';
@@ -131,7 +132,7 @@ function channelSection(id: string, result: ResultPayload, groupDelayUnit: Group
       <td>${format(row.vertical_beamwidth_deg)}</td>
     </tr>`).join('');
   return `<section>
-    <h2>${escapeHtml(id)}</h2>
+    <h2>${escapeHtml(id)}</h2>${samplingNotes(result).map((note) => `<p class="warnings">${escapeHtml(note)}</p>`).join('')}
     <div class="cards">
       <div><span>Frequency range</span><strong>${frequencies.length ? `${format(Math.min(...frequencies), 0)}–${format(Math.max(...frequencies), 0)} Hz` : '—'}</strong></div>
       <div><span>Samples</span><strong>${rows.length}</strong></div>
