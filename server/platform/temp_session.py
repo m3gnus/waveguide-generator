@@ -77,26 +77,37 @@ log = logging.getLogger("wg.temp")
 _active_root: str | None = None
 
 
-#: Set by the launched server to its session directory, so the processes it
-#: spawns (the BEMPP solve worker) can put a short-lived directory inside the
-#: session too, where the server's stop or the next start removes it.
-SESSION_ENVIRONMENT = "WG2_TEMP_SESSION_DIR"
+#: In a process the server spawned (the BEMPP solve worker), the parent's
+#: session directory, handed over at spawn by :func:`adopt_parent_session`.
+_parent_root: str | None = None
+
+
+def adopt_parent_session(root: str | None) -> None:
+    """In a spawned child: put short-lived directories in the parent's session.
+
+    The child has no session of its own; whatever it leaves behind is then
+    removed with the parent's session instead of staying loose in the system
+    temporary directory. A value that is not an existing session directory is
+    ignored.
+    """
+
+    global _parent_root
+    _parent_root = (
+        root if root and Path(root).name.startswith(SESSION_PREFIX) and Path(root).is_dir() else None
+    )
 
 
 def spawned_directory_root() -> str | None:
     """Like :func:`temporary_directory_root`, but also right in a process the
     server spawned: there the parent's session directory, while it exists.
 
-    Only for directories a child makes and removes itself. A spawned process
-    has no session of its own, so anything it leaves behind is removed with the
-    parent's session.
+    Only for directories a child makes and removes itself.
     """
 
     if _active_root is not None:
         return _active_root
-    inherited = os.environ.get(SESSION_ENVIRONMENT)
-    if inherited and Path(inherited).name.startswith(SESSION_PREFIX) and Path(inherited).is_dir():
-        return inherited
+    if _parent_root is not None and Path(_parent_root).is_dir():
+        return _parent_root
     return None
 
 

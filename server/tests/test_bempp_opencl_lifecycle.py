@@ -406,23 +406,24 @@ def test_a_stop_refuses_a_run_before_it_makes_its_directory(monkeypatch, tmp_pat
 
 
 def test_a_spawned_worker_puts_its_probe_directory_in_the_servers_session(monkeypatch, tmp_path):
-    """A BEMPP solve worker is spawned without the server's session active; the
-    session directory reaches it through the environment, so its probe result
-    directory is removed with the session, never left in the temp directory."""
+    """A BEMPP solve worker is spawned without the server's session active; it
+    is handed the session at spawn, so its probe result directory is removed
+    with the session, never left loose in the temporary directory."""
     from server.platform import temp_session
 
     session = tmp_path / "wg2-run-123-abc"
     session.mkdir()
     monkeypatch.setattr(temp_session, "_active_root", None)
-    monkeypatch.setenv(temp_session.SESSION_ENVIRONMENT, str(session))
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    temp_session.adopt_parent_session(str(session))
     assert temp_session.spawned_directory_root() == str(session)
     script = (f"print({probe._READY_MARKER!r}, flush=True); import sys; "
               f"open(sys.argv[1], 'w').write({json.dumps({'ok': True, 'smoke': {}})!r})")
     children = child_for(monkeypatch, script)
     assert probe._run_probe("smoke", None, 5)["ok"]
     assert Path(children[0].args[-1]).parent.parent == session
-    # A stale or foreign value is ignored.
-    monkeypatch.setenv(temp_session.SESSION_ENVIRONMENT, str(tmp_path / "elsewhere"))
+    # Anything but an existing session directory is ignored.
+    temp_session.adopt_parent_session(str(tmp_path / "elsewhere"))
     assert temp_session.spawned_directory_root() is None
 
 

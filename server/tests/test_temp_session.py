@@ -531,23 +531,36 @@ def test_a_field_plane_mesh_is_staged_inside_the_active_session(tmp_path: Path) 
         session.close(remove=True)
 
 
-def test_the_server_hands_its_session_to_the_processes_it_spawns(monkeypatch, tmp_path) -> None:
-    """A spawned BEMPP worker has no session of its own; the server names its
-    session in the environment, and nothing else is changed by it."""
-    import launch.serve as serve
+def test_the_bempp_worker_is_spawned_into_the_servers_session(monkeypatch, tmp_path) -> None:
+    """The worker has no session of its own; it is handed the server's at
+    spawn, and nothing in the server's own environment changes for it."""
     from server.platform import temp_session
+    from server.solver import bempp_process
 
-    monkeypatch.setattr(serve.tempfile, "gettempdir", lambda: str(tmp_path))
-    assert temp_session.SESSION_ENVIRONMENT not in os.environ
-    session = serve._start_temporary_session()
+    session = _active_session(tmp_path)
+    started = {}
+    class Context:
+        def Pipe(self, duplex):
+            return object(), object()
+        def Process(self, target, args, **kwargs):
+            started["target"], started["args"] = target, args
+            raise RuntimeError("stop before a real start")
+    worker = bempp_process.BemppProcessHost(process_context=Context(), target=lambda connection: None)
+    environment = dict(os.environ)
     try:
-        assert session is not None
-        assert os.environ[temp_session.SESSION_ENVIRONMENT] == str(session.path)
-        # As a spawned child sees it: no session of its own, the parent's named.
+        with pytest.raises(RuntimeError, match="stop before a real start"):
+            worker._ensure_started()
+        assert started["target"] is bempp_process._start_in_parent_session
+        assert started["args"][1] == str(session.path)
+        assert dict(os.environ) == environment
+        # In the child: no session of its own, the parent's adopted.
+        seen = []
+        monkeypatch.setattr(temp_session, "_parent_root", None)
         session.close(remove=False)
-        assert temp_session.temporary_directory_root() is None
-        assert temp_session.spawned_directory_root() == str(session.path)
+        bempp_process._start_in_parent_session(
+            lambda connection: seen.append(temp_session.spawned_directory_root()),
+            str(session.path), object(),
+        )
+        assert seen == [str(session.path)] and temp_session.temporary_directory_root() is None
     finally:
         session.close(remove=True)
-        # Set by the code under test, not by monkeypatch, so removed directly.
-        os.environ.pop(temp_session.SESSION_ENVIRONMENT, None)

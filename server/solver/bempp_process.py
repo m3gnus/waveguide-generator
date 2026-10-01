@@ -205,6 +205,17 @@ def _solve_payload(
     )
 
 
+def _start_in_parent_session(
+    target: Callable[[Connection], None], session_root: str | None, connection: Connection
+) -> None:
+    """The spawned worker's entry: adopt the server's session, then serve."""
+
+    from server.platform.temp_session import adopt_parent_session
+
+    adopt_parent_session(session_root)
+    target(connection)
+
+
 def _bempp_worker_main(connection: Connection) -> None:
     """Serve native solves in one warm process, one job at a time."""
 
@@ -291,9 +302,13 @@ class BemppProcessHost:
             return connection
         self._terminate_sync()
         parent, child = self._context.Pipe(duplex=True)
+        from server.platform.temp_session import temporary_directory_root
+
         process = self._context.Process(
-            target=self._target,
-            args=(child,),
+            # The worker has no session of its own: hand it the server's, so
+            # the directories it makes (its OpenCL check's) live and die there.
+            target=_start_in_parent_session,
+            args=(self._target, temporary_directory_root(), child),
             name="hornlab-bempp-worker",
             # NOT daemon. A daemonic multiprocessing process is forbidden from
             # having children at all -- ``start()`` asserts on it -- and the
