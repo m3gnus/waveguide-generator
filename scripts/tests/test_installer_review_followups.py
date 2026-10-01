@@ -124,14 +124,17 @@ def move_shim(tmp_path: Path, install: Install, body: str) -> dict[str, str]:
 
 def spawn(install: Install, env: dict[str, str] | None = None, *, stdin=subprocess.DEVNULL, interactive=False):
     command = [*mac.MAC_SHELL, str(install.script), str(install.target.parent)] if interactive else install.command
-    return subprocess.Popen(command, env=env or install.env, preexec_fn=linux.installer_process_signals,
+    proc = subprocess.Popen(command, env=env or install.env, preexec_fn=linux.installer_process_signals,
                             stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, start_new_session=True)
+    proc.installer_family = linux.InstallerFamily(proc)
+    return proc
 
 
 def wait_marker(proc, marker: Path, timeout: float = 15) -> None:
     deadline = time.monotonic() + timeout
     while not marker.exists():
+        proc.installer_family.live()
         assert proc.poll() is None, proc.communicate()[0]
         assert time.monotonic() < deadline, "intended operation never reached"
         time.sleep(0.01)
@@ -139,14 +142,24 @@ def wait_marker(proc, marker: Path, timeout: float = 15) -> None:
 
 def stop(proc) -> None:
     # A shim can outlive its parent; stop only this test's recorded process group.
+    family = getattr(proc, 'installer_family', None)
     try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    if proc.stdout is not None and proc.stdout.closed:
-        proc.wait(timeout=10)
-    else:
-        proc.communicate(timeout=10)
+        if family is not None and proc.poll() is not None:
+            family.assert_gone()
+    finally:
+        if family is not None:
+            family.stop()
+        else:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if proc.stdout is not None and proc.stdout.closed:
+            proc.wait(timeout=10)
+        else:
+            proc.communicate(timeout=10)
+        if family is not None:
+            family.assert_gone()
 
 
 def fail_app_install(tmp_path: Path, install: Install, extra: str = "") -> dict[str, str]:
@@ -682,7 +695,7 @@ def test_fifty_signal_burst_offsets_from_start_to_release(install: Install, tmp_
     # script can handle. Offsets extend through staging, swaps and cleanup.
     started = tmp_path / 'started'
     body = install.script.read_text()
-    trap_line = "trap 'INTERRUPTED=1' HUP INT TERM QUIT\n"
+    trap_line = next(line + '\n' for line in body.splitlines() if line.startswith("trap 'INTERRUPTED=1"))
     assert body.count(trap_line) == 1, 'readiness hook must follow the installed handler'
     body = body.replace(trap_line, trap_line + f": > {str(started)!r}\n", 1)
     install.script.write_text(body)
@@ -1161,6 +1174,7 @@ time.sleep(60)
                             env={**install.env, 'TMPDIR': str(capture_parent)},
                             preexec_fn=linux.installer_process_signals, start_new_session=True,
                             stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc.installer_family = linux.InstallerFamily(proc)
     try:
         wait_marker(proc, marker)
         os.kill(proc.pid, signal.SIGTERM)
@@ -1261,7 +1275,7 @@ def test_cancelled_watchdog_has_bounded_reap(install: Install, tmp_path: Path) -
     # The production completed-move escape must not bypass the injected hang.
     body = body.replace(' && kill -0 "$MOVE_PID" 2>/dev/null; do', '; do')
     body = body.replace("    trap '' USR1\n", f"    rm -f '{ready}'\n    trap '' USR1\n")
-    body = body.replace('        timer_pid=$!\n', f"        timer_pid=$!\n        touch '{ready}'\n")
+    body = body.replace('        timer_pid=$move_clock_pid\n', f"        timer_pid=$move_clock_pid\n        touch '{ready}'\n")
     body = body.replace('    watchdog_pid=$!\n', f"    watchdog_pid=$!\n    while [ ! -e '{ready}' ]; do sleep 0.01; done\n")
     install.script.write_text(body)
     original = {path: identity(path) for path in install.paths}
@@ -1275,6 +1289,7 @@ def test_cancelled_watchdog_has_bounded_reap(install: Install, tmp_path: Path) -
         assert 'Restored the previous installation' in output
         assert stuck.exists(), 'watchdog hang injection did not execute'
         assert_no_staging(install)
+        proc.installer_family.assert_gone()
     finally:
         stop(proc)
 
@@ -1431,6 +1446,233 @@ def test_watchdog_cancellation_before_registration_is_safe(install: Install, tmp
     assert not install.lock.exists(), output
 
 
+@pytest.mark.skipif(sys.platform != 'darwin', reason='Darwin stdio and system Bash 3.2')
+@pytest.mark.parametrize('platform', ('linux', 'macos'))
+@pytest.mark.parametrize('cancelled', (False, True))
+def test_bare_bash32_wait_diagnostic_does_not_poison_capture(tmp_path: Path, platform: str, cancelled: bool) -> None:
+    # Interrupt the actual libc stderr lock, exactly where wait's signal handler
+    # longjmps out of Bash 3.2's killed-child diagnostic. The guard consumes
+    # that diagnostic through jobs (stdout) instead of wait (stderr). The next substitution
+    # otherwise blocks in fileno(stderr), before object_id can install a trap.
+    compiler = shutil.which('clang')
+    signer = shutil.which('codesign')
+    assert compiler and signer, 'native lock-interleaving regression needs clang and codesign'
+    shell = tmp_path / 'bash'
+    shutil.copyfile('/bin/bash', shell)
+    shell.chmod(0o755)
+    subprocess.run([signer, '--force', '--sign', '-', str(shell)], check=True, capture_output=True)
+    shim = tmp_path / 'stdio.c'
+    shim.write_text(r'''
+#include <stdio.h>
+#include <signal.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <string.h>
+static int (*original_stderr)(void *, const char *, int);
+static int (*original_stdout)(void *, const char *, int);
+static int injected;
+static void signal_write(const char *data, int size) {
+    if (!injected && size >= 6 && memmem(data, size, "Killed", 6)) {
+        injected = 1;
+        int fd = open(getenv("WG_SIGNAL_MARKER"), O_CREAT|O_WRONLY, 0600);
+        write(fd, "locked diagnostic", 17); close(fd);
+        kill(getpid(), SIGTERM);
+    }
+}
+static int stderr_write(void *cookie, const char *data, int size) {
+    signal_write(data, size);
+    return original_stderr(cookie, data, size);
+}
+static int stdout_write(void *cookie, const char *data, int size) {
+    signal_write(data, size);
+    return original_stdout(cookie, data, size);
+}
+__attribute__((constructor)) static void setup(void) {
+    original_stderr = stderr->_write;
+    original_stdout = stdout->_write;
+    stderr->_write = stderr_write;
+    stdout->_write = stdout_write;
+}
+''')
+    library = tmp_path / 'stdio.dylib'
+    arch = 'arm64e' if os.uname().machine == 'arm64' else 'x86_64'
+    subprocess.run([compiler, '-dynamiclib', '-arch', arch, '-o', str(library), str(shim)],
+                   check=True, capture_output=True)
+    source = linux.SCRIPT if platform == 'linux' else mac.SCRIPT
+    boundary = 'BUNDLE_DIRECTORY=' if platform == 'linux' else 'APP_NAME='
+    body = source.read_text().split('\n' + boundary, 1)[0]
+    script = tmp_path / 'reap.sh'
+    script.write_text(body + f'''
+trap : EXIT
+STAT_STYLE=bsd
+{'kill -TERM $$' if cancelled else ':'}
+(trap '' HUP INT TERM QUIT; exec sleep 60) >/dev/null 2>&1 &
+child=$!
+sleep .03
+kill -KILL "$child"
+wait "$child" || :
+captured=$(object_id "$0")
+command printf 'capture: %s; interrupted: %s\\n' "$captured" "$INTERRUPTED"
+''')
+    marker = tmp_path / 'signal-injected'
+    env = {**os.environ, 'DYLD_INSERT_LIBRARIES': str(library), 'WG_SIGNAL_MARKER': str(marker)}
+    command = [str(shell), *(['--posix'] if platform == 'macos' else []), str(script)]
+    proc = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True, preexec_fn=linux.installer_process_signals)
+    proc.installer_family = linux.InstallerFamily(proc)
+    try:
+        output, _ = proc.communicate(timeout=2)
+        assert marker.read_text() == 'locked diagnostic', 'exact locked-diagnostic interleaving was not injected'
+        assert proc.returncode == 0 and '; interrupted: 1' in output, output
+        assert f'capture: {script.stat().st_dev}:{script.stat().st_ino}' in output, output
+        proc.installer_family.assert_gone()
+    finally:
+        stop(proc)
+
+
+@pytest.mark.parametrize('shell,platform', [('/bin/bash', 'linux'), ('/bin/sh', 'macos'), ('/bin/dash', 'macos')])
+def test_bare_captured_message_clock_is_owned_by_waiter(tmp_path: Path, shell: str, platform: str) -> None:
+    if not Path(shell).exists():
+        pytest.skip('shell unavailable')
+    source = linux.SCRIPT if platform == 'linux' else mac.SCRIPT
+    boundary = 'BUNDLE_DIRECTORY=' if platform == 'linux' else 'APP_NAME='
+    body = source.read_text().split('\n' + boundary, 1)[0]
+    # Expire the parent-owned message clock while the parent is reading its
+    # command-substitution pipe. dash defers reaping it, so kill -0 still
+    # succeeds on that zombie. The capture needs a timer it can reap itself.
+    body = body.replace('wait_for_child "$output_pid" 3 ', 'wait_for_child "$output_pid" .15 ')
+    script = tmp_path / 'capture.sh'
+    script.write_text(body + '''
+trap : EXIT
+CLEANING=1
+(exec sleep .03) >/dev/null 2>&1 &
+PRINT_CLOCK=$!
+captured=$(OUTPUT_BOUND=message protected_output sleep 60)
+capture_status=$?
+wait "$PRINT_CLOCK" 2>/dev/null || :
+command printf 'capture status: %s\\n' "$capture_status"
+''')
+    proc = subprocess.Popen([shell, str(script)], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, start_new_session=True,
+                            preexec_fn=linux.installer_process_signals)
+    family = linux.InstallerFamily(proc)
+    try:
+        output, _ = proc.communicate(timeout=2)
+        assert proc.returncode == 0 and 'capture status: 124' in output, output
+        family.assert_gone()
+    finally:
+        family.stop()
+        proc.communicate(timeout=2)
+        family.assert_gone()
+
+
+@pytest.mark.slow
+def test_interrupted_capture_inherits_ignore_before_its_trap(install: Install, tmp_path: Path) -> None:
+    moved, release_move = tmp_path / 'move-ready', tmp_path / 'move-release'
+    capture, release_capture = tmp_path / 'capture-ready', tmp_path / 'capture-release'
+    body = install.script.read_text()
+    # Stop the first post-move metadata capture BEFORE object_id's own trap.
+    # This is the fork/setup interval exposed by the every-row signal burst.
+    key = 'object_id() {\n'
+    assert body.count(key) == 1
+    body = body.replace(key, key + f'''
+    if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ] && [ ! -e '{capture}' ]; then
+        '{sys.executable}' -c 'import os, pathlib, time; pathlib.Path("{capture}").write_text(str(os.getppid()));\nwhile not pathlib.Path("{release_capture}").exists(): time.sleep(.01)'
+    fi
+''')
+    install.script.write_text(body)
+    # Finish the actual displacement before signalling the installer. The
+    # move's exit and watchdog cancellation precede the next metadata fork.
+    real_mv = shutil.which('mv')
+    env = move_shim(tmp_path, install, f'''
+if source == {str(install.target)!r}:
+    subprocess.run([{real_mv!r}, *args], check=True)
+    pathlib.Path({str(moved)!r}).touch()
+    while not pathlib.Path({str(release_move)!r}).exists(): time.sleep(.01)
+    sys.exit(0)
+''')
+    original = identity(install.target)
+    proc = spawn(install, env)
+    try:
+        wait_marker(proc, moved)
+        os.kill(proc.pid, signal.SIGTERM)
+        release_move.touch()
+        wait_marker(proc, capture)
+        capture_pid = int(capture.read_text())
+        proc.installer_family.live()
+        # The child has not installed a trap yet. A second group signal must
+        # leave it alive; setting ignore only at cleanup entry is too late.
+        os.killpg(proc.pid, signal.SIGTERM)
+        time.sleep(.05)
+        assert capture_pid in proc.installer_family.live(), 'metadata fork inherited default TERM after cancellation'
+        release_capture.touch()
+        output, _ = proc.communicate(timeout=8)
+        assert proc.returncode == 1 and 'Installation interrupted.' in output, output
+        assert identity(install.target) == original and not install.lock.exists(), output
+        proc.installer_family.assert_gone()
+    finally:
+        release_move.touch()
+        release_capture.touch()
+        stop(proc)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('tool', ('update-desktop-database', 'gtk-update-icon-cache'))
+@pytest.mark.parametrize('interrupt', (None, signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT))
+@pytest.mark.parametrize('scope', ('parent', 'group'))
+def test_linux_optional_step_stays_in_group_and_is_killed(install: Install, tmp_path: Path, tool, interrupt, scope) -> None:
+    if install.platform != 'linux':
+        pytest.skip('Linux optional integration refresh')
+    ready = tmp_path / 'optional-child'
+    killed = tmp_path / 'optional-kill'
+    body = install.script.read_text()
+    body = body.replace('set -u\n', f'''set -u
+kill() {{
+    if [ "$1" = -KILL ] && [ "${{2:-}}" = "${{optional_pid:-unset}}" ]; then
+        command printf '%s\\n' "$2" >> '{killed}'
+    fi
+    command kill "$@"
+    return $?
+}}
+''', 1)
+    install.script.write_text(body)
+    directory = tmp_path / 'bin'
+    directory.mkdir()
+    wrapper = directory / tool
+    wrapper.write_text(f'''#!{sys.executable}
+import os, pathlib, signal, time
+dispositions = [0 if signal.getsignal(s) == signal.default_int_handler else int(signal.getsignal(s))
+                for s in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT, signal.SIGPIPE)]
+# Ignore cancellation deliberately: the installer's deadline must deliver KILL.
+for s in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT): signal.signal(s, signal.SIG_IGN)
+pathlib.Path({str(ready)!r}).write_text(repr([os.getpid(), os.getpgrp(), os.getsid(0), dispositions]))
+while True: time.sleep(.01)
+''')
+    wrapper.chmod(0o755)
+    proc = spawn(install, {**install.env, 'PATH': str(directory) + os.pathsep + install.env['PATH']})
+    try:
+        wait_marker(proc, ready)
+        import ast
+
+        pid, group, session, dispositions = ast.literal_eval(ready.read_text())
+        assert (group, session) == (proc.installer_family.group, proc.installer_family.session)
+        # Python sets its own SIGPIPE ignore on entry; HUP/INT/TERM/QUIT
+        # still show what exec inherited, including Python's INT handler.
+        assert dispositions[:4] == [0, 0, 0, 0]
+        if interrupt is not None:
+            (os.kill if scope == 'parent' else os.killpg)(proc.pid, interrupt)
+        output, _ = proc.communicate(timeout=8)
+        assert proc.returncode == 0 and install.version() == 'new', output
+        assert killed.read_text().splitlines() == [str(pid)], 'deadline did not KILL the optional PID'
+        assert pid not in proc.installer_family.live()
+        proc.installer_family.assert_gone()
+        assert not install.lock.exists(), output
+    finally:
+        stop(proc)
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize('primitive', ('metadata', 'housekeeping', 'message-file', 'render', 'emit', 'message-remove', 'move'))
 def test_slow_forward_primitives_succeed(install: Install, tmp_path: Path, primitive: str) -> None:
@@ -1546,6 +1788,7 @@ if {match}:
             time.sleep(.01)
         limit = 30 if model == 'cleanup-rm' else 18
         output, _ = proc.communicate(timeout=limit)
+        proc.installer_family.assert_gone()
         assert time.monotonic() - start < limit, output
         assert not install.lock.exists(), output
         assert proc.returncode == (3 if model in ('restore-stat', 'restore-mv') else 1 if rollback else 0), output
@@ -1613,6 +1856,43 @@ os.execv({real!r}, [{real!r}, *sys.argv[1:]])
 
 
 @pytest.mark.slow
+def test_close_prompt_signal_reaps_emitter_before_exit(install: Install, tmp_path: Path) -> None:
+    if install.platform != 'macos':
+        pytest.skip('Finder close prompt')
+    import pty
+
+    master, slave = pty.openpty()
+    ready = tmp_path / 'prompt-emitter'
+    env = fail_app_install(tmp_path, install)
+    real_cat = shutil.which('cat')
+    wrapper = tmp_path / 'bin' / 'cat'
+    wrapper.write_text(f'''#!{sys.executable}
+import os, pathlib, sys, time
+contents = pathlib.Path(sys.argv[1]).read_bytes()
+if contents == b'Press Return to close...':
+    os.write(1, contents)
+    pathlib.Path({str(ready)!r}).write_text(str(os.getpid()))
+    while True: time.sleep(.01)
+os.execv({real_cat!r}, [{real_cat!r}, *sys.argv[1:]])
+''')
+    wrapper.chmod(0o755)
+    proc = spawn(install, env, stdin=slave, interactive=True)
+    os.close(slave)
+    try:
+        wait_marker(proc, ready)
+        assert not install.lock.exists() and install.version() == 'old'
+        os.kill(proc.pid, signal.SIGTERM)
+        output, _ = proc.communicate(timeout=5)
+        assert proc.returncode == 1 and 'Press Return to close...' in output, output
+        proc.installer_family.assert_gone()
+    finally:
+        try:
+            stop(proc)
+        finally:
+            os.close(master)
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize('interrupt', (signal.SIGINT, signal.SIGHUP))
 @pytest.mark.parametrize('scope', ('parent', 'group'))
 def test_close_prompt_cancellation_keeps_decided_status(install: Install, tmp_path: Path, interrupt, scope: str) -> None:
@@ -1620,13 +1900,17 @@ def test_close_prompt_cancellation_keeps_decided_status(install: Install, tmp_pa
         pytest.skip('Finder close prompt')
     import pty
     master, slave = pty.openpty()
+    reading = tmp_path / 'prompt-reading'
+    body = install.script.read_text()
+    body = body.replace('        read -r _unused || :', f"        : > '{reading}'\n        read -r _unused || :", 1)
+    install.script.write_text(body)
     original = identity(install.target)
     proc = spawn(install, fail_app_install(tmp_path, install), stdin=slave, interactive=True)
     os.close(slave)
     output = b''
     try:
         deadline = time.monotonic() + 15
-        while b'Press Return to close...' not in output:
+        while b'Press Return to close...' not in output or not reading.exists():
             assert time.monotonic() < deadline and proc.poll() is None, output
             if select.select([proc.stdout], [], [], .1)[0]:
                 output += os.read(proc.stdout.fileno(), 4096)

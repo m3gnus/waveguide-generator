@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -40,8 +41,99 @@ def installer_process_signals() -> None:
     POSIX sh cannot install a handler for a signal ignored on entry. Set the
     installer launch contract explicitly instead of inheriting the test runner.
     """
-    for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
         signal.signal(sig, signal.SIG_DFL)
+
+
+def process_snapshot() -> dict[int, tuple[int, int, int, int]]:
+    """Live PID -> (parent, group, session, birth), including foreign groups."""
+    result = {}
+    if sys.platform == 'darwin':
+        import ctypes
+
+        lib = ctypes.CDLL('/usr/lib/libproc.dylib')
+        pids = (ctypes.c_int * (lib.proc_listallpids(None, 0) + 128))()
+        count = lib.proc_listallpids(pids, ctypes.sizeof(pids))
+        for pid in pids[:count]:
+            info = (ctypes.c_uint32 * 34)()
+            # PROC_PIDTBSDINFO includes start timeval; status 5 is SZOMB.
+            if lib.proc_pidinfo(pid, 3, 0, info, ctypes.sizeof(info)) != ctypes.sizeof(info) or info[1] == 5:
+                continue
+            try:
+                birth = (info[30] | info[31] << 32) * 1_000_000 + (info[32] | info[33] << 32)
+                result[pid] = (info[4], info[25], os.getsid(pid), birth)
+            except ProcessLookupError:
+                pass
+    else:
+        for path in Path('/proc').glob('[0-9]*/stat'):
+            try:
+                fields = path.read_text().rpartition(')')[2].split()
+                if fields[0] != 'Z':
+                    result[int(path.parent.name)] = (*map(int, fields[1:4]), int(fields[19]))
+            except (FileNotFoundError, ProcessLookupError):
+                pass
+    return result
+
+
+class InstallerFamily:
+    """Record ownership at launch; assert before teardown and clean only our PIDs."""
+
+    def __init__(self, proc) -> None:
+        self.pid = proc.pid
+        self.group = os.getpgid(proc.pid)
+        self.session = os.getsid(proc.pid)
+        assert self.group == self.session == self.pid
+        row = process_snapshot().get(self.pid)
+        self.birth = row[3] if row else None
+        self.descendants = {self.pid: self.birth}
+
+    def live(self) -> set[int]:
+        rows = process_snapshot()
+        root = rows.get(self.pid)
+        same_session = not (root and root[3] != self.birth and root[2] == self.session)
+        while True:
+            owned = {pid for pid, birth in self.descendants.items() if pid in rows and rows[pid][3] == birth}
+            # A group number can be reused in another session. Session identity
+            # covers every original group, including children that enable monitor mode.
+            children = {pid: birth for pid, (parent, _group, session, birth) in rows.items()
+                        if parent in owned or (same_session and session == self.session)}
+            if all(self.descendants.get(pid) == birth for pid, birth in children.items()):
+                break
+            self.descendants.update(children)
+        return owned
+
+    def assert_gone(self) -> None:
+        deadline = time.monotonic() + .5
+        while live := self.live():
+            if time.monotonic() >= deadline:
+                pytest.fail(f'installer left live processes: {sorted(live)} (group {self.group}, session {self.session})')
+            time.sleep(.01)
+
+    def stop(self) -> None:
+        # Stop the session leader last, keeping descendants signalable until
+        # their own KILL has been sent.
+        for pid in sorted(self.live(), key=lambda pid: pid == self.pid):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.parametrize('reused_session', (100, 99))
+def test_installer_family_does_not_adopt_reused_pids(monkeypatch, reused_session) -> None:
+    rows = {100: (99, 100, 100, 1), 101: (100, 100, 100, 2)}
+    monkeypatch.setattr(sys.modules[__name__], 'process_snapshot', lambda: rows.copy())
+    monkeypatch.setattr(os, 'getpgid', lambda pid: 100)
+    monkeypatch.setattr(os, 'getsid', lambda pid: 100)
+    killed = []
+    monkeypatch.setattr(os, 'kill', lambda pid, sig: killed.append(pid))
+    family = InstallerFamily(type('Proc', (), {'pid': 100})())
+    assert family.live() == {100, 101}
+    # Both a descendant PID and the original session leader may be reused.
+    rows.update({100: (99, 100, reused_session, 3), 101: (100, 100, reused_session, 4)})
+    assert not family.live()
+    family.stop()
+    assert not killed
 
 
 def make_tarball(root: Path, version: str) -> Path:
@@ -52,6 +144,11 @@ def make_tarball(root: Path, version: str) -> Path:
     app = root / "waveguide-generator"
     (app / "app").mkdir(parents=True)
     (app / "runtime").mkdir()
+    (app / "runtime" / "bin").mkdir()
+    # Model the bundled interpreter used to reset optional-tool signals.
+    interpreter = app / "runtime" / "bin" / "python3.13"
+    interpreter.write_text(f'#!/bin/sh\nexec {shlex.quote(sys.executable)} "$@"\n')
+    interpreter.chmod(0o755)
     (app / "app" / "APP-MANIFEST.json").write_text("{}", encoding="utf-8")
     (app / "runtime" / "RUNTIME-MANIFEST.json").write_text("{}", encoding="utf-8")
     (app / "version.txt").write_text(version, encoding="utf-8")
@@ -447,9 +544,11 @@ def signal_paused_process(command: list[str], env: dict[str, str], paused: Path,
         command, preexec_fn=installer_process_signals, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, stdin=subprocess.DEVNULL, start_new_session=True,
     )
+    family = InstallerFamily(proc)
     try:
         deadline = time.monotonic() + 15
         while not paused.exists():
+            family.live()
             assert proc.poll() is None and time.monotonic() < deadline, "boundary never reached"
             time.sleep(0.01)
         os.killpg(proc.pid, interrupt)
@@ -464,14 +563,17 @@ def signal_paused_process(command: list[str], env: dict[str, str], paused: Path,
                     break
                 time.sleep(.0005)
         output, _ = proc.communicate(timeout=15)
+        family.assert_gone()
     finally:
         release.touch()
+        family.stop()
         # Kill only the session we created, also cleaning any surviving shim child.
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         proc.communicate()
+        family.assert_gone()
     return proc.returncode, output
 
 
@@ -661,15 +763,18 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(tmp_path: Pat
     proc = subprocess.Popen(command, preexec_fn=installer_process_signals, env={**process_env, "PATH": f"{bin_dir}{os.pathsep}{process_env['PATH']}"},
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             stdin=subprocess.DEVNULL, start_new_session=True)
+    family = InstallerFamily(proc)
     started = time.monotonic()
     try:
         if interrupt is not None:
             deadline = time.monotonic() + 5
             while not log.exists():
+                family.live()
                 assert proc.poll() is None and time.monotonic() < deadline
                 time.sleep(0.01)
             os.killpg(proc.pid, interrupt)
         output, _ = proc.communicate(timeout=10)
+        family.assert_gone()
         assert proc.returncode == 3, output
         assert time.monotonic() - started < 8
         prefix = 'Its backup remains at: '
@@ -683,11 +788,9 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(tmp_path: Pat
             with pytest.raises(ProcessLookupError):
                 os.kill(child, 0)
     finally:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        family.stop()
         proc.communicate()
+        family.assert_gone()
 
 
 def test_real_mv_never_waits_for_a_read_only_overwrite_prompt(tmp_path: Path, env: dict[str, str]) -> None:

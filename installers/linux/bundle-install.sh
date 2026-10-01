@@ -55,9 +55,9 @@
 # A signal before the traps ends a run that has done nothing; the flag never
 # comes from the environment.
 INTERRUPTED=0
-# Install these before any other executable line. Signals only record intent
-# until cleanup or commit makes the rest of the run uninterruptible.
-trap 'INTERRUPTED=1' HUP INT TERM QUIT
+# Record the first cancellation, then protect subsequent forks immediately.
+# Bash 3.2 can deliver a repeated signal before a child installs its own trap.
+trap 'INTERRUPTED=1; trap "" HUP INT TERM QUIT' HUP INT TERM QUIT
 trap cleanup EXIT
 trap '' PIPE
 CLEANING=0
@@ -70,11 +70,27 @@ LOCK_HELD=0
 MOVE_PID=""
 WORK_CLOCK=""
 PRINT_CLOCK=""
+OUTPUT_CAPTURE=0
 PREFLIGHT_CAPTURE=""
 PREFLIGHT_CAPTURE_ID=""
 STAGE_ROOT=""
 STAGE_ROOT_ID=""
 set -u
+# Bash 3.2 can longjmp out of wait while its diagnostic holds stderr's
+# FILE lock. A later capture inherits that lock and blocks before its trap.
+# Handle notifications outside wait, after the child is dead, before collecting
+# its cached status. dash has no such Bash wait/stdio path.
+wait() {
+    if [ -n "${BASH_VERSION:-}" ]; then
+        # Callers already observed exit or sent KILL. Drain the job table
+        # without forking a sleep for every killed clock.
+        while kill -0 "$1" 2>/dev/null; do jobs >/dev/null; done
+        jobs >/dev/null
+    fi
+    command wait "$@"
+    return "$?"
+}
+
 # Render once to a private file. A killed renderer can safely be retried;
 # only emission is retried after rendering. cat emits each short record at once.
 # A KILL during emission can race its completed write: parsers must tolerate a
@@ -184,6 +200,7 @@ same_device() {
 # Capturing shells and children ignore group cancellation while registering
 # resources. Short deadlines apply only during cleanup or after commit.
 protected_output() {
+    OUTPUT_CAPTURE=1
     trap '' HUP INT TERM QUIT
     (exec "$@") &
     output_pid=$!
@@ -198,7 +215,8 @@ wait_for_child() {
     bound_seconds=${2:-3}
     if [ "$CLEANING" -eq 0 ] && [ "$COMMITTED" -eq 0 ] && [ "${3:-budgeted}" != watchdog ]; then bound_seconds=30; fi
     bound_clock="$PRINT_CLOCK"
-    if [ "${3:-budgeted}" != message ]; then
+    # A captured waiter cannot reap its parent's message clock.
+    if [ "${3:-budgeted}" != message ] || [ "${OUTPUT_CAPTURE:-0}" -eq 1 ]; then
         (trap '' HUP INT TERM QUIT; exec sleep "$bound_seconds") >/dev/null 2>&1 &
         bound_clock=$!
     fi
@@ -231,7 +249,7 @@ wait_for_child() {
     done
     wait "$1"
     bound_status=$?
-    if [ "${3:-budgeted}" != message ]; then
+    if [ "${3:-budgeted}" != message ] || [ "${OUTPUT_CAPTURE:-0}" -eq 1 ]; then
         kill -KILL "$bound_clock" 2>/dev/null || :
         wait "$bound_clock" 2>/dev/null || :
     fi
@@ -309,12 +327,15 @@ run_housekeeping() {
 # Optional post-commit refreshes have default signal dispositions and three seconds.
 # Their failure cannot change the committed status.
 run_optional() {
-    # Bash otherwise forces INT/QUIT ignored for asynchronous commands, even
-    # after trap -. Monitor mode gives this optional child ordinary defaults.
-    set -m
-    (trap - HUP INT TERM QUIT PIPE; exec "$@") &
+    # Bash forces INT/QUIT ignored for asynchronous commands. The installed
+    # runtime restores defaults before exec, keeping this PID in our group.
+    (exec "$TARGET/runtime/bin/python3.13" -c '
+import os, signal, sys
+for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT, signal.SIGPIPE):
+    signal.signal(sig, signal.SIG_DFL)
+os.execvp(sys.argv[1], sys.argv[1:])
+' "$@") &
     optional_pid=$!
-    set +m
     wait_for_child "$optional_pid" 3 budgeted "$*" || :
 }
 
@@ -472,25 +493,27 @@ bounded_move() {
     ) &
     MOVE_PID=$!
     if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$MOVE_PID" 2>/dev/null || :; fi
+    # Own the timer in the installer, so killing a stuck watchdog cannot
+    # orphan its clock. Protected phases already ignore group cancellation.
+    if [ "$CLEANING" -eq 1 ] || [ "$COMMITTED" -eq 1 ]; then
+        sleep 5 >/dev/null 2>&1 &
+    else
+        sleep 30 >/dev/null 2>&1 &
+    fi
+    move_clock_pid=$!
     # Cancellation can arrive before the watchdog installs its USR1 handler.
     # Inherit ignored USR1 across that fork; a completed move also stops its timer.
     trap '' USR1
     (
-        # Ignore group signals in the watchdog AND its timer. USR1 is our
+        # Ignore group signals in the watchdog. USR1 is our
         # private cancellation, sent only after the move has been reaped.
         trap '' HUP INT TERM QUIT
         timer_cancelled=0
         trap 'timer_cancelled=1' USR1
-        if [ "$CLEANING" -eq 1 ] || [ "$COMMITTED" -eq 1 ]; then
-            sleep 5 >/dev/null 2>&1 &
-        else
-            sleep 30 >/dev/null 2>&1 &
-        fi
-        timer_pid=$!
+        timer_pid=$move_clock_pid
         while [ "$timer_cancelled" -eq 0 ] && kill -0 "$timer_pid" 2>/dev/null && kill -0 "$MOVE_PID" 2>/dev/null; do sleep 0.01; done
         if [ "$timer_cancelled" -eq 0 ]; then kill -KILL "$MOVE_PID" 2>/dev/null || :; fi
         kill -KILL "$timer_pid" 2>/dev/null || :
-        wait "$timer_pid" 2>/dev/null || :
     ) &
     watchdog_pid=$!
     trap - USR1
@@ -501,6 +524,8 @@ bounded_move() {
     move_status=$?
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
     reap_cancelled_watchdog "$watchdog_pid" 2>/dev/null || :
+    kill -KILL "$move_clock_pid" 2>/dev/null || :
+    wait "$move_clock_pid" 2>/dev/null || :
     # A file transfer has two temporary aliases; unlink only after verifying
     # the destination. The identity stays live at the destination after unlink.
     if same_object "$2" "$move_identity" && same_object "$1" "$move_identity"; then

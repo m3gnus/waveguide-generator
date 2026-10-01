@@ -23,6 +23,11 @@ them; they are not a current release status dashboard.
 
 ## Open: the one-pass manual test for the disk-image installer
 
+For GNU/Linux installer tests, run
+`scripts/ci/linux_installer_container_tests.sh <worktree> <pytest args...>` through
+the compute broker. It copies the checkout into `python:3.13-slim`, runs as a
+non-root user, and passes through `WG_STRESS` for the separate on-demand stress run.
+
 Everything about the installer script is measured except the part no
 command-line tool can observe — whether **System Settings → Privacy & Security**
 offers "Open Anyway" for it. `spctl` says the script has the `source` line that
