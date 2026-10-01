@@ -147,8 +147,10 @@ same_object() {
         current_id=$(object_id "$1")
         same_status=$?
         [ "$same_status" -gt 128 ] && continue
-        [ "$same_status" -eq 0 ] && [ "$current_id" = "$2" ]
-        return
+        # Explicit statuses: bash 5 makes a bare return in the EXIT trap
+        # report the status from before the trap, not this test's.
+        if [ "$same_status" -eq 0 ] && [ "$current_id" = "$2" ]; then return 0; fi
+        return 1
     done
     return 1
 }
@@ -361,7 +363,7 @@ canonical_path() {
     local input="$1" part resolved candidate
     local -a components
     if realpath -m -- "$input" 2>/dev/null; then
-        return
+        return 0
     fi
     # BSD realpath has no -m; this branch keeps cross-platform fixture tests
     # useful. Resolve each existing component before applying the next one so
@@ -378,7 +380,7 @@ canonical_path() {
             *)
                 if [ "$resolved" = "/" ]; then candidate="/$part"; else candidate="$resolved/$part"; fi
                 if [ -e "$candidate" ] || [ -L "$candidate" ]; then
-                    resolved="$(realpath -- "$candidate")" || return
+                    resolved="$(realpath -- "$candidate")" || return 1
                 else
                     resolved="$candidate"
                 fi
@@ -539,8 +541,8 @@ restore_row() {
         STATE[i]=evacuated
     fi
     if [ -z "${OLD_ID[i]}" ]; then
-        [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ]
-        return
+        if [ ! -e "${LIVE[i]}" ] && [ ! -L "${LIVE[i]}" ]; then return 0; fi
+        return 1
     fi
     locate_old || return 1
     if [ "$OLD_PATH" = "${LIVE[i]}" ]; then

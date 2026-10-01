@@ -142,8 +142,10 @@ same_object() {
         current_id=$(object_id "$1")
         same_status=$?
         [ "$same_status" -gt 128 ] && continue
-        [ "$same_status" -eq 0 ] && [ "$current_id" = "$2" ]
-        return
+        # Explicit statuses: bash 5 makes a bare return in the EXIT trap
+        # report the status from before the trap, not this test's.
+        if [ "$same_status" -eq 0 ] && [ "$current_id" = "$2" ]; then return 0; fi
+        return 1
     done
     return 1
 }
@@ -459,8 +461,8 @@ restore_row() {
         STATE=evacuated
     fi
     if [ -z "$OLD_ID" ]; then
-        [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ]
-        return
+        if [ ! -e "$LIVE_PATH" ] && [ ! -L "$LIVE_PATH" ]; then return 0; fi
+        return 1
     fi
     locate_old || return 1
     if [ "$OLD_PATH" = "$LIVE_PATH" ]; then

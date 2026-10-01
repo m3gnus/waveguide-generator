@@ -12,6 +12,12 @@ from pathlib import Path
 
 import pytest
 
+# Before anything below: module-level parametrize lists name POSIX signals
+# (SIGHUP, SIGQUIT) that Windows Python does not define, so a skip mark is too
+# late there; collection would fail on import.
+if sys.platform == "win32":
+    pytest.skip("POSIX shell installer", allow_module_level=True)
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "installers" / "linux" / "bundle-install.sh"
 

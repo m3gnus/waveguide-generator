@@ -18,6 +18,17 @@ from pathlib import Path
 
 import pytest
 
+# Before anything below: module-level parametrize lists name POSIX signals
+# (SIGHUP, SIGQUIT) that Windows Python does not define, so a skip mark is too
+# late there; collection would fail on import.
+if sys.platform == "win32":
+    pytest.skip("POSIX shell installer", allow_module_level=True)
+
+# The shell that runs the installer under test. Finder and Terminal always use
+# the #!/bin/sh line (bash 3.2 in sh mode on macOS); a portability run can set
+# WG_TEST_MAC_SHELL to /bin/dash, or to "zsh --emulate sh", for example.
+MAC_SHELL = os.environ.get("WG_TEST_MAC_SHELL", "/bin/sh").split()
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "installers" / "macos" / "dmg-install.command"
 BUNDLE_ID = "is.hornlab.waveguide-generator-v2"
@@ -98,7 +109,7 @@ def run(dmg: Path, *args: str, path_prefix: Path | None = None) -> subprocess.Co
     if path_prefix is not None:
         env["PATH"] = f"{path_prefix}{os.pathsep}{env['PATH']}"
     return subprocess.run(
-        ["/bin/sh", str(dmg / SCRIPT.name), *args], preexec_fn=installer_process_signals,
+        [*MAC_SHELL, str(dmg / SCRIPT.name), *args], preexec_fn=installer_process_signals,
         capture_output=True, text=True, env=env, stdin=subprocess.DEVNULL, timeout=120,
     )
 
@@ -179,7 +190,7 @@ def test_update_never_falls_back_when_the_parent_is_unwritable(dmg: Path, instal
     try:
         env_home = {**os.environ, "HOME": str(home)}
         result = subprocess.run(
-            ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
+            [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
             capture_output=True, text=True, env=env_home, stdin=subprocess.DEVNULL,
         )
     finally:
@@ -298,7 +309,7 @@ def test_a_signal_between_the_two_renames_restores_the_old_app(dmg: Path, instal
     )
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
     proc = subprocess.Popen(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
+        [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
         stdin=subprocess.DEVNULL, start_new_session=True,
     )
@@ -558,7 +569,7 @@ def test_a_signal_during_cleanup_allows_the_old_app_to_be_restored(
         f'exec "{real_mv}" "$@"\n',
     )
     proc = subprocess.Popen(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
+        [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, stdin=subprocess.DEVNULL,
         env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, start_new_session=True,
     )
@@ -723,7 +734,7 @@ def test_every_row_recovers_at_every_state_boundary(dmg: Path, installed: Path, 
     bin_dir = tmp_path / "bin"
     state_move_shim(bin_dir, [installed], 0, boundary, paused, release)
     code, output = signal_paused_process(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)],
         {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, paused, release, burst=True,
     )
     assert code == 1, output
@@ -738,7 +749,7 @@ def test_signal_after_commit_keeps_the_complete_new_installation(dmg: Path, inst
     paused, release = tmp_path / "paused", tmp_path / "release"
     instrument_boundaries(dmg / SCRIPT.name, 0, "committed", paused, release)
     code, output = signal_paused_process(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], dict(os.environ), paused, release,
+        [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)], dict(os.environ), paused, release,
     )
     assert code == 0, output
     assert version_of(installed) == "new"
@@ -752,7 +763,7 @@ def test_signal_after_displacement_before_bookkeeping(dmg: Path, installed: Path
     bin_dir = tmp_path / "bin"
     state_move_shim(bin_dir, [installed], 0, "post_displace", paused, release)
     code, output = signal_paused_process(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)],
+        [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)],
         {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, paused, release, interrupt,
     )
     assert code == 1, output
@@ -770,7 +781,7 @@ def test_every_move_is_no_clobber_and_has_null_stdin(dmg: Path, installed: Path,
     script.write_text(body.replace('    CLEANING=1\n', f'    CLEANING=1\n    : > {str(cleanup_marker)!r}\n', 1))
     noninteractive_move_shim(bin_dir, log, ".new.", cleanup_marker)
     result = subprocess.run(
-        ["/bin/sh", str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
+        [*MAC_SHELL, str(dmg / SCRIPT.name), "--update", str(installed)], preexec_fn=installer_process_signals,
         env={**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"},
         input="must never reach mv\n", capture_output=True, text=True, timeout=15,
     )
@@ -787,7 +798,7 @@ def test_every_move_is_no_clobber_and_has_null_stdin(dmg: Path, installed: Path,
 def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(dmg: Path, installed: Path, tmp_path: Path, blocked_step: str, interrupt: signal.Signals | None) -> None:
     script = dmg / SCRIPT.name
     target = installed
-    command = ["/bin/sh", str(script), "--update", str(target)]
+    command = [*MAC_SHELL, str(script), "--update", str(target)]
     process_env = dict(os.environ)
     # Force rollback with all new rows installed, and accelerate the SAME watchdog.
     body = script.read_text().replace("COMMITTED=1\n", "exit 1\n", 1).replace("sleep 5 &", "sleep 1 &", 1)
@@ -874,7 +885,7 @@ def test_first_install_interruption_removes_the_new_app(dmg: Path, tmp_path: Pat
     bin_dir = tmp_path / "bin"
     state_move_shim(bin_dir, [target], 0, boundary, paused, release)
     code, output = signal_paused_process(
-        ["/bin/sh", str(dmg / SCRIPT.name), str(folder)],
+        [*MAC_SHELL, str(dmg / SCRIPT.name), str(folder)],
         {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}, paused, release,
     )
     assert code == 1, output

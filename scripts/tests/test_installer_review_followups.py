@@ -14,8 +14,18 @@ from pathlib import Path
 
 import pytest
 
-from scripts.tests import test_dmg_install_update as mac
-from scripts.tests import test_linux_bundle_install_update as linux
+if sys.platform == "win32":
+    pytest.skip("POSIX shell installers", allow_module_level=True)
+
+from scripts.tests import test_dmg_install_update as mac  # noqa: E402  (after the Windows skip)
+from scripts.tests import test_linux_bundle_install_update as linux  # noqa: E402
+
+# Stress counts run only on demand (WG_STRESS=1, the installer branch
+# evidence and the on-demand CI job). The default suite and the landing gate
+# keep a few runs of each, enough to exercise every path in minutes.
+STRESS = os.environ.get("WG_STRESS") == "1"
+SERIES_RUNS = 50 if STRESS else 5
+ROLLBACK_BATCHES = 10 if STRESS else 1
 
 
 @dataclass
@@ -30,14 +40,14 @@ class Install:
     def command(self) -> list[str]:
         if self.platform == "linux":
             return ["/bin/bash", str(self.script), "--skip-checks", "--update"]
-        return ["/bin/sh", str(self.script), "--update", str(self.target)]
+        return [*mac.MAC_SHELL, str(self.script), "--update", str(self.target)]
 
     @property
     def lock(self) -> Path:
         return self.target.parent / f".{self.target.name}.install.lock"
 
     def run(self, env: dict[str, str] | None = None, *, interactive: bool = False):
-        command = ["/bin/sh", str(self.script), str(self.target.parent)] if interactive else self.command
+        command = [*mac.MAC_SHELL, str(self.script), str(self.target.parent)] if interactive else self.command
         return subprocess.run(command, env=env or self.env, preexec_fn=linux.installer_process_signals,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=20)
 
@@ -113,7 +123,7 @@ def move_shim(tmp_path: Path, install: Install, body: str) -> dict[str, str]:
 
 
 def spawn(install: Install, env: dict[str, str] | None = None, *, stdin=subprocess.DEVNULL, interactive=False):
-    command = ["/bin/sh", str(install.script), str(install.target.parent)] if interactive else install.command
+    command = [*mac.MAC_SHELL, str(install.script), str(install.target.parent)] if interactive else install.command
     return subprocess.Popen(command, env=env or install.env, preexec_fn=linux.installer_process_signals,
                             stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, start_new_session=True)
@@ -639,14 +649,14 @@ if destination == {str(install.target)!r} and ('.install.' in source or '.new.' 
     while not pathlib.Path({str(go)!r}).exists(): time.sleep(.001)
     sys.exit(1)
 ''')
-    for run in range(50):
+    for run in range(SERIES_RUNS):
         ready.unlink(missing_ok=True)
         go.unlink(missing_ok=True)
         proc = spawn(install, env)
         try:
             wait_marker(proc, ready)
             go.touch()
-            time.sleep(run * .0002)
+            time.sleep(run * .01 / SERIES_RUNS)
             for _ in range(40):
                 try:
                     os.kill(proc.pid, signal.SIGTERM)
@@ -675,12 +685,13 @@ def test_fifty_signal_burst_offsets_from_start_to_release(install: Install, tmp_
     # Fail at the forward install so repeated successful runs cannot change
     # our baseline; this gives an observable restoration during later offsets.
     env = fail_app_install(tmp_path, install)
-    for offset in range(50):
+    for offset in range(SERIES_RUNS):
         started.unlink(missing_ok=True)
         proc = spawn(install, env)
         try:
             wait_marker(proc, started)
-            time.sleep(offset * .012)
+            # Spread the offsets over the same 0-0.6 s span at any count.
+            time.sleep(offset * .6 / SERIES_RUNS)
             for _ in range(40):
                 try:
                     os.kill(proc.pid, signal.SIGTERM)
@@ -1001,11 +1012,12 @@ exec {real!r} "$@"
 
 @pytest.mark.slow
 @pytest.mark.parametrize('forced_failure', (False, True))
-@pytest.mark.parametrize('batch', range(10))
+@pytest.mark.parametrize('batch', range(ROLLBACK_BATCHES))
 def test_dense_group_bursts_during_rollback(install: Install, tmp_path: Path, forced_failure: bool, batch: int) -> None:
     # Reuse the reviewers' cleanup-burst and burst_capture models: fail the last
     # forward row, synchronize at a real restore child, vary the burst offset.
-    # Each platform gets 100 recoverable + 100 genuinely failed restores. On
+    # With WG_STRESS=1 each platform gets 100 recoverable + 100 genuinely failed
+    # restores (ten per batch); by default one batch of each. On
     # Linux all six rows have been displaced, so every recovery line is checked.
     ready, go = tmp_path / 'restore-ready', tmp_path / 'restore-go'
     burst_done = tmp_path / 'burst-done'
