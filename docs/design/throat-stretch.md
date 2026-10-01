@@ -17,7 +17,10 @@ valid design remains possible. The pin is identified by its capabilities, since
 mesher development commits may still declare an older package version.
 
 ATH text imports read s1 and s2 from the selected OSSE or R-OSSE block. `ROSSE`
-is an alias for R-OSSE; when both spellings are present, `R-OSSE` wins. A flat
+is an alias for R-OSSE when it supplies a nonzero stretch coefficient; when
+both spellings are present, `R-OSSE` wins. Legacy ROSSE blocks with absent or
+all-zero coefficients keep WG's existing OSSE interpretation and passthrough
+block, including in WG-native documents. A flat
 OSSE config without a profile block reads them at top level. Top-level values
 beside a profile block are ignored, matching the mesher, and the import report
 names them. Invalid supplied coefficients are refused even in ignored sections.
@@ -29,6 +32,13 @@ For active ATH imports, global Scale is read only at top level. Block-local
 Scale is ignored and reported. R-OSSE block Rot and Length are also ignored
 and reported; their top-level copies still participate in composition refusals.
 WG-native formats retain their existing Scale behavior.
+Active ATH imports materialize the mesher's raw default throat radius (12.7 mm)
+when the selected profile omits r0, so global Scale applies to it. A numeric
+Throat.Diameter supplies half that value as r0; an explicit r0 wins. Diameter
+expressions fall back to the default radius, matching the ATH importer.
+WG-native diameter expressions retain their existing expression behavior.
+Active ATH imports refuse Rollback and multi-source markers in top-level keys,
+the selected profile, and standalone block names with the mesher's reason.
 
 Active stretch also refuses the mesher's unverified combinations:
 

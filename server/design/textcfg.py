@@ -441,7 +441,14 @@ def _formula(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> str:
         key.startswith("Freeform.") for key in blocks
     ):
         return "FREEFORM"
-    if "R-OSSE" in blocks or "ROSSE" in blocks:
+    # ROSSE was historically an unconsumed passthrough block. Only a new,
+    # nonzero stretch coefficient opts it into the mesher's R-OSSE alias.
+    from .throat_stretch import text_number
+
+    alias = blocks.get("ROSSE")
+    if "R-OSSE" in blocks or (alias is not None and any(
+        text_number(alias.items.get(key, "0")) != 0 for key in ("s1", "s2")
+    )):
         return "R-OSSE"
     if "ICW" in blocks:
         return "ICW"
@@ -696,18 +703,6 @@ def _build_payload(
     selected = blocks[block_name].items if block_name is not None else flat
     stretch = {key: text_number(selected[key]) for key in ("s1", "s2") if key in selected}
     active_stretch = stretch.get("s1", 0) != 0 and stretch.get("s2", 0) != 0
-    if dialect == "ath" and formula == "R-OSSE" and active_stretch:
-        # These names are refusals, not ignored profile keys, in the mesher.
-        rollback = sorted(key for key in selected if key == "Rollback" or key.startswith("Rollback."))
-        if rollback:
-            raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
-        multi_source = sorted(key for key in selected if key == "Source.Contours"
-                              or key.startswith(("LFSource", "Source.Velocity.")))
-        if multi_source:
-            raise TextConfigError(
-                "multi-source ATH configs are not supported by this mesher "
-                f"(saw {', '.join(multi_source)}); only the single cap/disc throat source is implemented"
-            )
     if block_name is not None and formula in {"OSSE", "R-OSSE"} and active_stretch:
         in_block = [key for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length") if key in selected]
         if in_block:
@@ -721,10 +716,21 @@ def _build_payload(
         raise TextConfigError(message)
     if dialect == "ath" and formula == "OSSE" and active_stretch and not any(key in selected for key in ("L", "Length")):
         raise TextConfigError("ATH OSSE text configs must set Length")
+    refusal_keys = {*flat, *selected, *blocks} if dialect == "ath" and active_stretch else set()
+    multi_source = sorted(key for key in refusal_keys if key == "Source.Contours"
+                          or key.startswith(("LFSource", "Source.Velocity.")))
+    if multi_source:
+        raise TextConfigError(
+            "multi-source ATH configs are not supported by this mesher "
+            f"(saw {', '.join(multi_source)}); only the single cap/disc throat source is implemented"
+        )
     if active_stretch:
         throat_profile = selected.get("Throat.Profile", flat.get("Throat.Profile"))
         if throat_profile is not None and text_number(throat_profile) != 1:
             raise TextConfigError(f"Throat.Profile = {text_number(throat_profile)} is not supported; only the OS-SE profile (1) is implemented")
+    rollback = sorted(key for key in refusal_keys if key == "Rollback" or key.startswith("Rollback."))
+    if rollback:
+        raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
     composition = {**stretch}
     for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"):
         if key in flat:
@@ -802,7 +808,11 @@ def _build_payload(
                 elif active_stretch and key in active_aliases:
                     payload[active_aliases[key]] = value
                 elif formula in {"OSSE", "R-OSSE"} and key == "Throat.Diameter":
-                    if "r0" not in formula_block.items:
+                    if dialect == "ath" and active_stretch:
+                        # Numeric-only ATH conversion is handled below, using
+                        # the selected profile and its raw radius default.
+                        continue
+                    elif "r0" not in formula_block.items:
                         payload["r0"] = _numeric_or_expression_divide_by_two(value)
                 elif dialect == "ath" and active_stretch and formula == "R-OSSE" and key == "Throat.Profile":
                     # Already validated above; not an R-OSSE profile field.
@@ -818,6 +828,14 @@ def _build_payload(
         for key, target in profile_aliases:
             if key in selected:
                 payload[target] = selected[key]
+        if dialect == "ath" and "r0" not in selected:
+            # The mesher's raw default must participate in global Scale.
+            # Its ATH importer drops nonnumeric diameter expressions instead
+            # of evaluating them; native WG expressions retain their path.
+            try:
+                payload["r0"] = float(text_number(selected["Throat.Diameter"])) / 2.0
+            except (KeyError, TypeError, ValueError):
+                payload["r0"] = 12.7
     if formula in {"OSSE", "R-OSSE"}:
         payload.update(stretch)
     consumed_keys.update(key for key in ("s1", "s2") if key in flat)
@@ -838,7 +856,7 @@ def _build_payload(
                 elif key == "Rot" and "Rot" not in block.items:
                     _put(payload, path, flat[key])
                 consumed_keys.add(key)
-        if "Throat.Diameter" in flat and (not active_stretch or (block_name is None and "r0" not in selected)):
+        if "Throat.Diameter" in flat and (not active_stretch or (dialect != "ath" and block_name is None and "r0" not in selected)):
             payload["r0"] = _numeric_or_expression_divide_by_two(flat["Throat.Diameter"])
             consumed_keys.add("Throat.Diameter")
         if dialect == "ath":

@@ -103,8 +103,7 @@ def test_block_scale_matches_mesher_and_is_reported(family, placement, scale):
     block = (f"Scale = {scale}" if placement == "block" else "Scale = 3" if placement == "mixed"
              else "Scale = invalid" if placement == "mixed-invalid" else "")
     top = f"\nScale = {scale}" if placement != "block" else ""
-    # Explicit radius isolates Scale placement from WG's legacy unscaled
-    # omitted-radius default, which is preserved when stretch is enabled.
+    # Explicit radius isolates Scale placement from ATH default-radius import.
     text = _profile(family, "r0 = 12.7\n" + block) + top
     parsed = parse(text)
     effective_scale = scale if top else 1
