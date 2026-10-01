@@ -82,9 +82,18 @@ set -u
 # its cached status. dash has no such Bash wait/stdio path.
 wait() {
     if [ -n "${BASH_VERSION:-}" ]; then
-        # Callers already observed exit or sent KILL. Drain the job table
-        # without forking a sleep for every killed clock.
-        while kill -0 "$1" 2>/dev/null; do jobs >/dev/null; done
+        # jobs only reports cached states. A deferred SIGCHLD can leave a
+        # zombie visible to kill -0 forever. A foreground no-op makes Bash
+        # reap pending children outside the interruptible wait builtin.
+        reap_polls=0
+        while kill -0 "$1" 2>/dev/null; do
+            jobs >/dev/null
+            reap_polls=$((reap_polls + 1))
+            if [ "$reap_polls" -ge 32 ]; then
+                (trap - 0; :)
+                reap_polls=0
+            fi
+        done
         jobs >/dev/null
     fi
     command wait "$@"

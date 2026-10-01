@@ -1532,6 +1532,85 @@ command printf 'capture: %s; interrupted: %s\\n' "$captured" "$INTERRUPTED"
         stop(proc)
 
 
+@pytest.mark.skipif(sys.platform != 'darwin', reason='Native deferred SIGCHLD on system Bash 3.2')
+@pytest.mark.parametrize('platform', ('linux', 'macos'))
+@pytest.mark.parametrize('deferred', (False, True))
+def test_bare_bash32_wait_reaps_a_deferred_zombie(tmp_path: Path, platform: str, deferred: bool) -> None:
+    # The quiet full-suite hang had a spinning Bash and one zombie clock.
+    # Defer its asynchronous notification exactly before KILL; jobs can only
+    # print its cached running state. Foreground subshell completion must drive
+    # waitpid outside the interruptible wait builtin, then preserve its status.
+    compiler, signer = shutil.which('clang'), shutil.which('codesign')
+    assert compiler and signer, 'native deferred-reaping regression needs clang and codesign'
+    shell = tmp_path / 'bash'
+    shutil.copyfile('/bin/bash', shell)
+    shell.chmod(0o755)
+    subprocess.run([signer, '--force', '--sign', '-', str(shell)], check=True, capture_output=True)
+    shim = tmp_path / 'defer.c'
+    shim.write_text(r'''
+#include <signal.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <fcntl.h>
+static int injected;
+static int defer_kill(pid_t pid, int sig) {
+    const char *phase = getenv("WG_REAP_PHASE");
+    if (!injected && sig == SIGKILL && pid > 0 && phase && access(phase, F_OK) == 0) {
+        injected = 1;
+        sigset_t set;
+        sigemptyset(&set); sigaddset(&set, SIGCHLD);
+        sigprocmask(SIG_BLOCK, &set, 0);
+        int fd = open(getenv("WG_REAP_MARKER"), O_CREAT|O_WRONLY, 0600);
+        write(fd, "deferred CHLD", 13); close(fd);
+    }
+    return kill(pid, sig);
+}
+__attribute__((used)) static struct {const void *replacement; const void *replacee;} interposes[]
+__attribute__((section("__DATA,__interpose"))) = {{(void*)defer_kill, (void*)kill}};
+''')
+    library = tmp_path / 'defer.dylib'
+    arch = 'arm64e' if os.uname().machine == 'arm64' else 'x86_64'
+    subprocess.run([compiler, '-dynamiclib', '-arch', arch, '-o', str(library), str(shim)],
+                   check=True, capture_output=True)
+    source = linux.SCRIPT if platform == 'linux' else mac.SCRIPT
+    boundary = 'BUNDLE_DIRECTORY=' if platform == 'linux' else 'APP_NAME='
+    body = source.read_text().split('\n' + boundary, 1)[0]
+    phase, marker = tmp_path / 'kill-ready', tmp_path / 'deferred'
+    script = tmp_path / 'reap.sh'
+    script.write_text(body + f'''
+trap : EXIT
+STAT_STYLE=bsd
+(trap '' HUP INT TERM QUIT; exec sleep 60) >/dev/null 2>&1 &
+child=$!
+sleep .03
+{': > ' + repr(str(phase)) if deferred else ':'}
+kill -KILL "$child"
+wait "$child"
+child_status=$?
+if kill -0 "$child" 2>/dev/null; then exit 2; fi
+captured=$(object_id "$0")
+command printf 'status: %s; capture: %s; interrupted: %s\\n' "$child_status" "$captured" "$INTERRUPTED"
+''')
+    env = {**os.environ, 'DYLD_INSERT_LIBRARIES': str(library),
+           'WG_REAP_PHASE': str(phase), 'WG_REAP_MARKER': str(marker)}
+    command = [str(shell), *(['--posix'] if platform == 'macos' else []), str(script)]
+    proc = subprocess.Popen(command, env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True, preexec_fn=linux.installer_process_signals)
+    proc.installer_family = linux.InstallerFamily(proc)
+    try:
+        output, _ = proc.communicate(timeout=2)
+        if deferred:
+            assert marker.read_text() == 'deferred CHLD', 'notification deferral was not injected'
+        else:
+            assert not marker.exists(), 'control unexpectedly deferred notifications'
+        expected = f'status: 137; capture: {script.stat().st_dev}:{script.stat().st_ino}; interrupted: 0'
+        assert proc.returncode == 0 and expected in output, output
+        proc.installer_family.assert_gone()
+    finally:
+        stop(proc)
+
+
 @pytest.mark.parametrize('shell,platform', [('/bin/bash', 'linux'), ('/bin/sh', 'macos'), ('/bin/dash', 'macos')])
 def test_bare_captured_message_clock_is_owned_by_waiter(tmp_path: Path, shell: str, platform: str) -> None:
     if not Path(shell).exists():
