@@ -5300,7 +5300,7 @@ class JobRuntime:
             if isinstance(request.geometry, ImportedGeometrySource):
                 raise ValueError("imported geometry requires an explicit frequency count")
             assert simulation is not None
-            count = int(round(numeric(simulation.num_frequencies, 24.0)))
+            count = int(round(numeric(simulation.num_frequencies, 32.0)))
         count = max(1, min(401, count))
         if start <= 0 or end <= start:
             start, end = default_sweep_start_hz(), 20_000.0

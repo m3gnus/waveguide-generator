@@ -32,7 +32,7 @@ cannot alter an existing run.
 
 ## Solve, jobs, and results
 
-New designs and default sweeps start at 50 Hz with 32 points (was 400 Hz with 20); the sweep end is unchanged. New parametric designs end at 16 kHz. CAD retains its 20 kHz end and four points per octave (36 points). Sparse headless requests retain their 20 kHz end and 24-point fallback.
+New designs and default sweeps start at 50 Hz with 32 points (was 400 Hz with 20); the sweep end is unchanged. New parametric designs end at 16 kHz. CAD retains its 20 kHz end and four points per octave (36 points). Sparse headless requests keep their 20 kHz end and now also default to 32 points.
 
 Opening a design that omits `Simulation.F1` (or ATH's `ABEC.f1`) uses the new 50 Hz default. Stated frequencies and explicit frequency lists remain authoritative.
 

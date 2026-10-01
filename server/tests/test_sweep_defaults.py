@@ -29,10 +29,10 @@ def assert_sweep(request: SolveRequest, expected: tuple[float, float, int]) -> N
     assert points[-1] == pytest.approx(expected[1])
 
 
-def test_sparse_request_uses_shared_start_and_retains_headless_end_count() -> None:
+def test_sparse_request_uses_shared_start_headless_end_and_32_points() -> None:
     assert default_sweep_start_hz() == 50.0
     request = SolveRequest.model_validate({"design": {"formula": "OSSE"}})
-    assert_sweep(request, (50.0, 20_000.0, 24))
+    assert_sweep(request, (50.0, 20_000.0, 32))
 
 
 def test_request_validation_uses_new_start_for_omitted_f1() -> None:
@@ -40,7 +40,7 @@ def test_request_validation_uses_new_start_for_omitted_f1() -> None:
     request = SolveRequest.model_validate(
         {"design": {"formula": "OSSE", "simulation": {"f2": 100}}}
     )
-    assert_sweep(request, (50.0, 100.0, 24))
+    assert_sweep(request, (50.0, 100.0, 32))
 
 
 @pytest.mark.parametrize("header", ["; Parameter config\n", "; ATH design\n"])
@@ -57,7 +57,7 @@ def test_cli_text_omitted_start_uses_new_default_and_explicit_values_win(
     )
     parsed = parse(header + TEXT + suffix)
     request = build_request(parsed).request
-    assert_sweep(request, (315.0, 8000.0, 7) if explicit else (50.0, 20_000.0, 24))
+    assert_sweep(request, (315.0, 8000.0, 7) if explicit else (50.0, 20_000.0, 32))
     if not explicit:
         assert parsed.design.root.simulation.f1 is None
         assert not any("sweep" in item.name or "f1" in item.name for item in parsed.migrations)
@@ -66,7 +66,7 @@ def test_cli_text_omitted_start_uses_new_default_and_explicit_values_win(
 def test_cli_json_request_uses_new_start(tmp_path) -> None:
     path = tmp_path / "request.json"
     path.write_text(json.dumps({"design": {"formula": "OSSE"}}), encoding="utf-8")
-    assert_sweep(load_request_document(path).request, (50.0, 20_000.0, 24))
+    assert_sweep(load_request_document(path).request, (50.0, 20_000.0, 32))
 
 
 @pytest.mark.parametrize("family", ["OSSE", "R-OSSE", "ICW", "FREEFORM"])

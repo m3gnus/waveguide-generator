@@ -37,7 +37,7 @@ array, and adds stable `errors` with `code`, `stage`, `message`, `retryable`, an
 creating a durable job.
 
 A text design or JSON request with no sweep start uses 50 Hz. Omitted sweep
-end and count retain the headless defaults of 20 kHz and 24 points. New editor
+end keeps the headless default of 20 kHz; an omitted count uses 32 points. New editor
 designs state 50 Hz–16 kHz with 32 points. Stated design values, overlay range
 and count, and explicit frequency lists follow the precedence above.
 

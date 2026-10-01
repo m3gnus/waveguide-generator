@@ -1105,7 +1105,7 @@ class SolveRequest(JobModel):
                 )
 
         if self.options.frequencies_hz is None and self.options.num_frequencies is None:
-            count = scalar(simulation.num_frequencies, 24.0, "num_frequencies")
+            count = scalar(simulation.num_frequencies, 32.0, "num_frequencies")
             if not count.is_integer() or not 1 <= int(count) <= 401:
                 raise ValueError(
                     "design.simulation.num_frequencies must be an integer from 1 to 401"

@@ -141,7 +141,7 @@ class SolverContext:
                 start, end = default_sweep_start_hz(), 20_000.0
             count = request.options.num_frequencies
             if count is None:
-                count = int(round(_number(simulation.num_frequencies, 24.0)))
+                count = int(round(_number(simulation.num_frequencies, 32.0)))
             count = max(1, min(401, int(count)))
         quadrants = normalise_quadrants(_number(root.mesh.quadrants, float(FULL_DOMAIN_QUADRANTS)))
 
