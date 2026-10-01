@@ -801,7 +801,7 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(dmg: Path, in
     command = [*MAC_SHELL, str(script), "--update", str(target)]
     process_env = dict(os.environ)
     # Force rollback with all new rows installed, and accelerate the SAME watchdog.
-    body = script.read_text().replace("COMMITTED=1\n", "exit 1\n", 1).replace("sleep 5 &", "sleep 1 &", 1)
+    body = script.read_text().replace("COMMITTED=1\n", "exit 1\n", 1).replace("sleep 5 >/dev/null 2>&1 &", "sleep 1 >/dev/null 2>&1 &", 1)
     script.write_text(body)
     old_inode = target.stat().st_ino
     bin_dir = tmp_path / "bin"

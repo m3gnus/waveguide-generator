@@ -42,7 +42,7 @@ MUTATIONS = [
     ('missing_prefix_created', 'missing_update_prefix_creates_nothing',
      '[ "$UPDATE" -eq 1 ] && [ ! -d "$TARGET_PARENT" ]', '[ "$UPDATE" -eq 2 ] && [ ! -d "$TARGET_PARENT" ]'),
     ('later_forward_move_unbounded', 'later_linux_forward_deadlines and 5 and install and False',
-     'sleep 5 &', 'sleep 60 &'),
+     'sleep 30 >/dev/null 2>&1 &', 'sleep 60 >/dev/null 2>&1 &'),
     ('cleanup_parent_interruptible', 'cleanup_ignores_parent_signals',
      "    # forking: Bash 3.2 may resend a pending trapped signal in a new child.\n    trap '' HUP INT TERM QUIT",
      "    # forking: Bash 3.2 may resend a pending trapped signal in a new child.\n    trap 'INTERRUPTED=1' HUP INT TERM QUIT"),
@@ -72,11 +72,28 @@ MUTATIONS = [
      '        [ "$print_status" -gt 128 ] || break\n    done', '        break\n    done'),
     ('cleanup_total_budget_missing', 'shared_budget_bounds_repeated_restore_timeouts',
      '[ -n "$WORK_CLOCK" ] && ! kill -0 "$WORK_CLOCK" 2>/dev/null', '[ -n "$WORK_CLOCK" ] && false'),
+    ('forward_steps_use_cleanup_deadline', 'slow_forward_primitives and (metadata or housekeeping)',
+     'then bound_seconds=30; fi', 'then bound_seconds=1; fi'),
+    ('forward_messages_use_cleanup_deadline', 'slow_forward_primitives and (message-file or render or emit or message-remove)',
+     '    print_seconds=30', '    print_seconds=1'),
+    ('forward_moves_use_cleanup_deadline', 'slow_forward_primitives and move',
+     'sleep 30 >/dev/null 2>&1 &', 'sleep 1 >/dev/null 2>&1 &'),
+    ('forward_cancellation_waits_whole_deadline', 'forward_move_cancellation_keeps_short_grace',
+     'if [ "$bound_seconds" -eq 30 ]; then', 'if [ "$bound_seconds" -eq 0 ]; then'),
+    ('message_clock_holds_output', 'close_prompt_cancellation',
+     '(trap \'\' HUP INT TERM QUIT; exec sleep "$print_seconds") >/dev/null 2>&1 &',
+     '(trap \'\' HUP INT TERM QUIT; exec sleep "$print_seconds") &'),
+    ('watchdog_timer_holds_output', 'cancelled_watchdog_has_bounded_reap',
+     'sleep 30 >/dev/null 2>&1 &', 'sleep 30 &'),
+    ('watchdog_early_cancellation_unprotected', 'watchdog_cancellation_before_registration',
+     "    trap '' USR1\n    (", "    trap - USR1\n    ("),
+    ('deadlines_count_polls', 'blocked_commands_have_deadlines and commit-cache and parent',
+     'if ! kill -0 "$bound_clock" 2>/dev/null ||', 'if [ "$bound_fast" -ge 100 ] ||'),
     ('housekeeping_unbounded', 'blocked_commands_have_deadlines and cleanup-rm and parent',
-     'wait_for_child "$housekeeping_pid" 100 budgeted "$*"',
+     'wait_for_child "$housekeeping_pid" 3 budgeted "$*"',
      'while kill -0 "$housekeeping_pid" 2>/dev/null; do sleep 0.01; done; wait "$housekeeping_pid"'),
     ('stat_unbounded', 'blocked_commands_have_deadlines and restore-stat and parent',
-     'wait_for_child "$output_pid" 100 "${OUTPUT_BOUND:-budgeted}" "$*"',
+     'wait_for_child "$output_pid" 3 "${OUTPUT_BOUND:-budgeted}" "$*"',
      'while kill -0 "$output_pid" 2>/dev/null; do sleep 0.01; done; wait "$output_pid"'),
     ('cache_refresh_unbounded', 'blocked_commands_have_deadlines and commit-cache and parent',
      'run_optional update-desktop-database "$APPLICATIONS"', 'update-desktop-database "$APPLICATIONS"'),
@@ -112,8 +129,10 @@ def main() -> int:
                 if mode == 'mutant' and old in body:
                     assert body.count(old) == 1 or platform == 'bundle', (name, filename)
                     body = body.replace(old, new)
+                    if name == 'deadlines_count_polls':
+                        body = body.replace('            sleep 0.01\n', '            sleep 0.01\n            bound_fast=$((bound_fast + 1))\n')
                     if name == 'later_forward_move_unbounded':
-                        body = body.replace('wait_for_child "$MOVE_PID" 500', 'wait_for_child "$MOVE_PID" 6000')
+                        body = body.replace('then bound_seconds=30; fi', 'then bound_seconds=60; fi')
                     changed += 1
                 suffix = 'py' if platform == 'bundle' else 'sh'
                 (directory / f'{platform}.{suffix}').write_text(body)

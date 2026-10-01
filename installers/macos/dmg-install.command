@@ -38,9 +38,12 @@
 # after checking no installer is running, that staging copy is safe to delete.
 # Cleanup finishes within 300 seconds unless the kernel itself blocks a kill
 # (excluding the macOS close prompt's intentional user wait). Work has a shared
-# 20-second budget; metadata/housekeeping/output steps have short polling
-# deadlines, moves a five-second watchdog, then KILL and reap. Lock release and recovery
-# reporting also use bounded steps. A timed-out restore is status 3.
+# 20-second budget once CLEANING=1 or COMMITTED=1; metadata/housekeeping
+# steps and complete messages have three-second elapsed-time deadlines, moves
+# a five-second watchdog, then KILL and reap. Lock release and recovery reporting
+# use independent bounded steps. Forward metadata/housekeeping/messages/moves
+# allow 30 seconds per step, then report an ordinary failure; large copies and
+# checks remain unbounded until cancellation. A timed-out restore is status 3.
 # Journal recovery and fuller sweep/lock rules await the updater handoff stage.
 
 # A signal before the traps ends a run that has done nothing; the flag never
@@ -68,13 +71,20 @@ set -u
 # A KILL during emission can race its completed write: parsers must tolerate a
 # repeated line. Catchable cleanup signals cannot interrupt the emitter.
 printf() {
-    print_file=$(OUTPUT_BOUND=independent protected_output mktemp "${TMPDIR:-/tmp}/wg-installer-message.XXXXXX") || return 1
-    (trap '' HUP INT TERM QUIT; exec sleep 1) &
+    print_seconds=30
+    if [ "$CLEANING" -eq 1 ] || [ "$COMMITTED" -eq 1 ]; then print_seconds=3; fi
+    (trap '' HUP INT TERM QUIT; exec sleep "$print_seconds") >/dev/null 2>&1 &
     PRINT_CLOCK=$!
+    print_file=$(OUTPUT_BOUND=message protected_output mktemp "${TMPDIR:-/tmp}/wg-installer-message.XXXXXX") || {
+        kill -KILL "$PRINT_CLOCK" 2>/dev/null || :
+        wait "$PRINT_CLOCK" 2>/dev/null || :
+        PRINT_CLOCK=""
+        return 1
+    }
     for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
         (command printf "$@") > "$print_file" &
         render_pid=$!
-        wait_for_child "$render_pid" 100 message
+        wait_for_child "$render_pid" 3 message
         print_status=$?
         [ "$print_status" -gt 128 ] || break
     done
@@ -82,17 +92,17 @@ printf() {
         for print_attempt in 1 2 3 4 5 6 7 8 9 10; do
             (trap '' HUP INT TERM QUIT; exec cat "$print_file") &
             print_pid=$!
-            wait_for_child "$print_pid" 100 message
+            wait_for_child "$print_pid" 3 message
             print_status=$?
             [ "$print_status" -gt 128 ] || break
         done
     fi
-    kill -KILL "$PRINT_CLOCK" 2>/dev/null || :
-    wait_for_child "$PRINT_CLOCK" 100 independent 2>/dev/null || :
-    PRINT_CLOCK=""
     (trap '' HUP INT TERM QUIT; exec rm -f "$print_file") &
     print_remove_pid=$!
-    wait_for_child "$print_remove_pid" 100 independent "remove message $print_file" || :
+    wait_for_child "$print_remove_pid" 3 message "remove message $print_file" || :
+    kill -KILL "$PRINT_CLOCK" 2>/dev/null || :
+    wait "$PRINT_CLOCK" 2>/dev/null || :
+    PRINT_CLOCK=""
     return "$print_status"
 }
 
@@ -167,25 +177,29 @@ same_device() {
 }
 
 # Capturing shells and children ignore group cancellation while registering
-# resources. The same deadline covers metadata, housekeeping and emission.
+# resources. Short deadlines apply only during cleanup or after commit.
 protected_output() {
     trap '' HUP INT TERM QUIT
     (exec "$@") &
     output_pid=$!
-    wait_for_child "$output_pid" 100 "${OUTPUT_BOUND:-budgeted}" "$*"
+    wait_for_child "$output_pid" 3 "${OUTPUT_BOUND:-budgeted}" "$*"
 }
 
-# One bounded wait: deadline, KILL, reap, then report. Only kernel-blocked KILL
-# can prevent reaping. 100 slow polls allow one second plus dispatch overhead;
-# moves retain their five-second watchdog.
+# Elapsed-time clocks, never poll counts: deadline, KILL, reap, then report.
+# Only kernel-blocked KILL can prevent reaping. A cancelled watchdog is bounded
+# even before cleanup; ordinary forward steps get a generous thirty seconds.
 wait_for_child() {
-    bound_ticks=0
     bound_fast=0
-    bound_limit=${2:-100}
+    bound_seconds=${2:-3}
+    if [ "$CLEANING" -eq 0 ] && [ "$COMMITTED" -eq 0 ] && [ "${3:-budgeted}" != watchdog ]; then bound_seconds=30; fi
+    bound_clock="$PRINT_CLOCK"
+    if [ "${3:-budgeted}" != message ]; then
+        (trap '' HUP INT TERM QUIT; exec sleep "$bound_seconds") >/dev/null 2>&1 &
+        bound_clock=$!
+    fi
     bound_timeout=0
     while kill -0 "$1" 2>/dev/null; do
-        if [ "$bound_ticks" -ge "$bound_limit" ] ||
-           { [ "${3:-budgeted}" = message ] && ! kill -0 "$PRINT_CLOCK" 2>/dev/null; } ||
+        if ! kill -0 "$bound_clock" 2>/dev/null ||
            { [ "${3:-budgeted}" = budgeted ] && [ -n "$WORK_CLOCK" ] && ! kill -0 "$WORK_CLOCK" 2>/dev/null; }; then
             bound_timeout=1
             kill -KILL "$1" 2>/dev/null || :
@@ -193,6 +207,13 @@ wait_for_child() {
         fi
         if [ "$1" = "$MOVE_PID" ] && [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
             kill -TERM "$1" 2>/dev/null || :
+            if [ "$bound_seconds" -eq 30 ]; then
+                kill -KILL "$bound_clock" 2>/dev/null || :
+                wait "$bound_clock" 2>/dev/null || :
+                bound_seconds=5
+                (trap '' HUP INT TERM QUIT; exec sleep "$bound_seconds") >/dev/null 2>&1 &
+                bound_clock=$!
+            fi
         fi
         # Most native tools finish in milliseconds. Avoid adding a full poll
         # interval to every stat/print while retaining the slow-step deadline.
@@ -201,16 +222,19 @@ wait_for_child() {
             bound_fast=$((bound_fast + 1))
         else
             sleep 0.01
-            bound_ticks=$((bound_ticks + 1))
         fi
     done
     wait "$1"
     bound_status=$?
+    if [ "${3:-budgeted}" != message ]; then
+        kill -KILL "$bound_clock" 2>/dev/null || :
+        wait "$bound_clock" 2>/dev/null || :
+    fi
     if [ "$bound_timeout" -eq 1 ]; then
         if [ "${5:-report}" != silent ]; then
             (trap '' HUP INT TERM QUIT; command printf 'WARNING: installer step timed out: %s (process %s).\n' "${4:-child}" "$1" >&2) &
             warning_pid=$!
-            wait_for_child "$warning_pid" 100 independent warning silent 2>/dev/null || :
+            wait_for_child "$warning_pid" 3 independent warning silent 2>/dev/null || :
         fi
         return 124
     fi
@@ -221,13 +245,13 @@ wait_for_child() {
 # including capturing subshells. Reserve bounded lock release/reporting after it.
 start_work_clock() {
     [ -z "$WORK_CLOCK" ] || return 0
-    (trap '' HUP INT TERM QUIT; exec sleep 20) &
+    (trap '' HUP INT TERM QUIT; exec sleep 20) >/dev/null 2>&1 &
     WORK_CLOCK=$!
 }
 stop_work_clock() {
     [ -n "$WORK_CLOCK" ] || return 0
     kill -KILL "$WORK_CLOCK" 2>/dev/null || :
-    wait_for_child "$WORK_CLOCK" 100 independent 2>/dev/null || :
+    wait_for_child "$WORK_CLOCK" 3 independent 2>/dev/null || :
     WORK_CLOCK=""
 }
 
@@ -264,17 +288,17 @@ run_interruptible() {
     return "$step_status"
 }
 
-# A cancelled watchdog must never hold the lock indefinitely. Give it one
-# second to stop its timer, then KILL it and reap. Polls may end early on signals.
+# A cancelled watchdog must never hold the lock indefinitely. Give it three
+# elapsed seconds to stop its timer, then KILL it and reap.
 reap_cancelled_watchdog() {
-    wait_for_child "$1" 100 independent
+    wait_for_child "$1" 3 watchdog
 }
 
 # Record and reap housekeeping before inspecting its effects.
 run_housekeeping() {
     (trap '' HUP INT TERM QUIT; exec "$@") &
     housekeeping_pid=$!
-    wait_for_child "$housekeeping_pid" 100 budgeted "$*"
+    wait_for_child "$housekeeping_pid" 3 budgeted "$*"
 }
 
 release_lock() {
@@ -380,24 +404,32 @@ bounded_move() {
     ) &
     MOVE_PID=$!
     if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then kill -TERM "$MOVE_PID" 2>/dev/null || :; fi
+    # Cancellation can arrive before the watchdog installs its USR1 handler.
+    # Inherit ignored USR1 across that fork; a completed move also stops its timer.
+    trap '' USR1
     (
         # Ignore group signals in the watchdog AND its timer. USR1 is our
         # private cancellation, sent only after the move has been reaped.
         trap '' HUP INT TERM QUIT
         timer_cancelled=0
         trap 'timer_cancelled=1' USR1
-        sleep 5 &
+        if [ "$CLEANING" -eq 1 ] || [ "$COMMITTED" -eq 1 ]; then
+            sleep 5 >/dev/null 2>&1 &
+        else
+            sleep 30 >/dev/null 2>&1 &
+        fi
         timer_pid=$!
-        while [ "$timer_cancelled" -eq 0 ] && kill -0 "$timer_pid" 2>/dev/null; do sleep 0.01; done
+        while [ "$timer_cancelled" -eq 0 ] && kill -0 "$timer_pid" 2>/dev/null && kill -0 "$MOVE_PID" 2>/dev/null; do sleep 0.01; done
         if [ "$timer_cancelled" -eq 0 ]; then kill -KILL "$MOVE_PID" 2>/dev/null || :; fi
         kill -KILL "$timer_pid" 2>/dev/null || :
-        wait_for_child "$timer_pid" 2>/dev/null || :
+        wait "$timer_pid" 2>/dev/null || :
     ) &
     watchdog_pid=$!
+    trap - USR1
     move_status=1
     # A caught signal interrupts wait before the child exits. Reap that child
     # before inspecting paths, retrying, or stopping its watchdog.
-    wait_for_child "$MOVE_PID" 500 budgeted "move $*"
+    wait_for_child "$MOVE_PID" 5 budgeted "move $*"
     move_status=$?
     kill -USR1 "$watchdog_pid" 2>/dev/null || :
     reap_cancelled_watchdog "$watchdog_pid" 2>/dev/null || :

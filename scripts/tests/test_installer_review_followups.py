@@ -331,6 +331,10 @@ if destination == {str(dest)!r} and incoming:
 @pytest.mark.parametrize("step", ("displace", "install"))
 @pytest.mark.parametrize("interrupt", (None, signal.SIGTERM))
 def test_blocked_forward_move_is_bounded(install: Install, tmp_path: Path, step: str, interrupt) -> None:
+    # Keep the old fast blocked-move control, using an accelerated version of
+    # the new thirty-second forward deadline. Slow healthy moves are covered below.
+    body = install.script.read_text().replace('sleep 30 >/dev/null 2>&1 &', 'sleep 5 >/dev/null 2>&1 &')
+    install.script.write_text(body.replace('then bound_seconds=30; fi', 'then bound_seconds=5; fi'))
     record = tmp_path / "blocked-pid"
     original = identity(install.target)
     env = move_shim(tmp_path, install, f"""
@@ -874,7 +878,7 @@ if blocked:
     time.sleep(60)
 ''')
     # Exercise the actual watchdog with a shorter deadline for this 20-case matrix.
-    install.script.write_text(install.script.read_text().replace('sleep 5 &', 'sleep 1 &'))
+    install.script.write_text(install.script.read_text().replace('sleep 30 >/dev/null 2>&1 &', 'sleep 1 >/dev/null 2>&1 &'))
     proc = spawn(install, env)
     try:
         output, _ = proc.communicate(timeout=8)
@@ -1250,8 +1254,16 @@ def test_cancelled_watchdog_has_bounded_reap(install: Install, tmp_path: Path) -
     body = install.script.read_text()
     key = "trap 'timer_cancelled=1' USR1"
     assert body.count(key) == 1
-    stuck = tmp_path / 'stuck-watchdog'
-    install.script.write_text(body.replace(key, f"trap 'if [ ! -e \"{stuck}\" ]; then touch \"{stuck}\"; while :; do sleep 0.1; done; fi; timer_cancelled=1' USR1"))
+    stuck, ready = tmp_path / 'stuck-watchdog', tmp_path / 'watchdog-ready'
+    body = body.replace(key, f"trap 'if [ ! -e \"{stuck}\" ]; then touch \"{stuck}\"; while :; do sleep 0.1; done; fi; timer_cancelled=1' USR1")
+    # Force this broken watchdog to await cancellation even after its move exits,
+    # and acknowledge timer creation before the parent sends that cancellation.
+    # The production completed-move escape must not bypass the injected hang.
+    body = body.replace(' && kill -0 "$MOVE_PID" 2>/dev/null; do', '; do')
+    body = body.replace("    trap '' USR1\n", f"    rm -f '{ready}'\n    trap '' USR1\n")
+    body = body.replace('        timer_pid=$!\n', f"        timer_pid=$!\n        touch '{ready}'\n")
+    body = body.replace('    watchdog_pid=$!\n', f"    watchdog_pid=$!\n    while [ ! -e '{ready}' ]; do sleep 0.01; done\n")
+    install.script.write_text(body)
     original = {path: identity(path) for path in install.paths}
     started = time.monotonic()
     proc = spawn(install, fail_app_install(tmp_path, install))
@@ -1261,6 +1273,7 @@ def test_cancelled_watchdog_has_bounded_reap(install: Install, tmp_path: Path) -
         assert proc.returncode == 1, output
         assert {path: identity(path) for path in install.paths} == original
         assert 'Restored the previous installation' in output
+        assert stuck.exists(), 'watchdog hang injection did not execute'
         assert_no_staging(install)
     finally:
         stop(proc)
@@ -1377,12 +1390,98 @@ pathlib.Path({str(marker)!r}).write_text(str(int(signal.getsignal({int(interrupt
 
 
 @pytest.mark.slow
+def test_forward_move_cancellation_keeps_short_grace(install: Install, tmp_path: Path) -> None:
+    ready = tmp_path / 'cancelled-forward-move'
+    env = move_shim(tmp_path, install, f'''
+if destination == {str(install.target)!r} and ('.install.' in source or '.new.' in source):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    pathlib.Path({str(ready)!r}).touch()
+    time.sleep(60)
+''')
+    original = identity(install.target)
+    proc = spawn(install, env)
+    try:
+        wait_marker(proc, ready)
+        started = time.monotonic()
+        os.kill(proc.pid, signal.SIGTERM)
+        output, _ = proc.communicate(timeout=8)
+        assert time.monotonic() - started < 7, output
+        assert proc.returncode == 1 and 'Installation interrupted.' in output, output
+        assert identity(install.target) == original and not install.lock.exists(), output
+    finally:
+        stop(proc)
+
+
+@pytest.mark.slow
+def test_watchdog_cancellation_before_registration_is_safe(install: Install, tmp_path: Path) -> None:
+    observed = tmp_path / 'watchdog-disposition'
+    body = install.script.read_text()
+    key = '        timer_cancelled=0'
+    assert body.count(key) == 1
+    # Delay handler registration while the native move finishes. The inherited
+    # disposition must protect this exact interval on Bash 5 as well as Bash 3.2.
+    body = body.replace(key, f'''        '{sys.executable}' -c 'import pathlib, signal, time; pathlib.Path("{observed}").write_text(str(int(signal.getsignal(signal.SIGUSR1)))); time.sleep(.2)'
+{key}''')
+    install.script.write_text(body)
+    result = install.run()
+    output = result.stdout + result.stderr
+    assert result.returncode == 0 and install.version() == 'new', output
+    assert observed.read_text() == '1', 'watchdog cancellation was unprotected before registration'
+    assert output.count(f'Installed: {install.target}') == 1, output
+    assert not install.lock.exists(), output
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize('primitive', ('metadata', 'housekeeping', 'message-file', 'render', 'emit', 'message-remove', 'move'))
+def test_slow_forward_primitives_succeed(install: Install, tmp_path: Path, primitive: str) -> None:
+    """A healthy two-second command must survive both forward installation paths."""
+    delayed = tmp_path / 'slow-forward'
+    body = install.script.read_text()
+    # A one-shot shim runs inside the actual child, before the native primitive.
+    # It also proves the delay happened before either protected phase began.
+    delay = 6.2 if primitive == 'move' else 2.2
+    shim = f'''if [ "$CLEANING" -eq 0 ] && [ "$COMMITTED" -eq 0 ] && [ ! -e '{delayed}' ]; then
+        '{sys.executable}' -c 'import pathlib, time; pathlib.Path("{delayed}").touch(); time.sleep({delay})'
+    fi; '''
+    key = {
+        'metadata': '(exec "$@")',
+        'housekeeping': '(trap \'\' HUP INT TERM QUIT; exec "$@")',
+        'message-file': '(exec "$@")',
+        'render': '(command printf "$@")',
+        'emit': '(trap \'\' HUP INT TERM QUIT; exec cat "$print_file")',
+        'message-remove': '(trap \'\' HUP INT TERM QUIT; exec rm -f "$print_file")',
+        'move': '        exec mv ',
+    }[primitive]
+    if primitive in ('metadata', 'message-file'):
+        tool = 'stat' if primitive == 'metadata' else 'mktemp'
+        shim = f'if [ "$1" = {tool} ]; then {shim}fi; '
+    assert body.count(key) == 1
+    if primitive == 'move':
+        replacement = '        ' + shim + 'exec mv '
+    else:
+        replacement = '(' + shim + key[1:]
+    body = body.replace(key, replacement, 1)
+    body = body.replace('check_interrupted\nHERE=', "printf 'Forward status record.\\n'\ncheck_interrupted\nHERE=", 1)
+    install.script.write_text(body)
+    result = install.run()
+    output = result.stdout + result.stderr
+    assert delayed.exists(), 'forward fault injection did not execute'
+    assert result.returncode == 0 and install.version() == 'new', output
+    assert 'timed out' not in output, output
+    assert 'Forward status record.\n' in output, output
+    assert f'Installed: {install.target}' in output, output
+    assert not install.lock.exists(), output
+    assert_no_staging(install)
+
+
+@pytest.mark.slow
 @pytest.mark.parametrize('scope', ('parent', 'group'))
 @pytest.mark.parametrize('model', ('restore-stat', 'cleanup-rm', 'cleanup-rmdir', 'commit-rm', 'restore-mv', 'commit-cache'))
 def test_cleanup_commit_blocked_commands_have_deadlines(install: Install, tmp_path: Path, model: str, scope: str) -> None:
     """Round-4 gated blockers, without releasing the gate to finish cleanup."""
     if model == 'commit-cache' and install.platform != 'linux':
         pytest.skip('Linux desktop cache refresh')
+    install.script.write_text(install.script.read_text().replace('sleep 0.01', 'sleep 0.25'))
     ready, failed = tmp_path / 'blocked-command', tmp_path / 'failed-forward'
     original = {path: identity(path) for path in install.paths}
     rollback = not model.startswith('commit')
@@ -1442,8 +1541,9 @@ if {match}:
         for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM, signal.SIGQUIT):
             (os.kill if scope == 'parent' else os.killpg)(proc.pid, sig)
             time.sleep(.01)
-        output, _ = proc.communicate(timeout=18)
-        assert time.monotonic() - start < 18, output
+        limit = 30 if model == 'cleanup-rm' else 18
+        output, _ = proc.communicate(timeout=limit)
+        assert time.monotonic() - start < limit, output
         assert not install.lock.exists(), output
         assert proc.returncode == (3 if model in ('restore-stat', 'restore-mv') else 1 if rollback else 0), output
         if model in ('restore-stat', 'restore-mv'):
