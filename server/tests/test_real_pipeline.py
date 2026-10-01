@@ -244,10 +244,52 @@ def _imported_engine_expected() -> str | None:
     return None
 
 
+def _opencl_diagnosis() -> str:
+    """What WG's OpenCL check last concluded in this process, in full.
+
+    The capability reason is the user's sentence; the probe's own reason (the
+    exception and its message) and the child's stderr tail are what explain a
+    hosted-runner failure, and the CI log otherwise shows neither.
+    """
+
+    from server.solver import bempp_opencl as probe
+
+    verdict = probe._cached_verdict or probe._last_timeout
+    if verdict is None:
+        return "OpenCL check: no verdict recorded"
+    detail = {key: verdict.get(key) for key in ("opencl_unavailable_reason", "reason", "stage")}
+    stderr = verdict.get("probe_stderr")
+    return f"OpenCL check: {detail}" + (f"; probe stderr tail: {stderr!r}" if stderr else "")
+
+
+async def _settled_capabilities(registry: Any) -> list[Any]:
+    """The registry's engines once a transient OpenCL failure has had its retries.
+
+    A probe error or timeout is retried in the background after
+    RETRY_INTERVAL_SECONDS, up to MAX_TIMEOUT_ATTEMPTS. "Expected here" is a
+    statement about the settled answer, so wait for those retries (bounded by
+    the probe's own published ceiling) before asserting on it.
+    """
+
+    from server.solver import bempp_opencl as probe
+
+    engines = list(await registry.capabilities())
+    deadline = time.monotonic() + probe.qualification_max_seconds()
+    while time.monotonic() < deadline:
+        bempp = next((info for info in engines if info.name == "bempp"), None)
+        if bempp is None or bempp.opencl_unavailable_reason not in probe.TRANSIENT_REASONS:
+            break
+        if not probe.retry_pending():
+            break
+        await asyncio.sleep(probe.retry_delay() + 0.05)
+        engines = list(await registry.wait_for_bempp())
+    return engines
+
+
 async def _imported_engine(app: Any) -> tuple[str | None, str]:
     """The engine the CAD solve runs on here, or None and the registry's reasons."""
 
-    engines = {info.name: info for info in await app.state.engine_registry.capabilities()}
+    engines = {info.name: info for info in await _settled_capabilities(app.state.engine_registry)}
     for name in IMPORTED_ENGINES:
         info = engines.get(name)
         if info is not None and info.available and "imported" in info.geometry_sources:
@@ -264,7 +306,7 @@ async def _imported_engine(app: Any) -> tuple[str | None, str]:
     )
     return None, (
         f"no engine offers imported geometry on {sys.platform}/{platform.machine()} "
-        f"({reasons})"
+        f"({reasons}); {_opencl_diagnosis()}"
     )
 
 
@@ -353,7 +395,8 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
             bempp = engines.get(PARAMETRIC_ENGINE)
             assert bempp is not None and bempp.available, (
                 "BEMPP is unavailable, and the pinned requirements install it (numba "
-                f"included) on every host: {getattr(bempp, 'reason', 'not registered')}"
+                f"included) on every host: {getattr(bempp, 'reason', 'not registered')}; "
+                f"{_opencl_diagnosis()}"
             )
             started = time.perf_counter()
             accepted = await _call(app, "POST", "/api/solve", PARAMETRIC_BODY)
@@ -552,3 +595,42 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
     assert channel_metadata["source_motion"] == "normal"
     _assert_acoustics(channel, IMPORTED_FREQUENCIES, f"channel {channel_id!r}")
     _assert_pinned_provenance(result, "the imported result")
+
+
+# -- the diagnosis these tests print ----------------------------------------------
+
+
+def test_an_opencl_failure_names_its_cause(monkeypatch) -> None:
+    from server.solver import bempp_opencl as probe
+
+    monkeypatch.setattr(probe, "_cached_verdict", None)
+    monkeypatch.setattr(probe, "_last_timeout", {
+        "ok": False, "opencl_unavailable_reason": "probe_error",
+        "reason": "WG's OpenCL smoke check could not complete (internal error: ValueError: Child exited with status 139).",
+        "probe_stderr": "pocl error: Cannot select fsqrt",
+    })
+    diagnosis = _opencl_diagnosis()
+    assert "Child exited with status 139" in diagnosis and "Cannot select fsqrt" in diagnosis
+
+
+def test_expected_here_waits_for_the_transient_retries(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from server.solver import bempp_opencl as probe
+
+    pending = SimpleNamespace(name="bempp", available=True, geometry_sources=("parametric",),
+                              opencl_unavailable_reason="probe_error", reason="retrying")
+    settled = SimpleNamespace(name="bempp", available=True, geometry_sources=("parametric", "imported"),
+                              opencl_unavailable_reason=None, reason="OpenCL")
+    calls = []
+    class Registry:
+        async def capabilities(self):
+            calls.append("capabilities")
+            return (pending,)
+        async def wait_for_bempp(self):
+            calls.append("wait")
+            return (settled,)
+    monkeypatch.setattr(probe, "retry_pending", lambda: calls.count("wait") == 0)
+    monkeypatch.setattr(probe, "retry_delay", lambda: 0.0)
+    engines = asyncio.run(_settled_capabilities(Registry()))
+    assert engines == [settled] and calls == ["capabilities", "wait"]
