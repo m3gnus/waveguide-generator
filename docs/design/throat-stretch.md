@@ -16,7 +16,8 @@ exports refuse either nonzero coefficient with “needs mesher 0.2.4”. Saving 
 valid design remains possible. The pin is identified by its capabilities, since
 mesher development commits may still declare an older package version.
 
-ATH text imports read s1 and s2 from the selected OSSE or R-OSSE block. A flat
+ATH text imports read s1 and s2 from the selected OSSE or R-OSSE block. `ROSSE`
+is an alias for R-OSSE; when both spellings are present, `R-OSSE` wins. A flat
 OSSE config without a profile block reads them at top level. Top-level values
 beside a profile block are ignored, matching the mesher, and the import report
 names them. Invalid supplied coefficients are refused even in ignored sections.
@@ -24,9 +25,14 @@ For active stretch, an OSSE-block Rot wins over a top-level Rot; top-level Rot
 is used when the block omits it. Active OSSE profile dimensions come from the
 block. Inactive stretch retains WG's existing import precedence.
 
+For active ATH imports, global Scale is read only at top level. Block-local
+Scale is ignored and reported. R-OSSE block Rot and Length are also ignored
+and reported; their top-level copies still participate in composition refusals.
+WG-native formats retain their existing Scale behavior.
+
 Active stretch also refuses the mesher's unverified combinations:
 
-- Rotation with a throat extension or slot, and any R-OSSE rotation.
+- Rotation with a throat extension or slot, and R-OSSE top-level rotation.
 - OSSE slots.
 - A guiding curve with an extension, slot, or rotation.
 - R-OSSE with top-level Length.

@@ -109,7 +109,7 @@ class ParsedDesign:
     cadlink: CadLink | None = None
     source_text: str | None = None
     _initial_fingerprint: str = ""
-    ignored_stretch: list[IgnoredSetting] = field(default_factory=list)
+    ignored_profile: list[IgnoredSetting] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self._initial_fingerprint:
@@ -139,12 +139,12 @@ class ParsedDesign:
 
         block = self.extra_blocks.get(_WG_SOLVE_BLOCK)
         if block is None:
-            return list(self.ignored_stretch)
+            return list(self.ignored_profile)
         return [
             _ignored_setting(key, value, why, choose)
             for key, why, choose in _MACHINE_SOLVE_ADVICE
             if (value := block.items.get(key)) is not None
-        ] + self.ignored_stretch
+        ] + self.ignored_profile
 
     def semantic_data(self) -> dict[str, Any]:
         """Return the JSON/API meaning used by the corpus round-trip law."""
@@ -441,13 +441,20 @@ def _formula(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> str:
         key.startswith("Freeform.") for key in blocks
     ):
         return "FREEFORM"
-    if "R-OSSE" in blocks:
+    if "R-OSSE" in blocks or "ROSSE" in blocks:
         return "R-OSSE"
     if "ICW" in blocks:
         return "ICW"
     if "OSSE" in blocks or any(key in flat for key in ("Coverage.Angle", "Length", "Term.n")):
         return "OSSE"
     raise TextConfigError("could not find an OSSE, R-OSSE, ICW, or FREEFORM design")
+
+
+def _profile_block_name(formula: str, blocks: Mapping[str, _RawBlock]) -> str | None:
+    """Keep the source spelling separate from the canonical formula."""
+
+    names = ("R-OSSE", "ROSSE") if formula == "R-OSSE" else (formula,)
+    return next((name for name in names if name in blocks), None)
 
 
 def _legacy_sections(flat: dict[str, str], blocks: Mapping[str, _RawBlock]) -> set[str]:
@@ -671,6 +678,7 @@ def _build_payload(
     blocks: Mapping[str, _RawBlock],
     *,
     dialect: Literal["mwg", "ath"],
+    ignored_profile: list[IgnoredSetting],
 ) -> dict[str, Any]:
     from .throat_stretch import coefficient, text_number, validate_composition
 
@@ -684,15 +692,28 @@ def _build_payload(
                     coefficient(text_number(items[key]), key)
                 except ValueError as exc:
                     raise TextConfigError(str(exc)) from exc
-    selected = blocks[formula].items if formula in blocks else flat
+    block_name = _profile_block_name(formula, blocks)
+    selected = blocks[block_name].items if block_name is not None else flat
     stretch = {key: text_number(selected[key]) for key in ("s1", "s2") if key in selected}
     active_stretch = stretch.get("s1", 0) != 0 and stretch.get("s2", 0) != 0
-    if formula in blocks and formula in {"OSSE", "R-OSSE"} and active_stretch:
+    if dialect == "ath" and formula == "R-OSSE" and active_stretch:
+        # These names are refusals, not ignored profile keys, in the mesher.
+        rollback = sorted(key for key in selected if key == "Rollback" or key.startswith("Rollback."))
+        if rollback:
+            raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
+        multi_source = sorted(key for key in selected if key == "Source.Contours"
+                              or key.startswith(("LFSource", "Source.Velocity.")))
+        if multi_source:
+            raise TextConfigError(
+                "multi-source ATH configs are not supported by this mesher "
+                f"(saw {', '.join(multi_source)}); only the single cap/disc throat source is implemented"
+            )
+    if block_name is not None and formula in {"OSSE", "R-OSSE"} and active_stretch:
         in_block = [key for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length") if key in selected]
         if in_block:
             raise TextConfigError(
                 f"{', '.join(in_block)} must be top-level keys — ATH ignores them inside "
-                f"the {formula} block; move them out of the block"
+                f"the {block_name} block; move them out of the block"
             )
     if formula not in {"OSSE", "R-OSSE"} and any(text_number(items[key]) != 0 for items in (flat, *(block.items for block in blocks.values())) for key in ("s1", "s2") if key in items):
         message = ("OSSE/R-OSSE shape keys are not valid with formula ICW" if formula == "ICW"
@@ -743,6 +764,8 @@ def _build_payload(
             ("L", "L"), ("Length", "L"), ("n", "n"), ("Term.n", "n"),
             ("s", "s"), ("Term.s", "s"), ("h", "h"), ("OS.h", "h"), ("Rot", "rotation"),
         )
+    elif formula == "R-OSSE":
+        profile_aliases += tuple((key, key) for key in ("R", "m", "b", "r", "tmax"))
     active_aliases = dict(profile_aliases) if active_stretch else {}
     consumed_blocks = _legacy_sections(flat, blocks)
     consumed_blocks.add("CadLink")
@@ -753,11 +776,25 @@ def _build_payload(
         consumed_blocks.update(key for key in blocks if key in _FREEFORM_BLOCKS)
     else:
         payload = {"formula": formula}
-        formula_block = blocks.get(formula)
+        formula_block = blocks.get(block_name) if block_name is not None else None
         if formula_block:
-            consumed_blocks.add(formula)
+            consumed_blocks.add(block_name)
             for key, value in formula_block.items.items():
-                if key == "Scale":
+                # Active ATH profiles consume only the mesher's profile keys.
+                # Global Scale is top-level; R-OSSE Rot/Length are ignored in
+                # the block, even though their top-level copies can refuse.
+                if dialect == "ath" and active_stretch and (
+                    key == "Scale" or (formula == "R-OSSE" and key not in {
+                        *active_aliases, "s1", "s2", "Throat.Diameter", "Throat.Profile",
+                    })
+                ):
+                    note = f"ATH ignores {key} inside the {block_name} profile block. "
+                    note += ("Global Scale is read only at top level." if key == "Scale" else
+                             "This value does not change the imported geometry.")
+                    ignored_profile.append(IgnoredSetting(
+                        key=f"{block_name}.{key}", value=value, note=note,
+                    ))
+                elif key == "Scale":
                     payload["scale"] = value
                 elif key in ("s1", "s2"):
                     if formula in {"OSSE", "R-OSSE"}:
@@ -767,6 +804,9 @@ def _build_payload(
                 elif formula in {"OSSE", "R-OSSE"} and key == "Throat.Diameter":
                     if "r0" not in formula_block.items:
                         payload["r0"] = _numeric_or_expression_divide_by_two(value)
+                elif dialect == "ath" and active_stretch and formula == "R-OSSE" and key == "Throat.Profile":
+                    # Already validated above; not an R-OSSE profile field.
+                    continue
                 elif formula == "OSSE" and key == "Term.k":
                     payload["k"] = value
                 elif formula == "OSSE" and key in _OSSE_MAP:
@@ -798,7 +838,7 @@ def _build_payload(
                 elif key == "Rot" and "Rot" not in block.items:
                     _put(payload, path, flat[key])
                 consumed_keys.add(key)
-        if "Throat.Diameter" in flat and (not active_stretch or (formula not in blocks and "r0" not in selected)):
+        if "Throat.Diameter" in flat and (not active_stretch or (block_name is None and "r0" not in selected)):
             payload["r0"] = _numeric_or_expression_divide_by_two(flat["Throat.Diameter"])
             consumed_keys.add("Throat.Diameter")
         if dialect == "ath":
@@ -883,7 +923,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (TypeError, ValueError, ValidationError) as exc:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
-    payload = _build_payload(flat, blocks, dialect=dialect)
+    ignored_profile: list[IgnoredSetting] = []
+    payload = _build_payload(flat, blocks, dialect=dialect, ignored_profile=ignored_profile)
     applications: list[MigrationApplication] = []
     if migrate:
         try:
@@ -894,6 +935,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         design = DesignConfig.model_validate(payload)
     except ValidationError as exc:
         raise TextConfigError(str(exc)) from exc
+    block_name = _profile_block_name(design.formula, blocks)
     return ParsedDesign(
         design=design,
         dialect=dialect,
@@ -902,15 +944,15 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         raw_values=raw_values,
         cadlink=cadlink,
         source_text=text,
-        ignored_stretch=[
+        ignored_profile=ignored_profile + [
             IgnoredSetting(
                 key=f"{name}.{key}" if name else key,
                 value=value,
-                note=f"ATH reads {key} from the {design.formula} profile section. This value is ignored; move it into that section to use it.",
+                note=f"ATH reads {key} from the {block_name or design.formula} profile section. This value is ignored; move it into that section to use it.",
             )
             for name, items in [("", flat), *((name, block.items) for name, block in blocks.items())]
             for key, value in items.items()
-            if key in {"s1", "s2"} and ((name == "" and design.formula in blocks) or (name != "" and name != design.formula))
+            if key in {"s1", "s2"} and ((name == "" and block_name is not None) or (name != "" and name != block_name))
         ],
     )
 
