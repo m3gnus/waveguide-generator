@@ -8,7 +8,6 @@ rejections persist for the process.
 """
 from __future__ import annotations
 
-from contextlib import suppress
 from contextvars import ContextVar
 from functools import lru_cache
 import importlib
@@ -313,6 +312,35 @@ class _ProbeHandle:
             self.closed = True
 
 
+REMOVE_ATTEMPTS = 20
+REMOVE_RETRY_SECONDS = 0.05
+
+
+def _remove_channel(channel: Any) -> None:
+    """Remove a run's result directory, retrying while Windows still holds it.
+
+    A file the child just closed, or one an indexer or virus scanner opened,
+    can refuse deletion for a moment on Windows. A directory that still cannot
+    be removed is logged, and left for the session's removal or the next start.
+    """
+
+    for attempt in range(REMOVE_ATTEMPTS):
+        try:
+            channel.cleanup()
+        except OSError as exc:
+            error = exc
+        else:
+            if not os.path.exists(channel.name):
+                return
+            error = None
+        if attempt + 1 < REMOVE_ATTEMPTS:
+            time.sleep(REMOVE_RETRY_SECONDS)
+    logging.getLogger(__name__).warning(
+        "Could not remove the OpenCL check's directory %s%s; it is left for the "
+        "next start to remove", channel.name, f" ({error})" if error else "",
+    )
+
+
 def shutdown_qualification(owner: threading.Event) -> None:
     """Terminate/reap only this registry's children; safe on repeated shutdown."""
     with _probe_lock:
@@ -336,8 +364,7 @@ def shutdown_qualification(owner: threading.Event) -> None:
             _channels_idle.wait(remaining)
         leftovers = [channel for channel, token in _active_channels.items() if token is owner]
     for channel in leftovers:
-        with suppress(OSError):
-            channel.cleanup()
+        _remove_channel(channel)
 
 
 def _read_probe_output(stream: Any, events: Any) -> None:
@@ -388,7 +415,7 @@ def _validate_probe_result(result: Any, mode: str) -> None:
 
 def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
     # Parent-only import: the standalone native child never allocates a channel.
-    from server.platform.temp_session import temporary_directory_root
+    from server.platform.temp_session import spawned_directory_root
 
     handle = None
     ready_at = None
@@ -403,7 +430,9 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
         # stop either sees this directory or the run is refused before making it.
         with _probe_lock:
             _check_cancelled()
-            channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=temporary_directory_root())
+            # In the BEMPP solve worker too, which the server spawns: the
+            # parent's session, never the bare temporary directory.
+            channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=spawned_directory_root())
             _active_channels[channel] = _probe_owner.get()
         result_path = Path(channel.name) / "result.json"
         # Independent readers avoid backpressure on both pipes, on every OS.
@@ -481,10 +510,12 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
                     )
         finally:
             if channel is not None:
-                channel.cleanup()
-                with _channels_idle:
-                    _active_channels.pop(channel, None)
-                    _channels_idle.notify_all()
+                try:
+                    _remove_channel(channel)
+                finally:
+                    with _channels_idle:
+                        _active_channels.pop(channel, None)
+                        _channels_idle.notify_all()
 
 
 def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:

@@ -55,6 +55,9 @@ LEGACY_PREFIXES = (
     "wg2-imported-viewport-",
     "wg2-field-plane-",
     "wg2-stl-mesh-",
+    # The OpenCL check's result directory, from a BEMPP worker of a release
+    # that made it outside the session.
+    "wg2-opencl-",
 )
 LEGACY_MIN_AGE_SECONDS = 24 * 3600.0
 
@@ -72,6 +75,29 @@ log = logging.getLogger("wg.temp")
 
 #: The directory :func:`temporary_directory_root` answers, while a session is active.
 _active_root: str | None = None
+
+
+#: Set by the launched server to its session directory, so the processes it
+#: spawns (the BEMPP solve worker) can put a short-lived directory inside the
+#: session too, where the server's stop or the next start removes it.
+SESSION_ENVIRONMENT = "WG2_TEMP_SESSION_DIR"
+
+
+def spawned_directory_root() -> str | None:
+    """Like :func:`temporary_directory_root`, but also right in a process the
+    server spawned: there the parent's session directory, while it exists.
+
+    Only for directories a child makes and removes itself. A spawned process
+    has no session of its own, so anything it leaves behind is removed with the
+    parent's session.
+    """
+
+    if _active_root is not None:
+        return _active_root
+    inherited = os.environ.get(SESSION_ENVIRONMENT)
+    if inherited and Path(inherited).name.startswith(SESSION_PREFIX) and Path(inherited).is_dir():
+        return inherited
+    return None
 
 
 def temporary_directory_root() -> str | None:

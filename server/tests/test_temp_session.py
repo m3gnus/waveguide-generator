@@ -402,7 +402,8 @@ def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory(
     Loose in the system temporary directory, no rule removes one -- unless it
     carries a legacy ``wg2-`` directory prefix, and then only a day later. So
     every ``tempfile`` call in the server names its ``dir=``: the session's
-    (``temporary_directory_root()``) for scratch space -- a mesh build, the mesh
+    (``temporary_directory_root()``, or ``spawned_directory_root()`` in a
+    process the server spawns) for scratch space -- a mesh build, the mesh
     a solver reads, a STEP round trip, the isolated CAD child's sandbox -- or
     the destination's own parent for a file staged beside where it is
     published. A ``wg2-`` directory and a ``wg-cad-child-`` sandbox always go
@@ -457,6 +458,7 @@ def test_no_server_temporary_file_lands_loose_in_the_system_temporary_directory(
                 and isinstance(prefix.value, str)
                 and prefix.value.startswith(("wg2-", "wg-cad-child-"))
                 and not calls(directory, "temporary_directory_root")
+                and not calls(directory, "spawned_directory_root")
             ):
                 offenders.append(f"{where}: {prefix.value} outside the session")
 
@@ -527,3 +529,25 @@ def test_a_field_plane_mesh_is_staged_inside_the_active_session(tmp_path: Path) 
         assert loaded[0].parent.name.startswith("wg2-field-plane-")
     finally:
         session.close(remove=True)
+
+
+def test_the_server_hands_its_session_to_the_processes_it_spawns(monkeypatch, tmp_path) -> None:
+    """A spawned BEMPP worker has no session of its own; the server names its
+    session in the environment, and nothing else is changed by it."""
+    import launch.serve as serve
+    from server.platform import temp_session
+
+    monkeypatch.setattr(serve.tempfile, "gettempdir", lambda: str(tmp_path))
+    assert temp_session.SESSION_ENVIRONMENT not in os.environ
+    session = serve._start_temporary_session()
+    try:
+        assert session is not None
+        assert os.environ[temp_session.SESSION_ENVIRONMENT] == str(session.path)
+        # As a spawned child sees it: no session of its own, the parent's named.
+        session.close(remove=False)
+        assert temp_session.temporary_directory_root() is None
+        assert temp_session.spawned_directory_root() == str(session.path)
+    finally:
+        session.close(remove=True)
+        # Set by the code under test, not by monkeypatch, so removed directly.
+        os.environ.pop(temp_session.SESSION_ENVIRONMENT, None)

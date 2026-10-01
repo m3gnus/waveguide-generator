@@ -403,3 +403,48 @@ def test_a_stop_refuses_a_run_before_it_makes_its_directory(monkeypatch, tmp_pat
         probe._probe_owner.reset(token)
     assert len(made) == 1 and not list(tmp_path.iterdir())
     assert not probe._active_channels
+
+
+def test_a_spawned_worker_puts_its_probe_directory_in_the_servers_session(monkeypatch, tmp_path):
+    """A BEMPP solve worker is spawned without the server's session active; the
+    session directory reaches it through the environment, so its probe result
+    directory is removed with the session, never left in the temp directory."""
+    from server.platform import temp_session
+
+    session = tmp_path / "wg2-run-123-abc"
+    session.mkdir()
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setenv(temp_session.SESSION_ENVIRONMENT, str(session))
+    assert temp_session.spawned_directory_root() == str(session)
+    script = (f"print({probe._READY_MARKER!r}, flush=True); import sys; "
+              f"open(sys.argv[1], 'w').write({json.dumps({'ok': True, 'smoke': {}})!r})")
+    children = child_for(monkeypatch, script)
+    assert probe._run_probe("smoke", None, 5)["ok"]
+    assert Path(children[0].args[-1]).parent.parent == session
+    # A stale or foreign value is ignored.
+    monkeypatch.setenv(temp_session.SESSION_ENVIRONMENT, str(tmp_path / "elsewhere"))
+    assert temp_session.spawned_directory_root() is None
+
+
+def test_a_held_probe_directory_is_retried_then_logged(monkeypatch, tmp_path, caplog):
+    """Windows can refuse to delete a just-closed or scanned file for a moment.
+    Removal retries; one that never succeeds is logged, not swallowed."""
+    monkeypatch.setattr(probe, "REMOVE_RETRY_SECONDS", 0.0)
+    class Held:
+        def __init__(self, failures):
+            self.failures, self.calls = failures, 0
+            self.name = str(tmp_path / f"wg2-opencl-held{failures}")
+            Path(self.name).mkdir()
+        def cleanup(self):
+            self.calls += 1
+            if self.calls <= self.failures:
+                raise PermissionError(13, "The process cannot access the file", self.name)
+            Path(self.name).rmdir()
+    brief = Held(3)
+    probe._remove_channel(brief)
+    assert brief.calls == 4 and not Path(brief.name).exists()
+    stuck = Held(10 ** 6)
+    with caplog.at_level("WARNING", logger=probe.__name__):
+        probe._remove_channel(stuck)
+    assert stuck.calls == probe.REMOVE_ATTEMPTS and Path(stuck.name).exists()
+    assert "Could not remove the OpenCL check's directory" in caplog.text

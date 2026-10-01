@@ -53,6 +53,7 @@ from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E40
 from server.platform.paths import app_root, default_runs_dir, ensure_data_layout  # noqa: E402
 from server.platform.shutdown_backstop import ShutdownBackstop, lingering_threads  # noqa: E402
 from server.platform.temp_session import (  # noqa: E402
+    SESSION_ENVIRONMENT,
     TemporarySession,
     sweep_stale_temporary_directories,
 )
@@ -641,6 +642,8 @@ def _start_temporary_session() -> TemporarySession | None:
         session = None
     else:
         session.activate()
+        # Processes this server spawns put their short-lived directories in it too.
+        os.environ[SESSION_ENVIRONMENT] = str(session.path)
     removed = sweep_stale_temporary_directories(
         base, keep=session.path if session is not None else None
     )
