@@ -55,7 +55,7 @@ describe('OpenclUnavailableHook', () => {
       .toEqual(block.steps.map((step) => step.url));
   });
 
-  it.each(['future_reason', 'toString'])('renders platform guidance for unknown reason %s', (reason) => {
+  it.each(['probe_error', 'future_reason', 'toString'])('renders platform guidance for unknown reason %s', (reason) => {
     act(() => root.render(<OpenclUnavailableHook platform="windows"
       engine={{ ...engine, opencl_unavailable_reason: reason as EngineCapability['opencl_unavailable_reason'] }} />));
     const block = guidance.platforms.windows;

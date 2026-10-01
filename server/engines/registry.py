@@ -739,9 +739,9 @@ class EngineRegistry:
         return self._cache or capabilities
 
     def _has_bempp_timeout(self) -> bool:
-        from server.solver.bempp_opencl import TIMEOUT_REASONS
+        from server.solver.bempp_opencl import TRANSIENT_REASONS
 
-        return any(item.name == "bempp" and item.opencl_unavailable_reason in TIMEOUT_REASONS
+        return any(item.name == "bempp" and item.opencl_unavailable_reason in TRANSIENT_REASONS
                    for item in self._cache or ())
 
     def _bempp_needs_refresh(self) -> bool:

@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace as NS
 
 import numpy as np
@@ -11,6 +12,8 @@ import pytest
 
 from server.solver import bempp_opencl as probe
 
+
+_RESULT_PREFIX = "TEST_RESULT "
 
 CPU = {"platform_index": 1, "device_index": 0, "type": "cpu", "platform": "CPU OpenCL", "vendor": "CPU", "name": "CPU", "fp64": True}
 GPU = {"platform_index": 0, "device_index": 0, "type": "gpu", "platform": "Apple", "vendor": "Apple", "name": "M1 GPU", "fp64": False}
@@ -147,19 +150,32 @@ def fake_children(monkeypatch, scripts):
         def __init__(self, script):
             self.script = script
             self.closed = False
-        def __iter__(self):
-            for delay, line in self.script:
-                clock[0] += delay
-                yield line + "\n"
+            self.lines = iter(script)
+            self.path = None
+        def readline(self, limit):
+            try:
+                delay, line = next(self.lines)
+            except StopIteration:
+                return ""
+            clock[0] += delay
+            if line.startswith(_RESULT_PREFIX):
+                self.path.write_text(line[len(_RESULT_PREFIX):], encoding="utf-8")
+                return "child finished\n"
+            return line + "\n"
+        def read(self, limit):
+            return ""
         def close(self):
             self.closed = True
     class Child:
         def __init__(self, argv, **kwargs):
-            assert kwargs["stderr"] == subprocess.STDOUT
+            assert kwargs["stderr"] == subprocess.PIPE
             assert kwargs["stdout"] == subprocess.PIPE
             assert kwargs["env"]["NUMBA_DISABLE_JIT"] == "1"
+            assert kwargs["env"]["PYOPENCL_COMPILER_OUTPUT"] == "0"
             self.args, self.returncode = argv, None
             self.stdout = Stream(next(scripts))
+            self.stdout.path = Path(argv[-1])
+            self.stderr = Stream([])
             self.killed, self.waited = False, False
             children.append(self)
         def poll(self):
@@ -178,8 +194,9 @@ def fake_children(monkeypatch, scripts):
 
 
 def child_script(verdict, *, import_seconds=0.0, compute_seconds=0.0):
+    verdict = {"devices": [], "smoke": {}, "opencl_unavailable_reason": "smoke_test_failed", **verdict}
     return [(import_seconds, probe._READY_MARKER),
-            (compute_seconds, probe._RESULT_PREFIX + json.dumps(verdict))]
+            (compute_seconds, _RESULT_PREFIX + json.dumps(verdict))]
 
 
 def test_multiple_cpu_imports_share_published_wall_budget(monkeypatch):
@@ -234,22 +251,10 @@ def test_total_budget_excludes_imports_in_both_children(monkeypatch):
     assert probe.qualified_opencl()["device"] == CPU
 
 
-@pytest.mark.parametrize("output", ["not json", "WG_OPENCL_RESULT invalid", "WG_OPENCL_RESULT []"])
+@pytest.mark.parametrize("output", ["not json", _RESULT_PREFIX + "invalid", _RESULT_PREFIX + "[]"])
 def test_crashed_or_malformed_probe_is_rejected(monkeypatch, output):
     fake_children(monkeypatch, [[(0, probe._READY_MARKER), (0, output)]])
-    assert not probe._run_probe("smoke", CPU, 1)["ok"]
-
-
-def test_probe_drains_large_stderr_and_ignores_import_logs(monkeypatch):
-    # Real pipe/reader coverage complements virtual timing; no near-limit sleep.
-    real_popen = subprocess.Popen
-    def child(argv, **kwargs):
-        script = ("import sys; sys.stderr.write('log' * 100000); "
-                  f"print('\\n{probe._READY_MARKER}', flush=True); "
-                  f"print({probe._RESULT_PREFIX + json.dumps({'ok': True})!r}, flush=True)")
-        return real_popen([sys.executable, "-c", script], **kwargs)
-    monkeypatch.setattr(probe.subprocess, "Popen", child)
-    assert probe._run_probe("smoke", CPU, 20)["ok"]
+    assert probe._run_probe("smoke", CPU, 1)["opencl_unavailable_reason"] == "probe_error"
 
 
 @pytest.mark.parametrize("damage", ["zero", "nan", "partial", "wrong", "shape"])
@@ -395,19 +400,15 @@ def test_gpu_cannot_be_bound_or_smoke_tested(entry):
 
 
 @pytest.mark.parametrize("system", ["win32", "linux", "darwin"])
-@pytest.mark.parametrize("platform,windows_code", [
-    ("PoCL", "pocl_windows"),
-    ("Portable Computing Language", "pocl_windows"),
-    ("CPU OpenCL", "smoke_test_failed"),
-])
-def test_windows_smoke_failure_reason_uses_platform_identity(monkeypatch, system, platform, windows_code):
+@pytest.mark.parametrize("platform", ["PoCL", "Portable Computing Language", "CPU OpenCL"])
+def test_pocl_smoke_failure_classification_per_os(monkeypatch, system, platform):
     monkeypatch.setattr(probe.sys, "platform", system)
     # The device name is deliberately misleading: only its platform identifies PoCL.
     device = {**CPU, "platform": platform, "name": "PoCL CPU"}
     monkeypatch.setattr(probe, "_run_probe", lambda mode, *args:
                         {"ok": True, "devices": [device]} if mode == "inventory"
                         else {"ok": False, "reason": "zero computation"})
-    code = windows_code if system == "win32" else "smoke_test_failed"
+    code = "pocl_windows" if system == "win32" and platform != "CPU OpenCL" else "smoke_test_failed"
     assert probe.qualified_opencl()["opencl_unavailable_reason"] == code
 
 
@@ -434,7 +435,8 @@ def test_inventory_changed_to_gpu_is_refused_before_binding(monkeypatch):
 
 
 @pytest.mark.parametrize('stage', ['inventory', 'smoke'])
-def test_timeout_is_retried_then_pass_is_cached(monkeypatch, stage):
+@pytest.mark.parametrize('error', [False, True])
+def test_transient_failure_is_retried_then_pass_is_cached(monkeypatch, stage, error):
     clock = [0.0]
     monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
     calls = []
@@ -442,7 +444,7 @@ def test_timeout_is_retried_then_pass_is_cached(monkeypatch, stage):
         calls.append(mode)
         if mode == stage and calls.count(stage) == 1:
             return {'ok': False, 'reason': 'under load',
-                    'opencl_unavailable_reason': f'{stage}_test_timeout' if stage == 'smoke' else 'inventory_timeout'}
+                    'opencl_unavailable_reason': 'probe_error' if error else (f'{stage}_test_timeout' if stage == 'smoke' else 'inventory_timeout')}
         return {'ok': True, 'devices': [CPU]} if mode == 'inventory' else {'ok': True, 'smoke': {}}
     monkeypatch.setattr(probe, '_run_probe', run)
     assert not probe.qualified_opencl()['ok']
@@ -460,7 +462,7 @@ def test_timeout_is_retried_then_pass_is_cached(monkeypatch, stage):
     assert len(calls) == count
 
 
-@pytest.mark.parametrize('failure', ['no_device', 'wrong', 'crash'])
+@pytest.mark.parametrize('failure', ['no_device', 'wrong'])
 def test_definitive_rejection_is_cached(monkeypatch, failure):
     calls = []
     def run(mode, device, timeout):
@@ -468,11 +470,7 @@ def test_definitive_rejection_is_cached(monkeypatch, failure):
         if mode == 'inventory':
             return {'ok': True, 'devices': [] if failure == 'no_device' else [CPU]}
         return {'ok': False, 'reason': 'wrong result', 'opencl_unavailable_reason': 'smoke_test_failed'}
-    if failure == 'crash':
-        fake_children(monkeypatch, [child_script({'ok': True, 'devices': [CPU]}),
-                                   [(0, probe._READY_MARKER), (0, 'crashed')]])
-    else:
-        monkeypatch.setattr(probe, '_run_probe', run)
+    monkeypatch.setattr(probe, '_run_probe', run)
     first = probe.qualified_opencl()
     assert first['opencl_unavailable_reason'] == ('no_device' if failure == 'no_device' else 'smoke_test_failed')
     count = len(calls)
@@ -483,7 +481,8 @@ def test_definitive_rejection_is_cached(monkeypatch, failure):
 
 
 @pytest.mark.parametrize('stage', ['inventory', 'smoke'])
-def test_timeout_retries_have_interval_and_terminal_cap(monkeypatch, stage):
+@pytest.mark.parametrize('error', [False, True])
+def test_transient_retries_have_interval_and_terminal_cap(monkeypatch, stage, error):
     import asyncio
     from server.diagnostics.capabilities import capabilities_payload
     from server.engines.registry import EngineInfo
@@ -491,7 +490,7 @@ def test_timeout_retries_have_interval_and_terminal_cap(monkeypatch, stage):
     clock = [0.0]
     monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
     attempts = []
-    code = 'inventory_timeout' if stage == 'inventory' else 'smoke_test_timeout'
+    code = 'probe_error' if error else ('inventory_timeout' if stage == 'inventory' else 'smoke_test_timeout')
     def run(mode, device, timeout):
         if mode == 'inventory' and stage == 'smoke':
             return {'ok': True, 'devices': [CPU]}
@@ -609,3 +608,58 @@ def test_registry_does_not_retry_a_timeout_outside_its_snapshot(monkeypatch):
         finally:
             await registry.shutdown_prewarm()
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("code", sorted(probe.OPENCL_UNAVAILABLE_REASONS))
+@pytest.mark.parametrize("detail", ["check failed", "check failed.", "check failed!", "check failed?", ""])
+def test_fallback_sentence_boundaries(monkeypatch, code, detail):
+    from server.solver import bempp
+    monkeypatch.setattr(bempp, "retry_pending", lambda: True)
+    text = bempp.numba_fallback_warning(detail, code)
+    assert text.endswith(".")
+    assert ".." not in text
+    if code == "probe_error":
+        assert text == ("WG's OpenCL check could not complete (internal error); "
+                        "using the slower numba engine for now and retrying.")
+        assert "unusable" not in text
+        monkeypatch.setattr(bempp, "retry_pending", lambda: False)
+        assert "retrying" not in bempp.numba_fallback_warning(detail, code)
+    else:
+        assert f"{detail.rstrip('.!?')}. Until" in text
+
+
+@pytest.mark.parametrize("system", ["win32", "linux", "darwin"])
+def test_pocl_probe_error_is_never_a_runtime_rejection(monkeypatch, system):
+    monkeypatch.setattr(probe.sys, "platform", system)
+    monkeypatch.setattr(probe, "_run_probe", lambda mode, *args:
+                        {"ok": True, "devices": [{**CPU, "platform": "PoCL"}]} if mode == "inventory"
+                        else {"ok": False, "reason": "internal error", "opencl_unavailable_reason": "probe_error"})
+    assert probe.qualified_opencl()["opencl_unavailable_reason"] == "probe_error"
+    assert probe.retry_pending()
+
+
+@pytest.mark.parametrize("output,ready", [
+    (probe._READY_MARKER + "\n", True),
+    (" " + probe._READY_MARKER + "\n", False),
+    ("library " + probe._READY_MARKER + "\n", False),
+    (probe._READY_MARKER, False),
+    ("x" * 4096 + probe._READY_MARKER + "\n", False),
+    ("x" * 5000 + "\n" + probe._READY_MARKER + "\n", True),
+])
+def test_ready_requires_an_exact_complete_stdout_line(output, ready):
+    import io
+    import queue
+    events = queue.Queue()
+    probe._read_probe_output(io.StringIO(output), events)
+    lines = []
+    while not events.empty():
+        lines.append(events.get()[0])
+    assert lines == ([probe._READY_MARKER, None] if ready else [None])
+
+
+@pytest.mark.parametrize("change", [
+    {"type": "unknown"}, {"platform_index": "0"}, {"device_index": -1}, {"platform": None},
+])
+def test_malformed_inventory_is_a_probe_error(monkeypatch, change):
+    fake_children(monkeypatch, [child_script({"ok": True, "devices": [{**CPU, **change}]})])
+    assert probe._run_probe("inventory", None, 1)["opencl_unavailable_reason"] == "probe_error"

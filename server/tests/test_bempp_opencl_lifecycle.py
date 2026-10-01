@@ -23,7 +23,7 @@ def child_for(monkeypatch, script):
     original = subprocess.Popen
     children = []
     def spawn(argv, **kwargs):
-        child = original([sys.executable, '-c', script], **kwargs)
+        child = original([sys.executable, '-c', script, argv[-1]], **kwargs)
         children.append(child)
         return child
     monkeypatch.setattr(probe.subprocess, 'Popen', spawn)
@@ -34,7 +34,7 @@ def child_for(monkeypatch, script):
 def test_real_reader_protocol(monkeypatch, case):
     monkeypatch.setattr(probe, 'SPAWN_IMPORT_SECONDS', 0.5)
     ready = f"print({probe._READY_MARKER!r}, flush=True); "
-    result = f"print({(probe._RESULT_PREFIX + json.dumps({'ok': True}))!r}, flush=True)"
+    result = f"import sys; open(sys.argv[1], 'w').write({json.dumps({'ok': True, 'smoke': {}})!r})"
     scripts = {
         'never_ready': 'import time; time.sleep(30)',
         'duplicate_ready': 'import time; ' + ready + 'time.sleep(.20); ' + ready + 'time.sleep(.20); ' + result,
@@ -58,6 +58,7 @@ def test_real_reader_protocol(monkeypatch, case):
         assert 'spawn/import' in verdict['reason']
     assert children[0].poll() is not None
     assert children[0].stdout.closed
+    assert children[0].stderr.closed
 
 
 
@@ -138,3 +139,108 @@ def test_shutdown_without_a_child_prevents_later_spawn(monkeypatch):
     with pytest.raises(probe.ProbeCancelled):
         probe.owned_qualification(owner, probe.qualified_opencl)
     assert not probe._active_probes
+
+
+@pytest.mark.parametrize("system", ["linux", "win32"])
+def test_real_child_separates_interleaved_noise_from_protocol(monkeypatch, system):
+    monkeypatch.setattr(probe.sys, "platform", system)
+    script = f"""
+import json, os, sys
+# Exceeds both Windows/POSIX pipe buffers, then ends without a newline.
+os.write(2, b'x' * 2000000)
+os.write(2, b'70 warnings generated. unterminated compiler warning')
+print({probe._READY_MARKER!r}, flush=True)
+os.write(2, b'noise between READY and RESULT\\n')
+# Library output can resemble the former protocol and still cannot affect JSON.
+print('WG_OPENCL_RESULT garbage', flush=True)
+print(' ' + {probe._READY_MARKER!r}, flush=True)
+open(sys.argv[1], 'w').write(json.dumps({{"ok": True, "smoke": {{"solve_relative_error": 1e-7}}}}))
+os.write(2, b'final compiler diagnostic')
+"""
+    children = child_for(monkeypatch, script)
+    verdict = probe._run_probe("smoke", None, 5)
+    assert verdict["ok"], verdict
+    assert verdict["smoke"] == {"solve_relative_error": 1e-7}
+    assert len(verdict["probe_stderr"]) == 4096
+    assert verdict["probe_stderr"].endswith("final compiler diagnostic")
+    assert children[0].stderr.closed
+    assert children[0].stdout.closed
+    assert not probe._active_probes
+
+
+@pytest.mark.parametrize("case", ["crash", "garbage", "missing", "invalid_schema", "missing_reason"])
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_real_child_protocol_error_is_transient_and_retried(monkeypatch, case, mode):
+    scripts = {
+        "crash": "import os; os._exit(19)",
+        "garbage": "import sys; open(sys.argv[1], 'w').write('not json')",
+        "missing": "print('WG_OPENCL_RESULT garbage', flush=True)",
+        "invalid_schema": "import sys; open(sys.argv[1], 'w').write('{\"ok\": true}')",
+        "missing_reason": "import sys; open(sys.argv[1], 'w').write('{\"ok\": false, \"opencl_unavailable_reason\": \"smoke_test_failed\"}')",
+    }
+    children = child_for(monkeypatch, scripts[case])
+    real_run = probe._run_probe
+    def run(stage, device, timeout):
+        if stage != mode:
+            return {"ok": True, "devices": [{"platform_index": 0, "device_index": 0,
+                    "type": "cpu", "platform": "CPU OpenCL", "name": "CPU", "vendor": "CPU"}]}
+        return real_run(stage, device, timeout)
+    monkeypatch.setattr(probe, "_run_probe", run)
+    first = probe.qualified_opencl()
+    assert first["opencl_unavailable_reason"] == "probe_error"
+    assert "unusable" not in first["reason"]
+    assert probe._cached_verdict is None
+    assert not probe._device_verdict_cache
+    assert probe.retry_pending()
+    assert probe.qualified_opencl() == first
+    assert len(children) == 1
+    monkeypatch.setattr(probe, "_retry_after", 0)
+    assert probe.qualified_opencl()["opencl_unavailable_reason"] == "probe_error"
+    assert len(children) == 2
+
+
+@pytest.mark.parametrize("damage", ["wrong", "error"])
+def test_real_probe_child_distinguishes_computation_from_internal_error(monkeypatch, damage):
+    # Exercise the actual child exception classifier with hermetic imports.
+    script = f"""
+import sys, types
+from pathlib import Path
+from server.solver import bempp_opencl as probe
+for name in ['bempp_cl', 'bempp_cl.api', 'bempp_cl.core', 'bempp_cl.core.opencl_kernels',
+             'hornlab_bempp_bem', 'hornlab_bempp_bem.device', 'pyopencl']:
+    module = types.ModuleType(name)
+    module.__path__ = []
+    sys.modules[name] = module
+    parent, _, attr = name.rpartition('.')
+    if parent:
+        setattr(sys.modules[parent], attr, module)
+def smoke(device):
+    if {damage!r} == 'error':
+        raise ValueError('unexpected check exception')
+    return probe.check_computation(probe.reference_matrix() * 1.1)
+probe.smoke_test = smoke
+probe._write_probe_result(Path(sys.argv[1]), probe._child_result('smoke', None))
+"""
+    child_for(monkeypatch, script)
+    verdict = probe._run_probe("smoke", None, 5)
+    assert verdict["opencl_unavailable_reason"] == ("smoke_test_failed" if damage == "wrong" else "probe_error")
+    assert "disagrees" in verdict["reason"] if damage == "wrong" else "ValueError" in verdict["reason"]
+
+
+
+def test_real_probe_channel_belongs_to_the_session_and_is_cleaned(monkeypatch, tmp_path):
+    from pathlib import Path
+    from server.platform.temp_session import TemporarySession
+
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    try:
+        script = (f"print({probe._READY_MARKER!r}, flush=True); import sys; "
+                  f"open(sys.argv[1], 'w').write({json.dumps({'ok': True, 'smoke': {}})!r})")
+        children = child_for(monkeypatch, script)
+        assert probe._run_probe("smoke", None, 5)["ok"]
+        result_path = Path(children[0].args[-1])
+        assert result_path.parent.parent == session.path
+        assert not result_path.parent.exists()
+    finally:
+        session.close(remove=True)

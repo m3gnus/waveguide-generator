@@ -15,7 +15,8 @@ from server.tests.test_bempp_opencl import CPU
 
 
 @pytest.mark.parametrize('recovery', ['request', 'idle'])
-def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path, recovery):
+@pytest.mark.parametrize('code', ['inventory_timeout', 'probe_error'])
+def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path, recovery, code):
     bempp.bempp_status.cache_clear()
     # This test keeps the real app's lifespan open long enough for the WGLink
     # startup pass to run. It must not touch the user's Fusion add-in, nor leave
@@ -53,7 +54,7 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
             probe_started.set()
             assert release_probe.wait(5)
             return {'ok': False, 'reason': 'slow inventory after ready',
-                    'opencl_unavailable_reason': 'inventory_timeout'}
+                    'opencl_unavailable_reason': code}
         return {'ok': True, 'devices': [CPU]} if mode == 'inventory' else {'ok': True, 'smoke': {}}
     monkeypatch.setattr(probe, '_run_probe', run)
     monkeypatch.setattr(metal, 'metal_status', lambda: {
@@ -103,7 +104,10 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
                 assert first['opencl_retry_pending'] is True
                 assert first['qualification'] == 'done'
                 assert first['assembly_backend'] == 'numba'
-                assert first['opencl_unavailable_reason'] == 'inventory_timeout'
+                assert first['opencl_unavailable_reason'] == code
+                if code == 'probe_error':
+                    assert first['reason'] == ("WG's OpenCL check could not complete (internal error); "
+                                               "using the slower numba engine for now and retrying.")
                 assert tuple(first['geometry_sources']) == ('parametric',)
                 assert calls == ['inventory']
                 assert registry._opencl_retry_task is not None

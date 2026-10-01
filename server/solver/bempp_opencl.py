@@ -3,7 +3,8 @@
 Enumeration, driver imports, context creation and kernel execution can all hang.
 Native work runs in bounded children, waited on by the background capability
 thread or the isolated solve/warmup worker, never by startup or the event loop.
-Timeouts are transient; passes and definitive rejections persist for the process.
+Timeouts and internal probe errors are transient; passes and definitive
+rejections persist for the process.
 """
 from __future__ import annotations
 
@@ -11,12 +12,14 @@ from contextvars import ContextVar
 from functools import lru_cache
 import importlib
 import json
+import logging
 import os
 import queue
 from pathlib import Path
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 from typing import Any, Mapping
 
@@ -28,7 +31,7 @@ TOTAL_SECONDS = 30.0
 # Per child, including process creation. Cold Windows imports may be slow;
 # a hung import must still end and use the existing transient timeout codes.
 SPAWN_IMPORT_SECONDS = 60.0
-# Initial attempt plus two retries, at least 5s after each timeout completes.
+# Initial attempt plus two retries, at least 5s after each transient failure.
 # Serialize attempts so concurrent capability/solve requests cannot pile up.
 RETRY_INTERVAL_SECONDS = 5.0
 MAX_TIMEOUT_ATTEMPTS = 3
@@ -50,10 +53,9 @@ def _attempt_max_seconds() -> float:
 
 
 OPENCL_UNAVAILABLE_REASONS = frozenset({
-    "no_device", "inventory_timeout", "smoke_test_failed", "smoke_test_timeout", "pocl_windows",
+    "no_device", "inventory_timeout", "smoke_test_failed", "smoke_test_timeout", "pocl_windows", "probe_error",
 })
-TIMEOUT_REASONS = frozenset({"inventory_timeout", "smoke_test_timeout"})
-_RESULT_PREFIX = "WG_OPENCL_RESULT "
+TRANSIENT_REASONS = frozenset({"inventory_timeout", "smoke_test_timeout", "probe_error"})
 _READY_MARKER = "WG_OPENCL_READY"
 _selection_lock = threading.Lock()
 _device_verdict_cache: dict[str, dict[str, Any]] = {}
@@ -204,21 +206,28 @@ def reference_matrix() -> Any:
     return np.array([[values[len(set(a) & set(b))] for b in faces.T] for a in faces.T])
 
 
+class ComputationFailed(RuntimeError):
+    """The device ran, but its numerical result failed qualification."""
+
+
 def check_computation(matrix: Any) -> dict[str, float]:
     """Reject zero, partial, non-finite and numerically wrong computation."""
     import numpy as np
 
     reference = reference_matrix()
     if matrix.shape != reference.shape or not np.all(np.isfinite(matrix)) or not np.any(matrix):
-        raise RuntimeError("OpenCL smoke assembly is zero, non-finite or has the wrong shape")
+        raise ComputationFailed("OpenCL smoke assembly is zero, non-finite or has the wrong shape")
     matrix_error = float(np.linalg.norm(matrix - reference) / np.linalg.norm(reference))
     rhs = np.arange(1, 9, dtype=np.float32)
-    solution = np.linalg.solve(matrix, rhs)
+    try:
+        solution = np.linalg.solve(matrix, rhs)
+    except np.linalg.LinAlgError as exc:
+        raise ComputationFailed("OpenCL smoke assembly is singular") from exc
     expected = np.linalg.solve(reference, rhs)
     solve_error = float(np.linalg.norm(solution - expected) / np.linalg.norm(expected))
     # Single precision across vendor kernels, comfortably below audible error.
     if not np.all(np.isfinite(solution)) or matrix_error > 2e-4 or solve_error > 5e-4:
-        raise RuntimeError(f"OpenCL smoke disagrees with numba: matrix={matrix_error:.3g}, solve={solve_error:.3g}")
+        raise ComputationFailed(f"OpenCL smoke disagrees with numba: matrix={matrix_error:.3g}, solve={solve_error:.3g}")
     return {"matrix_relative_error": matrix_error, "solve_relative_error": solve_error}
 
 
@@ -269,8 +278,8 @@ def owned_qualification(owner: threading.Event, function: Any, *args: Any, **kwa
 
 
 class _ProbeHandle:
-    def __init__(self, child: Any, reader: Any, events: Any) -> None:
-        self.child, self.reader, self.events = child, reader, events
+    def __init__(self, child: Any, readers: Any, events: Any) -> None:
+        self.child, self.readers, self.events = child, readers, events
         self.lock = threading.Lock()
         self.closed = False
 
@@ -289,10 +298,12 @@ class _ProbeHandle:
                     self.child.kill()
             # Always reap, even if poll/terminate already observed an exit.
             self.child.wait(timeout=1.5)
-            self.reader.join(timeout=1.0)
-            if self.reader.is_alive():
-                raise RuntimeError("OpenCL probe reader did not stop")
+            for reader in self.readers:
+                reader.join(timeout=1.0)
+                if reader.is_alive():
+                    raise RuntimeError("OpenCL probe reader did not stop")
             self.child.stdout.close()
+            self.child.stderr.close()
             self.closed = True
 
 
@@ -310,42 +321,84 @@ def shutdown_qualification(owner: threading.Event) -> None:
 
 
 def _read_probe_output(stream: Any, events: Any) -> None:
-    """Drain the merged pipe on every OS; discard logs rather than buffer them.
+    """Timestamp only complete stdout READY lines, without trimming prefixes.
 
-    Timestamp READY in the reader, so parent scheduling delay cannot extend
-    the compute deadline. EOF is also timestamped to detect late results.
+    Read bounded pieces and discard library logs, including oversized lines.
+    EOF is timestamped too, so late completion cannot extend the deadline.
     """
+    partial = False
     try:
-        for line in stream:
-            line = line.strip()
-            if line == _READY_MARKER or line.startswith(_RESULT_PREFIX):
-                events.put((line, time.monotonic()))
+        while line := stream.readline(4096):
+            complete = line.endswith("\n")
+            if complete and not partial and line.rstrip("\r\n") == _READY_MARKER:
+                events.put((_READY_MARKER, time.monotonic()))
+            partial = not complete
     finally:
         events.put((None, time.monotonic()))
 
 
+def _read_probe_stderr(stream: Any, tail: list[str]) -> None:
+    """Continuously drain stderr on Windows/POSIX; retain at most 4 KB."""
+    while chunk := stream.read(1024):
+        tail[0] = (tail[0] + chunk)[-4096:]
+
+
+def _validate_probe_result(result: Any, mode: str) -> None:
+    if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+        raise ValueError("Invalid probe response")
+    if result["ok"]:
+        if mode == "inventory":
+            devices = result.get("devices")
+            if not isinstance(devices, list) or any(
+                not isinstance(device, dict)
+                or device.get("type") not in {"cpu", "gpu"}
+                or any(type(device.get(key)) is not int or device[key] < 0
+                       for key in ("platform_index", "device_index"))
+                or any(not isinstance(device.get(key), str)
+                       for key in ("platform", "name", "vendor"))
+                for device in devices
+            ):
+                raise ValueError("Invalid inventory response")
+        elif not isinstance(result.get("smoke"), dict):
+            raise ValueError("Invalid smoke response")
+    elif (result.get("opencl_unavailable_reason") not in OPENCL_UNAVAILABLE_REASONS
+          or not isinstance(result.get("reason"), str)):
+        raise ValueError("Invalid failure response")
+
+
 def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
-    child = reader = handle = None
+    # Parent-only import: the standalone native child never allocates a channel.
+    from server.platform.temp_session import temporary_directory_root
+
+    handle = None
     ready_at = None
     began = time.monotonic()
     deadline = min(began + SPAWN_IMPORT_SECONDS, _attempt_deadline.get())
     phase = "spawn/import"
-    result = None
+    response = None
+    stderr_tail = [""]
+    channel = None
     try:
-        # One continuously drained pipe avoids stdout/stderr backpressure and
-        # Windows select() limitations. No native work runs in the reader.
+        channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=temporary_directory_root())
+        result_path = Path(channel.name) / "result.json"
+        # Independent readers avoid backpressure on both pipes, on every OS.
+        # The result travels through an atomic file, never through library logs.
         with _probe_lock:
             _check_cancelled()
             child = subprocess.Popen(
-                [sys.executable, str(Path(__file__).resolve()), mode, json.dumps(device)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                env={**os.environ, "NUMBA_DISABLE_JIT": "1"},
+                [sys.executable, str(Path(__file__).resolve()), mode, json.dumps(device), str(result_path)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
+                env={**os.environ, "NUMBA_DISABLE_JIT": "1", "PYOPENCL_COMPILER_OUTPUT": "0"},
             )
             events = queue.Queue()
-            reader = threading.Thread(target=_read_probe_output, args=(child.stdout, events), daemon=True)
-            reader.start()
-            handle = _ProbeHandle(child, reader, events)
+            readers = [
+                threading.Thread(target=_read_probe_output, args=(child.stdout, events), daemon=True),
+                threading.Thread(target=_read_probe_stderr, args=(child.stderr, stderr_tail), daemon=True),
+            ]
+            handle = _ProbeHandle(child, readers, events)
             _active_probes[handle] = _probe_owner.get()
+            for reader in readers:
+                reader.start()
         while True:
             remaining = deadline - time.monotonic()
             try:
@@ -361,38 +414,55 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
                 phase = "compute"
             elif line is None:
                 child.wait(timeout=max(0.001, deadline - time.monotonic()))
-                if child.returncode or result is None:
-                    raise ValueError("Child exited without a successful protocol response")
+                if child.returncode:
+                    raise ValueError(f"Child exited with status {child.returncode}")
+                result = json.loads(result_path.read_text(encoding="utf-8"))
+                _validate_probe_result(result, mode)
                 # Engine import failures may precede READY; successful native
                 # work must always have a READY marker.
-                if ready_at is None and result.get("ok"):
+                if ready_at is None and (result["ok"] or result.get("opencl_unavailable_reason") in {
+                    "smoke_test_failed", "pocl_windows",
+                }):
                     raise ValueError("Missing ready marker")
-                return {**result, "_active_seconds": 0.0 if ready_at is None else observed_at - ready_at}
-            elif line.startswith(_RESULT_PREFIX):
-                result = json.loads(line[len(_RESULT_PREFIX):])
-                if not isinstance(result, dict):
-                    raise ValueError("Invalid probe response")
+                response = {**result, "_active_seconds": 0.0 if ready_at is None else observed_at - ready_at}
+                return response
     except subprocess.TimeoutExpired:
         limit = SPAWN_IMPORT_SECONDS if ready_at is None else timeout
-        return {"ok": False, "opencl_unavailable_reason": "inventory_timeout" if mode == "inventory" else "smoke_test_timeout", "reason": f"OpenCL {mode} {phase} timed out after {limit:.1f}s",
-                "_active_seconds": 0.0 if ready_at is None else timeout}
-    except (OSError, ValueError) as exc:
-        return {"ok": False, "opencl_unavailable_reason": "no_device" if mode == "inventory" else "smoke_test_failed", "reason": f"OpenCL {mode} probe failed: {type(exc).__name__}",
-                "_active_seconds": 0.0 if ready_at is None else min(timeout, time.monotonic() - ready_at)}
+        response = {"ok": False, "opencl_unavailable_reason": "inventory_timeout" if mode == "inventory" else "smoke_test_timeout", "reason": f"OpenCL {mode} {phase} timed out after {limit:.1f}s.",
+                    "_active_seconds": 0.0 if ready_at is None else timeout}
+        return response
+    except ProbeCancelled:
+        raise
+    except Exception as exc:
+        response = {"ok": False, "opencl_unavailable_reason": "probe_error", "reason": f"WG's OpenCL {mode} check could not complete (internal error: {type(exc).__name__}).",
+                    "_active_seconds": 0.0 if ready_at is None else min(timeout, time.monotonic() - ready_at)}
+        return response
     finally:
-        if handle is not None:
-            try:
-                handle.close()
-            finally:
-                with _probe_lock:
-                    _active_probes.pop(handle, None)
+        try:
+            if handle is not None:
+                try:
+                    handle.close()
+                finally:
+                    with _probe_lock:
+                        _active_probes.pop(handle, None)
+            if response is not None:
+                if stderr_tail[0]:
+                    response["probe_stderr"] = stderr_tail[0]
+                if not response["ok"]:
+                    logging.getLogger(__name__).warning(
+                        "OpenCL %s check: %s%s", mode, response["reason"],
+                        f"\nProbe stderr: {stderr_tail[0]}" if stderr_tail[0] else "",
+                    )
+        finally:
+            if channel is not None:
+                channel.cleanup()
 
 
 def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
     if device_json in _device_verdict_cache:
         return {**_device_verdict_cache[device_json], "_active_seconds": 0.0}
     verdict = _run_probe("smoke", json.loads(device_json), timeout)
-    if verdict.get("opencl_unavailable_reason") not in TIMEOUT_REASONS:
+    if verdict.get("opencl_unavailable_reason") not in TRANSIENT_REASONS:
         _device_verdict_cache[device_json] = verdict
     return verdict
 
@@ -437,13 +507,15 @@ def _probe_devices() -> dict[str, Any]:
                     "opencl_unavailable_reason": None,
                     "reason": f"OpenCL CPU {device['vendor']} {device['name']} passed BEMPP assembly/solve smoke"}
         code = verdict.get("opencl_unavailable_reason", "smoke_test_failed")
-        if code == "smoke_test_timeout":
+        if code in TRANSIENT_REASONS:
             unavailable_reason = code
-        elif unavailable_reason != "smoke_test_timeout" and sys.platform == "win32" and any(
+        elif unavailable_reason not in TRANSIENT_REASONS and code == "smoke_test_failed" and sys.platform == "win32" and any(
             token in device["platform"].lower() for token in ("pocl", "portable computing language")
         ):
             unavailable_reason = "pocl_windows"
         failures.append(f"{device['name']}: {verdict.get('reason', 'smoke failed')}")
+        if verdict.get("probe_stderr"):
+            failures.append(f"Probe stderr: {verdict['probe_stderr']}")
     return {"ok": False, "opencl_unavailable_reason": unavailable_reason,
             "reason": "; ".join(failures)}
 
@@ -476,13 +548,13 @@ def qualified_opencl() -> dict[str, Any]:
             return dict(_last_timeout)
         verdict = _qualified_opencl()
         _check_cancelled()
-        if verdict.get("opencl_unavailable_reason") in TIMEOUT_REASONS:
+        if verdict.get("opencl_unavailable_reason") in TRANSIENT_REASONS:
             _timeout_attempts += 1
             _last_timeout = verdict
             _retry_after = time.monotonic() + RETRY_INTERVAL_SECONDS
             if _timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
-                # Stop retrying a persistently hung runtime; retain its timeout
-                # code for guidance, rather than misreporting an absent device.
+                # Bound repeated timeouts/internal errors; retain the true code
+                # rather than misreporting an absent or numerically bad device.
                 _cached_verdict = verdict
         else:
             _cached_verdict = verdict
@@ -503,22 +575,37 @@ def clear_cache() -> None:
         _bind_device.cache_clear()
 
 
-if __name__ == "__main__":
+def _child_result(mode: str, device: Mapping[str, Any] | None) -> dict[str, Any]:
     stage = "engine"
     try:
         import bempp_cl.api  # noqa: F401 - test the native engine import in the bounded child
         stage = "opencl"
         import pyopencl  # noqa: F401
-        if sys.argv[1] != "inventory":
+        if mode != "inventory":
             import numpy  # noqa: F401
             import bempp_cl.core.opencl_kernels  # noqa: F401
             import hornlab_bempp_bem.device  # noqa: F401
         print(_READY_MARKER, flush=True)
         result = {"ok": True}
-        if sys.argv[1] == "inventory":
+        if mode == "inventory":
             result["devices"] = inventory()
         else:
-            result["smoke"] = smoke_test(json.loads(sys.argv[2]))
+            result["smoke"] = smoke_test(device)
     except Exception as exc:
-        result = {"ok": False, "stage": stage, "opencl_unavailable_reason": "no_device" if sys.argv[1] == "inventory" else "smoke_test_failed", "reason": f"{type(exc).__name__}: {str(exc).splitlines()[0][:200]}"}
-    print(_RESULT_PREFIX + json.dumps(result), flush=True)
+        code = "smoke_test_failed" if isinstance(exc, ComputationFailed) else "probe_error"
+        # A missing ICD is an expected inventory result, not an internal error.
+        if mode == "inventory" and getattr(exc, "code", None) == -1001:
+            code = "no_device"  # CL_PLATFORM_NOT_FOUND_KHR
+        result = {"ok": False, "stage": stage, "opencl_unavailable_reason": code,
+                  "reason": f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else 'check failed'}"[:240]}
+    return result
+
+
+def _write_probe_result(path: Path, result: Mapping[str, Any]) -> None:
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(result), encoding="utf-8")
+    os.replace(temporary, path)
+
+
+if __name__ == "__main__":
+    _write_probe_result(Path(sys.argv[3]), _child_result(sys.argv[1], json.loads(sys.argv[2])))

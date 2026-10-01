@@ -176,7 +176,7 @@ describe('useCapabilities', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it.each(['inventory_timeout', 'smoke_test_timeout'])(
+  it.each(['inventory_timeout', 'smoke_test_timeout', 'probe_error'])(
     'polls a retryable %s until OpenCL recovers without a remount', async (reason) => {
       const retrying = { ...CAPABILITIES, engines: [{
         name: 'bempp', available: true, qualification: 'done', assembly_backend: 'numba',

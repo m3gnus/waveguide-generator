@@ -28,7 +28,7 @@ from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
 from .bempp_opencl import (
-    TIMEOUT_REASONS, clear_cache as clear_opencl_cache,
+    TRANSIENT_REASONS, clear_cache as clear_opencl_cache,
     execution_route, native_call, qualification_revision, qualified_opencl, retry_pending,
 )
 from .base import (
@@ -367,12 +367,17 @@ def validate_assembly_status(status: Mapping[str, Any]) -> None:
         raise RuntimeError("BEMPP capability disagrees with the qualified execution route")
 
 
-def numba_fallback_warning(opencl_reason: str) -> str:
+def numba_fallback_warning(opencl_reason: str, code: str | None = None) -> str:
     """Say which backend is really running and why."""
 
+    if code == "probe_error":
+        retry = " and retrying" if retry_pending() else ""
+        return ("WG's OpenCL check could not complete (internal error); "
+                f"using the slower numba engine for now{retry}.")
+    detail = opencl_reason.rstrip().rstrip(".!?")
     return (
-        "Falling back to the numba assembly backend because OpenCL is unusable: "
-        f"{opencl_reason} Until that is fixed, solves assemble on numba, which is "
+        "Falling back to the numba assembly backend because OpenCL did not qualify: "
+        f"{detail}. Until that is fixed, solves assemble on numba, which is "
         "correct but slow, and the first solve after each start spends roughly a minute "
         "compiling kernels. Stop remains prompt because WG runs native BEMPP in "
         "an isolated worker; cancelling during compilation discards that worker "
@@ -400,7 +405,7 @@ def _assembly_backend_status() -> tuple[bool, str, str | None, str | None, dict[
         missing = _missing_windows_runtime_dlls()
         remedy = f" Missing {', '.join(missing)}. {_VCREDIST_GUIDANCE}" if missing else ""
         return False, f"no assembly backend can run a solve. OpenCL: {opencl_reason} numba also failed ({_describe(exc)}).{remedy}", None, None, None, unavailable_reason
-    warning = numba_fallback_warning(opencl_reason)
+    warning = numba_fallback_warning(opencl_reason, unavailable_reason)
     return True, warning, execution_route(probe)[0], warning, None, unavailable_reason
 
 
@@ -509,7 +514,7 @@ def _cached_successful_bempp_status(revision: int) -> dict[str, Any]:
     # recover while this call is finishing an older numba status.
     status = _probe_bempp_status()
     if not status["available"] or (
-        status.get("opencl_unavailable_reason") in TIMEOUT_REASONS and retry_pending()
+        status.get("opencl_unavailable_reason") in TRANSIENT_REASONS and retry_pending()
     ):
         # numba is available during a transient timeout, but caching that
         # fallback would prevent the next qualification from selecting OpenCL.
