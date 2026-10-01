@@ -326,6 +326,15 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         raise ValueError("source.contours is not supported by the HornLab mesher preview")
 
     scale = _scale_factor(root.scale)
+    s1, s2 = getattr(root, "s1", None) or 0, getattr(root, "s2", None) or 0
+    if s1 != 0 or s2 != 0:
+        from server.design.throat_stretch import mesher_supports_stretch
+
+        if not mesher_supports_stretch():
+            raise ValueError("nonzero throat stretch s1/s2 needs mesher 0.2.4")
+    # Use the mesher's post-profile scale for active stretch: scaling its plain
+    # bounded coefficients would change their validity (s2 is inverse length).
+    profile_scale = 1.0 if s1 != 0 and s2 != 0 else scale
     # ATH treats an omitted wall thickness as 5 mm for normal simulations and
     # 0 mm for infinite-baffle simulations. Keep the document field nullable
     # for lossless CFG round-trips and apply that default only at translation.
@@ -342,7 +351,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     config: dict[str, Any] = {
         "formula": root.formula,
         "mode": mode,
-        "profile": _profile(root, scale),
+        "profile": _profile(root, profile_scale),
         "mesh": _clean(
             {
                 "angularSegments": _expr(mesh.angular_segments),
@@ -388,9 +397,9 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "morphExponent": _expr(morph.target_exponent),
                 # ATH and profile_sampling.py define absent/zero target extents
                 # as implicit extents derived from the waveguide mouth.
-                "morphWidth": _scaled_expr(morph.target_width, scale),
-                "morphHeight": _scaled_expr(morph.target_height, scale),
-                "morphCorner": _scaled_expr(morph.corner_radius, scale),
+                "morphWidth": _scaled_expr(morph.target_width, profile_scale),
+                "morphHeight": _scaled_expr(morph.target_height, profile_scale),
+                "morphCorner": _scaled_expr(morph.corner_radius, profile_scale),
                 "morphRate": _expr(morph.rate),
                 "morphFixed": _expr(morph.fixed_part),
                 "morphAllowShrinkage": _expr(morph.allow_shrinkage),
@@ -405,12 +414,28 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
             }
         ),
     }
+    if s1 != 0 and s2 != 0:
+        config["profile"].update(s1=s1, s2=s2)
+        config["scale"] = scale
+        if scale != 1.0:
+            from hornlab_mesher.config_builder import build_geometry_params
+
+            # Legacy translation leaves omitted length fields at the mesher's
+            # unscaled defaults. Preserve those radii/depths when activating
+            # stretch, rather than scaling them for the first time.
+            baseline, _, _ = build_geometry_params({
+                **config, "scale": 1.0, "profile": _profile(root, scale),
+            })
+            length_key = "L" if isinstance(root, OSSEConfig) else "R"
+            for key in ("r0", length_key):
+                if key not in config["profile"]:
+                    config["profile"][key] = baseline[key] / scale
     if isinstance(root, OSSEConfig):
         curve = root.guiding_curve
         config["gcurve"] = _clean(
             {
                 "gcurveType": _expr(curve.curve_type),
-                "gcurveWidth": _scaled_expr(curve.width, scale),
+                "gcurveWidth": _scaled_expr(curve.width, profile_scale),
                 "gcurveAspectRatio": _expr(curve.aspect_ratio),
                 "gcurveDist": _expr(curve.distance),
                 "gcurveRot": _expr(curve.rotation),
@@ -425,6 +450,19 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "gcurveSfN3": _expr(curve.sf_n3),
             }
         )
+
+    if s1 != 0 and s2 != 0:
+        from server.design.throat_stretch import text_number
+
+        # Expr retains numeric ATH spelling. Active composition keys must reach
+        # the mesher as numbers, not strings, after schema validation.
+        for key in ("slotLength", "rot", "throatExtLength", "throatExtAngle"):
+            value = config["profile"].get(key)
+            if isinstance(value, str):
+                config["profile"][key] = text_number(value)
+        for key, value in config["gcurve"].items():
+            if isinstance(value, str):
+                config["gcurve"][key] = text_number(value)
 
     if mode == "enclosure" and root.enclosure is not None:
         enclosure = root.enclosure

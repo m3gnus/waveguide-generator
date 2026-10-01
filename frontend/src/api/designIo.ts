@@ -234,6 +234,9 @@ export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocu
     throw new Error(`Unsupported design formula: ${String(unwrapped.formula)}`);
   }
   const document = merge(designForFamily(formula), unwrapped);
+  if (formula === 'OSSE' || formula === 'R-OSSE') {
+    for (const key of ['s1', 's2']) if (!(key in wire)) absent.push(key);
+  }
   document.quadrants = decodeQuadrants(document.mesh.quadrants);
   document.mesh.quadrants = Number(document.quadrants.join(''));
   document.enclosure.baffle_margin = Number(document.enclosure.space_l);

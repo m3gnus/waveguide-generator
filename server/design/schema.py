@@ -680,7 +680,47 @@ class DesignCommon(StrictModel):
     extra_blocks: dict[str, ConfigBlock] = Field(default_factory=dict)
 
 
-class OSSEConfig(DesignCommon):
+class StretchDesign(DesignCommon):
+    s1: float | None = Field(default=None, ge=0, le=10, exclude_if=lambda value: value is None)
+    s2: float | None = Field(default=None, ge=0, le=10, exclude_if=lambda value: value is None)
+
+    @field_validator("s1", "s2", mode="before")
+    @classmethod
+    def _stretch_coefficient(cls, value: Any, info: Any) -> Any:
+        from .throat_stretch import coefficient
+
+        return None if value is None else coefficient(value, info.field_name)
+
+    @model_validator(mode="after")
+    def _stretch_composition(self) -> "StretchDesign":
+        from .throat_stretch import GUIDE_COMPOSITION, PROFILE_COMPOSITION, text_number, validate_composition
+
+        params: dict[str, Any] = {"s1": self.s1 or 0, "s2": self.s2 or 0}
+        def plain(value: Expr) -> Any:
+            return text_number(value.raw) if value.raw is not None else value.value
+
+        for key, name in PROFILE_COMPOSITION.items():
+            value = getattr(self, key, None)
+            if value is not None:
+                params[name] = plain(value)
+        guide = getattr(self, "guiding_curve", None)
+        if guide is not None:
+            for key, name in GUIDE_COMPOSITION.items():
+                value = getattr(guide, key)
+                if value is not None:
+                    params[name] = plain(value)
+        # R-OSSE cannot store Rot or Length as profile fields. Imported extras
+        # still participate in refusal, even though inactive designs preserve them.
+        for name in ("Rot", "Length", *GUIDE_COMPOSITION.values()):
+            if name in self.extra_keys and name not in params:
+                params[name] = text_number(self.extra_keys[name])
+        validate_composition(params, self.formula, length_supplied="Length" in self.extra_keys)
+        if self.formula == "R-OSSE" and params["s1"] != 0 and params["s2"] != 0 and all(params.get(k, 0) != 0 for k in ("GCurve.Type", "GCurve.Width")):
+            raise ValueError("throat stretch geometry is invalid: guiding curves are only supported with formula OSSE")
+        return self
+
+
+class OSSEConfig(StretchDesign):
     formula: Literal["OSSE"]
     L: Expr | None = None
     a: Expr | None = None
@@ -698,7 +738,7 @@ class OSSEConfig(DesignCommon):
     circ_arc_term_angle: Expr | None = None
 
 
-class ROSSEConfig(DesignCommon):
+class ROSSEConfig(StretchDesign):
     formula: Literal["R-OSSE"]
     R: Expr | None = None
     a: Expr | None = None
@@ -863,6 +903,19 @@ class DesignConfig(RootModel[DesignVariant]):
         from .migrate import apply_migrations
 
         migrated, _applications = apply_migrations(value)
+        if migrated.get("formula") not in {"OSSE", "R-OSSE"}:
+            from .throat_stretch import coefficient
+
+            for key in ("s1", "s2"):
+                if key not in migrated:
+                    continue
+                number = coefficient(migrated[key], key) if migrated[key] is not None else 0
+                if number != 0:
+                    formula = migrated.get("formula")
+                    if formula == "ICW":
+                        raise ValueError("OSSE/R-OSSE shape keys are not valid with formula ICW")
+                    raise ValueError(f"formula {formula} does not accept OSSE/R-OSSE profile coefficient keys")
+                migrated.pop(key)
         return migrated
 
     @property

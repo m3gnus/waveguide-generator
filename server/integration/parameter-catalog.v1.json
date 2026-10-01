@@ -15,6 +15,64 @@
   },
   "parameters": [
     {
+      "id": "common.s1",
+      "legacy_key": "s1",
+      "path": "s1",
+      "mirror_paths": [],
+      "label": "Throat stretch amount",
+      "section": "Profile Dimensions",
+      "symbol": "s1",
+      "kind": "number",
+      "unit": "plain number",
+      "families": [
+        "R-OSSE",
+        "OSSE"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0
+      },
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 10
+      },
+      "step": 0.01,
+      "precision": 3,
+      "options": [],
+      "description": "How much extra length is added near the throat. Uses a plain number from 0 to 10; either stretch control at zero turns stretching off. Needs mesher 0.2.4."
+    },
+    {
+      "id": "common.s2",
+      "legacy_key": "s2",
+      "path": "s2",
+      "mirror_paths": [],
+      "label": "Throat stretch sharpness",
+      "section": "Profile Dimensions",
+      "symbol": "s2",
+      "kind": "number",
+      "unit": "plain number",
+      "families": [
+        "R-OSSE",
+        "OSSE"
+      ],
+      "accepts_expression": false,
+      "writable": true,
+      "default_by_family": {
+        "R-OSSE": 0,
+        "OSSE": 0
+      },
+      "editor_bounds": {
+        "minimum": 0,
+        "maximum": 10
+      },
+      "step": 0.01,
+      "precision": 3,
+      "options": [],
+      "description": "How quickly the extra length builds up near the throat. Uses a plain number from 0 to 10; larger values make the transition sharper. Per-angle expressions are not supported. Needs mesher 0.2.4."
+    },
+    {
       "id": "common.scale",
       "legacy_key": "scale",
       "path": "scale",

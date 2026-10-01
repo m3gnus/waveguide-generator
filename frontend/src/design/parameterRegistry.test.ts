@@ -210,7 +210,7 @@ describe('complete parameter registry', () => {
     for (const family of ['R-OSSE', 'OSSE'] as const) {
       const scalars = PARAMETER_REGISTRY
         .filter((item) => item.section === 'Profile Dimensions' && item.families?.includes(family) && item.id !== 'common.scale');
-      expect(scalars.map((item) => item.symbol)).toEqual(TRACEABILITY_KEYS[family].filter((key) => key !== 'scale'));
+      expect(scalars.map((item) => item.symbol)).toEqual(['s1', 's2', ...TRACEABILITY_KEYS[family].filter((key) => key !== 'scale')]);
       expect(scalars.every((item) => item.symbol === item.legacyKey), family).toBe(true);
     }
   });

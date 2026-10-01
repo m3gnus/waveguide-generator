@@ -144,6 +144,9 @@ const SUPERFORMULA_HELP: Record<'sf_a' | 'sf_b' | 'sf_m1' | 'sf_m2' | 'sf_n1' | 
 };
 
 export const PARAMETER_REGISTRY: ParameterDefinition[] = [
+  // Plain coefficients; per-azimuth expressions are not supported by the mesher.
+  number('common.s1', 's1', 's1', profile, 'Throat stretch amount', { symbol: 's1', families: osseFamilies, unit: 'plain number', min: 0, max: 10, step: .01, precision: 3, description: 'How much extra length is added near the throat. Uses a plain number from 0 to 10; either stretch control at zero turns stretching off. Needs mesher 0.2.4.' }),
+  number('common.s2', 's2', 's2', profile, 'Throat stretch sharpness', { symbol: 's2', families: osseFamilies, unit: 'plain number', min: 0, max: 10, step: .01, precision: 3, description: 'How quickly the extra length builds up near the throat. Uses a plain number from 0 to 10; larger values make the transition sharper. Per-angle expressions are not supported. Needs mesher 0.2.4.' }),
   // Complete family profile scalars.
   number('common.scale', 'scale', 'scale', profile, 'Scale', { families: allFamilies, min: .1, max: 2, step: .001, precision: 3, description: 'Shrinks or enlarges the waveguide below and above 1, taking the source radius, wall thickness and horn mesh sizes with it. Enclosure dimensions are not scaled.' }),
   number('rosse.R', 'R', 'R', profile, 'Mouth radius', { symbol: 'R', families: ['R-OSSE'], unit: 'mm', min: .1, max: 1_000, description: 'Target radius at the end of the curve. Truncation limit and morphing can both change the mouth you actually get. Accepts an expression in the azimuthal angle p, so the mouth need not be circular — for example "140 - 20*sin(p)^2".' }),
@@ -491,4 +494,12 @@ export function fieldMatchesQuery(field: ParameterDefinition, query: string): bo
 
 export function traceEntryIsRegistered(entry: { key: string; family?: DesignFamily }): boolean {
   return PARAMETER_REGISTRY.some((field) => field.legacyKey === entry.key && (!entry.family || fieldAppliesToFamily(field, entry.family)));
+}
+
+
+/** Same coefficient refusal reasons as hornlab_mesher.throat_stretch. */
+export function throatStretchError(key: 's1' | 's2', value: number): string | undefined {
+  if (Number.isFinite(value) && value < 0) return `throat stretch ${key} must not be negative, got ${value}: negative values are not supported (ATH accepts them, but they fold the profile back through the throat for all but very small magnitudes)`;
+  if (!Number.isFinite(value) || value > 10) return `throat stretch ${key} must be finite and >= 0 and <= 10, got ${value}`;
+  return undefined;
 }

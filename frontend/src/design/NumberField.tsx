@@ -22,6 +22,7 @@ interface NumberFieldProps {
   disabledReason?: string;
   invalidMessage?: string;
   validate?: (value: number) => string | undefined;
+  formatRangeError?: (value: number) => string | undefined;
   onCommit: (value: number) => void;
   optional?: boolean;
   onClear?: () => void;
@@ -49,6 +50,7 @@ export function NumberField({
   disabledReason,
   invalidMessage,
   validate,
+  formatRangeError,
   onCommit,
   optional = false,
   onClear,
@@ -98,11 +100,11 @@ export function NumberField({
    * invalid draft is reverted on blur -- their typing silently discarded.
    */
   const rangeMessage = outOfRange
-    ? Number.isFinite(min) && Number.isFinite(max)
+    ? formatRangeError?.(parsed) ?? (Number.isFinite(min) && Number.isFinite(max)
       ? `Must be between ${formatBound(min, precision)} and ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`
       : Number.isFinite(min)
         ? `Must be at least ${formatBound(min, precision)}${unit ? ` ${unit}` : ''}.`
-        : `Must be at most ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`
+        : `Must be at most ${formatBound(max, precision)}${unit ? ` ${unit}` : ''}.`)
     : undefined;
   const emptyMessage = empty && !optional ? 'This value is required.' : undefined;
   const numberMessage = !empty && !isExpression && !Number.isFinite(parsed) ? 'Enter a valid number.' : undefined;

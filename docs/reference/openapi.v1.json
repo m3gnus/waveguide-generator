@@ -6379,6 +6379,32 @@
               }
             ]
           },
+          "s1": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S1"
+          },
+          "s2": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S2"
+          },
           "scale": {
             "anyOf": [
               {
@@ -7412,6 +7438,32 @@
                 "type": "null"
               }
             ]
+          },
+          "s1": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S1"
+          },
+          "s2": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "S2"
           },
           "scale": {
             "anyOf": [

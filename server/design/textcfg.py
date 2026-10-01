@@ -109,6 +109,7 @@ class ParsedDesign:
     cadlink: CadLink | None = None
     source_text: str | None = None
     _initial_fingerprint: str = ""
+    ignored_stretch: list[IgnoredSetting] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if not self._initial_fingerprint:
@@ -138,12 +139,12 @@ class ParsedDesign:
 
         block = self.extra_blocks.get(_WG_SOLVE_BLOCK)
         if block is None:
-            return []
+            return list(self.ignored_stretch)
         return [
             _ignored_setting(key, value, why, choose)
             for key, why, choose in _MACHINE_SOLVE_ADVICE
             if (value := block.items.get(key)) is not None
-        ]
+        ] + self.ignored_stretch
 
     def semantic_data(self) -> dict[str, Any]:
         """Return the JSON/API meaning used by the corpus round-trip law."""
@@ -671,8 +672,78 @@ def _build_payload(
     *,
     dialect: Literal["mwg", "ath"],
 ) -> dict[str, Any]:
+    from .throat_stretch import coefficient, text_number, validate_composition
+
     flat = dict(flat_source)
     formula = _formula(flat, blocks)
+    # Validate every supplied occurrence, including sections ATH ignores.
+    for items in (flat, *(block.items for block in blocks.values())):
+        for key in ("s1", "s2"):
+            if key in items:
+                try:
+                    coefficient(text_number(items[key]), key)
+                except ValueError as exc:
+                    raise TextConfigError(str(exc)) from exc
+    selected = blocks[formula].items if formula in blocks else flat
+    stretch = {key: text_number(selected[key]) for key in ("s1", "s2") if key in selected}
+    active_stretch = stretch.get("s1", 0) != 0 and stretch.get("s2", 0) != 0
+    if formula in blocks and formula in {"OSSE", "R-OSSE"} and active_stretch:
+        in_block = [key for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length") if key in selected]
+        if in_block:
+            raise TextConfigError(
+                f"{', '.join(in_block)} must be top-level keys — ATH ignores them inside "
+                f"the {formula} block; move them out of the block"
+            )
+    if formula not in {"OSSE", "R-OSSE"} and any(text_number(items[key]) != 0 for items in (flat, *(block.items for block in blocks.values())) for key in ("s1", "s2") if key in items):
+        message = ("OSSE/R-OSSE shape keys are not valid with formula ICW" if formula == "ICW"
+                   else f"formula {formula} does not accept OSSE/R-OSSE profile coefficient keys")
+        raise TextConfigError(message)
+    if dialect == "ath" and formula == "OSSE" and active_stretch and not any(key in selected for key in ("L", "Length")):
+        raise TextConfigError("ATH OSSE text configs must set Length")
+    if active_stretch:
+        throat_profile = selected.get("Throat.Profile", flat.get("Throat.Profile"))
+        if throat_profile is not None and text_number(throat_profile) != 1:
+            raise TextConfigError(f"Throat.Profile = {text_number(throat_profile)} is not supported; only the OS-SE profile (1) is implemented")
+    composition = {**stretch}
+    for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"):
+        if key in flat:
+            composition[key] = text_number(flat[key])
+    # The mesher uses an OSSE-block Rot before the top-level Rot. R-OSSE
+    # top-level Rot participates in refusal even though it is not a profile field.
+    if "Rot" in selected and formula == "OSSE":
+        composition["Rot"] = text_number(selected["Rot"])
+    elif "Rot" in flat:
+        composition["Rot"] = text_number(flat["Rot"])
+    guide_items: dict[str, str] = {}
+    if active_stretch:
+        # Match the mesher's namespace and block precedence exactly.
+        for prefix in ("GCurve.", "GCURVE."):
+            guide_items.update({key[len(prefix):]: value for key, value in flat.items() if key.startswith(prefix)})
+        for name in ("GCurve", "GCURVE"):
+            if name in blocks:
+                guide_items.update(blocks[name].items)
+        for key, value in guide_items.items():
+            name = "GCurve." + key
+            if name in _OSSE_MAP:
+                composition[name] = text_number(value)
+    try:
+        validate_composition(composition, formula, length_supplied="Length" in flat)
+    except ValueError as exc:
+        raise TextConfigError(str(exc)) from exc
+    if active_stretch and formula == "R-OSSE" and all(composition.get(k, 0) != 0 for k in ("GCurve.Type", "GCurve.Width")):
+        raise TextConfigError("throat stretch geometry is invalid: guiding curves are only supported with formula OSSE")
+    # The mesher maps aliases in this order, regardless of their source order.
+    profile_aliases = (
+        ("r0", "r0"), ("a", "a"), ("Coverage.Angle", "a"),
+        ("a0", "a0"), ("Throat.Angle", "a0"),
+        ("k", "k"), ("OS.k", "k"), ("Term.k", "k"), ("q", "q"), ("Term.q", "q"),
+    )
+    if formula == "OSSE":
+        profile_aliases += (
+            ("L", "L"), ("Length", "L"), ("n", "n"), ("Term.n", "n"),
+            ("s", "s"), ("Term.s", "s"), ("h", "h"), ("OS.h", "h"), ("Rot", "rotation"),
+        )
+    active_aliases = dict(profile_aliases) if active_stretch else {}
     consumed_blocks = _legacy_sections(flat, blocks)
     consumed_blocks.add("CadLink")
     consumed_keys: set[str] = set()
@@ -688,8 +759,28 @@ def _build_payload(
             for key, value in formula_block.items.items():
                 if key == "Scale":
                     payload["scale"] = value
+                elif key in ("s1", "s2"):
+                    if formula in {"OSSE", "R-OSSE"}:
+                        payload[key] = text_number(value)
+                elif active_stretch and key in active_aliases:
+                    payload[active_aliases[key]] = value
+                elif formula in {"OSSE", "R-OSSE"} and key == "Throat.Diameter":
+                    if "r0" not in formula_block.items:
+                        payload["r0"] = _numeric_or_expression_divide_by_two(value)
+                elif formula == "OSSE" and key == "Term.k":
+                    payload["k"] = value
+                elif formula == "OSSE" and key in _OSSE_MAP:
+                    _put(payload, _OSSE_MAP[key], value)
                 else:
                     payload[key] = value
+
+    if active_stretch:
+        for key, target in profile_aliases:
+            if key in selected:
+                payload[target] = selected[key]
+    if formula in {"OSSE", "R-OSSE"}:
+        payload.update(stretch)
+    consumed_keys.update(key for key in ("s1", "s2") if key in flat)
 
     for key, path in _COMMON_MAP.items():
         if key in flat:
@@ -699,9 +790,15 @@ def _build_payload(
     if formula == "OSSE":
         for key, path in _OSSE_MAP.items():
             if key in flat:
-                _put(payload, path, flat[key])
+                # A populated ATH OSSE block owns the formula parameters;
+                # Rot alone has the mesher's explicit top-level fallback.
+                block = blocks.get("OSSE")
+                if not block or not block.items or not active_stretch or key.startswith("GCurve.") or key.startswith("CircArc.") or (key == "Throat.Profile" and key not in block.items):
+                    _put(payload, path, flat[key])
+                elif key == "Rot" and "Rot" not in block.items:
+                    _put(payload, path, flat[key])
                 consumed_keys.add(key)
-        if "Throat.Diameter" in flat:
+        if "Throat.Diameter" in flat and (not active_stretch or (formula not in blocks and "r0" not in selected)):
             payload["r0"] = _numeric_or_expression_divide_by_two(flat["Throat.Diameter"])
             consumed_keys.add("Throat.Diameter")
         if dialect == "ath":
@@ -724,6 +821,14 @@ def _build_payload(
         # mouth out of plane, which an infinite-baffle build rejects outright.
         # hornlab_mesher.config_parser stamps the same mode on its ATH path.
         payload.setdefault("length_mode", "total")
+
+    if active_stretch and formula == "OSSE":
+        for key, value in guide_items.items():
+            name = "GCurve." + key
+            if name in _OSSE_MAP:
+                _put(payload, _OSSE_MAP[name], value)
+        consumed_blocks.update(name for name in ("GCurve", "GCURVE") if name in blocks)
+        consumed_keys.update(key for key in flat if key.startswith(("GCurve.", "GCURVE.")))
 
     enclosure = _enclosure(blocks)
     if enclosure is not None:
@@ -797,6 +902,16 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         raw_values=raw_values,
         cadlink=cadlink,
         source_text=text,
+        ignored_stretch=[
+            IgnoredSetting(
+                key=f"{name}.{key}" if name else key,
+                value=value,
+                note=f"ATH reads {key} from the {design.formula} profile section. This value is ignored; move it into that section to use it.",
+            )
+            for name, items in [("", flat), *((name, block.items) for name, block in blocks.items())]
+            for key, value in items.items()
+            if key in {"s1", "s2"} and ((name == "" and design.formula in blocks) or (name != "" and name != design.formula))
+        ],
     )
 
 
@@ -993,7 +1108,7 @@ def _serialize_canonical(
         _block(
             lines,
             "R-OSSE",
-            [(key, getattr(config, key)) for key in ("R", "a", "a0", "b", "k", "m", "q", "r", "r0", "tmax")],
+            [(key, getattr(config, key)) for key in ("R", "a", "a0", "b", "k", "m", "q", "r", "r0", "tmax", "s1", "s2")],
             emit_empty=True,
         )
     elif isinstance(config, ICWConfig):
@@ -1023,7 +1138,16 @@ def _serialize_canonical(
             emit_empty=True,
         )
     elif isinstance(config, OSSEConfig):
-        _block(lines, "OSSE", [], emit_empty=True)
+        # Keep old files byte-identical when stretch is absent. For stretch,
+        # ATH reads coefficients and formula scalars from the OSSE block.
+        stretch_items = []
+        if config.s1 is not None or config.s2 is not None:
+            stretch_items = [(key, getattr(config, path)) for key, path in (
+                ("L", "L"), ("a", "a"), ("a0", "a0"), ("r0", "r0"),
+                ("k", "k"), ("s", "s"), ("n", "n"), ("q", "q"), ("h", "h"),
+                ("Rot", "rotation"), ("s1", "s1"), ("s2", "s2"),
+            )]
+        _block(lines, "OSSE", stretch_items, emit_empty=True)
         _line(lines, "Throat.Profile", config.throat_profile)
         _line(lines, "Throat.Ext.Angle", config.throat_ext_angle)
         _line(lines, "Throat.Ext.Length", config.throat_ext_length)

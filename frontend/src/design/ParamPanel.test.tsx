@@ -143,6 +143,39 @@ describe('ParamPanel inventory UX', () => {
     vi.unstubAllGlobals();
   });
 
+  it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {
+    const stretchRow = () => host.querySelector<HTMLElement>('[data-parameter-id="common.s1"]');
+    expect(stretchRow()).not.toBeNull();
+    const input = stretchRow()!.querySelector<HTMLInputElement>('input')!;
+    const revision = useDesignStore.getState().designRevision;
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '0.45');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(useDesignStore.getState().design.s1).toBe(.45);
+    expect(useDesignStore.getState().designRevision).toBeGreaterThan(revision);
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '-1');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(stretchRow()!.textContent).toContain('throat stretch s1 must not be negative');
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(useDesignStore.getState().design.s1).toBe(.45);
+    for (const family of ['OSSE', 'R-OSSE'] as const) {
+      act(() => useDesignStore.getState().setFamily(family));
+      expect(stretchRow()).not.toBeNull();
+      expect(host.querySelector('[data-parameter-id="common.s2"]')).not.toBeNull();
+    }
+    for (const family of ['ICW', 'FREEFORM'] as const) {
+      act(() => useDesignStore.getState().setFamily(family));
+      expect(stretchRow()).toBeNull();
+      expect(host.querySelector('[data-parameter-id="common.s2"]')).toBeNull();
+    }
+  });
+
   it('does not apply a FREEFORM conversion after the user cancels it', async () => {
     const originalFormula = useDesignStore.getState().design.formula;
     let resolveConversion!: (response: Response) => void;

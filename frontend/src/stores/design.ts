@@ -56,6 +56,8 @@ export interface CornerGrid {
  */
 export interface DesignDocument {
   formula: DesignFamily;
+  s1?: number;
+  s2?: number;
   scale: number;
   throat_ext_angle: number;
   throat_ext_length: number;
@@ -225,7 +227,7 @@ const common = {
 };
 
 export const seedDesign: DesignDocument = {
-  formula: 'R-OSSE', R: 140, r0: 12.7, a0: 15.5, a: 25, k: 2,
+  formula: 'R-OSSE', s1: 0, s2: 0, R: 140, r0: 12.7, a0: 15.5, a: 25, k: 2,
   m: .85, b: .2, r: .4, q: 3.4, tmax: 1,
   ...structuredClone(common),
 };
@@ -235,7 +237,7 @@ export function designForFamily(family: DesignFamily): DesignDocument {
   if (family === 'R-OSSE') return { ...structuredClone(seedDesign), formula: family };
   if (family === 'OSSE') {
     return {
-      formula: family, L: 130, a: 45, a0: 10, r0: 12.7, k: 7, s: .85,
+      formula: family, s1: 0, s2: 0, L: 130, a: 45, a0: 10, r0: 12.7, k: 7, s: .85,
       n: 4, q: .991, h: 0, throat_profile: 1, rotation: 0,
       circ_arc_radius: 0, circ_arc_term_angle: 1, ...shared,
     };
@@ -267,10 +269,10 @@ export function designForFamily(family: DesignFamily): DesignDocument {
 
 const FAMILY_SPECIFIC_FIELDS = {
   OSSE: [
-    'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h', 'throat_profile',
+    'L', 'a', 'a0', 'r0', 'k', 's', 'n', 'q', 'h', 's1', 's2', 'throat_profile',
     'rotation', 'guiding_curve', 'circ_arc_radius', 'circ_arc_term_angle',
   ],
-  'R-OSSE': ['R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
+  'R-OSSE': ['s1', 's2', 'R', 'a', 'a0', 'r0', 'k', 'm', 'b', 'r', 'q', 'tmax'],
   ICW: [
     'R', 'L', 'r0', 'a0', 'a', 'k', 'q', 'coverage_angle', 'hold_start',
     'hold_end', 'n_coeff', 'termination', 'theta1_deg', 'depth', 'curl',
@@ -504,6 +506,12 @@ export function mergeDesignForFamily(current: DesignDocument, family: DesignFami
 
   const next = { ...designForFamily(family), ...shared, formula: family } as DesignDocument;
   applyCompatibleFamilyValues(next, compatible);
+  if (['OSSE', 'R-OSSE'].includes(current.formula) && ['OSSE', 'R-OSSE'].includes(family)) {
+    for (const key of ['s1', 's2'] as const) {
+      if (current[key] !== undefined) next[key] = current[key];
+      if (pathIsAbsent(current, key)) next._absent = [...(next._absent ?? []), key];
+    }
+  }
   return next;
 }
 

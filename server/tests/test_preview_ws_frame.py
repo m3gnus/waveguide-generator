@@ -187,3 +187,60 @@ def test_real_mesher_dimensions_pass_through_preview_frame_unchanged() -> None:
             geometry, epoch=7, seq=11, design_revision=19, lod=lod, eval_ms=4.2,
         ))
         assert header["previewMetadata"] == geometry.metadata
+
+
+@pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])
+def test_real_mesher_throat_stretch_passes_through_preview_frame(formula) -> None:
+    from server.design.throat_stretch import mesher_supports_stretch
+
+    if not mesher_supports_stretch():
+        pytest.skip("Pinned mesher 0.2.3 has no C4 throat stretch; runs after the mesher pin moves")
+    from hornlab_mesher.config_builder import build_geometry_params
+    from hornlab_mesher.profile_formulas import calculate_osse_curve, calculate_rosse_curve
+
+    payload = {"formula": formula, "s1": .45, "s2": .2, "scale": 1.037,
+               "L" if formula == "OSSE" else "R": 130,
+               "a": 40, "a0": 10, "r0": 12.7, "k": 1,
+               "mesh": {"wall_thickness": 0}, "source": {"shape": 2}}
+    config = design_to_mesher_config(DesignConfig.model_validate(payload))
+    zero_config = design_to_mesher_config(DesignConfig.model_validate({**payload, "s1": 0, "s2": 0}))
+    # Pin the degree convention independently of WG's translator.
+    params, _, _ = build_geometry_params(config)
+    stations = np.linspace(0, 130 if formula == "OSSE" else 1, 33)
+    evaluator = calculate_osse_curve if formula == "OSSE" else calculate_rosse_curve
+    x0, r0 = evaluator(stations, 0, {**params, "s1": 0, "s2": 0})
+    x, r = evaluator(stations, 0, params)
+    np.testing.assert_array_equal(r, r0)
+    np.testing.assert_allclose(x, x0 + .45 * np.degrees(np.arctan(.2 * x0)), rtol=0, atol=1e-12)
+    for lod in ("coarse", "fine"):
+        geometry = build_preview_geometry(config, preview_options(lod))
+        zero = build_preview_geometry(zero_config, preview_options(lod))
+        inner = next(s for s in geometry.surfaces if s.role == "horn.inner")
+        inner_zero = next(s for s in zero.surfaces if s.role == "horn.inner")
+        assert np.max(inner.positions.reshape(-1, 3)[:, 2]) > np.max(inner_zero.positions.reshape(-1, 3)[:, 2])
+        header, arrays = decode(encode_preview_geometry(
+            geometry, epoch=7, seq=11, design_revision=19, lod=lod, eval_ms=4.2,
+        ))
+        assert header["designRevision"] == 19
+        assert header["previewMetadata"] == geometry.metadata
+        horn = next(surface for surface in header["surfaces"] if surface["role"] == "horn.inner")
+        np.testing.assert_array_equal(arrays[horn["positions"]], inner.positions.astype("<f4").reshape(-1, 3))
+
+
+@pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])
+def test_real_mesher_zero_stretch_is_byte_identical(formula) -> None:
+    payload = {"formula": formula, "L" if formula == "OSSE" else "R": 130,
+               "a": 40, "a0": 10, "r0": 12.7, "k": 1, "mesh": {"wall_thickness": 0}}
+    frames = []
+    for design in (payload, {**payload, "s1": 0, "s2": 0}):
+        config = design_to_mesher_config(DesignConfig.model_validate(design))
+        geometry = build_preview_geometry(config, preview_options("coarse"))
+        frames.append(encode_preview_geometry(geometry, epoch=7, seq=11,
+                      design_revision=19, lod="coarse", eval_ms=4.2))
+    # Runtime timing metadata is allowed to differ; every geometry buffer must
+    # remain byte-identical, including normals, indices and curvature.
+    _, absent = decode(frames[0])
+    _, zero = decode(frames[1])
+    assert absent.keys() == zero.keys()
+    for key in absent:
+        assert absent[key].tobytes() == zero[key].tobytes()

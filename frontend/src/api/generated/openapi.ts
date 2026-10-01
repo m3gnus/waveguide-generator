@@ -3970,6 +3970,10 @@ export interface components {
             r0?: components["schemas"]["Expr"] | null;
             rotation?: components["schemas"]["Expr"] | null;
             s?: components["schemas"]["Expr"] | null;
+            /** S1 */
+            s1?: number | null;
+            /** S2 */
+            s2?: number | null;
             scale?: components["schemas"]["Expr"] | null;
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
@@ -4310,6 +4314,10 @@ export interface components {
             q?: components["schemas"]["Expr"] | null;
             r?: components["schemas"]["Expr"] | null;
             r0?: components["schemas"]["Expr"] | null;
+            /** S1 */
+            s1?: number | null;
+            /** S2 */
+            s2?: number | null;
             scale?: components["schemas"]["Expr"] | null;
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
