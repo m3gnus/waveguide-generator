@@ -14,8 +14,8 @@ workflow, repository write access that can edit `release.yml`, or theft of the s
 The Environment below narrows that: a workflow change alone cannot sign, because the
 signing job waits for a reviewer.
 
-Until step 3 is done the embedded key is an all-zero placeholder. Verification then
-refuses everything, and the release workflow's signing job refuses to sign.
+Step 3 is done: the real public key is embedded (2026-10-01). With the all-zero
+placeholder key, verification refuses everything and the signing job refuses to sign.
 
 ## One-time setup
 
