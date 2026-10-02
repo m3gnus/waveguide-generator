@@ -71,4 +71,21 @@ def test_the_default_installer_sample_keeps_every_function_and_both_ends() -> No
     assert conftest._spread(1, 2) == {0}
     assert conftest._spread(40, 2) == {0, 39}
     assert conftest._spread(3, 3) == {0, 1, 2}
+    assert conftest._spread(5, 1) == {4}
     assert conftest.INSTALLER_DEFAULT_CASES >= 2
+
+
+def test_hosted_macos_runs_one_case_per_installer_function(monkeypatch) -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("scripts_tests_conftest", ROOT / "scripts" / "tests" / "conftest.py")
+    conftest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(conftest)
+    monkeypatch.setattr(conftest.sys, "platform", "darwin")
+    monkeypatch.setenv("CI", "true")
+    assert conftest._installer_cases_per_function() == conftest.INSTALLER_HOSTED_MACOS_CASES == 1
+    monkeypatch.setattr(conftest.sys, "platform", "linux")
+    assert conftest._installer_cases_per_function() == conftest.INSTALLER_DEFAULT_CASES
+    monkeypatch.delenv("CI")
+    monkeypatch.setattr(conftest.sys, "platform", "darwin")
+    assert conftest._installer_cases_per_function() == conftest.INSTALLER_DEFAULT_CASES

@@ -25,6 +25,7 @@ with the variable already set keeps their value.
 """
 
 import os
+import sys
 
 os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
 
@@ -43,12 +44,36 @@ INSTALLER_TEST_FILES = frozenset({
     "test_dmg_install_update.py",
 })
 INSTALLER_DEFAULT_CASES = 2
+#: Hosted macOS runners run these about 3x slower than a developer Mac
+#: (measured 2026-10-02: the 2-case sample took ~17.6 min there and the
+#: harness job hit its 25-minute limit). There, one case per function,
+#: preferring the macOS variant; the Linux script runs natively on the
+#: ubuntu harness, and every case runs in installer-stress.yml.
+INSTALLER_HOSTED_MACOS_CASES = 1
+
+
+def _installer_cases_per_function() -> int:
+    if os.environ.get("CI") == "true" and sys.platform == "darwin":
+        return INSTALLER_HOSTED_MACOS_CASES
+    return INSTALLER_DEFAULT_CASES
 
 
 def _spread(count: int, keep: int) -> set[int]:
     if count <= keep:
         return set(range(count))
+    if keep == 1:
+        return {count - 1}
     return {round(index * (count - 1) / (keep - 1)) for index in range(keep)}
+
+
+def _always_skipped(item) -> bool:
+    """A case a skipif mark already decided to skip on this host (for example
+    a macOS-only parametrisation on Linux): never worth one of the slots."""
+
+    for mark in item.iter_markers("skipif"):
+        if mark.args and mark.args[0] is True:
+            return True
+    return False
 
 
 def pytest_collection_modifyitems(config, items):
@@ -56,14 +81,19 @@ def pytest_collection_modifyitems(config, items):
         # WG_INSTALLER_ALL_CASES: every case at default counts (the mutation
         # runner selects specific cases and must not lose them to sampling).
         return
+    keep = _installer_cases_per_function()
     groups: dict[tuple[str, str], list] = {}
     for item in items:
         if item.path.name in INSTALLER_TEST_FILES and hasattr(item, "callspec"):
             groups.setdefault((item.path.name, item.originalname), []).append(item)
     dropped = []
     for group in groups.values():
-        keep = _spread(len(group), INSTALLER_DEFAULT_CASES)
-        dropped.extend(item for index, item in enumerate(group) if index not in keep)
+        runnable = [item for item in group if not _always_skipped(item)] or group
+        if keep == 1:
+            mac = [item for item in runnable if "macos" in item.callspec.id.split("-")]
+            runnable = mac or runnable
+        chosen = {id(runnable[index]) for index in _spread(len(runnable), keep)}
+        dropped.extend(item for item in group if id(item) not in chosen)
     if dropped:
         drop = set(map(id, dropped))
         items[:] = [item for item in items if id(item) not in drop]
