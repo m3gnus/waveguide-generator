@@ -43,7 +43,7 @@ step, and its constraints come from where it runs:
   left is instantiating the CPU project and the 1 kHz probe.
 
   Availability is not preference. ``registry.full3d_engine_order`` still leaves
-  macOS on the base order, so AUTO keeps choosing Metal and then BEMPP there;
+  macOS on the base order, so AUTO keeps choosing Metal first, then eligible BEAT engines and BEMPP;
   this only decides whether the row can be chosen at all.
 * **It runs on a GPU host too, as long as the pinned package records readiness
   per backend.** It used to stop as soon as ``nvidia-smi`` found a card, and

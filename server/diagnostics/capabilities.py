@@ -48,7 +48,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
         engine["opencl_retry_pending"] = info.name == "bempp" and retry_pending()
     available = {item["name"] for item in engines if item.get("available") is True}
     # The planner's own order, asked for the same way it asks: the preference
-    # between BEMPP and BEAT's CPU path is platform-dependent, and an interface
+    # puts ready BEAT CPU ahead of BEMPP on every platform. An interface
     # that advertised a different one from the one AUTO follows would be worse
     # than no order at all.
     order = full3d_engine_order()

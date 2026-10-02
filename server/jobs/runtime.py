@@ -1547,7 +1547,7 @@ async def resolve_imported_submission(
     the contract, as ``mountings`` is for a ground plane -- never because of its
     name. Metal and BEAT's CPU backend declare it, so AUTO takes Metal where
     Metal runs and otherwise walks the same order ``resolve_auto_engine`` walks
-    for a parametric design.
+    for a parametric design: ready BEAT CPU precedes BEMPP, including in Fast.
 
     Declaring imported geometry is not the whole test, because a return can ask
     for something a declaring engine still cannot do. A candidate must also:
@@ -1803,7 +1803,8 @@ async def plan_imported_submission(
     ``resolve_imported_submission`` walks -- and the request itself is then
     resolved exactly as a submission would be, so the enabled entries, the
     reasons beside the disabled ones and the engine a Solve would run on come
-    from one capability. Reads only; never allocates or persists a job.
+    from one capability, with ready BEAT CPU before BEMPP in Fast too.
+    Reads only; never allocates or persists a job.
     """
 
     if not isinstance(request.geometry, ImportedGeometrySource):

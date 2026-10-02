@@ -164,25 +164,21 @@ so a missing driver or an uninstalled runtime says so instead of vanishing.
 **BEAT · CPU needs a runtime, and says so until it has one.** It runs on a
 private Julia runtime that has to be downloaded, instantiated, and then proved
 by actually solving a 1 kHz test frequency; only after that does the engine
-report itself available. On Windows and Linux, a machine with no supported GPU
-prepares that runtime for you. Source installations prepare it during setup;
-the packaged application prepares it in the background on its first launch.
-The engine becomes selectable when preparation finishes, without restarting.
-Until then its row reports progress or a failure, and other engines remain usable.
-Nothing is downloaded on a machine that has a GPU BEAT can use instead, and
-`WG2_SKIP_BEAT_CPU_PROVISION=1` switches the whole thing off.
+report itself available. Source installations prepare it during setup; the
+packaged application prepares it in the background on its first launch on
+Windows, Linux and macOS, including GPU hosts when readiness is recorded per
+backend. The engine becomes selectable when preparation finishes, without
+restarting. On CPU-only computers, while preparation is pending or has failed,
+AUTO uses BEMPP if it is ready. The BEAT row keeps its progress or failure reason.
+`WG2_SKIP_BEAT_CPU_PROVISION=1` switches preparation off.
 
-On Apple Silicon, Metal, BEAT · Metal and BEMPP can all run, and AUTO picks
-Metal because it is measurably faster on this hardware; the BEAT engines are
-there when you want them. macOS does not prepare a BEAT · CPU runtime, so that
-row stays unavailable there until you provision one yourself, and AUTO prefers
-BEMPP as the CPU route.
+On Apple Silicon, AUTO prefers Metal. AUTO walks the same order on every
+platform: Metal, then the BEAT GPU engines, then BEAT · CPU, then BEMPP.
+BEAT · CPU is the fastest measured CPU engine after the 0.3.4 SIMD work.
+BEMPP remains the fallback when BEAT · CPU is unavailable or refuses the
+request, and the CPU engine for infinite baffle.
 
-AUTO walks the same order on every platform: Metal, then the BEAT GPU engines,
-then BEMPP, then BEAT · CPU. So on Windows and Linux, once no GPU engine is
-available, AUTO takes BEMPP ahead of a provisioned BEAT · CPU, because BEMPP is
-the faster CPU engine over a full wide-band sweep. BEMPP prefers a CPU OpenCL
-runtime whose device passes a real assembly/solve smoke test. It never uses
+BEMPP prefers a CPU OpenCL runtime whose device passes a real assembly/solve smoke test. It never uses
 GPU OpenCL devices. CPU vendor does not decide eligibility: Intel's CPU runtime
 can work on AMD CPUs too, and PoCL on Linux is another CPU runtime. Enumeration
 alone does not qualify a device; zero, incorrect or timed-out compute probes
@@ -216,11 +212,12 @@ guidance.
 
 Imported CAD geometry follows the same order with two differences: AUTO does
 not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
-Accurate), and BEMPP offers it only where it assembles on OpenCL. On such a
-machine AUTO takes BEMPP ahead of BEAT · CPU for a CAD return too, although
-BEMPP's imported path is not yet qualified against Metal; BEAT · CPU's is. Without a compute-qualified OpenCL device, AUTO passes BEMPP over for imported geometry
-and takes BEAT · CPU, which it can only reach on a machine where that 1 kHz
-solve has already run. Choosing an engine yourself always overrides AUTO: an
+Accurate), and BEMPP offers it only where it assembles on OpenCL. AUTO prefers
+ready BEAT · CPU, then a compatible BEMPP with compute-qualified CPU OpenCL,
+for a CAD return too. BEAT · CPU is available only after its provisioning probe
+has succeeded. BEMPP's numba route remains unavailable for imported geometry.
+BEAT · CPU's imported path is qualified against Metal; BEMPP's is not yet.
+Choosing an engine yourself always overrides AUTO: an
 explicit BEMPP stays BEMPP, an explicit BEAT · CPU stays BEAT · CPU, and an
 explicit BEAT · Metal stays BEAT · Metal, in Fast as well as Accurate. BEAT ·
 CUDA and BEAT · ROCm take a CAD return only in Accurate; picking one in Fast is

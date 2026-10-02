@@ -503,7 +503,7 @@ def test_auto_resolution_prefers_metal_then_beat_gpus(monkeypatch) -> None:
 
     The accelerator half of the order is the same everywhere, and Metal leading
     on a Mac is measured rather than assumed. Which CPU engine follows them is
-    platform-dependent and is the next test.
+    platform-independent and is the next test.
     """
 
     _pin_platform(monkeypatch, "Darwin")
@@ -528,8 +528,8 @@ def test_auto_resolution_prefers_metal_then_beat_gpus(monkeypatch) -> None:
     assert registry.get_engine("beat-cuda", capabilities=gpu_windows) is not None
 
 
-def test_bempp_leads_beat_cpu_on_every_platform(monkeypatch) -> None:
-    """Availability is not preference, and the measured sweep decides AUTO."""
+def test_beat_cpu_leads_bempp_on_every_platform(monkeypatch) -> None:
+    """The SIMD CPU preference applies wherever the runtime is ready."""
 
     cpu_only = [
         _info("metal", False),
@@ -539,14 +539,14 @@ def test_bempp_leads_beat_cpu_on_every_platform(monkeypatch) -> None:
     ]
     for system in ("Windows", "Linux"):
         _pin_platform(monkeypatch, system)
-        assert registry.resolve_auto_engine(capabilities=cpu_only) == "bempp"
+        assert registry.resolve_auto_engine(capabilities=cpu_only) == "beat-cpu"
         order = list(registry.full3d_engine_order())
-        assert order.index("bempp") < order.index("beat-cpu")
+        assert order.index("beat-cpu") < order.index("bempp")
 
     _pin_platform(monkeypatch, "Darwin")
-    assert registry.resolve_auto_engine(capabilities=cpu_only) == "bempp"
+    assert registry.resolve_auto_engine(capabilities=cpu_only) == "beat-cpu"
     mac_order = list(registry.full3d_engine_order())
-    assert mac_order.index("bempp") < mac_order.index("beat-cpu")
+    assert mac_order.index("beat-cpu") < mac_order.index("bempp")
     assert mac_order.index("metal") == 0
 
     # An unavailable BEAT runtime changes no preference and no fallback.
@@ -564,8 +564,8 @@ def test_the_order_is_a_default_and_never_overrides_an_explicit_choice(
     """Reordering AUTO must not reach a user who named an engine.
 
     ``EngineRegistry.resolve`` answers a named request by name and availability
-    alone. That is what keeps an explicit BEAT choice meaning BEAT even though
-    BEMPP now leads the measured wide-band AUTO order.
+    alone. That keeps an explicit BEMPP choice meaning BEMPP even though
+    BEAT CPU now leads the CPU AUTO order.
     """
 
     _pin_platform(monkeypatch, "Windows")
@@ -583,7 +583,7 @@ def test_the_order_is_a_default_and_never_overrides_an_explicit_choice(
         # being quietly replaced by the new front-runner.
         assert await engine_registry.resolve("beat-cuda", solver_mode=None) is None
         # AUTO is the only request the platform order answers.
-        assert await engine_registry.resolve("auto", solver_mode=None) == "bempp"
+        assert await engine_registry.resolve("auto", solver_mode=None) == "beat-cpu"
 
     asyncio.run(scenario())
 

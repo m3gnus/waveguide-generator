@@ -3164,7 +3164,7 @@ async def _submit_record(
 
 def test_imported_auto_takes_beat_cpu_where_no_metal_runs(tmp_path: Path) -> None:
     registry = _DeclaredRegistry(
-        _metal(available=False, reason="no Apple GPU"), _bempp(), _beat_cpu()
+        _metal(available=False, reason="no Apple GPU"), _bempp(sources=("parametric", "imported")), _beat_cpu()
     )
 
     row = asyncio.run(_submit_with(tmp_path, registry, "auto"))
@@ -3174,8 +3174,37 @@ def test_imported_auto_takes_beat_cpu_where_no_metal_runs(tmp_path: Path) -> Non
     assert plan["engine"] == "beat-cpu"
     assert plan["eligibility_reasons"] == [
         "metal: unavailable (no Apple GPU)",
-        "bempp: does not declare imported geometry",
     ]
+
+
+@pytest.mark.parametrize("beat_ready, quadrants, expected", [
+    (True, 1234, "beat-cpu"), (False, 1234, "bempp"), (True, 12, "bempp"),
+])
+def test_imported_fast_auto_prefers_beat_cpu_and_retains_bempp_fallback(
+    monkeypatch: pytest.MonkeyPatch, beat_ready: bool, quadrants: int, expected: str
+) -> None:
+    from server.jobs.runtime import plan_imported_submission
+
+    request = _request("wgi_" + "0" * 26)
+    request.options.engine = "auto"
+    assert request.options.accuracy == "fast"
+    registry = _DeclaredRegistry(
+        _beat_cpu(available=beat_ready, reason="runtime provisioning"),
+        _bempp(sources=("parametric", "imported")),
+    )
+    # The preflight and resolver both ask for adapters; neither should pause.
+    async def get_engine(name):
+        return SimpleNamespace(name=name)
+    monkeypatch.setattr(registry, "get_engine", get_engine)
+    plan = asyncio.run(plan_imported_submission(
+        request, registry, symmetry_metadata={"resolved_quadrants": quadrants},
+    ))
+
+    assert plan["engine"] == expected
+    assert [entry["name"] for entry in plan["engines"]] == ["beat-cpu", "bempp"]
+    if expected == "bempp":
+        assert plan["engines"][0]["solves"] is False
+        assert plan["engines"][1]["solves"] is True
 
 
 def test_imported_explicit_beat_cpu_refuses_a_y_only_half_by_name(tmp_path: Path) -> None:
@@ -3822,7 +3851,7 @@ def test_the_imported_plan_names_every_engines_verdict_and_the_resolved_engine(
     assert plan["code"] is None
     assert plan["domain"] == "half_yz"
     verdicts = _verdicts(plan)
-    assert list(verdicts) == ["metal", "bempp", "beat-cpu"]
+    assert list(verdicts) == ["metal", "beat-cpu", "bempp"]
     assert verdicts["metal"]["solves"] is False
     assert verdicts["metal"]["stage"] == "availability"
     assert verdicts["metal"]["reason"] == "unavailable (no Apple GPU)"
