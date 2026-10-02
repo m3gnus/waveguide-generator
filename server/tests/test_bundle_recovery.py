@@ -1147,7 +1147,7 @@ def test_an_installation_that_predates_recovery_still_boots_on_a_new_app_layer(
 
 
 def test_an_installation_that_has_recovery_uses_the_shim_and_not_the_app_copy(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """And a new install keeps using the shim as later app layers arrive.
 
@@ -1181,7 +1181,18 @@ def test_an_installation_that_has_recovery_uses_the_shim_and_not_the_app_copy(
     resolved = _resolved_sitecustomize(order)
 
     assert resolved == root / "recovery" / "sitecustomize.py"
-    assert "windows_boot()" in resolved.read_text(encoding="utf-8")
+    # Execute the generated shim's actual delegation with a captured receiver.
+    # A hidden Python worker must nominate the public native image to recovery.
+    import types
+
+    calls = []
+    receiver = types.ModuleType("wg_bundle_recovery")
+    receiver.windows_boot = lambda **kwargs: calls.append(kwargs)
+    monkeypatch.setitem(sys.modules, "wg_bundle_recovery", receiver)
+    monkeypatch.setattr(sys, "executable", str(root / "wg-python.exe"))
+    monkeypatch.setattr(sys, "_wg_native_start_admitted", True, raising=False)
+    exec(compile(resolved.read_text(encoding="utf-8"), str(resolved), "exec"), {"__name__": "wg_test_sitecustomize"})
+    assert calls == [{"executable": str(root / "Waveguide Generator.exe")}]
     # The delegation target still ships with the application, so a later app
     # layer replaces it in the ordinary way.
     assert (app / "wg_desktop_bootstrap.py").is_file()

@@ -6,7 +6,9 @@
 param(
     [Parameter(Mandatory = $true)][string]$Setup,
     # Manual opt-in: exercises the production 120 s cap, with no test override.
-    [switch]$RunWaitPidTimeout
+    [switch]$RunWaitPidTimeout,
+    # Opt-in because these intentionally taskkill only the recorded gate setup.
+    [switch]$RunInterruptedInstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -38,6 +40,9 @@ function Start-SandboxedSetup {
             throw "Sandbox arguments belong to Start-SandboxedSetup."
         }
     }
+    if ($Executable -eq $Setup -and -not ($ExtraArguments | Where-Object { $_ -match '^/DIR=' })) {
+        $ExtraArguments = @("/DIR=`"$installRoot`"") + $ExtraArguments
+    }
     $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments + @("/WGLINKADDINSDIR=`"$AddIns`"")
     $p = Start-Process -FilePath $Executable -ArgumentList $arguments -PassThru -Wait:$Wait -NoNewWindow
     # Force a retained handle so Windows PowerShell 5.1 can report ExitCode.
@@ -49,6 +54,34 @@ function Start-StandIn {
     $p = Start-Process -FilePath "$env:SystemRoot\System32\ping.exe" -ArgumentList "-n", "600", "127.0.0.1" -RedirectStandardOutput (Join-Path $gateRoot "stand-in.log") -RedirectStandardError (Join-Path $gateRoot "stand-in-error.log") -PassThru -NoNewWindow
     $null = $p.Handle
     return $p
+}
+
+function Start-SandboxedNativeProbe {
+    param([string]$ProbePath)
+    if ($env:WG2_DATA_DIR -ne $gateData -or $env:WG2_FUSION_ADDINS_DIR -ne $wglinkAddins) {
+        throw "Native probe requires private data and Fusion AddIns."
+    }
+    if ($ProbePath -ne (Join-Path $gateRoot "recovered-loader-only.txt") -and
+        $ProbePath -ne (Join-Path $gateRoot "recovered-installer-tree.txt")) {
+        throw "Only the two fixed private recovery markers may be written."
+    }
+    $pythonPath = ConvertTo-Json -InputObject $ProbePath -Compress
+    $pythonPath = $pythonPath -replace '^"|"$', '' -replace "'", '\u0027'
+    $code = "from pathlib import Path;Path('$pythonPath').write_text('previous interpreter ran')"
+    $p = Start-Process -FilePath (Join-Path $installRoot "Waveguide Generator.exe") -ArgumentList "-c", ('"' + $code + '"') -PassThru -NoNewWindow
+    $null = $p.Handle
+    return $p
+}
+
+function Stop-SandboxedProcess {
+    param($Process, [switch]$Tree)
+    # Callers pass only original process objects from the checked start helpers.
+    # The retained handle's exit state prevents a reused PID from authorizing kill.
+    $null = $Process.Handle
+    if ($Process.HasExited) { return }
+    $arguments = @("/PID", [string]$Process.Id, "/F")
+    if ($Tree) { $arguments += "/T" }
+    & "$env:SystemRoot\System32\taskkill.exe" @arguments | Out-Null
 }
 
 function Gate($id, $name, $pass, $detail) {
@@ -88,14 +121,16 @@ function LayerFingerprint([string]$root) {
     return ($parts -join "`n")
 }
 
-$installRoot = "$env:LOCALAPPDATA\Programs\Waveguide Generator"
-$gateRoot = Join-Path $env:TEMP ("WaveguideGenerator-installer-gates-" + [guid]::NewGuid().ToString("N"))
+$gateRoot = Join-Path $env:TEMP ("WG-inst-" + [guid]::NewGuid().ToString("N").Substring(0, 12))
+$installRoot = Join-Path $gateRoot "i"
 $wglinkAddins = Join-Path $gateRoot "Fusion\API\AddIns"
 $developerAddins = Join-Path $gateRoot "Developer\API\AddIns"
 $gateData = Join-Path $gateRoot "data"
 New-Item -ItemType Directory -Force $wglinkAddins, $developerAddins, $gateData | Out-Null
 $previousDataDir = $env:WG2_DATA_DIR
 $env:WG2_DATA_DIR = $gateData
+$previousFusionAddins = $env:WG2_FUSION_ADDINS_DIR
+$env:WG2_FUSION_ADDINS_DIR = $wglinkAddins
 try {
 
 # --- Gate 1: the installer exists and carries a build-supplied payload budget --
@@ -111,7 +146,7 @@ $marked = $null -ne (Get-Item -Path $Setup -Stream "Zone.Identifier" -ErrorActio
 "       installer marked with ZoneId=3: $marked"
 
 # --- Gate 4 / 3: a too-long install root must be refused with an exit code -----
-$longDir = "C:\" + ("g" * 200)
+$longDir = Join-Path $gateRoot ("g" * 200)
 $p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/DIR=`"$longDir`""
 $longReturned = $true
 try {
@@ -143,8 +178,8 @@ $layerBaseline = if ($installExit -eq 0) { LayerFingerprint $installRoot } else 
 
 # --- Gate 2: per-user location, no elevation ----------------------------------
 $landed = Test-Path $installRoot
-$inProgramFiles = Test-Path "$env:ProgramFiles\Waveguide Generator"
-Gate 2 "per-user install under LOCALAPPDATA\Programs" ($installExit -eq 0 -and $landed -and -not $inProgramFiles) `
+$inProgramFiles = $installRoot -like ($env:ProgramFiles + "\*")
+Gate 2 "per-user installer in its private /DIR gate root" ($installExit -eq 0 -and $landed -and -not $inProgramFiles) `
     "exit $installExit; installed: $landed; Program Files copy: $inProgramFiles"
 
 # --- Gate 10: the actual setup executable installs packaged WGLink -----------
@@ -207,12 +242,65 @@ $upgrade = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART",
 $layerAfter = LayerFingerprint $installRoot
 $removedGone = -not (Test-Path $removedModule) -and -not (Test-Path $removedPackage)
 $layersMatch = ($null -ne $layerBaseline) -and ($layerAfter -eq $layerBaseline)
-$asideLeft = @(".app.old", ".runtime.old", ".upgrade-in-progress" | Where-Object { Test-Path (Join-Path $installRoot $_) })
+$asideLeft = @(".app.old", ".runtime.old", ".wg-install-old", ".wg-install-new", ".upgrade-in-progress" | Where-Object { Test-Path (Join-Path $installRoot $_) })
 $manifestPresent = Test-Path (Join-Path $installRoot "app\APP-MANIFEST.json")
 $outcome = if (Test-Path $outcomeFile) { Get-Content -Raw $outcomeFile | ConvertFrom-Json } else { $null }
-$outcomeOk = $null -ne $outcome -and $outcome.result -eq "ok" -and -not [string]::IsNullOrEmpty($outcome.to) -and -not [string]::IsNullOrEmpty($outcome.from) -and -not [string]::IsNullOrEmpty($outcome.when)
+$outcomeOk = $null -ne $outcome -and $outcome.result -eq "installed" -and -not [string]::IsNullOrEmpty($outcome.to) -and -not [string]::IsNullOrEmpty($outcome.from) -and -not [string]::IsNullOrEmpty($outcome.when)
 Gate 13 "upgrade removes files the package dropped and writes an outcome" ($plantedBefore -and ($upgrade.ExitCode -eq 0) -and $removedGone -and $layersMatch -and ($asideLeft.Count -eq 0) -and $manifestPresent -and $outcomeOk) `
     "setup exit $($upgrade.ExitCode); planted files present before: $plantedBefore; gone after: $removedGone; app+runtime equal the installed package: $layersMatch; renamed-aside leftovers: $($asideLeft.Count); manifest present: $manifestPresent; outcome result: $(if ($outcome) { $outcome.result } else { 'MISSING' }) from $(if ($outcome) { $outcome.from }) to $(if ($outcome) { $outcome.to })"
+
+# --- Gates 17/18: killed loader alone and killed installer tree mid-copy -----
+# These are real setup.exe runs. Merely planting a journal cannot qualify the
+# loader/watchdog contract. Every kill target comes from this gate's own Popen.
+if ($RunInterruptedInstall) {
+    foreach ($treeKill in @($false, $true)) {
+        $id = if ($treeKill) { 18 } else { 17 }
+        $label = if ($treeKill) { "installer-tree" } else { "loader-only" }
+        $oldApp = Join-Path $installRoot "app\gate_previous_app.txt"
+        $oldRuntime = Join-Path $installRoot "runtime\gate_previous_runtime.txt"
+        Set-Content -LiteralPath $oldApp -Value $label -NoNewline
+        Set-Content -LiteralPath $oldRuntime -Value $label -NoNewline
+        $previousLayers = LayerFingerprint $installRoot
+        $previousBoot = @("wg-python.exe", "python313.dll", "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "wg-python._pth", "Waveguide Generator._pth", "pyvenv.cfg") | ForEach-Object {
+            "$($_)|$((Get-FileHash -LiteralPath (Join-Path $installRoot $_) -Algorithm SHA256).Hash)"
+        }
+        $killRecord = Join-Path $gateRoot "outcome-$label.json"
+        $killLog = Join-Path $gateRoot "setup-$label.log"
+        $interrupted = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/OUTCOME=`"$killRecord`"", "/LOG=`"$killLog`""
+        $copyObserved = $false
+        $clock = [Diagnostics.Stopwatch]::StartNew()
+        while ($clock.Elapsed.TotalSeconds -lt 45 -and -not $interrupted.HasExited) {
+            $oldExists = Test-Path (Join-Path $installRoot ".wg-install-old\runtime")
+            $copyFile = Get-ChildItem -LiteralPath (Join-Path $installRoot "runtime") -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($oldExists -and $null -ne $copyFile -and (Test-Path (Join-Path $installRoot ".upgrade-in-progress"))) {
+                $copyObserved = $true
+                break
+            }
+            Start-Sleep -Milliseconds 10
+        }
+        if ($copyObserved) { Stop-SandboxedProcess -Process $interrupted -Tree:$treeKill }
+        $probePath = Join-Path $gateRoot "recovered-$label.txt"
+        $nativeProbe = Start-SandboxedNativeProbe -ProbePath $probePath
+        $returned = $nativeProbe.WaitForExit(30000)
+        $ran = $returned -and $nativeProbe.ExitCode -eq 0 -and (Test-Path $probePath)
+        if (-not $returned) { Stop-SandboxedProcess -Process $nativeProbe -Tree }
+        $afterBoot = @("wg-python.exe", "python313.dll", "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "wg-python._pth", "Waveguide Generator._pth", "pyvenv.cfg") | ForEach-Object {
+            "$($_)|$((Get-FileHash -LiteralPath (Join-Path $installRoot $_) -Algorithm SHA256).Hash)"
+        }
+        $killData = if (Test-Path $killRecord) { Get-Content -Raw $killRecord | ConvertFrom-Json } else { $null }
+        $recovered = ($copyObserved -and $ran -and ((LayerFingerprint $installRoot) -eq $previousLayers) -and
+            (($previousBoot -join "`n") -eq ($afterBoot -join "`n")) -and $null -ne $killData -and
+            $killData.result -eq "failed" -and $killData.previousKept -eq $true -and
+            -not (Test-Path (Join-Path $installRoot ".upgrade-in-progress")))
+        Gate $id "$label killed mid-copy restores exact prior layers and boot files" $recovered `
+            "copy observed: $copyObserved; only owned PID $($interrupted.Id) killed; previous interpreter: $ran; result: $(if ($killData) { $killData.result }); exact old layers+boot: $recovered; log $killLog"
+        if (-not $recovered) { throw "Interrupted install gate $id failed; retain $gateRoot for diagnosis." }
+        Remove-Item -LiteralPath $oldApp, $oldRuntime
+    }
+} else {
+    Gate 17 "loader-only taskkill during real copy" $null "Run with -RunInterruptedInstall on Windows."
+    Gate 18 "installer-tree taskkill during real copy" $null "Run with -RunInterruptedInstall on Windows."
+}
 
 # --- Gate 14: /WAITPID holds setup before any layer is replaced -------------
 # Wait for the setup log to confirm the wait was entered, rather than assuming
@@ -243,7 +331,7 @@ try {
     } while ([DateTime]::UtcNow -lt $readyDeadline)
     Start-Sleep -Seconds 8
     $heldWhileAlive = $waitingLogged -and (-not $standIn.HasExited) -and (-not $waiting.HasExited) -and -not (Test-Path $waitOutcome) -and (Test-Path $waitSentinel) -and ($beforeWait -eq (LayerFingerprint $installRoot))
-    foreach ($aside in @(".app.old", ".runtime.old", ".upgrade-in-progress")) {
+    foreach ($aside in @(".app.old", ".runtime.old", ".wg-install-old", ".wg-install-new", ".upgrade-in-progress")) {
         if (Test-Path (Join-Path $installRoot $aside)) { $heldWhileAlive = $false }
     }
 
@@ -275,7 +363,7 @@ try {
     if ($contender -and -not $contender.HasExited) { Stop-Process -Id $contender.Id -Force }
 }
 $waitData = if (Test-Path $waitOutcome) { Get-Content -Raw $waitOutcome | ConvertFrom-Json } else { $null }
-$waitSucceeded = $finishedAfter -and ($waitExit -eq 0) -and ($null -ne $waitData) -and ($waitData.result -eq "ok") -and -not (Test-Path $waitSentinel) -and ((LayerFingerprint $installRoot) -eq $layerBaseline)
+$waitSucceeded = $finishedAfter -and ($waitExit -eq 0) -and ($null -ne $waitData) -and ($waitData.result -eq "installed") -and -not (Test-Path $waitSentinel) -and ((LayerFingerprint $installRoot) -eq $layerBaseline)
 Gate 14 "/WAITPID waits before replacing layers, then installs" ($heldWhileAlive -and $waitSucceeded) `
     "wait reached: $waitingLogged; layers intact while process lived: $heldWhileAlive; finished after exit: $finishedAfter; exit $waitExit; outcome: $(if ($waitData) { $waitData.result } else { 'MISSING' }); sentinel removed: $(-not (Test-Path $waitSentinel))"
 Gate 15 "setup mutex excludes a second setup throughout /WAITPID" ($contenderBlocked -and $finishedAfter -and $waitSucceeded -and $contenderSettled) `
@@ -346,10 +434,10 @@ public static class WgGateWindows {
     $timeoutData = if (Test-Path $timeoutOutcome) { Get-Content -Raw $timeoutOutcome | ConvertFrom-Json } else { $null }
     $timeoutText = if (Test-Path $timeoutLog) { Get-Content -Raw $timeoutLog } else { "" }
     $failureWrites = ([regex]::Matches($timeoutText, 'Outcome: wrote .* \(failed\)\.')).Count
-    $timeoutAside = @(".app.old", ".runtime.old", ".upgrade-in-progress" | Where-Object { Test-Path (Join-Path $installRoot $_) })
+    $timeoutAside = @(".app.old", ".runtime.old", ".wg-install-old", ".wg-install-new", ".upgrade-in-progress" | Where-Object { Test-Path (Join-Path $installRoot $_) })
     $timeoutUntouched = ($beforeTimeout -eq (LayerFingerprint $installRoot)) -and $timeoutAside.Count -eq 0 -and $timeoutText -notmatch 'Protection: (renamed|restored)'
     $noRelaunch = $timeoutText -notmatch '-- Run entry --'
-    $timeoutOk = $timeoutReturned -and $timeoutClock.Elapsed.TotalSeconds -le 150 -and $null -ne $timeoutExit -and $timeoutExit -ne 0 -and -not $timeoutWindowSeen -and $standInSurvived -and $timeoutText -match 'was still running after 120 s' -and $null -ne $timeoutData -and $timeoutData.result -eq "failed" -and $failureWrites -eq 1 -and $timeoutUntouched -and $noRelaunch
+    $timeoutOk = $timeoutReturned -and $timeoutClock.Elapsed.TotalSeconds -le 150 -and $null -ne $timeoutExit -and $timeoutExit -ne 0 -and -not $timeoutWindowSeen -and $standInSurvived -and $timeoutText -match 'was still running after 120 s' -and $null -ne $timeoutData -and $timeoutData.result -eq "failed" -and $timeoutData.previousKept -eq $false -and $failureWrites -eq 1 -and $timeoutUntouched -and $noRelaunch
     Gate 16 "silent timeout exits without a window or relaunch" $timeoutOk `
         "Abort at ssInstall exit: $timeoutExit (expected 3, to be measured on Windows); self-exit: $timeoutReturned; elapsed: $($timeoutClock.Elapsed.TotalSeconds) s (cap + margin: 150 s); visible window seen: $timeoutWindowSeen; stand-in still alive: $standInSurvived; outcome: $(if ($timeoutData) { $timeoutData.result } else { 'MISSING' }); failed writes: $failureWrites; layers untouched: $timeoutUntouched; no Run entry: $noRelaunch"
     # Keep native timeout evidence outside the fixture removed at the end.
@@ -359,9 +447,40 @@ public static class WgGateWindows {
         if (Test-Path $evidenceFile) { Copy-Item -LiteralPath $evidenceFile -Destination $timeoutEvidence }
     }
     "       timeout log/outcome retained at: $timeoutEvidence"
+
+    # A registry entry from the installed gate fixture must not make an aborted
+    # install in a different empty root claim that a previous tree was kept.
+    $freshRoot = Join-Path $gateRoot "f"
+    $freshOutcome = Join-Path $gateRoot "fresh-timeout.json"
+    $freshLog = Join-Path $gateRoot "fresh-timeout.log"
+    $freshStandIn = Start-StandIn
+    $freshTimingOut = $null; $freshReturned = $false; $freshExit = $null
+    $freshClock = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $freshTimingOut = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/NORESTART", "/DIR=`"$freshRoot`"", "/WAITPID=$($freshStandIn.Id)", "/OUTCOME=`"$freshOutcome`"", "/LOG=`"$freshLog`""
+        $null = $freshTimingOut.Handle
+        $freshReturned = $freshTimingOut.WaitForExit(150000)
+        if ($freshReturned) { $freshTimingOut.Refresh(); $freshExit = $freshTimingOut.ExitCode }
+        $freshStandInSurvived = -not $freshStandIn.HasExited
+    } finally {
+        $freshClock.Stop()
+        if ($freshTimingOut -and -not $freshTimingOut.HasExited) { Stop-SandboxedProcess -Process $freshTimingOut -Tree }
+        if (-not $freshStandIn.HasExited) { Stop-SandboxedProcess -Process $freshStandIn }
+    }
+    $freshData = if (Test-Path $freshOutcome) { Get-Content -Raw $freshOutcome | ConvertFrom-Json } else { $null }
+    $freshText = if (Test-Path $freshLog) { Get-Content -Raw $freshLog } else { "" }
+    $freshUntouched = -not (Test-Path (Join-Path $freshRoot "app")) -and -not (Test-Path (Join-Path $freshRoot "runtime")) -and -not (Test-Path (Join-Path $freshRoot ".upgrade-in-progress"))
+    $freshOk = $freshReturned -and $freshExit -ne 0 -and $freshStandInSurvived -and $freshText -match 'was still running after 120 s' -and $null -ne $freshData -and $freshData.result -eq "failed" -and $freshData.previousKept -eq $false -and $freshUntouched
+    Gate 19 "fresh-root timeout never claims a previous version" $freshOk `
+        "self-exit: $freshReturned; exit: $freshExit; empty layers: $freshUntouched; previousKept: $(if ($freshData) { $freshData.previousKept }); actual timeout: $($freshClock.Elapsed.TotalSeconds) s"
+    foreach ($evidenceFile in @($freshLog, $freshOutcome)) {
+        if (Test-Path $evidenceFile) { Copy-Item -LiteralPath $evidenceFile -Destination $timeoutEvidence }
+    }
 } else {
     Gate 16 "silent timeout exits without a window or relaunch" $null `
         "Manual opt-in required: rerun with -RunWaitPidTimeout; uses the real 120 s cap plus a 30 s margin."
+    Gate 19 "fresh-root timeout never claims a previous version" $null `
+        "Same opt-in adds a second actual 120 s timeout in an empty private install root."
 }
 
 # --- Gate 11: a developer marker is never overwritten ------------------------
@@ -484,4 +603,5 @@ if ($results.Result -contains "FAIL") {
 
 } finally {
     $env:WG2_DATA_DIR = $previousDataDir
+    $env:WG2_FUSION_ADDINS_DIR = $previousFusionAddins
 }

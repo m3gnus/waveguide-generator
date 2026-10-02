@@ -28,7 +28,17 @@ def body(script: str, header: str) -> str:
 def test_installer_uses_generated_constants_and_ships_the_help_page(script: str) -> None:
     assert '[Code]\nconst\n#include "opencl-guidance.iss"' in script
     files = script.split("\n[Files]\n", 1)[1].split("\n[Icons]", 1)[0]
-    assert 'Source: "{#PayloadDir}\\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion' in files
+    for layer in ("app", "runtime", "recovery"):
+        assert (f'Source: "{{#PayloadDir}}\\{layer}\\*"; DestDir: "{{app}}\\{layer}"; '
+                'Flags: recursesubdirs createallsubdirs ignoreversion') in files
+    assert ('Source: "{#PayloadDir}\\*"; DestDir: "{app}\\.wg-install-new"; '
+            'Excludes: "Waveguide Generator.exe"; Flags: ignoreversion') in files
+    assert ('Source: "{#PayloadDir}\\Waveguide Generator.exe"; '
+            'DestName: "wg-installer-helper.exe"; Flags: dontcopy') in files
+    # Layers retain recursive packaged coverage; boot files stage for native
+    # commit, and the one excluded public entry is published by that helper.
+    assert "RunNative('--installer-entry')" in script
+    assert "RunNative('--installer-commit')" in script
     # The generated page is part of the measured, manifested payload, not an
     # extra file injected by setup after the bundle was built.
     assert "shared" in build_bundle.APP_SOURCE_DIRECTORIES

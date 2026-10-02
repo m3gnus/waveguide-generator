@@ -99,9 +99,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile={#PayloadDir}\WaveguideGenerator.ico
-; The launcher is a renamed pythonw.exe and nothing patches its resources,
-; so its embedded icon is Python's. Point every icon Windows shows at the
-; .ico the build stages beside it instead.
+; The native launcher uses the staged product icon for installed shortcuts.
 UninstallDisplayIcon={app}\WaveguideGenerator.ico
 UninstallDisplayName=Waveguide Generator
 
@@ -136,7 +134,14 @@ Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription
 Name: "wglink"; Description: "Install the &WGLink add-in for Autodesk Fusion"; GroupDescription: "Fusion integration:"; Flags: unchecked
 
 [Files]
-Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; The root boot files are staged, not overwritten while the old layers are
+; needed for rollback. Native commit records their exact identities then moves
+; them into place. The public native entry is published before displacement.
+Source: "{#PayloadDir}\Waveguide Generator.exe"; DestName: "wg-installer-helper.exe"; Flags: dontcopy
+Source: "{#PayloadDir}\app\*"; DestDir: "{app}\app"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#PayloadDir}\runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#PayloadDir}\recovery\*"; DestDir: "{app}\recovery"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#PayloadDir}\*"; DestDir: "{app}\.wg-install-new"; Excludes: "Waveguide Generator.exe"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.exe"; IconFilename: "{app}\WaveguideGenerator.ico"
@@ -173,7 +178,25 @@ Type: filesandordirs; Name: "{app}\app"
 ; Left by an upgrade that was killed mid-copy; see BeginProtectedReplace.
 Type: filesandordirs; Name: "{app}\.app.old"
 Type: filesandordirs; Name: "{app}\.runtime.old"
+Type: filesandordirs; Name: "{app}\.wg-install-old"
+Type: filesandordirs; Name: "{app}\.wg-install-new"
+; Root files are moved from staging by the native helper, so Inno's file log
+; records staging names. Name the owned final boot files explicitly.
+Type: files; Name: "{app}\Waveguide Generator.exe"
+Type: files; Name: "{app}\wg-python.exe"
+Type: files; Name: "{app}\wg-python._pth"
+Type: files; Name: "{app}\Waveguide Generator._pth"
+Type: files; Name: "{app}\pyvenv.cfg"
+Type: files; Name: "{app}\python313.dll"
+Type: files; Name: "{app}\python3.dll"
+Type: files; Name: "{app}\vcruntime140.dll"
+Type: files; Name: "{app}\vcruntime140_1.dll"
+Type: files; Name: "{app}\msvcp140.dll"
+Type: files; Name: "{app}\WaveguideGenerator.ico"
+Type: files; Name: "{app}\READ ME FIRST.txt"
 Type: files; Name: "{app}\.upgrade-in-progress"
+Type: files; Name: "{app}\.wg-install-lock"
+Type: filesandordirs; Name: "{app}\.native-start"
 Type: filesandordirs; Name: "{app}\recovery"
 Type: dirifempty; Name: "{app}"
 
@@ -216,7 +239,9 @@ var
   { True once ssPostInstall was reached: the new tree is complete and the old
     one may be deleted. Nothing may be restored after this. }
   ProtectionCommitted: Boolean;
+  RollbackIncomplete: Boolean;
   OutcomeWritten: Boolean;
+  NativeHelperPath: String;
 
 function SetEnvironmentVariable(Name, Value: String): Boolean;
   { No setuponly/uninstallonly qualifier: this process-local Windows API is
@@ -239,6 +264,30 @@ function WaitForSingleObject(Handle: Integer; Milliseconds: Integer): Integer;
 
 function CloseHandle(Handle: Integer): Integer;
   external 'CloseHandle@kernel32.dll stdcall setuponly';
+
+function OpenMutexW(DesiredAccess, InheritHandle: Integer; Name: String): Integer;
+  external 'OpenMutexW@kernel32.dll stdcall setuponly';
+
+function CreateFileW(Name: String; Access, Share: Integer; Security: Integer;
+  Creation, Flags: Integer; Template: Integer): Integer;
+  external 'CreateFileW@kernel32.dll stdcall setuponly';
+function FlushFileBuffers(Handle: Integer): Boolean;
+  external 'FlushFileBuffers@kernel32.dll stdcall setuponly';
+
+function PersistRecoveryRecord(const Path: String): Boolean;
+var
+  Handle: Integer;
+begin
+  Result := False;
+  Handle := CreateFileW(Path, $40000000, 3, 0, 3, $80, 0);
+  if Handle = -1 then
+    exit;
+  try
+    Result := FlushFileBuffers(Handle);
+  finally
+    CloseHandle(Handle);
+  end;
+end;
 
 function IsReparsePoint(const Path: String): Boolean;
 var
@@ -667,7 +716,7 @@ end;
   Pascal comment ends at the first closing brace. }
 procedure WriteOutcome(const Verdict: String);
 var
-  Path, Tmp: String;
+  Path, Tmp, ResultName, RecoveryField, Kept: String;
   Lines: TArrayOfString;
 begin
   if OutcomeWritten then
@@ -676,13 +725,26 @@ begin
   if Path = '' then
     exit;
   OutcomeWritten := True;
+  ResultName := Verdict;
+  RecoveryField := '';
+  Kept := 'false';
+  { Only native identity-verified recovery may claim a previous version kept.
+    This fallback has no such evidence, including on a failed fresh install. }
+  if Verdict = 'ok' then
+    ResultName := 'installed';
+  if RollbackIncomplete then
+  begin
+    ResultName := 'rollback_incomplete';
+    RecoveryField := ', "backupPath": null, "journalPath": ' + JsonStringOrNull(ExpandConstant('{app}') + '\' + ProtectionMarkerName);
+  end;
   SetArrayLength(Lines, 1);
   Lines[0] :=
     '{"from": ' + JsonStringOrNull(PreviousVersion) +
     ', "to": ' + JsonStringOrNull('{#AppVersion}') +
-    ', "result": ' + JsonStringOrNull(Verdict) +
+    ', "result": ' + JsonStringOrNull(ResultName) +
+    ', "previousKept": ' + Kept +
     ', "when": ' + JsonStringOrNull(GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':')) +
-    ', "log": ' + JsonStringOrNull(ExpandConstant('{param:LOG|}')) + '}';
+    ', "log": ' + JsonStringOrNull(ExpandConstant('{param:LOG|}')) + RecoveryField + '}';
   ForceDirectories(ExtractFileDir(Path));
   Tmp := Path + '.tmp';
   if not SaveStringsToUTF8FileWithoutBOM(Tmp, Lines, False) then
@@ -741,179 +803,61 @@ begin
       Result := True;
 end;
 
-{ ---- Install-time protection of the two bundle layers ------------------------
+{ Native recovery runs before any Python initialization, including when a
+  killed setup has displaced the interpreter itself. Its flushed journal
+  records the exact old/new object identities before a layer is renamed. }
 
-  Inno's [Files] section overlays: it writes the new files over the old tree,
-  never removes a file the new package dropped, and does not restore a file it
-  already overwrote if setup is stopped half way. So an upgrade could leave a
-  tree that is neither version, and a module deleted from the package survived
-  every upgrade.
-
-  Therefore, at the start of ssInstall <app>\app and <app>\runtime are renamed
-  aside (a rename inside one directory, so it is atomic and fails cleanly when
-  something still holds a file open -- a running application, say). Setup then
-  writes complete new layers into empty folders. Only at ssPostInstall, when
-  every file is in place, are the renamed-aside folders deleted. If setup ends
-  before that (a failure, a cancel, an error), DeinitializeSetup deletes the
-  partial new layers and renames the old ones back.
-
-  A killed setup runs no DeinitializeSetup at all. So the run also leaves
-  ProtectionMarkerName in <app>: present means "an earlier run died before it
-  committed", and the next setup restores from the renamed-aside folders before
-  doing anything else. The marker is deleted first when committing, so a run
-  killed while deleting the old folders never mistakes complete new layers for
-  partial ones.
-
-  Deliberately NOT an [InstallDelete] section: Inno processes [InstallDelete]
-  after CurStepChanged(ssInstall), so an entry naming the renamed-aside folders
-  would delete the very copies that this run has just made to restore from. }
-
-procedure DeleteTreeSafely(const Path: String);
-begin
-  if not DirExists(Path) then
-    exit;
-  { Never follow a junction or symlink out of the install root. }
-  if IsReparsePoint(Path) then
-  begin
-    Log('Left alone because it is a reparse point: ' + Path);
-    exit;
-  end;
-  if DelTree(Path, True, True, True) then
-    Log('Removed ' + Path)
-  else
-    Log('Could not remove ' + Path);
-end;
-
-function AppSubPath(const Name: String): String;
-begin
-  Result := AddBackslash(ExpandConstant('{app}')) + Name;
-end;
-
-{ Returns False only when the layer exists and could not be renamed aside.
-  Moved reports whether a rename happened. }
-function MoveLayerAside(const Layer, Aside: String; var Moved: Boolean): Boolean;
+function RunNative(const Mode: String): Integer;
 var
-  Source, Target: String;
+  Params: String;
+  Code: Integer;
 begin
-  Moved := False;
-  Result := True;
-  Source := AppSubPath(Layer);
-  Target := AppSubPath(Aside);
-  if not DirExists(Source) then
-    exit;
-  if IsReparsePoint(Source) then
-  begin
-    Log('Protection: refusing to rename a reparse point at ' + Source + '.');
-    Result := False;
-    exit;
-  end;
-  if not RenameFile(Source, Target) then
-  begin
-    Log('Protection: could not rename ' + Source + ' to ' + Target + '.');
-    Result := False;
-    exit;
-  end;
-  Moved := True;
-  Log('Protection: renamed ' + Source + ' to ' + Target + '.');
-end;
-
-{ Puts a renamed-aside layer back, removing whatever partial copy is in its
-  place. Nothing to do (and True) when there is no renamed-aside folder. }
-function RestoreLayer(const Layer, Aside: String): Boolean;
-var
-  Source, Target: String;
-begin
-  Result := True;
-  Source := AppSubPath(Aside);
-  Target := AppSubPath(Layer);
-  if not DirExists(Source) then
-    exit;
-  if DirExists(Target) then
-  begin
-    if IsReparsePoint(Target) then
-    begin
-      Log('Protection: cannot restore over a reparse point at ' + Target + '.');
-      Result := False;
-      exit;
-    end;
-    DeleteTreeSafely(Target);
-    if DirExists(Target) then
-    begin
-      Result := False;
-      exit;
-    end;
-  end;
-  if RenameFile(Source, Target) then
-    Log('Protection: restored ' + Target + '.')
-  else
-  begin
-    Log('Protection: could not restore ' + Target + ' from ' + Source + '.');
-    Result := False;
-  end;
+  Result := 3;
+  Params := Mode + ' "' + ExpandConstant('{app}') + '"';
+  if Mode = '--installer-prepare' then
+    Params := Params + ' "' + PreviousVersion + '" "{#AppVersion}" "' +
+      ExpandConstant('{param:OUTCOME|}') + '" "' + ExpandConstant('{param:LOG|}') + '"';
+  if Exec(NativeHelperPath, Params, ExpandConstant('{app}'), SW_HIDE,
+    ewWaitUntilTerminated, Code) then
+    Result := Code;
 end;
 
 procedure RollBackProtectedReplace();
 var
-  AppOk, RuntimeOk: Boolean;
+  Code: Integer;
 begin
-  AppOk := RestoreLayer(AppLayerName, AppAsideName);
-  RuntimeOk := RestoreLayer(RuntimeLayerName, RuntimeAsideName);
-  { Only forget the marker once both layers are back. If one could not be
-    restored, the marker stays so that the next setup tries again. }
-  if AppOk and RuntimeOk then
-    DeleteFile(AppSubPath(ProtectionMarkerName))
-  else
-    Log('Protection: the previous version could not be fully restored; the marker is kept for the next setup.');
+  Code := RunNative('--installer-rollback');
+  RollbackIncomplete := Code = 3;
+  if FileExists(ExpandConstant('{param:OUTCOME|}')) then
+    OutcomeWritten := True;
+  if RollbackIncomplete then
+    Log('Protection: native recovery refused an incomplete or foreign object; its journal and verified backups were retained.');
 end;
 
 procedure BeginProtectedReplace();
 var
-  AppMoved, RuntimeMoved, Moved: Boolean;
+  RecordPath: String;
 begin
-  ProtectionStarted := True;
   ForceDirectories(ExpandConstant('{app}'));
-
-  { An earlier setup that was killed before it committed left the marker and
-    the renamed-aside folders: put those back first, so that this run
-    protects a whole tree and not a half-written one. }
-  if FileExists(AppSubPath(ProtectionMarkerName)) then
+  ExtractTemporaryFile('wg-installer-helper.exe');
+  NativeHelperPath := ExpandConstant('{tmp}\wg-installer-helper.exe');
+  RecordPath := ExpandConstant('{param:OUTCOME|}');
+  if RecordPath <> '' then
   begin
-    Log('Protection: an earlier upgrade did not finish; restoring the previous version first.');
-    RollBackProtectedReplace();
-    if FileExists(AppSubPath(ProtectionMarkerName)) then
-    begin
-      WriteOutcome('failed');
-      RaiseException('Waveguide Generator could not restore the version left by an interrupted upgrade. Nothing was changed; see the setup log.');
-    end;
-  end
-  else
-  begin
-    { No marker: these are leftovers of an upgrade that did finish. }
-    DeleteTreeSafely(AppSubPath(AppAsideName));
-    DeleteTreeSafely(AppSubPath(RuntimeAsideName));
+    ForceDirectories(ExtractFileDir(RecordPath));
+    if FileExists(RecordPath) and not DeleteFile(RecordPath) then
+      RaiseException('Waveguide Generator could not replace its previous install outcome. Nothing was renamed.');
   end;
-
-  { A first install has nothing to protect. }
-  if not (DirExists(AppSubPath(AppLayerName)) or DirExists(AppSubPath(RuntimeLayerName))) then
-    exit;
-
-  if not SaveStringToFile(AppSubPath(ProtectionMarkerName), 'upgrade in progress', False) then
+  { Installing the native entry is completed before the journal or any layer
+    displacement. An older bridge can therefore still recover a killed first
+    full upgrade without importing Python from the displaced runtime. }
+  if RunNative('--installer-entry') <> 0 then
+    RaiseException('Waveguide Generator could not publish its native recovery entry. Nothing was renamed.');
+  ProtectionStarted := True;
+  if RunNative('--installer-prepare') <> 0 then
   begin
-    Log('Protection: could not write the marker; not touching the installed version.');
-    WriteOutcome('failed');
-    RaiseException('Waveguide Generator could not prepare the folder for the upgrade. The installed version was not changed.');
-  end;
-
-  Moved := MoveLayerAside(AppLayerName, AppAsideName, AppMoved);
-  if Moved then
-    Moved := MoveLayerAside(RuntimeLayerName, RuntimeAsideName, RuntimeMoved);
-  if not Moved then
-  begin
-    { Most often the running application still holds a file. Put back
-      whatever was moved and stop before anything is written. }
-    RollBackProtectedReplace();
-    WriteOutcome('failed');
-    RaiseException('Waveguide Generator could not replace its files because they are in use. Close Waveguide Generator and run setup again. The installed version was not changed.');
+    RollbackIncomplete := FileExists(ExpandConstant('{app}\.upgrade-in-progress'));
+    RaiseException('Waveguide Generator could not prepare the upgrade safely. See the install journal and log.');
   end;
 end;
 
@@ -921,19 +865,44 @@ procedure CommitProtectedReplace();
 begin
   if not ProtectionStarted then
     exit;
+  if RunNative('--installer-commit') <> 0 then
+    RaiseException('Waveguide Generator could not commit the complete installation. Native recovery will restore the previous version.');
   ProtectionCommitted := True;
-  { The marker goes first: a run killed while deleting the old folders must
-    not later be read as "the new layers are partial". }
-  DeleteFile(AppSubPath(ProtectionMarkerName));
-  DeleteTreeSafely(AppSubPath(AppAsideName));
-  DeleteTreeSafely(AppSubPath(RuntimeAsideName));
+  if FileExists(ExpandConstant('{param:OUTCOME|}')) then
+    OutcomeWritten := True;
+end;
+
+{ SetupMutex is already held at ssInstall. No new native entry can be
+  admitted while this check runs. Running is retained by both parent and child
+  until the app/worker exits, including a killed native parent. }
+function WaitForRunningApplicationExit(): Boolean;
+var
+  Handle, Attempt, Error: Integer;
+  WaitRequested: Boolean;
+begin
+  Result := False;
+  WaitRequested := ExpandConstant('{param:WAITPID|0}') <> '0';
+  for Attempt := 0 to 1200 do
+  begin
+    Handle := OpenMutexW(SYNCHRONIZE, 0, 'WaveguideGeneratorRunning');
+    if Handle = 0 then
+    begin
+      Error := DLLGetLastError();
+      Result := Error = 2;
+      exit;
+    end;
+    CloseHandle(Handle);
+    if not WaitRequested then
+      exit;
+    Sleep(100);
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
   begin
-    if not WaitForApplicationExit() then
+    if not WaitForApplicationExit() or not WaitForRunningApplicationExit() then
     begin
       WriteOutcome('failed');
       if not WizardSilent() then

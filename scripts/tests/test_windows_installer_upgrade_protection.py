@@ -125,22 +125,16 @@ def test_layers_are_renamed_aside_at_install_and_deleted_at_post_install(code: s
     # Committed before WGLink runs, which needs the new runtime.
     assert post.index("CommitProtectedReplace();") < post.index("InstallWGLink()")
 
-    assert "AppAsideName = '.app.old';" in code
-    assert "RuntimeAsideName = '.runtime.old';" in code
     begin = _body(code, "procedure BeginProtectedReplace();")
-    assert "MoveLayerAside(AppLayerName, AppAsideName, AppMoved)" in begin
-    assert "MoveLayerAside(RuntimeLayerName, RuntimeAsideName, RuntimeMoved)" in begin
-    # A refused rename stops setup with an error, before anything is written.
+    assert begin.index("--installer-entry") < begin.index("--installer-prepare")
+    assert "ExtractTemporaryFile('wg-installer-helper.exe')" in begin
     assert begin.count("RaiseException(") >= 2
-    assert "RollBackProtectedReplace();" in begin
 
 
-def test_commit_drops_the_marker_before_the_old_layers(code: str) -> None:
+def test_commit_only_succeeds_after_native_durable_commit(code: str) -> None:
     commit = _body(code, "procedure CommitProtectedReplace();")
-    marker = commit.index("DeleteFile(AppSubPath(ProtectionMarkerName))")
-    assert marker < commit.index("DeleteTreeSafely(AppSubPath(AppAsideName))")
-    assert marker < commit.index("DeleteTreeSafely(AppSubPath(RuntimeAsideName))")
-    assert commit.index("ProtectionCommitted := True;") < marker
+    assert commit.index("RunNative('--installer-commit')") < commit.index("ProtectionCommitted := True;")
+    assert "RaiseException(" in commit
 
 
 def test_rollback_happens_in_deinitialize_only_when_not_committed(code: str) -> None:
@@ -155,36 +149,28 @@ def test_rollback_happens_in_deinitialize_only_when_not_committed(code: str) -> 
     assert "WriteOutcome('failed')" in deinit
 
     rollback = _body(code, "procedure RollBackProtectedReplace();")
-    assert "RestoreLayer(AppLayerName, AppAsideName)" in rollback
-    assert "RestoreLayer(RuntimeLayerName, RuntimeAsideName)" in rollback
-    restore = _body(code, "function RestoreLayer(")
-    # Partial new layer is removed before the old one is renamed back.
-    assert restore.index("DeleteTreeSafely(Target)") < restore.index("RenameFile(Source, Target)")
+    assert "RunNative('--installer-rollback')" in rollback
+    assert "RollbackIncomplete := Code = 3;" in rollback
+    assert "OutcomeWritten := True;" in rollback
 
 
-def test_stale_aside_folders_are_handled_in_code_never_by_install_delete(
-    script: str, code: str
-) -> None:
-    """[InstallDelete] runs after CurStepChanged(ssInstall), so an entry naming
-    the renamed-aside folders would delete the copy this run just made."""
-
+def test_backups_are_never_install_delete_and_uninstall_names_the_owned_staging(script: str) -> None:
     assert not re.search(r"^\[InstallDelete\]", script, re.MULTILINE)
-    begin = _body(code, "procedure BeginProtectedReplace();")
-    # Marker present: an earlier run died uncommitted, so restore. Absent: those
-    # folders are finished-upgrade leftovers, so delete.
-    recovery, leftovers = begin.split("  else\n  begin\n", 1)
-    assert "ProtectionMarkerName" in recovery and "RollBackProtectedReplace();" in recovery
-    assert "DeleteTreeSafely(AppSubPath(AppAsideName));" in leftovers
-    assert "DeleteTreeSafely(AppSubPath(RuntimeAsideName));" in leftovers
-    # Uninstall cleans anything a killed upgrade left.
-    for name in (".app.old", ".runtime.old", ".upgrade-in-progress"):
+    for name in (".wg-install-old", ".wg-install-new", ".upgrade-in-progress"):
         assert f'Name: "{{app}}\\{name}"' in script
+    files = script.split("[Files]", 1)[1].split("[Icons]", 1)[0]
+    assert 'DestDir: "{app}\\.wg-install-new"' in files
+    assert 'DestDir: "{app}\\runtime"' in files
+    assert 'DestDir: "{app}\\app"' in files
+    assert 'DestDir: "{app}\\recovery"' in files
+    assert not re.search(r'DestDir: "\{app\}"', files)
 
 
-def test_no_junction_is_ever_followed_or_deleted(code: str) -> None:
-    assert "IsReparsePoint(Path)" in _body(code, "procedure DeleteTreeSafely(")
-    assert "IsReparsePoint(Source)" in _body(code, "function MoveLayerAside(")
-    assert code.index("function IsReparsePoint(") < code.index("procedure DeleteTreeSafely(")
+def test_native_recovery_does_not_follow_junctions() -> None:
+    source = (INSTALLERS.parents[1] / "launchers/windows/launcher.c").read_text()
+    assert "FILE_FLAG_OPEN_REPARSE_POINT" in source
+    assert "if (a & FILE_ATTRIBUTE_REPARSE_POINT) return 0;" in source
+    assert "matches(root, &j->root_id)" in source
 
 
 def test_wait_for_process_has_a_cap_and_fails_setup(code: str) -> None:
@@ -206,7 +192,7 @@ def test_wait_for_process_has_a_cap_and_fails_setup(code: str) -> None:
     step = _body(code, "procedure CurStepChanged(CurStep: TSetupStep);")
     install = step.split("if CurStep = ssInstall then", 1)[1].split("if CurStep = ssPostInstall", 1)[0]
     plain = _strip_comments_and_strings(install)
-    assert re.match(r"\s*begin\s+if not WaitForApplicationExit\(\) then", plain)
+    assert re.match(r"\s*begin\s+if not WaitForApplicationExit\(\) or not WaitForRunningApplicationExit\(\) then", plain)
     failure, replacement = install.split("    BeginProtectedReplace();", 1)
     assert re.search(
         r"begin\s+WriteOutcome\('failed'\);\s+if not WizardSilent\(\) then\s+"
@@ -263,6 +249,18 @@ def test_outcome_record_has_the_agreed_fields_and_is_atomic(code: str) -> None:
     assert "GetDateTimeString('yyyy-mm-dd\"T\"hh:nn:ss', '-', ':')" in write
 
 
+def test_fallback_outcome_cannot_claim_an_unverified_previous_install(code: str, gates: str) -> None:
+    write = _body(code, "procedure WriteOutcome(")
+    assert '"previousKept": ' in write
+    # Fresh-root aborts and pre-protection timeouts have no native identity
+    # evidence. Inno fallback must never assert that an old version was kept.
+    assert re.findall(r"Kept\s*:=\s*'([^']+)';", write) == ["false"]
+    assert len(re.findall(r"\bKept\s*:=", _strip_comments_and_strings(write))) == 1
+    assert '$freshData.result -eq "failed"' in gates
+    assert '$freshData.previousKept -eq $false' in gates
+    assert '$freshReturned' in gates and '$freshExit -ne 0' in gates
+
+
 def test_previous_version_comes_from_this_products_uninstall_key(script: str, code: str) -> None:
     app_id = re.search(r"^AppId=\{(\{[0-9A-F-]+\})", script, re.MULTILINE)
     assert app_id
@@ -303,7 +301,7 @@ def test_gates_check_removed_files_outcome_and_waitpid(gates: str) -> None:
     # The baseline is the package as freshly installed, taken before planting.
     assert gates.index("$layerBaseline =") < gates.index("$removedModule =")
     assert "$layerAfter -eq $layerBaseline" in gates
-    assert '".app.old", ".runtime.old", ".upgrade-in-progress"' in gates
+    assert '".app.old", ".runtime.old", ".wg-install-old", ".wg-install-new", ".upgrade-in-progress"' in gates
     assert '/OUTCOME=' in gates and '/WAITPID=' in gates
     # The silent upgrade in gate 13 passes no /TASKS.
     gate13 = gates.split("# --- Gate 13", 1)[1].split("# --- Gate 14", 1)[0]

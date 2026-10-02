@@ -1,0 +1,14 @@
+{
+  "sourceCommit": "524c31e4389a69c4fcd18de4e27ebbf206955ce2",
+  "source": "scripts/build_bundle.py",
+  "sourceSha256": "75c8644af902fbe4de1ff5e1c291014c37c991c394d3a948ffe1edd7ea4cb768",
+  "files": {
+    "Waveguide Generator._pth": "0c2b7a354a2f6865ef8048687e8df55341fd79f25bcfc87c041adcff702cdafb",
+    "wg_desktop_bootstrap.py": "fe1423c388a21c2b0e7be9f4186536922ee0336654938a6122940b6d37c28fb2",
+    "sitecustomize.py": "4a7aba8ca9801b5f1d0532797df52f27f27229d0127850d1343dfe4862f955f1",
+    "apply_update.py": "06fa1d8b153bad636edf865a3214a3cd2d6760eaf5e96d06472927c07dadfafe"
+  },
+  "sourceFiles": {
+    "apply_update.py": "launchers/apply_update.py"
+  }
+}

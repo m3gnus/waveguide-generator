@@ -1,0 +1,641 @@
+"""Native Win32 behavior runs only on Windows; build contracts run everywhere."""
+from __future__ import annotations
+
+import json
+import importlib.util
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import struct
+import time
+import zlib
+
+import pytest
+
+from scripts import build_bundle
+
+pytestmark = pytest.mark.xdist_group("windows_native_setup_mutex")
+
+ROOT = Path(__file__).resolve().parents[2]
+BOOT = ["wg-python.exe", "python313.dll", "python3.dll", "vcruntime140.dll",
+        "vcruntime140_1.dll", "msvcp140.dll", "wg-python._pth",
+        "Waveguide Generator._pth", "pyvenv.cfg", "WaveguideGenerator.ico"]
+
+
+def _old_receiver():
+    spec = importlib.util.spec_from_file_location("wg_v032_apply_update", ROOT / "scripts/tests/fixtures/windows_v032/apply_update.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_compiled_source_changes_shared_runtime_identity(tmp_path: Path) -> None:
+    source = tmp_path / build_bundle.WINDOWS_NATIVE_SOURCE
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"first source")
+    hook = tmp_path / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE
+    hook.write_bytes(b"first hook")
+    first = build_bundle.runtime_recipe(tmp_path)
+    source.write_bytes(b"changed source")
+    assert first != build_bundle.runtime_recipe(tmp_path)
+    assert first.startswith("wg2-bundle-runtime-v3:windows-native-")
+    second = build_bundle.runtime_recipe(tmp_path)
+    hook.write_bytes(b"changed hook")
+    assert second != build_bundle.runtime_recipe(tmp_path)
+
+
+def test_manifest_bridge_refreshes_both_native_entry_and_worker_python(tmp_path: Path) -> None:
+    root = tmp_path / "WG"
+    runtime = root / "runtime"
+    runtime.mkdir(parents=True)
+    (root / "Waveguide Generator.exe").write_bytes(b"old pythonw")
+    entries = []
+    for source, destination in build_bundle.windows_launcher_files():
+        (runtime / source).write_bytes(source.encode())
+        entries.append({"source": source, "destination": destination})
+    (runtime / "RUNTIME-MANIFEST.json").write_text(json.dumps({"launcherFiles": entries}))
+    _old_receiver().refresh_launcher_files(root)
+    assert (root / "Waveguide Generator.exe").read_bytes() == b"wg-native.exe"
+    assert (root / "wg-python.exe").read_bytes() == b"pythonw.exe"
+    assert (root / "Waveguide Generator.exe.previous").read_bytes() == b"old pythonw"
+    assert all("/" not in e["destination"] and "\\" not in e["destination"] for e in entries)
+
+
+@pytest.mark.parametrize("stop_after", range(len(build_bundle.windows_launcher_files())))
+def test_exact_old_receiver_death_between_publications_never_exposes_native_without_dependencies(tmp_path: Path,
+                                                                                                  stop_after: int) -> None:
+    class ReceiverDeath(BaseException):
+        pass
+
+    root = tmp_path / "WG"
+    runtime = root / "runtime"
+    runtime.mkdir(parents=True)
+    public = root / "Waveguide Generator.exe"
+    public.write_bytes(b"previous pythonw")
+    entries = []
+    for source, destination in build_bundle.windows_launcher_files():
+        (runtime / source).write_bytes(source.encode())
+        entries.append({"source": source, "destination": destination})
+    (runtime / "RUNTIME-MANIFEST.json").write_text(json.dumps({"launcherFiles": entries}))
+    published = 0
+
+    def rename(source, target):
+        nonlocal published
+        source.rename(target)
+        if source.parent.name == ".launcher-update":
+            published += 1
+            if published == stop_after + 1:
+                raise ReceiverDeath  # bypass caught-error rollback like process death
+
+    with pytest.raises(ReceiverDeath):
+        _old_receiver().refresh_launcher_files(root, renamer=rename)
+    if public.read_bytes() == b"wg-native.exe":
+        for source, destination in build_bundle.windows_launcher_files()[:-1]:
+            assert (root / destination).read_bytes() == source.encode()
+    else:
+        assert public.read_bytes() == b"previous pythonw"
+
+
+@pytest.fixture(scope="module")
+def native(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    if sys.platform != "win32":
+        pytest.skip("requires real Windows C compiler and Win32 filesystem/process APIs")
+    target = tmp_path_factory.mktemp("native") / "helper.exe"
+    build_bundle.write_windows_launcher(target, repo_root=ROOT)
+    return target
+
+
+@pytest.fixture(scope="module")
+def changed_natives(native: Path, tmp_path_factory: pytest.TempPathFactory):
+    variants = []
+    for version in ("B", "B1", "B2"):
+        repo = tmp_path_factory.mktemp("native-" + version)
+        source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
+        source.parent.mkdir(parents=True)
+        shutil.copy2(ROOT / build_bundle.WINDOWS_NATIVE_SOURCE, source)
+        hook = (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes() + f"\n# packaged hook {version}\n".encode()
+        (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(hook)
+        target = repo / "helper.exe"
+        build_bundle.write_windows_launcher(target, repo_root=repo)
+        variants.append((target, hook))
+    return variants
+
+
+@pytest.fixture(scope="module")
+def pausing_native(native: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Instrument only the private test compile, around the real Win32 I/O."""
+    repo = tmp_path_factory.mktemp("pausing-native")
+    source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
+    source.parent.mkdir(parents=True)
+    code = (ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()
+    pause = r'''
+static void test_pause(const wchar_t *target, const wchar_t *stage) {
+    wchar_t wanted[64], kind[64], marker[1024]; DWORD written; HANDLE file;
+    const wchar_t *leaf = wcsrchr(target, L'\\');
+    if (!GetEnvironmentVariableW(L"WG_NATIVE_TEST_STAGE", wanted, 64) || wcscmp(wanted, stage) ||
+        !GetEnvironmentVariableW(L"WG_NATIVE_TEST_TARGET", kind, 64) || !leaf || wcscmp(leaf + 1, kind) ||
+        !GetEnvironmentVariableW(L"WG_NATIVE_TEST_MARKER", marker, 1024)) return;
+    file = CreateFileW(marker, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file != INVALID_HANDLE_VALUE) { WriteFile(file, "ready", 5, &written, NULL); FlushFileBuffers(file); CloseHandle(file); }
+    for (;;) Sleep(1000);
+}
+'''
+    code = code.replace("static int hook_write(", pause + "\nstatic int hook_write(", 1)
+    begin = code.index("static int hook_write(")
+    end = code.index("static int hook_temp_name(", begin)
+    part = code[begin:end].replace("    ok = WriteFile", "    test_pause(target, L\"created\");\n    ok = WriteFile", 1)
+    part = part.replace("    if (ok) ok = SetFileInformationByHandle", "    if (ok) test_pause(target, L\"flushed\");\n    if (ok) ok = SetFileInformationByHandle", 1)
+    part = part.replace("    if (!CloseHandle(h))", "    if (ok) test_pause(target, L\"cleared\");\n    if (!CloseHandle(h))", 1)
+    source.write_text(code[:begin] + part + code[end:])
+    code = source.read_text().replace("    if (equal_files(public_path, self)) return 0;",
+                                    "    test_pause(public_path, L\"entry\");\n    if (equal_files(public_path, self)) return 0;", 1)
+    source.write_text(code)
+    hook = (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes() + b"\n# interruption candidate\n"
+    (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(hook)
+    target = repo / "helper.exe"
+    build_bundle.write_windows_launcher(target, repo_root=repo)
+    return target
+
+
+def _old_root(tmp_path: Path, native: Path) -> tuple[Path, Path]:
+    root = tmp_path / "WG"
+    root.mkdir()
+    for name in ("app", "runtime", "recovery"):
+        (root / name).mkdir()
+        (root / name / "old.txt").write_text(name)
+    for name in BOOT:
+        (root / name).write_bytes(("old:" + name).encode())
+    (root / "Waveguide Generator.exe").write_bytes(native.read_bytes())
+    outcome = tmp_path / "outcome.json"
+    return root, outcome
+
+
+def _prepare(native: Path, root: Path, outcome: Path, *, dead_owner: bool) -> subprocess.Popen[str] | None:
+    command = [str(native), "--installer-prepare", str(root), "0.3.4", "0.3.5", str(outcome), ""]
+    if dead_owner:
+        # Hold a real owner until the partial/foreign objects are ready. The
+        # monitor may restore immediately after owner.kill(), before startup.
+        code = "import subprocess,sys;assert subprocess.call(sys.argv[1:])==0;print('ready',flush=True);sys.stdin.read()"
+        owner = subprocess.Popen([sys.executable, "-c", code, *command], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        assert owner.stdout is not None and owner.stdout.readline().strip() == "ready"
+        return owner
+    result = subprocess.run(command, check=False)
+    assert result.returncode == 0
+    return None
+
+
+def _kill_owner(owner: subprocess.Popen[str] | None) -> None:
+    assert owner is not None
+    owner.kill()
+    owner.wait(timeout=5)
+    if owner.stdout is not None:
+        owner.stdout.close()
+    if owner.stdin is not None:
+        owner.stdin.close()
+
+
+def test_dead_owner_partial_runtime_is_restored_before_python(native: Path, tmp_path: Path) -> None:
+    root, record = _old_root(tmp_path, native)
+    owner = _prepare(native, root, record, dead_owner=True)
+    (root / "runtime" / "partial.dll").write_bytes(b"truncated runtime")
+    (root / "app" / "new.txt").write_text("partial app")
+    _kill_owner(owner)
+    # -c stays inert after recovery; the fake Python image intentionally cannot
+    # run. Restoration and its outcome must already be complete before that.
+    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    assert (root / "runtime" / "old.txt").read_text() == "runtime"
+    assert not (root / "runtime" / "partial.dll").exists()
+    assert not (root / "app" / "new.txt").exists()
+    assert (root / "wg-python.exe").read_bytes() == b"old:wg-python.exe"
+    assert json.loads(record.read_text())["previousKept"] is True
+    assert json.loads(record.read_text())["result"] == "failed"
+    assert not (root / ".upgrade-in-progress").exists()
+
+
+def test_foreign_live_directory_is_preserved_and_real_backup_reported(native: Path, tmp_path: Path) -> None:
+    root, record = _old_root(tmp_path, native)
+    owner = _prepare(native, root, record, dead_owner=True)
+    displaced = root / "owned-partial"
+    (root / "runtime").rename(displaced)
+    (root / "runtime").mkdir()
+    (root / "runtime" / "foreign.txt").write_text("preserve")
+    _kill_owner(owner)
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    assert result.returncode == 3
+    assert (root / "runtime" / "foreign.txt").read_text() == "preserve"
+    data = json.loads(record.read_text())
+    assert data["result"] == "rollback_incomplete" and not data["previousKept"]
+    assert Path(data["backupPath"]) == root / ".wg-install-old" / "runtime"
+    assert Path(data["backupPath"]).is_dir()
+    assert (root / ".upgrade-in-progress").exists()
+
+
+def test_successful_commit_replaces_entire_layers_and_exact_boot_files(native: Path, tmp_path: Path) -> None:
+    root, record = _old_root(tmp_path, native)
+    _prepare(native, root, record, dead_owner=False)
+    for name in ("app", "runtime", "recovery"):
+        (root / name / "new.txt").write_text(name)
+    for name in BOOT:
+        (root / ".wg-install-new" / name).write_bytes(("new:" + name).encode())
+    result = subprocess.run([str(native), "--installer-commit", str(root)], check=False)
+    assert result.returncode == 0
+    for name in ("app", "runtime", "recovery"):
+        assert not (root / name / "old.txt").exists()
+        assert (root / name / "new.txt").read_text() == name
+    for name in BOOT:
+        assert (root / name).read_bytes() == ("new:" + name).encode()
+    assert json.loads(record.read_text())["result"] == "installed"
+    assert not (root / ".upgrade-in-progress").exists()
+    assert not (root / ".wg-install-old").exists()
+
+
+def test_malformed_journal_never_touches_installed_files(native: Path, tmp_path: Path) -> None:
+    root, record = _old_root(tmp_path, native)
+    (root / ".upgrade-in-progress").write_bytes(b"truncated or foreign journal")
+    before = (root / "runtime" / "old.txt").read_bytes()
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    assert result.returncode == 3
+    assert (root / "runtime" / "old.txt").read_bytes() == before
+    assert not record.exists()
+
+
+def _host_python_old_hook(root: Path) -> None:
+    """Real host interpreter plus exact v0.3.2 hook bytes, not a release bundle."""
+    base = Path(sys.base_prefix)
+    python = base / "python.exe"
+    assert python.is_file()
+    shutil.copy2(python, root / "wg-python.exe")
+    shutil.copy2(python, root / "Waveguide Generator.exe")
+    (root / "pyvenv.cfg").write_text(build_bundle.windows_pyvenv_cfg())
+    for name in ("python313.dll", "python3.dll"):
+        shutil.copy2(base / name, root / name)
+    for name, source in build_bundle.locate_msvc_runtime_dlls().items():
+        shutil.copy2(source, root / name)
+
+    def link_or_copy(source: str, target: str) -> str:
+        try:
+            os.link(source, target)
+        except OSError:
+            shutil.copy2(source, target)
+        return target
+
+    shutil.copytree(base / "Lib", root / "runtime/Lib", copy_function=link_or_copy,
+                    ignore=shutil.ignore_patterns("__pycache__", "site-packages", "test", "ensurepip", "turtledemo"))
+    shutil.copytree(base / "DLLs", root / "runtime/DLLs", copy_function=link_or_copy)
+    fixture = ROOT / "scripts/tests/fixtures/windows_v032"
+    for name in ("Waveguide Generator._pth",):
+        shutil.copy2(fixture / name, root / name)
+    (root / "wg-python._pth").unlink()
+    shutil.copy2(fixture / "wg_desktop_bootstrap.py", root / "app/wg_desktop_bootstrap.py")
+    shutil.copy2(fixture / "sitecustomize.py", root / "recovery/sitecustomize.py")
+    for source, target in (("bundle_recovery.py", "wg_bundle_recovery.py"),
+                           ("apply_update.py", "apply_update.py"), ("update_lock.py", "update_lock.py")):
+        shutil.copy2(ROOT / "launchers" / source, root / "recovery" / target)
+    (root / "app/launchers").mkdir()
+    (root / "app/launchers/__init__.py").write_text("")
+    (root / "app/launchers/desktop.py").write_text(
+        "from pathlib import Path\nimport os\ndef main(argv):\n"
+        " Path(os.environ['WG_TEST_STARTED']).write_text('old desktop ran')\n return 0\n")
+
+
+def test_native_first_manual_rollback_starts_actual_old_hook_and_forwards_args(native: Path, tmp_path: Path) -> None:
+    root, record = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    original_pth = (root / "Waveguide Generator._pth").read_bytes()
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    owner = _prepare(native, root, record, dead_owner=True)
+    (root / "runtime/partial.dll").write_bytes(b"incomplete")
+    _kill_owner(owner)
+    started = tmp_path / "old-desktop.txt"
+    environment = dict(os.environ, WG_TEST_STARTED=str(started), WG2_DATA_DIR=str(tmp_path / "private-data"),
+                       WG2_FUSION_ADDINS_DIR=str(tmp_path / "private-AddIns"))
+    result = subprocess.run([str(root / "Waveguide Generator.exe")], env=environment, check=False, timeout=30)
+    assert result.returncode == 0 and started.read_text() == "old desktop ran"
+    assert (root / "Waveguide Generator._pth").read_bytes() == original_pth
+    assert json.loads(record.read_text())["result"] == "failed"
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "import json,sys;print(json.dumps(sys.argv))", "value with spaces"],
+                            env=environment, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and json.loads(result.stdout) == ["-c", "value with spaces"]
+    (root / "app/argv_probe.py").write_text("import json,sys;print(json.dumps(sys.argv[1:]))")
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-m", "argv_probe", "quoted value"],
+                            env=environment, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and json.loads(result.stdout) == ["quoted value"]
+    # Nested workers return through the public native image too; stdout and
+    # quoted argv survive both admissions.
+    worker = ("import sys;from pathlib import Path;assert getattr(sys,'_wg_native_start_admitted',False);"
+              f"assert Path(sys.executable)==Path({str(root / 'Waveguide Generator.exe')!r});print(sys.argv[1])")
+    code = f"import subprocess,sys;subprocess.run([sys.executable,'-c',{worker!r},'nested value'],check=True)"
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", code], env=environment,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and result.stdout.strip() == "nested value"
+
+
+def test_forged_capability_never_executes_worker_code(native: Path, tmp_path: Path) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    # One legitimate inert invocation publishes the embedded hook/private pth.
+    assert subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=30).returncode == 0
+    worker_wrote = tmp_path / "forged-worker.txt"
+    environment = dict(os.environ, WG_NATIVE_START=f"{os.getpid()},0,0,123,124,125,0")
+    result = subprocess.run([str(root / "wg-python.exe"), "-B", "-c", f"open({str(worker_wrote)!r},'w').write('bad')"],
+                            env=environment, check=False, timeout=15)
+    assert result.returncode == 4 and not worker_wrote.exists()
+
+
+def test_missing_capability_refuses_active_setup(native: Path, tmp_path: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    assert subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=30).returncode == 0
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+    k.CreateMutexW.restype = wintypes.HANDLE
+    k.CloseHandle.argtypes = [wintypes.HANDLE]
+    mutex = k.CreateMutexW(None, False, "WaveguideGeneratorSetup")
+    assert mutex
+    environment = dict(os.environ)
+    environment.pop("WG_NATIVE_START", None)
+    wrote = tmp_path / "unadmitted.txt"
+    try:
+        result = subprocess.run([str(root / "wg-python.exe"), "-B", "-c", f"open({str(wrote)!r},'w').write('bad')"],
+                                env=environment, check=False, timeout=15)
+        assert result.returncode == 4 and not wrote.exists()
+    finally:
+        k.CloseHandle(mutex)
+
+
+def test_known_old_hook_refreshes_before_runtime_source_changes(native: Path, tmp_path: Path) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    sidecar = root / ".native-start"
+    sidecar.mkdir()
+    old_hook = b"# prior packaged native admission hook\n"
+    (sidecar / "sitecustomize.py").write_bytes(old_hook)
+    (root / "runtime/wg-startup-hook.py").write_bytes(old_hook)
+    # Native entry publication has access to the old source before prepare
+    # moves its runtime. After it disappears, the embedded new hook is exact.
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    expected = (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes()
+    assert (sidecar / "sitecustomize.py").read_bytes() == expected
+    (root / "runtime/wg-startup-hook.py").write_bytes(expected)
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "print('new hook admitted')"],
+                            check=False, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and result.stdout.strip() == "new hook admitted"
+
+
+def test_junction_root_refused_before_any_native_entry_or_lock_write(native: Path, tmp_path: Path) -> None:
+    target, _ = _old_root(tmp_path, native)
+    previous = (target / "Waveguide Generator.exe").read_bytes()
+    junction = tmp_path / "foreign-root"
+    result = subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(junction), str(target)],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    try:
+        result = subprocess.run([str(native), "--installer-entry", str(junction)], check=False)
+        assert result.returncode == 3
+        assert (target / "Waveguide Generator.exe").read_bytes() == previous
+        assert not (target / ".wg-install-lock").exists()
+        assert not (target / ".native-start").exists()
+    finally:
+        junction.rmdir()
+
+
+def _entry(native: Path, root: Path) -> int:
+    return subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=20).returncode
+
+
+def _run_admitted(root: Path) -> None:
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c",
+                             "import sys;assert sys._wg_native_start_admitted;print('admitted')"],
+                            check=False, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0 and result.stdout.strip() == "admitted", result.stderr
+
+
+def test_changed_hook_rollback_then_next_setup_is_recognised(changed_natives, tmp_path: Path) -> None:
+    (b, b_hook), (b1, b1_hook), (b2, b2_hook) = changed_natives
+    root, record = _old_root(tmp_path, b)
+    _host_python_old_hook(root)
+    assert _entry(b, root) == 0
+    (root / "runtime/wg-startup-hook.py").write_bytes(b_hook)
+    _run_admitted(root)
+    assert _entry(b1, root) == 0
+    owner = _prepare(b1, root, record, dead_owner=True)
+    (root / "runtime/wg-startup-hook.py").write_bytes(b1_hook)
+    (root / "runtime/partial.dll").write_bytes(b"incomplete B1")
+    _kill_owner(owner)
+    _run_admitted(root)
+    assert (root / "runtime/wg-startup-hook.py").read_bytes() == b_hook
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b1_hook
+    assert json.loads(record.read_text())["result"] == "failed"
+    assert _entry(b2, root) == 0  # neither previous sidecar nor runtime matches B2
+    _run_admitted(root)
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b2_hook
+
+
+def test_exact_v032_bridge_can_swap_runtime_before_new_hook_admission(changed_natives, tmp_path: Path) -> None:
+    (b, b_hook), (b1, b1_hook), _ = changed_natives
+    root, _ = _old_root(tmp_path, b)
+    _host_python_old_hook(root)
+    assert _entry(b, root) == 0
+    (root / "runtime/wg-startup-hook.py").write_bytes(b_hook)
+    _run_admitted(root)
+    (root / "runtime/wg-startup-hook.py").write_bytes(b1_hook)
+    (root / "runtime/wg-native.exe").write_bytes(b1.read_bytes())
+    (root / "runtime/RUNTIME-MANIFEST.json").write_text(json.dumps({
+        "launcherFiles": [{"source": "wg-native.exe", "destination": "Waveguide Generator.exe"}]}))
+    _old_receiver().refresh_launcher_files(root)
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b_hook
+    _run_admitted(root)
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b1_hook
+
+
+def test_interrupted_entry_publication_old_image_accepts_recorded_new_hook(changed_natives, tmp_path: Path) -> None:
+    (b, b_hook), (b1, b1_hook), _ = changed_natives
+    root, _ = _old_root(tmp_path, b)
+    _host_python_old_hook(root)
+    assert _entry(b, root) == 0
+    (root / "runtime/wg-startup-hook.py").write_bytes(b_hook)
+    _run_admitted(root)
+    previous_image = (root / "Waveguide Generator.exe").read_bytes()
+    assert _entry(b1, root) == 0
+    # Exact on-disk boundary after durable hook/ledger publication and before
+    # the public native image's atomic rename. No journal exists yet.
+    (root / "Waveguide Generator.exe").write_bytes(previous_image)
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b1_hook
+    _run_admitted(root)
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b_hook
+
+
+def _history_rebuild(original: bytes, records: list[bytes]) -> bytes:
+    header = bytearray(original[:80])
+    payload = b"".join(struct.pack("<I", len(value)) + value for value in records)
+    struct.pack_into("<III", header, 28, 80 + len(payload), len(records), 0)
+    result = header + payload
+    struct.pack_into("<I", result, 36, zlib.crc32(result))
+    return bytes(result)
+
+
+@pytest.mark.parametrize("malformation", ["crc", "total", "count", "length", "zero_length", "truncated", "trailing",
+                                         "oversized", "foreign_directory"])
+def test_malformed_or_foreign_history_refused_without_altering_hook(native: Path, tmp_path: Path, malformation: str) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert _entry(native, root) == 0
+    sidecar = root / ".native-start"
+    ledger = sidecar / "known-hooks"
+    original_hook = (sidecar / "sitecustomize.py").read_bytes()
+    data = bytearray(ledger.read_bytes())
+    if malformation == "crc":
+        data[-1] ^= 1
+    elif malformation == "total":
+        struct.pack_into("<I", data, 28, 0xffffffff)
+    elif malformation == "count":
+        struct.pack_into("<I", data, 32, 0xffffffff)
+    elif malformation in {"length", "zero_length", "truncated", "trailing"}:
+        if malformation in {"length", "zero_length"}:
+            struct.pack_into("<I", data, 80, 0xffffffff if malformation == "length" else 0)
+        elif malformation == "truncated":
+            data = data[:-1]
+        else:
+            data += b"x"
+        struct.pack_into("<I", data, 28, len(data))
+        struct.pack_into("<I", data, 36, 0)
+        struct.pack_into("<I", data, 36, zlib.crc32(data))  # reach bounded record parsing
+    elif malformation == "oversized":
+        data = bytearray(b"x" * (1024 * 1024 + 1))
+    else:
+        sidecar.rename(root / ".previous-native-start")
+        sidecar.mkdir()
+        (sidecar / "sitecustomize.py").write_bytes(original_hook)
+    ledger.write_bytes(data)
+    assert _entry(native, root) == 3
+    assert ledger.read_bytes() == data
+    assert (sidecar / "sitecustomize.py").read_bytes() == original_hook
+
+
+def test_history_exhaustion_preserves_previous_recognition(changed_natives, tmp_path: Path) -> None:
+    (b, b_hook), (b1, _), _ = changed_natives
+    root, _ = _old_root(tmp_path, b)
+    _host_python_old_hook(root)
+    assert _entry(b, root) == 0
+    ledger = root / ".native-start/known-hooks"
+    full = _history_rebuild(ledger.read_bytes(), [b_hook] + [f"known prior hook {i}\n".encode() for i in range(63)])
+    ledger.write_bytes(full)
+    assert _entry(b1, root) == 3
+    assert ledger.read_bytes() == full
+    assert (root / ".native-start/sitecustomize.py").read_bytes() == b_hook
+    _run_admitted(root)  # recognised hooks still run when no new history fits
+
+
+def test_unknown_sidecar_entry_and_hook_bytes_are_preserved(native: Path, tmp_path: Path) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert _entry(native, root) == 0
+    sidecar = root / ".native-start"
+    unknown = sidecar / "foreign.tmp"
+    unknown.write_bytes(b"not native-owned")
+    assert _entry(native, root) == 3 and unknown.read_bytes() == b"not native-owned"
+    unknown.unlink()
+    (sidecar / "sitecustomize.py").write_bytes(b"# unknown hook\n")
+    assert _entry(native, root) == 3
+    assert (sidecar / "sitecustomize.py").read_bytes() == b"# unknown hook\n"
+
+
+def test_legal_payload_becomes_long_backup_path_and_recovers(native: Path, tmp_path: Path) -> None:
+    root, record = _old_root(tmp_path, native)
+    # The payload remains below MAX_PATH; inserting .wg-install-old raises the
+    # backup above it. Native traversal must work without registry long-path opt-in.
+    base = root / "runtime"
+    remaining = 250 - len(str(base)) - 1
+    assert remaining > 30, "Windows test temp directory must leave payload path budget"
+    relative = "n" * (remaining - 9) + "/old.txt"
+    previous = base / relative
+    previous.parent.mkdir()
+    previous.write_bytes(b"deep previous payload")
+    assert len(str(previous)) < 260 and len(str(root / ".wg-install-old/runtime" / relative)) > 260
+    owner = _prepare(native, root, record, dead_owner=True)
+    _kill_owner(owner)
+    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    assert previous.read_bytes() == b"deep previous payload"
+    assert json.loads(record.read_text())["previousKept"] is True
+    assert not (root / ".upgrade-in-progress").exists()
+
+
+@pytest.mark.parametrize("target", ["known-hooks", "sitecustomize.py"])
+@pytest.mark.parametrize("stage", ["created", "flushed", "cleared"])
+def test_actual_terminated_sidecar_writer_recovers(native: Path, pausing_native: Path, tmp_path: Path,
+                                                   target: str, stage: str) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert _entry(native, root) == 0
+    _run_admitted(root)
+    marker = tmp_path / "paused.txt"
+    environment = dict(os.environ, WG_NATIVE_TEST_STAGE=stage, WG_NATIVE_TEST_TARGET=target,
+                       WG_NATIVE_TEST_MARKER=str(marker))
+    helper = subprocess.Popen([str(pausing_native), "--installer-entry", str(root)], env=environment)
+    try:
+        until = time.monotonic() + 20
+        while not marker.exists() and helper.poll() is None and time.monotonic() < until:
+            time.sleep(0.01)
+        assert marker.read_text() == "ready"
+        temporary = root / ".native-start" / f"{target}.{helper.pid}.tmp"
+        helper.kill()
+        helper.wait(timeout=5)
+        if stage == "cleared":
+            assert temporary.exists()  # Ex genuinely cleared on-close deletion
+        else:
+            assert not temporary.exists()  # OS deleted even an interrupted writer
+        _run_admitted(root)
+        assert not temporary.exists()
+        assert _entry(pausing_native, root) == 0  # full clear/close/rename also survives
+        _run_admitted(root)
+    finally:
+        if helper.poll() is None:
+            helper.kill()
+            helper.wait(timeout=5)
+
+
+@pytest.mark.parametrize("target", ["known-hooks", "sitecustomize.py"])
+def test_foreign_or_incomplete_native_named_temporary_preserved(native: Path, tmp_path: Path, target: str) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert _entry(native, root) == 0
+    temporary = root / ".native-start" / f"{target}.12345.tmp"
+    temporary.write_bytes(b"foreign or interrupted partial data")
+    assert _entry(native, root) == 3
+    assert temporary.read_bytes() == b"foreign or interrupted partial data"
+
+
+def test_actual_entry_termination_after_hook_before_public_image(native: Path, pausing_native: Path, tmp_path: Path) -> None:
+    root, _ = _old_root(tmp_path, native)
+    _host_python_old_hook(root)
+    assert _entry(native, root) == 0
+    _run_admitted(root)
+    old_image = (root / "Waveguide Generator.exe").read_bytes()
+    old_hook = (root / ".native-start/sitecustomize.py").read_bytes()
+    marker = tmp_path / "entry-paused.txt"
+    environment = dict(os.environ, WG_NATIVE_TEST_STAGE="entry", WG_NATIVE_TEST_TARGET="Waveguide Generator.exe",
+                       WG_NATIVE_TEST_MARKER=str(marker))
+    helper = subprocess.Popen([str(pausing_native), "--installer-entry", str(root)], env=environment)
+    try:
+        until = time.monotonic() + 20
+        while not marker.exists() and helper.poll() is None and time.monotonic() < until:
+            time.sleep(0.01)
+        assert marker.read_text() == "ready"
+        assert (root / "Waveguide Generator.exe").read_bytes() == old_image
+        assert (root / ".native-start/sitecustomize.py").read_bytes() != old_hook
+        helper.kill()
+        helper.wait(timeout=5)
+        _run_admitted(root)
+        assert (root / ".native-start/sitecustomize.py").read_bytes() == old_hook
+    finally:
+        if helper.poll() is None:
+            helper.kill()
+            helper.wait(timeout=5)

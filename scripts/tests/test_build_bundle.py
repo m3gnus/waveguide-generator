@@ -1700,6 +1700,10 @@ def test_windows_runtime_build_requests_the_explicit_host_target_and_copies_msvc
             return subprocess.CompletedProcess(command, 0, str(path), "")
         return subprocess.CompletedProcess(command, 0, "", "")
 
+    hook = repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE
+    hook.parent.mkdir(parents=True)
+    hook.write_text("# test native startup hook\n")
+    monkeypatch.setattr(build_bundle, "write_windows_launcher", lambda path, **_kw: path.write_bytes(b"native entry"))
     destination = tmp_path / "scratch" / "runtime"
     destination.parent.mkdir()
     builder = BundleBuilder(repo, runner=run, system=lambda: "Windows", machine=lambda: "AMD64")
@@ -1744,6 +1748,7 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
     runtime.mkdir()
     app.mkdir()
     (runtime / "pythonw.exe").write_bytes(b"gui python")
+    (runtime / build_bundle.WINDOWS_NATIVE_NAME).write_bytes(b"native entry")
     (runtime / "python313.dll").write_bytes(b"python dll")
     (runtime / "python3.dll").write_bytes(b"stable dll")
     for filename in MSVC_RUNTIME_DLLS:
@@ -1772,7 +1777,9 @@ def test_windows_layout_writer_copies_launcher_dlls_layers_pth_and_icon(
         icon_writer=lambda path: path.write_bytes(b"ico"),
     )
 
-    assert (destination / WINDOWS_LAUNCHER_NAME).read_bytes() == b"gui python"
+    assert (destination / WINDOWS_LAUNCHER_NAME).read_bytes() == b"native entry"
+    assert (destination / build_bundle.WINDOWS_PYTHON_NAME).read_bytes() == b"gui python"
+    assert (destination / "wg-python._pth").read_text() == build_bundle.windows_native_pth()
     assert (destination / WINDOWS_PTH_NAME).read_text(encoding="utf-8") == windows_pth()
     assert (destination / WINDOWS_PYVENV_NAME).read_text(encoding="utf-8") == windows_pyvenv_cfg()
     assert (destination / WINDOWS_ICON_NAME).read_bytes() == b"ico"

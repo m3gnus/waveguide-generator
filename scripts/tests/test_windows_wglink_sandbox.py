@@ -39,7 +39,7 @@ COMMANDS = frozenset('''
     Group-Object Out-Null Set-Content ConvertFrom-Json ConvertTo-Json Select-Object
     New-Object Split-Path Rename-Item Start-Sleep Unblock-File
     Get-Process Get-CimInstance Select-String Copy-Item Get-ItemProperty
-    Start-SandboxedSetup Start-StandIn Gate TreeFingerprint LayerFingerprint
+    Start-SandboxedSetup Start-StandIn Start-SandboxedNativeProbe Stop-SandboxedProcess Gate TreeFingerprint LayerFingerprint
 '''.lower().split())
 TYPES = {'[io.path]', '[guid]', '[pscustomobject]', '[string]', '[string[]]',
          '[switch]', '[parameter(mandatory = $true)]', '[datetime]',
@@ -55,7 +55,8 @@ METHODS = {'::getfullpath', '::newguid', '.tostring', '.trimend', '.substring',
            '::getcurrent', '::administrator', '.isinrole'}
 KEYWORDS = {'param', 'if', 'elseif', 'else', 'foreach', 'try', 'catch', 'finally',
             'return', 'throw', 'exit', 'do', 'while', 'break', 'continue'}
-FUNCTIONS = {'gate', 'treefingerprint', 'layerfingerprint', 'start-sandboxedsetup', 'start-standin'}
+FUNCTIONS = {'gate', 'treefingerprint', 'layerfingerprint', 'start-sandboxedsetup', 'start-standin',
+             'start-sandboxednativeprobe', 'stop-sandboxedprocess'}
 
 # Reviewed user32 window/PID queries only. Pin the entire literal C# body;
 # Add-Type is never part of the general command allowlist.
@@ -255,6 +256,8 @@ def assert_gate_allowlist(source: str) -> None:
     tokens = powershell_tokens(source)
     setup_body, outside = function_body(tokens, 'Start-SandboxedSetup')
     standin_body, outside = function_body(outside, 'Start-StandIn')
+    probe_body, outside = function_body(outside, 'Start-SandboxedNativeProbe')
+    stop_body, outside = function_body(outside, 'Stop-SandboxedProcess')
     commands = assert_allowed_powershell(outside, extra_commands={'add-type'})
     compilations = [c for c in commands if c[0].lower() == 'add-type']
     assert len(compilations) == 1, 'exactly one reviewed Add-Type is allowed'
@@ -278,6 +281,9 @@ def assert_gate_allowlist(source: str) -> None:
         foreach ($argument in $ExtraArguments) {
             if ($argument -match '^/(VERYSILENT|SUPPRESSMSGBOXES|WGLINKADDINSDIR)(=|$)') { throw "refused" }
         }
+        if ($Executable -eq $Setup -and -not ($ExtraArguments | Where-Object { $_ -match '^/DIR=' })) {
+            $ExtraArguments = @("/DIR=`"$installRoot`"") + $ExtraArguments
+        }
         $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES") + $ExtraArguments + @("/WGLINKADDINSDIR=`"$AddIns`"")
         $p = Start-Process -FilePath $Executable -ArgumentList $arguments -PassThru -Wait:$Wait -NoNewWindow
         $null = $p.Handle
@@ -288,7 +294,27 @@ def assert_gate_allowlist(source: str) -> None:
         $null = $p.Handle
         return $p
     '''
-    for body, contract in ((setup_body, setup_contract), (standin_body, standin_contract)):
+    probe_contract = r'''
+        param([string]$ProbePath)
+        if ($env:WG2_DATA_DIR -ne $gateData -or $env:WG2_FUSION_ADDINS_DIR -ne $wglinkAddins) { throw "refused" }
+        if ($ProbePath -ne (Join-Path $gateRoot "recovered-loader-only.txt") -and
+            $ProbePath -ne (Join-Path $gateRoot "recovered-installer-tree.txt")) { throw "refused" }
+        $pythonPath = ConvertTo-Json -InputObject $ProbePath -Compress
+        $pythonPath = $pythonPath -replace '^"|"$', '' -replace "'", '\u0027'
+        $code = "from pathlib import Path;Path('$pythonPath').write_text('previous interpreter ran')"
+        $p = Start-Process -FilePath (Join-Path $installRoot "Waveguide Generator.exe") -ArgumentList "-c", ('"' + $code + '"') -PassThru -NoNewWindow
+        $null = $p.Handle
+        return $p
+    '''
+    stop_contract = r'''
+        param($Process, [switch]$Tree)
+        $null = $Process.Handle
+        if ($Process.HasExited) { return }
+        $arguments = @("/PID", [string]$Process.Id, "/F")
+        if ($Tree) { $arguments += "/T" }
+        & "$env:SystemRoot\System32\taskkill.exe" @arguments | Out-Null
+    '''
+    for body, contract in ((setup_body, setup_contract), (standin_body, standin_contract), (probe_body, probe_contract)):
         helper_commands = assert_allowed_powershell(body, extra_commands={'start-process'})
         assert sum(c[0].lower() == 'start-process' for c in helper_commands) == 1
         normalized = compact(body)
@@ -298,16 +324,31 @@ def assert_gate_allowlist(source: str) -> None:
                 assert normalized[i + 1].startswith(('"', "'"))
                 normalized[i + 1] = '"refused"'
         assert normalized == compact(powershell_tokens(contract)), 'unreviewed helper body'
-    assert_environment_pair(tokens, ['$env:WG2_DATA_DIR = $gateData', '$env:WG2_DATA_DIR = $previousDataDir'])
+    taskkill = '"$env:systemroot\\system32\\taskkill.exe"'
+    assert_allowed_powershell(stop_body, delegated={taskkill})
+    assert compact(stop_body) == compact(powershell_tokens(stop_contract)), 'unreviewed stop helper body'
+    assert_environment_pair(tokens, ['$env:WG2_DATA_DIR = $gateData',
+                                     '$env:WG2_FUSION_ADDINS_DIR = $wglinkAddins',
+                                     '$env:WG2_DATA_DIR = $previousDataDir',
+                                     '$env:WG2_FUSION_ADDINS_DIR = $previousFusionAddins'])
     # The inputs to the helper are immutable private fixtures, created before
     # the first call. Pin their definitions rather than infer arbitrary PS code.
     fixtures = {
-        '$installRoot': '"$env:LOCALAPPDATA\\Programs\\Waveguide Generator"',
-        '$gateRoot': 'Join-Path $env:TEMP ("WaveguideGenerator-installer-gates-" + [guid]::NewGuid().ToString("N"))',
+        '$installRoot': 'Join-Path $gateRoot "i"',
+        '$longDir': 'Join-Path $gateRoot ("g" * 200)',
+        '$contenderRoot': 'Join-Path $gateRoot "mutex-contender"',
+        '$gateRoot': 'Join-Path $env:TEMP ("WG-inst-" + [guid]::NewGuid().ToString("N").Substring(0, 12))',
         '$wglinkAddins': 'Join-Path $gateRoot "Fusion\\API\\AddIns"',
         '$developerAddins': 'Join-Path $gateRoot "Developer\\API\\AddIns"',
         '$gateData': 'Join-Path $gateRoot "data"',
         '$previousDataDir': '$env:WG2_DATA_DIR',
+        '$previousFusionAddins': '$env:WG2_FUSION_ADDINS_DIR',
+        '$oldApp': 'Join-Path $installRoot "app\\gate_previous_app.txt"',
+        '$oldRuntime': 'Join-Path $installRoot "runtime\\gate_previous_runtime.txt"',
+        '$probePath': 'Join-Path $gateRoot "recovered-$label.txt"',
+        '$freshRoot': 'Join-Path $gateRoot "f"',
+        '$freshOutcome': 'Join-Path $gateRoot "fresh-timeout.json"',
+        '$freshLog': 'Join-Path $gateRoot "fresh-timeout.log"',
         '$unins': 'Get-ChildItem $installRoot -Filter "unins*.exe" | Select-Object -First 1',
         '$planted': '"$installRoot\\app\\__pycache__"',
         '$plantedRecovery': '"$installRoot\\recovery\\__pycache__"',
@@ -320,15 +361,30 @@ def assert_gate_allowlist(source: str) -> None:
                    for i, t in enumerate(outside[:-1])) == 1, f'reassigned sandbox input {variable}'
     assert not any(t.lower() == '$setup' and outside[i + 1] in {'=', '+=', '-=', '++', '--'}
                    for i, t in enumerate(outside[:-1])), 'setup reassignment'
+    assert_fragment(outside, '$label = if ($treeKill) { "installer-tree" } else { "loader-only" }')
+    assert sum(t.lower() == '$label' and outside[i + 1] == '=' for i, t in enumerate(outside[:-1])) == 1
+    # Every stop argument comes from its original checked launcher object,
+    # never a later Get-Process lookup of a potentially unrelated/reused PID.
+    factories = {
+        '$interrupted': [['start-sandboxedsetup', '-executable', '$setup']],
+        '$nativeprobe': [['start-sandboxednativeprobe', '-probepath', '$probepath']],
+        '$freshstandin': [['start-standin']],
+        '$freshtimingout': [['$null'], ['start-sandboxedsetup', '-executable', '$setup']],
+    }
+    for variable, expected in factories.items():
+        positions = [i for i, t in enumerate(outside[:-1]) if t.lower() == variable and outside[i + 1] == '=']
+        assert len(positions) == len(expected), f'reassigned process input {variable}'
+        for position, prefix in zip(positions, expected):
+            assert compact(outside[position + 2:position + 2 + len(prefix)]) == prefix, f'unreviewed process factory {variable}'
     mkdir = 'New-Item -ItemType Directory -Force $wglinkAddins, $developerAddins, $gateData | Out-Null'
     assert_fragment(outside, mkdir)
-    assert_fragment(outside, '$previousDataDir = $env:WG2_DATA_DIR; $env:WG2_DATA_DIR = $gateData; try {')
-    assert_fragment(outside, '} finally { $env:WG2_DATA_DIR = $previousDataDir }')
+    assert_fragment(outside, '$previousDataDir = $env:WG2_DATA_DIR; $env:WG2_DATA_DIR = $gateData; $previousFusionAddins = $env:WG2_FUSION_ADDINS_DIR; $env:WG2_FUSION_ADDINS_DIR = $wglinkAddins; try {')
+    assert_fragment(outside, '} finally { $env:WG2_DATA_DIR = $previousDataDir; $env:WG2_FUSION_ADDINS_DIR = $previousFusionAddins }')
     assert outside.index('New-Item') < outside.index('Start-SandboxedSetup')
     assert outside.index('$env:WG2_DATA_DIR', outside.index('$previousDataDir') + 1) < outside.index('Start-SandboxedSetup')
     # Only the two existing cleanup roots are permitted; neither command may
     # operate on the private AddIns/data fixtures or an indirect provider path.
-    removable = {'$gateroot', '$installroot'}
+    removable = {'$gateroot', '$installroot', '$oldapp', '$oldruntime'}
     directory_commands = [compact(powershell_tokens(line)) for line in (
         mkdir.split(' | ')[0],
         'New-Item -ItemType Directory -Force (Join-Path $developerAddins "WGLink")',
@@ -350,7 +406,7 @@ def assert_gate_allowlist(source: str) -> None:
         if lower[0] == 'get-ciminstance':
             assert lower == ['get-ciminstance', 'win32_process'], 'unreviewed process inventory'
         if lower[0] == 'remove-item':
-            targets = [t for t in lower[1:] if not t.startswith('-')]
+            targets = [t for t in lower[1:] if not t.startswith('-') and t != ',']
             assert targets and all(t in removable for t in targets), f'unreviewed removal: {command}'
         if lower[0] == 'rename-item':
             assert len(lower) == 5 and lower[3:] == ['-erroraction', 'stop']
@@ -360,12 +416,21 @@ def assert_gate_allowlist(source: str) -> None:
             }, 'unreviewed rename target'
         if lower[0] == 'start-standin':
             assert len(lower) == 1, 'stand-in takes no executable argument'
+        if lower[0] == 'start-sandboxednativeprobe':
+            assert lower == ['start-sandboxednativeprobe', '-probepath', '$probepath'], 'unreviewed native probe arguments'
+        if lower[0] == 'stop-sandboxedprocess':
+            assert lower[1:3] in (['-process', '$interrupted'], ['-process', '$nativeprobe'],
+                                   ['-process', '$freshtimingout'], ['-process', '$freshstandin'])
+            assert lower[3:] in ([], ['-tree'], ['-tree:$treekill']), 'unreviewed stop arguments'
         if lower[0] == 'start-sandboxedsetup':
             assert lower[1] == '-executable' and (lower[2] == '$setup' or lower[2:4] == ['$unins', '.fullname'])
             assert all(not t.startswith('-') or t in {'-executable', '-extraarguments', '-wait', '-addins'} for t in lower)
             assert not any(re.search(r'/(VERYSILENT|SUPPRESSMSGBOXES|WGLINKADDINSDIR)', t, re.I) for t in command)
             if '-addins' in lower:
                 assert lower[lower.index('-addins') + 1] == '$developeraddins'
+            for token in command:
+                if token.upper().startswith('"/DIR='):
+                    assert token in {f'"/DIR=`"{root}`""' for root in ('$installRoot', '$longDir', '$contenderRoot', '$freshRoot')}, 'unreviewed setup root'
     root_cleanup = [c for c in commands if c[0].lower() == 'remove-item' and '$gateroot' in compact(c)]
     assert len(root_cleanup) == 1, 'only one final private-root cleanup is allowed'
     cleanup = root_cleanup[0]
@@ -720,3 +785,62 @@ def test_qualifier_server_process_environment(tmp_path: Path, monkeypatch: pytes
             cpu.Server(Path('python'), app, environment, data, work / 'control', work / 'server.log')
         else:
             quit_gate.Run.start(Path('python'), app, environment, data, work)
+
+
+@pytest.mark.parametrize('old,new', [
+    ('if ($Process.HasExited) { return }', 'if ($false) { return }'),
+    ('@("/PID", [string]$Process.Id, "/F")', '@("/IM", "*", "/F")'),
+    ('$null = $Process.Handle', '$null = Get-Process -Id $Process.Id'),
+    ('if ($env:WG2_DATA_DIR -ne $gateData -or $env:WG2_FUSION_ADDINS_DIR -ne $wglinkAddins)', 'if ($false)'),
+    ('(Join-Path $installRoot "Waveguide Generator.exe")', '$Setup'),
+    ('Join-Path $gateRoot "i"', '"$env:LOCALAPPDATA\\Programs\\Waveguide Generator"'),
+    ('Join-Path $installRoot "app\\gate_previous_app.txt"', '"C:\\unrelated.txt"'),
+    ('if ($Executable -eq $Setup -and -not ($ExtraArguments | Where-Object { $_ -match \'^/DIR=\' }))', 'if ($false)'),
+    ('Stop-SandboxedProcess -Process $nativeProbe -Tree', 'Stop-SandboxedProcess -Process $unrelated -Tree'),
+])
+def test_native_gate_closed_helpers_reject_boundary_mutations(old: str, new: str) -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    changed = source.replace(old, new, 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_gate_allowlist(changed)
+
+
+def test_native_helpers_do_not_enable_global_launch_or_taskkill() -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    for call in ('Start-Process -FilePath $Setup', '& "$env:SystemRoot\\System32\\taskkill.exe" /PID 123 /F'):
+        with pytest.raises(AssertionError):
+            assert_gate_allowlist(source + '\n' + call + '\n')
+
+
+@pytest.mark.parametrize('old,new', [
+    ('$freshStandIn = Start-StandIn', '$freshStandIn = Get-Process -Id 123'),
+    ('$nativeProbe = Start-SandboxedNativeProbe -ProbePath $probePath', '$nativeProbe = Get-Process -Id 123'),
+    ('$interrupted = Start-SandboxedSetup -Executable $Setup', '$interrupted = Get-Process -Id 123; Start-SandboxedSetup -Executable $Setup'),
+    ('$freshTimingOut = Start-SandboxedSetup -Executable $Setup', '$freshTimingOut = Get-Process -Id 123; Start-SandboxedSetup -Executable $Setup'),
+    ('$ProbePath -ne (Join-Path $gateRoot "recovered-loader-only.txt")', '$ProbePath -notlike "$gateRoot\\recovered-*.txt"'),
+    ('Join-Path $gateRoot "recovered-$label.txt"', 'Join-Path $gateRoot "recovered-x\\..\\..\\outside.txt"'),
+    ('Remove-Item -LiteralPath $oldApp, $oldRuntime', '$oldApp = "C:\\unrelated.txt"; Remove-Item -LiteralPath $oldApp, $oldRuntime'),
+])
+def test_native_probe_and_stop_inputs_cannot_escape_private_factories(old: str, new: str) -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    changed = source.replace(old, new, 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_gate_allowlist(changed)
+
+
+@pytest.mark.parametrize('old,new', [
+    ('$longDir = Join-Path $gateRoot ("g" * 200)', '$longDir = "C:\\unrelated-install"'),
+    ('$contenderRoot = Join-Path $gateRoot "mutex-contender"', '$contenderRoot = "C:\\unrelated-install"'),
+    ('$p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/DIR=`"$longDir`""',
+     '$longDir = "C:\\unrelated-install"; $p = Start-SandboxedSetup -Executable $Setup -ExtraArguments "/DIR=`"$longDir`""'),
+    ('$contender = Start-SandboxedSetup -Executable $Setup',
+     '$contenderRoot = "C:\\unrelated-install"; $contender = Start-SandboxedSetup -Executable $Setup'),
+])
+def test_explicit_setup_roots_cannot_escape_private_fixtures(old: str, new: str) -> None:
+    source = (ROOT / 'installers/windows/gates.ps1').read_text()
+    changed = source.replace(old, new, 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_gate_allowlist(changed)

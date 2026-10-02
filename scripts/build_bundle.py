@@ -55,7 +55,7 @@ PYTHON_SERIES = "3.13"
 # file. uv's version catalog may otherwise move a Python patch request to a
 # newer standalone build without changing PYTHON_VERSION.
 PYTHON_BUILD = "20260325"
-RUNTIME_RECIPE = "wg2-bundle-runtime-v2"
+RUNTIME_RECIPE = "wg2-bundle-runtime-v3"
 MACOS_PLATFORM = "macos-arm64"
 WINDOWS_PLATFORM = "windows-x86_64"
 LINUX_PLATFORM = "linux-x86_64"
@@ -145,6 +145,11 @@ MSVC_RUNTIME_DLLS = (
     "msvcp140.dll",
 )
 WINDOWS_LAUNCHER_NAME = "Waveguide Generator.exe"
+WINDOWS_NATIVE_NAME = "wg-native.exe"
+WINDOWS_PYTHON_NAME = "wg-python.exe"
+WINDOWS_NATIVE_SOURCE = "launchers/windows/launcher.c"
+WINDOWS_NATIVE_HOOK_SOURCE = "launchers/windows/startup_hook.py"
+WINDOWS_NATIVE_HOOK_NAME = "wg-startup-hook.py"
 WINDOWS_PTH_NAME = "Waveguide Generator._pth"
 #: The directory holding the recovery route, beside ``app`` and ``runtime``
 #: rather than inside either, because those are the two an update renames.
@@ -250,10 +255,13 @@ def windows_launcher_files(python_series: str = PYTHON_SERIES) -> tuple[tuple[st
 
     tag = python_series.replace(".", "")
     return (
-        ("pythonw.exe", WINDOWS_LAUNCHER_NAME),
+        ("pythonw.exe", WINDOWS_PYTHON_NAME),
         (f"python{tag}.dll", f"python{tag}.dll"),
         ("python3.dll", "python3.dll"),
         *((name, name) for name in MSVC_RUNTIME_DLLS),
+        # The retained v0.3.2 receiver publishes these entries sequentially.
+        # Publish native startup only after its interpreter/DLL prerequisites.
+        (WINDOWS_NATIVE_NAME, WINDOWS_LAUNCHER_NAME),
     )
 
 
@@ -790,6 +798,61 @@ def substitute_info_plist(template: Path, output: Path, version: str) -> None:
 MACOS_LAUNCHER_SOURCE = "launchers/macos/launcher.c"
 
 
+def runtime_recipe(repo_root: Path) -> str:
+    """Bind the compiled Windows entry to the shared runtime identity.
+
+    All platforms use the same recipe so their common app layer still has one
+    runtimeId. A launcher source change automatically invalidates old runtime
+    identities, rather than depending on a person remembering a recipe bump.
+    """
+    fingerprint = sha256_bytes((repo_root / WINDOWS_NATIVE_SOURCE).read_bytes() + b"\0" +
+                               (repo_root / WINDOWS_NATIVE_HOOK_SOURCE).read_bytes())
+    return RUNTIME_RECIPE + ":windows-native-" + fingerprint
+
+
+def write_windows_launcher(
+    path: Path, *, repo_root: Path, runner: RunCallable = subprocess.run,
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    """Build a static-CRT entry which can recover without the bundled runtime."""
+    env = dict(os.environ if environment is None else environment)
+    compiler = shutil.which("cl.exe", path=env.get("PATH", ""))
+    if compiler is None:
+        installer = Path(env.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
+        if not installer.is_file():
+            raise BundleError("The Windows native launcher requires Visual Studio's x64 C compiler (cl.exe).")
+        result = runner([str(installer), "-latest", "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64", "-property", "installationPath"], capture_output=True, check=False, env=env)
+        installation = os.fsdecode(result.stdout or b"").strip()
+        vcvars = Path(installation) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
+        if result.returncode or not installation or not vcvars.is_file() or any(c in str(vcvars) for c in '"%\r\n'):
+            raise BundleError("Visual Studio did not provide a valid vcvars64.bat for the native launcher.")
+        result = runner([env.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", f'call "{vcvars}" >nul && set'], capture_output=True, check=False, env=env)
+        if result.returncode:
+            raise BundleError("Could not initialize the Visual Studio x64 compiler environment.")
+        for line in os.fsdecode(result.stdout or b"").splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key and not key.startswith("="):
+                env[key] = value
+                if key.casefold() == "path":
+                    env["PATH"] = value
+        compiler = shutil.which("cl.exe", path=env.get("PATH", env.get("Path", "")))
+    if compiler is None:
+        raise BundleError("Visual Studio's initialized environment contains no cl.exe.")
+    source = repo_root / WINDOWS_NATIVE_SOURCE
+    hook = (repo_root / WINDOWS_NATIVE_HOOK_SOURCE).read_text(encoding="utf-8")
+    if not hook.isascii():
+        raise BundleError("The embedded Windows startup hook must remain ASCII source.")
+    header = path.parent / "startup-hook.h"
+    header.write_text("static const char NATIVE_START_HOOK[] = " + json.dumps(hook) + ";\n", encoding="ascii")
+    obj = path.with_suffix(".obj")
+    result = runner([compiler, "/nologo", "/O2", "/W4", "/WX", "/MT", "/D_CRT_SECURE_NO_WARNINGS", f"/I{path.parent}", str(source), f"/Fo{obj}", f"/Fe{path}", "/link", "/SUBSYSTEM:WINDOWS", "/MACHINE:X64", "shell32.lib"], capture_output=True, check=False, env=env)
+    obj.unlink(missing_ok=True)
+    header.unlink(missing_ok=True)
+    if result.returncode or not path.is_file():
+        detail = os.fsdecode(result.stderr or result.stdout or b"").strip()
+        raise BundleError(f"Could not compile the Windows native launcher: {detail or result.returncode}")
+
+
 def write_launcher_stub(path: Path, *, repo_root: Path, runner: RunCallable = subprocess.run) -> None:
     """Compile the bundle's main executable. It must be Mach-O, not a script.
 
@@ -873,6 +936,10 @@ def windows_pyvenv_cfg() -> str:
     return "include-system-site-packages = false\n"
 
 
+def windows_native_pth() -> str:
+    return ".native-start\n" + windows_pth()
+
+
 def windows_runtime_pth() -> str:
     """Pin the runtime interpreter's own search path inside its layer.
 
@@ -893,6 +960,35 @@ def windows_runtime_pth() -> str:
     """
 
     return "Lib\nDLLs\nLib\\site-packages\nimport site\n"
+
+
+def windows_setup_guard_source() -> str:
+    """Native setup exclusion, reachable even when the app layer is absent."""
+    return '''
+def _wait_for_setup_mutex(timeout=120.0):
+    import ctypes
+    import time
+    if sys.platform != "win32":
+        return True
+    if getattr(sys, "_wg_native_start_admitted", False):
+        return True
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenMutexW.argtypes = (ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p)
+    kernel.OpenMutexW.restype = ctypes.c_void_p
+    kernel.CloseHandle.argtypes = (ctypes.c_void_p,)
+    kernel.CloseHandle.restype = ctypes.c_int
+    deadline = time.monotonic() + timeout
+    while True:
+        handle = kernel.OpenMutexW(0x00100000, False, "WaveguideGeneratorSetup")
+        if not handle:
+            # Missing is the only permission to start. Access denied and other
+            # lookup failures must not look like an absent installer.
+            return ctypes.get_last_error() == 2
+        kernel.CloseHandle(handle)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
+'''
 
 
 def windows_desktop_bootstrap() -> str:
@@ -916,12 +1012,12 @@ import os
 from pathlib import Path, PureWindowsPath
 import sys
 import traceback
-
+''' + windows_setup_guard_source() + '''
 
 def _is_direct_launch() -> bool:
     return (
         sys.argv[0] == ""
-        and PureWindowsPath(sys.executable).name.casefold() == "waveguide generator.exe"
+        and PureWindowsPath(sys.executable).name.casefold() in ("waveguide generator.exe", "wg-python.exe")
     )
 
 
@@ -933,6 +1029,8 @@ def _is_direct_launch() -> bool:
 
 
 if _is_direct_launch():
+    if not _wait_for_setup_mutex():
+        raise SystemExit(4)
     bundle_root = Path(sys.executable).resolve().parent
     app_root = bundle_root / "app"
     os.environ["WG2_BUNDLE"] = "1"
@@ -996,9 +1094,12 @@ def recovery_sitecustomize() -> str:
     """
 
     return (
+        "import sys\n" + windows_setup_guard_source() +
+        '\nif sys.argv[0] == "" and not _wait_for_setup_mutex():\n    raise SystemExit(4)\n\n' +
         "import wg_bundle_recovery\n"
         "\n"
-        "wg_bundle_recovery.windows_boot()\n"
+        "from pathlib import Path\n"
+        "wg_bundle_recovery.windows_boot(executable=str(Path(sys.executable).with_name('Waveguide Generator.exe')))\n"
     )
 
 
@@ -1955,6 +2056,9 @@ class BundleBuilder:
             (destination / WINDOWS_RUNTIME_PTH_NAME).write_text(
                 windows_runtime_pth(), encoding="utf-8", newline="\n"
             )
+            write_windows_launcher(destination / WINDOWS_NATIVE_NAME, repo_root=self.repo_root,
+                                   runner=self.runner, environment=self.command_environment)
+            shutil.copyfile(self.repo_root / WINDOWS_NATIVE_HOOK_SOURCE, destination / WINDOWS_NATIVE_HOOK_NAME)
         removed = prune_runtime(destination, platform_name=platform_name)
         print(f"Pruned {len(removed)} runtime directories.")
         write_runtime_manifest(
@@ -2072,6 +2176,7 @@ class BundleBuilder:
         for source, target in launcher_files:
             shutil.copy2(runtime_root / source, destination / target)
         (destination / WINDOWS_PTH_NAME).write_text(windows_pth(), encoding="utf-8", newline="\n")
+        (destination / "wg-python._pth").write_text(windows_native_pth(), encoding="utf-8", newline="\n")
         (destination / WINDOWS_PYVENV_NAME).write_text(
             windows_pyvenv_cfg(), encoding="utf-8", newline="\n"
         )
@@ -3065,13 +3170,14 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
     requirements = builder.git_blob(commit, PurePosixPath("server/requirements-runtime.txt"))
     pins = builder.git_blob(commit, PurePosixPath("server/requirements-pins.txt"))
     lock = builder.git_blob(commit, PurePosixPath("server/requirements-lock.txt"))
+    recipe = runtime_recipe(builder.repo_root)
     runtime_id = compute_runtime_id(
         requirements,
         pins,
         lock,
         args.python_version,
         PYTHON_BUILD,
-        RUNTIME_RECIPE,
+        recipe,
     )
     output = args.output
     if not output.is_absolute():
@@ -3089,7 +3195,7 @@ def build(args: argparse.Namespace, *, builder: BundleBuilder | None = None) -> 
                 runtime_root,
                 python_version=args.python_version,
                 python_build=PYTHON_BUILD,
-                runtime_recipe=RUNTIME_RECIPE,
+                runtime_recipe=recipe,
                 runtime_id=runtime_id,
                 requirements=requirements,
                 pins=pins,
