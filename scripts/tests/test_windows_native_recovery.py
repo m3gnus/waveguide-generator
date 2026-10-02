@@ -24,6 +24,67 @@ BOOT = ["wg-python.exe", "python313.dll", "python3.dll", "vcruntime140.dll",
         "Waveguide Generator._pth", "pyvenv.cfg", "WaveguideGenerator.ico"]
 
 
+def _read_pause_marker(marker: Path, helper: subprocess.Popen, *, timeout: float = 20) -> str:
+    """Wait for readable publication, within the original native pause cap."""
+    until = time.monotonic() + timeout
+    while True:
+        try:
+            return marker.read_text()
+        except (FileNotFoundError, PermissionError):
+            # Publication can remain temporarily unreadable on Windows. Only
+            # the private ready marker gets this bounded retry.
+            if helper.poll() is not None or time.monotonic() >= until:
+                raise
+        time.sleep(0.01)
+
+
+@pytest.mark.parametrize("transient", [FileNotFoundError, PermissionError])
+def test_pause_marker_waits_for_readable_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                    transient: type[OSError]) -> None:
+    marker = tmp_path / "paused.txt"
+    marker.write_text("ready")
+    read_text = Path.read_text
+    attempts = []
+
+    def read(path):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise transient("publication is not yet readable")
+        return read_text(path)
+
+    class Helper:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(Path, "read_text", read)
+    assert _read_pause_marker(marker, Helper()) == "ready"
+    assert attempts == [marker, marker]
+
+
+@pytest.mark.parametrize("stop", ["deadline", "process_exit"])
+def test_pause_marker_sharing_refusal_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stop: str) -> None:
+    attempts = []
+    sleeps = []
+
+    def refused(path):
+        attempts.append(path)
+        raise PermissionError("marker remains locked")
+
+    class Helper:
+        def poll(self):
+            return 3 if stop == "process_exit" else None
+
+    clock = iter([10, 29, 30])
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_text", refused)
+        patch.setattr(time, "monotonic", lambda: next(clock))
+        patch.setattr(time, "sleep", sleeps.append)
+        with pytest.raises(PermissionError, match="marker remains locked"):
+            _read_pause_marker(tmp_path / "paused.txt", Helper())
+    assert len(attempts) == (2 if stop == "deadline" else 1)
+    assert sleeps == ([0.01] if stop == "deadline" else [])
+
+
 def _old_receiver():
     spec = importlib.util.spec_from_file_location("wg_v032_apply_update", ROOT / "scripts/tests/fixtures/windows_v032/apply_update.py")
     assert spec and spec.loader
@@ -338,7 +399,11 @@ def test_native_first_manual_rollback_starts_actual_old_hook_and_forwards_args(n
     # quoted argv survive both admissions.
     worker = ("import sys;from pathlib import Path;assert getattr(sys,'_wg_native_start_admitted',False);"
               f"assert Path(sys.executable)==Path({str(root / 'Waveguide Generator.exe')!r});print(sys.argv[1])")
-    code = f"import subprocess,sys;subprocess.run([sys.executable,'-c',{worker!r},'nested value'],check=True)"
+    # Windows Popen with all streams None and default close_fds supplies no
+    # standard handles to a GUI child. Explicit redirection transfers only the
+    # intended streams; the native launcher must preserve them at both hops.
+    code = (f"import subprocess,sys;subprocess.run([sys.executable,'-c',{worker!r},'nested value'],"
+            "stdout=sys.stdout,stderr=sys.stderr,check=True)")
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", code], env=environment,
                             capture_output=True, text=True, timeout=30)
     assert result.returncode == 0 and result.stdout.strip() == "nested value"
@@ -591,10 +656,7 @@ def test_actual_terminated_sidecar_writer_recovers(native: Path, pausing_native:
                        WG_NATIVE_TEST_MARKER=str(marker))
     helper = subprocess.Popen([str(pausing_native), "--installer-entry", str(root)], env=environment)
     try:
-        until = time.monotonic() + 20
-        while not marker.exists() and helper.poll() is None and time.monotonic() < until:
-            time.sleep(0.01)
-        assert marker.read_text() == "ready"
+        assert _read_pause_marker(marker, helper) == "ready"
         temporary = root / ".native-start" / f"{target}.{helper.pid}.tmp"
         helper.kill()
         helper.wait(timeout=5)
@@ -635,10 +697,7 @@ def test_actual_entry_termination_after_hook_before_public_image(native: Path, p
                        WG_NATIVE_TEST_MARKER=str(marker))
     helper = subprocess.Popen([str(pausing_native), "--installer-entry", str(root)], env=environment)
     try:
-        until = time.monotonic() + 20
-        while not marker.exists() and helper.poll() is None and time.monotonic() < until:
-            time.sleep(0.01)
-        assert marker.read_text() == "ready"
+        assert _read_pause_marker(marker, helper) == "ready"
         assert (root / "Waveguide Generator.exe").read_bytes() == old_image
         assert (root / ".native-start/sitecustomize.py").read_bytes() != old_hook
         helper.kill()
