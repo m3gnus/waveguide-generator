@@ -1787,8 +1787,24 @@ def test_the_launcher_tells_its_own_server_where_it_accepts_staging(tmp_path: Pa
     assert controller.take_update_request() == BundleUpdateRequest("2.0.1", staged_app.resolve(), None)
 
 
+def _create_legacy_layer_app(monkeypatch: pytest.MonkeyPatch, **options: Any):
+    """Exercise the retained receiving service through its explicit mounting seam."""
+    import server.app as app_module
+
+    mount = app_module.mount_updates
+
+    def mount_legacy(application, **mount_options):
+        service = UpdateService(**mount_options)
+        return mount(application, service=service, **mount_options)
+
+    monkeypatch.setattr(app_module, "mount_updates", mount_legacy)
+    application = create_app(**options)
+    assert isinstance(application.state.update_service, UpdateService)
+    return application
+
+
 def test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """§2.7: the root comes from the launcher, and must be the server's own derivation too.
 
@@ -1817,7 +1833,7 @@ def test_the_server_stages_beside_the_bundle_only_where_its_launcher_accepts_it(
     assert service(None).bundle_installer.staging_root is None
     assert service(tmp_path / "somewhere else").bundle_installer.staging_root is None
 
-    app = create_app(
+    app = _create_legacy_layer_app(monkeypatch,
         data_dir=tmp_path / "server data",
         update_request_path=tmp_path / "control" / "update.json",
         update_staging_root=root,
@@ -2220,7 +2236,7 @@ def test_a_solve_submitted_after_restart_approval_is_refused(
         progress(len(archive))
 
     async def scenario() -> tuple[int, bytes]:
-        app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+        app = _create_legacy_layer_app(monkeypatch, data_dir=tmp_path / "data", update_request_path=request_path)
         installer = app.state.update_service.bundle_installer
         if installer is None:
             pytest.fail("set-up: an app given an update request path has no bundle installer")
@@ -2327,7 +2343,7 @@ def test_a_restart_approval_is_released_when_the_handoff_request_cannot_be_writt
     monkeypatch.setenv("WG2_ENABLE_DRYRUN", "1")
     request_path = tmp_path / "control" / "update.json"
     request_path.mkdir(parents=True)
-    app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+    app = _create_legacy_layer_app(monkeypatch, data_dir=tmp_path / "data", update_request_path=request_path)
     latch = app.state.update_restart
     if app.state.update_service.bundle_installer.restart_approval is not latch:
         pytest.fail("set-up: the installer and the job routes hold different latches")
@@ -3133,12 +3149,12 @@ def test_the_window_declines_an_adopted_server_too(
 
 
 def test_a_called_off_restart_shows_as_a_failed_install(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Contract §4.2: a launcher discard is a failed attempt the update dialog can show."""
 
     request_path = tmp_path / "control" / "update.json"
-    app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+    app = _create_legacy_layer_app(monkeypatch, data_dir=tmp_path / "data", update_request_path=request_path)
     state = _stage_through_the_app(app)
     if state["installState"] != "ready" or not request_path.is_file():
         pytest.fail(f"set-up: the restart was never approved: {state}")
@@ -3164,7 +3180,7 @@ def test_an_expired_restart_in_the_app_is_taken_back_by_the_installer_that_appro
     """
 
     request_path = tmp_path / "control" / "update.json"
-    app = create_app(data_dir=tmp_path / "data", update_request_path=request_path)
+    app = _create_legacy_layer_app(monkeypatch, data_dir=tmp_path / "data", update_request_path=request_path)
     state = _stage_through_the_app(app)
     if state["installState"] != "ready" or not request_path.is_file():
         pytest.fail(f"set-up: the restart was never approved: {state}")

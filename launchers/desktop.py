@@ -17,6 +17,16 @@ from collections.abc import Callable, Mapping, MutableMapping
 from urllib.parse import urljoin, urlsplit
 import webbrowser
 
+# The layer bridge retains older Mac/Linux native entry bytes. Guard their
+# first full-installer startup before importing controller, server or UI code.
+from launchers.full_installer import InstallerStartBlocked, guard_full_installer_start
+
+try:
+    guard_full_installer_start(Path(__file__).resolve().parents[1])
+except InstallerStartBlocked as exc:
+    print(str(exc), file=sys.stderr)
+    raise SystemExit(4) from exc
+
 from launchers.statusapp.__main__ import (
     _console_is_readable,
     _log_startup_failure,
@@ -54,6 +64,7 @@ from launchers.statusapp.updater import (
     UpdateHandoffError,
     launch_rollback_handoff,
 )
+from launchers.full_installer import FullInstallerRequest
 
 
 WINDOW_TITLE = "Waveguide Generator"
@@ -1462,8 +1473,8 @@ class DesktopWindow:
         request = self.controller.take_update_request()
         if request is None:
             return False
-        label = request.version if isinstance(request, BundleUpdateRequest) else request
-        if isinstance(request, BundleUpdateRequest):
+        label = request.version if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)) else request
+        if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
             pending = self._pending_bundle_update_paths()
             if pending:
                 self._report_bundle_failure(
@@ -1479,14 +1490,14 @@ class DesktopWindow:
                 )
                 return False
         try:
-            if isinstance(request, BundleUpdateRequest):
+            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
                 # Leave one progress-poll window in which the SPA can render
                 # "ready" after the server publishes the request file.
                 time.sleep(self.update_ready_delay)
                 self.controller.close()
             self.controller.launch_update(request)
         except UpdateHandoffError as exc:
-            if isinstance(request, BundleUpdateRequest):
+            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
                 restart_error = self._restart_after_failed_handoff()
                 if restart_error is None:
                     self._report_bundle_failure(

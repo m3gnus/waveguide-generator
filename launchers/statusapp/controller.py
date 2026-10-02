@@ -34,6 +34,7 @@ from launchers.apply_update import append_update_log, destination_staging_root
 from server.platform.instance import requested_port
 from server.platform.paths import app_root, resolve_data_dir
 from shared.build_identity import build_label
+from launchers.full_installer import FullInstallerRequest, consume_full_installer_request, launch_full_installer
 from .healthy_start import BundlePaths, HealthyStartSettlement, Report, resolve_bundle_paths
 from .updater import (
     BundleUpdateRequest,
@@ -1312,7 +1313,7 @@ class StatusController:
         if temporary_directory is not None:
             temporary_directory.cleanup()
 
-    def take_update_request(self) -> UpdateRequest | None:
+    def take_update_request(self) -> UpdateRequest | FullInstallerRequest | None:
         """Return one delayed, validated UI request when it is ready to run."""
 
         with self._lock:
@@ -1320,6 +1321,11 @@ class StatusController:
         if path is None:
             return None
         try:
+            handled, full_request = consume_full_installer_request(
+                path, repo_root=self.repo_root, data_dir=self._data_dir()
+            )
+            if handled:
+                return full_request
             return consume_update_request(
                 path, data_dir=self._data_dir(), staging_root=self.update_staging_root()
             )
@@ -1390,9 +1396,13 @@ class StatusController:
         except (OSError, RuntimeError, TypeError, ValueError):
             pass
 
-    def launch_update(self, request: UpdateRequest) -> None:
+    def launch_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
         """Start the independent updater before this status owner shuts down."""
 
+        if isinstance(request, FullInstallerRequest):
+            launch_full_installer(self.repo_root, request, os.getpid(),
+                data_dir=self._data_dir(), environ=self.environ)
+            return
         if isinstance(request, BundleUpdateRequest):
             launch_bundle_update_handoff(
                 self.repo_root,

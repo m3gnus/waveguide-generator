@@ -31,11 +31,13 @@
 # The updater helper owns staleness policy (UPDATER-PLAN.md section 9).
 # Statuses verify recorded object identities, not external edits to their
 # contents. Recovery assumes native same-device rename/link operations.
-# Known limit: there is no journal. SIGKILL/power loss between the two renames
-# can leave the target absent; a rerun does not discover/restore the backup.
-# Look beside the target for .<app basename>.previous.<installer PID>.
-# A hard kill can also leave a half-copied .<app basename>.new.<installer PID>;
-# after checking no installer is running, that staging copy is safe to delete.
+# A persistent identity ledger is synced before the first rename. SIGKILL or
+# power loss leaves it beside the lock, with exact old/new recovery paths.
+# A later run refuses to mutate until that record and its backups are reviewed.
+# Interrupted staging uses .Waveguide Generator.app.new.<pid>. With no installer running,
+# unreferenced staging is safe to delete only after checking the identity ledger
+# does not name it. Preserve the ledger and all referenced backup/staging paths;
+# inspect unexpected contents rather than deleting an unverified object.
 # Cleanup finishes within 300 seconds unless the kernel itself blocks a kill
 # (excluding the macOS close prompt's intentional user wait). Work has a shared
 # 20-second budget once CLEANING=1 or COMMITTED=1; metadata/housekeeping
@@ -44,7 +46,7 @@
 # use independent bounded steps. Forward metadata/housekeeping/messages/moves
 # allow 30 seconds per step, then report an ordinary failure; large copies and
 # checks remain unbounded until cancellation. A timed-out restore is status 3.
-# Journal recovery and fuller sweep/lock rules await the updater handoff stage.
+# Interrupted journals and locks are never reclaimed from a dead PID alone.
 
 # A signal before the traps ends a run that has done nothing; the flag never
 # comes from the environment.
@@ -61,6 +63,8 @@ COMMITTED=0
 LOCK_PATH=""
 LOCK_ID=""
 LOCK_HELD=0
+JOURNAL_PATH=""
+JOURNAL_ID=""
 MOVE_PID=""
 WORK_CLOCK=""
 PRINT_CLOCK=""
@@ -297,6 +301,7 @@ run_interruptible() {
     ) &
     step_pid=$!
     while kill -0 "$step_pid" 2>/dev/null; do
+        handoff_owner_alive || INTERRUPTED=1
         if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
             kill -TERM "$step_pid" 2>/dev/null || :
             # No deadline on an ordinary large copy: only cancellation gets
@@ -377,7 +382,108 @@ lock_busy() {
 }
 
 # The parent must be writable before attempting the exclusion primitive.
+# Durable, data-only identity ledger. Never execute/source a recovery record.
+# A surviving ledger blocks subsequent mutation, even if its PID is dead. The
+# old and new device/inode IDs let recovery inspect each actual object without
+# guessing from the last command's status. The external recovery entry uses it.
+journal_rows() {
+    journal_field WG-INSTALL-JOURNAL-1 && journal_field "$TARGET" && journal_field 1 &&
+    journal_field "$LIVE_PATH" && journal_field "$BACKUP_PATH" && journal_field "$STAGED_PATH" &&
+    journal_field "$OLD_ID" && journal_field "$NEW_ID"
+}
+journal_backups_absent() {
+    [ ! -e "$DISPLACED" ] && [ ! -L "$DISPLACED" ]
+}
+
+journal_guard() {
+    JOURNAL_PATH="$LOCK_PATH.journal"
+    if [ -e "$JOURNAL_PATH" ] || [ -L "$JOURNAL_PATH" ]; then
+        printf 'ERROR: an interrupted installation needs recovery before another install.\n' >&2
+        printf 'Preserve this identity ledger and its named backups: %s\n' "$JOURNAL_PATH" >&2
+        EXIT_STATUS=3
+        exit 3
+    fi
+}
+journal_field() {
+    case "$1" in
+        *"$(command printf '\001')"*|*"$(command printf '\t')"*|*'
+'*|*"$(command printf '\r')"*) return 1 ;;
+    esac
+    command printf '%s\n' "$1"
+}
+journal_publish() {
+    journal_temp=$(protected_output mktemp "$JOURNAL_PATH.XXXXXX") || fail "Could not reserve the installation journal."
+    chmod 600 "$journal_temp" || fail "Could not protect the installation journal."
+    if ! journal_rows > "$journal_temp"; then
+        rm -f "$journal_temp"
+        fail "Could not record all installation identities."
+    fi
+    # link is atomic and cannot clobber a raced recovery record. sync persists
+    # the complete ledger and its directory entry before the first rename.
+    run_housekeeping ln "$journal_temp" "$JOURNAL_PATH" || fail "Could not publish the installation journal."
+    JOURNAL_ID=$(object_id "$JOURNAL_PATH") || fail "Could not identify the installation journal."
+    run_housekeeping rm -f "$journal_temp"
+    run_housekeeping sync || fail "Could not persist the installation journal."
+}
+journal_commit() {
+    same_object "$JOURNAL_PATH" "$JOURNAL_ID" || fail "The installation journal was replaced."
+    command printf 'COMMITTED\n' >> "$JOURNAL_PATH" || fail "Could not record the installation commit."
+    run_housekeeping sync || fail "Could not persist the installation commit."
+}
+journal_finish() {
+    [ -n "$JOURNAL_ID" ] || return 0
+    if [ "$COMMITTED" -eq 1 ] && [ -n "${WG_INSTALLER_HANDOFF_RECOVERY:-}" ] &&
+       ! same_object "$WG_INSTALLER_HANDOFF_RECOVERY/committed" "$JOURNAL_ID"; then
+        printf 'Preserved committed identities for startup recovery: %s\n' "$JOURNAL_PATH" >&2
+        return 0
+    fi
+    if [ "$status" -eq 3 ]; then
+        printf 'Preserved recovery identity ledger: %s\n' "$JOURNAL_PATH" >&2
+        return 0
+    fi
+    # A committed install with cleanup leftovers may start; archive its ledger
+    # under a no-clobber name, preserving evidence of every retained backup.
+    if ! journal_backups_absent; then
+        if [ "$status" -eq 0 ] && same_object "$JOURNAL_PATH" "$JOURNAL_ID"; then
+            run_housekeeping ln "$JOURNAL_PATH" "$JOURNAL_PATH.committed.$$" &&
+            run_housekeeping rm -f "$JOURNAL_PATH"
+        fi
+        return 0
+    fi
+    if same_object "$JOURNAL_PATH" "$JOURNAL_ID"; then
+        run_housekeeping rm -f "$JOURNAL_PATH"
+    fi
+}
+
 acquire_lock() {
+    # Proven live exclusion wins over ledger refusal. A dead or ambiguous
+    # owner with a ledger still requires recovery; nothing is reclaimed here.
+    if [ -z "${WG_INSTALLER_HANDOFF_LOCK_ID:-}" ] &&
+       [ -d "$LOCK_PATH" ] && [ ! -L "$LOCK_PATH" ] &&
+       [ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ]; then
+        held_contents=$(OUTPUT_BOUND=watchdog protected_output ls -A "$LOCK_PATH" 2>/dev/null) || held_contents=""
+        held_owner=$(OUTPUT_BOUND=watchdog protected_output head -c 33 "$LOCK_PATH/pid" 2>/dev/null) || held_owner=""
+        case "$held_owner" in ''|0*|*[!0-9]*) ;; *)
+            if [ "$held_contents" = pid ] && [ "${#held_owner}" -le 32 ] && kill -0 "$held_owner" 2>/dev/null; then lock_busy; fi ;;
+        esac
+    fi
+    journal_guard
+    # A detached full-installer helper reserves this exact lock before waiting
+    # for the application. Adopt only its identified live object with the sole
+    # expected pid record; arbitrary stale locks remain a refusal.
+    if [ -n "${WG_INSTALLER_HANDOFF_LOCK_ID:-}" ]; then
+        case "${WG_INSTALLER_HANDOFF_OWNER_PID:-}" in ''|*[!0-9]*) lock_busy ;; esac
+        [ ! -L "$LOCK_PATH" ] && [ -d "$LOCK_PATH" ] &&
+        same_object "$LOCK_PATH" "$WG_INSTALLER_HANDOFF_LOCK_ID" &&
+        [ "$(ls -A "$LOCK_PATH")" = pid ] && [ -f "$LOCK_PATH/pid" ] && [ ! -L "$LOCK_PATH/pid" ] &&
+        [ "$(cat "$LOCK_PATH/pid")" = "$WG_INSTALLER_HANDOFF_OWNER_PID" ] &&
+        kill -0 "$WG_INSTALLER_HANDOFF_OWNER_PID" 2>/dev/null || lock_busy
+        LOCK_ID="$WG_INSTALLER_HANDOFF_LOCK_ID"
+        LOCK_HELD=1
+        command printf '%s\n' "$$" > "$LOCK_PATH/pid" || fail "Could not adopt the installer lock."
+        check_interrupted
+        return 0
+    fi
     [ -w "${LOCK_PATH%/*}" ] || fail "${LOCK_PATH%/*} cannot be written." "Nothing has been changed."
     check_interrupted
     if ! run_housekeeping mkdir "$LOCK_PATH" 2>/dev/null; then
@@ -393,7 +499,21 @@ acquire_lock() {
     check_interrupted
 }
 
+# An adopted installer must remain the direct child of its live helper.
+# Checking OS parentage prevents PID reuse after reparenting from authorizing
+# an orphan to commit. Interactive native installs have no helper owner.
+handoff_owner_alive() {
+    [ -n "${WG_INSTALLER_HANDOFF_OWNER_PID:-}" ] || return 0
+    kill -0 "$WG_INSTALLER_HANDOFF_OWNER_PID" 2>/dev/null || return 1
+    owner_parent=$(protected_output ps -o ppid= -p "$$") || return 1
+    owner_parent=$(printf '%s' "$owner_parent" | tr -d ' ')
+    [ "$owner_parent" = "$WG_INSTALLER_HANDOFF_OWNER_PID" ]
+}
 check_interrupted() {
+    if [ "$CLEANING" -eq 0 ] && [ "$COMMITTED" -eq 0 ] && ! handoff_owner_alive; then
+        printf 'Installer helper exited; restoring the previous installation.\n' >&2
+        INTERRUPTED=1
+    fi
     if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ] && [ "$COMMITTED" -eq 0 ]; then
         EXIT_STATUS=1
         exit 1
@@ -585,6 +705,7 @@ cleanup() {
         remove_owned "$STAGED_PATH" "$NEW_ID"
         NEW_ID=""
     fi
+    journal_finish
     stop_work_clock
     release_lock
     close_prompt
@@ -809,6 +930,7 @@ if { [ -e "$LIVE_PATH" ] || [ -L "$LIVE_PATH" ]; } && [ -z "$OLD_ID" ]; then
     fail "Could not identify the existing installation."
 fi
 STATE=prepared
+journal_publish
 check_interrupted
 if [ -n "$OLD_ID" ]; then
     printf 'Replacing the copy already in %s ...\n' "$TARGET_DIR"
@@ -838,7 +960,20 @@ if ! verify_move "$STAGED_PATH" "$LIVE_PATH" "$NEW_ID" || [ "$move_status" -ne 0
 fi
 STATE=installed
 check_interrupted
+check_interrupted
+journal_commit
 COMMITTED=1
+# Persist the full committed identity table outside the replaced tree before
+# retiring any old objects. A killed helper can then recognize the exact new
+# installation, without guessing from a version string or a missing journal.
+if [ -n "${WG_INSTALLER_HANDOFF_RECOVERY:-}" ]; then
+    [ "$WG_INSTALLER_HANDOFF_RECOVERY" = "${TARGET%/*}/.${TARGET##*/}.installer-recovery" ] &&
+    [ -d "$WG_INSTALLER_HANDOFF_RECOVERY" ] && [ ! -L "$WG_INSTALLER_HANDOFF_RECOVERY" ] ||
+        fail "The external installer recovery directory changed."
+    run_housekeeping ln "$JOURNAL_PATH" "$WG_INSTALLER_HANDOFF_RECOVERY/committed" ||
+        fail "Could not preserve the committed installer identities."
+    run_housekeeping sync || fail "Could not persist the committed installer identities."
+fi
 # Once committed, finish the success message and removal of this run's backups.
 trap '' HUP INT TERM QUIT
 start_work_clock

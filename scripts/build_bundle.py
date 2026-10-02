@@ -125,11 +125,12 @@ WINDOWS_PRUNE_LIBRARY_GLOBS = (
     "DLLs/tk*.dll",
     "Lib/site-packages/pip-*.dist-info",
 )
-# The interpreter entries in bin/. Every other file there is a console-script
+# The interpreter entries and standalone installer logger in bin/. Every
+# other file there is a console-script
 # wrapper whose shebang names the temporary build prefix; the bundle runs
 # modules through python3.13 directly, so the wrappers would only ship a dead
 # absolute path.
-RUNTIME_BIN_KEEP = frozenset({"python", "python3", f"python{PYTHON_SERIES}"})
+RUNTIME_BIN_KEEP = frozenset({"python", "python3", f"python{PYTHON_SERIES}", "wg-installer-log"})
 # The bundle is sealed by codesign, so nothing may be written into it after
 # the build. Python would otherwise create __pycache__ beside every module it
 # imports and numba would cache compiled kernels beside their source.
@@ -305,6 +306,10 @@ def write_runtime_manifest(
                 python_version.rsplit(".", 1)[0] if python_version.count(".") > 1 else PYTHON_SERIES
             )
         ]
+    logger = runtime_root / "bin" / "wg-installer-log"
+    if platform_name in (MACOS_PLATFORM, LINUX_PLATFORM) and logger.is_file():
+        payload["installerLogger"] = "bin/wg-installer-log"
+        payload["installerLoggerSha256"] = file_sha256(logger)
     write_json(runtime_root / "RUNTIME-MANIFEST.json", payload)
     return payload
 
@@ -799,7 +804,7 @@ MACOS_LAUNCHER_SOURCE = "launchers/macos/launcher.c"
 
 
 def runtime_recipe(repo_root: Path) -> str:
-    """Bind the compiled Windows entry to the shared runtime identity.
+    """Bind the native Windows entry and POSIX logger to shared runtime identity.
 
     All platforms use the same recipe so their common app layer still has one
     runtimeId. A launcher source change automatically invalidates old runtime
@@ -807,7 +812,13 @@ def runtime_recipe(repo_root: Path) -> str:
     """
     fingerprint = sha256_bytes((repo_root / WINDOWS_NATIVE_SOURCE).read_bytes() + b"\0" +
                                (repo_root / WINDOWS_NATIVE_HOOK_SOURCE).read_bytes())
-    return RUNTIME_RECIPE + ":windows-native-" + fingerprint
+    logger_source = repo_root / "launchers" / "installer-log.c"
+    # Historical source-only identity probes may omit the POSIX source. A real
+    # POSIX build still requires it in write_installer_logger; adding it or
+    # changing its bytes always invalidates the shared recipe on every host.
+    logger_fingerprint = sha256_bytes(logger_source.read_bytes() if logger_source.is_file() else b"")
+    return (RUNTIME_RECIPE + ":windows-native-" + fingerprint +
+            ":posix-installer-log-macos11-v1-" + logger_fingerprint)
 
 
 def write_windows_launcher(
@@ -877,6 +888,7 @@ def write_launcher_stub(path: Path, *, repo_root: Path, runner: RunCallable = su
             "cc",
             "-arch",
             "arm64",
+            "-mmacosx-version-min=11.0",
             "-O2",
             "-Wall",
             "-Werror",
@@ -1115,6 +1127,9 @@ def recovery_manifest(recovery_root: Path, *, runtime_id: str) -> dict[str, obje
         "entrySha256": file_sha256(recovery_root / RECOVERY_ENTRY_NAME),
         "lock": RECOVERY_LOCK_NAME,
         "lockSha256": file_sha256(recovery_root / RECOVERY_LOCK_NAME),
+        **({"installerLogger": "installer-log",
+            "installerLoggerSha256": file_sha256(recovery_root / "installer-log")}
+           if (recovery_root / "installer-log").is_file() else {}),
     }
 
 
@@ -1131,12 +1146,30 @@ def runtime_id_of(runtime_root: Path) -> str:
     return value if isinstance(value, str) and value else "unknown"
 
 
+def write_installer_logger(path: Path, *, repo_root: Path, platform_name: str,
+                           runner: RunCallable = subprocess.run) -> None:
+    """Build the standalone host logger; installed users never need a compiler."""
+    source = repo_root / "launchers" / "installer-log.c"
+    if not source.is_file():
+        raise BundleError("The POSIX installer logger source is missing.")
+    command = ["cc", "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror"]
+    if platform_name == MACOS_PLATFORM:
+        command += ["-arch", "arm64", "-mmacosx-version-min=11.0"]
+    command += ["-o", str(path), str(source)]
+    result = runner(command, check=False, capture_output=True)
+    if result.returncode != 0:
+        detail = os.fsdecode(result.stderr or b"").strip()
+        raise BundleError(f"Could not compile the POSIX installer logger: {detail}")
+    path.chmod(0o755)
+
+
 def write_recovery_layer(
     resources: Path,
     *,
     repo_root: Path,
     runtime_root: Path,
     platform_name: str,
+    runner: RunCallable = subprocess.run,
 ) -> Path:
     """Stage the recovery route beside the two layers an update replaces.
 
@@ -1165,6 +1198,9 @@ def write_recovery_layer(
     shutil.copyfile(
         repo_root / "launchers" / RECOVERY_LOCK_NAME, recovery / RECOVERY_LOCK_NAME
     )
+    if platform_name in (MACOS_PLATFORM, LINUX_PLATFORM):
+        write_installer_logger(recovery / "installer-log", repo_root=repo_root,
+                               platform_name=platform_name, runner=runner)
     if platform_name == WINDOWS_PLATFORM:
         (recovery / "sitecustomize.py").write_text(
             recovery_sitecustomize(), encoding="utf-8", newline="\n"
@@ -1211,6 +1247,23 @@ else
     resolved=$self
 fi
 here=$(CDPATH= cd -- "$(dirname -- "$resolved")" && pwd -P)
+
+# Whole-installer replacement is independent of the receiving layer bridge.
+# Never enter its tree while its native lock or recovery ledger exists.
+installer_lock="${here%/*}/.${here##*/}.install.lock"
+installer_recovery_dir="${here%/*}/.${here##*/}.installer-recovery"
+if [ -e "$installer_lock" ] || [ -L "$installer_lock" ] ||
+   [ -e "$installer_lock.journal" ] || [ -L "$installer_lock.journal" ] ||
+   [ -e "$installer_recovery_dir" ] || [ -L "$installer_recovery_dir" ]; then
+    installer_recovery="${here%/*}/.${here##*/}.installer-recovery/recover.sh"
+    if [ -d "$installer_recovery_dir" ] && [ ! -L "$installer_recovery_dir" ] &&
+       [ -f "$installer_recovery" ] && [ ! -L "$installer_recovery" ]; then
+        /bin/sh "$installer_recovery" "$here" || exit 4
+    else
+        printf 'Waveguide Generator: installation is in progress or needs recovery: %s\\n' "$installer_lock" >&2
+        exit 4
+    fi
+fi
 
 app=$here/app
 python=$here/runtime/bin/python3.13
@@ -2059,6 +2112,13 @@ class BundleBuilder:
             write_windows_launcher(destination / WINDOWS_NATIVE_NAME, repo_root=self.repo_root,
                                    runner=self.runner, environment=self.command_environment)
             shutil.copyfile(self.repo_root / WINDOWS_NATIVE_HOOK_SOURCE, destination / WINDOWS_NATIVE_HOOK_NAME)
+        if platform_name in (MACOS_PLATFORM, LINUX_PLATFORM):
+            # The retained 0.3.2 receiver delivers app/runtime only. Compile
+            # before their archive/manifest so B receives this independent
+            # logger even while its historical outer recovery is unchanged.
+            write_installer_logger(destination / "bin" / "wg-installer-log",
+                                   repo_root=self.repo_root, platform_name=platform_name,
+                                   runner=self.runner)
         removed = prune_runtime(destination, platform_name=platform_name)
         print(f"Pruned {len(removed)} runtime directories.")
         write_runtime_manifest(
@@ -2139,6 +2199,7 @@ class BundleBuilder:
             repo_root=self.repo_root,
             runtime_root=runtime_root,
             platform_name=MACOS_PLATFORM,
+            runner=self.runner,
         )
         write_launcher_stub(
             contents / "MacOS" / "Waveguide Generator",
@@ -2212,6 +2273,7 @@ class BundleBuilder:
             repo_root=self.repo_root,
             runtime_root=runtime_root,
             platform_name=LINUX_PLATFORM,
+            runner=self.runner,
         )
         launcher = destination / LINUX_LAUNCHER_NAME
         # Written and chmod-ed here rather than copied from the checkout, for
@@ -2273,7 +2335,10 @@ run may say another installation seems to be running and change nothing. If no
 installer is open, look inside a lock with unexpected contents before removing
 it, then run the command it prints and run ./install.sh again. A hard kill can
 also leave a half-copied .waveguide-generator.install.* staging folder beside
-the application; once no installer is running, that folder is safe to delete.
+the application. Preserve the identity ledger beside the lock and every
+referenced backup or staging path. Once no installer is running, an unreferenced
+staging folder is safe to delete only after checking that ledger; inspect
+unexpected contents instead of deleting an unverified object.
 
 
 UNINSTALL
@@ -2573,7 +2638,9 @@ nothing. If no installer window is open, look inside a lock with unexpected
 contents before removing it, then paste the command it prints and run the
 installer again. A hard kill can also leave a half-copied
 .Waveguide Generator.app.new.<pid> beside the app; once no installer is running,
-that staging copy is safe to delete.
+an unreferenced staging copy is safe to delete only after checking the identity ledger
+beside the lock. Preserve that ledger and every referenced backup or staging path;
+inspect unexpected contents instead of deleting an unverified object.
 
 IF PRIVACY & SECURITY LISTS NOTHING AT ALL
 ------------------------------------------

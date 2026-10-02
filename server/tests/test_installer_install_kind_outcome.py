@@ -82,11 +82,11 @@ def test_outcomes_preserve_failure_truth_and_only_consume_valid_records(tmp_path
     folder = tmp_path / "update-install"
     folder.mkdir()
     path = folder / "outcome.json"
-    payload = {"from": "0.3.3", "to": "0.3.4", "result": result, "when": "2026-10-02T12:00:00Z", "log": "install.log", "previousKept": explicit_kept, "backupPath": "retained-backup"}
+    payload = {"from": "0.3.3", "to": "0.3.4", "result": result, "when": "2026-10-02T12:00:00Z", "log": "install.log", "previousKept": explicit_kept, "backupPath": "retained-backup", "journalPath": "separate-journal"}
     path.write_text(json.dumps(payload))
     outcome = read_outcome(tmp_path, consume=False)
     assert outcome["result"] == result and outcome["previousKept"] is expected
-    assert outcome["backupPath"] == "retained-backup" and path.exists()
+    assert outcome["backupPath"] == "retained-backup" and outcome["journalPath"] == "separate-journal" and path.exists()
     assert read_outcome(tmp_path) == outcome and not path.exists()
 
 
@@ -128,3 +128,18 @@ def test_nonobject_plist_is_notify_only_and_cannot_crash_status(tmp_path, value)
         plistlib.dump(value, handle)
     found = probe(app, assets.MACOS_PLATFORM)
     assert found["updateSupported"] is False and found["kind"] == "unsupported"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX named pipes")
+def test_outcome_replaced_by_fifo_between_stat_and_open_cannot_block(tmp_path, monkeypatch):
+    path = tmp_path / "update-install" / "outcome.json"
+    path.parent.mkdir()
+    path.write_text("{}")
+    real_open = os.open
+    def replace(candidate, flags, *args, **kwargs):
+        if str(candidate) == str(path):
+            path.unlink()
+            os.mkfifo(path)
+        return real_open(candidate, flags, *args, **kwargs)
+    monkeypatch.setattr(os, "open", replace)
+    assert read_outcome(tmp_path) is None and path.exists()

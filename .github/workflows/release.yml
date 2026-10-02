@@ -1043,23 +1043,25 @@ jobs:
             **Updating from 0.2.x is not possible in-app.** v0.2.2 to v0.2.4 published
             only the prebuilt frontend, with no application bundle, and v0.2.7 was
             withdrawn - so no installed copy has a path to this release. Install this
-            one directly. From here on the in-app updater works normally: it downloads
-            only the layer that changed, verifies its checksum, swaps it atomically, and
-            on macOS re-signs and clears quarantine, so an update will not put you back
-            behind the first-launch dialog.
+            one directly. From this version, **Install and restart** downloads the full
+            installer, verifies its signed manifest and checksum, then closes WG,
+            installs the update and restarts. Your saved data stays in place.
 
             **Updating from 0.3.1 or 0.3.2 with the application and its data on
             different drives stays blocked in-app**, as it was: those releases stage an
             update in the data folder, and the swap has to stay on one drive. Install
-            this release once with the full installer. From here on an update is staged
-            beside the application, on its own drive.
+            this release once with the full installer. The new full-installer update
+            path removes that older same-drive restriction.
 
             <details><summary>Where the in-app updater's files went</summary>
 
             This page holds one file per platform and nothing else. Everything
             named `update-…` is machinery, and it is published to
             [${{ env.UPDATES_TAG }}](https://github.com/m3gnus/waveguide-generator/releases/tag/${{ env.UPDATES_TAG }}),
-            a pre-release you do not need to visit: `update-app-*.zip` and its
+            a pre-release you do not need to visit. These compatibility assets let
+            older installed clients receive the bridge release; this version's new
+            updater uses the full installers and signed manifest on this page.
+            `update-app-*.zip` and its
             manifest are the platform-neutral application layer;
             `update-runtime-*-<id>.zip` are the three runtime layers, addressed by
             content so releases that do not change the interpreter share one and

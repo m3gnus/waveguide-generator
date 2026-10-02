@@ -180,6 +180,19 @@ class RestartApproval:
         with self._lock:
             return self._approval if self._target is not None else None
 
+    def publish_if_current(self, approval: int, publish: Callable[[], object]) -> bool:
+        """Order one atomic request publication against release of its approval.
+
+        The callable must be short and must not read this latch. Expensive
+        proof checks and temporary-file writes happen before taking this lock.
+        """
+        with self._lock:
+            if (self._target is None or self._approval != approval
+                    or self._clock() - self._approved_at >= self._ttl):
+                return False
+            publish()
+            return True
+
     def remaining(self) -> float | None:
         """Seconds until the approved restart expires, or ``None`` when none is pending."""
 

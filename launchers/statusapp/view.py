@@ -12,6 +12,7 @@ import webbrowser
 from .controller import ServiceState, StatusController, StatusSnapshot, frontend_ready
 from .diagnostics import WindowUnavailable
 from .updater import BundleUpdateRequest, UpdateRequest
+from launchers.full_installer import FullInstallerRequest
 
 
 COLORS = {
@@ -240,8 +241,8 @@ class StatusView:
         # snapshot travels the same queue every other worker here uses.
         self._updates.put(("lost", snapshot))
 
-    def _start_update(self, request: UpdateRequest) -> None:
-        label = request.version if isinstance(request, BundleUpdateRequest) else request
+    def _start_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
+        label = request.version if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)) else request
         self._closing = True
         self._backend_reason.set(f"Preparing {label}…")
         self._frontend_reason.set("WG will close, install the update, and restart.")
@@ -253,14 +254,14 @@ class StatusView:
             daemon=True,
         ).start()
 
-    def _handoff_update(self, request: UpdateRequest) -> None:
+    def _handoff_update(self, request: UpdateRequest | FullInstallerRequest) -> None:
         try:
-            if isinstance(request, BundleUpdateRequest):
+            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
                 self.controller.close()
             self.controller.launch_update(request)
         except Exception as exc:  # noqa: BLE001 - keep the current healthy app usable
             reason = str(exc) or type(exc).__name__
-            if isinstance(request, BundleUpdateRequest):
+            if isinstance(request, (BundleUpdateRequest, FullInstallerRequest)):
                 # A fresh server, and a fresh process starts unlatched.
                 self.controller.start()
             else:

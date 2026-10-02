@@ -475,8 +475,12 @@ if destination == {str(install.target)!r} and '.new.' in source:
     ditto.write_text("#!/bin/sh\nexit 1\n")
     ditto.chmod(0o755)
     subprocess.run(["/bin/sh", "-n", str(ditto)], check=True)
+    ledger = install.lock.with_name(install.lock.name + '.journal')
+    ledger_before = (identity(ledger), ledger.read_bytes())
     second = install.run(env, interactive=True)
-    assert second.returncode == 1, second.stdout + second.stderr
+    assert second.returncode == 3, second.stdout + second.stderr
+    assert 'journal' in second.stderr.lower()
+    assert (identity(ledger), ledger.read_bytes()) == ledger_before
     assert identity(backup) == original and install.version(backup) == "old"
     assert (nested / "Recovered.app").exists()
     assert (install.target / "precious.txt").read_text() == "racer"
@@ -583,15 +587,25 @@ if destination == {str(install.target)!r} and '.previous.' in source:
 @pytest.mark.parametrize("boundary", ("acquiring", "preflight"))
 def test_signal_releases_the_lock_before_staging(install: Install, boundary: str) -> None:
     body = install.script.read_text()
+    marker = install.script.parent / "signal-boundary-reached"
     if boundary == "acquiring":
         # A signal during owner initialization must be deferred until the lock
         # can be identified and then released, without a missing-PID residue.
-        body = body.replace("    LOCK_HELD=1\n", "    LOCK_HELD=1\n    kill -TERM $$\n", 1)
+        key = "    LOCK_HELD=1\n    for lock_attempt in 1 2 3; do\n"
+        assert body.count(key) == 1
+        body = body.replace(key, f"    LOCK_HELD=1\n    touch {str(marker)!r}\n    kill -TERM $$\n    for lock_attempt in 1 2 3; do\n", 1)
     else:
-        body = body.replace("    acquire_lock\n", "    acquire_lock\n    kill -TERM $$\n") if install.platform == "macos" else body.replace("\nacquire_lock\n", "\nacquire_lock\nkill -TERM $$\n", 1)
+        key = '    acquire_lock\n    if [ ! -d "$TARGET"' if install.platform == "macos" else "\nacquire_lock\n"
+        assert body.count(key) == 1
+        indent = "    " if install.platform == "macos" else ""
+        if install.platform == "macos":
+            body = body.replace(key, f'    acquire_lock\n    touch {str(marker)!r}\n    kill -TERM $$\n    if [ ! -d "$TARGET"', 1)
+        else:
+            body = body.replace(key, key + f"{indent}touch {str(marker)!r}\n{indent}kill -TERM $$\n", 1)
     install.script.write_text(body)
     original = identity(install.target)
     result = install.run()
+    assert marker.exists(), result.stdout + result.stderr
     assert result.returncode == 1, result.stdout + result.stderr
     assert identity(install.target) == original and not install.lock.exists()
 
@@ -632,10 +646,35 @@ def snapshot(root: Path) -> dict:
             for p in [root, *root.rglob('*')]}
 
 
-def assert_no_staging(install: Install) -> None:
+def read_retained_ledger(install: Install, ledger: Path) -> list[tuple[Path, Path, Path, str, str]]:
+    assert ledger.is_file() and not ledger.is_symlink()
+    raw = ledger.read_bytes()
+    assert len(raw) <= 16384
+    fields = raw.decode().splitlines()
+    assert fields[:2] == ['WG-INSTALL-JOURNAL-1', str(install.target)]
+    count = int(fields[2])
+    assert count == len(install.paths) and len(fields) == 3 + count * 5
+    return [(Path(fields[i]), Path(fields[i + 1]), Path(fields[i + 2]), fields[i + 3], fields[i + 4])
+            for i in range(3, len(fields), 5)]
+
+
+def retire_reconciled_fixture_ledger(install: Install) -> None:
+    """The fixture restored exact old objects; retire only its checked evidence."""
+    ledger = install.lock.with_name(install.lock.name + '.journal')
+    before = (identity(ledger), ledger.read_bytes())
+    for live, backup, staged, old_id, _new_id in read_retained_ledger(install, ledger):
+        assert ':'.join(map(str, identity(live))) == old_id
+        assert not backup.exists() and not backup.is_symlink()
+        assert not staged.exists() and not staged.is_symlink()
+    assert (identity(ledger), ledger.read_bytes()) == before
+    ledger.unlink()
+
+
+def assert_no_staging(install: Install, *, retained_journal: Path | None = None) -> None:
     parents = {p.parent for p in install.paths}
     leftovers = [p for parent in parents for p in parent.glob('.waveguide-generator.*')
-                 if p.name != '.waveguide-generator.owner' and '.previous.' not in p.name and '.backup.' not in p.name]
+                 if p.name != '.waveguide-generator.owner' and '.previous.' not in p.name and '.backup.' not in p.name
+                 and p != retained_journal]
     if install.platform == 'macos':
         leftovers += list(install.target.parent.glob(f'.{mac.APP}.new.*'))
     assert not leftovers, leftovers
@@ -923,7 +962,65 @@ if source == {str(install.target)!r} and '.previous.' in destination:
     path = Path(next(line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)))
     assert path.exists() and install.version(path) == 'stranger', output
     assert install.version(saved) == 'old'
-    assert_no_staging(install)
+    ledger = install.lock.with_name(install.lock.name + '.journal')
+    rows = read_retained_ledger(install, ledger)
+    assert rows[0][0] == install.target and rows[0][1] == path
+    assert_no_staging(install, retained_journal=ledger)
+
+
+@pytest.mark.parametrize('replacement', ('file', 'symlink'))
+def test_unattempted_prepared_linux_row_refuses_foreign_live(install: Install, tmp_path: Path, replacement: str) -> None:
+    if install.platform != 'linux':
+        pytest.skip('Linux prepares multiple rows before mutation')
+    live = install.paths[1]
+    saved = tmp_path / 'saved-desktop'
+    original = identity(live)
+    foreign = tmp_path / 'foreign-desktop'
+    foreign.write_text('precious foreign contents')
+    foreign_id = identity(foreign)
+    env = fail_app_install(tmp_path, install, f"""
+if destination == {str(install.target)!r} and '.install.' in source:
+    pathlib.Path({str(live)!r}).rename({str(saved)!r})
+    if {replacement!r} == 'file': pathlib.Path({str(foreign)!r}).rename({str(live)!r})
+    else: pathlib.Path({str(live)!r}).symlink_to({str(foreign)!r})
+""")
+    result = install.run(env)
+    output = result.stdout + result.stderr
+    assert result.returncode == 3 and 'could not restore the previous desktop entry' in output, output
+    assert identity(saved) == original
+    assert live.read_text() == 'precious foreign contents'
+    assert live.is_symlink() == (replacement == 'symlink')
+    assert identity(foreign if replacement == 'symlink' else live) == foreign_id
+    assert install.version() == 'old'
+    ledger = install.lock.with_name(install.lock.name + '.journal')
+    rows = read_retained_ledger(install, ledger)
+    assert rows[1][0] == live and rows[1][3] == ':'.join(map(str, original))
+    assert_no_staging(install, retained_journal=ledger)
+
+
+def test_successful_rmdir_without_removal_preserves_reservation(install: Install, tmp_path: Path) -> None:
+    if install.platform != 'linux':
+        pytest.skip('Linux reserves empty rollback directories')
+    directory = tmp_path / 'reservation-tools'
+    directory.mkdir()
+    real = shutil.which('rmdir')
+    tool = directory / 'rmdir'
+    reached = tmp_path / 'reservation-path'
+    tool.write_text(f'''#!/bin/sh
+case "$1" in *.previous.*)
+    printf '%s' "$1" > {str(reached)!r}
+    printf precious > "$1/precious"
+    exit 0 ;;
+esac
+exec {real!r} "$@"
+''')
+    tool.chmod(0o755)
+    original = identity(install.target)
+    result = install.run({**install.env, 'PATH': f"{directory}{os.pathsep}{install.env['PATH']}"})
+    assert result.returncode == 1 and 'reservation was not removed' in result.stdout + result.stderr
+    reservation = Path(reached.read_text())
+    assert (reservation / 'precious').read_text() == 'precious'
+    assert identity(install.target) == original and not install.lock.exists()
 
 
 def test_linux_foreign_backup_reservation_is_preserved(install: Install, tmp_path: Path) -> None:
@@ -1093,6 +1190,7 @@ if backup:
                     backup = recovery_by_identity[old_id]
                     assert not path.exists() and not path.is_symlink(), output
                     backup.rename(path)
+                retire_reconciled_fixture_ledger(install)
             else:
                 assert {path: identity(path) for path in install.paths} == original, output
                 assert sum(line.startswith('Restored the previous installation') for line in output.splitlines()) == 1, output
@@ -1364,6 +1462,7 @@ def test_cleanup_documentation_describes_hard_kill_staging(install: Install) -> 
         assert pattern in text
         assert 'safe to delete' in text
         assert 'unexpected contents' in ' '.join(text.split())
+        assert 'identity ledger' in text and 'referenced' in text
     assert 'a crash, power loss or a forced quit' in readme
     assert 'closed Terminal window' not in readme
 
