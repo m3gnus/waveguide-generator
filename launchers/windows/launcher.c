@@ -184,6 +184,218 @@ static int append(char *out, size_t cap, size_t *used, const char *s) {
     size_t n = strlen(s); if (*used + n >= cap) return 0;
     memcpy(out + *used, s, n); *used += n; out[*used] = 0; return 1;
 }
+
+/* Updater diagnostics use this static helper, never installed Python. These
+ * modes are dispatched before native startup/exclusion or journal handling. */
+#define LOG_LIMIT 262144U
+#define LOG_RECORD 8192U
+#define LOG_MESSAGE 4096U
+typedef struct { HANDLE h; Identity id; char *data; DWORD count; LONGLONG size; } LogSlot;
+
+static int log_regular(HANDLE h, Identity *id, int directory) {
+    BY_HANDLE_FILE_INFORMATION info;
+    if (!GetFileInformationByHandle(h, &info) ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
+        !!(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != directory ||
+        (!directory && info.nNumberOfLinks != 1)) return 0;
+    id->volume = info.dwVolumeSerialNumber; id->high = info.nFileIndexHigh;
+    id->low = info.nFileIndexLow; id->present = 1; id->directory = (DWORD)directory;
+    return 1;
+}
+static int log_paths(const wchar_t *input, wchar_t *directory, wchar_t *current,
+                     wchar_t *backup, wchar_t *lock) {
+    wchar_t full[CAP], *leaf; DWORD n;
+    size_t length = wcsnlen_s(input, CAP);
+    if (length < 3 || length >= CAP ||
+        (!((input[1] == L':' && input[2] == L'\\') ||
+           (!wcsncmp(input, L"\\\\", 2) && wcsncmp(input, L"\\\\.\\", 4))))) return 0;
+    n = GetFullPathNameW(input, CAP, full, NULL);
+    if (!n || n >= CAP || !ordinary_path(full) || !(leaf = wcsrchr(full, L'\\')) ||
+        _wcsicmp(leaf + 1, L"install.log")) return 0;
+    *leaf = 0;
+    return wcscpy_s(directory, CAP, full) == 0 && path(current, full, L"install.log") &&
+        path(backup, full, L"install.log.1") && path(lock, full, L".install-log.lock");
+}
+/* Accept a complete UTF-8 prefix or an interrupted final character, never an
+ * interior invalid sequence/overlong encoding/surrogate. */
+static int log_utf8_prefix(const unsigned char *s, DWORD n, DWORD *complete) {
+    DWORD i = 0;
+    while (i < n) {
+        DWORD width, k, available; unsigned char b = s[i];
+        if (b < 0x80) width = 1;
+        else if (b >= 0xc2 && b <= 0xdf) width = 2;
+        else if (b >= 0xe0 && b <= 0xef) width = 3;
+        else if (b >= 0xf0 && b <= 0xf4) width = 4;
+        else return 0;
+        available = n - i < width ? n - i : width;
+        for (k = 1; k < available; ++k)
+            if ((s[i + k] & 0xc0) != 0x80) return 0;
+        if (available > 1 && ((b == 0xe0 && s[i + 1] < 0xa0) ||
+            (b == 0xed && s[i + 1] >= 0xa0) || (b == 0xf0 && s[i + 1] < 0x90) ||
+            (b == 0xf4 && s[i + 1] >= 0x90))) return 0;
+        if (available < width) { *complete = i; return 1; }
+        i += width;
+    }
+    *complete = i; return 1;
+}
+static int log_read_slot(const wchar_t *p, LogSlot *s) {
+    LARGE_INTEGER size, offset; DWORD got, skip = 0, complete;
+    const char marker[] = "[previous log tail retained]\r\n";
+    ZeroMemory(s, sizeof(*s));
+    s->h = CreateFileW(p, GENERIC_READ | GENERIC_WRITE | DELETE, FILE_SHARE_READ,
+                      NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (s->h == INVALID_HANDLE_VALUE) { s->h = NULL; return GetLastError() == ERROR_FILE_NOT_FOUND; }
+    if (!log_regular(s->h, &s->id, 0) || !GetFileSizeEx(s->h, &size) || size.QuadPart < 0) return 0;
+    s->size = size.QuadPart;
+    s->data = (char *)malloc(LOG_LIMIT); if (!s->data) return 0;
+    offset.QuadPart = size.QuadPart > LOG_LIMIT ? size.QuadPart - (LOG_LIMIT - sizeof(marker) + 1) : 0;
+    if (!SetFilePointerEx(s->h, offset, NULL, FILE_BEGIN) ||
+        !ReadFile(s->h, s->data, LOG_LIMIT - (offset.QuadPart ? sizeof(marker) - 1 : 0), &got, NULL)) return 0;
+    if (offset.QuadPart) {
+        while (skip < got && skip < 3 && (((unsigned char *)s->data)[skip] & 0xc0) == 0x80) ++skip;
+    }
+    if (!log_utf8_prefix((unsigned char *)s->data + skip, got - skip, &complete)) return 0;
+    memmove(s->data + (offset.QuadPart ? sizeof(marker) - 1 : 0), s->data + skip, complete);
+    s->count = complete;
+    if (offset.QuadPart) { memcpy(s->data, marker, sizeof(marker) - 1); s->count += sizeof(marker) - 1; }
+    return 1;
+}
+static int log_normalize(LogSlot *s) {
+    LARGE_INTEGER at; DWORD done;
+    if (!s->h || s->size == s->count) return 1;
+    /* Shorten before rewriting: death never grows an old oversized file. */
+    at.QuadPart = s->count;
+    if (!SetFilePointerEx(s->h, at, NULL, FILE_BEGIN) || !SetEndOfFile(s->h)) return 0;
+    at.QuadPart = 0;
+    return SetFilePointerEx(s->h, at, NULL, FILE_BEGIN) &&
+        WriteFile(s->h, s->data, s->count, &done, NULL) && done == s->count && FlushFileBuffers(s->h);
+}
+static int log_record(const wchar_t *message, char *out, DWORD *count) {
+    wchar_t clean[LOG_MESSAGE * 2 + 1]; char utf8[LOG_MESSAGE * 8 + 1], stamp[64];
+    size_t i, used = 0, n = wcsnlen_s(message, LOG_MESSAGE + 1); SYSTEMTIME t; DWORD complete;
+    const char trimmed[] = " [record truncated]"; int bytes;
+    if (n > LOG_MESSAGE) return 0;
+    for (i = 0; i < n; ++i) {
+        if (message[i] == L'\r' || message[i] == L'\n') {
+            clean[used++] = L'\\'; clean[used++] = message[i] == L'\r' ? L'r' : L'n';
+        } else clean[used++] = message[i];
+    }
+    clean[used] = 0;
+    bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, clean, (int)used, utf8, sizeof(utf8), NULL, NULL);
+    if (used && !bytes) return 0;
+    GetSystemTime(&t);
+    sprintf_s(stamp, sizeof(stamp), "%04u-%02u-%02uT%02u:%02u:%02uZ ",
+              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    used = strlen(stamp); memcpy(out, stamp, used);
+    if ((size_t)bytes > LOG_RECORD - used - sizeof(trimmed) - 2) {
+        DWORD bounded = (DWORD)(LOG_RECORD - used - sizeof(trimmed) - 2);
+        if (!log_utf8_prefix((unsigned char *)utf8, bounded, &complete)) return 0;
+        memcpy(out + used, utf8, complete); used += complete;
+        memcpy(out + used, trimmed, sizeof(trimmed) - 1); used += sizeof(trimmed) - 1;
+    } else { memcpy(out + used, utf8, (size_t)bytes); used += (size_t)bytes; }
+    out[used++] = '\r'; out[used++] = '\n'; *count = (DWORD)used; return 1;
+}
+static int log_write(const wchar_t *input, const wchar_t *message, int initialize) {
+    wchar_t directory[CAP], current[CAP], backup[CAP], lock_path[CAP];
+    HANDLE parent = NULL, lock = NULL; Identity parent_id, lock_id; LogSlot slots[2];
+    char record[LOG_RECORD]; DWORD count, done; LARGE_INTEGER at, lock_size; int ok = 0, i;
+    ULONGLONG end = GetTickCount64() + 1500;
+    ZeroMemory(slots, sizeof(slots));
+    if (!log_paths(input, directory, current, backup, lock_path) || !log_record(message, record, &count)) return 0;
+    parent = CreateFileW(directory, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (parent == INVALID_HANDLE_VALUE) { parent = NULL; goto log_done; }
+    if (!log_regular(parent, &parent_id, 1)) goto log_done;
+    do {
+        DWORD error;
+        lock = CreateFileW(lock_path, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_ALWAYS,
+                          FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        if (lock != INVALID_HANDLE_VALUE) break;
+        lock = NULL; error = GetLastError();
+        if (error != ERROR_SHARING_VIOLATION || GetTickCount64() >= end) goto log_done;
+        Sleep(25);
+    } while (1);
+    if (!log_regular(lock, &lock_id, 0) || !GetFileSizeEx(lock, &lock_size) || lock_size.QuadPart ||
+        !matches(directory, &parent_id) || !log_read_slot(current, &slots[0]) ||
+        !log_read_slot(backup, &slots[1])) goto log_done;
+    /* Both leaves are proven before either can be normalized. Open handles
+     * deny writers/deletion; the retained parent denies directory replacement. */
+    if (!log_normalize(&slots[0]) || !log_normalize(&slots[1])) goto log_done;
+    if (slots[0].h && ((initialize && slots[0].count) || slots[0].count > LOG_LIMIT - count)) {
+        FILE_RENAME_INFO *rename; DWORD rename_size;
+        if (slots[1].h) {
+            /* This retained single-link handle denied displacement since its
+             * proof. Delete that exact old slot, never a new pathname occupant. */
+            FILE_DISPOSITION_INFO disposition = {TRUE};
+            if (!SetFileInformationByHandle(slots[1].h, FileDispositionInfo, &disposition, sizeof(disposition))) goto log_done;
+            if (!CloseHandle(slots[1].h)) { slots[1].h = NULL; goto log_done; }
+            slots[1].h = NULL;
+        }
+        rename_size = (DWORD)(sizeof(FILE_RENAME_INFO) + wcslen(backup) * sizeof(wchar_t));
+        rename = (FILE_RENAME_INFO *)calloc(1, rename_size); if (!rename) goto log_done;
+        /* No-clobber also preserves a raced occupant after the old slot closed. */
+        rename->ReplaceIfExists = FALSE; rename->FileNameLength = (DWORD)(wcslen(backup) * sizeof(wchar_t));
+        memcpy(rename->FileName, backup, rename->FileNameLength);
+        ok = SetFileInformationByHandle(slots[0].h, FileRenameInfo, rename, rename_size); free(rename);
+        if (!ok) goto log_done;
+        ok = 0;
+        if (!CloseHandle(slots[0].h)) { slots[0].h = NULL; goto log_done; }
+        slots[0].h = NULL; slots[0].count = 0;
+    }
+    if (!slots[0].h) {
+        slots[0].h = CreateFileW(current, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ,
+            NULL, CREATE_NEW, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+        if (slots[0].h == INVALID_HANDLE_VALUE) { slots[0].h = NULL; goto log_done; }
+        if (!log_regular(slots[0].h, &slots[0].id, 0)) goto log_done;
+    }
+    at.QuadPart = slots[0].count;
+    ok = SetFilePointerEx(slots[0].h, at, NULL, FILE_BEGIN) &&
+        WriteFile(slots[0].h, record, count, &done, NULL) && done == count && FlushFileBuffers(slots[0].h);
+log_done:
+    for (i = 0; i < 2; ++i) { if (slots[i].h && !CloseHandle(slots[i].h)) ok = 0; free(slots[i].data); }
+    if (lock && !CloseHandle(lock)) ok = 0;
+    if (parent && !CloseHandle(parent)) ok = 0;
+    return ok;
+}
+
+static int log_quote(wchar_t *out, size_t cap, size_t *used, const wchar_t *value) {
+    size_t i = 0;
+    if (*used + 2 >= cap) return 0;
+    out[(*used)++] = L'"';
+    do {
+        size_t slashes = 0, copies, k;
+        while (value[i] == L'\\') { ++slashes; ++i; }
+        copies = value[i] == L'"' || !value[i] ? slashes * 2 : slashes;
+        if (*used + copies + 3 >= cap) return 0;
+        for (k = 0; k < copies; ++k) out[(*used)++] = L'\\';
+        if (value[i] == L'"') out[(*used)++] = L'\\';
+        if (value[i]) out[(*used)++] = value[i++];
+    } while (value[i]);
+    out[(*used)++] = L'"'; out[*used] = 0; return 1;
+}
+static int log_bounded(const wchar_t *self, const wchar_t *input, const wchar_t *message, int initialize) {
+    wchar_t command[LOG_MESSAGE * 4 + CAP * 4], directory[CAP], current[CAP], backup[CAP], lock[CAP];
+    char record[LOG_RECORD]; DWORD count, wait, code = 3; size_t n = 0;
+    STARTUPINFOW si; PROCESS_INFORMATION pi;
+    if (!log_paths(input, directory, current, backup, lock) || !log_record(message, record, &count) ||
+        !log_quote(command, sizeof(command) / sizeof(*command), &n, self)) return 0;
+    if (wcscpy_s(command + n, sizeof(command) / sizeof(*command) - n,
+        initialize ? L" --update-log-worker-init " : L" --update-log-worker ")) return 0;
+    n = wcslen(command);
+    if (!log_quote(command, sizeof(command) / sizeof(*command), &n, input)) return 0;
+    command[n++] = L' '; command[n] = 0;
+    if (!log_quote(command, sizeof(command) / sizeof(*command), &n, message)) return 0;
+    ZeroMemory(&si, sizeof(si)); si.cb = sizeof(si); ZeroMemory(&pi, sizeof(pi));
+    if (!CreateProcessW(self, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                        NULL, directory, &si, &pi)) return 0;
+    CloseHandle(pi.hThread);
+    wait = WaitForSingleObject(pi.hProcess, 5000);
+    if (wait == WAIT_OBJECT_0) GetExitCodeProcess(pi.hProcess, &code);
+    else { TerminateProcess(pi.hProcess, 3); WaitForSingleObject(pi.hProcess, 500); }
+    /* The exact retained CreateProcess handle, never a PID lookup, owns this
+     * timeout termination. No setup/application process is affected. */
+    CloseHandle(pi.hProcess); return wait == WAIT_OBJECT_0 && code == 0;
+}
 static int json_string(char *out, size_t cap, size_t *used, const wchar_t *s) {
     char utf8[CAP * 4]; const unsigned char *p; wchar_t normal[CAP];
     if (!s || !*s) return append(out, cap, used, "null");
@@ -201,7 +413,7 @@ static int json_string(char *out, size_t cap, size_t *used, const wchar_t *s) {
     return append(out, cap, used, "\"");
 }
 static int outcome(const Journal *j, const char *result, int kept, const wchar_t *backup) {
-    char out[CAP * 16], when[64]; size_t n = 0; SYSTEMTIME t; wchar_t marker[CAP];
+    char out[CAP * 16], when[64]; size_t n = 0; SYSTEMTIME t; wchar_t marker[CAP]; int ok;
     if (!j->outcome[0]) return 1;
     GetSystemTime(&t);
     sprintf_s(when, sizeof(when), "%04u-%02u-%02uT%02u:%02u:%02uZ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
@@ -215,7 +427,15 @@ static int outcome(const Journal *j, const char *result, int kept, const wchar_t
     ADD("}\n");
 #undef ADD
 #undef STR
-    return durable_write(j->outcome, out, (DWORD)n, 1);
+    ok = durable_write(j->outcome, out, (DWORD)n, 1);
+    if (ok && j->log[0]) {
+        wchar_t self[CAP], message[256]; DWORD length = GetModuleFileNameW(NULL, self, CAP);
+        if (length && length < CAP &&
+            swprintf_s(message, 256, L"Native verified outcome: %hs; previousKept=%s.",
+                       result, kept ? L"true" : L"false") > 0)
+            (void)log_bounded(self, j->log, message, 0);
+    }
+    return ok;
 }
 static HANDLE exact_process(DWORD pid, const FILETIME *expected, DWORD access) {
     HANDLE h; FILETIME created, exited, kernel, user;
@@ -777,6 +997,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     (void)instance; (void)previous; (void)show;
     if (!GetModuleFileNameW(NULL, self, CAP) || wcslen(self) >= CAP - 1 || !ordinary_path(self)) return 3;
     argv = CommandLineToArgvW(GetCommandLineW(), &argc); if (!argv) return 3;
+    if (argc >= 2 && !wcsncmp(argv[1], L"--update-log", 12)) {
+        code = 3;
+        if (argc == 4 && !wcscmp(argv[1], L"--update-log-init")) code = log_bounded(self, argv[2], argv[3], 1) ? 0 : 3;
+        else if (argc == 4 && !wcscmp(argv[1], L"--update-log-append")) code = log_bounded(self, argv[2], argv[3], 0) ? 0 : 3;
+        else if (argc == 4 && !wcscmp(argv[1], L"--update-log-worker-init")) code = log_write(argv[2], argv[3], 1) ? 0 : 3;
+        else if (argc == 4 && !wcscmp(argv[1], L"--update-log-worker")) code = log_write(argv[2], argv[3], 0) ? 0 : 3;
+        LocalFree(argv); return code;
+    }
     if (argc >= 3 && !wcsncmp(argv[1], L"--installer-", 12) && wcscmp(argv[1], L"--installer-watch")) {
         lock = transaction_lock(argv[2]); if (!lock) { LocalFree(argv); return 3; }
     }

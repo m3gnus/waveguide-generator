@@ -106,6 +106,40 @@ the journal or a backup already restored. `journalPath` is separate diagnostics.
 Refusal preserves the journal/backups. Uninstall explicitly removes the owned
 native sidecar, lock and staging names as well as the normal bundle layers.
 
+## Bounded updater diagnostics
+
+The detached updater passes `/WGLOG=<data>/update-install/install.log` instead
+of Inno's vendor `/LOG`. `SetupLogging=no` prevents an automatic unbounded
+temporary debug log; explicit manual `/LOG` remains available and cannot be
+combined with `/WGLOG`. Setup extracts its own static native helper during
+initialization, before replacement. Logger modes return before application
+admission, install exclusion or journal dispatch, and load no bundled Python.
+Each invocation briefly uses a native supervisor and worker. The supervisor
+retains the exact created process handle and stops only that worker after a
+five-second deadline. Logging never changes the recorded installer genealogy.
+
+The writer measures UTF-8 bytes and bounds each record before writing. Active
+`install.log` and its sole `install.log.1` backup stay within 262144 bytes.
+Rollover replaces only the previously verified backup object; a raced new
+occupant is preserved and refused. The writer holds a real non-reparse parent
+directory, an exclusive OS-held `.install-log.lock`, and regular single-link
+leaf handles. Reparse, directory and multiply linked leaves are preserved.
+Existing oversized logs are normalized through bounded reads to valid UTF-8
+tails before an update proceeds. Interrupted final UTF-8 characters are trimmed;
+invalid interior bytes cause refusal. Process death releases the logging lock.
+These fixed diagnostic files live in retained user data, outside the bundle.
+
+The log records real setup/refusal and wait results, native protection calls,
+throttled exact progress with the current actual copy filename, WGLink output,
+outcomes and exit. It is a WG diagnostic stream; explicit `/LOG` supplies the
+vendor per-file debugging transcript. Initial log failure refuses before
+application mutation. A later failure disables further Inno logging attempts.
+Native verified outcomes and watchdog recovery append their actual verdict
+only after the outcome is durable; failed diagnostics never change that verdict
+or authorize a commit. A killed writer may lose its final bounded record.
+Early Inno loader failures before script initialization have no WG log and
+cannot have begun this protected replacement.
+
 ## Required evidence
 
 Mac static/unit tests and cross-compiling with real Win32 headers prove source
@@ -115,7 +149,11 @@ old-receiver bridge admission, changed-hook rollback/next setup, real terminated
 sidecar/entry writers, extended disposition clearing/rename survival, bounded
 history refusal, capability refusal, admitted nested/quoted argv, malformed
 journals, foreign directory/root refusal, long backup paths and boot/layer
-transaction behavior. These rows are explicitly skipped elsewhere.
+transaction behavior. Logger rows additionally cover continuous size checks,
+single-slot rollover, Unicode/oversized inputs, foreign/raced leaves, actual
+terminated/timed-out workers and flooded verified native outcomes. Actual Inno
+`/WGLOG` install/timeout/copy-failure/hard-kill runs remain required separately.
+These rows are explicitly skipped elsewhere.
 
 Run `installers/windows/gates.ps1 -Setup <exact-artifact> -RunInterruptedInstall
 -RunWaitPidTimeout` in a disposable Windows account. Gate install roots, data and

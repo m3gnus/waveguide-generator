@@ -115,10 +115,9 @@ WizardStyle=modern
 DisableWelcomePage=yes
 DisableReadyPage=yes
 LicenseFile={#PayloadDir}\app\LICENSE
-; Keep the outcome of the optional WGLink action available after setup exits.
-; This is particularly important for a silent deployment, where the final page
-; is absent and the setup log is the only actionable record.
-SetupLogging=yes
+; Updater /WGLOG uses bounded diagnostics. Automatic vendor logging would create
+; an unbounded second stream. Explicit /LOG remains available for manual debug.
+SetupLogging=no
 UninstallLogging=yes
 
 [Languages]
@@ -138,10 +137,10 @@ Name: "wglink"; Description: "Install the &WGLink add-in for Autodesk Fusion"; G
 ; needed for rollback. Native commit records their exact identities then moves
 ; them into place. The public native entry is published before displacement.
 Source: "{#PayloadDir}\Waveguide Generator.exe"; DestName: "wg-installer-helper.exe"; Flags: dontcopy
-Source: "{#PayloadDir}\app\*"; DestDir: "{app}\app"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#PayloadDir}\runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#PayloadDir}\recovery\*"; DestDir: "{app}\recovery"; Flags: recursesubdirs createallsubdirs ignoreversion
-Source: "{#PayloadDir}\*"; DestDir: "{app}\.wg-install-new"; Excludes: "Waveguide Generator.exe"; Flags: ignoreversion
+Source: "{#PayloadDir}\app\*"; DestDir: "{app}\app"; Flags: recursesubdirs createallsubdirs ignoreversion; BeforeInstall: RecordCopyStart; AfterInstall: RecordCopyDone
+Source: "{#PayloadDir}\runtime\*"; DestDir: "{app}\runtime"; Flags: recursesubdirs createallsubdirs ignoreversion; BeforeInstall: RecordCopyStart; AfterInstall: RecordCopyDone
+Source: "{#PayloadDir}\recovery\*"; DestDir: "{app}\recovery"; Flags: recursesubdirs createallsubdirs ignoreversion; BeforeInstall: RecordCopyStart; AfterInstall: RecordCopyDone
+Source: "{#PayloadDir}\*"; DestDir: "{app}\.wg-install-new"; Excludes: "Waveguide Generator.exe"; Flags: ignoreversion; BeforeInstall: RecordCopyStart; AfterInstall: RecordCopyDone
 
 [Icons]
 Name: "{group}\Waveguide Generator"; Filename: "{app}\Waveguide Generator.exe"; IconFilename: "{app}\WaveguideGenerator.ico"
@@ -242,6 +241,184 @@ var
   RollbackIncomplete: Boolean;
   OutcomeWritten: Boolean;
   NativeHelperPath: String;
+  WgLogPath: String;
+  WgLogReady: Boolean;
+  LastCopiedFile: String;
+  LastCopyCompleted: Boolean;
+  LastLogPercent: Integer;
+
+function DiagnosticArgument(const S: String): String;
+var
+  I, Slashes, Copies, K: Integer;
+begin
+  Result := '"';
+  I := 1;
+  while I <= Length(S) do
+  begin
+    Slashes := 0;
+    while I <= Length(S) do
+    begin
+      if S[I] <> '\' then
+        break;
+      Slashes := Slashes + 1;
+      I := I + 1;
+    end;
+    Copies := Slashes;
+    if I > Length(S) then
+      Copies := Slashes * 2
+    else if S[I] = '"' then
+      Copies := Slashes * 2;
+    for K := 1 to Copies do
+      Result := Result + '\';
+    if I <= Length(S) then
+    begin
+      if S[I] = '"' then
+        Result := Result + '\';
+      Result := Result + S[I];
+      I := I + 1;
+    end;
+  end;
+  Result := Result + '"';
+end;
+
+function BoundedDiagnostic(const S: String): String;
+begin
+  Result := S;
+  if Length(Result) > 4096 then
+  begin
+    Result := Copy(Result, 1, 4060);
+    if (Ord(Result[Length(Result)]) >= $D800) and
+       (Ord(Result[Length(Result)]) <= $DBFF) then
+      Delete(Result, Length(Result), 1);
+    Result := Result + ' [message truncated]';
+  end;
+end;
+
+function EnsureNativeHelper(): Boolean;
+begin
+  Result := NativeHelperPath <> '';
+  if Result then
+    exit;
+  try
+    ExtractTemporaryFile('wg-installer-helper.exe');
+    NativeHelperPath := ExpandConstant('{tmp}\wg-installer-helper.exe');
+    Result := True;
+  except
+    NativeHelperPath := '';
+    Result := False;
+  end;
+end;
+
+function OutcomeLogPath(): String;
+begin
+  if WgLogPath <> '' then
+    Result := WgLogPath
+  else
+    Result := ExpandConstant('{param:LOG|}');
+end;
+
+function InitializeWgLog(): Boolean;
+var
+  I, Code: Integer;
+  Params: String;
+begin
+  WgLogPath := ExpandConstant('{param:WGLOG|}');
+  WgLogReady := False;
+  LastLogPercent := -1;
+  Result := WgLogPath = '';
+  if Result then
+    exit;
+  for I := 1 to ParamCount do
+    if (CompareText(ParamStr(I), '/LOG') = 0) or
+       (CompareText(Copy(ParamStr(I), 1, 5), '/LOG=') = 0) then
+      exit;
+  if not EnsureNativeHelper() then
+    exit;
+  Params := '--update-log-init ' + DiagnosticArgument(WgLogPath) + ' ' +
+    DiagnosticArgument('Setup start: target version {#AppVersion}.');
+  Result := Exec(NativeHelperPath, Params, ExpandConstant('{tmp}'), SW_HIDE,
+    ewWaitUntilTerminated, Code);
+  if Result then
+    Result := Code = 0;
+  WgLogReady := Result;
+end;
+
+procedure WgLog(const S: String);
+var
+  Code: Integer;
+  Params: String;
+begin
+  if WgLogPath = '' then
+  begin
+    Log(S);
+    exit;
+  end;
+  if not WgLogReady then
+    exit;
+  Params := '--update-log-append ' + DiagnosticArgument(WgLogPath) + ' ' +
+    DiagnosticArgument(BoundedDiagnostic(S));
+  { The extracted native supervisor owns its exact worker handle and enforces
+    a five-second deadline. A failed late write disables all further attempts. }
+  if not Exec(NativeHelperPath, Params, ExpandConstant('{tmp}'), SW_HIDE,
+    ewWaitUntilTerminated, Code) then
+    WgLogReady := False
+  else if Code <> 0 then
+    WgLogReady := False;
+end;
+
+procedure RecordCopyStart();
+begin
+  LastCopiedFile := CurrentFilename();
+  LastCopyCompleted := False;
+end;
+
+procedure RecordCopyDone();
+begin
+  LastCopiedFile := CurrentFilename();
+  LastCopyCompleted := True;
+end;
+
+function InstallPercent(CurProgress, MaxProgress: Integer): Integer;
+var
+  Low, High, Middle, Threshold: Integer;
+begin
+  Result := 0;
+  if (CurProgress <= 0) or (MaxProgress <= 0) then
+    exit;
+  if CurProgress >= MaxProgress then
+  begin
+    Result := 100;
+    exit;
+  end;
+  Low := 0;
+  High := 100;
+  while Low < High do
+  begin
+    Middle := (Low + High + 1) div 2;
+    { ceil(Middle * MaxProgress / 100), with every intermediate <= MaxInt. }
+    Threshold := (MaxProgress div 100) * Middle +
+      ((MaxProgress mod 100) * Middle + 99) div 100;
+    if CurProgress >= Threshold then
+      Low := Middle
+    else
+      High := Middle - 1;
+  end;
+  Result := Low;
+end;
+
+procedure CurInstallProgressChanged(CurProgress, MaxProgress: Integer);
+var
+  Percent: Integer;
+begin
+  if (WgLogPath = '') or not WgLogReady or (MaxProgress <= 0) then
+    exit;
+  Percent := InstallPercent(CurProgress, MaxProgress);
+  if Percent <> LastLogPercent then
+  begin
+    LastLogPercent := Percent;
+    WgLog('Install progress: ' + IntToStr(Percent) + '%; file: ' + LastCopiedFile);
+  end;
+end;
 
 function SetEnvironmentVariable(Name, Value: String): Boolean;
   { No setuponly/uninstallonly qualifier: this process-local Windows API is
@@ -301,9 +478,9 @@ end;
 procedure WgLinkOutput(const S: String; const Error, FirstLine: Boolean);
 begin
   if Error then
-    Log('WGLink stderr: ' + S)
+    WgLog('WGLink stderr: ' + S)
   else
-    Log('WGLink stdout: ' + S);
+    WgLog('WGLink stdout: ' + S);
 end;
 
 function WgLinkAddInsOverrideSpecified(): Boolean;
@@ -335,7 +512,7 @@ begin
   if (OverrideDir <> '') and DirExists(OverrideDir) then
     exit;
   Reason := 'Refusing /WGLINKADDINSDIR: supply an existing directory. No files have been changed. Value: ' + OverrideDir;
-  Log(Reason);
+  WgLog(Reason);
   if not Silent then
     MsgBox(Reason, mbError, MB_OK);
   Result := False;
@@ -363,7 +540,7 @@ begin
     if (OverrideDir <> '') and DirExists(OverrideDir) then
       Result := OverrideDir
     else
-      Log('WGLink: invalid /WGLINKADDINSDIR; skipping install or uninstall without Fusion fallback: ' + OverrideDir);
+      WgLog('WGLink: invalid /WGLINKADDINSDIR; skipping install or uninstall without Fusion fallback: ' + OverrideDir);
     exit;
   end;
 
@@ -411,7 +588,7 @@ begin
     ) then
       Result := ExitCode = 0
     else
-      Log('WGLink ownership query could not start for ' + Target + '.');
+      WgLog('WGLink ownership query could not start for ' + Target + '.');
   finally
     SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
     SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
@@ -441,7 +618,7 @@ var
 begin
   if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
   begin
-    Log('WGLink setup choice: bundled runtime python.exe is missing; continuing setup.');
+    WgLog('WGLink setup choice: bundled runtime python.exe is missing; continuing setup.');
     exit;
   end;
   PreviousBundleFlag := GetEnv('WG2_BUNDLE');
@@ -452,14 +629,14 @@ begin
     Parameters :=
       AddQuotes(ExpandConstant('{app}\app\scripts\install_wglink.py')) +
       ' --record-setup-choice';
-    Log('WGLink setup choice: recording the selected task.');
+    WgLog('WGLink setup choice: recording the selected task.');
     if not ExecAndLogOutput(
       ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
       SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
     ) then
-      Log('WGLink setup choice: could not start the recording command; continuing setup.')
+      WgLog('WGLink setup choice: could not start the recording command; continuing setup.')
     else if ExitCode <> 0 then
-      Log('WGLink setup choice: recording failed with exit code ' + IntToStr(ExitCode) + '; continuing setup.');
+      WgLog('WGLink setup choice: recording failed with exit code ' + IntToStr(ExitCode) + '; continuing setup.');
   finally
     SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
     SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
@@ -481,13 +658,13 @@ begin
       WgLinkStatus :=
         'WGLink could not be installed because /WGLINKADDINSDIR is not an existing directory.' + #13#10 +
         'Create a usable directory, then run the installer again and select WGLink.';
-      Log('WGLink: failed; invalid AddIns override.');
+      WgLog('WGLink: failed; invalid AddIns override.');
       exit;
     end;
     WgLinkStatus :=
       'WGLink was not installed because Autodesk Fusion was not detected.' + #13#10 +
       'Install Fusion first, then run this installer again and select WGLink.';
-    Log('WGLink: skipped; no existing Fusion AddIns directory was found.');
+    WgLog('WGLink: skipped; no existing Fusion AddIns directory was found.');
     exit;
   end;
 
@@ -500,7 +677,7 @@ begin
     WgLinkStatus :=
       'WGLink could not be installed because the bundled Python runtime is missing.' + #13#10 +
       'Repair Waveguide Generator, then run the installer again.';
-    Log('WGLink: failed; bundled runtime python.exe is missing.');
+    WgLog('WGLink: failed; bundled runtime python.exe is missing.');
     exit;
   end;
 
@@ -513,7 +690,7 @@ begin
       AddQuotes(ExpandConstant('{app}\app\scripts\install_wglink.py')) +
       ' --root ' + AddQuotes(ExpandConstant('{app}\app')) +
       ' --platform windows --offline-only --addins-dir ' + AddQuotes(AddInsDirectory);
-    Log('WGLink: running the packaged installer for ' + Target);
+    WgLog('WGLink: running the packaged installer for ' + Target);
     if not ExecAndLogOutput(
       ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
       SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
@@ -521,7 +698,7 @@ begin
     begin
       WgLinkStatus :=
         'WGLink could not be started. See the setup log for details, then run the installer again.';
-      Log('WGLink: Exec failed to start the packaged installer.');
+      WgLog('WGLink: Exec failed to start the packaged installer.');
       exit;
     end;
   finally
@@ -534,7 +711,7 @@ begin
     WgLinkStatus :=
       'WGLink could not be installed (exit code ' + IntToStr(ExitCode) + ').' + #13#10 +
       'See the setup log for details, then run the installer again.';
-    Log('WGLink: packaged installer failed with exit code ' + IntToStr(ExitCode) + '.');
+    WgLog('WGLink: packaged installer failed with exit code ' + IntToStr(ExitCode) + '.');
   end
   { The developer marker always wins, including if a stale or copied WG
     ownership marker happens to be beside it. install_wglink.py observes the
@@ -544,7 +721,7 @@ begin
     WgLinkStatus :=
       'WGLink was not changed because its developer marker was preserved.' + #13#10 +
       'Remove that developer-managed copy yourself if you want this installer to manage WGLink.';
-    Log('WGLink: preserved developer marker at ' + Target + '.');
+    WgLog('WGLink: preserved developer marker at ' + Target + '.');
   end
   else if WgLinkManagedByThisInstall(Target) then
   begin
@@ -553,21 +730,21 @@ begin
     else
       WgLinkStatus :=
         'WGLink was installed. Restart Fusion, then enable Run on Startup in Scripts and Add-Ins.';
-    Log('WGLink: installed or updated managed copy at ' + Target + '.');
+    WgLog('WGLink: installed or updated managed copy at ' + Target + '.');
   end
   else if WgLinkHasMarker(Target) then
   begin
     WgLinkStatus :=
       'WGLink was not changed because an existing installation marker was preserved.' + #13#10 +
       'Remove that existing copy yourself if you want this installer to manage WGLink.';
-    Log('WGLink: preserved non-owned target with an installation marker at ' + Target + '.');
+    WgLog('WGLink: preserved non-owned target with an installation marker at ' + Target + '.');
   end
   else
   begin
     WgLinkStatus :=
       'WGLink was not changed because an existing non-Waveguide Generator copy was preserved.' + #13#10 +
       'Remove that copy yourself if you want this installer to manage WGLink.';
-    Log('WGLink: preserved an existing non-managed copy at ' + Target + '.');
+    WgLog('WGLink: preserved an existing non-managed copy at ' + Target + '.');
   end;
 end;
 
@@ -581,7 +758,7 @@ begin
   AddInsDirectory := WgLinkAddInsDirectory();
   if AddInsDirectory = '' then
   begin
-    Log('WGLink uninstall: no Fusion AddIns directory was found; nothing to remove.');
+    WgLog('WGLink uninstall: no Fusion AddIns directory was found; nothing to remove.');
     exit;
   end;
 
@@ -596,17 +773,17 @@ begin
     whether the current target is ours. }
   if WgLinkHasDeveloperMarker(Target) and not HasTransaction then
   begin
-    Log('WGLink uninstall: preserved developer-managed target at ' + Target + '.');
+    WgLog('WGLink uninstall: preserved developer-managed target at ' + Target + '.');
     exit;
   end;
   if (not WgLinkManagedByThisInstall(Target)) and not HasTransaction then
   begin
-    Log('WGLink uninstall: preserved non-owned target at ' + Target + '.');
+    WgLog('WGLink uninstall: preserved non-owned target at ' + Target + '.');
     exit;
   end;
   if not FileExists(ExpandConstant('{app}\runtime\python.exe')) then
   begin
-    Log('WGLink uninstall: managed target preserved because bundled python.exe is missing.');
+    WgLog('WGLink uninstall: managed target preserved because bundled python.exe is missing.');
     exit;
   end;
 
@@ -620,22 +797,22 @@ begin
       ' --uninstall --yes --root ' + AddQuotes(ExpandConstant('{app}\app')) +
       ' --platform windows --addins-dir ' + AddQuotes(AddInsDirectory);
     if HasTransaction then
-      Log('WGLink uninstall: recovering an interrupted replacement before managed cleanup.')
+      WgLog('WGLink uninstall: recovering an interrupted replacement before managed cleanup.')
     else
-      Log('WGLink uninstall: removing the managed target before bundle layers.');
+      WgLog('WGLink uninstall: removing the managed target before bundle layers.');
     if not ExecAndLogOutput(
       ExpandConstant('{app}\runtime\python.exe'), Parameters, ExpandConstant('{app}'),
       SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput
     ) then
-      Log('WGLink uninstall: could not start the managed cleanup command.')
+      WgLog('WGLink uninstall: could not start the managed cleanup command.')
     else if ExitCode <> 0 then
-      Log('WGLink uninstall: managed cleanup failed with exit code ' + IntToStr(ExitCode) + '.')
+      WgLog('WGLink uninstall: managed cleanup failed with exit code ' + IntToStr(ExitCode) + '.')
     else if DirExists(Target) and HasTransaction then
-      Log('WGLink uninstall: recovery settled; the resulting non-owned target was preserved at ' + Target + '.')
+      WgLog('WGLink uninstall: recovery settled; the resulting non-owned target was preserved at ' + Target + '.')
     else if DirExists(Target) then
-      Log('WGLink uninstall: managed cleanup returned success but left ' + Target + '.')
+      WgLog('WGLink uninstall: managed cleanup returned success but left ' + Target + '.')
     else
-      Log('WGLink uninstall: removed managed target ' + Target + '.');
+      WgLog('WGLink uninstall: removed managed target ' + Target + '.');
   finally
     SetEnvironmentVariable('WG2_BUNDLE', PreviousBundleFlag);
     SetEnvironmentVariable('WG2_APP_ROOT', PreviousAppRoot);
@@ -651,7 +828,7 @@ begin
   { Opening help is optional and never a condition of finishing setup. }
   if not ShellExec('open', ExpandConstant('{app}\app\shared\opencl-guidance.html'),
     '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
-    Log('OpenCL: could not open the help page; error ' + IntToStr(ErrorCode) + '.');
+    WgLog('OpenCL: could not open the help page; error ' + IntToStr(ErrorCode) + '.');
 end;
 
 procedure InitializeWizard();
@@ -678,12 +855,12 @@ begin
     /TASKS="wglink" instead. }
   if FusionDetected() then
   begin
-    Log('WGLink: Fusion AddIns directory detected at ' + WgLinkAddInsDirectory() + '.');
+    WgLog('WGLink: Fusion AddIns directory detected at ' + WgLinkAddInsDirectory() + '.');
     if not WizardSilent() then
       WizardSelectTasks(WgLinkTaskName);
   end
   else
-    Log('WGLink: no Fusion AddIns directory detected; task remains unchecked.');
+    WgLog('WGLink: no Fusion AddIns directory detected; task remains unchecked.');
 end;
 
 { ---- Outcome record, /WAITPID and /RELAUNCH for the in-app updater ----------
@@ -691,8 +868,9 @@ end;
   The updater starts this setup silently and detached. Nothing of WG's own
   Python is involved, so setup is also the helper: /WAITPID=<pid> waits for
   the application to exit, /OUTCOME=<file> reports what happened for the next
-  start to show, /LOG=<file> is Inno's own switch and its path is echoed in the
-  record, and /RELAUNCH starts the application again afterwards. All are
+  start to show, /WGLOG=<install.log> is the capped updater diagnostic stream,
+  and /RELAUNCH starts the application again afterwards. Explicit manual /LOG
+  remains Inno's debug switch; it cannot be combined with /WGLOG. All are
   optional; an ordinary interactive install ignores every one of them. }
 
 function JsonEscape(const S: String): String;
@@ -744,19 +922,19 @@ begin
     ', "result": ' + JsonStringOrNull(ResultName) +
     ', "previousKept": ' + Kept +
     ', "when": ' + JsonStringOrNull(GetDateTimeString('yyyy-mm-dd"T"hh:nn:ss', '-', ':')) +
-    ', "log": ' + JsonStringOrNull(ExpandConstant('{param:LOG|}')) + RecoveryField + '}';
+    ', "log": ' + JsonStringOrNull(OutcomeLogPath()) + RecoveryField + '}';
   ForceDirectories(ExtractFileDir(Path));
   Tmp := Path + '.tmp';
   if not SaveStringsToUTF8FileWithoutBOM(Tmp, Lines, False) then
   begin
-    Log('Outcome: could not write ' + Tmp + '.');
+    WgLog('Outcome: could not write ' + Tmp + '.');
     exit;
   end;
   DeleteFile(Path);
   if RenameFile(Tmp, Path) then
-    Log('Outcome: wrote ' + Path + ' (' + Verdict + ').')
+    WgLog('Outcome: wrote ' + Path + ' (' + Verdict + ').')
   else
-    Log('Outcome: could not move ' + Tmp + ' to ' + Path + '.');
+    WgLog('Outcome: could not move ' + Tmp + ' to ' + Path + '.');
 end;
 
 { False when the process named by /WAITPID is still running after the cap. A
@@ -773,17 +951,17 @@ begin
   Handle := OpenProcess(SYNCHRONIZE, 0, Pid);
   if Handle = 0 then
   begin
-    Log('/WAITPID: process ' + IntToStr(Pid) + ' is not running.');
+    WgLog('/WAITPID: process ' + IntToStr(Pid) + ' is not running.');
     exit;
   end;
   try
-    Log('/WAITPID: waiting up to ' + IntToStr(WaitForProcessLimitMs div 1000) +
+    WgLog('/WAITPID: waiting up to ' + IntToStr(WaitForProcessLimitMs div 1000) +
         ' s for process ' + IntToStr(Pid) + '.');
     if WaitForSingleObject(Handle, WaitForProcessLimitMs) = WAIT_OBJECT_0 then
-      Log('/WAITPID: process ' + IntToStr(Pid) + ' exited.')
+      WgLog('/WAITPID: process ' + IntToStr(Pid) + ' exited.')
     else
     begin
-      Log('/WAITPID: process ' + IntToStr(Pid) + ' was still running after ' +
+      WgLog('/WAITPID: process ' + IntToStr(Pid) + ' was still running after ' +
           IntToStr(WaitForProcessLimitMs div 1000) + ' s.');
       Result := False;
     end;
@@ -816,10 +994,12 @@ begin
   Params := Mode + ' "' + ExpandConstant('{app}') + '"';
   if Mode = '--installer-prepare' then
     Params := Params + ' "' + PreviousVersion + '" "{#AppVersion}" "' +
-      ExpandConstant('{param:OUTCOME|}') + '" "' + ExpandConstant('{param:LOG|}') + '"';
+      ExpandConstant('{param:OUTCOME|}') + '" "' + OutcomeLogPath() + '"';
+  WgLog('Protection: starting ' + Mode + '.');
   if Exec(NativeHelperPath, Params, ExpandConstant('{app}'), SW_HIDE,
     ewWaitUntilTerminated, Code) then
     Result := Code;
+  WgLog('Protection: ' + Mode + ' returned ' + IntToStr(Result) + '.');
 end;
 
 procedure RollBackProtectedReplace();
@@ -831,16 +1011,17 @@ begin
   if FileExists(ExpandConstant('{param:OUTCOME|}')) then
     OutcomeWritten := True;
   if RollbackIncomplete then
-    Log('Protection: native recovery refused an incomplete or foreign object; its journal and verified backups were retained.');
+    WgLog('Protection: native recovery refused an incomplete or foreign object; its journal and verified backups were retained.');
 end;
 
 procedure BeginProtectedReplace();
 var
   RecordPath: String;
 begin
+  WgLog('Install phase: native exclusion confirmed; preparing replacement.');
   ForceDirectories(ExpandConstant('{app}'));
-  ExtractTemporaryFile('wg-installer-helper.exe');
-  NativeHelperPath := ExpandConstant('{tmp}\wg-installer-helper.exe');
+  if not EnsureNativeHelper() then
+    RaiseException('Waveguide Generator could not extract its native recovery helper. Nothing was renamed.');
   RecordPath := ExpandConstant('{param:OUTCOME|}');
   if RecordPath <> '' then
   begin
@@ -893,9 +1074,13 @@ begin
     end;
     CloseHandle(Handle);
     if not WaitRequested then
+    begin
+      WgLog('Install refused: native application or worker is still running.');
       exit;
+    end;
     Sleep(100);
   end;
+  WgLog('Install refused: native Running handles remained after 120 seconds.');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -913,6 +1098,7 @@ begin
   end;
   if CurStep = ssPostInstall then
   begin
+    WgLog('Install phase: payload copied; committing verified complete installation.');
     CommitProtectedReplace();
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
@@ -922,7 +1108,7 @@ begin
     else
     begin
       WgLinkStatus := 'WGLink was not installed because it was not selected.';
-      Log('WGLink: not selected.');
+      WgLog('WGLink: not selected.');
     end;
   end;
 end;
@@ -951,7 +1137,7 @@ begin
   Target := UpdateStagingRoot();
   if not DirExists(Target) then
   begin
-    Log('Update staging: nothing to remove at ' + Target + '.');
+    WgLog('Update staging: nothing to remove at ' + Target + '.');
     exit;
   end;
   { A staging folder is where a downloaded update lands; a reparse point left
@@ -960,13 +1146,13 @@ begin
     server/updates/bundle.py applies with _is_link_or_junction(). }
   if IsReparsePoint(Target) then
   begin
-    Log('Update staging: left ' + Target + ' alone because it is a reparse point.');
+    WgLog('Update staging: left ' + Target + ' alone because it is a reparse point.');
     exit;
   end;
   if DelTree(Target, True, True, True) then
-    Log('Update staging: removed ' + Target + '.')
+    WgLog('Update staging: removed ' + Target + '.')
   else
-    Log('Update staging: could not remove ' + Target + '.');
+    WgLog('Update staging: could not remove ' + Target + '.');
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
@@ -1044,6 +1230,12 @@ function InitializeSetup(): Boolean;
 var
   Dir: String;
 begin
+  Result := InitializeWgLog();
+  if not Result then
+  begin
+    WriteOutcome('failed');
+    exit;
+  end;
   Result := ValidateWgLinkAddInsOverride(WizardSilent());
   if not Result then
     exit;
@@ -1053,7 +1245,7 @@ begin
   if (Dir <> '') and (Length(Dir) > MaxRootLength()) then
   begin
     if WizardSilent() then
-      Log('Refusing /DIR: ' + IntToStr(Length(Dir)) +
+      WgLog('Refusing /DIR: ' + IntToStr(Length(Dir)) +
           ' characters, over the limit of ' + IntToStr(MaxRootLength()))
     else
       MsgBox(TooLongMessage(Dir), mbError, MB_OK);
@@ -1067,12 +1259,23 @@ end;
   Roll back first: the record must describe the state the disk is left in. }
 procedure DeinitializeSetup();
 begin
+  if LastCopiedFile <> '' then
+  begin
+    if LastCopyCompleted then
+      WgLog('Last file completed: ' + LastCopiedFile)
+    else
+      WgLog('Last file not confirmed complete: ' + LastCopiedFile);
+  end;
   if ProtectionStarted and not ProtectionCommitted then
     RollBackProtectedReplace();
   if ProtectionCommitted then
     WriteOutcome('ok')
   else
     WriteOutcome('failed');
+  if ProtectionCommitted then
+    WgLog('Setup exit: installation committed.')
+  else
+    WgLog('Setup exit: installation did not commit; native recovery/outcome is authoritative.');
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

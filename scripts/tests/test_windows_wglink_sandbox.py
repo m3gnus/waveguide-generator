@@ -685,7 +685,7 @@ def assert_closed_override(source: str) -> None:
     assert 'if WgLinkAddInsOverrideSpecified() then' in override
     assert "Result := '';" in override
     assert "if (OverrideDir <> '') and DirExists(OverrideDir) then" in override
-    assert "else\n      Log('WGLink: invalid /WGLINKADDINSDIR" in override
+    assert "else\n      WgLog('WGLink: invalid /WGLINKADDINSDIR" in override
     assert override.rstrip().endswith('exit;\n  end;')
     assert 'userappdata' in fallback
     install = source.split('procedure InstallWGLink()', 1)[1].split('procedure UninstallWGLink()', 1)[0]
@@ -719,11 +719,12 @@ def assert_early_override_refusal(source: str) -> None:
     assert "OverrideDir := ExpandConstant('{param:WGLINKADDINSDIR|}');" in validator
     assert "if (OverrideDir <> '') and DirExists(OverrideDir) then\n    exit;" in validator
     assert "Refusing /WGLINKADDINSDIR: supply an existing directory" in validator
-    assert 'Log(Reason);' in validator
+    assert 'WgLog(Reason);' in validator
     assert 'if not Silent then\n    MsgBox(Reason, mbError, MB_OK);' in validator
     assert validator.rstrip().endswith('Result := False;\nend;')
     setup = source.split('function InitializeSetup(): Boolean;', 1)[1].split('\nfunction ', 1)[0]
-    assert 'begin\n  Result := ValidateWgLinkAddInsOverride(WizardSilent());\n  if not Result then\n    exit;' in setup
+    assert 'Result := ValidateWgLinkAddInsOverride(WizardSilent());\n  if not Result then\n    exit;' in setup
+    assert setup.index('InitializeWgLog()') < setup.index('ValidateWgLinkAddInsOverride(WizardSilent())')
     uninstall = source.split('function InitializeUninstall(): Boolean;', 1)[1].split('\nfunction ', 1)[0]
     assert 'Result := ValidateWgLinkAddInsOverride(UninstallSilent());' in uninstall
     assert uninstall.rstrip().endswith('end;')
@@ -745,7 +746,7 @@ def test_early_refusal_guard_detects_bypasses(mutation: str) -> None:
         'uninstall-bypass': ('Result := ValidateWgLinkAddInsOverride(UninstallSilent());', 'Result := True;'),
         'success': ('  Result := False;\nend;\n\nfunction InitializeUninstall', '  Result := True;\nend;\n\nfunction InitializeUninstall'),
         'silent-dialog': ('if not Silent then\n    MsgBox(Reason', 'if Silent then\n    MsgBox(Reason'),
-        'no-log': ('Log(Reason);', ''),
+        'no-log': ('WgLog(Reason);', ''),
         'no-empty-guard': ("if (OverrideDir <> '') and DirExists(OverrideDir) then\n    exit;", 'if DirExists(OverrideDir) then\n    exit;'),
     }
     old, new = replacements[mutation]

@@ -127,7 +127,9 @@ def test_layers_are_renamed_aside_at_install_and_deleted_at_post_install(code: s
 
     begin = _body(code, "procedure BeginProtectedReplace();")
     assert begin.index("--installer-entry") < begin.index("--installer-prepare")
-    assert "ExtractTemporaryFile('wg-installer-helper.exe')" in begin
+    assert "EnsureNativeHelper()" in begin
+    helper = _body(code, "function EnsureNativeHelper()")
+    assert "ExtractTemporaryFile('wg-installer-helper.exe')" in helper
     assert begin.count("RaiseException(") >= 2
 
 
@@ -238,7 +240,9 @@ def test_outcome_record_has_the_agreed_fields_and_is_atomic(code: str) -> None:
     assert "{param:OUTCOME|}" in write
     for key in ("from", "to", "result", "when", "log"):
         assert f"'\"{key}\": '" in write.replace("{\"from\"", "\"from\"") or f'"{key}": ' in write
-    assert "{param:LOG|}" in write
+    assert "OutcomeLogPath()" in write
+    selector = _body(code, "function OutcomeLogPath()")
+    assert "WgLogPath" in selector and "{param:LOG|}" in selector
     assert "SaveStringsToUTF8FileWithoutBOM(Tmp, Lines, False)" in write
     assert write.index("SaveStringsToUTF8FileWithoutBOM") < write.index("RenameFile(Tmp, Path)")
     # Written at most once, so DeinitializeSetup cannot overwrite an earlier failure.
