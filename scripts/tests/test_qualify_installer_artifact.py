@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -193,8 +194,8 @@ def test_developer_control_records_literal_external_symlink_without_following(tm
     outside.mkdir()
     (outside / "file.py").write_bytes(b"developer data")
     (control / "WGLink").symlink_to(outside, target_is_directory=True)
-    assert gate.tree_entries(control, control=True) == {"WGLink": {"kind": "symlink", "target": str(outside)}}
-    with pytest.raises(gate.EvidenceError, match="absolute symlink"):
+    assert gate.tree_entries(control, control=True) == {"WGLink": {"kind": "symlink", "target": os.readlink(control / "WGLink")}}
+    with pytest.raises(gate.EvidenceError, match="absolute symlink|invalid symlink target"):
         gate.tree_entries(control)
 
 
@@ -403,3 +404,162 @@ def test_bounded_json_reads_and_cli_runs_without_site_packages(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "--require-removals" in result.stdout
     assert "public-key" not in result.stdout
+
+
+@pytest.fixture
+def windows_stat_model(monkeypatch):
+    """Reproduce CPython 3.13's path/fd differences on every test host."""
+    original_lstat, original_fstat = Path.lstat, os.fstat
+
+    def observed(info, *, named=False, path=None):
+        mode = info.st_mode
+        if named and path.suffix.lower() in (".exe", ".bat", ".cmd", ".com"):
+            mode |= 0o111
+        elif not named:
+            mode &= ~0o111
+        return SimpleNamespace(st_dev=info.st_dev, st_ino=info.st_ino,
+            st_mode=mode, st_size=info.st_size, st_mtime_ns=info.st_mtime_ns,
+            st_ctime_ns=1_000_000 if named else info.st_ctime_ns,
+            st_birthtime_ns=1_000_000,
+            st_file_attributes=getattr(info, "st_file_attributes", 0))
+
+    monkeypatch.setattr(gate, "WINDOWS_HOST", True)
+    monkeypatch.setattr(Path, "lstat", lambda path: observed(original_lstat(path), named=True, path=path))
+    monkeypatch.setattr(gate.os, "fstat", lambda fd: observed(original_fstat(fd)))
+
+
+@pytest.mark.parametrize("platform", gate.PLATFORMS)
+def test_windows_path_and_descriptor_stat_differences_allow_exact_signed_payload(case, windows_stat_model, platform):
+    # Exercises JSON reads, streamed hashes and the Linux tar reader through
+    # the actual complete verifier, with independent golden/install trees.
+    assert gate.verify(**case(platform))["artifactComparisonPassed"]
+
+
+@pytest.mark.parametrize("suffix", (".json", ".exe", ".bat", ".cmd", ".com"))
+def test_windows_filename_execute_bits_and_ctime_do_not_refuse_stable_file(tmp_path, windows_stat_model, suffix):
+    path = tmp_path / ("input" + suffix)
+    path.write_bytes(b"stable bytes")
+    assert gate.read_bytes(path, 100) == b"stable bytes"
+    assert gate.hash_file(path)["size"] == 12
+
+
+def test_windows_same_size_and_mtime_replacement_before_open_is_refused(tmp_path, windows_stat_model, monkeypatch):
+    path = tmp_path / "input.exe"
+    path.write_bytes(b"first")
+    before = path.stat()
+    original_open = os.open
+
+    def substitute(name, flags, *args, **kwargs):
+        path.rename(tmp_path / "original")
+        path.write_bytes(b"other")
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return original_open(name, flags, *args, **kwargs)
+
+    monkeypatch.setattr(gate.os, "open", substitute)
+    with pytest.raises(gate.EvidenceError, match="file changed before read"):
+        gate.read_bytes(path, 100)
+    assert path.read_bytes() == b"other" and path.stat().st_mtime_ns == before.st_mtime_ns
+
+
+@pytest.mark.parametrize("operation", ("read", "hash"))
+def test_windows_same_size_and_mtime_replacement_after_close_is_refused(tmp_path, windows_stat_model, monkeypatch, operation):
+    path = tmp_path / "input.exe"
+    path.write_bytes(b"first")
+    before = path.stat()
+    original_fdopen = os.fdopen
+
+    class ReplacingReader:
+        def __init__(self, fd, mode):
+            self.handle = original_fdopen(fd, mode)
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            result = self.handle.__exit__(*args)
+            path.rename(tmp_path / "original")
+            path.write_bytes(b"other")
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return result
+
+    monkeypatch.setattr(gate.os, "fdopen", ReplacingReader)
+    with pytest.raises(gate.EvidenceError, match="file changed after read|file changed after hashing"):
+        gate.read_bytes(path, 100) if operation == "read" else gate.hash_file(path)
+    assert path.read_bytes() == b"other" and path.stat().st_mtime_ns == before.st_mtime_ns
+
+
+@pytest.mark.parametrize("operation", ("read", "hash"))
+def test_windows_descriptor_change_time_catches_same_size_restored_mtime_write(tmp_path, windows_stat_model, monkeypatch, operation):
+    path = tmp_path / "input.exe"
+    path.write_bytes(b"first")
+    before = path.stat()
+    original_fdopen = os.fdopen
+
+    class MutatingReader:
+        def __init__(self, fd, mode):
+            self.handle = original_fdopen(fd, mode)
+            self.changed = False
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def read(self, size):
+            data = self.handle.read(size)
+            if not self.changed:
+                self.changed = True
+                path.write_bytes(b"other")
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return data
+
+    monkeypatch.setattr(gate.os, "fdopen", MutatingReader)
+    with pytest.raises(gate.EvidenceError, match="file changed or exceeded limit|file changed while hashing"):
+        gate.read_bytes(path, 100) if operation == "read" else gate.hash_file(path)
+    assert path.read_bytes() == b"other" and path.stat().st_mtime_ns == before.st_mtime_ns
+
+
+def test_windows_streamed_archive_retains_strict_descriptor_change_time(case, windows_stat_model, monkeypatch):
+    args = case()
+    original_fstat = gate.os.fstat
+    calls = 0
+
+    def metadata_change(fd):
+        nonlocal calls
+        calls += 1
+        observed = original_fstat(fd)
+        if calls == 2:
+            observed.st_ctime_ns += 1
+        return observed
+
+    monkeypatch.setattr(gate.os, "fstat", metadata_change)
+    with pytest.raises(gate.EvidenceError, match="artifact changed while reading archive"):
+        gate.linux_archive_entries(args["artifact"])
+    assert calls == 2
+
+
+def test_windows_symlink_substitution_to_original_object_before_read_is_refused(tmp_path, windows_stat_model, monkeypatch):
+    path = tmp_path / "input.exe"
+    path.write_bytes(b"owned bytes")
+    held = tmp_path / "held.exe"
+    original_open = os.open
+
+    def substitute(name, flags, *args, **kwargs):
+        path.rename(held)
+        path.symlink_to(held)
+        return original_open(name, flags, *args, **kwargs)
+
+    # Model Windows os.open's absent O_NOFOLLOW. Post-open lstat must still
+    # reject a symlink even when the opened descriptor names the original inode.
+    monkeypatch.setattr(gate.os, "O_NOFOLLOW", 0, raising=False)
+    monkeypatch.setattr(gate.os, "open", substitute)
+    with pytest.raises(gate.EvidenceError, match="file changed before read"):
+        gate.read_bytes(path, 100)
+    assert path.is_symlink() and held.read_bytes() == b"owned bytes"

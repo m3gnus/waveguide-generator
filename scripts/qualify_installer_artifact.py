@@ -26,6 +26,7 @@ MAX_JSON = 16 << 20
 MAX_MANIFEST = 1 << 20
 MAX_ENTRIES = 200_000
 PLATFORMS = ("macos-arm64", "windows-x86_64", "linux-x86_64")
+WINDOWS_HOST = sys.platform == "win32"
 VERSION = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?\Z")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -72,6 +73,17 @@ def identity(info: os.stat_result) -> tuple:
     return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns
 
 
+def opening_identity(info: os.stat_result) -> tuple:
+    if not WINDOWS_HOST:
+        return identity(info)
+    # CPython 3.13 Windows lstat reports creation time as ctime and adds
+    # filename-derived execute bits; fstat reports ChangeTime and no such bits.
+    # Normalize only this cross-API binding. Each API's later observations
+    # retain its complete identity, including the descriptor's ChangeTime.
+    return (info.st_dev, info.st_ino, info.st_mode & ~0o111, info.st_size,
+            info.st_mtime_ns, info.st_birthtime_ns)
+
+
 def junction(info: os.stat_result) -> bool:
     return bool(getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)) and not stat.S_ISLNK(info.st_mode)
 
@@ -95,19 +107,26 @@ def regular_open(path: Path):
         raise EvidenceError(f"not a regular file: {path}")
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
     handle = os.fdopen(fd, "rb")
-    if identity(before) != identity(os.fstat(handle.fileno())):
+    try:
+        opened = os.fstat(handle.fileno())
+        if (not stat.S_ISREG(opened.st_mode) or junction(opened)
+                or (WINDOWS_HOST and (not before.st_ino or not opened.st_ino))
+                or opening_identity(before) != opening_identity(opened)
+                or identity(before) != identity(path.lstat())):
+            raise EvidenceError(f"file changed before read: {path}")
+    except BaseException:
         handle.close()
-        raise EvidenceError(f"file changed before read: {path}")
-    return handle, before
+        raise
+    return handle, before, opened
 
 
 def read_bytes(path: Path, limit: int) -> bytes:
-    handle, before = regular_open(path)
+    handle, before, opened = regular_open(path)
     with handle:
         if before.st_size > limit:
             raise EvidenceError(f"file too large: {path}")
         data = handle.read(limit + 1)
-        if len(data) > limit or identity(before) != identity(os.fstat(handle.fileno())):
+        if len(data) > limit or identity(opened) != identity(os.fstat(handle.fileno())):
             raise EvidenceError(f"file changed or exceeded limit: {path}")
     if identity(before) != identity(path.lstat()):
         raise EvidenceError(f"file changed after read: {path}")
@@ -125,12 +144,12 @@ def read_object(path: Path, limit: int = MAX_JSON) -> dict:
 
 
 def hash_file(path: Path) -> dict:
-    handle, before = regular_open(path)
+    handle, before, opened = regular_open(path)
     digest = hashlib.sha256()
     with handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
-        if identity(before) != identity(os.fstat(handle.fileno())):
+        if identity(opened) != identity(os.fstat(handle.fileno())):
             raise EvidenceError(f"file changed while hashing: {path}")
     if identity(before) != identity(path.lstat()):
         raise EvidenceError(f"file changed after hashing: {path}")
@@ -341,7 +360,7 @@ def payload_identity(root: Path, platform: str, version: str) -> dict:
 def linux_archive_entries(artifact: Path) -> dict:
     """Hash tar members in place; do not extract or follow links/hardlinks."""
     result = {}
-    handle, before = regular_open(artifact)
+    handle, before, opened = regular_open(artifact)
     with handle, tarfile.open(fileobj=handle, mode="r|gz") as archive:
         for member in archive:
             name = member.name.rstrip("/")
@@ -367,7 +386,7 @@ def linux_archive_entries(artifact: Path) -> dict:
                 raise EvidenceError(f"unsupported tar member (including hardlink/device): {name}")
             if len(result) > MAX_ENTRIES:
                 raise EvidenceError("too many tar entries")
-        if identity(before) != identity(os.fstat(handle.fileno())):
+        if identity(opened) != identity(os.fstat(handle.fileno())):
             raise EvidenceError("artifact changed while reading archive")
     if identity(before) != identity(artifact.lstat()):
         raise EvidenceError("artifact changed after reading archive")
