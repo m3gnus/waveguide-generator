@@ -60,3 +60,15 @@ def test_the_stress_series_run_on_demand_only() -> None:
     source = (ROOT / "scripts" / "tests" / "test_installer_review_followups.py").read_text(encoding="utf-8")
     assert 'SERIES_RUNS = 50 if STRESS else 5' in source
     assert 'ROLLBACK_BATCHES = 10 if STRESS else 1' in source
+
+
+def test_the_default_installer_sample_keeps_every_function_and_both_ends() -> None:
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("scripts_tests_conftest", ROOT / "scripts" / "tests" / "conftest.py")
+    conftest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(conftest)
+    assert conftest._spread(1, 2) == {0}
+    assert conftest._spread(40, 2) == {0, 39}
+    assert conftest._spread(3, 3) == {0, 1, 2}
+    assert conftest.INSTALLER_DEFAULT_CASES >= 2

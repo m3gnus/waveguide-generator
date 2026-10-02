@@ -168,7 +168,8 @@ def pytest_configure(config):
     from scripts import build_bundle
     exec(compile((root / 'bundle.py').read_text(), str(root / 'bundle.py'), 'exec'), build_bundle.__dict__)
 ''')
-            env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'INSTALLER_MUTANT_ROOT': str(directory.resolve()),
+            # Every selected case, not the default sample (scripts/tests/conftest.py).
+            env = {**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'WG_INSTALLER_ALL_CASES': '1', 'INSTALLER_MUTANT_ROOT': str(directory.resolve()),
                    'PYTHONPATH': str(directory.resolve()) + os.pathsep + str(ROOT)}
             command = [sys.executable, 'scripts/run_tests.py', TEST, '-k', selected, '-q', '-p', 'no:cacheprovider', '-p', 'installer_mutant']
             with (directory / 'pytest.log').open('w') as log:

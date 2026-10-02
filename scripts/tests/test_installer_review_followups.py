@@ -1059,7 +1059,7 @@ if backup:
     prefix = 'Its backup remains at: ' if install.platform == 'linux' else 'The previous app is at: '
     # Keep each pytest item below the suite's 300-second hang backstop while
     # preserving 100 runs for each outcome/platform across ten batches.
-    for local_run in range(10):
+    for local_run in range(10 if STRESS else 3):
         run = batch * 10 + local_run
         burst_done.unlink(missing_ok=True)
         ready.unlink(missing_ok=True)

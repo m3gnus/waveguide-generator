@@ -601,8 +601,19 @@ def noninteractive_move_shim(bin_dir: Path, log: Path, fail_source: str, cleanup
     adapt_link_shim(bin_dir)
 
 
-@pytest.mark.parametrize("row", range(6))
-@pytest.mark.parametrize("boundary", BOUNDARIES)
+# The full matrix (6 rows x 14 boundaries x 2 sides, 168 installs) runs with
+# WG_STRESS=1 (the on-demand installer-stress workflow and branch evidence).
+# The default suite keeps every boundary on both sides, rotating through the
+# rows, so each row and each boundary is still exercised: 28 installs.
+STRESS = os.environ.get("WG_STRESS") == "1"
+ROW_BOUNDARY_CASES = (
+    [(row, boundary) for row in range(6) for boundary in BOUNDARIES]
+    if STRESS
+    else [(index % 6, boundary) for index, boundary in enumerate(BOUNDARIES)]
+)
+
+
+@pytest.mark.parametrize("row,boundary", ROW_BOUNDARY_CASES)
 @pytest.mark.parametrize("side", ("before", "after"))
 @pytest.mark.slow
 def test_every_row_recovers_at_every_state_boundary(tmp_path: Path, env: dict[str, str], row: int, boundary: str, side: str) -> None:

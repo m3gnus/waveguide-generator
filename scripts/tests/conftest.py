@@ -27,3 +27,44 @@ with the variable already set keeps their value.
 import os
 
 os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
+
+
+# The installer scripts' tests: full matrices on demand, a spread-out sample by
+# default. Their full parametrisations take about 32 minutes serially, more
+# than the whole CI harness budget, so by default each test function keeps at
+# most INSTALLER_DEFAULT_CASES of its cases, spaced evenly through its
+# parametrisation (so the first and the last, which for the platform-
+# parametrised tests means both Linux and macOS). Every test function still
+# runs. WG_STRESS=1 (the on-demand "Installer stress" workflow, and branch
+# evidence) runs every case.
+INSTALLER_TEST_FILES = frozenset({
+    "test_installer_review_followups.py",
+    "test_linux_bundle_install_update.py",
+    "test_dmg_install_update.py",
+})
+INSTALLER_DEFAULT_CASES = 2
+
+
+def _spread(count: int, keep: int) -> set[int]:
+    if count <= keep:
+        return set(range(count))
+    return {round(index * (count - 1) / (keep - 1)) for index in range(keep)}
+
+
+def pytest_collection_modifyitems(config, items):
+    if os.environ.get("WG_STRESS") == "1" or os.environ.get("WG_INSTALLER_ALL_CASES") == "1":
+        # WG_INSTALLER_ALL_CASES: every case at default counts (the mutation
+        # runner selects specific cases and must not lose them to sampling).
+        return
+    groups: dict[tuple[str, str], list] = {}
+    for item in items:
+        if item.path.name in INSTALLER_TEST_FILES and hasattr(item, "callspec"):
+            groups.setdefault((item.path.name, item.originalname), []).append(item)
+    dropped = []
+    for group in groups.values():
+        keep = _spread(len(group), INSTALLER_DEFAULT_CASES)
+        dropped.extend(item for index, item in enumerate(group) if index not in keep)
+    if dropped:
+        drop = set(map(id, dropped))
+        items[:] = [item for item in items if id(item) not in drop]
+        config.hook.pytest_deselected(items=dropped)
