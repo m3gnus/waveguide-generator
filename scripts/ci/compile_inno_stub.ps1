@@ -4,7 +4,8 @@
 # made it, not at the next release build. Nothing is installed or run: the
 # setup.exe it produces is checked for existence and then deleted with the
 # stub. The payload is the smallest tree the script's [Setup] and [Files]
-# sections read at compile time: the icon, the LICENSE and one file.
+# sections read at compile time: the icon, LICENSE, root native helper and one
+# file in each layer. The helper placeholder is compile-only, never executed.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)][string] $CompilerPath
@@ -19,7 +20,7 @@ if ([string]::IsNullOrWhiteSpace($parent)) {
 $root = Join-Path $parent ("inno-stub-" + [guid]::NewGuid().ToString("N"))
 $payload = Join-Path $root "payload"
 $output = Join-Path $root "output"
-New-Item -ItemType Directory -Path (Join-Path $payload "app"), $output | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $payload "app"), (Join-Path $payload "runtime"), (Join-Path $payload "recovery"), $output | Out-Null
 try {
     Copy-Item -LiteralPath "LICENSE" -Destination (Join-Path $payload "app\LICENSE")
     python -c "import sys; from pathlib import Path; sys.path.insert(0, 'launchers/macos'); import generate_icon; generate_icon.build_ico(Path(sys.argv[1]))" (Join-Path $payload "WaveguideGenerator.ico")
@@ -27,6 +28,9 @@ try {
         throw "Could not write the stub icon (exit $LASTEXITCODE)."
     }
     Set-Content -LiteralPath (Join-Path $payload "app\stub.txt") -Value "stub payload" -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $payload "runtime\stub.txt") -Value "stub runtime" -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $payload "recovery\stub.txt") -Value "stub recovery" -Encoding utf8
+    Set-Content -LiteralPath (Join-Path $payload "Waveguide Generator.exe") -Value "compile-only native helper placeholder" -Encoding utf8
 
     $arguments = @(
         "/DAppVersion=0.0.0-ci",

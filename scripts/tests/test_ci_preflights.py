@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -267,3 +268,18 @@ def test_ci_compiles_the_windows_installer_script_on_every_run() -> None:
     assert "stub-setup.exe" in stub
     # Compile only: the produced setup is never started.
     assert "Start-Process" not in stub and "Invoke-Item" not in stub
+
+
+def test_inno_compile_stub_supplies_every_required_payload_source() -> None:
+    installer = (ROOT / "installers/windows/bundle-setup.iss").read_text(encoding="utf-8")
+    files = installer.split("[Files]", 1)[1].split("[Icons]", 1)[0]
+    sources = re.findall(r'^Source: "\{#PayloadDir\}\\([^\"]+)"', files, re.MULTILINE)
+    stub = (ROOT / "scripts/ci/compile_inno_stub.ps1").read_text(encoding="utf-8")
+    payload = re.findall(r'Join-Path \$payload "([^\"]+)"', stub)
+    assert sources
+    for source in sources:
+        if source.endswith("*"):
+            prefix = source[:-1]
+            assert any(path.startswith(prefix) and path != prefix for path in payload), source
+        else:
+            assert source in payload, source

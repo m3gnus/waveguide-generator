@@ -2470,7 +2470,7 @@ def _desktop_exec_argv(entry: str) -> list[str]:
 #: where these same assertions are exact. Asserting the bit on Windows tests the
 #: Windows filesystem rather than the builder, which is why it is skipped rather
 #: than weakened: the check stays strict everywhere it means anything.
-def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path) -> None:
+def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One root holding ``app``, ``runtime`` and the launcher, and nothing else.
 
     That is the layout ``apply_update.bundle_from_app_layer`` already resolves
@@ -2480,6 +2480,9 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path)
     one level from where it looked.
     """
 
+    # The assembly fixture supplies native build output on every test host.
+    # Actual POSIX compilation is covered by the native logger tests.
+    monkeypatch.setattr(build_bundle, "write_installer_logger", lambda path, **_: path.write_bytes(b"fixture logger"))
     builder = BundleBuilder(Path(__file__).resolve().parents[2], system=lambda: "Linux")
     runtime = tmp_path / "runtime"
     (runtime / "bin").mkdir(parents=True)
@@ -2514,6 +2517,7 @@ def test_the_linux_bundle_is_the_windows_shape_not_the_macos_one(tmp_path: Path)
     )
     assert (bundle / "app" / "APP-MANIFEST.json").is_file()
     assert (bundle / "recovery" / "wg_bundle_recovery.py").is_file()
+    assert (bundle / "recovery" / "installer-log").read_bytes() == b"fixture logger"
     # Only Windows launches through an interpreter, so only Windows needs the
     # site hook; a shell script and a Mach-O binary call the entry directly.
     assert not (bundle / "recovery" / "sitecustomize.py").exists()

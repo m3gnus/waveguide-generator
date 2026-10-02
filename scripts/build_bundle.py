@@ -837,9 +837,13 @@ def write_windows_launcher(
         vcvars = Path(installation) / "VC" / "Auxiliary" / "Build" / "vcvars64.bat"
         if result.returncode or not installation or not vcvars.is_file() or any(c in str(vcvars) for c in '"%\r\n'):
             raise BundleError("Visual Studio did not provide a valid vcvars64.bat for the native launcher.")
-        result = runner([env.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", f'call "{vcvars}" >nul && set'], capture_output=True, check=False, env=env)
+        # cmd parses its /c tail itself. CRT list quoting would turn the batch
+        # path's quotes into literal backslash-quotes before cmd sees them.
+        command = subprocess.list2cmdline([env.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c"])
+        result = runner(command + f' "call "{vcvars}" >nul && set"', capture_output=True, check=False, env=env)
         if result.returncode:
-            raise BundleError("Could not initialize the Visual Studio x64 compiler environment.")
+            detail = os.fsdecode(result.stderr or result.stdout or b"").strip()
+            raise BundleError(f"Could not initialize the Visual Studio x64 compiler environment: {detail or result.returncode}")
         for line in os.fsdecode(result.stdout or b"").splitlines():
             key, separator, value = line.partition("=")
             if separator and key and not key.startswith("="):
