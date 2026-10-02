@@ -246,6 +246,50 @@ exit 1
             proc.wait(timeout=5)
 
 
+@pytest.mark.parametrize("hash_exit", [0, 7])
+def test_quoted_asset_digest_and_checksum_failure_are_preserved(tmp_path, hash_exit):
+    tmp_path = tmp_path / "space ' quote \\ backslash"
+    tmp_path.mkdir()
+    env = sandbox(tmp_path)
+    root = tmp_path / "waveguide-generator"
+    root.mkdir()
+    (root / "waveguide-generator").write_text("#!/bin/sh\nexit 0\n")
+    (root / "waveguide-generator").chmod(0o755)
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    reached = tmp_path / "native-reached"
+    (payload / "install.sh").write_text(f"#!/bin/bash\ntouch {shlex.quote(str(reached))}\nexit 0\n")
+    commands = tmp_path / "bin"
+    commands.mkdir()
+    checksum = commands / "sha256sum"
+    # GNU prefixes a digest with a backslash when it escapes a filename.
+    # Also return a correct digest with an unsuccessful tool status: stdout
+    # alone must never authorize native mutation.
+    checksum.write_text(f'''#!{sys.executable}
+import hashlib, pathlib, sys
+name = sys.argv[1] if len(sys.argv) > 1 else '-'
+data = pathlib.Path(name).read_bytes() if name != '-' else sys.stdin.buffer.read()
+escaped = chr(92) in name
+prefix = chr(92) if escaped else ''
+print(prefix + hashlib.sha256(data).hexdigest() + '  ' + name.replace(chr(92), chr(92) * 2))
+sys.exit({hash_exit})
+''')
+    checksum.chmod(0o755)
+    env["PATH"] = str(commands) + os.pathsep + env["PATH"]
+    proc, family, _recovery, work = helper(root, payload, env, tmp_path)
+    try:
+        assert proc.wait(timeout=10) == (0 if hash_exit == 0 else 1)
+        assert reached.exists() == (hash_exit == 0)
+        outcome = json.loads((work / "outcome.json").read_text())
+        assert outcome["result"] == ("installed" if hash_exit == 0 else "failed")
+        assert not (work / "lock").exists()
+        assert not (root.parent / ".waveguide-generator.install.lock").exists()
+    finally:
+        family.stop()
+        if proc.poll() is None:
+            proc.wait(timeout=5)
+
+
 @pytest.mark.parametrize("leaf", ["install.log", "install.log.1"])
 @pytest.mark.parametrize("kind", ["foreign", "symlink", "fifo", "oversized", "hardlink"])
 def test_logger_preserves_foreign_leaves_before_native_mutation(tmp_path, leaf, kind):

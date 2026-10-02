@@ -106,10 +106,12 @@ done
 # The helper verifies the downloaded bytes again after waiting; its own host
 # shell never assumes that an earlier Python hash froze the file forever.
 if [ "$platform" = macos-arm64 ]; then
-    actual_sha=$(shasum -a 256 "$asset" | awk '{print $1}') || fail
+    actual_sha=$(shasum -a 256 < "$asset") || fail
 else
-    actual_sha=$(sha256sum "$asset" | awk '{print $1}') || fail
+    actual_sha=$(sha256sum < "$asset") || fail
 fi
+# Hash stdin so GNU filename escaping cannot prefix a quoted-path digest.
+actual_sha=${actual_sha%% *}
 [ "$actual_sha" = "$expected_sha" ] || fail
 if [ "$platform" = macos-arm64 ]; then
     mount="$payload/mount"

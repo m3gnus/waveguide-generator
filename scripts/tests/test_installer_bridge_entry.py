@@ -115,7 +115,11 @@ def test_retained_v032_layer_receiver_delivers_B_logger_before_next_handoff(tmp_
         shutil.copyfile(ROOT / "launchers" / name, new_app / "launchers" / name)
     native = new_runtime / "bin/wg-installer-log"
     selected_platform = MACOS_PLATFORM if platform == "darwin" else LINUX_PLATFORM
-    write_installer_logger(native, repo_root=ROOT, platform_name=selected_platform)
+    # This receiver/handoff case inspects delivered bytes for both layouts.
+    # Compile those real bytes for this host; native Mac flags/floor are tested
+    # on Mac separately, rather than asking Linux cc to cross-compile Mach-O.
+    compiler_platform = MACOS_PLATFORM if sys.platform == "darwin" else LINUX_PLATFORM
+    write_installer_logger(native, repo_root=ROOT, platform_name=compiler_platform)
     runtime_manifest = write_runtime_manifest(new_runtime, python_version="3.13.12", runtime_id="new-logger-runtime",
         requirements=b"runtime", pins=b"pins", lock=b"lock", python_build=PYTHON_BUILD,
         runtime_recipe="source-bound-logger", platform_name=selected_platform)

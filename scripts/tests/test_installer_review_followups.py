@@ -681,7 +681,7 @@ def assert_no_staging(install: Install, *, retained_journal: Path | None = None)
     assert not install.lock.exists()
 
 
-def assert_truthful(install: Install, code: int, output: str) -> None:
+def assert_truthful(install: Install, code: int, output: str, *, retained_journal: Path | None = None) -> None:
     assert code in (0, 1, 3), output
     if code in (0, 1):
         assert install.target.exists(), output
@@ -690,7 +690,7 @@ def assert_truthful(install: Install, code: int, output: str) -> None:
         prefix = 'Its backup remains at: ' if install.platform == 'linux' else 'The previous app is at: '
         backup = Path(next(line.removeprefix(prefix) for line in output.splitlines() if line.startswith(prefix)))
         assert backup.exists() and install.version(backup) == 'old', output
-    assert_no_staging(install)
+    assert_no_staging(install, retained_journal=retained_journal)
 
 
 @pytest.mark.slow
@@ -793,6 +793,7 @@ def test_cleanup_is_safe_when_reentered(install: Install, tmp_path: Path) -> Non
 @pytest.mark.slow
 @pytest.mark.parametrize('outcome', (0, 1, 3))
 def test_group_signals_during_lock_release_leave_no_lock(install: Install, tmp_path: Path, outcome: int) -> None:
+    original = identity(install.target)
     ready, go = tmp_path / 'rm-ready', tmp_path / 'rm-go'
     directory = tmp_path / 'bin'
     directory.mkdir()
@@ -819,7 +820,32 @@ os.execv({real_rm!r}, [{real_rm!r}, *sys.argv[1:]])
         go.touch()
         output, _ = proc.communicate(timeout=15)
         assert proc.returncode == outcome, output
-        assert_truthful(install, proc.returncode, output)
+        ledger = None
+        if outcome == 3:
+            # Incomplete rollback must release exclusion while preserving the
+            # exact identity ledger and old backup for verified recovery.
+            ledger = install.lock.with_name(install.lock.name + '.journal')
+            rows = read_retained_ledger(install, ledger)
+            assert {row[0] for row in rows} == set(install.paths)
+            target_row = next(row for row in rows if row[0] == install.target)
+            assert identity(target_row[1]) == original
+            for live, backup, staged, old_id, _new_id in rows:
+                assert not staged.exists() and not staged.is_symlink()
+                if old_id:
+                    retained = backup if backup.exists() or backup.is_symlink() else live
+                    assert ':'.join(map(str, identity(retained))) == old_id
+            saved = (identity(ledger), ledger.read_bytes())
+        assert_truthful(install, proc.returncode, output, retained_journal=ledger)
+        if ledger is not None:
+            again = install.run()
+            refusal = again.stdout + again.stderr
+            assert again.returncode == 3, refusal
+            assert 'an interrupted installation needs recovery before another install' in refusal
+            assert f'Preserve this identity ledger and its named backups: {ledger}' in refusal
+            assert (identity(ledger), ledger.read_bytes()) == saved
+            assert identity(target_row[1]) == original
+            assert install.version(target_row[1]) == 'old'
+            assert_no_staging(install, retained_journal=ledger)
     finally:
         go.touch()
         stop(proc)
