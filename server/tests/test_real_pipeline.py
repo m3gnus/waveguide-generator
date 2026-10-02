@@ -259,7 +259,9 @@ def _opencl_diagnosis() -> str:
         return "OpenCL check: no verdict recorded"
     detail = {key: verdict.get(key) for key in ("opencl_unavailable_reason", "reason", "stage")}
     stderr = verdict.get("probe_stderr")
-    return f"OpenCL check: {detail}" + (f"; probe stderr tail: {stderr!r}" if stderr else "")
+    diagnostic = verdict.get("probe_diagnostic")
+    return (f"OpenCL check: {detail}" + (f"; probe stderr tail: {stderr!r}" if stderr else "")
+            + (f"\nProbe diagnostic:\n{diagnostic}" if diagnostic else ""))
 
 
 async def _settled_capabilities(registry: Any) -> list[Any]:

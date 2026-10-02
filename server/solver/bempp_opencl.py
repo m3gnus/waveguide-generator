@@ -21,6 +21,7 @@ import sys
 import threading
 import tempfile
 import time
+import traceback
 from typing import Any, Mapping
 
 # Only driver enumeration/kernel execution consumes these budgets. Child
@@ -35,6 +36,19 @@ SPAWN_IMPORT_SECONDS = 60.0
 # Serialize attempts so concurrent capability/solve requests cannot pile up.
 RETRY_INTERVAL_SECONDS = 5.0
 MAX_TIMEOUT_ATTEMPTS = 3
+# Failure evidence stays separate from the short capability/UI reason. Native
+# compiler exceptions contain their build log, options and saved source path on
+# later lines; retain those within a fixed parent/child diagnostic budget.
+PROBE_DIAGNOSTIC_CHARS = 16 * 1024
+
+
+def _bounded_diagnostic(text: str) -> str:
+    if len(text) <= PROBE_DIAGNOSTIC_CHARS:
+        return text
+    marker = "\n[... OpenCL diagnostic truncated ...]\n"
+    head = (PROBE_DIAGNOSTIC_CHARS - len(marker)) // 2
+    tail = PROBE_DIAGNOSTIC_CHARS - len(marker) - head
+    return text[:head] + marker + text[-tail:]
 
 
 def qualification_max_seconds() -> float:
@@ -411,6 +425,9 @@ def _validate_probe_result(result: Any, mode: str) -> None:
     elif (result.get("opencl_unavailable_reason") not in OPENCL_UNAVAILABLE_REASONS
           or not isinstance(result.get("reason"), str)):
         raise ValueError("Invalid failure response")
+    if "probe_diagnostic" in result and (not isinstance(result["probe_diagnostic"], str)
+                                         or len(result["probe_diagnostic"]) > PROBE_DIAGNOSTIC_CHARS):
+        raise ValueError("Invalid probe diagnostic")
 
 
 def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
@@ -510,7 +527,8 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
                     response["probe_stderr"] = stderr_tail[0]
                 if not response["ok"]:
                     logging.getLogger(__name__).warning(
-                        "OpenCL %s check: %s%s", mode, response["reason"],
+                        "OpenCL %s check: %s%s%s", mode, response["reason"],
+                        f"\nProbe diagnostic:\n{response['probe_diagnostic']}" if response.get("probe_diagnostic") else "",
                         f"\nProbe stderr: {stderr_tail[0]}" if stderr_tail[0] else "",
                     )
         finally:
@@ -540,6 +558,10 @@ def _device_verdict(device_json: str, timeout: float) -> dict[str, Any]:
         verdict["_active_seconds"] = verdict.get("_active_seconds", 0.0) + first.get("_active_seconds", 0.0)
         if verdict.get("opencl_unavailable_reason") == "probe_error":
             verdict["reason"] = f"{verdict['reason']} First attempt: {first['reason']}"
+            if first.get("probe_diagnostic") or verdict.get("probe_diagnostic"):
+                verdict["probe_diagnostic"] = _bounded_diagnostic(
+                    f"{verdict.get('probe_diagnostic', '')}\nFirst attempt diagnostic:\n{first.get('probe_diagnostic', '')}"
+                )
     if verdict.get("opencl_unavailable_reason") not in TRANSIENT_REASONS:
         _device_verdict_cache[device_json] = verdict
     return verdict
@@ -579,6 +601,7 @@ def _probe_devices() -> dict[str, Any]:
                       "separate (BEAT · CUDA on NVIDIA, Metal on Apple Silicon).",
         }
     failures = []
+    diagnostics = []
     unavailable_reason = "smoke_test_failed"
     for device in devices:
         remaining = TOTAL_SECONDS - active_seconds
@@ -602,8 +625,11 @@ def _probe_devices() -> dict[str, Any]:
         failures.append(f"{device['name']}: {verdict.get('reason', 'smoke failed')}")
         if verdict.get("probe_stderr"):
             failures.append(f"Probe stderr: {verdict['probe_stderr']}")
+        if verdict.get("probe_diagnostic"):
+            diagnostics.append(f"{device['name']} ({verdict.get('stage', 'unknown stage')}):\n{verdict['probe_diagnostic']}")
     return {"ok": False, "opencl_unavailable_reason": unavailable_reason,
-            "reason": "; ".join(failures)}
+            "reason": "; ".join(failures),
+            **({"probe_diagnostic": _bounded_diagnostic("\n".join(diagnostics))} if diagnostics else {})}
 
 
 def retry_pending() -> bool:
@@ -683,7 +709,8 @@ def _child_result(mode: str, device: Mapping[str, Any] | None) -> dict[str, Any]
         if mode == "inventory" and getattr(exc, "code", None) == -1001:
             code = "no_device"  # CL_PLATFORM_NOT_FOUND_KHR
         result = {"ok": False, "stage": stage, "opencl_unavailable_reason": code,
-                  "reason": f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else 'check failed'}"[:240]}
+                  "reason": f"{type(exc).__name__}: {str(exc).splitlines()[0] if str(exc) else 'check failed'}"[:240],
+                  "probe_diagnostic": _bounded_diagnostic("".join(traceback.format_exception(exc)))}
     return result
 
 
@@ -697,6 +724,11 @@ def _child_main(mode: str, device: Mapping[str, Any] | None, path: Path) -> None
     result = _child_result(mode, device)
     _validate_probe_result(result, mode)
     _write_probe_result(path, result)
+    if not result["ok"] and result.get("probe_diagnostic"):
+        # Retain direct compiler evidence in a captured child stderr artifact
+        # even if native failure teardown subsequently aborts. A nonzero exit
+        # still invalidates the report; this output never approves a device.
+        sys.stderr.write(f"OpenCL probe diagnostic:\n{result['probe_diagnostic']}\n")
     sys.stdout.flush()
     sys.stderr.flush()
     if result["ok"]:
