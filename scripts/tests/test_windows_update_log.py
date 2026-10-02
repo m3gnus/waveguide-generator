@@ -13,7 +13,7 @@ import re
 
 import pytest
 
-from scripts.tests.test_windows_native_recovery import BOOT, _old_root, native
+from scripts.tests.test_windows_native_recovery import BOOT, _old_root, native as native
 from scripts import build_bundle
 
 pytestmark = pytest.mark.xdist_group("windows_native_setup_mutex")

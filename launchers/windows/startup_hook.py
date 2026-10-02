@@ -114,4 +114,4 @@ if sys.platform == "win32":
                 raise
         else:
             wg_bundle_recovery.windows_boot(executable=str(root / "Waveguide Generator.exe"))
-        import wg_desktop_bootstrap
+        import wg_desktop_bootstrap as wg_desktop_bootstrap
