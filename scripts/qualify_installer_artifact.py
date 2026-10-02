@@ -120,6 +120,22 @@ def regular_open(path: Path):
     return handle, before, opened
 
 
+def descriptor_content_matches(fd: int, size: int, expected_digest: bytes) -> bool:
+    # Windows may retain the same ChangeTime after a same-size write with a
+    # restored mtime. Re-read the retained object, bypassing BufferedReader's
+    # cached bytes. This terminal check consumes at most the original size + 1.
+    os.lseek(fd, 0, os.SEEK_SET)
+    remaining = size + 1
+    digest = hashlib.sha256()
+    while remaining:
+        chunk = os.read(fd, min(remaining, 1 << 20))
+        if not chunk:
+            break
+        digest.update(chunk)
+        remaining -= len(chunk)
+    return remaining == 1 and digest.digest() == expected_digest
+
+
 def read_bytes(path: Path, limit: int) -> bytes:
     handle, before, opened = regular_open(path)
     with handle:
@@ -127,6 +143,9 @@ def read_bytes(path: Path, limit: int) -> bytes:
             raise EvidenceError(f"file too large: {path}")
         data = handle.read(limit + 1)
         if len(data) > limit or identity(opened) != identity(os.fstat(handle.fileno())):
+            raise EvidenceError(f"file changed or exceeded limit: {path}")
+        if WINDOWS_HOST and (not descriptor_content_matches(handle.fileno(), before.st_size, hashlib.sha256(data).digest())
+                or identity(opened) != identity(os.fstat(handle.fileno()))):
             raise EvidenceError(f"file changed or exceeded limit: {path}")
     if identity(before) != identity(path.lstat()):
         raise EvidenceError(f"file changed after read: {path}")
@@ -150,6 +169,9 @@ def hash_file(path: Path) -> dict:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
         if identity(opened) != identity(os.fstat(handle.fileno())):
+            raise EvidenceError(f"file changed while hashing: {path}")
+        if WINDOWS_HOST and (not descriptor_content_matches(handle.fileno(), before.st_size, digest.digest())
+                or identity(opened) != identity(os.fstat(handle.fileno()))):
             raise EvidenceError(f"file changed while hashing: {path}")
     if identity(before) != identity(path.lstat()):
         raise EvidenceError(f"file changed after hashing: {path}")

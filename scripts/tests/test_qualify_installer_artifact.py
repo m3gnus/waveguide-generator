@@ -526,6 +526,87 @@ def test_windows_descriptor_change_time_catches_same_size_restored_mtime_write(t
     assert path.read_bytes() == b"other" and path.stat().st_mtime_ns == before.st_mtime_ns
 
 
+@pytest.mark.parametrize("operation", ("read", "hash"))
+def test_windows_same_metadata_content_write_is_refused(tmp_path, windows_stat_model, monkeypatch, operation):
+    path = tmp_path / "input.exe"
+    path.write_bytes(b"first")
+    before = path.stat()
+    original_fdopen, original_fstat = os.fdopen, gate.os.fstat
+    observations = []
+
+    def unchanged_metadata(fd):
+        raw = original_fstat(fd)
+        # Native Windows can report the same ChangeTime after this write.
+        # Copy the observation without mutating stat_result or the model.
+        info = SimpleNamespace(st_dev=raw.st_dev, st_ino=raw.st_ino,
+            st_mode=raw.st_mode, st_size=raw.st_size, st_mtime_ns=raw.st_mtime_ns,
+            st_ctime_ns=observations[0][-1] if observations else raw.st_ctime_ns,
+            st_birthtime_ns=raw.st_birthtime_ns,
+            st_file_attributes=getattr(raw, "st_file_attributes", 0))
+        observations.append(gate.identity(info))
+        return info
+
+    class MutatingReader:
+        def __init__(self, fd, mode):
+            self.handle = original_fdopen(fd, mode)
+            self.changed = False
+
+        def __getattr__(self, name):
+            return getattr(self.handle, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.handle.__exit__(*args)
+
+        def read(self, size):
+            data = self.handle.read(size)
+            if not self.changed:
+                self.changed = True
+                assert data == b"first"
+                path.write_bytes(b"other")  # Writer is closed before recheck.
+                os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+            return data
+
+    monkeypatch.setattr(gate.os, "fstat", unchanged_metadata)
+    monkeypatch.setattr(gate.os, "fdopen", MutatingReader)
+    with pytest.raises(gate.EvidenceError, match="file changed or exceeded limit|file changed while hashing"):
+        gate.read_bytes(path, 100) if operation == "read" else gate.hash_file(path)
+    assert observations and all(info == observations[0] for info in observations)
+    after = path.stat()
+    assert path.read_bytes() == b"other"
+    assert (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) == (
+        before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+
+
+def test_descriptor_content_recheck_bypasses_cached_bytes(tmp_path):
+    path = tmp_path / "input"
+    path.write_bytes(b"first")
+    with path.open("rb") as handle:
+        assert handle.read(1) == b"f"  # Buffer contains the original remainder.
+        expected_digest = gate.hashlib.sha256(b"first").digest()
+        assert gate.descriptor_content_matches(handle.fileno(), 5, expected_digest)
+        path.write_bytes(b"other")
+        assert not gate.descriptor_content_matches(handle.fileno(), 5, expected_digest)
+
+
+def test_descriptor_content_recheck_bounds_continuous_growth(tmp_path, monkeypatch):
+    path = tmp_path / "input"
+    path.write_bytes(b"first")
+    reads = []
+
+    def growing_read(fd, size):
+        reads.append(size)
+        assert len(reads) <= 6, "recheck must stop at original size + 1"
+        return b"x"  # A short read which never reaches EOF.
+
+    with path.open("rb") as handle:
+        monkeypatch.setattr(gate.os, "read", growing_read)
+        assert not gate.descriptor_content_matches(handle.fileno(), 5, gate.hashlib.sha256(b"first").digest())
+    assert len(reads) == 6 and reads[-1] == 1
+
+
 def test_windows_streamed_archive_retains_strict_descriptor_change_time(case, windows_stat_model, monkeypatch):
     args = case()
     original_fstat = gate.os.fstat
