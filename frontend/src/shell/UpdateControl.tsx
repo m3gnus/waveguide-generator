@@ -15,11 +15,13 @@ export interface UpdateSnapshot {
 export function useUpdateStatus(): UpdateSnapshot {
   const client = useQueryClient();
   const query = useQuery({
-    queryKey: UPDATE_QUERY_KEY, queryFn: () => getUpdateStatus(), retry: false, staleTime: 60_000,
+    queryKey: UPDATE_QUERY_KEY, queryFn: ({ signal }) => getUpdateStatus(false, signal), retry: false, staleTime: 60_000,
     refetchInterval: (value) => value.state.data?.checking || active(value.state.data?.installState) ? 400 : 60_000,
   });
   const refresh = useCallback(async () => {
+    await client.cancelQueries({ queryKey: UPDATE_QUERY_KEY });
     const result = await getUpdateStatus(true);
+    await client.cancelQueries({ queryKey: UPDATE_QUERY_KEY });
     client.setQueryData(UPDATE_QUERY_KEY, result);
     return result;
   }, [client]);
@@ -79,20 +81,31 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string>();
   const [choice, setChoice] = useState<UpdateChannel>();
+  const [channelPending, setChannelPending] = useState(false);
+  const [verifiedChannel, setVerifiedChannel] = useState<UpdateChannel>();
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [progress, setProgress] = useState<UpdateInstallAccepted>();
   const state = progress?.installState ?? data?.installState;
   const installing = active(state) || state === 'ready';
   const close = useCallback(() => {
-    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); onClose();
+    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChannelPending(false); setVerifiedChannel(undefined); onClose();
   }, [onClose]);
   const initialFocus = useCallback((node: HTMLDivElement) => node.querySelector<HTMLElement>('[data-autofocus]')
     ?? node.querySelector<HTMLElement>(focusableSelector), []);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose: close, initialFocus });
   useEffect(() => {
     if (open) return;
-    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChoice(undefined);
+    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChoice(undefined); setChannelPending(false); setVerifiedChannel(undefined);
   }, [open]);
+  useEffect(() => {
+    if (!open || busy || !data?.channel) return;
+    if (channelPending) {
+      if (verifiedChannel === data.channel) {
+        setChoice(data.channel); setChannelPending(false); setVerifiedChannel(undefined);
+      }
+    } else setChoice(data.channel);
+  }, [open, busy, channelPending, verifiedChannel, data?.channel]);
+  useEffect(() => { setConfirmRestart(false); }, [data?.channel, data?.release?.tag]);
   useEffect(() => {
     if (!open || choice !== undefined) return;
     if (data?.channel) { setChoice(data.channel); return; }
@@ -143,10 +156,25 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const choose = (next: UpdateChannel) => {
     const operation = generation.current + 1;
     void perform(async () => {
-      const saved = await setUpdateChannel(next);
-      if (operation !== generation.current) return;
-      setChoice(saved); setConfirmRestart(false); setProgress(undefined);
-      await client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
+      let saved = false;
+      setChannelPending(true); setVerifiedChannel(undefined); setConfirmRestart(false);
+      try {
+        await client.cancelQueries({ queryKey: UPDATE_QUERY_KEY });
+        if (operation !== generation.current) return;
+        const selected = await setUpdateChannel(next);
+        if (operation !== generation.current) return;
+        saved = true;
+        setChoice(selected); setProgress(undefined);
+        const refreshed = await getUpdateStatus();
+        if (operation !== generation.current) return;
+        await client.cancelQueries({ queryKey: UPDATE_QUERY_KEY });
+        if (operation !== generation.current) return;
+        client.setQueryData(UPDATE_QUERY_KEY, refreshed);
+        setChoice(refreshed.channel); setVerifiedChannel(refreshed.channel);
+      } catch (error) {
+        if (operation === generation.current && !saved) setChannelPending(false);
+        throw error;
+      }
     });
   };
   const total = progress?.totalBytes || data?.totalBytes || data?.action?.size || 0;
@@ -154,7 +182,8 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
   const error = progress?.error ?? data?.error;
   const mismatch = presentation.state === 'reload';
   const outcome = data?.lastOutcome;
-  const installable = !mismatch && data?.canInstall === true && data.action?.kind === 'full_installer';
+  const installable = !mismatch && !channelPending && choice === data?.channel
+    && data?.canInstall === true && data.action?.kind === 'full_installer';
   const title = mismatch ? 'Waveguide Generator was updated' : data?.availability === 'available'
     ? `Waveguide Generator ${data.release?.version} is available` : `Waveguide Generator ${__WG2_VERSION__}`;
   const actionLabel = state === 'downloading' ? 'Downloading…' : state === 'verifying' ? 'Verifying…'
@@ -176,6 +205,7 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
               className={choice === next ? 'on' : ''} disabled={choice === undefined || busy || installing || mismatch}
               onClick={() => choose(next)}>{next === 'stable' ? 'Stable' : 'Beta'}</button>)}</div>
           <p>{choice === 'beta' ? 'Includes pre-release builds. Returning to Stable waits for a newer stable version.' : 'Finished releases only.'}</p></section>
+        {channelPending && <p role="status" className="update-note">Check the selected channel before installing.</p>}
         {presentation.detail && <p role={presentation.stale ? 'status' : 'alert'} className="update-note error">{presentation.detail}</p>}
         {data?.checkout.reason && <p className="update-note">{data.checkout.reason}</p>}
         {outcome && <p role={outcome.result === 'installed' ? 'status' : 'alert'} className="update-note">
@@ -197,7 +227,14 @@ export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 
       </div>
       <footer>{mismatch ? <button data-autofocus onClick={() => window.location.reload()}>Reload WG</button>
         : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy ? 'Starting…' : actionLabel}</button>
-          : <button data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => { await onRefresh(); })}>
+          : <button data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => {
+            const operation = generation.current;
+            const refreshed = await onRefresh();
+            if (operation === generation.current) {
+              setChoice(refreshed.channel); setVerifiedChannel(refreshed.channel);
+              if (refreshed.channel !== data?.channel) setChannelPending(true);
+            }
+          })}>
             {busy || data?.checking ? 'Checking…' : 'Check again'}</button>}
         <button onClick={close}>Close</button></footer>
     </div>

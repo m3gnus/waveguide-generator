@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UpdateStatus } from '../api/updates';
-import { UpdateButton, UpdateDialog, updatePresentation } from './UpdateControl';
+import { UPDATE_QUERY_KEY, UpdateButton, UpdateDialog, updatePresentation, useUpdateStatus } from './UpdateControl';
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return { schemaVersion: 2, runningVersion: __WG2_VERSION__, channel: 'stable', availability: 'available',
@@ -83,8 +83,66 @@ describe('full-installer update control', () => {
     expect(button('Stable').getAttribute('aria-pressed')).toBe('true'); expect(host.textContent).toContain('download is active');
   });
   it('saves Beta on the server and waits to offer a newer stable when switching back', async () => {
-    fetch.mockResolvedValue(reply({ channel: 'beta' })); render(); await click('Beta');
+    fetch.mockResolvedValueOnce(reply({ channel: 'beta' })).mockResolvedValueOnce(reply(status({ channel: 'beta' }))); render(); await click('Beta');
+    render(status({ channel: 'beta' }));
     expect(button('Beta').getAttribute('aria-pressed')).toBe('true'); expect(host.textContent).toContain('Returning to Stable waits');
+  });
+  it('follows authoritative channel changes from another window and clears the old restart confirmation', async () => {
+    render(status(), { activeJobs: 1 }); await click('Install and restart');
+    expect(button('Stop solves, install and restart')).toBeDefined();
+    render(status({ channel: 'beta' }), { activeJobs: 1 });
+    expect(button('Beta').getAttribute('aria-pressed')).toBe('true');
+    expect(button('Stable').getAttribute('aria-pressed')).toBe('false');
+    expect(button('Stop solves, install and restart')).toBeUndefined();
+    expect(button('Install and restart')).toBeDefined(); expect(fetch).not.toHaveBeenCalled();
+  });
+  it('withholds a cached install offer if the channel is saved but its status refresh fails', async () => {
+    fetch.mockResolvedValueOnce(reply({ channel: 'beta' })).mockRejectedValueOnce(new Error('The channel status is offline.'));
+    render(); await click('Beta');
+    expect(button('Beta').getAttribute('aria-pressed')).toBe('true');
+    expect(button('Install and restart')).toBeUndefined();
+    expect(button('Check again')).toBeDefined();
+    expect(host.textContent).toContain('Check the selected channel before installing.');
+    expect(host.textContent).toContain('channel status is offline');
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/updates/install')).toHaveLength(0);
+    render(status({ channel: 'beta' }));
+    expect(button('Install and restart')).toBeUndefined();
+    refresh.mockResolvedValueOnce(status({ channel: 'beta' })); await click('Check again');
+    expect(button('Install and restart')).toBeDefined();
+  });
+  it('withholds the old offer until the confirmed channel reaches the displayed status', async () => {
+    fetch.mockResolvedValueOnce(reply({ channel: 'beta' })).mockResolvedValueOnce(reply(status({ channel: 'beta' })));
+    render(); await click('Beta');
+    expect(button('Install and restart')).toBeUndefined();
+    render(status({ channel: 'beta' }));
+    expect(button('Install and restart')).toBeDefined();
+  });
+  it('cancels an older live query so its delayed Stable response cannot replace the new Beta offer', async () => {
+    const old = deferred<Response>();
+    let oldSignal: AbortSignal | undefined;
+    let statusCalls = 0;
+    fetch.mockImplementation((url: string, options?: RequestInit) => {
+      if (url === '/api/updates/channel') return Promise.resolve(reply({ channel: 'beta' }));
+      if (url === '/api/updates/status' && statusCalls++ === 0) {
+        oldSignal = options?.signal as AbortSignal;
+        return old.promise;
+      }
+      return Promise.resolve(reply(status({ channel: 'beta' })));
+    });
+    client.setQueryData(UPDATE_QUERY_KEY, status(), { updatedAt: 0 });
+    function LiveDialog() {
+      const snapshot = useUpdateStatus();
+      return <UpdateDialog open snapshot={snapshot} onRefresh={snapshot.refresh} onClose={close}/>;
+    }
+    await act(async () => root.render(<QueryClientProvider client={client}><LiveDialog/></QueryClientProvider>));
+    await click('Beta');
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(oldSignal?.aborted).toBe(true);
+    expect(button('Beta').getAttribute('aria-pressed')).toBe('true');
+    await act(async () => old.resolve(reply(status())));
+    expect(client.getQueryData<UpdateStatus>(UPDATE_QUERY_KEY)?.channel).toBe('beta');
+    expect(button('Beta').getAttribute('aria-pressed')).toBe('true');
+    expect(button('Install and restart')).toBeDefined();
   });
   it('polls through verification and ready without another download request', async () => {
     vi.useFakeTimers(); render(); await click('Install and restart');
