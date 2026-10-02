@@ -482,7 +482,8 @@ export function TopBar({ onResetLayout }: { onResetLayout: () => void }) {
     </div>
     <WindowControls side="trailing"/>
     <SettingsDialog open={settingsOpen} theme={theme} focusSection={settingsSection} onThemeChange={setTheme} onClose={closeSettings}/>
-    <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}/>
+    <UpdateDialog open={updateOpen} snapshot={update} onRefresh={update.refresh} onClose={() => setUpdateOpen(false)}
+      activeJobs={jobs.filter((job) => job.status === 'preparing' || job.status === 'queued' || job.status === 'running').length}/>
     <ReportDialog open={reportOpen} jobs={jobs} onClose={() => setReportOpen(false)}/>
     {/* Mounted once, for every export surface in the window: the File menu, the
       * Results panel and each run's export menu all ask this one dialog. */}

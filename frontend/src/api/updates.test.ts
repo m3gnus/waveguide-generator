@@ -1,524 +1,99 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
-  getUpdateChannel,
-  getUpdateDiagnostics,
-  getUpdateStatus,
-  installApplicationUpdate,
-  retrySuppressedUpdate,
-  setUpdateChannel,
-} from './updates';
+import { getUpdateChannel, getUpdateStatus, installApplicationUpdate, setUpdateChannel, type UpdateStatus } from './updates';
 
-const payload = {
-  schemaVersion: 1,
-  runningVersion: '2.0.0',
-  channel: 'stable',
-  availability: 'current',
-  freshness: 'fresh',
-  cached: false,
-  release: null,
-  checkedAt: '2026-08-22T12:00:00Z',
-  nextCheckAt: '2026-08-23T00:00:00Z',
-  checkout: {
-    kind: 'release',
-    branch: 'main',
-    head: 'a'.repeat(40),
-    atDeclaredTag: true,
-    trackedChanges: false,
-    aheadCount: 0,
-    behindCount: 0,
-    updateSupported: true,
-    reason: null,
-  },
-  action: null,
-  canInstall: false,
-  lastError: null,
-  installState: 'idle',
-  activeVersion: null,
-  downloadedBytes: 0,
-  totalBytes: 0,
-  error: null,
-} as const;
-
-const bundlePayload = {
-  ...payload,
-  availability: 'available',
-  release: {
-    version: '2.0.1',
-    tag: 'v2.0.1',
-    url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.0.1',
-    publishedAt: '2026-08-22T12:00:00Z',
-    assetsReady: true,
-    runtimeId: '222222222222',
-    bundleAssets: [{
-      name: 'update-app-2.0.1.zip',
-      url: 'https://github.com/example/app.zip',
-      sha256Url: 'https://github.com/example/app.zip.sha256',
-      bytes: 1_500,
-      sha256Bytes: 96,
-      layer: 'app',
-    }, {
-      name: 'update-app-2.0.1.manifest.json',
-      url: 'https://github.com/example/manifest.json',
-      sha256Url: 'https://github.com/example/manifest.json.sha256',
-      bytes: 180,
-      sha256Bytes: 96,
-      layer: 'manifest',
-    }, {
-      name: 'Waveguide.Generator-2.0.1-macos-arm64.dmg',
-      url: 'https://github.com/example/app.dmg',
-      sha256Url: 'https://github.com/example/app.dmg.sha256',
-      bytes: 9_000,
-      sha256Bytes: 96,
-      layer: 'installer',
-    }],
-  },
-  checkout: {
-    kind: 'bundle',
-    branch: null,
-    head: null,
-    atDeclaredTag: false,
-    trackedChanges: false,
-    aheadCount: null,
-    behindCount: null,
-    updateSupported: true,
-    installedVersion: '2.0.0',
-    runtimeId: '111111111111',
-    reason: null,
-  },
-  action: {
-    kind: 'bundle_download',
-    assets: [{
-      name: 'update-app-2.0.1.zip',
-      url: 'https://github.com/example/app.zip',
-      sha256Url: 'https://github.com/example/app.zip.sha256',
-      bytes: 1_500,
-      layer: 'app',
-    }],
-    downloadBytes: 1_500,
-  },
-  canInstall: true,
-  totalBytes: 1_500,
-} as const;
-
-const APP_DIGEST = 'a'.repeat(64);
-const MANIFEST_DIGEST = 'b'.repeat(64);
-
-/**
- * The live shape: no sidecar files, one `sha256` per asset.
- *
- * Taken from a real `/api/updates/status` response for the v0.3.1 standalone
- * app, with the URLs and digests shortened.
- */
-const inlineDigestPayload = {
-  ...bundlePayload,
-  release: {
-    ...bundlePayload.release,
-    bundleAssets: [{
-      name: 'update-app-2.0.1.zip',
-      url: 'https://github.com/example/app.zip',
-      sha256: APP_DIGEST,
-      bytes: 1_500,
-      layer: 'app',
-    }, {
-      name: 'update-app-2.0.1.manifest.json',
-      url: 'https://github.com/example/manifest.json',
-      sha256: MANIFEST_DIGEST,
-      bytes: 180,
-      layer: 'manifest',
-    }],
-  },
-  action: {
-    kind: 'bundle_download',
-    assets: [{
-      name: 'update-app-2.0.1.zip',
-      url: 'https://github.com/example/app.zip',
-      sha256: APP_DIGEST,
-      bytes: 1_500,
-      layer: 'app',
-    }],
-    downloadBytes: 1_500,
-  },
-} as const;
-
-function jsonResponse(value: unknown, status = 200): Response {
+export function installerStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
   return {
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => value,
-  } as Response;
+    schemaVersion: 2, runningVersion: __WG2_VERSION__, channel: 'stable', availability: 'available', freshness: 'fresh',
+    cached: false, checking: false, checkedAt: '2026-10-02T06:00:00Z', nextCheckAt: '2026-10-02T12:00:00Z', lastError: null,
+    release: { version: '2.0.1', tag: 'v2.0.1', url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.0.1',
+      publishedAt: '2026-10-02T06:00:00Z', notes: 'Improved installation.', assetsReady: true,
+      installer: { name: 'Waveguide.Generator-2.0.1-macos-arm64.dmg', url: 'https://github.com/m3gnus/waveguide-generator/releases/download/v2.0.1/Waveguide.Generator-2.0.1-macos-arm64.dmg', size: 244_000_000, sha256: 'a'.repeat(64) } },
+    checkout: { kind: 'macos', installRoot: '/Applications/Waveguide Generator.app', updateSupported: true, reason: null },
+    action: { kind: 'full_installer', version: '2.0.1', tag: 'v2.0.1', name: 'Waveguide.Generator-2.0.1-macos-arm64.dmg', size: 244_000_000 },
+    canInstall: true, installState: 'idle', activeVersion: null, downloadedBytes: 0, totalBytes: 0, error: null,
+    lastOutcome: null, ...overrides,
+  };
 }
+const accepted = { accepted: true, version: '2.0.1', activeVersion: '2.0.1', installState: 'downloading', downloadedBytes: 0, totalBytes: 244_000_000, error: null };
+const reply = (payload: unknown, status = 200) => new Response(JSON.stringify(payload), { status });
+afterEach(() => vi.unstubAllGlobals());
 
-const heldBuild = { version: '2.0.1', commit: 'b'.repeat(40), runtimeId: '222222222222' };
-const lastOutcome = {
-  transaction: '5f0c',
-  operation: 'update',
-  outcome: 'rolled-back',
-  detail: 'The relaunched application exited at once with status 1',
-  recordedAt: '2026-09-13T12:00:00',
-  from: { version: '2.0.0', commit: 'a'.repeat(40), runtimeId: '111111111111' },
-  to: heldBuild,
-  channel: null,
-  verificationBasis: 'release-digest',
-  rollbackMaterial: 'retained',
-  suppressedBuilds: [heldBuild],
-};
-
-describe('the last update outcome and a held-back build', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('accepts the last outcome and the build it holds back', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
-      ...bundlePayload,
-      action: null,
-      canInstall: false,
-      lastOutcome,
-      suppressed: heldBuild,
-    })));
-    const result = await getUpdateStatus();
-    expect(result.suppressed).toEqual(heldBuild);
-    expect(result.lastOutcome).toEqual(lastOutcome);
-  });
-
-  it('accepts a WGLink activation the update is waiting on', async () => {
-    const wglink = { verdict: 'pending', detail: 'WGLink activation is pending until Fusion closes' };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, wglink })));
-    expect((await getUpdateStatus()).wglink).toEqual(wglink);
-  });
-
-  it('accepts a rollback that did not finish, which needs repair', async () => {
-    const repairRequired = { transaction: '5f0c', detail: 'The restored bundle failed its signature check.' };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, repairRequired })));
-    const result = await getUpdateStatus();
-    expect(result.repairRequired).toEqual(repairRequired);
-  });
-
-  it.each([
-    ['an unknown outcome', { lastOutcome: { ...lastOutcome, outcome: 'exploded' } }],
-    ['a held-back build with no version', { suppressed: { ...heldBuild, version: 7 } }],
-    ['a suppression list that is not a list', { lastOutcome: { ...lastOutcome, suppressedBuilds: heldBuild } }],
-    ['a build identity with a stray field', { suppressed: { ...heldBuild, path: '/somewhere' } }],
-    ['a repair notice with no detail', { repairRequired: { transaction: '5f0c' } }],
-    ['a repair notice that is not an object', { repairRequired: 'yes' }],
-    ['a WGLink report with no verdict', { wglink: { detail: 'pending' } }],
-  ] as [string, Record<string, unknown>][])('rejects %s', async (_label, fields) => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ ...bundlePayload, ...fields })));
-    await expect(getUpdateStatus()).rejects.toThrow('Update status response is invalid');
-  });
-
-  it('asks to retry exactly the held-back build, with a non-simple confirmation header', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ lifted: heldBuild }));
-    vi.stubGlobal('fetch', fetchMock);
-    await retrySuppressedUpdate(heldBuild);
-    expect(fetchMock).toHaveBeenCalledWith('/api/updates/retry', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-WG-Update': 'retry' },
-      body: JSON.stringify(heldBuild),
-    });
-  });
-
-  it('surfaces the reason a retry was refused', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'That build is not held back.' }, 409)));
-    await expect(retrySuppressedUpdate(heldBuild)).rejects.toThrow('That build is not held back.');
-  });
-});
-
-describe('getUpdateDiagnostics', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it("reads the updater's own logs, bounded and scrubbed by the server", async () => {
-    const logs = {
-      tailBytes: 65536,
-      logs: { 'update.log': 'installed\n', 'update-handoff.log': null, 'rollback-handoff.log': null },
-    };
-    const fetchMock = vi.fn(async () => jsonResponse(logs));
-    vi.stubGlobal('fetch', fetchMock);
-    await expect(getUpdateDiagnostics()).resolves.toEqual(logs);
-    expect(fetchMock).toHaveBeenCalledWith('/api/updates/diagnostics');
-  });
-
-  it.each([
-    ['a log that is not text', { tailBytes: 65536, logs: { 'update.log': 7 } }],
-    ['no logs at all', { tailBytes: 65536 }],
-  ] as [string, Record<string, unknown>][])('rejects %s', async (_label, value) => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(value)));
-    await expect(getUpdateDiagnostics()).rejects.toThrow('Update diagnostics response is invalid');
-  });
-});
-
-describe('getUpdateStatus', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('uses the cacheable GET endpoint, manual refresh query, and optional cancellation signal', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse(payload));
-    vi.stubGlobal('fetch', fetchMock);
+describe('full-installer API', () => {
+  it('reads status, manual refresh and abort signals without requesting installation', async () => {
+    const fetch = vi.fn(async () => reply(installerStatus())); vi.stubGlobal('fetch', fetch);
     const controller = new AbortController();
-    await getUpdateStatus();
-    await getUpdateStatus(true);
-    await getUpdateStatus(false, controller.signal);
-    expect(fetchMock.mock.calls).toEqual([
-      ['/api/updates/status'],
-      ['/api/updates/status?refresh=true'],
-      ['/api/updates/status', { signal: controller.signal }],
-    ]);
+    await expect(getUpdateStatus()).resolves.toEqual(installerStatus());
+    await getUpdateStatus(true, controller.signal);
+    expect(fetch.mock.calls).toEqual([['/api/updates/status', { signal: undefined }], ['/api/updates/status?refresh=true', { signal: controller.signal }]]);
   });
-
-  it('accepts the complete server-shaped bundle release and projected install action', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(bundlePayload)));
-
-    await expect(getUpdateStatus()).resolves.toEqual(bundlePayload);
+  it('accepts checking and notify-only states', async () => {
+    const value = installerStatus({ availability: 'unknown', checking: true, release: null, action: null, canInstall: false,
+      checkout: { kind: 'source', installRoot: null, updateSupported: false, reason: 'Download the installer to update.' } });
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value)));
+    await expect(getUpdateStatus()).resolves.toEqual(value);
   });
-
-  it("accepts GitHub's own per-asset digest in place of a .sha256 sidecar", async () => {
-    // The shape every release cut since the server moved to `digest` actually
-    // publishes -- see `UpdateService._paired_asset`. Refusing it rejected the
-    // whole status payload, and every packaged install read "status unknown"
-    // for its entire life as a result.
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(inlineDigestPayload)));
-
-    await expect(getUpdateStatus()).resolves.toEqual(inlineDigestPayload);
+  it('accepts a release without an installer on an unsupported architecture', async () => {
+    const value = installerStatus({ action: null, canInstall: false,
+      checkout: { kind: 'unsupported', installRoot: null, updateSupported: false, reason: 'No installer is available for this architecture.' } });
+    value.release!.installer = null;
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value)));
+    await expect(getUpdateStatus()).resolves.toEqual(value);
   });
-
-  it('accepts a release that mixes both digest shapes across its assets', async () => {
-    // A release published across the changeover carries one of each.
-    const mixed = {
-      ...inlineDigestPayload,
-      release: {
-        ...inlineDigestPayload.release,
-        bundleAssets: [
-          inlineDigestPayload.release.bundleAssets[0],
-          bundlePayload.release.bundleAssets[1],
-        ],
-      },
-    };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mixed)));
-
-    await expect(getUpdateStatus()).resolves.toEqual(mixed);
+  it('accepts a refusal before a download has an active version', async () => {
+    const value = installerStatus({ installState: 'failed', activeVersion: null, error: 'The update request was cancelled.' });
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value)));
+    await expect(getUpdateStatus()).resolves.toEqual(value);
   });
-
+  it('accepts pre-releases and explicit recovery outcomes', async () => {
+    const value = installerStatus(); value.channel = 'beta';
+    value.release!.version = '2.1.0-rc.1'; value.release!.tag = 'v2.1.0-rc.1';
+    value.release!.url = 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0-rc.1';
+    value.action!.version = value.release!.version; value.action!.tag = value.release!.tag;
+    value.lastOutcome = { from: '2.0.0', to: '2.0.1', result: 'rollback_incomplete', when: '2026-10-02', log: 'install.log', backupPath: 'saved.previous' };
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value)));
+    await expect(getUpdateStatus()).resolves.toEqual(value);
+  });
   it.each([
-    ['a missing channel', { ...payload, channel: undefined }],
-    ['an unknown channel', { ...payload, channel: 'nightly' }],
-    ['a release tag that disagrees with its pre-release version', {
-      ...payload,
-      availability: 'available',
-      release: {
-        version: '2.1.0-beta.1',
-        tag: 'v2.1.0',
-        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0',
-        publishedAt: '2026-08-22T12:00:00Z',
-        assetsReady: true,
-      },
-    }],
-    ['a version carrying build metadata', {
-      ...payload,
-      availability: 'available',
-      release: {
-        version: '2.1.0+abc',
-        tag: 'v2.1.0+abc',
-        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0+abc',
-        publishedAt: '2026-08-22T12:00:00Z',
-        assetsReady: true,
-      },
-    }],
-    ['unknown availability', { ...payload, availability: 'sometimes' }],
-    ['unknown freshness', { ...payload, freshness: 'expired' }],
-    ['incomplete checkout', { ...payload, checkout: { kind: 'release' } }],
-    ['bundle checkout without installed version', {
-      ...bundlePayload,
-      checkout: { ...bundlePayload.checkout, installedVersion: undefined },
-    }],
-    ['repository checkout with bundle-only fields', {
-      ...payload,
-      checkout: { ...payload.checkout, installedVersion: '2.0.0' },
-    }],
-    ['bundle release without its asset list', {
-      ...bundlePayload,
-      release: { ...bundlePayload.release, bundleAssets: undefined },
-    }],
-    ['release asset without checksum size', {
-      ...bundlePayload,
-      release: {
-        ...bundlePayload.release,
-        bundleAssets: [{ ...bundlePayload.release.bundleAssets[0], sha256Bytes: undefined }],
-      },
-    }],
-    ['release asset with no proof at all', {
-      ...inlineDigestPayload,
-      release: {
-        ...inlineDigestPayload.release,
-        bundleAssets: [{ ...inlineDigestPayload.release.bundleAssets[0], sha256: undefined }],
-      },
-    }],
-    ['release asset with a truncated digest', {
-      ...inlineDigestPayload,
-      release: {
-        ...inlineDigestPayload.release,
-        bundleAssets: [{ ...inlineDigestPayload.release.bundleAssets[0], sha256: 'a'.repeat(63) }],
-      },
-    }],
-    ['release asset whose digest is not hex', {
-      ...inlineDigestPayload,
-      release: {
-        ...inlineDigestPayload.release,
-        bundleAssets: [{ ...inlineDigestPayload.release.bundleAssets[0], sha256: `${'a'.repeat(63)}z` }],
-      },
-    }],
-    ['bundle action asset with no proof at all', {
-      ...inlineDigestPayload,
-      action: {
-        ...inlineDigestPayload.action,
-        assets: [{ ...inlineDigestPayload.action.assets[0], sha256: undefined }],
-      },
-    }],
-    ['unknown action', { ...payload, action: { kind: 'surprise' } }],
-    ['incomplete bundle action asset', {
-      ...bundlePayload,
-      action: {
-        ...bundlePayload.action,
-        assets: [{ ...bundlePayload.action.assets[0], bytes: undefined }],
-      },
-    }],
-    ['bundle action with mismatched byte total', {
-      ...bundlePayload,
-      action: { ...bundlePayload.action, downloadBytes: 1_499 },
-    }],
-    ['non-string last error', { ...payload, lastError: 5 }],
-    ['non-string progress error', { ...payload, error: { detail: 'bad' } }],
-    ['missing active version while downloading', {
-      ...payload, installState: 'downloading', activeVersion: null,
-    }],
-    ['NaN byte progress', { ...payload, downloadedBytes: Number.NaN }],
-    ['negative total bytes', { ...payload, totalBytes: -1 }],
-    ['progress beyond its total', {
-      ...payload, installState: 'downloading', activeVersion: '2.0.1', downloadedBytes: 3, totalBytes: 2,
-    }],
-  ] as [string, unknown][])('rejects %s', async (_label, malformed) => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(malformed)));
-
-    await expect(getUpdateStatus()).rejects.toThrow('Update status response is invalid');
-  });
-
-  it('rejects an invalid or failed response', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({})));
+    ['legacy schema', (v: Record<string, unknown>) => { v.schemaVersion = 1; }],
+    ['wrong channel', (v: Record<string, unknown>) => { v.channel = 'nightly'; }],
+    ['missing checking', (v: Record<string, unknown>) => { delete v.checking; }],
+    ['missing available release', (v: Record<string, unknown>) => { v.release = null; v.action = null; v.canInstall = false; }],
+    ['fractional bytes', (v: Record<string, unknown>) => { v.totalBytes = 1.5; }],
+    ['negative bytes', (v: Record<string, unknown>) => { v.downloadedBytes = -1; }],
+    ['overflow progress', (v: Record<string, unknown>) => { v.downloadedBytes = 2; v.totalBytes = 1; }],
+    ['unknown install state', (v: Record<string, unknown>) => { v.installState = 'complete'; }],
+    ['idle active version', (v: Record<string, unknown>) => { v.activeVersion = '2.0.1'; }],
+    ['unsigned action', (v: Record<string, unknown>) => { (v.release as UpdateStatus['release'])!.assetsReady = false; }],
+    ['mismatched action', (v: Record<string, unknown>) => { (v.action as UpdateStatus['action'])!.tag = 'v2.0.2'; }],
+    ['wrong download size', (v: Record<string, unknown>) => { (v.action as UpdateStatus['action'])!.size += 1; }],
+    ['unsafe release link', (v: Record<string, unknown>) => { (v.release as UpdateStatus['release'])!.url = 'javascript:alert(1)'; }],
+    ['missing digest', (v: Record<string, unknown>) => { (v.release as UpdateStatus['release'])!.installer!.sha256 = ''; }],
+    ['unsupported installation', (v: Record<string, unknown>) => { (v.checkout as UpdateStatus['checkout']).updateSupported = false; }],
+    ['invented outcome', (v: Record<string, unknown>) => { v.lastOutcome = { result: 'installed' }; }],
+  ])('refuses %s', async (_name, change) => {
+    const value = structuredClone(installerStatus()) as unknown as Record<string, unknown>; change(value);
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value)));
     await expect(getUpdateStatus()).rejects.toThrow('invalid');
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({}, 503)));
+  });
+  it('starts only an explicit confirmed installation request', async () => {
+    const fetch = vi.fn(async () => reply(accepted, 202)); vi.stubGlobal('fetch', fetch);
+    await expect(installApplicationUpdate()).resolves.toEqual(accepted);
+    expect(fetch).toHaveBeenCalledWith('/api/updates/install', { method: 'POST', headers: { 'X-WG-Update': 'install' } });
+  });
+  it.each([{ ...accepted, accepted: false }, { ...accepted, activeVersion: '2.0.2' }, { ...accepted, downloadedBytes: -1 }, { accepted: true, tag: 'v2.0.1' }])('rejects incomplete accepted response %#', async (value) => {
+    vi.stubGlobal('fetch', vi.fn(async () => reply(value, 202))); await expect(installApplicationUpdate()).rejects.toThrow('invalid');
+  });
+  it('reports the server refusal and the HTTP fallback', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(reply({ error: { message: 'An update restart is pending.' } }, 409))
+      .mockResolvedValueOnce(new Response('offline', { status: 503 })));
+    await expect(installApplicationUpdate()).rejects.toThrow('restart is pending');
     await expect(getUpdateStatus()).rejects.toThrow('(503)');
   });
-});
-
-describe('the beta channel', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('accepts a pre-release version and its tag', async () => {
-    const beta = {
-      ...payload,
-      channel: 'beta',
-      availability: 'available',
-      release: {
-        version: '2.1.0-beta.1',
-        tag: 'v2.1.0-beta.1',
-        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0-beta.1',
-        publishedAt: '2026-08-22T12:00:00Z',
-        assetsReady: true,
-      },
-    };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(beta)));
-
-    await expect(getUpdateStatus()).resolves.toEqual(beta);
-  });
-
-  it('accepts a beta install running ahead of the latest stable release', async () => {
-    const ahead = { ...payload, availability: 'ahead', runningVersion: '2.1.0-beta.1' };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(ahead)));
-
-    await expect(getUpdateStatus()).resolves.toEqual(ahead);
-  });
-
-  it('reads the stored channel', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ channel: 'beta' }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(getUpdateChannel()).resolves.toBe('beta');
-    expect(fetchMock).toHaveBeenCalledWith('/api/updates/channel');
-  });
-
-  it('writes the chosen channel and returns what the server stored', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ channel: 'beta' }));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(setUpdateChannel('beta')).resolves.toBe('beta');
-    expect(fetchMock).toHaveBeenCalledWith('/api/updates/channel', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{"channel":"beta"}',
-    });
-  });
-
-  it('surfaces the server-supplied reason a channel change was refused', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ detail: 'Unsupported update channel' }, 400)));
-
-    await expect(setUpdateChannel('beta')).rejects.toThrow('Unsupported update channel');
-  });
-
-  it.each([
-    ['an unknown channel', { channel: 'nightly' }],
-    ['no channel at all', {}],
-  ] as [string, unknown][])('rejects a channel response naming %s', async (_label, malformed) => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(malformed)));
-    await expect(getUpdateChannel()).rejects.toThrow('Update channel response is invalid');
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(malformed)));
-    await expect(setUpdateChannel('beta')).rejects.toThrow('Update channel response is invalid');
-  });
-});
-
-describe('installApplicationUpdate', () => {
-  afterEach(() => vi.unstubAllGlobals());
-
-  it('requests installation with a non-simple confirmation header', async () => {
-    const fetchMock = vi.fn(async () => jsonResponse({ accepted: true, tag: 'v2.0.1' }, 202));
-    vi.stubGlobal('fetch', fetchMock);
-
-    await expect(installApplicationUpdate()).resolves.toEqual({ accepted: true, tag: 'v2.0.1' });
-    expect(fetchMock).toHaveBeenCalledWith('/api/updates/install', {
-      method: 'POST',
-      headers: { 'X-WG-Update': 'install' },
-    });
-  });
-
-  it('accepts complete bundle installation progress from the same mutation endpoint', async () => {
-    const bundle = {
-      accepted: true,
-      version: '2.0.1',
-      installState: 'downloading',
-      activeVersion: '2.0.1',
-      downloadedBytes: 1024,
-      totalBytes: 4096,
-      error: null,
-    };
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(bundle, 202)));
-
-    await expect(installApplicationUpdate()).resolves.toEqual(bundle);
-  });
-
-  it.each([
-    ['missing error field', {
-      accepted: true, version: '2.0.1', installState: 'downloading', activeVersion: '2.0.1', downloadedBytes: 1, totalBytes: 2,
-    }],
-    ['non-string error', {
-      accepted: true, version: '2.0.1', installState: 'failed', activeVersion: '2.0.1', downloadedBytes: 1, totalBytes: 2, error: 5,
-    }],
-    ['NaN progress', {
-      accepted: true, version: '2.0.1', installState: 'downloading', activeVersion: '2.0.1', downloadedBytes: Number.NaN, totalBytes: 2, error: null,
-    }],
-    ['negative total', {
-      accepted: true, version: '2.0.1', installState: 'downloading', activeVersion: '2.0.1', downloadedBytes: 1, totalBytes: -1, error: null,
-    }],
-    ['a different active version', {
-      accepted: true, version: '2.0.1', installState: 'downloading', activeVersion: '2.0.0', downloadedBytes: 1, totalBytes: 2, error: null,
-    }],
-  ] as [string, unknown][])('rejects bundle install progress with %s', async (_label, malformed) => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(malformed, 202)));
-
-    await expect(installApplicationUpdate()).rejects.toThrow('Update installation response is invalid');
+  it('saves the server channel and reports refusal', async () => {
+    const fetch = vi.fn().mockResolvedValueOnce(reply({ channel: 'beta' })).mockResolvedValueOnce(reply({ channel: 'beta' }))
+      .mockResolvedValueOnce(reply({ detail: 'A download is active.' }, 409)); vi.stubGlobal('fetch', fetch);
+    await expect(getUpdateChannel()).resolves.toBe('beta'); await expect(setUpdateChannel('beta')).resolves.toBe('beta');
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/updates/channel', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: '{"channel":"beta"}' });
+    await expect(setUpdateChannel('stable')).rejects.toThrow('download is active');
   });
 });

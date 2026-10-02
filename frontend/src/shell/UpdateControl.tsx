@@ -1,831 +1,205 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import {
-  getUpdateChannel,
-  getUpdateDiagnostics,
-  getUpdateStatus,
-  installApplicationUpdate,
-  retrySuppressedUpdate,
-  setUpdateChannel,
-  type UpdateBuildIdentity,
-  type UpdateChannel,
-  type UpdateDiagnosticLogs,
-  type UpdateOutcome,
-  type UpdateStatus,
-} from '../api/updates';
+import { getUpdateChannel, getUpdateStatus, installApplicationUpdate, setUpdateChannel,
+  type UpdateChannel, type UpdateInstallAccepted, type UpdateStatus } from '../api/updates';
 import { Icon } from './icons';
 import { focusableSelector, useModalDialogFocus } from './dialogFocus';
 
 export const UPDATE_QUERY_KEY = ['application-update'] as const;
-const UPDATE_CLIENT_STALE_MS = 60_000;
-const UPDATE_PROGRESS_POLL_MS = 400;
-
-type BundleInstallProgress = Pick<UpdateStatus, 'installState' | 'downloadedBytes' | 'totalBytes' | 'error'>;
-
+const active = (state: string | undefined) => state === 'downloading' || state === 'verifying';
+const megabytes = (value: number) => `${(value / 1_000_000).toFixed(1)} MB`;
 export interface UpdateSnapshot {
-  data: UpdateStatus | undefined;
-  error: Error | null;
-  isPending: boolean;
+  data: UpdateStatus | undefined; error: Error | null; isPending: boolean;
   refresh: () => Promise<UpdateStatus>;
 }
-
 export function useUpdateStatus(): UpdateSnapshot {
   const client = useQueryClient();
   const query = useQuery({
-    queryKey: UPDATE_QUERY_KEY,
-    queryFn: () => getUpdateStatus(),
-    retry: false,
-    staleTime: UPDATE_CLIENT_STALE_MS,
-    refetchOnWindowFocus: true,
+    queryKey: UPDATE_QUERY_KEY, queryFn: () => getUpdateStatus(), retry: false, staleTime: 60_000,
+    refetchInterval: (value) => value.state.data?.checking || active(value.state.data?.installState) ? 400 : 60_000,
   });
   const refresh = useCallback(async () => {
-    const status = await getUpdateStatus(true);
-    client.setQueryData(UPDATE_QUERY_KEY, status);
-    return status;
+    const result = await getUpdateStatus(true);
+    client.setQueryData(UPDATE_QUERY_KEY, result);
+    return result;
   }, [client]);
-  return {
-    data: query.data,
-    error: query.error instanceof Error ? query.error : null,
-    isPending: query.isPending,
-    refresh,
-  };
+  return { data: query.data, error: query.error instanceof Error ? query.error : null, isPending: query.isPending, refresh };
 }
-
-export type UpdatePresentation =
-  | 'available' | 'held' | 'current' | 'development' | 'checking' | 'publishing' | 'reload' | 'failed';
-
 export interface UpdatePresentationResult {
-  state: UpdatePresentation;
-  /** The verdict on its own, for the dialog's status row. */
-  label: string;
-  wide: string;
-  compact: string;
-  announcement: string;
-  /** Why a check failed, or why the standing verdict is older than it looks. */
-  detail: string | null;
-  /** The verdict stands, but the most recent check did not succeed. */
-  stale: boolean;
+  state: 'available' | 'current' | 'development' | 'checking' | 'publishing' | 'reload' | 'failed';
+  label: string; wide: string; compact: string; announcement: string; detail: string | null; stale: boolean;
 }
-
-/**
- * What the top bar says about the update check, in one place both it and the
- * dialog read.
- *
- * The order below is the priority order, and its shape is deliberate: every
- * branch that can be reached with a verdict in hand reports that verdict, and
- * only the branches with nothing to report fall through to "check failed" or
- * "checking". There is no terminal "unknown" -- a permanent one is what a
- * packaged install showed for its entire life when the status payload was
- * refused client-side, and a label a user can never resolve is worse than the
- * failure it is hiding. A failed check says so, and carries its reason.
- */
-export function updatePresentation(
-  snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>,
-): UpdatePresentationResult {
-  const version = __WG2_VERSION__;
+export function updatePresentation(snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>): UpdatePresentationResult {
   const data = snapshot.data;
-  const reason = snapshot.error?.message ?? data?.lastError ?? null;
-  // A stale verdict is still the truth of the last successful check; the failure
-  // rides along as detail rather than replacing the answer.
+  const version = __WG2_VERSION__;
   const stale = data?.freshness === 'stale';
-  const carry = (result: Omit<UpdatePresentationResult, 'detail' | 'stale'>): UpdatePresentationResult => ({
-    ...result,
-    detail: stale ? reason : null,
-    stale,
-  });
-
-  if (data && data.runningVersion !== version) {
-    return carry({
-      state: 'reload',
-      label: 'Restart pending',
-      wide: `${version} · reload`,
-      compact: 'Reload',
-      announcement: 'Waveguide Generator was updated. Reload this page.',
-    });
-  }
-  if (data?.availability === 'available' && data.suppressed) {
-    // The release exists, but it is a build that rolled back here, so it is not
-    // offered (contract §2.3). Not the amber "available": nothing is on offer.
-    const held = data.suppressed.version ?? data.release?.version;
-    return carry({
-      state: 'held',
-      label: 'Update held back',
-      wide: `${version} · update held back`,
-      compact: version,
-      announcement: `Waveguide Generator ${held ?? 'an update'} was rolled back after it did not start, so WG is not offering it again.`,
-    });
-  }
-  if (data?.availability === 'available') {
-    const latest = data.release?.version;
-    return carry({
-      state: 'available',
-      label: 'Update available',
-      wide: latest ? `${version} · update available (v${latest})` : `${version} · update available`,
-      compact: 'Update',
-      announcement: `Waveguide Generator ${latest ?? 'a newer version'} is available.`,
-    });
-  }
-  if (data?.availability === 'incomplete') {
-    return carry({
-      state: 'publishing',
-      label: 'Update preparing',
-      wide: `${version} · update preparing`,
-      compact: 'Update',
-      announcement: 'A Waveguide Generator update is being published.',
-    });
-  }
-  if (data?.checkout.kind === 'development' || data?.checkout.kind === 'detached') {
-    return carry({
-      state: 'development',
-      label: 'Development build',
-      wide: `${version} · development build`,
-      compact: 'Dev',
-      announcement: 'This is a development build of Waveguide Generator.',
-    });
-  }
-  if (data?.availability === 'ahead') {
-    // Running a beta after switching back to Stable. The visual state stays
-    // 'current' on purpose -- being in front of your channel is not a problem
-    // to flag -- but the label is not "up to date", because the running version
-    // is not the one the channel offers.
-    return carry({
-      state: 'current',
-      label: 'Ahead of stable',
-      wide: `${version} · ahead of stable`,
-      compact: version,
-      announcement: `Waveguide Generator ${version} is newer than the latest stable release.`,
-    });
-  }
-  if (data?.availability === 'current') {
-    return carry({
-      state: 'current',
-      label: 'Up to date',
-      wide: `${version} · up to date`,
-      compact: version,
-      announcement: 'Waveguide Generator is up to date.',
-    });
-  }
-  // No verdict. Either the check failed, or it has not finished yet -- and those
-  // are different things to say, so they are said differently.
-  if (snapshot.isPending && !data) {
-    return {
-      state: 'checking',
-      label: 'Checking…',
-      wide: `${version} · checking…`,
-      compact: version,
-      announcement: 'Checking for Waveguide Generator updates.',
-      detail: null,
-      stale: false,
-    };
-  }
-  const failure = reason ?? 'The last update check did not return a result.';
-  return {
-    state: 'failed',
-    label: 'Check failed',
-    wide: `${version} · check failed`,
-    compact: version,
-    announcement: `Waveguide Generator could not check for updates. ${failure}`,
-    detail: failure,
-    stale: false,
-  };
+  const reason = snapshot.error?.message ?? data?.lastError ?? null;
+  let state: UpdatePresentationResult['state'] = 'current';
+  let label = 'Up to date';
+  if (data && data.runningVersion !== version) { state = 'reload'; label = 'Reload WG'; }
+  else if (data?.availability === 'available') {
+    state = 'available';
+    const size = data.action?.size ?? data.release?.installer?.size;
+    label = `v${data.release?.version} available${size === undefined ? '' : ` (${megabytes(size)})`}`;
+  } else if (data?.availability === 'incomplete') { state = 'publishing'; label = 'Update preparing'; }
+  else if (data?.availability === 'ahead') label = `Ahead of ${data.channel}`;
+  else if (data?.availability === 'current') label = 'Up to date';
+  else if (data?.checking || snapshot.isPending) { state = 'checking'; label = 'Checking…'; }
+  else if (data?.checkout.kind === 'source') { state = 'development'; label = 'Development build'; }
+  else { state = 'failed'; label = 'Check failed'; }
+  const detail = state === 'failed' ? reason ?? 'WG has not completed an update check.' : stale ? reason : null;
+  const wide = `${version} · ${label}`;
+  return { state, label, wide, compact: state === 'available' ? 'Update' : version,
+    announcement: detail ? `${wide}. ${detail}` : wide, detail, stale };
 }
-
 export function UpdateButton({ snapshot, open, onOpen, buttonRef }: {
-  snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>;
-  open: boolean;
-  onOpen: () => void;
+  snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>; open: boolean; onOpen: () => void;
   buttonRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const presentation = updatePresentation(snapshot);
   return <>
-    <button
-      ref={buttonRef}
-      type="button"
-      className={`update-indicator ${presentation.state}${presentation.stale ? ' stale' : ''}`}
-      aria-haspopup="dialog"
-      aria-expanded={open}
-      aria-label={`${presentation.wide}. Open application update details.`}
-      // The reason on hover, so a failed check is never a dead end in the bar.
-      title={presentation.detail ?? undefined}
-      onClick={onOpen}
-    >
-      <i className="update-dot" aria-hidden="true" />
-      <span className="update-wide">{presentation.wide}</span>
+    <button ref={buttonRef} type="button" className={`update-indicator ${presentation.state}${presentation.stale ? ' stale' : ''}`}
+      aria-haspopup="dialog" aria-expanded={open} aria-label={`${presentation.wide}. Open application update details.`}
+      title={presentation.detail ?? undefined} onClick={onOpen}>
+      <i className="update-dot" aria-hidden="true"/><span className="update-wide">{presentation.wide}</span>
       <span className="update-compact">{presentation.compact}</span>
     </button>
     <span className="sr-only" role="status" aria-atomic="true">{presentation.announcement}</span>
   </>;
 }
 
-function checkedAt(value: string | null | undefined): { short: string; full: string } {
-  if (!value) return { short: 'Never checked', full: 'WG has not completed an update check yet.' };
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return { short: value, full: value };
-  return {
-    short: `Checked ${parsed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
-    full: `Last checked ${parsed.toLocaleString()}`,
-  };
-}
-
-function megabytes(value: number): string {
-  return (value / 1_000_000).toFixed(1);
-}
-
-function Fact({ label, value }: { label: string; value: ReactNode }) {
-  return <div><dt>{label}</dt><dd>{value}</dd></div>;
-}
-
-const CHANNEL_NOTE: Record<UpdateChannel, string> = {
-  beta: 'Beta builds are published to test packaging and installation on every platform before a stable version number is committed to them. Expect rough edges — and report them.',
-  stable: 'Only finished releases. This is the right choice unless you want to help test a release before it ships.',
-};
-
-/**
- * Stable or beta, where the version and its verdict already are.
- *
- * It used to sit in Settings, because it is a standing preference rather than a
- * decision about one release. It is still exactly that -- and this is where
- * someone forms the intent: they clicked the version to see what WG would
- * install, and "which releases am I offered?" is the same question. Switching
- * here re-checks immediately, so the answer above changes while it is on
- * screen; from Settings that took a trip back to the top bar to see.
- *
- * The value stays on the server. A browser-scoped copy would be back on stable
- * the first time the update it asked for actually landed, which is the one
- * moment the preference exists to survive.
- */
-function UpdateChannelChoice({ status, disabled }: {
-  status: UpdateStatus | undefined;
-  disabled: boolean;
+export function UpdateDialog({ open, snapshot, onRefresh, onClose, activeJobs = 0 }: {
+  open: boolean; snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>;
+  onRefresh: () => Promise<UpdateStatus>; onClose: () => void; activeJobs?: number;
 }) {
   const client = useQueryClient();
-  const [choice, setChoice] = useState<UpdateChannel>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const generation = useRef(0);
-  const confirmed = useRef<UpdateChannel>('stable');
-  const reported = status?.channel;
-
-  // Read once per opening, from the status payload the dialog already has. Not
-  // continuously: after the user presses a button, their choice is what the
-  // buttons show until the write settles, and a refetch that is still carrying
-  // the previous payload must not flip the pressed state back under the
-  // pointer. This component unmounts with the dialog, so the next opening reads
-  // the payload again.
-  useEffect(() => {
-    if (!reported || choice !== undefined) return;
-    confirmed.current = reported;
-    setChoice(reported);
-  }, [choice, reported]);
-
-  useEffect(() => {
-    // Only when the status has no answer -- a failed check must still leave a
-    // usable selector, and that is the state in which it matters most.
-    if (reported || choice) return;
-    const request = ++generation.current;
-    void getUpdateChannel().then(
-      (value) => {
-        if (request !== generation.current) return;
-        confirmed.current = value;
-        setChoice(value);
-      },
-      (reason: unknown) => {
-        if (request === generation.current) setError(reason instanceof Error ? reason.message : String(reason));
-      },
-    );
-  }, [choice, reported]);
-
-  const choose = async (next: UpdateChannel) => {
-    if (next === choice || busy) return;
-    // Optimistic, and rolled back on refusal, so the buttons never disagree
-    // with what the server will actually check.
-    const request = ++generation.current;
-    setChoice(next); setBusy(true); setError(undefined);
-    try {
-      const saved = await setUpdateChannel(next);
-      if (request !== generation.current) return;
-      confirmed.current = saved;
-      setChoice(saved);
-      // The standing verdict answers the other channel's question. Dropping it
-      // makes this dialog re-check while it is still open, which is the point
-      // of the selector being here.
-      await client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
-    } catch (reason) {
-      if (request !== generation.current) return;
-      setChoice(confirmed.current);
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      if (request === generation.current) setBusy(false);
-    }
-  };
-
-  return <section className="update-channel" aria-labelledby="update-channel-title">
-    <h3 id="update-channel-title">Update channel</h3>
-    <div className="settings-theme-options" role="group" aria-label="Update channel">
-      <button
-        className={choice === 'stable' ? 'on' : ''}
-        aria-pressed={choice === 'stable'}
-        disabled={choice === undefined || busy || disabled}
-        onClick={() => void choose('stable')}
-      >Stable</button>
-      <button
-        className={choice === 'beta' ? 'on' : ''}
-        aria-pressed={choice === 'beta'}
-        disabled={choice === undefined || busy || disabled}
-        onClick={() => void choose('beta')}
-      >Beta</button>
-    </div>
-    <p className="cad-settings-note">{CHANNEL_NOTE[choice ?? 'stable']}</p>
-    <p className="cad-settings-note">Stored with WG’s application data, not in this browser, so it survives the updates it controls. Switching back to <b>Stable</b> while running a beta leaves WG ahead of the latest release; it stays on that beta until the release catches up.</p>
-    {error && <p className="workspace-settings-error" role="status">{error}</p>}
-  </section>;
-}
-
-/** The build an outcome is about: the one that rolled back, or the one installed. */
-function outcomeBuild(outcome: UpdateOutcome): UpdateBuildIdentity | null {
-  return outcome.outcome === 'rolled-back' && outcome.operation === 'rollback' ? outcome.from : outcome.to;
-}
-
-/** The last outcome in a few words, for the dialog's fact list. */
-export function outcomeFact(outcome: UpdateOutcome): string {
-  const version = outcomeBuild(outcome)?.version ?? 'The update';
-  if (outcome.outcome === 'installed') return `${version} installed`;
-  if (outcome.outcome === 'rolled-back') return `${version} rolled back`;
-  if (outcome.outcome === 'aborted') return `${version} not installed`;
-  return 'Not confirmed';
-}
-
-function withDetail(sentence: string, detail: string): string {
-  return detail ? `${sentence} ${detail}` : sentence;
-}
-
-/** Why the last update did not simply install (contract §2.2 "Readers"). */
-function outcomeExplanation(outcome: UpdateOutcome): string {
-  const version = outcomeBuild(outcome)?.version ?? 'the update';
-  if (outcome.outcome === 'rolled-back') {
-    return withDetail(`WG rolled back ${version} and restored the version before it.`, outcome.detail);
-  }
-  if (outcome.outcome === 'aborted') {
-    return withDetail(`The update to ${version} stopped before anything was replaced.`, outcome.detail);
-  }
-  return withDetail('WG could not confirm how the last update ended.', outcome.detail);
-}
-
-/**
- * What "Copy update diagnostics" copies: the update state as the server
- * reported it, with the last outcome from the completion record, and the
- * updater's own logs (`updateLogs`, bounded and scrubbed by the server, or the
- * reason they could not be read). The install command is left out because it
- * names a folder on this machine; the server already leaves the record's
- * staging folders out.
- */
-export function updateDiagnostics(
-  status: UpdateStatus | undefined,
-  logs: UpdateDiagnosticLogs | { error: string } | null = null,
-): string {
-  const checkout = status?.checkout;
-  const release = status?.release;
-  return JSON.stringify({
-    tabVersion: __WG2_VERSION__,
-    runningVersion: status?.runningVersion ?? null,
-    channel: status?.channel ?? null,
-    availability: status?.availability ?? null,
-    freshness: status?.freshness ?? null,
-    checkedAt: status?.checkedAt ?? null,
-    lastError: status?.lastError ?? null,
-    checkout: checkout ? {
-      kind: checkout.kind,
-      updateSupported: checkout.updateSupported,
-      reason: checkout.reason,
-      ...(checkout.kind === 'bundle'
-        ? { installedVersion: checkout.installedVersion, runtimeId: checkout.runtimeId }
-        : { head: checkout.head }),
-    } : null,
-    release: release ? {
-      version: release.version,
-      assetsReady: release.assetsReady,
-      ...('runtimeId' in release ? { runtimeId: release.runtimeId, commit: release.commit ?? null } : {}),
-    } : null,
-    canInstall: status?.canInstall ?? null,
-    installState: status?.installState ?? null,
-    activeVersion: status?.activeVersion ?? null,
-    error: status?.error ?? null,
-    lastOutcome: status?.lastOutcome ?? null,
-    suppressed: status?.suppressed ?? null,
-    repairRequired: status?.repairRequired ?? null,
-    wglink: status?.wglink ?? null,
-    updateLogs: logs,
-  }, null, 2);
-}
-
-/**
- * Put text that is still being fetched on the clipboard, from inside the click.
- *
- * WebKit -- the macOS desktop window -- lets a click write the clipboard only
- * from within the click, and the logs arrive after it. A `ClipboardItem` can
- * hold the pending text, so the write itself happens in the click. Where that
- * is unavailable or refused, the text is awaited and written the usual way.
- */
-async function writePendingText(text: Promise<string>): Promise<void> {
-  const clipboard = navigator.clipboard;
-  if (typeof ClipboardItem !== 'undefined' && typeof clipboard.write === 'function') {
-    try {
-      const blob = text.then((value) => new Blob([value], { type: 'text/plain' }));
-      await clipboard.write([new ClipboardItem({ 'text/plain': blob })]);
-      return;
-    } catch {
-      // Fall back to the plain write below.
-    }
-  }
-  await clipboard.writeText(await text);
-}
-
-export function UpdateDialog({ open, snapshot, onRefresh, onClose }: {
-  open: boolean;
-  snapshot: Pick<UpdateSnapshot, 'data' | 'error' | 'isPending'>;
-  onRefresh: () => Promise<UpdateStatus>;
-  onClose: () => void;
-}) {
-  const client = useQueryClient();
-  const operationGeneration = useRef(0);
-  const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<string>();
-  const [bundleProgress, setBundleProgress] = useState<BundleInstallProgress>();
   const data = snapshot.data;
   const presentation = updatePresentation(snapshot);
-  const mismatch = presentation.state === 'reload';
-  const bundleAction = data?.action?.kind === 'bundle_download' ? data.action : undefined;
-  const commandAction = data?.action?.kind === 'copy_command' ? data.action : undefined;
-  const installProgress = bundleProgress ?? (data ? {
-    installState: data.installState,
-    downloadedBytes: data.downloadedBytes,
-    totalBytes: data.totalBytes,
-    error: data.error,
-  } : undefined);
-  const installActive = installProgress?.installState === 'downloading' || installProgress?.installState === 'verifying';
-  // The offered release is a build that rolled back here (contract §2.3).
-  const held = !mismatch && data?.availability === 'available' ? data.suppressed ?? null : null;
-  const heldVersion = held ? held.version ?? data?.release?.version ?? 'this build' : undefined;
-  const lastOutcome = data?.lastOutcome ?? null;
-  // A rollback that did not finish (the updater review §3.3 "Honest outcomes").
-  const repair = !mismatch ? data?.repairRequired ?? null : null;
-  // WGLink waits for Fusion to close before WG replaces it (the review §3.8).
-  const wglinkPending = !mismatch && data?.wglink?.verdict === 'pending';
-  const wglinkNote = wglinkPending
-    ? `${lastOutcome?.outcome === 'installed' ? 'Waveguide Generator updated successfully. ' : ''}Close Fusion to finish updating WGLink. WG will confirm when it is ready to reopen.`
-    : null;
-
+  const generation = useRef(0);
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<string>();
+  const [choice, setChoice] = useState<UpdateChannel>();
+  const [confirmRestart, setConfirmRestart] = useState(false);
+  const [progress, setProgress] = useState<UpdateInstallAccepted>();
+  const state = progress?.installState ?? data?.installState;
+  const installing = active(state) || state === 'ready';
   const close = useCallback(() => {
-    operationGeneration.current += 1;
-    setBusy(false);
-    setFeedback(undefined);
-    setBundleProgress(undefined);
-    onClose();
+    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); onClose();
   }, [onClose]);
-
-  // The action a user came here for, not whichever control happens to be first
-  // in the DOM.
-  const initialFocus = useCallback((node: HTMLDivElement) => (
-    node.querySelector<HTMLElement>('[data-autofocus]') ?? node.querySelector<HTMLElement>(focusableSelector)
-  ), []);
+  const initialFocus = useCallback((node: HTMLDivElement) => node.querySelector<HTMLElement>('[data-autofocus]')
+    ?? node.querySelector<HTMLElement>(focusableSelector), []);
   const dialog = useModalDialogFocus<HTMLDivElement>({ open, onClose: close, initialFocus });
-
   useEffect(() => {
     if (open) return;
-    operationGeneration.current += 1;
-    setBusy(false);
-    setFeedback(undefined);
-    setBundleProgress(undefined);
+    generation.current += 1; setBusy(false); setFeedback(undefined); setConfirmRestart(false); setProgress(undefined); setChoice(undefined);
   }, [open]);
-
   useEffect(() => {
-    if (!open || !data || data.checkout.kind !== 'bundle') return;
-    setBundleProgress({
-      installState: data.installState,
-      downloadedBytes: data.downloadedBytes,
-      totalBytes: data.totalBytes,
-      error: data.error,
-    });
-  }, [data, open]);
-
-  useEffect(() => {
-    if (!open || !installActive) return;
+    if (!open || choice !== undefined) return;
+    if (data?.channel) { setChoice(data.channel); return; }
     const controller = new AbortController();
-    let timer: number | undefined;
-    const schedule = () => {
-      timer = window.setTimeout(() => void poll(), UPDATE_PROGRESS_POLL_MS);
-    };
+    void getUpdateChannel(controller.signal).then((next) => { if (!controller.signal.aborted) setChoice(next); }).catch((error: unknown) => {
+      if (!controller.signal.aborted) setFeedback(error instanceof Error ? error.message : String(error));
+    });
+    return () => controller.abort();
+  }, [open, data?.channel, choice]);
+  useEffect(() => {
+    if (!open || !active(state)) return;
+    const controller = new AbortController();
+    let timer: number;
     const poll = async () => {
       try {
-        const status = await getUpdateStatus(false, controller.signal);
+        const result = await getUpdateStatus(false, controller.signal);
         if (controller.signal.aborted) return;
-        client.setQueryData(UPDATE_QUERY_KEY, status);
-        setBundleProgress({
-          installState: status.installState,
-          downloadedBytes: status.downloadedBytes,
-          totalBytes: status.totalBytes,
-          error: status.error,
-        });
-        setFeedback((current) => current?.startsWith('Could not read update progress:') ? undefined : current);
-        if (status.installState === 'downloading' || status.installState === 'verifying') schedule();
-      } catch (reason) {
+        client.setQueryData(UPDATE_QUERY_KEY, result);
+        setProgress({ accepted: true, version: result.activeVersion ?? '', activeVersion: result.activeVersion ?? '',
+          installState: result.installState, downloadedBytes: result.downloadedBytes, totalBytes: result.totalBytes, error: result.error });
+        if (active(result.installState)) timer = window.setTimeout(() => void poll(), 400);
+      } catch (error) {
         if (controller.signal.aborted) return;
-        setFeedback(`Could not read update progress: ${reason instanceof Error ? reason.message : String(reason)}`);
-        schedule();
+        setFeedback(`Could not read update progress: ${error instanceof Error ? error.message : String(error)}`);
+        timer = window.setTimeout(() => void poll(), 400);
       }
     };
-    schedule();
-    return () => {
-      controller.abort();
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [client, installActive, open]);
-
+    timer = window.setTimeout(() => void poll(), 400);
+    return () => { controller.abort(); window.clearTimeout(timer); };
+  }, [client, open, state]);
   if (!open) return null;
 
-  const refresh = async () => {
-    const operation = ++operationGeneration.current;
-    setBusy(true);
-    setFeedback(undefined);
-    try {
-      const result = await onRefresh();
-      if (operation === operationGeneration.current) setFeedback(result.lastError ? `Could not refresh: ${result.lastError}` : 'Update status refreshed.');
-    } catch (reason) {
-      if (operation === operationGeneration.current) setFeedback(`Could not refresh: ${reason instanceof Error ? reason.message : String(reason)}`);
-    } finally {
-      if (operation === operationGeneration.current) setBusy(false);
-    }
+  const perform = async (action: () => Promise<void>) => {
+    const operation = ++generation.current;
+    setBusy(true); setFeedback(undefined);
+    try { await action(); }
+    catch (error) { if (operation === generation.current) setFeedback(error instanceof Error ? error.message : String(error)); }
+    finally { if (operation === generation.current) setBusy(false); }
   };
-  const copy = async () => {
-    if (!commandAction) return;
-    const operation = ++operationGeneration.current;
-    try {
-      await navigator.clipboard.writeText(commandAction.command);
-      if (operation === operationGeneration.current) setFeedback('Update command copied. Close Waveguide Generator, then run it.');
-    } catch {
-      if (operation === operationGeneration.current) setFeedback('Clipboard access failed. Select and copy the command below.');
-    }
-  };
-  const install = async () => {
-    const operation = ++operationGeneration.current;
-    setBusy(true);
-    setFeedback(undefined);
-    try {
+  const install = () => {
+    if (activeJobs > 0 && !confirmRestart) { setConfirmRestart(true); return; }
+    const operation = generation.current + 1;
+    void perform(async () => {
       const result = await installApplicationUpdate();
-      if (operation === operationGeneration.current) {
-        if ('version' in result) {
-          setBundleProgress({
-            installState: result.installState,
-            downloadedBytes: result.downloadedBytes,
-            totalBytes: result.totalBytes,
-            error: result.error,
-          });
-        } else {
-          setFeedback(`Installing ${result.tag}. WG will close and restart.`);
-        }
-      }
-    } catch (reason) {
-      if (operation === operationGeneration.current) setFeedback(`Could not start the update: ${reason instanceof Error ? reason.message : String(reason)}`);
-    } finally {
-      if (operation === operationGeneration.current) setBusy(false);
-    }
+      if (operation === generation.current) { setProgress(result); setConfirmRestart(false); }
+    });
   };
-
-  const retry = async () => {
-    if (!held) return;
-    const operation = ++operationGeneration.current;
-    setBusy(true);
-    setFeedback(undefined);
-    try {
-      await retrySuppressedUpdate(held);
-      // The suppression is applied when the status is read, so the next read
-      // offers the build again with no new check of GitHub.
+  const choose = (next: UpdateChannel) => {
+    const operation = generation.current + 1;
+    void perform(async () => {
+      const saved = await setUpdateChannel(next);
+      if (operation !== generation.current) return;
+      setChoice(saved); setConfirmRestart(false); setProgress(undefined);
       await client.invalidateQueries({ queryKey: UPDATE_QUERY_KEY });
-      if (operation === operationGeneration.current) setFeedback(`WG offers ${heldVersion} again. Install it when you are ready.`);
-    } catch (reason) {
-      if (operation === operationGeneration.current) setFeedback(`Could not retry ${heldVersion}: ${reason instanceof Error ? reason.message : String(reason)}`);
-    } finally {
-      if (operation === operationGeneration.current) setBusy(false);
-    }
+    });
   };
-  const copyDiagnostics = async () => {
-    const operation = ++operationGeneration.current;
-    // The logs are read for the copy alone, not whenever the dialog opens. A
-    // failure to read them still copies the rest, with the reason.
-    const text = getUpdateDiagnostics().then(
-      (logs) => updateDiagnostics(data, logs),
-      (reason: unknown) => updateDiagnostics(data, {
-        error: reason instanceof Error ? reason.message : String(reason),
-      }),
-    );
-    try {
-      await writePendingText(text);
-      if (operation === operationGeneration.current) setFeedback('Update diagnostics copied.');
-    } catch {
-      if (operation === operationGeneration.current) setFeedback('Clipboard access failed, so the update diagnostics were not copied.');
-    }
-  };
-
-  const latest = data?.release?.version;
-  const checked = checkedAt(data?.checkedAt);
-  const channelName = data?.channel === 'beta' ? 'Beta' : 'Stable';
-  const installable = !mismatch && data?.availability === 'available' && data.canInstall === true;
-  const totalBytes = installProgress?.totalBytes || bundleAction?.downloadBytes || 0;
-  const downloadedBytes = installProgress?.downloadedBytes ?? 0;
-  const percent = totalBytes > 0
-    ? Math.max(0, Math.min(100, Math.round((downloadedBytes / totalBytes) * 100)))
-    : 0;
-
-  let title = `Waveguide Generator ${__WG2_VERSION__}`;
-  let summary = 'WG checks GitHub for a newer release and can install it for you.';
-  if (mismatch) {
-    title = 'Waveguide Generator was updated';
-    summary = `This tab is ${__WG2_VERSION__}; the running application is ${data?.runningVersion}. Reload before continuing.`;
-  } else if (repair) {
-    title = 'Rollback failed, repair required';
-    summary = 'WG began restoring the version before the last update and could not finish, so this installation may be only partly restored.';
-  } else if (held) {
-    title = `Waveguide Generator ${heldVersion} is held back`;
-    summary = `WG rolled back ${heldVersion} after it did not start, so it will not install that build again on its own.`;
-  } else if (presentation.state === 'available' && latest) {
-    title = `Waveguide Generator ${latest} is available`;
-    summary = bundleAction
-      ? `WG downloads ${megabytes(bundleAction.downloadBytes)} MB, verifies it, then restarts to finish.`
-      : data?.canInstall
-        ? 'WG can run the verified installer for you, or you can run the command yourself.'
-        : 'Close Waveguide Generator before running the updater.';
-  } else if (presentation.state === 'publishing') {
-    title = 'An update is being published';
-    summary = 'The release exists, but its verified interface files are not ready yet. WG will check again shortly.';
-  } else if (presentation.state === 'failed') {
-    // The reason belongs to the alert below, once. Repeating it here left the
-    // headline saying nothing about what the failure means for the user.
-    title = 'Update check failed';
-    summary = `WG cannot tell whether a newer release exists. Version ${__WG2_VERSION__} keeps running normally.`;
-  } else if (presentation.state === 'development') {
-    summary = 'This is a development checkout, so WG will not install a release over it.';
-  } else if (presentation.state === 'checking') {
-    summary = 'Checking GitHub for a newer release…';
-  } else if (data?.availability === 'ahead') {
-    // Reached by switching back to Stable while running a beta, which is the
-    // whole reason no new availability state was added for that: WG is not out
-    // of date, it is in front of the channel it now follows.
-    summary = `This build is newer than the latest ${data.channel === 'beta' ? 'release' : 'stable release'} on the ${channelName.toLowerCase()} channel.`;
-  } else if (data?.availability === 'current') {
-    summary = `You are running the latest ${data.channel === 'beta' ? 'release offered on the beta channel' : 'stable release'}.`;
-  }
-
-  const primary = mismatch
-    ? { label: 'Reload WG', onClick: () => window.location.reload(), disabled: false }
-    : installable
-      ? {
-        label: installProgress?.installState === 'downloading'
-          ? 'Downloading…'
-          : installProgress?.installState === 'verifying'
-            ? 'Verifying…'
-            : installProgress?.installState === 'ready'
-              ? 'Update ready'
-              : installProgress?.installState === 'failed'
-                ? 'Try again'
-                : busy ? 'Starting…' : 'Install update',
-        onClick: () => void install(),
-        disabled: busy || installActive || installProgress?.installState === 'ready',
-      }
-      : {
-        label: busy ? 'Checking…' : 'Check again',
-        onClick: () => void refresh(),
-        disabled: busy || installActive,
-      };
+  const total = progress?.totalBytes || data?.totalBytes || data?.action?.size || 0;
+  const downloaded = progress?.downloadedBytes ?? data?.downloadedBytes ?? 0;
+  const error = progress?.error ?? data?.error;
+  const mismatch = presentation.state === 'reload';
+  const outcome = data?.lastOutcome;
+  const installable = !mismatch && data?.canInstall === true && data.action?.kind === 'full_installer';
+  const title = mismatch ? 'Waveguide Generator was updated' : data?.availability === 'available'
+    ? `Waveguide Generator ${data.release?.version} is available` : `Waveguide Generator ${__WG2_VERSION__}`;
+  const actionLabel = state === 'downloading' ? 'Downloading…' : state === 'verifying' ? 'Verifying…'
+    : state === 'ready' ? 'Restarting…' : confirmRestart ? 'Stop solves, install and restart' : 'Install and restart';
 
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}>
-    <div ref={dialog} className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-busy={busy || installActive}>
-      <header>
-        <div>
-          <h2 id="update-dialog-title">{title}</h2>
-          <p>{summary}</p>
-        </div>
-        <button className="dialog-close" aria-label="Close update details" onClick={close}><Icon name="close"/></button>
-      </header>
-
+    <div ref={dialog} className="update-dialog" role="dialog" aria-modal="true" aria-labelledby="update-dialog-title" aria-busy={busy || installing}>
+      <header><div><h2 id="update-dialog-title">{title}</h2><p>{mismatch
+        ? 'Reload this page before continuing.' : 'WG checks for updates automatically. Downloads start only when you choose to install.'}</p></div>
+        <button className="dialog-close" aria-label="Close update details" onClick={close}><Icon name="close"/></button></header>
       <div className="update-dialog-body">
-        <p className={`update-state ${presentation.state}`}>
-          <i className="update-dot" aria-hidden="true"/>
-          <b>{presentation.label}</b>
-          <em title={checked.full}>{checked.short}</em>
-        </p>
-
-        <dl className="update-facts">
-          <Fact label="Installed" value={data?.runningVersion ?? __WG2_VERSION__}/>
-          <Fact label="Latest" value={latest ?? (presentation.state === 'failed' ? 'Unknown' : '—')}/>
-          <Fact label="Channel" value={channelName}/>
-          {bundleAction && <Fact label="Download" value={`${megabytes(bundleAction.downloadBytes)} MB`}/>}
-          {lastOutcome && <Fact label="Last update" value={outcomeFact(lastOutcome)}/>}
-        </dl>
-
-        {/* Not while an install is downloading or verifying: the bytes on disk
-            were resolved from the channel this check answered. */}
-        <UpdateChannelChoice status={data} disabled={installActive}/>
-
-        {repair && <p className="update-note error" role="alert">
-          <b>Rollback failed, repair required</b>
-          {withDetail('Review update.log in the application data log directory before changing the installation.', repair.detail)}
-        </p>}
-
-        {presentation.state === 'failed' && <p className="update-note error" role="alert">
-          <b>WG could not complete the check</b>
-          {presentation.detail}
-        </p>}
-
-        {presentation.stale && presentation.detail && <p className="update-note warn">
-          <b>Showing the last successful result</b>
-          {presentation.detail}
-        </p>}
-
-        {data?.checkout.reason && <p className={`update-note ${data.checkout.updateSupported ? '' : 'error'}`}>
-          <b>{data.checkout.kind === 'bundle' ? 'Standalone app' : data.checkout.kind === 'development' ? 'Development checkout' : 'Checkout status'}</b>
-          {data.checkout.reason}
-        </p>}
-
-        {data?.channel === 'beta' && <p className="update-note">
-          <b>Beta channel</b>
-          WG is offered the newest release published on GitHub, pre-releases included. Betas are published per release candidate, not per commit on <code>main</code>.
-        </p>}
-
-        {held && <section className="update-install" aria-labelledby="update-held-title">
-          <h3 id="update-held-title">Why WG is not offering {heldVersion}</h3>
-          <p>{lastOutcome && lastOutcome.outcome === 'rolled-back' && outcomeBuild(lastOutcome)?.version === held.version
-            ? outcomeExplanation(lastOutcome)
-            : `WG rolled back ${heldVersion} after it did not start.`}</p>
-          <p>A build from another commit, or a later version, is still offered. Try this build again only if you expect it to start this time.</p>
-          <div className="update-install-actions">
-            <button disabled={busy} onClick={() => void retry()}>Try {heldVersion} again</button>
-          </div>
-        </section>}
-
-        {lastOutcome && lastOutcome.outcome !== 'installed' && !held && <p className="update-note warn">
-          <b>Last update</b>
-          {outcomeExplanation(lastOutcome)}
-        </p>}
-
-        {wglinkNote && <p className="update-note warn" role="status">
-          <b>WGLink</b>
-          {wglinkNote}
-        </p>}
-
-        {commandAction && <section className="update-install" aria-labelledby="update-install-title">
-          <h3 id="update-install-title">Install this update</h3>
-          <p>WG will close, run the verified installer, and restart. The {commandAction.shell} command remains available as a fallback.</p>
-          <pre tabIndex={0}>{commandAction.command}</pre>
-          <div className="update-install-actions">
-            <button disabled={busy} onClick={() => void copy()}><Icon name="copy"/>Copy update command</button>
-          </div>
-        </section>}
-
-        {bundleAction && <section className="update-install" aria-labelledby="update-install-title">
-          <h3 id="update-install-title">Install this update</h3>
-          <p>WG stays open while it downloads and verifies the update, then closes and restarts to install it. Unsaved work in this window is not carried across the restart.</p>
-          {installProgress?.installState === 'downloading' && <div className="update-progress">
-            <div className="update-progress-line">
-              <span>Downloading {megabytes(installProgress.downloadedBytes)} of {megabytes(totalBytes)} MB</span>
-              <b>{percent}%</b>
-            </div>
-            <div
-              className="progress"
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-valuetext={`${percent}% downloaded`}
-            ><i style={{ width: `${percent}%` }}/></div>
-          </div>}
-          {installProgress?.installState === 'verifying' && <div className="update-progress">
-            <div className="update-progress-line"><span>Verifying downloaded update…</span></div>
-            <div className="progress indeterminate" role="progressbar" aria-valuetext="Verifying"><i/></div>
-          </div>}
-          {installProgress?.installState === 'ready' && <p className="update-progress-note ready" role="status">Update ready — WG will close and restart.</p>}
-          {installProgress?.installState === 'failed' && <p className="update-note error" role="alert">
-            <b>Update failed</b>
-            {installProgress.error ?? 'Unknown error'}
-          </p>}
-        </section>}
-
-        {data?.availability === 'available' && !data.action && !held && <p className="update-note error">
-          <b>No update command</b>
-          This release is available, but WG will not suggest an update command until the checkout issue above is resolved.
-        </p>}
-
-        {feedback && <p className="update-feedback" role="status" aria-atomic="true">{feedback}</p>}
+        <p className={`update-state ${presentation.state}`} role="status">{presentation.label}</p>
+        <dl className="update-facts"><div><dt>Installed</dt><dd>{data?.runningVersion ?? __WG2_VERSION__}</dd></div>
+          <div><dt>Latest</dt><dd>{data?.release?.version ?? '—'}</dd></div>
+          {data?.action && <div><dt>Download</dt><dd>{megabytes(data.action.size)}</dd></div>}</dl>
+        <section className="update-channel" aria-label="Update channel"><h3>Update channel</h3>
+          <div className="settings-theme-options" role="group" aria-label="Update channel">
+            {(['stable', 'beta'] as const).map((next) => <button key={next} aria-pressed={choice === next}
+              className={choice === next ? 'on' : ''} disabled={choice === undefined || busy || installing || mismatch}
+              onClick={() => choose(next)}>{next === 'stable' ? 'Stable' : 'Beta'}</button>)}</div>
+          <p>{choice === 'beta' ? 'Includes pre-release builds. Returning to Stable waits for a newer stable version.' : 'Finished releases only.'}</p></section>
+        {presentation.detail && <p role={presentation.stale ? 'status' : 'alert'} className="update-note error">{presentation.detail}</p>}
+        {data?.checkout.reason && <p className="update-note">{data.checkout.reason}</p>}
+        {outcome && <p role={outcome.result === 'installed' ? 'status' : 'alert'} className="update-note">
+          {outcome.result === 'installed' ? `Updated to v${outcome.to}.` : outcome.result === 'rollback_incomplete'
+            ? 'The update failed and recovery is incomplete. Review the installation log before changing the installation.'
+            : outcome.previousKept === true ? 'Update failed. The previous version was kept.' : 'Update failed. Review the installation log.'}
+          {outcome.backupPath && <> Recovery location: <code>{outcome.backupPath}</code>.</>}
+          {outcome.result !== 'installed' && <> Log: <code>{outcome.log}</code>.</>}</p>}
+        {confirmRestart && <p role="alert" className="update-note warn">{activeJobs} active solve{activeJobs === 1 ? '' : 's'} will be stopped when WG restarts.</p>}
+        {installable && <p className="update-note">WG verifies the download, closes, installs the update, and restarts. Your saved data stays in place.</p>}
+        {(active(state) || state === 'ready') && <div role="status" className="update-install">
+          <p>{state === 'verifying' ? 'Verifying the download…' : state === 'ready' ? 'Restarting WG to install the update…'
+            : `${megabytes(downloaded)} of ${megabytes(total)}`}</p>
+          {state === 'downloading' && <progress aria-label="Update download" value={downloaded} max={total || 1}/>}</div>}
+        {error && <p role="alert" className="update-note error">{error}</p>}
+        {feedback && <p role="status" className="update-note">{feedback}</p>}
+        {data?.release?.notes && <section className="update-release-notes"><h3>Release notes</h3><p style={{ whiteSpace: 'pre-wrap' }}>{data.release.notes}</p></section>}
+        {data?.release && <a href={data.release.url} target="_blank" rel="noreferrer">View release</a>}
       </div>
-
-      <footer>
-        {data?.release && <a className="update-release-link" href={data.release.url} target="_blank" rel="noreferrer">
-          Release notes for {data.release.tag}
-        </a>}
-        <button disabled={!data} onClick={() => void copyDiagnostics()}><Icon name="copy"/>Copy update diagnostics</button>
-        <span className="spacer"/>
-        {installable && <button disabled={busy || installActive} onClick={() => void refresh()}>Check again</button>}
-        <button className="primary" data-autofocus disabled={primary.disabled} onClick={primary.onClick}>{primary.label}</button>
-      </footer>
+      <footer>{mismatch ? <button data-autofocus onClick={() => window.location.reload()}>Reload WG</button>
+        : installable ? <button data-autofocus disabled={busy || installing} onClick={install}>{busy ? 'Starting…' : actionLabel}</button>
+          : <button data-autofocus disabled={busy || installing || data?.checking} onClick={() => void perform(async () => { await onRefresh(); })}>
+            {busy || data?.checking ? 'Checking…' : 'Check again'}</button>}
+        <button onClick={close}>Close</button></footer>
     </div>
   </div>;
 }

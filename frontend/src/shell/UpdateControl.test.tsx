@@ -1,862 +1,144 @@
-import { act, useState } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { defaultScheduler, notifyManager, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { UpdateOutcome, UpdateStatus } from '../api/updates';
-import { UpdateButton, UpdateDialog, updatePresentation, useUpdateStatus } from './UpdateControl';
+import type { UpdateStatus } from '../api/updates';
+import { UpdateButton, UpdateDialog, updatePresentation } from './UpdateControl';
 
 function status(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
-  return {
-    schemaVersion: 1,
-    // The control reads a mismatch between this and the build's own version as
-    // "the tab is stale, reload" and stops presenting the release at all, so a
-    // literal here quietly rewrites what every case below is testing the next
-    // time the product version moves.
-    runningVersion: __WG2_VERSION__,
-    channel: 'stable',
-    availability: 'available',
-    freshness: 'fresh',
-    cached: false,
-    release: {
-      version: '2.0.1',
-      tag: 'v2.0.1',
-      url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.0.1',
-      publishedAt: '2026-08-11T12:00:00Z',
-      assetsReady: true,
-    },
-    checkedAt: '2026-08-11T12:00:00Z',
-    nextCheckAt: '2026-08-12T00:00:00Z',
-    checkout: {
-      kind: 'release',
-      branch: 'main',
-      head: 'a'.repeat(40),
-      atDeclaredTag: true,
-      trackedChanges: false,
-      aheadCount: 0,
-      behindCount: 0,
-      updateSupported: true,
-      reason: null,
-    },
-    action: {
-      kind: 'copy_command',
-      shell: 'Terminal',
-      command: "bash '/Applications/WG checkout/installers/macos/install-wg.command' --tag v2.0.1",
-    },
-    canInstall: true,
-    lastError: null,
-    installState: 'idle',
-    activeVersion: null,
-    downloadedBytes: 0,
-    totalBytes: 0,
-    error: null,
-    ...overrides,
-  };
+  return { schemaVersion: 2, runningVersion: __WG2_VERSION__, channel: 'stable', availability: 'available',
+    freshness: 'fresh', cached: false, checking: false, checkedAt: null, nextCheckAt: null, lastError: null,
+    release: { version: '2.0.1', tag: 'v2.0.1', url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.0.1',
+      publishedAt: null, notes: 'Installation fixes.', assetsReady: true,
+      installer: { name: 'installer.dmg', url: 'https://github.com/example/installer.dmg', size: 244_000_000, sha256: 'a'.repeat(64) } },
+    action: { kind: 'full_installer', version: '2.0.1', tag: 'v2.0.1', name: 'installer.dmg', size: 244_000_000 },
+    checkout: { kind: 'macos', installRoot: '/Applications/Waveguide Generator.app', updateSupported: true, reason: null },
+    canInstall: true, installState: 'idle', activeVersion: null, downloadedBytes: 0, totalBytes: 0, error: null,
+    lastOutcome: null, ...overrides };
 }
+const accepted = { accepted: true, version: '2.0.1', activeVersion: '2.0.1', installState: 'downloading', downloadedBytes: 0, totalBytes: 244_000_000, error: null };
+const reply = (value: unknown, code = 200) => new Response(JSON.stringify(value), { status: code });
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>((settle) => { resolve = settle; }); return { resolve, promise }; }
 
-function bundleStatus(overrides: Partial<UpdateStatus> = {}): UpdateStatus {
-  return status({
-    release: {
-      version: '2.0.1',
-      tag: 'v2.0.1',
-      url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.0.1',
-      publishedAt: '2026-08-11T12:00:00Z',
-      assetsReady: true,
-      runtimeId: '222222222222',
-      bundleAssets: [{
-        name: 'update-app-2.0.1.zip',
-        url: 'https://github.com/example/app.zip',
-        sha256Url: 'https://github.com/example/app.zip.sha256',
-        bytes: 5_500_000,
-        sha256Bytes: 96,
-        layer: 'app',
-      }],
-    },
-    checkout: {
-      ...status().checkout,
-      kind: 'bundle',
-      branch: null,
-      head: null,
-      atDeclaredTag: false,
-      updateSupported: true,
-      installedVersion: __WG2_VERSION__,
-      runtimeId: '111111111111',
-      reason: null,
-    },
-    action: {
-      kind: 'bundle_download',
-      assets: [{
-        name: 'update-app-2.0.1.zip',
-        url: 'https://github.com/example/app.zip',
-        sha256Url: 'https://github.com/example/app.zip.sha256',
-        bytes: 5_500_000,
-        layer: 'app',
-      }],
-      downloadBytes: 5_500_000,
-    },
-    totalBytes: 5_500_000,
-    activeVersion: overrides.installState && overrides.installState !== 'idle' ? '2.0.1' : null,
-    ...overrides,
-  });
-}
-
-/** The dialog over a live status query, as the top bar mounts it. */
-function LiveDialog() {
-  const snapshot = useUpdateStatus();
-  return <UpdateDialog open snapshot={snapshot} onRefresh={snapshot.refresh} onClose={() => undefined}/>;
-}
-
-function LiveHarness() {
-  const [client] = useState(() => new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  }));
-  return <QueryClientProvider client={client}><LiveDialog/></QueryClientProvider>;
-}
-
-function Harness({ value, refresh = async () => value }: { value: UpdateStatus; refresh?: () => Promise<UpdateStatus> }) {
-  const [open, setOpen] = useState(false);
-  const [client] = useState(() => new QueryClient());
-  const snapshot = { data: value, error: null, isPending: false };
-  return <QueryClientProvider client={client}>
-    <UpdateButton snapshot={snapshot} open={open} onOpen={() => setOpen(true)}/>
-    <UpdateDialog open={open} snapshot={snapshot} onRefresh={refresh} onClose={() => setOpen(false)}/>
-  </QueryClientProvider>;
-}
-
-/** The dialog's fact list, read back the way a user reads it. */
-function facts(): Record<string, string> {
-  return Object.fromEntries([...document.querySelectorAll('.update-facts > div')]
-    .map((row) => [row.querySelector('dt')!.textContent!, row.querySelector('dd')!.textContent!]));
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((settle) => { resolve = settle; });
-  return { promise, resolve };
-}
-
-describe('UpdateControl', () => {
-  let host: HTMLDivElement;
-  let root: Root;
-  const writeText = vi.fn(async () => undefined);
-
+describe('full-installer update control', () => {
+  let host: HTMLDivElement; let root: Root; let client: QueryClient;
+  const refresh = vi.fn(async () => status());
+  const close = vi.fn();
+  const fetch = vi.fn();
   beforeEach(() => {
-    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
-    writeText.mockClear();
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(
-      JSON.stringify({ accepted: true, tag: 'v2.0.1' }),
-      { status: 202 },
-    )));
-    host = document.createElement('div');
-    document.body.append(host);
-    root = createRoot(host);
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    host = document.createElement('div'); document.body.append(host); root = createRoot(host);
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    refresh.mockClear(); close.mockClear(); fetch.mockReset();
+    fetch.mockResolvedValue(reply(accepted, 202)); vi.stubGlobal('fetch', fetch);
   });
+  afterEach(() => { act(() => root.unmount()); host.remove(); client.clear(); vi.unstubAllGlobals(); vi.useRealTimers(); });
+  function render(value = status(), options: { open?: boolean; activeJobs?: number } = {}) {
+    const snapshot = { data: value, error: null, isPending: false };
+    act(() => root.render(<QueryClientProvider client={client}>
+      <UpdateButton snapshot={snapshot} open={options.open ?? true} onOpen={() => undefined}/>
+      <UpdateDialog open={options.open ?? true} snapshot={snapshot} onRefresh={refresh} onClose={close} activeJobs={options.activeJobs}/>
+    </QueryClientProvider>));
+  }
+  function button(label: string) { return [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === label)!; }
+  async function click(label: string) { await act(async () => button(label).click()); }
 
-  afterEach(() => {
-    act(() => root.unmount());
-    host.remove();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
+  it('shows download size and notes before any download starts', async () => {
+    render();
+    await act(async () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    expect(host.textContent).toContain('v2.0.1 available (244.0 MB)'); expect(host.textContent).toContain('Installation fixes.');
+    expect(button('Install and restart')).toBeDefined(); expect(fetch).not.toHaveBeenCalled();
+    expect(host.textContent).not.toContain('runtimeId'); expect(host.textContent).not.toContain('app layer');
+    expect(document.activeElement).toBe(button('Install and restart'));
   });
-
-  it('renders an explicit responsive update alert and copies the exact command', async () => {
-    const value = status();
-    act(() => root.render(<Harness value={value}/>));
-    const opener = host.querySelector<HTMLButtonElement>('.update-indicator')!;
-    expect(opener.classList.contains('available')).toBe(true);
-    expect(opener.textContent).toContain('update available');
-    expect(opener.querySelector('.update-compact')?.textContent).toBe('Update');
-
-    await act(async () => opener.click());
-    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(dialog.textContent).toContain('Waveguide Generator 2.0.1 is available');
-    expect(dialog.querySelector('pre')?.textContent).toContain('/Applications/WG checkout');
-    const copy = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Copy update command')!;
-    await act(async () => copy.click());
-    expect(writeText).toHaveBeenCalledWith(
-      value.action?.kind === 'copy_command' ? value.action.command : undefined,
-    );
-    expect(dialog.textContent).toContain('Update command copied');
+  it('starts the signed installer request only on click and reports progress', async () => {
+    render(); await click('Install and restart');
+    expect(fetch).toHaveBeenCalledWith('/api/updates/install', { method: 'POST', headers: { 'X-WG-Update': 'install' } });
+    expect(host.textContent).toContain('0.0 MB of 244.0 MB'); expect(button('Downloading…').disabled).toBe(true);
+    expect(button('Stable').disabled).toBe(true); expect(button('Beta').disabled).toBe(true);
   });
-
-  it('blocks the easy action for a modified checkout while retaining release availability', async () => {
-    const value = status({
-      action: null,
-      canInstall: false,
-      checkout: {
-        ...status().checkout,
-        kind: 'modified',
-        trackedChanges: true,
-        updateSupported: false,
-        reason: 'Commit or stash tracked changes first.',
-      },
-    });
-    act(() => root.render(<Harness value={value}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    expect(host.textContent).toContain('WG will not suggest an update command');
-    expect(host.querySelector('.update-command')).toBeNull();
+  it('requires a second confirmation before stopping active solves', async () => {
+    render(status(), { activeJobs: 2 }); await click('Install and restart');
+    expect(host.textContent).toContain('2 active solves will be stopped'); expect(fetch).not.toHaveBeenCalled();
+    await click('Stop solves, install and restart'); expect(fetch).toHaveBeenCalledTimes(1);
   });
-
-  it('offers a bundled download without a command fallback or copy button', async () => {
-    const value = bundleStatus();
-    act(() => root.render(<Harness value={value}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    expect(facts()).toMatchObject({ Installed: __WG2_VERSION__, Latest: '2.0.1', Channel: 'Stable', Download: '5.5 MB' });
-    expect(host.textContent).toContain('stays open while it downloads and verifies');
-    expect(host.textContent).toContain('then closes and restarts to install it');
-    expect(host.textContent).toContain('Install update');
-    expect(host.textContent).not.toContain('fallback');
-    expect(host.textContent).not.toContain('Copy update command');
-    expect(host.querySelector('pre')).toBeNull();
+  it('does not install after cancelling the restart confirmation', async () => {
+    render(status(), { activeJobs: 1 }); await click('Install and restart'); await click('Close');
+    expect(close).toHaveBeenCalledTimes(1); expect(fetch).not.toHaveBeenCalled();
   });
-
+  it('honestly reports download or handoff failure without claiming an install', async () => {
+    fetch.mockResolvedValue(reply({ detail: 'The download signature is invalid.' }, 409));
+    render(); await click('Install and restart');
+    expect(host.textContent).toContain('signature is invalid'); expect(button('Install and restart').disabled).toBe(false);
+    expect(host.textContent).not.toContain('Updated to');
+  });
+  it('ignores an installation reply after the dialog closes', async () => {
+    const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise); render();
+    await act(async () => button('Install and restart').click()); await click('Close'); render(status(), { open: false });
+    await act(async () => pending.resolve(reply(accepted, 202))); render();
+    expect(button('Install and restart')).toBeDefined(); expect(host.querySelector('progress')).toBeNull();
+  });
+  it('keeps the saved channel when the server refuses a change', async () => {
+    fetch.mockResolvedValue(reply({ detail: 'A download is active.' }, 409)); render(); await click('Beta');
+    expect(button('Stable').getAttribute('aria-pressed')).toBe('true'); expect(host.textContent).toContain('download is active');
+  });
+  it('saves Beta on the server and waits to offer a newer stable when switching back', async () => {
+    fetch.mockResolvedValue(reply({ channel: 'beta' })); render(); await click('Beta');
+    expect(button('Beta').getAttribute('aria-pressed')).toBe('true'); expect(host.textContent).toContain('Returning to Stable waits');
+  });
+  it('polls through verification and ready without another download request', async () => {
+    vi.useFakeTimers(); render(); await click('Install and restart');
+    const verifying = status({ installState: 'verifying', activeVersion: '2.0.1', downloadedBytes: 244_000_000, totalBytes: 244_000_000 });
+    fetch.mockResolvedValue(reply(verifying)); await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(host.textContent).toContain('Verifying the download');
+    fetch.mockResolvedValue(reply({ ...verifying, installState: 'ready' })); await act(async () => vi.advanceTimersByTimeAsync(400));
+    expect(button('Restarting…').disabled).toBe(true);
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/updates/install')).toHaveLength(1);
+  });
+  it('aborts progress polling when closed', async () => {
+    vi.useFakeTimers(); render(); await click('Install and restart');
+    const pending = deferred<Response>(); fetch.mockReturnValue(pending.promise);
+    await act(async () => vi.advanceTimersByTimeAsync(400));
+    const signal = (fetch.mock.calls.at(-1)![1] as RequestInit).signal!;
+    render(status(), { open: false }); expect(signal.aborted).toBe(true);
+    await act(async () => pending.resolve(reply(status())));
+  });
   it.each([
-    ['downloading', 2_000_000, 'Downloading 2.0 of 5.5 MB'],
-    ['verifying', 5_500_000, 'Verifying downloaded update'],
-    ['ready', 5_500_000, 'Update ready — WG will close and restart'],
-    ['failed', 3_000_000, 'disk full'],
-  ] as const)('renders bundle install state %s', async (installState, downloadedBytes, expected) => {
-    const value = bundleStatus({
-      installState,
-      downloadedBytes,
-      error: installState === 'failed' ? 'disk full' : null,
-    });
-    act(() => root.render(<Harness value={value}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-
-    expect(host.textContent).toContain(expected);
-    expect(host.textContent).not.toContain('Copy update command');
-    // One install control, in the footer where every dialog puts its primary
-    // action -- not a second one buried in the section above it.
-    const installButtons = [...host.querySelectorAll<HTMLButtonElement>('footer button.primary')];
-    expect(installButtons).toHaveLength(1);
-    if (installState === 'downloading' || installState === 'verifying' || installState === 'ready') {
-      expect(installButtons[0].disabled).toBe(true);
-    }
+    [{ from: '2.0.0', to: '2.0.1', result: 'installed', when: '', log: '' } as const, 'Updated to v2.0.1.'],
+    [{ from: '2.0.0', to: '2.0.1', result: 'failed', when: '', log: 'install.log' } as const, 'Update failed. Review the installation log.'],
+    [{ from: '2.0.0', to: '2.0.1', result: 'failed', previousKept: true, when: '', log: 'install.log' } as const, 'The previous version was kept.'],
+    [{ from: '2.0.0', to: '2.0.1', result: 'rollback_incomplete', when: '', log: 'install.log', backupPath: 'saved.previous' } as const, 'recovery is incomplete'],
+  ])('shows the recorded outcome %# without inventing recovery', (lastOutcome, text) => {
+    render(status({ lastOutcome })); expect(host.textContent).toContain(text);
+    if (lastOutcome.result === 'failed' && !('previousKept' in lastOutcome)) expect(host.textContent).not.toContain('previous version was kept');
   });
-
-  describe('a held-back build and the last outcome', () => {
-    const held = { version: '2.0.1', commit: 'b'.repeat(40), runtimeId: '222222222222' };
-    const rolledBack: UpdateOutcome = {
-      transaction: '5f0c',
-      operation: 'update',
-      outcome: 'rolled-back',
-      detail: 'The relaunched application exited at once with status 1',
-      recordedAt: '2026-09-13T12:00:00',
-      from: { version: '2.0.0', commit: 'a'.repeat(40), runtimeId: '111111111111' },
-      to: held,
-      channel: null,
-      verificationBasis: 'release-digest',
-      rollbackMaterial: 'retained',
-      suppressedBuilds: [held],
-    };
-    const heldStatus = () => bundleStatus({
-      action: null,
-      canInstall: false,
-      suppressed: held,
-      lastOutcome: rolledBack,
-    });
-
-    beforeEach(() => {
-      notifyManager.setScheduler((callback) => callback());
-    });
-
-    afterEach(() => {
-      notifyManager.setScheduler(defaultScheduler);
-    });
-
-    it('does not offer a build WG rolled back, and says why', async () => {
-      act(() => root.render(<Harness value={heldStatus()}/>));
-      const opener = host.querySelector<HTMLButtonElement>('.update-indicator')!;
-      expect(opener.classList.contains('available')).toBe(false);
-      expect(opener.textContent).toContain('update held back');
-
-      await act(async () => opener.click());
-      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-      expect(dialog.textContent).toContain('WG rolled back 2.0.1');
-      expect(dialog.textContent).toContain(rolledBack.detail);
-      expect(dialog.textContent).not.toContain('Install update');
-      expect(dialog.textContent).not.toContain('No update command');
-      expect(facts()['Last update']).toBe('2.0.1 rolled back');
-    });
-
-    it('retries only the held-back build, then offers it again', async () => {
-      let lifted = false;
-      const calls: [string, RequestInit | undefined][] = [];
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = String(input);
-        calls.push([path, init]);
-        if (path === '/api/updates/retry') {
-          lifted = true;
-          return new Response(JSON.stringify({ lifted: held }), { status: 200 });
-        }
-        const served = lifted ? bundleStatus({ lastOutcome: rolledBack }) : heldStatus();
-        return new Response(JSON.stringify(served), { status: 200 });
-      }));
-      act(() => root.render(<LiveHarness/>));
-      await act(async () => { for (let index = 0; index < 4; index += 1) await Promise.resolve(); });
-      const retry = [...host.querySelectorAll<HTMLButtonElement>('button')]
-        .find((button) => button.textContent === 'Try 2.0.1 again');
-      expect(retry).toBeDefined();
-
-      await act(async () => {
-        retry!.click();
-        for (let index = 0; index < 12; index += 1) await Promise.resolve();
-      });
-
-      const retries = calls.filter(([path]) => path === '/api/updates/retry');
-      expect(retries).toHaveLength(1);
-      expect(retries[0][1]).toMatchObject({ method: 'POST', body: JSON.stringify(held) });
-      expect(host.querySelector('footer button.primary')?.textContent).toBe('Install update');
-    });
-
-    it('says a rollback that did not finish needs repair, and copies it', async () => {
-      const repair = { transaction: '5f0c', detail: 'The restored bundle failed its signature check.' };
-      act(() => root.render(<Harness value={bundleStatus({ repairRequired: repair })}/>));
-      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-
-      expect(dialog.querySelector('h2')?.textContent).toBe('Rollback failed, repair required');
-      const alert = [...dialog.querySelectorAll<HTMLElement>('[role="alert"]')]
-        .find((note) => note.textContent?.includes('Rollback failed, repair required'));
-      expect(alert?.textContent).toContain(repair.detail);
-      expect(alert?.textContent).toContain('update.log');
-
-      const copy = [...dialog.querySelectorAll<HTMLButtonElement>('button')]
-        .find((button) => button.textContent === 'Copy update diagnostics');
-      await act(async () => copy!.click());
-      await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
-      const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
-      expect(copied.repairRequired).toEqual(repair);
-    });
-
-    it('reports WGLink partial success after an update, in the update flow', async () => {
-      const installed: UpdateOutcome = { ...rolledBack, outcome: 'installed', suppressedBuilds: [] };
-      act(() => root.render(<Harness value={bundleStatus({
-        availability: 'current',
-        release: null,
-        action: null,
-        canInstall: false,
-        lastOutcome: installed,
-        wglink: { verdict: 'pending', detail: 'WGLink activation is pending until Fusion closes' },
-      })}/>));
-      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-      const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-
-      expect(dialog.textContent).toContain(
-        'Waveguide Generator updated successfully. Close Fusion to finish updating WGLink. WG will confirm when it is ready to reopen.',
-      );
-    });
-
-    it('says nothing about WGLink when no activation is waiting', async () => {
-      const installed: UpdateOutcome = { ...rolledBack, outcome: 'installed', suppressedBuilds: [] };
-      act(() => root.render(<Harness value={bundleStatus({
-        lastOutcome: installed,
-        wglink: { verdict: 'current', detail: '' },
-      })}/>));
-      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-
-      expect(host.querySelector('[role="dialog"]')!.textContent).not.toContain('Close Fusion to finish updating WGLink');
-    });
-
-    it("copies the updater's own logs with the diagnostics, read when asked for", async () => {
-      const logs = {
-        tailBytes: 65536,
-        logs: {
-          'update.log': '[2026-09-14T10:00:00] Installed and verified the staged bundle layers.\n',
-          'update-handoff.log': null,
-          'rollback-handoff.log': 'rollback helper started\n',
-        },
-      };
-      const requested: string[] = [];
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-        requested.push(String(input));
-        return String(input) === '/api/updates/diagnostics'
-          ? new Response(JSON.stringify(logs), { status: 200 })
-          : new Response(JSON.stringify({ accepted: true, tag: 'v2.0.1' }), { status: 202 });
-      }));
-      act(() => root.render(<Harness value={heldStatus()}/>));
-      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-      // Not when the dialog opens: the logs are read for the copy alone.
-      expect(requested).not.toContain('/api/updates/diagnostics');
-
-      const copy = [...host.querySelectorAll<HTMLButtonElement>('button')]
-        .find((button) => button.textContent === 'Copy update diagnostics');
-      await act(async () => copy!.click());
-      await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
-
-      const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
-      expect(requested).toContain('/api/updates/diagnostics');
-      expect(copied.updateLogs).toEqual(logs);
-      expect(copied.lastOutcome).toEqual(rolledBack);
-    });
-
-    it('copies update diagnostics that carry the last outcome', async () => {
-      act(() => root.render(<Harness value={heldStatus()}/>));
-      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-      const copy = [...host.querySelectorAll<HTMLButtonElement>('button')]
-        .find((button) => button.textContent === 'Copy update diagnostics');
-      expect(copy).toBeDefined();
-      await act(async () => copy!.click());
-      await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
-      const copied = JSON.parse(String((writeText.mock.calls[0] as unknown[])[0]));
-      expect(copied.lastOutcome).toEqual(rolledBack);
-      expect(copied.suppressed).toEqual(held);
-      expect(copied.runningVersion).toBe(__WG2_VERSION__);
-      expect(host.textContent).toContain('Update diagnostics copied');
-    });
+  it('keeps unsupported installations notify-only', () => {
+    render(status({ canInstall: false, action: null, checkout: { kind: 'portable', installRoot: null, updateSupported: false, reason: 'Download and install the full release.' } }));
+    expect(button('Install and restart')).toBeUndefined(); expect(host.textContent).toContain('Download and install');
   });
-
-  it('reports download progress in the run-progress idiom', async () => {
-    act(() => root.render(<Harness value={bundleStatus({
-      installState: 'downloading',
-      downloadedBytes: 2_750_000,
-    })}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-
-    const bar = host.querySelector<HTMLElement>('.update-progress .progress[role="progressbar"]')!;
-    expect(bar.getAttribute('aria-valuenow')).toBe('50');
-    expect(bar.querySelector<HTMLElement>('i')!.style.width).toBe('50%');
-    expect(host.querySelector('.update-progress-line')!.textContent).toContain('50%');
+  it('shows the release on an unsupported architecture without inventing a download size', () => {
+    const value = status({ canInstall: false, action: null, checkout: { kind: 'unsupported', installRoot: null,
+      updateSupported: false, reason: 'No installer is available for this architecture.' } });
+    value.release!.installer = null;
+    render(value);
+    expect(host.textContent).toContain('v2.0.1 available');
+    expect(host.textContent).not.toContain('0.0 MB');
+    expect(button('Install and restart')).toBeUndefined();
+    expect(host.querySelector('a')?.getAttribute('href')).toBe(value.release!.url);
   });
-
-  it('hands a ready release to the in-app installer', async () => {
-    act(() => root.render(<Harness value={status()}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    const install = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Install update')!;
-
-    await act(async () => install.click());
-
-    expect(fetch).toHaveBeenCalledWith('/api/updates/install', {
-      method: 'POST',
-      headers: { 'X-WG-Update': 'install' },
-    });
-    expect(host.textContent).toContain('WG will close and restart');
+  it('closes on Escape and exposes a modal accessible name', async () => {
+    render(); expect(host.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('update-dialog-title');
+    await act(async () => document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(close).toHaveBeenCalledTimes(1);
   });
-
-  it('starts a bundle download and switches to progress', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
-      accepted: true,
-      version: '2.0.1',
-      installState: 'downloading',
-      activeVersion: '2.0.1',
-      downloadedBytes: 1_000_000,
-      totalBytes: 5_500_000,
-      error: null,
-    }), { status: 202 })));
-    act(() => root.render(<Harness value={bundleStatus()}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    const install = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Install update')!;
-
-    await act(async () => install.click());
-
-    expect(host.textContent).toContain('Downloading 1.0 of 5.5 MB');
+  it('asks for reload when the frontend and running app differ', () => {
+    render(status({ runningVersion: '2.0.0' })); expect(button('Reload WG')).toBeDefined(); expect(button('Install and restart')).toBeUndefined();
   });
-
-  it('moves a bundle install from download through verification to ready and then stops polling', async () => {
-    vi.useFakeTimers();
-    const statuses = [
-      bundleStatus({ installState: 'verifying', downloadedBytes: 5_500_000 }),
-      bundleStatus({ installState: 'ready', downloadedBytes: 5_500_000 }),
-    ];
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'POST') {
-        return new Response(JSON.stringify({
-          accepted: true,
-          version: '2.0.1',
-          installState: 'downloading',
-          activeVersion: '2.0.1',
-          downloadedBytes: 1_000_000,
-          totalBytes: 5_500_000,
-          error: null,
-        }), { status: 202 });
-      }
-      return new Response(JSON.stringify(statuses.shift()), { status: 200 });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    act(() => root.render(<Harness value={bundleStatus()}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    const install = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Install update')!;
-
-    await act(async () => install.click());
-    expect(host.textContent).toContain('Downloading 1.0 of 5.5 MB');
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    expect(host.textContent).toContain('Verifying downloaded update');
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    expect(host.textContent).toContain('Update ready — WG will close and restart');
-
-    const callsAtReady = fetchMock.mock.calls.length;
-    await act(async () => vi.advanceTimersByTimeAsync(2_000));
-    expect(fetchMock).toHaveBeenCalledTimes(callsAtReady);
-  });
-
-  it.each([
-    ['downloading', 'failed', 'disk full'],
-    ['verifying', 'ready', 'Update ready — WG will close and restart'],
-  ] as const)('keeps polling through two unchanged %s samples until %s', async (activeState, terminalState, expected: string) => {
-    vi.useFakeTimers();
-    const downloadedBytes = activeState === 'downloading' ? 2_000_000 : 5_500_000;
-    const statuses = [
-      bundleStatus({ installState: activeState, downloadedBytes }),
-      bundleStatus({ installState: activeState, downloadedBytes }),
-      bundleStatus({
-        installState: terminalState,
-        downloadedBytes,
-        error: terminalState === 'failed' ? 'disk full' : null,
-      }),
-    ];
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify(statuses.shift()), { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    act(() => root.render(<Harness value={bundleStatus({ installState: activeState, downloadedBytes })}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(host.textContent).toContain(expected);
-  });
-
-  it('recovers from a transient progress request failure on the next poll', async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response('offline', { status: 503 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(bundleStatus({
-        installState: 'ready',
-        downloadedBytes: 5_500_000,
-      })), { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    act(() => root.render(<Harness value={bundleStatus({
-      installState: 'verifying',
-      downloadedBytes: 5_500_000,
-    })}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-    expect(host.textContent).toContain('Could not read update progress');
-    await act(async () => vi.advanceTimersByTimeAsync(400));
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(host.textContent).toContain('Update ready — WG will close and restart');
-    expect(host.textContent).not.toContain('Could not read update progress');
-  });
-
-  it('aborts an in-flight progress request when the dialog closes', async () => {
-    vi.useFakeTimers();
-    let polledSignal: AbortSignal | undefined;
-    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
-      polledSignal = init?.signal as AbortSignal;
-      return new Promise<Response>((_resolve, reject) => {
-        polledSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-      });
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    act(() => root.render(<Harness value={bundleStatus({
-      installState: 'downloading',
-      downloadedBytes: 2_000_000,
-    })}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    act(() => vi.advanceTimersByTime(400));
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(polledSignal?.aborted).toBe(false);
-
-    await act(async () => {
-      host.querySelector<HTMLButtonElement>('.dialog-close')!.click();
-      await Promise.resolve();
-    });
-
-    expect(polledSignal?.aborted).toBe(true);
-  });
-
-  it.each([
-    ['up to date', { data: status({ availability: 'current', release: null, action: null, canInstall: false }), error: null, isPending: false }, 'current', 'Up to date', `${__WG2_VERSION__} · up to date`],
-    ['an offered release', { data: status(), error: null, isPending: false }, 'available', 'Update available', `${__WG2_VERSION__} · update available (v2.0.1)`],
-    ['a first check in flight', { data: undefined, error: null, isPending: true }, 'checking', 'Checking…', `${__WG2_VERSION__} · checking…`],
-    ['a transport failure', { data: undefined, error: new Error('Update status response is invalid'), isPending: false }, 'failed', 'Check failed', `${__WG2_VERSION__} · check failed`],
-  ] as const)('resolves the indicator to %s', (_label, snapshot, state, dialogLabel, wide) => {
-    const presentation = updatePresentation(snapshot);
-    expect(presentation.state).toBe(state);
-    expect(presentation.label).toBe(dialogLabel);
-    expect(presentation.wide).toBe(wide);
-  });
-
-  it.each([
-    ['a server-reported check failure', status({ availability: 'unknown', freshness: 'unknown', release: null, action: null, canInstall: false, checkedAt: null, lastError: 'GitHub rate limit exceeded' }), 'GitHub rate limit exceeded'],
-    ['a verdict-free payload with no stated reason', status({ availability: 'unknown', freshness: 'unknown', release: null, action: null, canInstall: false, checkedAt: null }), 'The last update check did not return a result.'],
-  ] as [string, UpdateStatus, string][])('never settles on a permanent unknown for %s', async (_label, value, reason) => {
-    // The regression this replaces: a packaged install showed "status unknown"
-    // for its whole life, with no reason anywhere and nothing a user could do.
-    const presentation = updatePresentation({ data: value, error: null, isPending: false });
-    expect(presentation.state).toBe('failed');
-    expect(presentation.wide).toContain('check failed');
-    expect(presentation.wide).not.toContain('unknown');
-    expect(presentation.detail).toBe(reason);
-
-    act(() => root.render(<Harness value={value}/>));
-    const indicator = host.querySelector<HTMLButtonElement>('.update-indicator')!;
-    expect(indicator.className).toContain('failed');
-    expect(indicator.getAttribute('title')).toBe(reason);
-
-    await act(async () => indicator.click());
-    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(dialog.textContent).toContain('Update check failed');
-    expect(dialog.textContent).toContain(reason);
-    expect(facts().Latest).toBe('Unknown');
-    // A failed check still offers the one action that can resolve it.
-    expect(dialog.querySelector<HTMLButtonElement>('footer button.primary')!.textContent).toBe('Check again');
-  });
-
-  it('keeps a stale verdict rather than replacing it with a failure, and says why', async () => {
-    const value = status({
-      availability: 'current',
-      freshness: 'stale',
-      release: null,
-      action: null,
-      canInstall: false,
-      lastError: 'GitHub timed out',
-    });
-    const presentation = updatePresentation({ data: value, error: null, isPending: false });
-    expect(presentation.state).toBe('current');
-    expect(presentation.wide).toBe(`${__WG2_VERSION__} · up to date`);
-    expect(presentation.stale).toBe(true);
-
-    act(() => root.render(<Harness value={value}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    expect(host.textContent).toContain('Showing the last successful result');
-    expect(host.textContent).toContain('GitHub timed out');
-  });
-
-  it('reads its own surface rather than borrowing the settings dialog shell', async () => {
-    // `.settings-dialog` is a fixed-height scrolling shell; wearing it gave this
-    // five-line dialog a 760px box with its content pinned to the top edge.
-    act(() => root.render(<Harness value={status()}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(dialog.className).toBe('update-dialog');
-    expect(dialog.querySelector('footer')).not.toBeNull();
-  });
-
-  it('focuses the primary action rather than the close button', async () => {
-    act(() => root.render(<Harness value={status()}/>));
-    await act(async () => {
-      host.querySelector<HTMLButtonElement>('.update-indicator')!.click();
-      await new Promise((settle) => requestAnimationFrame(() => settle(undefined)));
-    });
-    expect(document.activeElement).toBe(host.querySelector('footer button.primary'));
-  });
-
-  it('prioritizes frontend/backend skew over release status', () => {
-    const presentation = updatePresentation({
-      data: status({ runningVersion: '2.0.1', availability: 'current' }),
-      error: null,
-      isPending: false,
-    });
-    expect(presentation.state).toBe('reload');
-    expect(presentation.announcement).toContain('Reload this page');
-  });
-
-  it('supports keyboard dismissal and restores focus to the version button', async () => {
-    act(() => root.render(<Harness value={status()}/>));
-    const opener = host.querySelector<HTMLButtonElement>('.update-indicator')!;
-    opener.focus();
-    await act(async () => opener.click());
-    expect(host.querySelector('[role="dialog"]')).not.toBeNull();
-    act(() => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })));
-    expect(host.querySelector('[role="dialog"]')).toBeNull();
-    expect(document.activeElement).toBe(opener);
-  });
-
-  it('discards refresh feedback when the dialog closes before the request finishes', async () => {
-    const pending = deferred<UpdateStatus>();
-    act(() => root.render(<Harness value={status()} refresh={() => pending.promise}/>));
-    const opener = host.querySelector<HTMLButtonElement>('.update-indicator')!;
-    await act(async () => opener.click());
-    const check = [...host.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent === 'Check again')!;
-    act(() => check.click());
-    const close = host.querySelector<HTMLButtonElement>('.dialog-close')!;
-    act(() => close.click());
-
-    await act(async () => {
-      pending.resolve(status({ availability: 'current' }));
-      await pending.promise;
-      await Promise.resolve();
-    });
-    await act(async () => opener.click());
-
-    expect(host.textContent).not.toContain('Update status refreshed');
-    expect(host.querySelector('[aria-busy="true"]')).toBeNull();
-  });
-  it('names the beta channel in the dialog and says what it actually offers', async () => {
-    act(() => root.render(<Harness value={status({
-      channel: 'beta',
-      release: {
-        version: '2.1.0-beta.1',
-        tag: 'v2.1.0-beta.1',
-        url: 'https://github.com/m3gnus/waveguide-generator/releases/tag/v2.1.0-beta.1',
-        publishedAt: '2026-08-11T12:00:00Z',
-        assetsReady: true,
-      },
-    })}/>));
-    await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-
-    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(dialog.textContent).toContain('Beta channel');
-    // Published releases, pre-releases included -- not every commit on main.
-    // Saying so here is what keeps the channel from promising a build nothing
-    // publishes; see docs/reference/UPDATE-CHANNELS.md.
-    expect(dialog.textContent).toContain('pre-releases included');
-    expect(dialog.textContent).toContain('not per commit on');
-    expect(dialog.textContent).not.toContain('Change this in Settings');
-    expect(dialog.textContent).toContain('2.1.0-beta.1 is available');
-  });
-
-  describe('the update channel, chosen where the version is', () => {
-    beforeEach(() => {
-      // Query-core schedules observer notifications on a zero-delay timer in
-      // production. Make these query update assertions deterministic instead
-      // of relying on a timer that a Promise-only flush does not run.
-      notifyManager.setScheduler((callback) => callback());
-    });
-
-    afterEach(() => {
-      notifyManager.setScheduler(defaultScheduler);
-    });
-
-    function channelButton(label: 'Stable' | 'Beta'): HTMLButtonElement {
-      const found = [...document.querySelectorAll<HTMLButtonElement>('.update-channel button')]
-        .find((button) => button.textContent === label);
-      if (!found) throw new Error(`Missing channel button: ${label}`);
-      return found;
-    }
-
-    async function openDialog(value = status()) {
-      act(() => root.render(<Harness value={value}/>));
-      await act(async () => host.querySelector<HTMLButtonElement>('.update-indicator')!.click());
-    }
-
-    it('shows the channel the status reports, without a request of its own', async () => {
-      await openDialog(status({ channel: 'beta' }));
-
-      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('true');
-      expect(channelButton('Stable').getAttribute('aria-pressed')).toBe('false');
-      expect(document.querySelector('.update-channel')?.textContent)
-        .toContain('before a stable version number is committed');
-      // The channel rides on the status payload the dialog already has.
-      expect(vi.mocked(fetch)).not.toHaveBeenCalled();
-    });
-
-    it('writes the chosen channel to the server and re-checks at once', async () => {
-      const calls: Array<[string, RequestInit | undefined]> = [];
-      // The live query, not a fixed snapshot: the point of the selector living
-      // here is that the verdict above it is re-checked while the dialog is
-      // open, and only a real query can show that.
-      const served = { channel: 'stable' as const };
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const path = String(input);
-        calls.push([path, init]);
-        if (path === '/api/updates/channel' && init?.method === 'PUT') {
-          served.channel = JSON.parse(String(init.body)).channel;
-          return new Response(JSON.stringify({ channel: served.channel }), { status: 200 });
-        }
-        if (path.startsWith('/api/updates/status')) {
-          return new Response(JSON.stringify(status({ channel: served.channel })), { status: 200 });
-        }
-        return new Response(JSON.stringify({ channel: served.channel }), { status: 200 });
-      }));
-      act(() => root.render(<LiveHarness/>));
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
-      expect(channelButton('Stable').getAttribute('aria-pressed')).toBe('true');
-
-      await act(async () => {
-        channelButton('Beta').click();
-        for (let index = 0; index < 8; index += 1) await Promise.resolve();
-      });
-
-      expect(calls.some(([path, init]) => path === '/api/updates/channel'
-        && init?.method === 'PUT'
-        && init.body === '{\"channel\":\"beta\"}')).toBe(true);
-      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('true');
-      // The standing verdict answered the other channel's question, so it is
-      // discarded rather than left to expire while the user watches it.
-      expect(calls.filter(([path]) => path.startsWith('/api/updates/status')).length)
-        .toBeGreaterThan(1);
-      expect(facts().Channel).toBe('Beta');
-    });
-
-    it('puts the previous channel back when the server refuses the change', async () => {
-      vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
-        String(input) === '/api/updates/channel' && init?.method === 'PUT'
-          ? new Response(JSON.stringify({ detail: 'Settings are read-only' }), { status: 400 })
-          : new Response(JSON.stringify({ channel: 'stable' }), { status: 200 })
-      )));
-      await openDialog();
-
-      await act(async () => {
-        channelButton('Beta').click();
-        await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
-      });
-
-      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('false');
-      expect(channelButton('Stable').getAttribute('aria-pressed')).toBe('true');
-      expect(document.querySelector('.update-channel')?.textContent)
-        .toContain('Settings are read-only');
-    });
-
-    it('still offers the selector when the check itself failed', async () => {
-      vi.stubGlobal('fetch', vi.fn(async () => new Response(
-        JSON.stringify({ channel: 'beta' }), { status: 200 },
-      )));
-      const [open, setOpen] = [true, () => undefined];
-      const client = new QueryClient();
-      act(() => root.render(<QueryClientProvider client={client}>
-        <UpdateDialog
-          open={open}
-          snapshot={{ data: undefined, error: new Error('offline'), isPending: false }}
-          onRefresh={async () => status()}
-          onClose={setOpen}
-        />
-      </QueryClientProvider>));
-      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
-
-      // No status payload to read the channel from, so it is asked for: a
-      // failed check must not leave the choice unavailable, which is exactly
-      // when someone wants to move off the channel that is failing.
-      expect(channelButton('Beta').getAttribute('aria-pressed')).toBe('true');
-      expect(document.querySelector('[role="dialog"]')?.textContent).toContain('Update check failed');
-    });
-  });
-
-  it('says a beta install is ahead of stable rather than up to date', async () => {
-    // Reached by switching back to Stable while running a beta, which is why
-    // no new availability state was needed for that case.
-    act(() => root.render(<Harness value={status({
-      availability: 'ahead',
-      release: null,
-      action: null,
-      canInstall: false,
-    })}/>));
-
-    // The indicator, not only the dialog. This test asserted the dialog alone,
-    // so the top bar went on reading "up to date" for a version that is not the
-    // one the channel offers -- the two disagreed about the same snapshot.
-    const indicator = host.querySelector<HTMLButtonElement>('.update-indicator')!;
-    expect(indicator.textContent).toContain('ahead of stable');
-    expect(indicator.textContent).not.toContain('up to date');
-    expect(indicator.getAttribute('aria-label')).toContain('ahead of stable');
-    // Still not a problem state: being in front of your channel is not a
-    // warning, so the visual treatment stays the same as 'current'.
-    expect(indicator.className).toContain('current');
-
-    await act(async () => indicator.click());
-
-    const dialog = host.querySelector<HTMLElement>('[role="dialog"]')!;
-    expect(dialog.textContent).toContain('newer than the latest stable release');
-    expect(dialog.textContent).not.toContain('is up to date');
+  it('reports stale results and failed checks explicitly', () => {
+    const stale = updatePresentation({ data: status({ freshness: 'stale', lastError: 'Network unavailable.' }), error: null, isPending: false });
+    expect(stale.state).toBe('available'); expect(stale.detail).toBe('Network unavailable.');
+    const failed = updatePresentation({ data: status({ availability: 'unknown', action: null, canInstall: false, release: null, lastError: 'No check result.' }), error: null, isPending: false });
+    expect(failed.state).toBe('failed'); expect(failed.detail).toBe('No check result.');
+    expect(updatePresentation({ data: status({ availability: 'unknown', checking: true }), error: null, isPending: false }).state).toBe('checking');
   });
 });
