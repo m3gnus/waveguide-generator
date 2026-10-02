@@ -252,7 +252,14 @@ jobs:
     # to 38.8m per job with setup. Run 36500433825 was cut off at the old 40m
     # cap at 97% with no hang. It is capped at 60m so it has real headroom;
     # every other job keeps matrix.budget.
-    timeout-minutes: ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && 60 || matrix.budget }}
+    #
+    # macOS harness is the other exception. On main (run 36940318262,
+    # 2026-10-01) it already took 18m of the 25m budget, about 14m of it
+    # test_qualify_installed_cpu.py; the installer scripts' tests added about
+    # 7m more on hosted macOS (run of 770e7e9e, 2026-10-02: their default
+    # sample, one case per function there). It is capped at 40m. Bringing
+    # test_qualify_installed_cpu.py down is a separate follow-up.
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && matrix.suite == 'server' && 60 || (matrix.os == 'macos-latest' && matrix.suite == 'harness' && 40 || matrix.budget) }}
     strategy:
       fail-fast: false
       matrix:
@@ -278,7 +285,8 @@ jobs:
           - suite: harness
             label: Harness
             paths: scripts/tests
-            # macOS, the slowest, sits at ~11m including setup.
+            # Linux and Windows sit well inside this; macOS has its own 40m
+            # cap above (measured 18m on main plus ~7m of installer tests).
             budget: 25
     # `test_update_transaction_contract.py` and `test_cadlink_store_rollback.py`
     # (server/tests) run a previously *released* build's own code, extracted
