@@ -1,7 +1,8 @@
 """ATH importer regressions from the independent C4 review.
 
-Parser/report checks run on either pin. Point-grid parity uses the installed
-mesher's importer as the oracle and runs when that install supports C4.
+Parser/report checks run on either pin. Point-grid parity uses supported ATH
+inputs as the independent oracle when the installed mesher supports C4. WG
+retains legacy ignored settings; the strict mesher refuses those raw inputs.
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import asyncio
 
 import numpy as np
 import pytest
-from hornlab_mesher.config_parser import parse_text_config
+from hornlab_mesher.config_parser import ConfigError, parse_text_config
 
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.design.throat_stretch import mesher_supports_stretch
@@ -41,6 +42,18 @@ def _translate_or_pin_refusal(design):
     return None
 
 
+def _ath_oracle(original, supported, refused_items=()):
+    # The oracle must describe the effective geometry independently of WG's
+    # serializer/translator. First prove why the original legacy text cannot
+    # be used directly: the mesher must name every unsupported occurrence.
+    if refused_items:
+        with pytest.raises(ConfigError, match=r"unsupported item\(s\) in ATH config:") as caught:
+            parse_text_config(original)
+        refused = str(caught.value).split(". The importer", 1)[0]
+        assert all(item in refused for item in refused_items)
+    return parse_text_config(supported)
+
+
 @pytest.mark.parametrize("top", ["", "Coverage.Angle = 50", "Term.n = 6",
                                  "Coverage.Angle = 50\nTerm.n = 6"])
 @pytest.mark.parametrize("family,coefficients", [
@@ -59,7 +72,10 @@ def test_rosse_alias_selects_same_family_and_reaches_capability_gate(family, top
         assert getattr(parsed.design.root, key) == ({"s1": .5, "s2": .2}[key] if key in coefficients else None)
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
-        expected = parse_text_config(text)
+        expected = _ath_oracle(
+            text, _profile(family, coefficients=coefficients),
+            tuple(line.split(" = ")[0] for line in top.splitlines()),
+        )
         assert got["formula"] == expected["formula"]
         assert got["profile"].get("s1", 0) == expected["profile"].get("s1", 0)
         assert got["profile"].get("s2", 0) == expected["profile"].get("s2", 0)
@@ -118,7 +134,10 @@ def test_block_scale_matches_mesher_and_is_reported(family, placement, scale):
         assert "top level" in parsed.ignored_settings[0].note
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
-        expected = parse_text_config(text)
+        expected = _ath_oracle(
+            text, _profile(family, "r0 = 12.7") + top,
+            (f"{family}.Scale",) if block else (),
+        )
         assert got.get("scale", 1) == expected.get("scale", 1)
         np.testing.assert_array_equal(_grid(got), _grid(expected))
         np.testing.assert_array_equal(_grid(got), _grid(design_to_mesher_config(parse(serialize(parsed.design)).design)))
@@ -145,8 +164,7 @@ def test_ignored_r_osse_block_keys_are_accepted_and_reported(family, extra):
     assert parsed.design == parse(_profile(family)).design
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
-        expected = parse_text_config(text)
-        assert expected == parse_text_config(_profile(family))
+        expected = _ath_oracle(text, _profile(family), (f"{family}.{key}",))
         np.testing.assert_array_equal(_grid(got), _grid(expected))
     opened = asyncio.run(open_design(text))
     assert opened["ignoredSettings"][0]["key"] == f"{family}.{key}"
@@ -173,7 +191,10 @@ def test_ignored_block_rot_and_length_with_zero_top_rot(family, extra):
     assert {item.key for item in parsed.ignored_settings} == {f"{family}.Rot", f"{family}.Length"}
     got = _translate_or_pin_refusal(parsed.design)
     if got is not None:
-        np.testing.assert_array_equal(_grid(got), _grid(parse_text_config(text)))
+        expected = _ath_oracle(
+            text, _profile(family) + "\nRot = 0", (f"{family}.Rot", f"{family}.Length"),
+        )
+        np.testing.assert_array_equal(_grid(got), _grid(expected))
 
 
 @_REAL_C4

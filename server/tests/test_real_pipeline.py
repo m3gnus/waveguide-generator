@@ -275,7 +275,10 @@ async def _settled_capabilities(registry: Any) -> list[Any]:
 
     from server.solver import bempp_opencl as probe
 
-    engines = list(await registry.capabilities())
+    # Capability snapshots deliberately return a pending BEMPP row while its
+    # independent initial check runs. Submission waits on that same owned
+    # check; qualification must use the settled answer too.
+    engines = list(await registry.wait_for_bempp())
     deadline = time.monotonic() + probe.qualification_max_seconds()
     while time.monotonic() < deadline:
         bempp = next((info for info in engines if info.name == "bempp"), None)
@@ -393,7 +396,7 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path / "data")
         try:
-            engines = {info.name: info for info in await app.state.engine_registry.capabilities()}
+            engines = {info.name: info for info in await _settled_capabilities(app.state.engine_registry)}
             bempp = engines.get(PARAMETRIC_ENGINE)
             assert bempp is not None and bempp.available, (
                 "BEMPP is unavailable, and the pinned requirements install it (numba "
@@ -631,8 +634,8 @@ def test_expected_here_waits_for_the_transient_retries(monkeypatch) -> None:
             return (pending,)
         async def wait_for_bempp(self):
             calls.append("wait")
-            return (settled,)
-    monkeypatch.setattr(probe, "retry_pending", lambda: calls.count("wait") == 0)
+            return (pending,) if calls.count("wait") == 1 else (settled,)
+    monkeypatch.setattr(probe, "retry_pending", lambda: calls.count("wait") == 1)
     monkeypatch.setattr(probe, "retry_delay", lambda: 0.0)
     engines = asyncio.run(_settled_capabilities(Registry()))
-    assert engines == [settled] and calls == ["capabilities", "wait"]
+    assert engines == [settled] and calls == ["wait", "wait"]
