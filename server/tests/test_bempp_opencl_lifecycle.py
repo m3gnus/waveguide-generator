@@ -238,6 +238,85 @@ def test_a_probe_error_names_what_failed(monkeypatch):
     assert "internal error: ValueError: Child exited with status 19" in verdict["reason"]
 
 
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_parent_rejects_a_crash_even_after_a_complete_success_report(monkeypatch, mode):
+    result = ({"ok": True, "devices": []} if mode == "inventory" else
+              {"ok": True, "smoke": {"matrix_relative_error": 0., "solve_relative_error": 0.}})
+    script = f"""
+import os, sys
+from pathlib import Path
+from server.solver import bempp_opencl as probe
+print(probe._READY_MARKER, flush=True)
+probe._write_probe_result(Path(sys.argv[1]), {result!r})
+os.abort()
+"""
+    children = child_for(monkeypatch, script)
+    verdict = probe._run_probe(mode, None, 5)
+    assert children[0].returncode != 0
+    assert not verdict["ok"]
+    assert verdict["opencl_unavailable_reason"] == "probe_error"
+    assert "Child exited with status" in verdict["reason"]
+
+
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_completed_native_child_exits_before_teardown_abort(tmp_path, mode):
+    result = ({"ok": True, "devices": []} if mode == "inventory" else
+              {"ok": True, "smoke": {"matrix_relative_error": 0., "solve_relative_error": 0.}})
+    path = tmp_path / "result.json"
+    script = f"""
+import atexit, os
+from pathlib import Path
+from server.solver import bempp_opencl as probe
+atexit.register(os.abort)
+probe._child_result = lambda *args: {result!r}
+print('completed computation', end='')
+probe._child_main({mode!r}, None, Path({str(path)!r}))
+"""
+    child = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=5)
+    assert child.returncode == 0, child.stderr
+    assert child.stdout == "completed computation"
+    assert json.loads(path.read_text()) == result
+    assert not path.with_suffix(".tmp").exists()
+
+
+@pytest.mark.parametrize("damage", ["rejected", "malformed", "write", "stdout", "stderr"])
+def test_child_cannot_take_success_exit_after_a_failed_completion(tmp_path, damage):
+    path = tmp_path / "result.json"
+    script = f"""
+import atexit, os, sys
+from pathlib import Path
+from server.solver import bempp_opencl as probe
+atexit.register(lambda: os._exit(23))
+result = {{"ok": True, "smoke": {{"matrix_relative_error": 0., "solve_relative_error": 0.}}}}
+if {damage!r} == 'rejected':
+    result = {{"ok": False, "opencl_unavailable_reason": "smoke_test_failed", "reason": "wrong answer"}}
+elif {damage!r} == 'malformed':
+    result = {{"ok": True}}
+elif {damage!r} == 'write':
+    def fail(*args):
+        raise OSError('cannot publish result')
+    probe._write_probe_result = fail
+elif {damage!r} in ('stdout', 'stderr'):
+    class BrokenFlush:
+        def __init__(self, stream):
+            self.stream = stream
+        def write(self, value):
+            return self.stream.write(value)
+        def flush(self):
+            raise OSError('cannot flush probe output')
+    name = {damage!r}
+    setattr(sys, name, BrokenFlush(getattr(sys, name)))
+probe._child_result = lambda *args: result
+probe._child_main('smoke', None, Path({str(path)!r}))
+"""
+    child = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True, timeout=5)
+    assert child.returncode != 0, (damage, child.stdout, child.stderr)
+    if damage in {"malformed", "write"}:
+        assert not path.exists()
+    elif damage == "rejected":
+        assert json.loads(path.read_text())["ok"] is False
+
+
 @pytest.mark.parametrize("damage", ["wrong", "error"])
 def test_real_probe_child_distinguishes_computation_from_internal_error(monkeypatch, damage):
     # Exercise the actual child exception classifier with hermetic imports.

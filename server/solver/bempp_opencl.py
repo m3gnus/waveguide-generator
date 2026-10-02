@@ -693,5 +693,20 @@ def _write_probe_result(path: Path, result: Mapping[str, Any]) -> None:
     os.replace(temporary, path)
 
 
+def _child_main(mode: str, device: Mapping[str, Any] | None, path: Path) -> None:
+    result = _child_result(mode, device)
+    _validate_probe_result(result, mode)
+    _write_probe_result(path, result)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if result["ok"]:
+        # Native work and its numerical checks are complete, and the atomic
+        # report is closed. PoCL can abort while tearing down LLVM contexts at
+        # interpreter shutdown; this disposable child needs no further cleanup.
+        # A computation, report or flush failure never reaches this exit. The
+        # parent still refuses every child that crashes, even with a result file.
+        os._exit(0)
+
+
 if __name__ == "__main__":
-    _write_probe_result(Path(sys.argv[3]), _child_result(sys.argv[1], json.loads(sys.argv[2])))
+    _child_main(sys.argv[1], json.loads(sys.argv[2]), Path(sys.argv[3]))
