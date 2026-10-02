@@ -120,12 +120,15 @@ def log_pausing_native(native, tmp_path_factory):
     code = (ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()
     pause = r'''
 static void log_test_pause(const wchar_t *stage) {
-    wchar_t wanted[32], marker[1024]; HANDLE h; DWORD done; ULONGLONG end;
+    wchar_t wanted[32], marker[1024], temporary[1024]; HANDLE h; DWORD done; ULONGLONG end;
     if (!GetEnvironmentVariableW(L"WG_LOG_TEST_PAUSE", wanted, 32) || wcscmp(wanted, stage) ||
         !GetEnvironmentVariableW(L"WG_LOG_TEST_MARKER", marker, 1024)) return;
-    h = CreateFileW(marker, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (h == INVALID_HANDLE_VALUE) return;
-    WriteFile(h, "paused", 6, &done, NULL); FlushFileBuffers(h); CloseHandle(h);
+    /* Pathname observation must not race the exclusive publishing handle. */
+    if (swprintf_s(temporary, 1024, L"%s.%lu.tmp", marker, GetCurrentProcessId()) <= 0) ExitProcess(3);
+    h = CreateFileW(temporary, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) ExitProcess(3);
+    if (!WriteFile(h, "paused", 6, &done, NULL) || done != 6 || !FlushFileBuffers(h)) ExitProcess(3);
+    if (!CloseHandle(h) || !MoveFileExW(temporary, marker, MOVEFILE_WRITE_THROUGH)) ExitProcess(3);
     end = GetTickCount64() + 60000;
     while (GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES && GetTickCount64() < end) Sleep(10);
 }
@@ -178,7 +181,7 @@ def test_native_logging_needs_no_application_runtime_or_running_admission(native
 @pytest.mark.parametrize("mode,args", [
     ("--update-log", []), ("--update-log-unknown", []),
     ("--update-log-init", []), ("--update-log-worker", []),
-    ("--update-log-worker-unknown", []), ("--update-log-append", ["extra"]),
+    ("--update-log-worker-unknown", []), ("--update-log-append", ["message", "extra"]),
 ])
 def test_malformed_reserved_logger_modes_never_fall_through(native, tmp_path, mode, args):
     log, _ = _paths(tmp_path)

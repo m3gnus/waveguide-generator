@@ -134,13 +134,17 @@ def pausing_native(native: Path, tmp_path_factory: pytest.TempPathFactory) -> Pa
     code = (ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()
     pause = r'''
 static void test_pause(const wchar_t *target, const wchar_t *stage) {
-    wchar_t wanted[64], kind[64], marker[1024]; DWORD written; HANDLE file;
+    wchar_t wanted[64], kind[64], marker[1024], temporary[1024]; DWORD written; HANDLE file;
     const wchar_t *leaf = wcsrchr(target, L'\\');
     if (!GetEnvironmentVariableW(L"WG_NATIVE_TEST_STAGE", wanted, 64) || wcscmp(wanted, stage) ||
         !GetEnvironmentVariableW(L"WG_NATIVE_TEST_TARGET", kind, 64) || !leaf || wcscmp(leaf + 1, kind) ||
         !GetEnvironmentVariableW(L"WG_NATIVE_TEST_MARKER", marker, 1024)) return;
-    file = CreateFileW(marker, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file != INVALID_HANDLE_VALUE) { WriteFile(file, "ready", 5, &written, NULL); FlushFileBuffers(file); CloseHandle(file); }
+    /* Publish readiness only after the exclusive publishing handle closes. */
+    if (swprintf_s(temporary, 1024, L"%s.%lu.tmp", marker, GetCurrentProcessId()) <= 0) ExitProcess(3);
+    file = CreateFileW(temporary, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (file == INVALID_HANDLE_VALUE) ExitProcess(3);
+    if (!WriteFile(file, "ready", 5, &written, NULL) || written != 5 || !FlushFileBuffers(file)) ExitProcess(3);
+    if (!CloseHandle(file) || !MoveFileExW(temporary, marker, MOVEFILE_WRITE_THROUGH)) ExitProcess(3);
     for (;;) Sleep(1000);
 }
 '''
@@ -305,6 +309,11 @@ def _host_python_old_hook(root: Path) -> None:
 def test_native_first_manual_rollback_starts_actual_old_hook_and_forwards_args(native: Path, tmp_path: Path) -> None:
     root, record = _old_root(tmp_path, native)
     _host_python_old_hook(root)
+    # The frozen direct-launch shim requires the packaged layer markers even
+    # after native rollback. This host-Python fixture must model those files.
+    manifests = {root / "app/APP-MANIFEST.json": b"{}\n", root / "runtime/RUNTIME-MANIFEST.json": b"{}\n"}
+    for marker, data in manifests.items():
+        marker.write_bytes(data)
     original_pth = (root / "Waveguide Generator._pth").read_bytes()
     assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
     owner = _prepare(native, root, record, dead_owner=True)
@@ -315,6 +324,7 @@ def test_native_first_manual_rollback_starts_actual_old_hook_and_forwards_args(n
                        WG2_FUSION_ADDINS_DIR=str(tmp_path / "private-AddIns"))
     result = subprocess.run([str(root / "Waveguide Generator.exe")], env=environment, check=False, timeout=30)
     assert result.returncode == 0 and started.read_text() == "old desktop ran"
+    assert all(marker.read_bytes() == data for marker, data in manifests.items())
     assert (root / "Waveguide Generator._pth").read_bytes() == original_pth
     assert json.loads(record.read_text())["result"] == "failed"
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "import json,sys;print(json.dumps(sys.argv))", "value with spaces"],
