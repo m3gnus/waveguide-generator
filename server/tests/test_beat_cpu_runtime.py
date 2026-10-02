@@ -593,24 +593,56 @@ def test_an_unsupported_platform_still_declines(tmp_path, monkeypatch) -> None:
     assert beat_cpu_runtime.start_cpu_provisioning(environ={}, system="FreeBSD") is None
 
 
-def test_availability_is_not_preference() -> None:
-    """Offering the row must not change which engine AUTO picks.
+@pytest.mark.parametrize("state_name, expected", [
+    ("ready", "beat-cpu"), ("provisioning", "bempp"), ("failed", "bempp"),
+])
+def test_auto_uses_readiness_without_waiting_for_cpu_provisioning(
+    tmp_path, monkeypatch, state_name, expected
+) -> None:
+    import asyncio
 
-    The two were entangled: the CPU runtime was prepared exactly where AUTO
-    ranked it ahead of BEMPP. Preparing it everywhere is a change to what a
-    user can *choose*, and would be a regression if it also changed what they
-    get when they choose nothing.
-    """
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.runtime import resolve_submission
+    from server.tests.test_engines_registry import _planner_request
+
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    state = {**_ready_state(project, julia), "status": state_name, "error": "offline"}
+    package = _install_stub_package(monkeypatch, project=project, state=state)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_provisioning_step",
+                        lambda: "instantiating" if state_name == "provisioning" else None)
+    ready, reason = beat._cpu_backend_status(package)
+    registry = EngineRegistry(
+        cpu_refresh=False,
+        detector=lambda: [
+            EngineInfo("beat-cpu", ready, reason, "test"),
+            EngineInfo("bempp", True, "ready", "test"),
+        ],
+        factory=lambda _name: object(),
+    )
+
+    async def exercise():
+        try:
+            resolution = await asyncio.wait_for(resolve_submission(_planner_request(), registry), 5)
+            assert resolution.engine_name == expected
+            assert await registry.unavailable_reason("beat-cpu") == reason
+            if state_name != "ready":
+                assert state_name in reason.lower()
+        finally:
+            await registry.shutdown_prewarm()
+
+    asyncio.run(exercise())
+
+
+def test_ready_cpu_preference_is_platform_independent() -> None:
+    """Background preparation enables the preferred CPU route on every platform."""
 
     from server.engines.registry import full3d_engine_order
 
-    assert full3d_engine_order("Darwin").index("bempp") < full3d_engine_order("Darwin").index(
-        "beat-cpu"
-    ), "macOS AUTO still reaches BEMPP before the CPU path"
-    for system in ("Windows", "Linux"):
+    for system in ("Darwin", "Windows", "Linux"):
         order = full3d_engine_order(system)
-        assert order.index("bempp") < order.index("beat-cpu")
-    assert full3d_engine_order("Darwin")[0] == "metal"
+        assert order.index("beat-cpu") < order.index("bempp")
+        assert order[0] == "metal"
 
 
 def test_a_single_slot_package_leaves_a_gpu_host_to_its_gpu_runtime(
@@ -1030,7 +1062,7 @@ def _warmup_host(monkeypatch, *, system: str, cpu_available: bool) -> list[str]:
     return warmed
 
 
-@pytest.mark.parametrize("system", ["Windows", "Linux"])
+@pytest.mark.parametrize("system", ["Windows", "Linux", "Darwin"])
 def test_the_boot_warmup_warms_the_engine_auto_would_pick(monkeypatch, system: str) -> None:
     """The warmup and AUTO must agree on the measured CPU preference.
 
@@ -1046,25 +1078,13 @@ def test_the_boot_warmup_warms_the_engine_auto_would_pick(monkeypatch, system: s
 
     warmup._run_warmup()
 
-    assert warmed == ["bempp"]
+    assert warmed == ["beat-cpu"]
 
 
 def test_an_unprovisioned_cpu_runtime_leaves_the_warmup_on_bempp(monkeypatch) -> None:
     from server.solver import warmup
 
     warmed = _warmup_host(monkeypatch, system="Linux", cpu_available=False)
-
-    warmup._run_warmup()
-
-    assert warmed == ["bempp"]
-
-
-def test_macos_keeps_warming_bempp(monkeypatch) -> None:
-    """Where the order does not swap, neither does the warmup."""
-
-    from server.solver import warmup
-
-    warmed = _warmup_host(monkeypatch, system="Darwin", cpu_available=True)
 
     warmup._run_warmup()
 

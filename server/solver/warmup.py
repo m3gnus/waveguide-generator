@@ -299,7 +299,7 @@ def _warm_bempp(status: Mapping[str, object]) -> None:
 def _beat_cpu_leads_bempp() -> bool:
     """Whether AUTO would reach a provisioned BEAT CPU runtime before BEMPP.
 
-    Two questions, both cheap: does this platform prefer it (an ordering fact),
+    Two questions, both cheap: does AUTO prefer it (an ordering fact),
     and is it actually provisioned here (a capability fact, answered from a
     state file rather than a Julia launch). Asking both is what keeps this
     warmup on the engine the user's first solve will really use -- the
@@ -335,7 +335,7 @@ def _run_warmup() -> None:
             _warm_metal()
         else:
             # AUTO's order is metal, BEAT's accelerators, then the two CPU
-            # engines in whichever order this platform prefers (see
+            # engines with BEAT CPU ahead of BEMPP (see
             # ``registry.full3d_engine_order``). Leaving BEAT out here did not
             # merely skip a warmup: on a CUDA host, where AUTO resolves to BEAT,
             # this fell through and warmed BEMPP -- an engine that host's first
@@ -353,7 +353,7 @@ def _run_warmup() -> None:
                 engine = "BEAT"
                 _warm_beat(beat_backend)
             elif _beat_cpu_leads_bempp():
-                # Windows and Linux prefer a *provisioned* BEAT CPU runtime to
+                # AUTO prefers a *provisioned* BEAT CPU runtime to
                 # BEMPP, and that row is available only where a real solve has
                 # already been proved, so asking for it here cannot warm an
                 # engine the first solve will not reach.

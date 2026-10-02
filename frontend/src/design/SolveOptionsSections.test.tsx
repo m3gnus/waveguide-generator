@@ -206,8 +206,8 @@ describe('solve and directivity control help', () => {
       cadFastEngine: 'beat-cpu', accurateEngine: 'beat-cuda', cadAccurateEngine: 'beat-cuda',
     },
     {
-      name: 'Windows CPU-only', ready: ['bempp', 'beat-cpu'], resolvedDefault: 'bempp',
-      parametricFast: 'Fast: BEMPP, complex-k (numerical shift 0.005). Good for locating resonances; sharp chamber resonances may look milder.',
+      name: 'Windows CPU-only', ready: ['beat-cpu', 'bempp'], resolvedDefault: 'beat-cpu',
+      parametricFast: 'Fast: BEAT CPU. Good for locating resonances.',
       cadFastEngine: 'beat-cpu', accurateEngine: 'beat-cpu', cadAccurateEngine: 'beat-cpu',
     },
     {
@@ -221,7 +221,7 @@ describe('solve and directivity control help', () => {
       cadFastEngine: null, accurateEngine: null, cadAccurateEngine: null,
     },
   ])('describes the resolved Fast and Accurate engines for $name in both modes', (platform) => {
-    const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu'];
+    const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'beat-cpu', 'bempp'];
     const capabilityEngines = engineOrder.map((name) => ({
       name,
       available: platform.ready.includes(name),
@@ -492,7 +492,7 @@ describe('solve and directivity control help', () => {
   });
 
   describe("the Fast / Accurate explainer", () => {
-    const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu'];
+    const engineOrder = ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'beat-cpu', 'bempp'];
     const setReady = (ready: string[], resolvedDefault: string) => {
       queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
         engines: engineOrder.map((name) => ({
@@ -524,8 +524,8 @@ describe('solve and directivity control help', () => {
         fast: 'here on Metal:', fastKind: 'complex-k', accurate: 'Runs through BEAT Metal;',
       },
       {
-        engine: 'bempp', ready: ['bempp', 'beat-cpu'],
-        fast: 'here on BEMPP:', fastKind: 'complex-k', accurate: 'Runs through BEAT CPU, because no BEAT GPU backend is ready here;',
+        engine: 'bempp', ready: ['bempp'],
+        fast: 'here on BEMPP:', fastKind: 'complex-k', accurate: 'Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU;',
       },
       {
         engine: 'beat-cuda', ready: ['beat-cuda', 'beat-cpu', 'bempp'],

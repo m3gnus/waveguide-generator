@@ -35,30 +35,26 @@ CAPABILITIES_WAIT_SECONDS = 30.0
 #: Metal leads on the measured ATH ladder (1.0x at ~2,000 dofs to 6.9x at
 #: ~20,000, all of it in the solve stage). The BEAT accelerators follow; at most
 #: one of them is ever available on a given host, so their relative order only
-#: settles a two-GPU-family box. BEMPP is ahead of BEAT's CPU path here because
-#: it is the faster CPU engine over a complete wide-band sweep in the project's
-#: same-host B6 comparison. BEAT-CPU is competitive at low frequency, but its
-#: deliberately higher high-k quadrature makes it 2-3x slower at 20 kHz and
-#: slower over the full 100 Hz-20 kHz sweep. It remains explicitly selectable
-#: and stays ahead of dryrun, because a slow real solve beats a synthetic one.
+#: settles a two-GPU-family box. BEAT · CPU is the fastest
+#: measured CPU engine after the 0.3.4 SIMD work, so it precedes BEMPP.
+#: BEMPP remains the fallback when BEAT · CPU is unavailable or cannot solve
+#: the request, and the CPU engine for infinite baffle.
 _BASE_FULL3D_ENGINE_ORDER: tuple[str, ...] = (
     "metal",
     "beat-cuda",
     "beat-rocm",
     "beat-metal",
-    "bempp",
     "beat-cpu",
+    "bempp",
     "dryrun",
 )
 
 def full3d_engine_order(system: str | None = None) -> tuple[str, ...]:
     """AUTO's full-3D preference order on this platform.
 
-    The order is intentionally platform-independent. Being able to provision
-    BEAT-CPU everywhere changes what a user can choose, not which CPU engine
-    AUTO should prefer. BEMPP wins the measured wide-band CPU sweep; BEAT's
-    robust Burton-Miller/high-k path remains available when that trade-off is
-    wanted explicitly.
+    The order is platform-independent. BEAT · CPU is the fastest measured CPU
+    engine after the 0.3.4 SIMD work. BEMPP remains the fallback and the
+    infinite-baffle CPU engine; availability and capability filters still apply.
 
     Ordering is a *default*, never an override: an explicitly selected engine is
     resolved by name in ``EngineRegistry.resolve`` and never passes through
@@ -461,19 +457,12 @@ def resolve_auto_engine(
     """Resolve AUTO to the best engine this host can actually run.
 
     Solver mode chooses a path inside a backend, not a backend. The order is
-    ``full3d_engine_order()``: Metal, then BEAT's accelerators, BEMPP, BEAT-CPU,
+    ``full3d_engine_order()``: Metal, then BEAT's accelerators, BEAT-CPU, BEMPP,
     and only then the gated dry-run engine.
 
-    The order is safe because availability already encodes the platform. On a
-    Mac, Metal, BEAT-Metal, BEAT-CPU and BEMPP are all available and Metal is
-    preferred, which is a measured preference rather than a platform accident:
-    on the ATH reference ladder hornlab-metal-bem wins the whole sweep at every
-    size, by 1.0x at ~2,000 dofs rising to 6.9x at ~20,000, and all of that
-    margin is the solve stage. Every BEAT variant stays explicitly selectable
-    there.
-
-    BEAT-CPU stays ahead of dryrun, because a slow real solve beats a synthetic
-    one.
+    Availability and request capabilities determine which engines can be used.
+    Metal leads on Apple Silicon; BEAT-CPU is the preferred measured CPU engine
+    after the 0.3.4 SIMD work, with BEMPP as fallback.
 
     ``mounting`` drops candidates that cannot solve the requested mounting at
     all. BEAT rejects every coupled infinite-baffle request, so without this

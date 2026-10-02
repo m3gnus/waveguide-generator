@@ -22,7 +22,7 @@ def pending_probe(monkeypatch):
     bempp.bempp_status.cache_clear()
     entered, release = threading.Event(), threading.Event()
     clock, calls = [0.0], []
-    state = NS(outcome='opencl', metal=False, gpu=False)
+    state = NS(outcome='opencl', metal=False, gpu=False, cpu=True)
     monkeypatch.setattr(probe, 'time', NS(monotonic=lambda: clock[0]))
     monkeypatch.setattr(bempp, '_load_api', lambda: True)
     monkeypatch.setattr(bempp, '_version', lambda: 'test')
@@ -32,7 +32,7 @@ def pending_probe(monkeypatch):
     monkeypatch.setattr(metal, 'metal_status', lambda: {
         'available': state.metal, 'reason': 'Metal real state', 'version': 'test'})
     monkeypatch.setattr(beat, 'beat_backend_statuses', lambda: {
-        backend: {'available': backend == 'cpu' or (backend in {'cuda', 'metal'} and state.gpu),
+        backend: {'available': (backend == 'cpu' and state.cpu) or (backend in {'cuda', 'metal'} and state.gpu),
                   'reason': 'BEAT real state', 'version': 'test'}
         for backend in beat.BEAT_BACKENDS})
     def run(mode, device, timeout):
@@ -120,6 +120,7 @@ def test_other_engine_publishes_and_runs_without_qualification_wait(pending_prob
 def test_pending_bempp_submission_waits_then_completes(pending_probe, monkeypatch, tmp_path, outcome, requested):
     p = pending_probe
     p.state.outcome = outcome
+    p.state.cpu = False  # AUTO reaches BEMPP only without a ready BEAT CPU.
     runs, waiting = [], asyncio.Event()
     registry = EngineRegistry(cpu_refresh=False, factory=lambda name: RecordedEngine(name, runs))
     real_wait = registry.wait_for_bempp
@@ -158,7 +159,7 @@ def test_pending_bempp_submission_waits_then_completes(pending_probe, monkeypatc
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize('above', ['metal', 'beat-cuda'])
+@pytest.mark.parametrize('above', ['metal', 'beat-cuda', 'beat-cpu'])
 def test_auto_takes_compatible_higher_engine_immediately(pending_probe, above):
     p = pending_probe
     p.state.metal = above == 'metal'
@@ -178,31 +179,31 @@ def test_auto_takes_compatible_higher_engine_immediately(pending_probe, above):
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize('outcome,expected', [('opencl', 'bempp'), ('numba', 'bempp'), ('unavailable', 'beat-cpu')])
-def test_auto_choice_is_invariant_during_and_after_qualification(pending_probe, monkeypatch, outcome, expected):
+@pytest.mark.parametrize('outcome', ['opencl', 'numba', 'unavailable'])
+def test_auto_choice_is_invariant_without_waiting_for_bempp(pending_probe, monkeypatch, outcome):
     p = pending_probe
     p.state.outcome = outcome
-    waiting = asyncio.Event()
     registry = EngineRegistry(cpu_refresh=False, factory=lambda _name: object())
     real_wait = registry.wait_for_bempp
-    async def observed_wait():
-        waiting.set()
-        return await real_wait()
-    monkeypatch.setattr(registry, 'wait_for_bempp', observed_wait)
+    async def unexpected_wait():
+        pytest.fail('Ready BEAT CPU must not wait for BEMPP')
+    monkeypatch.setattr(registry, 'wait_for_bempp', unexpected_wait)
     async def exercise():
         try:
             await startup(registry, p)
+            payload = await capabilities_payload(registry)
+            assert payload['engineSelection']['resolvedDefault'] == 'beat-cpu'
             request = _planner_request()
-            during = asyncio.create_task(resolve_submission(request, registry))
-            await asyncio.wait_for(waiting.wait(), 5)
-            assert not during.done(), 'AUTO must not pass pending BEMPP for BEAT CPU'
+            first = await asyncio.wait_for(resolve_submission(request, registry), 5)
+            assert not p.release.is_set()
+            assert not registry._initial_bempp_task.done()
             p.release.set()
-            first = await asyncio.wait_for(during, 5)
+            await real_wait()
             after = await resolve_submission(request, registry)
-            assert first.engine_name == after.engine_name == expected
+            assert first.engine_name == after.engine_name == 'beat-cpu'
         finally:
             p.release.set()
-            await registry.wait_for_bempp()
+            await real_wait()
             await registry.shutdown_prewarm()
     asyncio.run(exercise())
 
@@ -232,13 +233,46 @@ def test_auto_waits_when_higher_available_engine_cannot_solve_mounting(pending_p
     asyncio.run(exercise())
 
 
-@pytest.mark.parametrize('outcome,expected', [('opencl', 'bempp'), ('numba', 'beat-cpu')])
-def test_imported_auto_waits_then_keeps_same_choice_when_bempp_may_be_ineligible(pending_probe, monkeypatch, outcome, expected):
+@pytest.mark.parametrize('outcome', ['opencl', 'numba'])
+def test_imported_auto_uses_ready_beat_cpu_without_waiting_for_bempp(pending_probe, monkeypatch, outcome):
     from server.jobs.runtime import resolve_imported_submission
     from server.tests.test_imported_jobs import _request
 
     p = pending_probe
     p.state.outcome = outcome
+    registry = EngineRegistry(cpu_refresh=False, factory=lambda _name: object())
+    real_wait = registry.wait_for_bempp
+    async def unexpected_wait():
+        pytest.fail('Imported Fast AUTO must not wait for BEMPP with ready BEAT CPU')
+    monkeypatch.setattr(registry, 'wait_for_bempp', unexpected_wait)
+    async def exercise():
+        try:
+            await startup(registry, p)
+            request = _request('wgi_' + '0' * 26)
+            request.options.engine = 'auto'
+            first = await asyncio.wait_for(resolve_imported_submission(request, registry), 5)
+            assert not p.release.is_set()
+            assert not registry._initial_bempp_task.done()
+            p.release.set()
+            await real_wait()
+            after = await resolve_imported_submission(request, registry)
+            assert first.engine_name == after.engine_name == 'beat-cpu'
+            assert first.symmetry_metadata['solver_plan']['eligibility_reasons'] == after.symmetry_metadata['solver_plan']['eligibility_reasons']
+        finally:
+            p.release.set()
+            await real_wait()
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize('outcome', ['opencl', 'numba'])
+def test_imported_auto_without_ready_beat_waits_for_bempp_and_refuses_numba(pending_probe, monkeypatch, outcome):
+    from server.jobs.runtime import EngineUnavailableError, resolve_imported_submission
+    from server.tests.test_imported_jobs import _request
+
+    p = pending_probe
+    p.state.outcome = outcome
+    p.state.cpu = False
     waiting = asyncio.Event()
     registry = EngineRegistry(cpu_refresh=False, factory=lambda _name: object())
     real_wait = registry.wait_for_bempp
@@ -251,18 +285,18 @@ def test_imported_auto_waits_then_keeps_same_choice_when_bempp_may_be_ineligible
             await startup(registry, p)
             request = _request('wgi_' + '0' * 26)
             request.options.engine = 'auto'
-            during = asyncio.create_task(resolve_imported_submission(request, registry))
+            task = asyncio.create_task(resolve_imported_submission(request, registry))
             await asyncio.wait_for(waiting.wait(), 5)
-            assert not during.done()
+            assert not task.done()
             p.release.set()
-            first = await asyncio.wait_for(during, 5)
-            after = await resolve_imported_submission(request, registry)
-            assert first.engine_name == after.engine_name == expected
-            if outcome == 'numba':
-                assert 'bempp: does not declare imported geometry' in first.symmetry_metadata['solver_plan']['eligibility_reasons']
+            if outcome == 'opencl':
+                assert (await asyncio.wait_for(task, 5)).engine_name == 'bempp'
+            else:
+                with pytest.raises(EngineUnavailableError):
+                    await asyncio.wait_for(task, 5)
         finally:
             p.release.set()
-            await registry.wait_for_bempp()
+            await real_wait()
             await registry.shutdown_prewarm()
     asyncio.run(exercise())
 

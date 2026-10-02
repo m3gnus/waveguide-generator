@@ -152,7 +152,7 @@ describe('legacy beat engine migration', () => {
   const beatSelection: EngineSelection = {
     default: 'auto',
     resolvedDefault: 'metal',
-    full3dOrder: ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'bempp', 'beat-cpu', 'dryrun'],
+    full3dOrder: ['metal', 'beat-cuda', 'beat-rocm', 'beat-metal', 'beat-cpu', 'bempp', 'dryrun'],
     };
 
   it('narrows a stored beat to the best variant this host can run', () => {

@@ -158,7 +158,7 @@ describe('solver-backend parameter gating', () => {
         engine('beat-cpu', true, ['free-standing']),
         engine('bempp', true, ['free-standing']),
       ],
-      engineSelection: { default: 'auto', resolvedDefault: 'bempp', full3dOrder: ['metal', 'beat-cpu', 'bempp', 'dryrun'] },
+      engineSelection: { default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['metal', 'beat-cpu', 'bempp', 'dryrun'] },
     });
     const option = [...host.querySelectorAll<HTMLOptionElement>('[data-parameter-id="simulation.sim_type"] option')]
       .find((item) => item.textContent === 'Infinite baffle');
