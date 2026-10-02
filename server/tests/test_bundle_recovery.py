@@ -709,7 +709,7 @@ def test_the_bootstrap_reports_a_live_updater_rather_than_starting(tmp_path: Pat
 
 
 def test_the_real_helper_declines_while_the_claim_is_held_and_moves_nothing(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """End to end, with the real CLI: held claim in, refusal out, nothing moved."""
 
@@ -721,7 +721,11 @@ def test_the_real_helper_declines_while_the_claim_is_held_and_moves_nothing(
     resources.mkdir(parents=True)
     data_dir = tmp_path / "data"
     _interrupted_installation(resources, data_dir, sys.platform)
+    # This fixture tests the real helper's claim refusal, independent of the
+    # host's POSIX compiler. Native logger compilation has its own real tests.
+    monkeypatch.setattr(build_bundle, "write_installer_logger", lambda path, **_: path.write_bytes(b"fixture logger"))
     _staged_recovery(resources)
+    assert (resources / "recovery" / "installer-log").read_bytes() == b"fixture logger"
     before = sorted(entry.name for entry in resources.iterdir())
 
     with update_lock.claim_update(resources):
