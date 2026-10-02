@@ -303,13 +303,18 @@ run_interruptible() {
         if [ "$INTERRUPTED" -ne 0 ] && [ "$CLEANING" -eq 0 ]; then
             kill -TERM "$step_pid" 2>/dev/null || :
             # No deadline on an ordinary large copy: only cancellation gets
-            # a five-second grace period, then KILL and a reap.
-            cancel_ticks=0
-            while kill -0 "$step_pid" 2>/dev/null && [ "$cancel_ticks" -lt 50 ]; do
+            # a five-second grace period, then KILL and a reap. Five seconds
+            # of elapsed time from a clock child, not a count of polls: each
+            # poll forks a sleep, and a loaded machine makes those slower
+            # (fifty polls took well over five seconds on a hosted runner).
+            (trap '' HUP INT TERM QUIT; exec sleep 5) >/dev/null 2>&1 &
+            grace_clock=$!
+            while kill -0 "$step_pid" 2>/dev/null && kill -0 "$grace_clock" 2>/dev/null; do
                 sleep 0.1
-                cancel_ticks=$((cancel_ticks + 1))
             done
             kill -KILL "$step_pid" 2>/dev/null || :
+            kill -KILL "$grace_clock" 2>/dev/null || :
+            wait "$grace_clock" 2>/dev/null || :
             break
         fi
         sleep 0.1

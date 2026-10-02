@@ -824,13 +824,15 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(dmg: Path, in
     proc = subprocess.Popen(command, preexec_fn=installer_process_signals, env={**process_env, "PATH": f"{bin_dir}{os.pathsep}{process_env['PATH']}"},
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             stdin=subprocess.DEVNULL, start_new_session=True)
-    started = time.monotonic()
     try:
+        # Reaching the blocked move is setup, not the deadline under test (a
+        # hosted macOS runner is about 3x slower); the bound starts there.
+        deadline = time.monotonic() + 30
+        while not log.exists():
+            assert proc.poll() is None and time.monotonic() < deadline, "the blocked move was never reached"
+            time.sleep(0.01)
+        started = time.monotonic()
         if interrupt is not None:
-            deadline = time.monotonic() + 5
-            while not log.exists():
-                assert proc.poll() is None and time.monotonic() < deadline
-                time.sleep(0.01)
             os.killpg(proc.pid, interrupt)
         output, _ = proc.communicate(timeout=10)
         assert proc.returncode == 3, output

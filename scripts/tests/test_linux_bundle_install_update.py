@@ -775,14 +775,18 @@ def test_blocked_recovery_has_a_deadline_and_names_the_real_backup(tmp_path: Pat
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                             stdin=subprocess.DEVNULL, start_new_session=True)
     family = InstallerFamily(proc)
-    started = time.monotonic()
     try:
+        # Reaching the blocked move is the test's setup, not the deadline
+        # under test: a hosted macOS runner, about 3x slower than a developer
+        # Mac, overran a 5 s allowance here. The installer's own bound is
+        # measured from the moment the move is blocked.
+        deadline = time.monotonic() + 30
+        while not log.exists():
+            family.live()
+            assert proc.poll() is None and time.monotonic() < deadline, "the blocked move was never reached"
+            time.sleep(0.01)
+        started = time.monotonic()
         if interrupt is not None:
-            deadline = time.monotonic() + 5
-            while not log.exists():
-                family.live()
-                assert proc.poll() is None and time.monotonic() < deadline
-                time.sleep(0.01)
             os.killpg(proc.pid, interrupt)
         output, _ = proc.communicate(timeout=10)
         family.assert_gone()
