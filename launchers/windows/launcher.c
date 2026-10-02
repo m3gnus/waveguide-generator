@@ -132,8 +132,8 @@ static int load(const wchar_t *root, Journal *j) {
         !matches(root, &j->root_id)) return 0;
     for (i = 0; i < ITEMS; ++i) {
         if (j->before[i].present > 1 || j->after[i].present > 1 ||
-            (j->before[i].present && j->before[i].directory != (i < 3)) ||
-            (j->after[i].present && j->after[i].directory != (i < 3))) return 0;
+            (j->before[i].present && j->before[i].directory != (DWORD)(i < 3)) ||
+            (j->after[i].present && j->after[i].directory != (DWORD)(i < 3))) return 0;
     }
     return 1;
 }
@@ -572,7 +572,7 @@ static int prepare(const wchar_t *root, const wchar_t *from, const wchar_t *to,
     if (!path(old, root, OLD) || !path(newer, root, NEW) || !absent(old) || !absent(newer)) return 3;
     for (i = 0; i < ITEMS; ++i) {
         if (!path(live, root, names[i]) || !identity(live, &j.before[i]) ||
-            (j.before[i].present && j.before[i].directory != (i < 3))) return 3;
+            (j.before[i].present && j.before[i].directory != (DWORD)(i < 3))) return 3;
     }
     if (j.before[0].present != j.before[1].present) return 3;
     if (!CreateDirectoryW(old, NULL) || !CreateDirectoryW(newer, NULL) ||
