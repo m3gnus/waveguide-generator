@@ -7,11 +7,12 @@ and never runs Python out of the installation it is replacing.
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
@@ -26,6 +27,11 @@ from shared.release_assets import LINUX_PLATFORM, MACOS_PLATFORM, WINDOWS_PLATFO
 MAX_REQUEST = 16 * 1024
 MAX_ARCHIVE_MEMBERS = 250000
 MAX_UNPACKED_BYTES = 8 * 1024**3
+MAX_ARCHIVE_PATH_LENGTH = 4096
+MAX_ARCHIVE_LINK_HOPS = 40
+MAX_ARCHIVE_VIRTUAL_NODES = MAX_ARCHIVE_MEMBERS
+MAX_ARCHIVE_VIRTUAL_COMPONENTS = MAX_ARCHIVE_MEMBERS * 16
+MAX_ARCHIVE_GRAPH_WORK = MAX_ARCHIVE_MEMBERS * 256
 
 
 @dataclass(frozen=True)
@@ -235,6 +241,110 @@ def consume_full_installer_request(path: Path, *, repo_root: Path, data_dir: Pat
         raise UpdateHandoffError(f"The full installer request is invalid: {exc}.") from exc
 
 
+def _validate_linux_members(members: list[tarfile.TarInfo]) -> None:
+    """Resolve the bounded archive graph without creating any filesystem object."""
+    # Physical virtual paths include implicit directories created by extraction.
+    nodes: dict[tuple[str, ...], tuple[str, tuple[str, ...], bool]] = {(): ("directory", (), False)}
+    stored_components = 0
+    work = 0
+
+    def spend(amount: int) -> None:
+        nonlocal work
+        work += amount
+        if work > MAX_ARCHIVE_GRAPH_WORK:
+            raise ValueError("the installer archive exceeds its graph budget")
+
+    def store(path: tuple[str, ...], node: tuple[str, tuple[str, ...], bool]) -> None:
+        nonlocal stored_components
+        if path not in nodes:
+            stored_components += len(path)
+            if len(nodes) >= MAX_ARCHIVE_VIRTUAL_NODES or stored_components > MAX_ARCHIVE_VIRTUAL_COMPONENTS:
+                raise ValueError("the installer archive exceeds its graph budget")
+        nodes[path] = node
+
+    def parts(name: str) -> tuple[str, ...]:
+        spend(len(name))
+        if not name or len(name) > MAX_ARCHIVE_PATH_LENGTH or PurePosixPath(name).is_absolute():
+            raise ValueError("the installer archive contains an unsafe path or link")
+        return PurePosixPath(name).parts
+
+    def resolve(components: tuple[str, ...], *, follow_final: bool = True,
+                directory_links: bool = False) -> tuple[str, ...]:
+        pending = deque(components)
+        resolved: list[str] = []
+        hops = 0
+        directory_targets = 0
+        while pending:
+            spend(len(resolved) + 1)
+            component = pending.popleft()
+            if component is None:
+                if nodes.get(tuple(resolved), (None, (), False))[0] != "directory":
+                    raise ValueError("the installer archive traverses a dangling directory link")
+                directory_targets -= 1
+                continue
+            if component == "..":
+                if not resolved:
+                    raise ValueError("the installer archive link escapes its destination")
+                resolved.pop()
+                continue
+            path = (*resolved, component)
+            node = nodes.get(path)
+            if directory_targets and node is None:
+                raise ValueError("the installer archive traverses a dangling directory link")
+            if node and node[0] == "symlink" and (follow_final or pending):
+                hops += 1
+                if hops > MAX_ARCHIVE_LINK_HOPS:
+                    raise ValueError("the installer archive contains cyclic or excessive links")
+                # Expand the link before processing a later '..'; normpath here
+                # would incorrectly accept a -> '.', x -> 'a/../outside'.
+                spend(len(node[1]))
+                if directory_links:
+                    # A parent symlink cannot create its missing target when
+                    # makedirs encounters the already existing dangling link.
+                    pending.appendleft(None)
+                    directory_targets += 1
+                pending.extendleft(reversed(node[1]))
+                continue
+            resolved.append(component)
+            if pending and node and node[0] != "directory":
+                raise ValueError("the installer archive path traverses a non-directory")
+        return tuple(resolved)
+
+    for member in members:
+        name = parts(member.name)
+        parent = resolve(name[:-1], directory_links=True)
+        for depth in range(1, len(parent) + 1):
+            spend(depth)
+            path = parent[:depth]
+            existing = nodes.get(path)
+            if existing and existing[0] != "directory":
+                raise ValueError("the installer archive path has a non-directory parent")
+            if existing is None:
+                store(path, ("directory", (), False))
+        path = (*parent, name[-1])
+        existing = nodes.get(path)
+        if existing and not (member.isdir() and existing[0] == "directory" and not existing[2]):
+            raise ValueError("the installer archive repeats a resolved path")
+        if member.issym():
+            target = parts(member.linkname)
+            store(path, ("symlink", target, True))
+            resolve(path)
+        elif member.islnk():
+            # Hardlinks are archive-root relative, not symlink-parent relative.
+            # Require an already available regular source (including a previous
+            # hardlink); a hardlink to a symlink is not a directory alias.
+            target = resolve(parts(member.linkname), follow_final=False, directory_links=True)
+            if nodes.get(target, (None, (), False))[0] != "file":
+                raise ValueError("the installer archive hardlink lacks a regular target")
+            store(path, ("file", (), True))
+        else:
+            store(path, ("directory" if member.isdir() else "file", (), True))
+    # Future symlink declarations can change an earlier target's resolution.
+    for path, node in nodes.items():
+        if node[0] == "symlink":
+            resolve(path)
+
+
 def _extract_linux(installer: Path, destination: Path) -> None:
     """Validate all paths before extracting any member into a private directory."""
     stream, info = _open_regular(installer)
@@ -249,8 +359,10 @@ def _extract_linux(installer: Path, destination: Path) -> None:
                 raise ValueError("the installer archive is too large")
             # Validate every path before extracting any object. Iterating and
             # limiting here also bounds the table itself, not just extraction.
-            relative = Path(member.name)
-            if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+            # Linux tar names use POSIX syntax even when validated on Windows.
+            relative = PurePosixPath(member.name)
+            if (len(member.name) > MAX_ARCHIVE_PATH_LENGTH or relative.is_absolute()
+                    or ".." in relative.parts or not relative.parts):
                 raise ValueError("the installer archive contains an unsafe path")
             if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
                 raise ValueError("the installer archive contains a special file")
@@ -260,6 +372,7 @@ def _extract_linux(installer: Path, destination: Path) -> None:
             names.add(name)
             tarfile.data_filter(member, str(destination))
             members.append(member)
+        _validate_linux_members(members)
         if shutil.disk_usage(destination).free < total + 64 * 1024**2:
             raise ValueError("there is not enough free space to extract the installer")
         archive.extractall(destination, members=members, filter="data")
@@ -268,6 +381,19 @@ def _extract_linux(installer: Path, destination: Path) -> None:
     entry = destination / "install.sh"
     if not entry.is_file() or entry.is_symlink() or not (destination / "waveguide-generator").is_dir():
         raise ValueError("the installer archive lacks its binary installer")
+
+
+def _sync_file(path: Path) -> None:
+    with path.open("rb") as stream:
+        os.fsync(stream.fileno())
+
+
+def _sync_directory(path: Path) -> None:
+    directory = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def launch_full_installer(repo_root: Path, request: FullInstallerRequest, parent_pid: int,
@@ -349,13 +475,8 @@ def launch_full_installer(repo_root: Path, request: FullInstallerRequest, parent
             config.chmod(0o600)
             # Persist both configuration and external entry before detachment.
             for durable in (recovery_entry, recovery_logger):
-                with durable.open("rb") as stream:
-                    os.fsync(stream.fileno())
-            directory = os.open(recovery, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-            try:
-                os.fsync(directory)
-            finally:
-                os.close(directory)
+                _sync_file(durable)
+            _sync_directory(recovery)
             _unexpired(request)
             subprocess.Popen(["/bin/sh", str(script), request.platform, str(request.installer),
                 str(payload), str(request.install_root), str(parent_pid), str(work), metadata,

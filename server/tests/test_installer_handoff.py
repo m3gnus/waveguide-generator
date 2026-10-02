@@ -5,7 +5,7 @@ import hashlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import subprocess
 import tarfile
 import threading
@@ -62,6 +62,28 @@ def facade(tmp_path):
     service = InstallerUpdateService(running_version="0.3.3", data_dir=data,
         repo_root=app, update_request_path=request, client=client, restart_approval=approval)
     return service, client, request, ready, app, data
+
+
+def target_posix_durability(monkeypatch, module):
+    """Model a POSIX handoff on Windows; retain native sync calls on POSIX."""
+    sync_file, sync_directory = module._sync_file, module._sync_directory
+    calls = []
+    def file(path):
+        if os.name == "nt":
+            # Windows _commit requires a writable handle; the target is POSIX.
+            with path.open("r+b") as stream:
+                os.fsync(stream.fileno())
+        else:
+            sync_file(path)
+        calls.append(("file", path))
+    def directory(path):
+        assert path.is_dir() and not path.is_symlink()
+        if os.name != "nt":
+            sync_directory(path)
+        calls.append(("directory", path))
+    monkeypatch.setattr(module, "_sync_file", file)
+    monkeypatch.setattr(module, "_sync_directory", directory)
+    return calls
 
 
 def test_approval_precedes_reverification_and_atomic_publication(tmp_path):
@@ -277,9 +299,17 @@ def test_launcher_rehashes_before_starting_any_helper(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("name,link", [("../outside", None), ("/outside", None), ("safe-link", "../../outside")])
-def test_linux_tar_rejects_traversal_before_extraction(tmp_path, name, link):
+@pytest.mark.parametrize("host_path", ["native", "windows"])
+def test_linux_tar_rejects_traversal_before_extraction(tmp_path, monkeypatch, name, link, host_path):
+    import launchers.full_installer as module
+    if host_path == "windows":
+        # The old host-dependent member parser must fail this on every host.
+        monkeypatch.setattr(module, "Path", PureWindowsPath)
     asset = tmp_path / "bad.tar.gz"
     with tarfile.open(asset, "w:gz") as archive:
+        preceding = tarfile.TarInfo("benign-first")
+        preceding.size = 1
+        archive.addfile(preceding, io.BytesIO(b"x"))
         entry = tarfile.TarInfo(name)
         if link:
             entry.type, entry.linkname = tarfile.SYMTYPE, link
@@ -289,6 +319,9 @@ def test_linux_tar_rejects_traversal_before_extraction(tmp_path, name, link):
             archive.addfile(entry, io.BytesIO(b"x"))
     destination = tmp_path / "payload"
     destination.mkdir()
+    def refuse_extract(*args, **kwargs):
+        raise AssertionError("unsafe archive reached extraction")
+    monkeypatch.setattr(tarfile.TarFile, "extractall", refuse_extract)
     with pytest.raises((ValueError, tarfile.TarError)):
         _extract_linux(asset, destination)
     assert list(destination.iterdir()) == []
@@ -308,10 +341,132 @@ def test_linux_tar_accepts_confined_runtime_links(tmp_path):
         entry = tarfile.TarInfo("waveguide-generator/runtime/python3")
         entry.type, entry.linkname = tarfile.SYMTYPE, "python3.13"
         archive.addfile(entry)
+        entry = tarfile.TarInfo("waveguide-generator/runtime/python")
+        entry.type, entry.linkname = tarfile.SYMTYPE, "python3"
+        archive.addfile(entry)
+        for name, target in [("hard-one", "waveguide-generator/runtime/python3.13"),
+                             ("hard-two", "waveguide-generator/runtime/hard-one")]:
+            entry = tarfile.TarInfo("waveguide-generator/runtime/" + name)
+            entry.type, entry.linkname = tarfile.LNKTYPE, target
+            archive.addfile(entry)
     destination = tmp_path / "payload"
     destination.mkdir()
     _extract_linux(asset, destination)
     assert (destination / "waveguide-generator/runtime/python3").read_bytes() == b"x"
+    assert (destination / "waveguide-generator/runtime/python").read_bytes() == b"x"
+    for name in ("hard-one", "hard-two"):
+        assert (destination / "waveguide-generator/runtime" / name).read_bytes() == b"x"
+
+
+def graph_member(name, kind, target=""):
+    member = tarfile.TarInfo(name)
+    member.type = {"directory": tarfile.DIRTYPE, "file": tarfile.REGTYPE,
+                   "symlink": tarfile.SYMTYPE, "hardlink": tarfile.LNKTYPE}[kind]
+    member.linkname = target
+    if kind == "file":
+        member.size = 1
+    return member
+
+
+@pytest.mark.parametrize("graph", [
+    [("a", "symlink", "."), ("a/link", "symlink", "../outside")],
+    [("a", "symlink", "."), ("x", "symlink", "a/../outside")],
+    [("a", "symlink", "b"), ("b", "symlink", "a")],
+    [("a", "hardlink", "b"), ("b", "hardlink", "a")],
+    [("a", "file", ""), ("a/b", "file", "")],
+    [("a", "symlink", "."), ("x", "hardlink", "a/../outside")],
+    [("a", "directory", ""), ("x", "symlink", "a"),
+     ("x/file", "file", ""), ("a/file", "file", "")],
+    [("a", "directory", ""), ("x", "hardlink", "a")],
+    [("a", "symlink", "b"), ("a/file", "file", "")],
+    [("a", "symlink", "b"), ("a/file", "file", ""), ("b", "directory", "")],
+    [("b", "directory", ""), ("a", "symlink", "missing/../b"), ("a/file", "file", "")],
+])
+def test_linux_tar_preflights_interacting_links_before_any_extraction(tmp_path, monkeypatch, graph):
+    asset = tmp_path / "graph.tar.gz"
+    with tarfile.open(asset, "w:gz") as archive:
+        archive.addfile(graph_member("benign-first", "file"), io.BytesIO(b"x"))
+        for name, kind, target in graph:
+            member = graph_member(name, kind, target)
+            archive.addfile(member, io.BytesIO(b"x") if member.isfile() else None)
+    destination = tmp_path / "payload"
+    destination.mkdir()
+    def refuse_extract(*args, **kwargs):
+        raise AssertionError("unsafe graph reached extraction")
+    monkeypatch.setattr(tarfile.TarFile, "extractall", refuse_extract)
+    with pytest.raises((ValueError, tarfile.TarError)):
+        _extract_linux(asset, destination)
+    assert list(destination.iterdir()) == []
+    assert not (tmp_path / "outside").exists()
+
+
+def test_linux_graph_accepts_confined_directory_aliases_and_parent_relative_links():
+    import launchers.full_installer as module
+    members = [graph_member(*row) for row in [
+        ("bundle", "directory", ""),
+        ("bundle/lib", "directory", ""),
+        ("bundle/lib/real", "file", ""),
+        ("bundle/lib64", "symlink", "lib"),
+        ("bundle/lib64/extra", "file", ""),
+        ("bundle/lib64/new/sub/file", "file", ""),
+        ("bundle/lib/link", "symlink", "../lib64/real"),
+        ("bundle/hard-one", "hardlink", "bundle/lib/real"),
+        ("bundle/hard-two", "hardlink", "bundle/hard-one"),
+    ]]
+    module._validate_linux_members(members)
+
+
+@pytest.mark.parametrize("bound", ["path", "links", "nodes", "components", "work"])
+def test_linux_archive_graph_resolution_is_bounded_before_extraction(tmp_path, monkeypatch, bound):
+    import launchers.full_installer as module
+    asset = tmp_path / "bounded.tar.gz"
+    with tarfile.open(asset, "w:gz") as archive:
+        archive.addfile(graph_member("benign-first", "file"), io.BytesIO(b"x"))
+        if bound == "path":
+            monkeypatch.setattr(module, "MAX_ARCHIVE_PATH_LENGTH", 16)
+            archive.addfile(graph_member("a", "symlink", "x" * 17))
+        elif bound == "links":
+            monkeypatch.setattr(module, "MAX_ARCHIVE_LINK_HOPS", 2)
+            for name, target in [("a", "b"), ("b", "c"), ("c", "d")]:
+                archive.addfile(graph_member(name, "symlink", target))
+            archive.addfile(graph_member("d", "file"), io.BytesIO(b"x"))
+        else:
+            attribute, limit = {"nodes": ("MAX_ARCHIVE_VIRTUAL_NODES", 2),
+                                "components": ("MAX_ARCHIVE_VIRTUAL_COMPONENTS", 1),
+                                "work": ("MAX_ARCHIVE_GRAPH_WORK", 32)}[bound]
+            monkeypatch.setattr(module, attribute, limit)
+            archive.addfile(graph_member("a/b/c/d/e/file", "file"), io.BytesIO(b"x"))
+    destination = tmp_path / "payload"
+    destination.mkdir()
+    def refuse_extract(*args, **kwargs):
+        raise AssertionError("unbounded graph reached extraction")
+    monkeypatch.setattr(tarfile.TarFile, "extractall", refuse_extract)
+    with pytest.raises(ValueError, match="unsafe|excessive|graph budget"):
+        _extract_linux(asset, destination)
+    assert list(destination.iterdir()) == []
+
+
+def test_real_linux_archive_builder_runtime_link_layout_is_accepted(tmp_path):
+    from scripts.build_bundle import deterministic_tar_gz
+    source = tmp_path / "waveguide-generator"
+    binary = source / "runtime/bin"
+    binary.mkdir(parents=True)
+    interpreter = binary / "python3.13"
+    interpreter.write_bytes(b"representative interpreter")
+    (binary / "python3").symlink_to("python3.13")
+    os.link(interpreter, binary / "python")
+    package = source / "runtime/lib/python3.13/site-packages/numpy"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("# representative installed package\n")
+    archive = tmp_path / "installer.tar.gz"
+    deterministic_tar_gz(source, archive, archive_root="waveguide-generator",
+        extra_root_files={"install.sh": ("#!/bin/sh\nexit 0\n", 0o755)})
+    destination = tmp_path / "payload"
+    destination.mkdir()
+    _extract_linux(archive, destination)
+    for name in ("python", "python3", "python3.13"):
+        assert (destination / "waveguide-generator/runtime/bin" / name).read_bytes() == interpreter.read_bytes()
+    assert (destination / "waveguide-generator/runtime/lib/python3.13/site-packages/numpy/__init__.py").is_file()
 
 
 def test_release_and_atomic_link_are_serialized(tmp_path, monkeypatch):
@@ -421,6 +576,7 @@ def test_approval_expiring_during_extraction_cleans_only_prepared_objects(tmp_pa
     def extract(_installer, _destination):
         clock[0] = request.expires_at_epoch
     monkeypatch.setattr(module, "_extract_linux", extract)
+    target_posix_durability(monkeypatch, module)
     monkeypatch.setattr(module.time, "time", lambda: clock[0])
     called = []
     monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: called.append(args))
@@ -501,6 +657,7 @@ def test_handoff_copies_and_syncs_packaged_logger_before_detaching(tmp_path, mon
     packaged.mkdir(parents=True)
     (packaged / "wg-installer-log").write_bytes(b"packaged independent native logger")
     monkeypatch.setattr(module, "_extract_linux", lambda *args: None)
+    durable = target_posix_durability(monkeypatch, module)
     called = []
     real_fsync = os.fsync
     synced = []
@@ -508,14 +665,62 @@ def test_handoff_copies_and_syncs_packaged_logger_before_detaching(tmp_path, mon
         synced.append(os.fstat(fd).st_ino)
         return real_fsync(fd)
     monkeypatch.setattr(os, "fsync", sync)
+    modes = []
+    real_chmod = Path.chmod
+    def chmod(path, mode, **kwargs):
+        modes.append((path, mode))
+        return real_chmod(path, mode, **kwargs)
+    monkeypatch.setattr(Path, "chmod", chmod)
     def detach(command, **_kwargs):
         external = Path(command[-1]) / "log"
         assert external.read_bytes() == (packaged / "wg-installer-log").read_bytes()
-        assert external.stat().st_ino in synced and external.stat().st_mode & 0o111
+        assert external.stat().st_ino in synced and (external, 0o700) in modes
+        if os.name != "nt":
+            assert external.stat().st_mode & 0o111
+        assert durable == [("file", external.parent / "recover.sh"),
+                           ("file", external), ("directory", external.parent)]
         called.append(command)
     monkeypatch.setattr(subprocess, "Popen", detach)
     launch_full_installer(app, request, 123, data_dir=data)
     assert len(called) == 1
+
+
+@pytest.mark.parametrize("failed", ["recover.sh", "log", "directory"])
+def test_recovery_sync_failure_refuses_detachment_and_cleans_only_prepared_objects(tmp_path, monkeypatch, failed):
+    import launchers.full_installer as module
+    service, _, path, ready, app, data = facade(tmp_path)
+    service._publish(ready)
+    _, request = consume_full_installer_request(path, repo_root=app, data_dir=data,
+        now=json.loads(path.read_text())["readyAtEpoch"] + 1)
+    sources = app / "launchers"
+    sources.mkdir()
+    for name in ("installer-helper.sh", "installer-recovery.sh"):
+        (sources / name).write_text("#!/bin/sh\nexit 0\n")
+    packaged = app.parent / "runtime/bin"
+    packaged.mkdir(parents=True)
+    logger = packaged / "wg-installer-log"
+    logger.write_bytes(b"retained packaged logger")
+    monkeypatch.setattr(module, "_extract_linux", lambda *args: None)
+    target_posix_durability(monkeypatch, module)
+    sync_file, sync_directory = module._sync_file, module._sync_directory
+    def file(candidate):
+        if candidate.name == failed:
+            raise OSError("injected durability failure")
+        sync_file(candidate)
+    def directory(candidate):
+        if failed == "directory":
+            raise OSError("injected durability failure")
+        sync_directory(candidate)
+    monkeypatch.setattr(module, "_sync_file", file)
+    monkeypatch.setattr(module, "_sync_directory", directory)
+    called = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *args, **kwargs: called.append(args))
+    with pytest.raises(UpdateHandoffError, match="durability failure"):
+        launch_full_installer(app, request, 123, data_dir=data)
+    assert not called
+    assert not list((data / "update-install").glob("helper-*"))
+    assert not (request.install_root.parent / ("." + request.install_root.name + ".installer-recovery")).exists()
+    assert logger.read_bytes() == b"retained packaged logger"
 
 
 def test_windows_full_installer_uses_detached_native_bounded_log_switch(tmp_path, monkeypatch):
