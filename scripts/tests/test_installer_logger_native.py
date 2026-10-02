@@ -318,8 +318,10 @@ touch {shlex.quote(str(finished))}
     finally:
         release.touch()
         if sink is not None:
-            try: os.kill(sink, signal.SIGKILL)
-            except ProcessLookupError: pass
+            try:
+                os.kill(sink, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         family.stop()
 
 
@@ -347,8 +349,10 @@ def test_unsettled_sink_after_eof_has_bounded_reap_and_keeps_record(tmp_path):
         os.kill(sink, 0)
     finally:
         if sink is not None:
-            try: os.kill(sink, signal.SIGKILL)
-            except ProcessLookupError: pass
+            try:
+                os.kill(sink, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         family.stop()
 
 

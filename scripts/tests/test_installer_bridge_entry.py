@@ -102,7 +102,8 @@ def test_retained_v032_layer_receiver_delivers_B_logger_before_next_handoff(tmp_
     root = tmp_path / ("Waveguide Generator.app" if platform == "darwin" else "waveguide-generator")
     resources = root / "Contents/Resources" if platform == "darwin" else root
     app, runtime, outer = (resources / name for name in ("app", "runtime", "recovery"))
-    for directory in (app, runtime, outer): directory.mkdir(parents=True)
+    for directory in (app, runtime, outer):
+        directory.mkdir(parents=True)
     (app / "old-app").write_text("0.3.2")
     (runtime / "old-runtime").write_text("0.3.2")
     (outer / "historical-recovery").write_text("must remain exactly unchanged")
