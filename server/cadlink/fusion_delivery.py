@@ -34,6 +34,7 @@ import threading
 import time
 from typing import Any, Callable, Literal, Mapping
 
+from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
 from .live import wake as live_wake
@@ -226,7 +227,9 @@ def _withdraw_and_record(
         f".wg-withdraw-{path.name}.{os.getpid()}-{time.monotonic_ns()}.tmp"
     )
     try:
-        os.rename(path, held)
+        # Against the add-in's claim of the same file: on Windows plain
+        # os.rename lets both renames succeed (server/platform/exclusive_rename.py).
+        take_by_rename(path, held)
     except FileNotFoundError:
         return "gone"
     except OSError as exc:
