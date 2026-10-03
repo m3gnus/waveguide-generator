@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   driverCountText,
   driverEmptyState,
@@ -10,6 +10,10 @@ import {
   type DriverKindTally,
 } from './driverLibraryCounts';
 import type { DriverLibraryInfo } from '../api/drivers';
+
+// The product formats counts in the user's locale, so expectations do the same
+// rather than hardcoding en-US separators.
+const n = (value: number): string => value.toLocaleString();
 
 const info = (kinds: DriverLibraryInfo['kinds'], rest: Partial<DriverLibraryInfo> = {}): DriverLibraryInfo => ({
   folder: '/library',
@@ -79,15 +83,15 @@ describe('driverKindTotal and labels', () => {
 
   it('agrees with itself on singular and plural, and groups the thousands', () => {
     expect(driverCountText(1, 'cd')).toBe('1 compression driver');
-    expect(driverCountText(1045, 'lf')).toBe('1,045 cone drivers');
-    expect(driverCountText(1046)).toBe('1,046 drivers');
+    expect(driverCountText(1045, 'lf')).toBe(`${n(1045)} cone drivers`);
+    expect(driverCountText(1046)).toBe(`${n(1046)} drivers`);
   });
 });
 
 describe('driverLibraryHoldingText', () => {
   it('leads with the total and then breaks it down', () => {
     expect(driverLibraryHoldingText(SHIPPED))
-      .toBe('The library has 1,046 drivers — 1,045 cone and 1 compression.');
+      .toBe(`The library has ${n(1046)} drivers — ${n(1045)} cone and 1 compression.`);
   });
 
   it('drops the breakdown when there is only one type to break down', () => {
@@ -119,7 +123,7 @@ describe('driverEmptyState', () => {
       matchesByKind: { lf: 7, cd: 0 },
     });
     expect(state.title).toBe('No compression driver matches “B&C 15”');
-    expect(state.detail).toBe('7 cone drivers do. The library has 1,046 drivers — 1,045 cone and 1 compression.');
+    expect(state.detail).toBe(`7 cone drivers do. The library has ${n(1046)} drivers — ${n(1045)} cone and 1 compression.`);
     expect(state.action).toEqual({ label: 'Show all 7', kind: 'all', clearQuery: false });
   });
 
@@ -128,8 +132,8 @@ describe('driverEmptyState', () => {
     expect(state.title).toBe('No compression driver matches “DE250”');
     // The three questions the old "No driver matches that search." answered
     // none of: what was searched, what exists, what to press.
-    expect(state.detail).toBe('The library has 1,046 drivers — 1,045 cone and 1 compression. No brand or model contains that.');
-    expect(state.action).toEqual({ label: 'Search all 1,046 drivers', kind: 'all', clearQuery: false });
+    expect(state.detail).toBe(`The library has ${n(1046)} drivers — ${n(1045)} cone and 1 compression. No brand or model contains that.`);
+    expect(state.action).toEqual({ label: `Search all ${n(1046)} drivers`, kind: 'all', clearQuery: false });
   });
 
   it('offers a way back to browsing once the whole library has been searched', () => {
@@ -137,7 +141,7 @@ describe('driverEmptyState', () => {
     expect(state.title).toBe('Nothing in the library matches “compression”');
     // Widening the type cannot help here -- it is already all of it -- so the
     // escape empties the box instead of moving the filter.
-    expect(state.action).toEqual({ label: 'Browse all 1,046 drivers', kind: 'all', clearQuery: true });
+    expect(state.action).toEqual({ label: `Browse all ${n(1046)} drivers`, kind: 'all', clearQuery: true });
   });
 
   it('separates "the library does not know it" from "it cannot drive it"', () => {
@@ -146,7 +150,7 @@ describe('driverEmptyState', () => {
     expect(state.detail).toContain('no moving mass or compliance');
     expect(state.detail).toContain('cannot drive a channel');
     // Still says what the library holds, so the count is never left implied.
-    expect(state.detail).toContain('1,046 drivers');
+    expect(state.detail).toContain(`${n(1046)} drivers`);
   });
 
   it('reads singular when exactly one match was withheld', () => {
@@ -164,7 +168,7 @@ describe('driverEmptyState', () => {
       matchesByKind: { lf: 1045, cd: 0 },
     });
     expect(state.title).toBe('The library has no compression drivers');
-    expect(state.action).toEqual({ label: 'Show all 1,045', kind: 'all', clearQuery: false });
+    expect(state.action).toEqual({ label: `Show all ${n(1045)}`, kind: 'all', clearQuery: false });
   });
 
   it('does not pretend an empty library is a filtering problem', () => {
@@ -180,7 +184,7 @@ describe('driverEmptyState', () => {
       const state = driverEmptyState({ ...base, query: 'nothing at all', kind });
       expect(state.action).not.toBeNull();
       expect(state.title).toContain('“nothing at all”');
-      expect(state.detail).toContain('1,046');
+      expect(state.detail).toContain(`${n(1046)}`);
     }
   });
 });
@@ -205,5 +209,17 @@ describe('openingSearchKind', () => {
     // An older server sends no breakdown, and guessing would be worse than
     // honouring the channel's own role.
     expect(openingSearchKind('cd', { lf: 0, cd: 0, unknown: 0, total: 900, known: false })).toBe('cd');
+  });
+});
+
+describe('locale', () => {
+  it('formats counts through the runtime locale, not a fixed separator', () => {
+    const spy = vi.spyOn(Number.prototype, 'toLocaleString').mockImplementation(function (this: number) { return `<${Number(this)}>`; });
+    try {
+      expect(driverCountText(1045, 'lf')).toBe('<1045> cone drivers');
+      expect(driverLibraryHoldingText(SHIPPED)).toBe('The library has <1046> drivers — <1045> cone and <1> compression.');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

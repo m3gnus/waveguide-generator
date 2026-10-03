@@ -25,6 +25,10 @@ import { FusionParameterDrift, ParamPanel, RealizedDimensionsSection, channelHea
  */
 let queryClient: QueryClient;
 
+// The product formats counts in the user's locale, so expectations do the same
+// rather than hardcoding en-US separators.
+const n = (value: number): string => value.toLocaleString();
+
 const cadRecord = {
   ingest_id: 'wgi_mode_test', manifest_sha256: 'sha256:manifest', artifact_sha256: 'sha256:artifact', report_sha256: 'sha256:report',
   findings: [], evidence: { fem_air_volumes: [{ required: true }] },
@@ -1549,7 +1553,7 @@ describe('driver picker', () => {
 
     const empty = channelCard().querySelector<HTMLElement>('.driver-empty')!;
     expect(empty.textContent).toContain('7 cone drivers do.');
-    expect(empty.textContent).toContain('1,046 drivers — 1,045 cone and 1 compression');
+    expect(empty.textContent).toContain(`${n(1046)} drivers — ${n(1045)} cone and 1 compression`);
 
     const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
     fetchMock.mockClear();
@@ -1592,11 +1596,11 @@ describe('driver picker', () => {
     // Nothing focused, nothing typed: the shape of the library is already on
     // screen, which is the whole answer to "is this database empty?".
     const buttons = [...channelCard().querySelectorAll<HTMLButtonElement>('.driver-kind-toggle button')];
-    expect(buttons.map((button) => button.textContent)).toEqual(['Cone1,045', 'Compression1', 'All1,046']);
+    expect(buttons.map((button) => button.textContent)).toEqual([`Cone${n(1045)}`, 'Compression1', `All${n(1046)}`]);
     expect(buttons.map((button) => button.getAttribute('aria-label')))
-      .toEqual(['Cone, 1,045 cone drivers', 'Compression, 1 compression driver', 'All, 1,046 drivers']);
+      .toEqual([`Cone, ${n(1045)} cone drivers`, 'Compression, 1 compression driver', `All, ${n(1046)} drivers`]);
     // And an HF channel does not open inside the one-driver half.
-    expect(buttons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent).toBe('All1,046');
+    expect(buttons.find((button) => button.getAttribute('aria-pressed') === 'true')?.textContent).toBe(`All${n(1046)}`);
   });
 
   it('lands a hand-entered driver in the sheet, submits it, and never calls it edited', async () => {
