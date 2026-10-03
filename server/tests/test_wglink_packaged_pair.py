@@ -122,7 +122,7 @@ def _from_package(folder: Path, filename: str):
 
 def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
     provenance = json.loads((CORPUS / "PROVENANCE.json").read_text())
-    assert provenance["wg_commit"] == "9396111d6e5f79b4d06557d69d16e79f1e255b51"
+    assert provenance["wg_commit"] == "9d38fcea792da31effdd2bfab4fa93bdd639ebe2"
     assert provenance["addin_commit"] == PIN["commit"]
     assert provenance["generator"] == "server/tests/tools/generate_cadlink_endpoint_oracle.py"
     actual = {
