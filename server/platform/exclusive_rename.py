@@ -137,18 +137,22 @@ def _take_by_rename_windows(source: Path, target: Path, wait_seconds: float) -> 
             raise PermissionError(13, f"{source} stayed held by another process (Windows error {error})", str(source))
         raise ctypes.WinError(error)
     try:
-        name = _extended(target)
-        name_bytes = len(name) * ctypes.sizeof(wintypes.WCHAR)
+        # UTF-16 code units, not code points: a character outside the BMP is
+        # a surrogate pair, and counting len(name) would cut the name short.
+        encoded = _extended(target).encode("utf-16-le")
+        name_bytes = len(encoded)
         size = ctypes.sizeof(FileRenameInfo) + name_bytes
         buffer = ctypes.create_string_buffer(size)
         info = FileRenameInfo.from_buffer(buffer)
         info.Flags = 0
         info.RootDirectory = None
         info.FileNameLength = name_bytes
+        # The name's exact UTF-16 bytes, then a NUL unit; sizeof() already
+        # holds the struct's one WCHAR, so the buffer has room for it.
         ctypes.memmove(
             ctypes.addressof(buffer) + FileRenameInfo.FileName.offset,
-            ctypes.create_unicode_buffer(name),
-            name_bytes + ctypes.sizeof(wintypes.WCHAR),
+            encoded + b"\0\0",
+            name_bytes + 2,
         )
         if not set_information(handle, file_rename_info_class, buffer, size):
             error = ctypes.get_last_error()
