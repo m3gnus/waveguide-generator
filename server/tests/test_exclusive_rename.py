@@ -51,6 +51,33 @@ def test_an_existing_target_is_file_exists_and_left_alone(tmp_path: Path) -> Non
     assert source.read_text(encoding="utf-8") == "new" and target.read_text(encoding="utf-8") == "old"
 
 
+def test_the_posix_path_refuses_an_existing_target_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """POSIX rename(2) replaces its target; the POSIX branch must still refuse.
+
+    Runs everywhere: the branch is forced, and ``os.rename`` there is given
+    POSIX's replacing semantics, so this fails on Windows too if the check goes.
+    """
+
+    from types import SimpleNamespace
+
+    from server.platform import exclusive_rename
+
+    monkeypatch.setattr(exclusive_rename, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(exclusive_rename, "os", SimpleNamespace(
+        rename=os.replace, path=os.path, strerror=os.strerror,
+    ))
+    source = tmp_path / "request.json"
+    source.write_text("new", encoding="utf-8")
+    target = tmp_path / ".taken.tmp"
+    target.write_text("old", encoding="utf-8")
+    with pytest.raises(FileExistsError):
+        exclusive_rename.take_by_rename(source, target)
+    assert source.read_text(encoding="utf-8") == "new" and target.read_text(encoding="utf-8") == "old"
+    target.unlink()
+    exclusive_rename.take_by_rename(source, target)
+    assert target.read_text(encoding="utf-8") == "new" and not source.exists()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path length, attributes and share modes")
 def test_a_path_past_max_path_is_taken(tmp_path: Path) -> None:
     folder = tmp_path

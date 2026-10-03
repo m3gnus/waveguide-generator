@@ -26,8 +26,12 @@ A sharing violation on *this* side means another taker is mid-rename (or a
 scanner has the file briefly open); waiting a moment answers which: the file
 is then gone, or free to open.
 
-POSIX ``rename(2)`` already makes the decision exclusive, so there this is
-``os.rename``.
+POSIX ``rename(2)`` already makes the decision exclusive -- of two renames of
+one source, exactly one finds it -- so there this is ``os.rename``. It would
+replace an existing target, though, so the target is checked first. That
+check is advisory (check, then rename), not atomic as on Windows; it is enough
+because every caller's target is a private name unique to its claim, or is
+written only under ``fusion_delivery._LOCK``.
 """
 
 from __future__ import annotations
@@ -53,11 +57,14 @@ def take_by_rename(source: Path, target: Path, *, wait_seconds: float = SHARING_
 
     Raises ``FileNotFoundError`` when ``source`` is gone (someone else took it),
     ``PermissionError`` when it stayed held by another opener for
-    ``wait_seconds``, ``FileExistsError`` when ``target`` exists (it is never
-    replaced), and ``OSError`` for anything else.
+    ``wait_seconds``, ``FileExistsError`` when ``target`` exists (it is not
+    replaced; on POSIX that check is advisory, see the module docstring), and
+    ``OSError`` for anything else.
     """
 
     if sys.platform != "win32":
+        if os.path.lexists(target):
+            raise FileExistsError(17, os.strerror(17), str(target))
         os.rename(source, target)
         return
     _take_by_rename_windows(Path(source), Path(target), wait_seconds)
