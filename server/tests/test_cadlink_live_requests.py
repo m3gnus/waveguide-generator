@@ -890,11 +890,21 @@ def test_concurrent_file_and_live_claims_of_one_request_claim_it_exactly_once(tm
 
             def by_file() -> bool:
                 barrier.wait(WAIT)
-                try:
-                    app.file_claim(operation_id)
-                except FileNotFoundError:
-                    return False
-                return True
+                deadline = time.monotonic() + WAIT
+                while True:
+                    try:
+                        app.file_claim(operation_id)
+                    except FileNotFoundError:
+                        return False
+                    except PermissionError:
+                        # Windows: the live claim holds the file for its rename.
+                        # The pinned add-in's claim_request returns None on any
+                        # OSError and tries again on its next pass; so does this.
+                        if time.monotonic() > deadline:
+                            raise
+                        time.sleep(0.001)
+                        continue
+                    return True
 
             def by_live() -> Response:
                 barrier.wait(WAIT)
