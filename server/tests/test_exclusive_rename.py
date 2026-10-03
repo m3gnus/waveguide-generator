@@ -118,6 +118,29 @@ def test_a_non_bmp_name_round_trips_exactly(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path length, attributes and share modes")
+def test_a_name_with_an_unpaired_surrogate_round_trips_exactly(tmp_path: Path) -> None:
+    """NTFS names are UTF-16 units and may hold a lone surrogate; Python keeps it as one.
+
+    Strict UTF-16 encoding raises UnicodeEncodeError on it -- not an OSError,
+    so a claim would escape as a server error -- where the rename must pass
+    the same units Windows has.
+    """
+
+    source = tmp_path / "request.json"
+    payload = "lone"
+    source.write_text(payload, encoding="utf-8")
+    target = tmp_path / ".request.json.live-\udc80.tmp"
+
+    take_by_rename(source, target)
+    assert sorted(os.listdir(tmp_path)) == [target.name]
+    assert target.read_text(encoding="utf-8") == payload
+
+    take_by_rename(target, source)
+    assert sorted(os.listdir(tmp_path)) == [source.name]
+    assert source.read_text(encoding="utf-8") == payload
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path length, attributes and share modes")
 def test_a_hidden_file_is_taken(tmp_path: Path) -> None:
     import ctypes
 

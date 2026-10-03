@@ -139,7 +139,9 @@ def _take_by_rename_windows(source: Path, target: Path, wait_seconds: float) -> 
     try:
         # UTF-16 code units, not code points: a character outside the BMP is
         # a surrogate pair, and counting len(name) would cut the name short.
-        encoded = _extended(target).encode("utf-16-le")
+        # surrogatepass keeps an unpaired surrogate (legal in an NTFS name) as
+        # the unit Windows has, as CreateFileW receives it for the source.
+        encoded = _extended(target).encode("utf-16-le", "surrogatepass")
         name_bytes = len(encoded)
         size = ctypes.sizeof(FileRenameInfo) + name_bytes
         buffer = ctypes.create_string_buffer(size)
