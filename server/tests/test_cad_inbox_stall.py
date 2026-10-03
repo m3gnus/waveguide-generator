@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -75,11 +76,15 @@ def app_for(tmp_path: Path, *, select: bool = True):
     return application, data_dir, workspace
 
 
-def run_loop(application, seconds: float, *, before=None) -> dict[str, Any] | None:
-    """The real start-up delivery loop, for ``seconds``, then its shutdown.
+def run_loop(
+    application, seconds: float, *, before=None,
+    until: Callable[[dict[str, Any]], bool] | None = None,
+) -> dict[str, Any] | None:
+    """Run the real delivery loop until an observation or a bounded deadline.
 
-    Returns the delivery status route's answer taken while the loop still runs,
-    once that route exists.
+    Without ``until``, observe a fixed interval (for negative controls). Positive
+    controls wait for actual progress rather than assuming the host's inbox I/O
+    finishes within a sleep. Always take the status before shutting down.
     """
 
     async def main() -> dict[str, Any] | None:
@@ -89,12 +94,28 @@ def run_loop(application, seconds: float, *, before=None) -> dict[str, Any] | No
         try:
             if before is not None:
                 await asyncio.to_thread(before)
-            await asyncio.sleep(seconds)
             try:
                 from server.cadlink.api import get_delivery_status
             except ImportError:
                 return None
-            return await get_delivery_status(SimpleNamespace(app=application))
+            if until is None:
+                await asyncio.sleep(seconds)
+                return await get_delivery_status(SimpleNamespace(app=application))
+
+            observed = None
+
+            async def wait_for_observation() -> dict[str, Any]:
+                nonlocal observed
+                while True:
+                    observed = await get_delivery_status(SimpleNamespace(app=application))
+                    if until(observed):
+                        return observed
+                    await asyncio.sleep(0.01)
+
+            try:
+                return await asyncio.wait_for(wait_for_observation(), timeout=seconds)
+            except TimeoutError:
+                pytest.fail(f"Delivery observation did not arrive within {seconds}s: {observed}")
         finally:
             await shutdown["abandon_cad_preparations_on_shutdown"]()
 
@@ -103,6 +124,20 @@ def run_loop(application, seconds: float, *, before=None) -> dict[str, Any] | No
 
 def delivery_status(observed: dict[str, Any] | None) -> dict[str, Any]:
     assert observed is not None, "WG has no delivery status route"
+    return observed
+
+
+def completed_passes(count: int) -> Callable[[dict[str, Any]], bool]:
+    """Require distinct completed passes, including idle passes with no push."""
+
+    completed: set[str] = set()
+
+    def observed(status: dict[str, Any]) -> bool:
+        timestamp = status["lastPassCompletedAt"]
+        if timestamp is not None:
+            completed.add(timestamp)
+        return len(completed) >= count
+
     return observed
 
 
@@ -141,7 +176,13 @@ def test_a_received_solve_waits_while_the_consumer_is_off_and_moves_once_it_runs
             ),
         )
 
-    run_loop(application, 2.5, before=deliver)
+    if consumer == "off":
+        run_loop(application, 2.5, before=deliver)
+    else:
+        run_loop(
+            application, 10, before=deliver,
+            until=lambda _status: store.get_operation("op-live")["state"] != "received",
+        )
     state = store.get_operation("op-live")["state"]
     if consumer == "off":
         assert state == "received"
@@ -200,7 +241,7 @@ def test_no_wglink_folder_is_a_visible_reason_not_a_silent_pass(
     monkeypatch.delenv(CAD_DELIVERY_ENV, raising=False)
     application, data_dir, _workspace = app_for(tmp_path, select=False)
     drop(data_dir, fixture(V3_SOLVE))
-    status = delivery_status(run_loop(application, 1.5))
+    status = delivery_status(run_loop(application, 10, until=completed_passes(1)))
     assert status["consumer"] == "running"
     assert status["declined"] == preparation.NO_WORKSPACE_REASON
     assert status["lastPassCompletedAt"] is not None
@@ -213,7 +254,7 @@ def test_an_approved_restart_is_a_visible_reason(tmp_path: Path, monkeypatch: py
     drop(data_dir, fixture(V3_SOLVE))
     reason = "Waveguide Generator is about to restart to install 0.3.4."
     monkeypatch.setattr(application.state.update_restart, "refusal", lambda: reason)
-    assert delivery_status(run_loop(application, 1.5))["declined"] == reason
+    assert delivery_status(run_loop(application, 10, until=completed_passes(1)))["declined"] == reason
     application.state.cadlink_store.close()
 
 
@@ -224,24 +265,40 @@ def test_a_hung_pass_is_distinguishable_from_an_idle_one(tmp_path: Path, monkeyp
 
     monkeypatch.delenv(CAD_DELIVERY_ENV, raising=False)
     application, _data_dir, _workspace = app_for(tmp_path)
+    entered = {"hang": False}
 
     async def hang(*_args: Any, **_kwargs: Any) -> list[str]:
+        entered["hang"] = True
         await asyncio.Event().wait()
         return []
 
     monkeypatch.setattr(cadlink_api, "run_delivery_pass", hang)
-    status = delivery_status(run_loop(application, 1.5))
+    status = delivery_status(run_loop(application, 10, until=lambda _status: entered["hang"]))
     assert status["lastPassCompletedAt"] is None
     assert status["passStartedAt"] is not None
     application.state.cadlink_store.close()
 
 
-def test_an_idle_pass_reports_liveness_and_no_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("delay", [0, 1.6])
+def test_an_idle_pass_reports_liveness_and_no_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, delay: float,
+) -> None:
     """The control for the three above: a running, idle consumer says nothing is wrong."""
+
+    from server.cadlink import api as cadlink_api
 
     monkeypatch.delenv(CAD_DELIVERY_ENV, raising=False)
     application, _data_dir, _workspace = app_for(tmp_path)
-    status = delivery_status(run_loop(application, 1.5))
+    real_pass = cadlink_api.run_delivery_pass
+
+    async def delayed_pass(*args: Any, **kwargs: Any) -> list[str]:
+        # Reproduce a loaded runner exceeding the old 1.5-second observation,
+        # while still executing the real inbox pass below the 15-second watchdog.
+        await asyncio.sleep(delay)
+        return await real_pass(*args, **kwargs)
+
+    monkeypatch.setattr(cadlink_api, "run_delivery_pass", delayed_pass)
+    status = delivery_status(run_loop(application, 10, until=completed_passes(1)))
     assert status["consumer"] == "running"
     assert status["declined"] is None
     assert status["lastPassCompletedAt"] is not None
@@ -332,7 +389,7 @@ def test_a_pass_that_hangs_after_passes_completed_is_pushed_as_hung(
 
     monkeypatch.setattr(cadlink_api, "run_delivery_pass", hang_on_the_third)
     pushed = _pushes(application)
-    status = delivery_status(run_loop(application, 3.2))
+    status = delivery_status(run_loop(application, 10, until=lambda status: status["passHung"]))
 
     assert calls["n"] == 3
     assert status["lastPassCompletedAt"] is not None  # earlier passes did complete
@@ -349,7 +406,7 @@ def test_a_new_declined_reason_is_pushed_once_and_an_idle_pass_pushes_nothing(
     # No WGLink folder: every pass declines with the same reason.
     application, _data_dir, _workspace = app_for(tmp_path, select=False)
     pushed = _pushes(application)
-    run_loop(application, 2.5)
+    run_loop(application, 10, until=completed_passes(3))
     declined = [m for m in pushed if m.get("kind") == "cadDeliveryStatus"]
     assert len(declined) == 1
     assert declined[0]["status"]["declined"] == preparation.NO_WORKSPACE_REASON
@@ -359,6 +416,6 @@ def test_a_new_declined_reason_is_pushed_once_and_an_idle_pass_pushes_nothing(
     (tmp_path / "idle").mkdir()
     idle, _d, _w = app_for(tmp_path / "idle")
     quiet = _pushes(idle)
-    run_loop(idle, 2.5)
+    run_loop(idle, 10, until=completed_passes(3))
     assert [m for m in quiet if m.get("kind") == "cadDeliveryStatus"] == []
     idle.state.cadlink_store.close()
