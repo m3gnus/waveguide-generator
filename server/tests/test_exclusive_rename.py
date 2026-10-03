@@ -93,6 +93,31 @@ def test_a_path_past_max_path_is_taken(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows path length, attributes and share modes")
+def test_a_non_bmp_name_round_trips_exactly(tmp_path: Path) -> None:
+    """A character outside the BMP is two UTF-16 units; the rename must name all of them.
+
+    Counting code points instead would cut one unit per such character off the
+    end of the name -- ``.tmp`` arriving as ``.tm`` -- and strand the request
+    under a name nothing looks for.
+    """
+
+    folder = tmp_path / "data \U0001F4E6 dir"
+    folder.mkdir()
+    source = folder / "request.json"
+    payload = '{"operationId": "r-\U0001F680"}'
+    source.write_text(payload, encoding="utf-8")
+    target = folder / ".request.json.live-\U0001F680\U0001F9EA.tmp"
+
+    take_by_rename(source, target)
+    assert sorted(os.listdir(folder)) == [target.name]
+    assert target.read_text(encoding="utf-8") == payload
+
+    take_by_rename(target, source)
+    assert sorted(os.listdir(folder)) == [source.name]
+    assert source.read_text(encoding="utf-8") == payload
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows path length, attributes and share modes")
 def test_a_hidden_file_is_taken(tmp_path: Path) -> None:
     import ctypes
 
@@ -128,6 +153,28 @@ def test_a_rival_rename_in_progress_holds_it_off_until_the_wait_ends(tmp_path: P
         ctypes.windll.kernel32.CloseHandle(wintypes.HANDLE(rival))
     take_by_rename(source, tmp_path / ".taken.tmp")
     assert not source.exists()
+
+
+def _run_both(*targets) -> None:
+    """Run the workers together; each must finish in time without raising."""
+
+    errors: list[BaseException] = []
+
+    def guarded(target):
+        def run() -> None:
+            try:
+                target()
+            except BaseException as exc:  # noqa: BLE001 - reported below, never lost
+                errors.append(exc)
+        return run
+
+    threads = [threading.Thread(target=guarded(target)) for target in targets]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(10)
+    assert not any(thread.is_alive() for thread in threads), "a worker did not finish"
+    assert not errors, errors
 
 
 def test_against_an_add_in_style_rename_exactly_one_taker_wins(tmp_path: Path) -> None:
@@ -167,12 +214,9 @@ def test_against_an_add_in_style_rename_exactly_one_taker_wins(tmp_path: Path) -
                 won["add_in"] = True
                 return
 
-        threads = [threading.Thread(target=live), threading.Thread(target=add_in)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(10)
-        assert won.get("live") != won.get("add_in"), (index, won)
+        _run_both(live, add_in)
+        assert isinstance(won.get("live"), bool) and isinstance(won.get("add_in"), bool), (index, won)
+        assert won["live"] != won["add_in"], (index, won)
         remaining = sorted(path.name for path in folder.iterdir())
         assert remaining == [mine.name if won["live"] else theirs.name], (index, remaining)
 
@@ -199,10 +243,7 @@ def test_plain_os_rename_is_not_exclusive_here(tmp_path: Path) -> None:
             else:
                 results.append(True)
 
-        threads = [threading.Thread(target=rename, args=(folder / f".{name}.tmp",)) for name in ("a", "b")]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(10)
+        _run_both(*(lambda name=name: rename(folder / f".{name}.tmp") for name in ("a", "b")))
+        assert len(results) == 2 and all(isinstance(result, bool) for result in results), (index, results)
         both += results.count(True) == 2
     assert both > 0, "two concurrent os.rename calls never both succeeded; the guarded race is not exercised"
