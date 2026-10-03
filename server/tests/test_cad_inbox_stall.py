@@ -320,19 +320,21 @@ def test_a_pass_that_hangs_after_passes_completed_is_pushed_as_hung(
     monkeypatch.delenv(CAD_DELIVERY_ENV, raising=False)
     monkeypatch.setattr(cadlink_api, "DELIVERY_PASS_HUNG_S", 0.3)
     application, _data_dir, _workspace = app_for(tmp_path)
-    real = cadlink_api.run_delivery_pass
     calls = {"n": 0}
 
-    async def hang_on_the_third(*args: Any, **kwargs: Any) -> list[str]:
+    async def hang_on_the_third(*_args: Any, **_kwargs: Any) -> list[str]:
         calls["n"] += 1
         if calls["n"] >= 3:
             await asyncio.Event().wait()
-        return await real(*args, **kwargs)
+        # Earlier passes must finish below this test's shortened watchdog.
+        # Real inbox I/O can exceed 0.3 s on a loaded Windows runner.
+        return []
 
     monkeypatch.setattr(cadlink_api, "run_delivery_pass", hang_on_the_third)
     pushed = _pushes(application)
     status = delivery_status(run_loop(application, 3.2))
 
+    assert calls["n"] == 3
     assert status["lastPassCompletedAt"] is not None  # earlier passes did complete
     assert status["passHung"] is True
     hung = [m["status"] for m in pushed if m.get("kind") == "cadDeliveryStatus" and m["status"]["passHung"]]
