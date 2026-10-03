@@ -47,7 +47,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 import sqlite3
 import time
@@ -72,6 +71,7 @@ from server.cadlink.operations import (
 )
 from server.cadlink.store import CadLinkStore
 from server.integration.contracts import error_envelope
+from server.platform.exclusive_rename import SHARING_WAIT_SECONDS, take_by_rename
 
 from . import registry as live_registry
 from . import wake as live_wake
@@ -168,13 +168,32 @@ def _channel_directory(data_dir: Path, kind: str) -> Path:
     return fusion_delivery.ipc_folder(data_dir) / channel.directory
 
 
-def _read_request(path: Path, operation_id: str) -> dict[str, Any] | None:
-    """The v3 request document at ``path`` if it is this operation's, else None."""
+class _Unreadable(Exception):
+    """A request file this claim owns that could not be read within the wait."""
 
-    try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, TypeError):
-        return None
+
+def _read_request(path: Path, operation_id: str, *, owned: bool = False) -> dict[str, Any] | None:
+    """The v3 request document at ``path`` if it is this operation's, else None.
+
+    ``owned`` is for a file this claim has just taken: a sharing violation
+    there is a scanner or indexer that opened it, not a rival, so it is waited
+    out for ``SHARING_WAIT_SECONDS`` and then raised as ``_Unreadable`` rather
+    than read as "not this operation's request".
+    """
+
+    deadline = time.monotonic() + SHARING_WAIT_SECONDS
+    while True:
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+            break
+        except PermissionError as exc:
+            if not owned:
+                return None
+            if time.monotonic() >= deadline:
+                raise _Unreadable(str(exc)) from exc
+            time.sleep(0.001)
+        except (OSError, ValueError, TypeError):
+            return None
     if (
         not isinstance(document, dict)
         or document.get("schemaVersion") != fusion_delivery.SCHEMA_VERSION
@@ -303,8 +322,16 @@ def _delete_claimed_file(path: Path) -> None:
 
 
 def _restore(hidden: Path, visible: Path, data_dir: Path) -> None:
+    """Put a taken request back under its own name, never over another file.
+
+    Only the claim that took ``hidden`` knows its name, and the publisher
+    cannot write ``visible`` while this claim holds ``_LOCK``, so ``visible``
+    is free here; a no-replace rename keeps it that way if that ever stops
+    being true, rather than overwriting a newer request with this one.
+    """
+
     try:
-        os.replace(hidden, visible)
+        take_by_rename(hidden, visible)
     except OSError:
         logger.error("Could not restore the Fusion request %s.", visible.name, exc_info=True)
         return
@@ -347,15 +374,24 @@ def _claim(
                     "This return request is for another Fusion session.",
                 )
         hidden = directory / f".{operation_id}.json.live-{claim_id}.tmp"
-        # 1. Take the file: whoever renames it first has the request.
+        # 1. Take the file: whoever renames it first has the request. Not
+        # os.rename: on Windows two concurrent renames of one file can both
+        # succeed (server/platform/exclusive_rename.py).
         try:
-            os.rename(visible, hidden)
+            take_by_rename(visible, hidden)
         except FileNotFoundError:
             return _refusal(409, "claimed_elsewhere", "The request was already taken.")
         except OSError as exc:
             logger.warning("Could not take the Fusion request %s: %s", visible.name, exc)
             return _store_busy()
-        document = _read_request(hidden, operation_id)
+        try:
+            document = _read_request(hidden, operation_id, owned=True)
+        except _Unreadable as exc:
+            # Held open by someone else past the wait: it is still this
+            # claim's to put back, and the client may simply ask again.
+            logger.warning("Could not read the taken Fusion request %s: %s", visible.name, exc)
+            _restore(hidden, visible, data_dir)
+            return _store_busy()
         if document is None:
             _restore(hidden, visible, data_dir)
             return _refusal(409, "claimed_elsewhere", "The request file is not this operation's request.")
