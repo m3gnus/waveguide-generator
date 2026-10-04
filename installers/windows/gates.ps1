@@ -197,7 +197,11 @@ $expectedRoot = [IO.Path]::GetFullPath((Join-Path $installRoot "app"))
 $markerRootOk = $null -ne $markerData -and $markerData.waveguideGeneratorRoot -eq $expectedRoot
 $fullPinOk = $null -ne $markerData -and $null -ne $sourceSpec -and $markerData.sourceCommit -match '^[0-9a-f]{40}$' -and $markerData.sourceCommit -eq $sourceSpec.commit
 $runtimeRoot = if ($null -ne $runtimeData) { [string]$runtimeData.root } else { "" }
-$runtimePointerOk = $null -ne $runtimeData -and $runtimeData.python -eq (Join-Path $installRoot "runtime\python.exe") -and (Test-Path (Join-Path $runtimeRoot "scripts\wglink_resample.py"))
+# install_wglink.py records the resolved interpreter path, which expands the 8.3 short
+# names a hosted runner puts in TEMP (RUNNER~1 -> the long profile name). Compare the
+# part that identifies this gate run (its private GUID folder) rather than the
+# spelling of the profile prefix.
+$runtimePointerOk = $null -ne $runtimeData -and [string]$runtimeData.python -like ("*\" + (Split-Path $gateRoot -Leaf) + "\i\runtime\python.exe") -and (Test-Path -LiteralPath ([string]$runtimeData.python) -PathType Leaf) -and (Test-Path (Join-Path $runtimeRoot "scripts\wglink_resample.py"))
 $journal = Join-Path $wglinkAddins ".WGLink-install-transaction.json"
 $staging = @(Get-ChildItem -LiteralPath $wglinkAddins -Directory -Filter ".WGLink-install-*" -ErrorAction SilentlyContinue)
 $settled = -not (Test-Path $journal) -and $staging.Count -eq 0
@@ -206,7 +210,7 @@ $usageBefore = if (Test-Path $usageRecord) { Get-Content -Raw $usageRecord } els
 $usageData = if ($null -ne $usageBefore) { $usageBefore | ConvertFrom-Json } else { $null }
 $setupChoiceOk = $null -ne $usageData -and $usageData.schemaVersion -eq 1 -and $usageData.reason -eq "setup-task"
 $wglinkOk = ($installExit -eq 0) -and (Test-Path (Join-Path $wglinkTarget "WGLink.py")) -and (Test-Path $wglinkMarker) -and (Test-Path $wglinkRuntime) -and $markerRootOk -and $fullPinOk -and $runtimePointerOk -and $settled -and $setupChoiceOk
-$wglinkDetail = "setup exit $installExit; target: $wglinkTarget; marker root: $markerRootOk; full pin: $fullPinOk; runtime pointer: $runtimePointerOk; journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count); setup choice recorded: $setupChoiceOk"
+$wglinkDetail = "setup exit $installExit; target: $wglinkTarget; marker root: $markerRootOk; full pin: $fullPinOk; runtime pointer: $runtimePointerOk ($($runtimeData.python)); journal absent: $(-not (Test-Path $journal)); staging directories: $($staging.Count); setup choice recorded: $setupChoiceOk"
 Gate 10 "setup task installs packaged WGLink into a disposable AddIns directory" $wglinkOk $wglinkDetail
 
 # --- Gate 12: a silent upgrade must name WGLink again -------------------------
