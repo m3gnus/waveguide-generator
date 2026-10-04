@@ -63,6 +63,9 @@ def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path,
     monkeypatch.setattr(probe, '_run_probe', run)
     monkeypatch.setattr(metal, 'metal_status', lambda: {
         'available': True, 'reason': 'Metal ready', 'version': 'test'})
+    # The registry's live CPU refresh re-reads the real BEAT CPU verdict, which
+    # depends on whether this host has a prepared runtime. Pin it with the rows.
+    monkeypatch.setattr(beat, '_cpu_backend_status', lambda _package: (True, 'BEAT detected'))
     monkeypatch.setattr(beat, 'beat_backend_statuses', lambda: {
         backend: {'available': backend == 'cpu', 'reason': 'BEAT detected', 'version': 'test'}
         for backend in beat.BEAT_BACKENDS})
