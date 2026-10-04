@@ -2664,6 +2664,8 @@ def _ib_result() -> dict:
     result = _result()
     result["frequencies"] = list(gate.IB_FREQUENCIES)
     result["spl_on_axis"]["frequencies"] = list(gate.IB_FREQUENCIES)
+    # Levels a real numba IB solve of the gate's design returns (hosted and local runs agree).
+    result["spl_on_axis"]["spl"] = [15.152, 17.844]
     result["metadata"] = {
         "engine": "hornlab-bempp-bem",
         "solver_backend": "bempp",
@@ -2791,6 +2793,16 @@ def test_ib_accepts_each_qualified_route(tmp_path, backend, expected, capsys):
     assert section["solve"]["assembly_backend"] == backend
     assert section["solve"]["assembly_device"] == device
     assert f"IB assembly backend: {backend}" in capsys.readouterr().out
+
+
+def test_ib_level_band_accepts_real_numba_levels_and_refuses_the_rest():
+    gate.check_ib_solve(_ib_result(), PINS, "any")
+    for bad in ([0.0, 0.0], [float("nan"), 17.844], [float("inf"), 17.844], [None, 17.844],
+                [True, 17.844], [-40.0, 17.844], [15.152, 60.0], [92.5, 94.1], [-120.0, 17.844]):
+        result = _ib_result()
+        result["spl_on_axis"]["spl"] = list(bad)
+        with pytest.raises(gate.QualificationError, match="implausible|non-finite|nothing was solved"):
+            gate.check_ib_solve(result, PINS, "any")
 
 
 @pytest.mark.parametrize("backend", [None, "auto", "cuda"])

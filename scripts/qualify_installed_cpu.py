@@ -1152,8 +1152,9 @@ def check_ib_solve(
             f"the IB solve answered other frequencies: {result['frequencies']!r}"
         )
     levels = result["spl_on_axis"]["spl"]
+    # Unit-acceleration drive sits within a few dB of 0 dB at 1 m; band matches test_real_pipeline.
     if any(
-        not isinstance(value, (int, float)) or isinstance(value, bool) or not 40.0 <= value <= 160.0
+        not isinstance(value, (int, float)) or isinstance(value, bool) or not -40.0 < value < 60.0
         for value in levels
     ):
         raise QualificationError(f"the IB solve has implausible on-axis SPL: {levels!r}")
