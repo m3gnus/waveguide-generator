@@ -369,6 +369,31 @@ def _package_backend_statuses() -> dict[str, Any] | None:
             return exc.status["statuses"]
 
 
+def reprobe_package_backend_statuses() -> dict[str, Any] | None:
+    """The package's per-backend verdicts, asked again from scratch.
+
+    For after runtime preparation, when every cached verdict may describe a
+    host without a Julia or without the GPU runtime. The package's own
+    ``functional()`` cache is cleared too: a probe that overlapped provisioning
+    can have stored its "false" after provisioning cleared it. Clearing and
+    re-reading happen under the probe lock, so a probe still running elsewhere
+    finishes first and its answer is discarded rather than read.
+    """
+
+    with _status_probe_lock:
+        try:
+            from hornlab_beat_bem import runtime as beat_runtime
+
+            beat_runtime.probe_gpu_functional_cache_clear()
+        except (ImportError, AttributeError):
+            pass
+        _clear_status_caches()
+        try:
+            return _cached_available_package_statuses()
+        except _BeatProbeUnavailable as exc:
+            return exc.status["statuses"]
+
+
 def beat_backend_statuses() -> dict[str, dict[str, Any]]:
     """One status per BEAT backend: what each of them can do on this host.
 
@@ -999,6 +1024,7 @@ __all__ = [
     "beat_geometry_sources",
     "beat_status",
     "is_beat_engine",
+    "reprobe_package_backend_statuses",
     "resolve_beat_backend",
     "solve_beat_from_msh_text",
 ]

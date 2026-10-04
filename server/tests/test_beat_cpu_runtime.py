@@ -80,6 +80,8 @@ def _install_stub_package(
     provision_cpu: object | None = object(),
     detect_gpu_backend: object | None = None,
     backend_states: dict[str, dict[str, object]] | None = None,
+    provision_gpu: object | None = None,
+    backend_ready: object | None = None,
 ) -> SimpleNamespace:
     """Stand in for an installed ``hornlab-beat-bem`` of a chosen vintage.
 
@@ -120,6 +122,10 @@ def _install_stub_package(
         provision.provision_cpu = provision_cpu
     if detect_gpu_backend is not None:
         provision.detect_gpu_backend = detect_gpu_backend
+    if provision_gpu is not None:
+        provision.provision_gpu = provision_gpu
+    if backend_ready is not None:
+        provision.backend_ready = backend_ready
     runtime = SimpleNamespace(
         default_project=lambda backend: project,
         package_fingerprint=lambda selected=None: fingerprint,
@@ -1101,3 +1107,214 @@ def test_older_gpu_record_offers_upgrade_instead_of_overwriting_command(tmp_path
     assert "Update Waveguide Generator" in readiness.reason
     assert "interrupt GPU availability" in readiness.reason
     assert "--backend cpu" not in readiness.reason
+
+
+# --------------------------------------------------------------------------
+# The GPU runtime, prepared after the CPU one.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _fresh_preparation_flag():
+    """A worker run here must not make the registry re-probe in later tests."""
+
+    beat_cpu_runtime._runtimes_prepared = False
+    yield
+    beat_cpu_runtime._runtimes_prepared = False
+
+
+def _gpu_host(tmp_path, monkeypatch, *, cpu_ready=True, gpu_states=None, provision_gpu=None,
+              provision_cpu=None, gpu="metal"):
+    project = tmp_path / "package" / "julia"
+    if not project.exists():
+        project = _cpu_project(tmp_path)
+    julia = tmp_path / "runtime" / "julia-1.12.6" / "bin" / "julia"
+    if not julia.exists():
+        julia = _julia(tmp_path)
+    states = dict(gpu_states or {})
+    if cpu_ready:
+        states["cpu"] = _ready_state(project, julia)
+    calls: list[str] = []
+
+    def default_provision_gpu(runtime_dir=None, *, backend, status_cb=print, force=False):
+        calls.append(backend)
+        return {"status": "ready"}
+
+    def default_provision_cpu(runtime_dir=None, *, status_cb=print, force=False):
+        calls.append("cpu")
+        return {"status": "ready"}
+
+    _install_stub_package(
+        monkeypatch,
+        project=project,
+        state=states.get("cpu"),
+        backend_states=states,
+        detect_gpu_backend=lambda: gpu,
+        provision_cpu=provision_cpu or default_provision_cpu,
+        provision_gpu=provision_gpu or default_provision_gpu,
+        backend_ready=lambda backend, runtime_dir=None: (
+            (states.get(backend) or {}).get("status") == "ready"
+        ),
+    )
+    return calls
+
+
+@pytest.mark.parametrize("gpu", ["metal", "cuda"])
+def test_a_packaged_gpu_host_prepares_its_gpu_runtime(tmp_path, monkeypatch, gpu) -> None:
+    """The reported defect: nothing in the packaged app ever prepared BEAT Metal.
+
+    ``scripts/bootstrap.py --if-gpu`` is the only other place that runs, and
+    the packaged application never runs it, so BEAT Metal/CUDA stayed
+    unavailable for good on an installed copy.
+    """
+
+    calls = _gpu_host(tmp_path, monkeypatch, gpu=gpu)
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == [gpu]
+
+
+def test_the_cpu_runtime_is_prepared_before_the_gpu_one(tmp_path, monkeypatch) -> None:
+    calls = _gpu_host(tmp_path, monkeypatch, cpu_ready=False)
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == ["cpu", "metal"]
+
+
+def test_a_ready_gpu_runtime_is_not_provisioned_again(tmp_path, monkeypatch) -> None:
+    calls = _gpu_host(
+        tmp_path, monkeypatch,
+        gpu_states={"metal": {"status": "ready", "backend": "metal"}},
+    )
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == []
+    assert beat_cpu_runtime.runtimes_prepared_this_process() is False
+
+
+def test_a_gpu_failure_for_this_build_is_never_retried(tmp_path, monkeypatch) -> None:
+    project = _cpu_project(tmp_path)
+    calls = _gpu_host(
+        tmp_path, monkeypatch,
+        gpu_states={"cuda": {
+            "status": "failed", "backend": "cuda", "project": str(project),
+            "package_fingerprint": "abc123", "error": "offline",
+        }},
+        gpu="cuda",
+    )
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Windows")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == []
+
+
+def test_another_gpu_familys_record_does_not_block_the_detected_one(
+    tmp_path, monkeypatch
+) -> None:
+    """A replaced or second card: a CUDA verdict says nothing about ROCm."""
+
+    project = _cpu_project(tmp_path)
+    calls = _gpu_host(
+        tmp_path, monkeypatch,
+        gpu_states={
+            "cuda": {
+                "status": "failed", "backend": "cuda", "project": str(project),
+                "package_fingerprint": "abc123", "error": "offline",
+            },
+            "metal": {"status": "ready", "backend": "metal"},
+        },
+        gpu="rocm",
+    )
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Linux")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == ["rocm"]
+    assert beat_cpu_runtime.runtimes_prepared_this_process() is True
+
+
+def test_a_gpu_failure_from_another_build_is_retried(tmp_path, monkeypatch) -> None:
+    project = _cpu_project(tmp_path)
+    calls = _gpu_host(
+        tmp_path, monkeypatch,
+        gpu_states={"metal": {
+            "status": "failed", "backend": "metal", "project": str(project),
+            "package_fingerprint": "older-build", "error": "offline",
+        }},
+    )
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == ["metal"]
+
+
+def test_the_gpu_opt_out_leaves_the_cpu_stage_alone(tmp_path, monkeypatch) -> None:
+    calls = _gpu_host(tmp_path, monkeypatch, cpu_ready=False)
+    env = {beat_cpu_runtime.SKIP_GPU_PROVISION_ENV_VAR: "1"}
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ=env, system="Darwin")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == ["cpu"]
+
+    _gpu_host(tmp_path, monkeypatch)
+    assert beat_cpu_runtime.start_cpu_provisioning(environ=env, system="Darwin") is None
+
+
+def test_a_gpu_less_host_runs_no_gpu_stage(tmp_path, monkeypatch) -> None:
+    calls = _gpu_host(tmp_path, monkeypatch, gpu=None)
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Linux")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    assert calls == []
+    assert beat_cpu_runtime.cpu_preparation_in_flight() is False
+
+
+def test_the_gpu_stage_reports_itself_and_not_as_cpu_provisioning(tmp_path, monkeypatch) -> None:
+    """During the GPU stage the CPU row must not claim it is provisioning."""
+
+    in_stage = threading.Event()
+    release = threading.Event()
+    seen: dict[str, object] = {}
+
+    def provision_gpu(runtime_dir=None, *, backend, status_cb=print, force=False):
+        status_cb("Instantiating the Julia Metal environment")
+        seen["gpu_reason"] = beat_cpu_runtime.gpu_preparation_reason("metal")
+        seen["cuda_reason"] = beat_cpu_runtime.gpu_preparation_reason("cuda")
+        seen["cpu_step"] = beat_cpu_runtime.cpu_provisioning_step()
+        in_stage.set()
+        assert release.wait(5.0)
+        return {"status": "ready"}
+
+    _gpu_host(tmp_path, monkeypatch, cpu_ready=False, provision_gpu=provision_gpu)
+    try:
+        thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin")
+        assert thread is not None
+        assert in_stage.wait(5.0)
+        assert beat_cpu_runtime.cpu_preparation_in_flight() is True
+    finally:
+        release.set()
+    thread.join(timeout=5.0)
+
+    assert "preparing the BEAT metal runtime" in str(seen["gpu_reason"])
+    assert "Instantiating the Julia Metal environment" in str(seen["gpu_reason"])
+    assert seen["cuda_reason"] is None
+    assert seen["cpu_step"] is None
+    assert beat_cpu_runtime.gpu_preparation_reason("metal") is None

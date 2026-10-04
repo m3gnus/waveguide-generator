@@ -367,6 +367,47 @@ def detect_engines(
     return engines
 
 
+def _beat_row_updates(
+    package: Any, cpu_backend_status: Callable[[Any], tuple[bool, str]]
+) -> dict[str, tuple[bool, str]]:
+    """Fresh ``(available, reason)`` for the BEAT rows background preparation moved.
+
+    While preparation runs only the CPU row is re-read, plus a "being prepared"
+    sentence on the GPU row whose runtime is being provisioned: asking a GPU
+    backend for its verdict costs a Julia startup that would race the
+    provisioning it is about to report on. Once preparation has finished every
+    BEAT row is probed again, if it provisioned anything. The GPU rows were
+    detected at startup, which on a host preparing its runtimes is before any
+    Julia existed -- left alone, they kept saying "No Julia executable was
+    found" until the next launch.
+    """
+
+    from server.solver import beat, beat_cpu_runtime
+
+    updates = {"beat-cpu": cpu_backend_status(package)}
+    if beat_cpu_runtime.cpu_preparation_in_flight():
+        for backend in beat_cpu_runtime.GPU_BACKENDS:
+            reason = beat_cpu_runtime.gpu_preparation_reason(backend)
+            if reason is not None:
+                updates[beat.beat_engine_name(backend)] = (False, reason)
+        return updates
+    if not beat_cpu_runtime.runtimes_prepared_this_process():
+        return updates
+    # The package's own per-backend verdicts, as ``beat_backend_statuses``
+    # uses them; ``None`` on an older pin, whose GPU rows keep their startup
+    # verdict as they always did.
+    statuses = beat.reprobe_package_backend_statuses() or {}
+    for backend in beat_cpu_runtime.GPU_BACKENDS:
+        status = statuses.get(backend)
+        if isinstance(status, Mapping):
+            updates[beat.beat_engine_name(backend)] = (
+                bool(status.get("available")),
+                str(status.get("reason")
+                    or f"the BEAT package returned no reason for the {backend} backend"),
+            )
+    return updates
+
+
 def _beat_engine_backend(name: str) -> str | None:
     """``beat_engine_backend`` without importing the optional stack eagerly."""
 
@@ -626,6 +667,12 @@ class EngineRegistry:
             self._cache = tuple(results.get(item.name, item) for item in self._cache or ())
             if "bempp" in names:
                 self._opencl_revision = revision
+        if "beat-cpu" in names and self._cpu_refresh_enabled and not self._listener_removed:
+            # This snapshot may predate runtime preparation that has already
+            # finished and been published; re-apply the refresh over it.
+            with self._refresh_state_lock:
+                self._refresh_revision += 1
+            self._schedule_cpu_refresh()
         self._schedule_opencl_retry()
 
     async def _detect_initial(self) -> None:
@@ -804,19 +851,20 @@ class EngineRegistry:
             try:
                 package = _load_api()
                 if package is not None:
-                    available, reason = await asyncio.to_thread(
-                        _cpu_backend_status, package
+                    updates = await asyncio.to_thread(
+                        _beat_row_updates, package, _cpu_backend_status
                     )
                     async with self._lock:
                         if self._cache is not None and not self._listener_removed:
                             self._cache = tuple(
-                                replace(item, available=available, reason=reason)
-                                if item.name == "beat-cpu"
+                                replace(item, available=updates[item.name][0],
+                                        reason=updates[item.name][1])
+                                if item.name in updates
                                 else item
                                 for item in self._cache
                             )
             except Exception:  # noqa: BLE001 - refresh cannot break capabilities
-                log.warning("BEAT CPU capability refresh failed", exc_info=True)
+                log.warning("BEAT capability refresh failed", exc_info=True)
             with self._refresh_state_lock:
                 self._refresh_applied_revision = max(
                     self._refresh_applied_revision, target_revision

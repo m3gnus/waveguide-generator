@@ -146,6 +146,134 @@ def test_cpu_refresh_preserves_terminal_event_during_an_inflight_probe(
     asyncio.run(scenario())
 
 
+def test_finished_preparation_refreshes_the_gpu_rows_too(monkeypatch) -> None:
+    """GPU rows detected before any Julia existed must not keep that verdict.
+
+    The reported defect: a packaged Mac launched while it re-prepared its BEAT
+    runtimes, so BEAT Metal was detected with "No Julia executable was found".
+    The CPU row was refreshed when preparation finished and the Metal row never
+    was, so it kept that sentence until the next launch.
+    """
+
+    from server.solver import beat, beat_cpu_runtime
+
+    stale = "No Julia executable was found."
+    in_flight = {"value": True}
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "cpu ready"))
+    monkeypatch.setattr(
+        beat_cpu_runtime, "cpu_preparation_in_flight", lambda: in_flight["value"]
+    )
+    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: True)
+    monkeypatch.setattr(
+        beat_cpu_runtime, "gpu_preparation_reason",
+        lambda backend: "preparing metal" if backend == "metal" else None,
+    )
+    monkeypatch.setattr(beat, "reprobe_package_backend_statuses", lambda: {
+        "metal": {"available": True, "reason": "metal ready"},
+        "cuda": {"available": False, "reason": "No NVIDIA GPU was detected."},
+    })
+    engine_registry = registry.EngineRegistry(
+        detector=lambda names=None: [
+            _cpu_info(False, "starting"),
+            registry.EngineInfo("beat-metal", False, stale, "1"),
+            registry.EngineInfo("beat-cuda", False, stale, "1"),
+        ],
+        cpu_refresh=True,
+    )
+
+    async def rows() -> dict[str, registry.EngineInfo]:
+        for _ in range(500):
+            await asyncio.sleep(0.01)
+            with engine_registry._refresh_state_lock:
+                settled = (engine_registry._refresh_applied_revision
+                           == engine_registry._refresh_revision)
+            if settled and engine_registry._refresh_task is None:
+                break
+        return {item.name: item for item in await engine_registry.capabilities()}
+
+    async def scenario() -> None:
+        await engine_registry.capabilities()
+        engine_registry._cpu_readiness_changed()
+        during = await rows()
+        assert during["beat-metal"].reason == "preparing metal"
+        assert during["beat-cuda"].reason == stale
+
+        in_flight["value"] = False
+        engine_registry._cpu_readiness_changed()
+        after = await rows()
+        assert after["beat-cpu"].available is True
+        assert after["beat-metal"].available is True
+        assert after["beat-metal"].reason == "metal ready"
+        assert after["beat-cuda"].reason == "No NVIDIA GPU was detected."
+
+        # A startup detection that finishes after all this must not win.
+        await engine_registry._publish_detection(
+            ("beat-cuda", "beat-rocm", "beat-metal", "beat-cpu")
+        )
+        late = await rows()
+        assert late["beat-metal"].available is True
+        assert late["beat-metal"].reason == "metal ready"
+        await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
+def test_a_reprobe_waits_for_a_running_probe_and_discards_its_answer(monkeypatch) -> None:
+    """A probe begun before provisioning finished must not answer after it."""
+
+    from server.solver import beat
+
+    answers = iter([
+        {"metal": {"available": False, "reason": "stale"}},
+        {"metal": {"available": True, "reason": "fresh"}},
+    ])
+    first_running = threading.Event()
+    release_first = threading.Event()
+
+    def probe():
+        answer = next(answers)
+        if answer["metal"]["reason"] == "stale":
+            first_running.set()
+            assert release_first.wait(5.0)
+        return answer
+
+    monkeypatch.setattr(beat, "_probe_package_backend_statuses", probe)
+    beat.beat_backend_statuses.cache_clear()
+    stale = threading.Thread(target=beat._package_backend_statuses)
+    stale.start()
+    assert first_running.wait(5.0)
+    result: list[object] = []
+    reprobe = threading.Thread(
+        target=lambda: result.append(beat.reprobe_package_backend_statuses())
+    )
+    reprobe.start()
+    release_first.set()
+    stale.join(5.0)
+    reprobe.join(5.0)
+
+    assert result == [{"metal": {"available": True, "reason": "fresh"}}]
+    beat.beat_backend_statuses.cache_clear()
+
+
+def test_a_launch_that_prepared_nothing_does_not_reprobe_gpu_rows(monkeypatch) -> None:
+    """Each GPU re-probe is a Julia startup; pay it only when something changed."""
+
+    from server.solver import beat, beat_cpu_runtime
+
+    monkeypatch.setattr(beat, "_load_api", lambda: object())
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "cpu ready"))
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
+    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: False)
+    monkeypatch.setattr(
+        beat, "reprobe_package_backend_statuses", lambda: pytest.fail("must not re-probe")
+    )
+
+    updates = registry._beat_row_updates(object(), beat._cpu_backend_status)
+
+    assert updates == {"beat-cpu": (True, "cpu ready")}
+
+
 def test_cpu_refresh_retains_an_event_before_initial_cache_population(
     monkeypatch,
 ) -> None:
