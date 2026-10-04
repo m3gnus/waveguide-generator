@@ -191,6 +191,35 @@ def guard_execution(backend: str | None, opencl_device: str | None) -> None:
     bind_device(device, force=True)
 
 
+def _keep_bempp_scratch_in_session() -> None:
+    """Move bempp-cl's import-time scratch directory into WG's session.
+
+    ``bempp_cl.api`` runs ``TMP_PATH = tempfile.mkdtemp()`` when imported and
+    never removes it, so every process that imported it left one empty ``tmp*``
+    directory in the system temporary directory: five after one start and a
+    solve in the 0.3.4 Windows rehearsal. Only bempp's own shapes and viewers
+    write there. In the server and its BEMPP worker the empty directory is
+    removed and ``TMP_PATH`` pointed at the session, which is swept however the
+    process ends. The OpenCL check child is handled in ``_child_main``.
+    """
+
+    try:
+        from server.platform.temp_session import spawned_directory_root
+        import bempp_cl.api as api
+    except (ImportError, OSError):
+        return
+    root = spawned_directory_root()
+    current = getattr(api, "TMP_PATH", None)
+    if root is None or not isinstance(current, str) or current == root:
+        return
+    try:
+        # Only ever bempp's own empty directory; anything it wrote there stays.
+        os.rmdir(current)
+    except OSError:
+        return
+    api.TMP_PATH = root
+
+
 def native_call(function: Any, *args: Any, execution_config: Any = None, **kwargs: Any) -> Any:
     """Lowest shared boundary for solves and potential/field evaluation."""
     backend = (getattr(execution_config, "assembly_backend", None)
@@ -198,6 +227,7 @@ def native_call(function: Any, *args: Any, execution_config: Any = None, **kwarg
     device = (getattr(execution_config, "opencl_device", None)
               if execution_config is not None else kwargs.get("opencl_device"))
     guard_execution(backend, device)
+    _keep_bempp_scratch_in_session()
     return function(*args, **kwargs)
 
 
@@ -721,6 +751,12 @@ def _write_probe_result(path: Path, result: Mapping[str, Any]) -> None:
 
 
 def _child_main(mode: str, device: Mapping[str, Any] | None, path: Path) -> None:
+    # ``import bempp_cl.api`` makes a scratch directory with ``tempfile.mkdtemp()``
+    # and never removes it. This disposable child keeps no state in the system
+    # temporary directory, so point it at the check's own channel directory,
+    # which the parent removes however the child ends.
+    if path.parent.is_dir():
+        tempfile.tempdir = str(path.parent)
     result = _child_result(mode, device)
     _validate_probe_result(result, mode)
     _write_probe_result(path, result)

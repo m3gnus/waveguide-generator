@@ -23,7 +23,7 @@ from typing import Any, Mapping, Sequence
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
-from server.platform.temp_session import temporary_directory_root
+from server.platform.temp_session import spawned_directory_root
 from server.preview.translate import has_closed_outer_body
 
 from .acoustics import solver_sound_speed_m_per_s
@@ -894,7 +894,7 @@ def solve_bempp_from_msh_text(
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".msh", delete=False, encoding="utf-8",
-            dir=temporary_directory_root(),
+            dir=spawned_directory_root(),
         ) as handle:
             path = Path(handle.name)
             handle.write(msh_text)
