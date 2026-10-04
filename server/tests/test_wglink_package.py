@@ -777,6 +777,99 @@ def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(short_tmp_path:
     assert status == "removed"
     assert not target.exists()
     assert (root / "integrations" / "wglink" / "runtime").is_dir()
+    # The operation lock goes with the last of WGLink's entries: the 0.3.4
+    # Windows uninstall left a lone .WGLink-install.lock in Fusion's AddIns.
+    assert list(addins.iterdir()) == []
+
+
+def test_uninstall_keeps_the_lock_while_anything_of_wglinks_remains(short_tmp_path: Path):
+    installer = _load_installer()
+    addins = short_tmp_path / "AddIns"
+    external = addins / "WGLink"
+    external.mkdir(parents=True)
+    (external / "WGLink.py").write_text("# the user's own\n", encoding="utf-8")
+
+    status, _target = installer.uninstall(root=short_tmp_path, platform="macos", addins_dir=addins)
+
+    assert status == "preserved-external"
+    assert (external / "WGLink.py").is_file()
+    assert (addins / installer.TRANSACTION_LOCK).is_file()
+
+
+def test_uninstall_removes_a_lock_an_earlier_install_left_on_its_own(short_tmp_path: Path):
+    installer = _load_installer()
+    addins = short_tmp_path / "AddIns"
+    addins.mkdir()
+    (addins / installer.TRANSACTION_LOCK).write_bytes(b"\0")
+    (addins / "OtherAddIn").mkdir()
+
+    installer.uninstall(root=short_tmp_path, platform="macos", addins_dir=addins)
+
+    assert sorted(entry.name for entry in addins.iterdir()) == ["OtherAddIn"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows refuses to delete an open file")
+def test_uninstall_leaves_the_lock_to_a_process_that_has_it_open(short_tmp_path: Path):
+    """Another WGLink operation that has opened the lock and is waiting for it
+    keeps it: Windows refuses the delete, and nothing is replaced underneath it."""
+
+    installer = _load_installer()
+    addins = short_tmp_path / "AddIns"
+    addins.mkdir()
+    lock = addins / installer.TRANSACTION_LOCK
+    lock.write_bytes(b"\0")
+    ready = short_tmp_path / "open-ready"
+    release = short_tmp_path / "open-release"
+    child = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            "import sys, time\nfrom pathlib import Path\n"
+            "with open(sys.argv[1], 'r+b'):\n"
+            "    Path(sys.argv[2]).write_text('ready')\n"
+            "    deadline = time.monotonic() + 10\n"
+            "    while not Path(sys.argv[3]).exists() and time.monotonic() < deadline:\n"
+            "        time.sleep(0.01)\n",
+            str(lock),
+            str(ready),
+            str(release),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 5.0
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+
+        installer.uninstall(root=short_tmp_path, platform="macos", addins_dir=addins)
+
+        assert lock.is_file()
+    finally:
+        release.write_text("release", encoding="utf-8")
+        child.wait(timeout=10)
+
+
+def test_a_lock_won_on_a_removed_file_is_given_up_for_the_one_the_path_names(
+    short_tmp_path: Path, monkeypatch
+):
+    """POSIX lets an uninstall unlink the lock while a waiter has it open; the
+    waiter then wins a file nobody else can see, and must open the path again."""
+
+    installer = _load_installer()
+    addins = short_tmp_path / "AddIns"
+    addins.mkdir()
+    opened: list[Path] = []
+    open_lock_file = installer._open_lock_file
+    answers = iter([False, True])
+    monkeypatch.setattr(
+        installer, "_open_lock_file", lambda path: opened.append(path) or open_lock_file(path)
+    )
+    monkeypatch.setattr(installer, "_names_locked_file", lambda _path, _handle: next(answers))
+
+    with installer._operation_lock(addins, timeout=1.0):
+        pass
+
+    assert opened == [addins / installer.TRANSACTION_LOCK] * 2
 
 
 @pytest.mark.parametrize("other_installation", [False, True])

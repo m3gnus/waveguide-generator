@@ -507,16 +507,7 @@ def _set_file_lock(handle, *, acquire: bool) -> None:
         fcntl.flock(handle.fileno(), mode)
 
 
-@contextmanager
-def _operation_lock(
-    addins_dir: Path,
-    *,
-    timeout: float = TRANSACTION_LOCK_TIMEOUT,
-):
-    """Serialize target changes with an OS lock released on process death."""
-
-    addins_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = addins_dir / TRANSACTION_LOCK
+def _open_lock_file(lock_path: Path):
     if lock_path.is_symlink():
         raise InstallError(f"WGLink operation lock is unsafe: {lock_path}")
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
@@ -525,32 +516,103 @@ def _operation_lock(
         handle = os.fdopen(descriptor, "r+b")
     except OSError as exc:
         raise InstallError(f"Could not open WGLink operation lock {lock_path}: {exc}") from exc
-    acquired = False
     try:
         if os.fstat(handle.fileno()).st_size == 0:
             handle.write(b"\0")
             handle.flush()
             os.fsync(handle.fileno())
-        deadline = time.monotonic() + max(timeout, 0.0)
-        while True:
-            try:
-                _set_file_lock(handle, acquire=True)
-                acquired = True
-                break
-            except OSError as exc:
-                if time.monotonic() >= deadline:
-                    raise InstallError(
-                        "Another WGLink install, update, or uninstall is still running; "
-                        "try again when it finishes."
-                    ) from exc
-                time.sleep(min(0.05, max(deadline - time.monotonic(), 0.0)))
+    except BaseException:
+        handle.close()
+        raise
+    return handle
+
+
+def _names_locked_file(lock_path: Path, handle) -> bool:
+    """Whether the lock path still names the file this handle has open."""
+
+    try:
+        named = os.stat(lock_path, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    held = os.fstat(handle.fileno())
+    return (named.st_dev, named.st_ino) == (held.st_dev, held.st_ino)
+
+
+def _acquire_operation_lock(lock_path: Path, timeout: float):
+    deadline = time.monotonic() + max(timeout, 0.0)
+    while True:
+        handle = _open_lock_file(lock_path)
+        try:
+            while True:
+                try:
+                    _set_file_lock(handle, acquire=True)
+                    break
+                except OSError as exc:
+                    if time.monotonic() >= deadline:
+                        raise InstallError(
+                            "Another WGLink install, update, or uninstall is still running; "
+                            "try again when it finishes."
+                        ) from exc
+                    time.sleep(min(0.05, max(deadline - time.monotonic(), 0.0)))
+            if _names_locked_file(lock_path, handle):
+                return handle
+            # The holder removed the lock file while this waited on it (see
+            # ``_operation_lock``): what was won is a lock nobody else can
+            # see. Start over with whatever the path names now.
+            _set_file_lock(handle, acquire=False)
+        except BaseException:
+            handle.close()
+            raise
+        handle.close()
+
+
+def _nothing_of_wglink_left(addins_dir: Path) -> bool:
+    """No add-in, journal or staging directory beside the lock file."""
+
+    return not any(
+        entry.name == "WGLink"
+        or (entry.name.startswith(".WGLink") and entry.name != TRANSACTION_LOCK)
+        for entry in addins_dir.iterdir()
+    )
+
+
+@contextmanager
+def _operation_lock(
+    addins_dir: Path,
+    *,
+    timeout: float = TRANSACTION_LOCK_TIMEOUT,
+    discard_when_unused: bool = False,
+):
+    """Serialize target changes with an OS lock released on process death.
+
+    With ``discard_when_unused`` (uninstall), the lock file goes too once
+    nothing of WGLink's is left in the folder, so an uninstall leaves Fusion's
+    AddIns folder as it found it. On POSIX it is unlinked while still held; a
+    waiter that then wins the old file sees that the path no longer names it
+    and opens the new one. Windows refuses to delete a file another process
+    has open, so there it is deleted after closing and simply stays when
+    anyone else has it open.
+    """
+
+    addins_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = addins_dir / TRANSACTION_LOCK
+    handle = _acquire_operation_lock(lock_path, timeout)
+    discard = False
+    try:
         yield
+        discard = discard_when_unused and _nothing_of_wglink_left(addins_dir)
+        if discard and os.name != "nt":
+            lock_path.unlink(missing_ok=True)
     finally:
         try:
-            if acquired:
-                _set_file_lock(handle, acquire=False)
+            _set_file_lock(handle, acquire=False)
         finally:
             handle.close()
+    if discard and os.name == "nt":
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
 
 
 def _remove_entry(path: Path) -> None:
@@ -1010,7 +1072,7 @@ def uninstall(
     resolved_addins = resolved_addins.expanduser().resolve()
     if not resolved_addins.is_dir():
         return "preserved-external", None
-    with _operation_lock(resolved_addins):
+    with _operation_lock(resolved_addins, discard_when_unused=True):
         return _uninstall_unlocked(
             root=root,
             platform=platform,
