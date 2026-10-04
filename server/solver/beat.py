@@ -32,6 +32,7 @@ from server.mesh.builder import build_solver_mesh
 from server.platform.temp_session import temporary_directory_root
 
 from .acoustics import solver_sound_speed_m_per_s
+from .beat_threads import beat_julia_threads
 from .base import (
     ArtifactCallback,
     CancelCallback,
@@ -698,6 +699,7 @@ def solve_beat_from_msh_text(
             native_symmetry_plane=native_symmetry_plane(context),
             mesh_scale=1.0,
             beat_backend=backend,
+            julia_threads=beat_julia_threads(backend),
             source_motion=context.source_motion,
             **({"surface_traces": True} if retain_traces else {}),
             progress_callback=progress,

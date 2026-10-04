@@ -719,6 +719,13 @@ def test_imported_adapter_passes_selected_backend_to_beat(
 
     assert recording_beat.solves
     assert {solve["config"].beat_backend for solve in recording_beat.solves} == {backend}
+    # The same thread count as the parametric solve and the warmup: the package
+    # keys workers by it, so a mismatch boots a second Julia worker.
+    from server.solver.beat_threads import beat_julia_threads
+
+    assert {solve["config"].julia_threads for solve in recording_beat.solves} == {
+        beat_julia_threads(backend)
+    }
     assert result.results["metadata"]["solver_engine"]["device"] == backend
 
 

@@ -584,3 +584,87 @@ def test_unavailable_package_backends_are_probed_once_per_request(monkeypatch):
     assert beat._package_backend_statuses() == statuses
     assert beat._package_backend_statuses() == statuses
     assert len(calls) == 2
+
+
+@pytest.mark.parametrize(("cores", "expected"), [(1, 1), (4, 3), (8, 6), (10, 8), (12, 9)])
+def test_beat_metal_leaves_a_quarter_of_the_performance_cores(monkeypatch, cores, expected) -> None:
+    """Inside WG the server and the window share those cores with the sweep.
+
+    With all eight M1 Max performance cores the factorization stalls whenever
+    one is busy: 4.3 s idle, 5.9 s with one busy core, against 3.9 s / 4.0 s
+    with six threads. See ``server/solver/beat_threads.py``.
+    """
+
+    from server.solver import beat_threads
+
+    monkeypatch.setattr(beat_threads, "_performance_core_count", lambda: cores)
+    assert beat_threads.beat_julia_threads("metal") == expected
+    for backend in ("cpu", "cuda", "rocm", None):
+        assert beat_threads.beat_julia_threads(backend) == "auto"
+
+
+def test_the_metal_solve_and_its_warmup_ask_for_the_same_worker(monkeypatch) -> None:
+    """The package keys persistent workers by thread count.
+
+    A warmup that asks for a different count warms a worker no solve uses,
+    and the first real solve pays the whole Julia start-up again.
+    """
+
+    import types
+
+    import numpy as np
+    from types import SimpleNamespace
+
+    from server.solver import beat_threads
+    from server.solver import warmup as solver_warmup
+
+    monkeypatch.setattr(beat_threads, "_performance_core_count", lambda: 8)
+
+    warmed: list[object] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "hornlab_beat_bem",
+        types.SimpleNamespace(warm_up=lambda **kwargs: warmed.append(kwargs["julia_threads"])),
+    )
+    solver_warmup._warm_beat("metal")
+
+    configs: list[SimpleNamespace] = []
+
+    def solve(path, frequencies, config, *, status_callback):
+        configs.append(config)
+        f = np.asarray(frequencies)
+        pressure = np.ones((len(f), 1, 1), dtype=complex)
+        return SimpleNamespace(
+            frequencies_hz=f,
+            pressure_complex=pressure,
+            directivity_db=np.zeros_like(pressure.real),
+            impedance=np.ones(len(f), dtype=complex),
+            observation_angles_deg=np.array([0.0]),
+            observation_planes=["horizontal"],
+            solver_log=[],
+            timings={},
+        )
+
+    package = SimpleNamespace(
+        ObservationConfig=SimpleNamespace,
+        ObservationFrame=SimpleNamespace,
+        SolveConfig=SimpleNamespace,
+        reject_unsupported_native_symmetry=lambda config: None,
+        solve_frequencies=solve,
+    )
+    monkeypatch.setattr(beat, "_load_api", lambda: package)
+    monkeypatch.setattr(
+        beat,
+        "beat_backend_statuses",
+        lambda: {"metal": {"available": True, "reason": "test", "surface_traces": False}},
+    )
+    monkeypatch.setattr(
+        beat,
+        "observation_config",
+        lambda *args, **kwargs: SimpleNamespace(distance_m=2.0, origin="mouth"),
+    )
+    monkeypatch.setattr(beat, "native_observation_frame", lambda *args: SimpleNamespace())
+    beat.solve_beat_from_msh_text("$MeshFormat\n", _context(), backend="metal")
+
+    assert warmed == [6]
+    assert [config.julia_threads for config in configs] == [6]

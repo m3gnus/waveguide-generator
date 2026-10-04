@@ -400,7 +400,7 @@ def test_the_beat_warmup_runs_a_solve_not_just_a_process_start(
 
     solver_warmup._warm_beat("cuda")
 
-    assert calls == [{"beat_backend": "cuda", "mode": "tiny"}]
+    assert calls == [{"beat_backend": "cuda", "mode": "tiny", "julia_threads": "auto"}]
 
 
 @pytest.mark.parametrize("backend", ["cuda", "rocm", "metal", "cpu"])
@@ -435,7 +435,13 @@ def test_the_beat_warmup_warms_the_backend_the_solve_will_use(
     engine = f"beat-{backend}"
     assert solver_warmup.prewarm_beat_worker_for_engine(engine) is True
 
-    assert calls == [{"beat_backend": backend, "mode": "tiny"}]
+    from server.solver.beat_threads import beat_julia_threads
+
+    # The thread count is part of the package's worker key: the solve asks
+    # ``beat_julia_threads`` too, so both land on the same worker.
+    assert calls == [
+        {"beat_backend": backend, "mode": "tiny", "julia_threads": beat_julia_threads(backend)}
+    ]
     assert create_engine(engine).backend == backend
 
 
@@ -476,7 +482,7 @@ def test_the_beat_prewarm_still_answers_the_legacy_family_name(
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
 
     assert solver_warmup.prewarm_beat_worker_for_engine("beat") is True
-    assert calls == [{"beat_backend": "rocm", "mode": "tiny"}]
+    assert calls == [{"beat_backend": "rocm", "mode": "tiny", "julia_threads": "auto"}]
 
 
 def test_an_unnamed_beat_backend_falls_back_to_the_one_every_host_has() -> None:

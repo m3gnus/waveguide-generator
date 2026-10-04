@@ -238,12 +238,16 @@ def _warm_beat(backend: str) -> None:
 
     import hornlab_beat_bem
 
+    from .beat_threads import beat_julia_threads
+
     # Recorded around the call, not inside the package: a solve that arrives
     # now waits for the same worker, and ``beat_warmup_in_progress`` is what
     # lets ``server/solver/beat.py`` say so instead of leaving the user on
     # "Configuring BEAT Engine BEM solve" for the length of the compile.
     with beat_warmup_recorded():
-        hornlab_beat_bem.warm_up(beat_backend=backend, mode="tiny")
+        hornlab_beat_bem.warm_up(
+            beat_backend=backend, mode="tiny", julia_threads=beat_julia_threads(backend)
+        )
 
 
 def warm_bempp_in_this_process(status: Mapping[str, object]) -> None:
