@@ -562,6 +562,11 @@ def _provision_worker() -> None:
         with _provision_lock:
             prepare_cpu, prepare_gpu = _prepare_cpu, _prepare_gpu
         gpu = _gpu_backend_present(provision)
+        if prepare_gpu:
+            if gpu is None:
+                log.info("BEAT GPU check: no supported GPU found; no GPU runtime prepared")
+            else:
+                log.info("BEAT GPU check: %s hardware found", gpu)
         if prepare_cpu:
             _prepare_cpu_runtime(provision, gpu)
         if prepare_gpu and gpu is not None:
@@ -794,8 +799,11 @@ def start_cpu_provisioning(
     # Listener notification takes the same lock to snapshot its callbacks.
     # Publish START after releasing it, while the just-started thread is live.
     _notify_readiness_listeners()
+    # No hardware has been looked at yet: the inventory runs on the worker
+    # thread, which logs what it found. Saying "detected GPU" here read as a
+    # finding on GPU-less machines.
     log.info(
-        "Preparing BEAT runtimes in the background (CPU: %s, detected GPU: %s)",
+        "Preparing BEAT runtimes in the background (CPU: %s, GPU check: %s)",
         "yes" if prepare_cpu else "no",
         "yes" if prepare_gpu else "no",
     )

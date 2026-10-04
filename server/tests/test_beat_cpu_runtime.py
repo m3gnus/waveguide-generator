@@ -530,6 +530,48 @@ def test_provisioning_starts_off_the_calling_thread_on_a_gpu_less_host(
     assert started == ["ran"]
 
 
+@pytest.mark.parametrize(
+    "found, worker_line",
+    [
+        (None, "BEAT GPU check: no supported GPU found; no GPU runtime prepared"),
+        ("cuda", "BEAT GPU check: cuda hardware found"),
+    ],
+)
+def test_the_log_reports_a_gpu_only_after_the_inventory_found_one(
+    tmp_path, monkeypatch, caplog, found, worker_line
+) -> None:
+    """The start line cannot know about hardware; the worker says what it found.
+
+    The 0.3.4 Windows rehearsal (a VM with a virtual display adapter and no
+    GPU) logged "detected GPU: yes" at start, which only meant the GPU stage
+    would run its check.
+    """
+
+    import logging
+
+    project = _cpu_project(tmp_path)
+    _install_stub_package(
+        monkeypatch,
+        project=project,
+        state=None,
+        backend_states={},
+        detect_gpu_backend=lambda: found,
+        provision_cpu=lambda runtime_dir=None, *, status_cb=print, force=False: {"status": "ready"},
+        provision_gpu=lambda *_args, **_kwargs: {"status": "ready"},
+        backend_ready=lambda *_args, **_kwargs: False,
+    )
+    caplog.set_level(logging.INFO)
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Windows")
+
+    assert thread is not None
+    thread.join(timeout=5.0)
+    messages = [record.getMessage() for record in caplog.records]
+    assert "Preparing BEAT runtimes in the background (CPU: yes, GPU check: yes)" in messages
+    assert worker_line in messages
+    assert not any("detected GPU" in message for message in messages)
+
+
 @pytest.mark.parametrize("system", ["Windows", "Linux", "Darwin"])
 def test_every_supported_platform_prepares_the_cpu_runtime(
     tmp_path, monkeypatch, system: str
