@@ -213,7 +213,9 @@ jobs:
 
   server:
     name: ${{ matrix.label }} (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    # The Linux server's CPU ICD below is pinned to Ubuntu 24.04 packages.
+    # Keep the matrix label stable, but do not let ubuntu-latest move that host.
+    runs-on: ${{ matrix.os == 'ubuntu-latest' && matrix.suite == 'server' && 'ubuntu-24.04' || matrix.os }}
     # Two suites, two budgets, because they exhaust a budget differently.
     #
     # Windows has hung here on a blocking Win32 dialog: the suite stops making
@@ -359,12 +361,34 @@ jobs:
           pip install -r server/requirements-lock.txt
           pip install --no-deps -r server/requirements-pins.txt
           pip install -r server/requirements-dev.txt
-      # pyopencl's Linux wheel discovers this CPU ICD. It needs no GPU or Julia
-      # provisioning and adds no Python dependencies or app-lock changes.
+      # The 2022 PoCL 3.0 wheel failed on newer hosted EPYC CPUs with both an
+      # unknown LLVM CPU target and missing compiled kernels. Use the pinned
+      # distro CPU ICD instead; app dependencies and required CAD tests stay
+      # unchanged. The real compute probe makes provisioning failures visible
+      # before spending the full suite, and logs the actual CPU/driver facts.
       - name: Install the pinned CPU OpenCL runtime for the CAD pipeline
         if: runner.os == 'Linux' && matrix.suite == 'server'
         run: |
-          pip install --no-deps --only-binary=:all: pocl-binary-distribution==3.0
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pocl-opencl-icd=5.0-2.1build3
+          dpkg-query -W pocl-opencl-icd libpocl2t64 libpocl2-common
+          lscpu
+          python - <<'PY'
+          import json
+          import pyopencl as cl
+          from server.solver.bempp_opencl import qualified_opencl
+
+          for platform in cl.get_platforms():
+              print(json.dumps({"platform": platform.name, "version": platform.version,
+                                "devices": [{"name": device.name, "driver": device.driver_version,
+                                             "version": device.version, "type": int(device.type)}
+                                            for device in platform.get_devices()]}, sort_keys=True))
+          verdict = qualified_opencl()
+          print(json.dumps(verdict, sort_keys=True))
+          if not verdict.get("ok") or verdict.get("device", {}).get("type") != "cpu":
+              raise SystemExit("The pinned CPU OpenCL runtime failed WG's real compute qualification")
+          PY
       - name: ${{ matrix.label }} tests
         # -v, not -q: Linux has been dying mid-run with exit 141 (SIGPIPE) and
         # no summary, so the only way to name the test that takes the process
