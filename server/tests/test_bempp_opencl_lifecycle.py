@@ -582,3 +582,64 @@ def test_a_held_probe_directory_is_retried_then_logged(monkeypatch, tmp_path, ca
         probe._remove_channel(stuck)
     assert stuck.calls == probe.REMOVE_ATTEMPTS and Path(stuck.name).exists()
     assert "Could not remove the OpenCL check's directory" in caplog.text
+
+
+def _stub_bempp_api(monkeypatch, scratch):
+    """``bempp_cl.api`` as far as its import-time scratch directory goes."""
+    import types
+    api = types.SimpleNamespace(TMP_PATH=str(scratch))
+    monkeypatch.setitem(sys.modules, "bempp_cl", types.SimpleNamespace(api=api))
+    monkeypatch.setitem(sys.modules, "bempp_cl.api", api)
+    return api
+
+
+def test_bempps_import_time_scratch_directory_moves_into_the_session(monkeypatch, tmp_path):
+    """``import bempp_cl.api`` makes ``TMP_PATH = tempfile.mkdtemp()`` and never
+    removes it: one empty ``tmp*`` per process in the system temporary directory
+    (five after one start and a solve in the 0.3.4 Windows rehearsal)."""
+    from server.platform.temp_session import TemporarySession
+    scratch = tmp_path / "system" / "tmpbempp"
+    scratch.mkdir(parents=True)
+    api = _stub_bempp_api(monkeypatch, scratch)
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    try:
+        probe._keep_bempp_scratch_in_session()
+        assert api.TMP_PATH == str(session.path) and not scratch.exists()
+        probe._keep_bempp_scratch_in_session()
+        assert api.TMP_PATH == str(session.path) and session.path.is_dir()
+    finally:
+        session.close(remove=True)
+
+
+def test_bempps_scratch_directory_is_left_alone_when_used_or_without_a_session(monkeypatch, tmp_path):
+    from server.platform.temp_session import TemporarySession
+    scratch = tmp_path / "system" / "tmpbempp"
+    scratch.mkdir(parents=True)
+    api = _stub_bempp_api(monkeypatch, scratch)
+    probe._keep_bempp_scratch_in_session()
+    assert api.TMP_PATH == str(scratch) and scratch.is_dir()
+    (scratch / "sphere.msh").write_text("bempp's own\n", encoding="utf-8")
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    try:
+        probe._keep_bempp_scratch_in_session()
+        assert api.TMP_PATH == str(scratch) and (scratch / "sphere.msh").is_file()
+    finally:
+        session.close(remove=True)
+
+
+def test_the_check_child_makes_its_temporary_directories_in_its_channel(monkeypatch, tmp_path):
+    """The parent removes the channel however the child ends, so whatever the
+    child's imports leave in its temporary directory goes with it."""
+    channel = tmp_path / "wg2-opencl-check"
+    channel.mkdir()
+    seen = []
+    monkeypatch.setattr(tempfile, "tempdir", None)
+    def result(mode, device):
+        seen.append(tempfile.gettempdir())
+        return {"ok": False, "opencl_unavailable_reason": "probe_error", "reason": "stub"}
+    monkeypatch.setattr(probe, "_child_result", result)
+    probe._child_main("inventory", None, channel / "result.json")
+    assert seen == [str(channel)]
+    assert json.loads((channel / "result.json").read_text(encoding="utf-8"))["ok"] is False
