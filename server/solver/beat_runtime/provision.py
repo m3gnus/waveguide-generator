@@ -1,4 +1,4 @@
-"""Explicit CPU provisioning; package setup alone never proves readiness."""
+"""Shared provisioning; package setup alone never proves readiness."""
 
 from __future__ import annotations
 
@@ -41,12 +41,13 @@ def _failure(
     # A diagnostic write failure must not hide the provisioning/lock error.
     with suppress(Exception):
         record = state.write_state(record, directory)
-    report(f"BEAT CPU runtime provisioning failed: {exc}")
+    label = "CPU" if record["backend"] == "cpu" else "Metal"
+    report(f"BEAT {label} runtime provisioning failed: {exc}")
     return record
 
 
-def provision_cpu(
-    directory: Path | None = None, *, status_cb: julia_steps.StatusCallback = print,
+def _provision_backend(
+    directory: Path | None = None, *, backend: str, status_cb: julia_steps.StatusCallback = print,
     force: bool = False, retry: bool = False, julia_executable: str | None = None,
     julia_project: Path | None = None, julia_threads: int | str = "auto",
     environ: Mapping[str, str] | None = None, depot: Path | None = None,
@@ -54,38 +55,42 @@ def provision_cpu(
     probe_contract: str | None = None, probe_fixture_identity: str | None = None,
     run_step: Callable[..., None] | None = None,
     ensure_julia: Callable[..., str] | None = None,
+    setup_steps: tuple[tuple[str, str, str], ...] = (),
 ) -> dict[str, Any]:
-    """Resolve, instantiate, precompile and prove CPU; failures can always retry.
+    """Resolve, instantiate, precompile and prove one backend; failures can always retry.
 
     force bypasses a matching ready record; retry also requests a fresh attempt.
     The injected probe receives backend, julia_executable, julia_project,
     julia_threads, environment and status_cb and returns completion evidence.
     Its contract/fixture identity must be supplied for reuse and a ready record.
     """
+    if backend not in {"cpu", "metal"}:
+        raise ValueError(f"Unsupported provisioning backend: {backend!r}")
+    label = "CPU" if backend == "cpu" else "Metal"
     report = julia_steps.guarded_status(status_cb)
     env = dict(os.environ if environ is None else environ)
     directory = (paths.runtime_dir(environ=env) if directory is None else paths.checked_root(directory, environ=env)).expanduser().absolute()
     paths.checked_root(directory)
     record: dict[str, Any] = dict.fromkeys(state._IDENTITY_FIELDS)
-    record.update(backend="cpu", status="in_progress", step="lock", error=None,
+    record.update(backend=backend, status="in_progress", step="lock", error=None,
                   environment={}, completion={})
     held = ExitStack()
     try:
-        held.enter_context(locks.provisioning_lock(directory, backend="cpu", status_cb=report))
+        held.enter_context(locks.provisioning_lock(directory, backend=backend, status_cb=report))
     except Exception as exc:
         held.close()
         return _failure(record, directory, exc, report)
     with held:
         try:
             # Recheck under exclusion: another provisioner may have finished waiting.
-            previous = state.read_state(directory, backend="cpu")
+            previous = state.read_state(directory, backend=backend)
             record["step"] = "resolve_assets"
-            engine = assets.engine_assets("cpu")
+            engine = assets.engine_assets(backend)
             project = (engine.project if julia_project is None else julia_project).expanduser().resolve()
-            count = threads.resolve_julia_threads("cpu", julia_threads)
+            count = threads.resolve_julia_threads(backend, julia_threads)
             effective_depot = str(Path(depot).expanduser().resolve()) if depot is not None else env.get("JULIA_DEPOT_PATH") or str(directory / "depot")
             env.update(JULIA_DEPOT_PATH=effective_depot, JULIA_NUM_THREADS=str(count),
-                       BLAB_BEAT_ENGINE_GPU_BACKEND="cpu")
+                       BLAB_BEAT_ENGINE_GPU_BACKEND=backend)
             record.update(
                 project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
                 runtime_fingerprint=identity.runtime_fingerprint(), depot=str(effective_depot),
@@ -107,13 +112,13 @@ def provision_cpu(
                 outdated = managed_tree and not (version_dir == installer.JULIA_VERSION or version_dir.startswith(f"{installer.JULIA_VERSION}-"))
                 selected = bool((julia_executable or "").strip() or env.get(discovery.JULIA_ENV_VAR, "").strip())
                 if not (force or retry or outdated and not selected) and _ready(previous, expected):
-                    report("BEAT CPU runtime is already provisioned.")
+                    report(f"BEAT {label} runtime is already provisioned.")
                     assert previous is not None
                     return previous
             state.write_state(record, directory)
             julia = (ensure_julia or installer.ensure_julia)(
                 directory, explicit=julia_executable, environ=env, status_cb=report,
-                required_bytes=installer.CPU_REQUIRED_FREE_BYTES,
+                required_bytes=installer.CPU_REQUIRED_FREE_BYTES if backend == "cpu" else installer.GPU_REQUIRED_FREE_BYTES,
             )
             julia = str(Path(julia))
             julia_record = state.read_julia(directory)
@@ -121,32 +126,52 @@ def provision_cpu(
                           julia_identity=discovery.executable_identity(Path(julia)),
                           julia_version=julia_record["version"] if julia_record and julia_record["executable"] == julia else None)
             step = run_step or julia_steps.run_julia_step
-            for name, code, label in (
-                ("instantiate", "using Pkg; Pkg.instantiate()", "Instantiating the Julia CPU environment"),
-                ("precompile", "using Pkg; Pkg.precompile()", "Precompiling the Julia CPU environment"),
-            ):
+            for name, code, step_label in (
+                ("instantiate", "using Pkg; Pkg.instantiate()", f"Instantiating the Julia {label} environment"),
+                ("precompile", "using Pkg; Pkg.precompile()", f"Precompiling the Julia {label} environment"),
+            ) + setup_steps:
                 record["step"] = name
                 state.write_state(record, directory)
-                step(julia, code, project=project, environment=env, label=label, status_cb=report)
-            record["step"] = "cpu_probe"
+                step(julia, code, project=project, environment=env, label=step_label, status_cb=report)
+            record["step"] = f"{backend}_probe"
             state.write_state(record, directory)
             # TODO(PR 11): wire the compiled solve probe and its contract/fixture identity.
             if probe is None:
-                raise RuntimeError("Compiled CPU readiness probe is not configured (PR 11)")
+                raise RuntimeError(f"Compiled {label} readiness probe is not configured (PR 11)")
             if not probe_contract or not probe_fixture_identity:
-                raise RuntimeError("Compiled CPU probe contract and fixture identity are required")
+                raise RuntimeError(f"Compiled {label} probe contract and fixture identity are required")
             completion = dict(probe(
-                backend="cpu", julia_executable=julia, julia_project=project,
+                backend=backend, julia_executable=julia, julia_project=project,
                 julia_threads=count, environment=env, status_cb=report,
             ))
             if not _completion_valid(completion):
-                raise RuntimeError("Compiled CPU probe returned incomplete readiness evidence")
+                raise RuntimeError(f"Compiled {label} probe returned incomplete readiness evidence")
             json.dumps(completion, allow_nan=False)
             # Pkg can change manifests; save the identity of the project actually proved.
             record.update(engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
                           completion=completion, status="ready", step="done", error=None)
             saved = state.write_state(record, directory)
-            report("BEAT CPU runtime is ready.")
+            report(f"BEAT {label} runtime is ready.")
             return saved
         except Exception as exc:
             return _failure(record, directory, exc, report)
+
+
+def provision_cpu(
+    directory: Path | None = None, *, status_cb: julia_steps.StatusCallback = print,
+    force: bool = False, retry: bool = False, julia_executable: str | None = None,
+    julia_project: Path | None = None, julia_threads: int | str = "auto",
+    environ: Mapping[str, str] | None = None, depot: Path | None = None,
+    probe: Callable[..., Mapping[str, Any]] | None = None,
+    probe_contract: str | None = None, probe_fixture_identity: str | None = None,
+    run_step: Callable[..., None] | None = None,
+    ensure_julia: Callable[..., str] | None = None,
+) -> dict[str, Any]:
+    """Provision CPU with the shared lock, identity and injectable compiled probe."""
+    return _provision_backend(
+        directory, backend="cpu", status_cb=status_cb, force=force, retry=retry,
+        julia_executable=julia_executable, julia_project=julia_project,
+        julia_threads=julia_threads, environ=environ, depot=depot, probe=probe,
+        probe_contract=probe_contract, probe_fixture_identity=probe_fixture_identity,
+        run_step=run_step, ensure_julia=ensure_julia,
+    )

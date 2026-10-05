@@ -533,3 +533,60 @@ caller switch or pin/requirement changes occurred. Native Windows and Julia
 qualification are outside this fake-only review round; changes are uncommitted
 as explicitly requested. `julia_steps.py` needed no change: PR 10b's callback
 guard/subprocess tests are included in the passing targeted runtime run.
+- **PR 12a — Metal hardware eligibility:**
+  `server/solver/beat_runtime/hardware.py`;
+  `server/tests/beat_runtime/test_hardware.py`; this `CHANGES.md`.
+  `gpu_hardware()` reports Metal eligibility only on Apple Silicon with macOS
+  13.3+, refusing Intel Macs and missing/malformed versions. Its `available`
+  field is hardware eligibility, never runtime readiness. CUDA/ROCm always
+  report `available=False`, reason `not supported in this build`.
+  `detect_gpu_backend()` suggests Metal or None without importing an engine.
+- **PR 12b — shared orchestration and compiled Metal wiring:**
+  `server/solver/beat_runtime/{gpu,provision,probe}.py`;
+  `server/tests/beat_runtime/test_gpu.py`; this `CHANGES.md`.
+  `gpu.provision_gpu(directory=None, backend="metal"|None, ..., worker_factory=...,
+  probe=..., **options)` gates hardware before any filesystem, asset, installer
+  or probe work. CUDA/ROCm return explicit unsupported skips. `options` forwards
+  the existing CPU provisioning controls, including force/retry, executable,
+  project, environment, depot, threads, run_step, ensure_julia and probe identity.
+  The CPU public signature is unchanged; its implementation and Metal both use
+  `_provision_backend`, with backend-local records and optional setup steps.
+  This reuses lock acquisition, locked recheck, discovery/installer, identity,
+  julia_steps and the callback guard; state/locks/discovery/installer are unedited.
+  Metal selects `assets.engine_assets("metal")` (official `julia_metal`), uses
+  the GPU disk budget, instantiates, precompiles and resolves/checks Metal
+  artifacts/functionality. None of those steps can establish readiness.
+  The default injectable probe launches the optional public EngineWorker with
+  the selected system solver/project/environment and the single resolved integer
+  thread count, preserving WG Metal headroom. It runs PR 11's compiled_probe,
+  requires its verdict and matching fixture/contract identity, then terminates
+  its own worker. `probe.fixture_identity()` exposes the actual fixture hash.
+  PR 11 result_count/solved_count/finite_nonzero evidence is retained and adapted
+  to PR 10's finite/nonzero/terminal_count completion mapping.
+- **PR 12c — Metal failure/identity preservation coverage:**
+  `server/tests/beat_runtime/test_gpu_failures.py`; this `CHANGES.md`.
+  Artifact/functionality, missing assets/package, zero/wrong-backend solve,
+  unavailable negotiated backend, wrong probe identity and worker-retirement
+  failures remain failed Metal records while CPU readiness stays byte-identical.
+  Changed project/executable/environment/threads/fixture require another compiled
+  solve. No-device calls preserve both existing records. Tests also exercise the
+  default lazy public EngineWorker import with a fake optional package.
+
+PR 12 deviations: official JWSound/BEAT_Engine replaces the design's fork target,
+and CUDA/ROCm are explicitly unsupported by owner decision. Split into three
+review slices to keep each below the design's approximate 400-line ceiling.
+Minimal shared-provisioner parameterization avoids duplicating orchestration;
+the small public fixture hash helper avoids duplicating probe-fixture policy.
+Device functionality remains a preliminary artifact/device check; only the
+compiled result makes Metal ready. No existing caller is switched, pins and
+requirements are unchanged, and no HBB writes or stale-PID signalling are added.
+
+PR 12 validation: the 42 new hardware/Metal tests passed; the available combined
+targeted launcher run (`server/tests/beat_runtime`, `server/tests/test_solver_beat.py`)
+passed 597 tests in 5.96 s. Runtime/test Ruff and `git diff --check` passed.
+The exact requested pytest/Ruff commands were attempted but cannot complete:
+`server/tests/beat_adapter` and `server/solver/beat_adapter` are absent here.
+All checks were unpiped and below two minutes. Tests use temporary trees and
+fake steps/workers; no Julia, download, real user/HBB data directory or real
+Metal solve was used. Real installed-device qualification remains a later gate,
+as required by the no-Julia constraint. Changes remain uncommitted as requested.

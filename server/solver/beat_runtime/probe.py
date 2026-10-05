@@ -45,6 +45,11 @@ class ProbeResult:
             raise ValueError("Ready verdicts must come from compiled_probe")
 
 
+def fixture_identity() -> str:
+    """Hash the actual compiled-probe fixture for provisioning reuse."""
+    return hashlib.sha256(_FIXTURE.read_bytes()).hexdigest()
+
+
 def build_request(mesh: Path, *, backend: str = "cpu") -> dict:
     """One source, frequency and observation; paths are worker-local absolutes."""
     if backend not in {"cpu", "metal"}:
