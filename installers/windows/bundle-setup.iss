@@ -869,7 +869,7 @@ begin
   end;
 end;
 
-{ True when a registered Khronos ICD is Intel's CPU OpenCL runtime and its DLL
+{ True when a registered (HKLM) Khronos ICD is Intel's CPU OpenCL runtime and its DLL
   exists. This is a cheap hint, not a compute test (setup cannot run one): the
   application still qualifies the device with a real smoke test at start-up and
   says so when it fails. Only Intel's CPU runtime counts, because that is what
@@ -879,23 +879,24 @@ end;
 function CpuOpenClRuntimeRegistered(): Boolean;
 var
   Names: TArrayOfString;
-  Roots: array[0..1] of Integer;
-  Root, I: Integer;
+  I: Integer;
   Disabled: Cardinal;
   Dll: String;
 begin
   Result := False;
-  Roots[0] := HKEY_LOCAL_MACHINE;
-  Roots[1] := HKEY_CURRENT_USER;
-  for Root := 0 to 1 do
+  { The Khronos ICD loader reads this key under HKLM only, so an HKCU entry
+    is never loaded and must not count. }
   begin
-    if not RegGetValueNames(Roots[Root], 'SOFTWARE\Khronos\OpenCL\Vendors', Names) then
-      Continue;
+    if not RegGetValueNames(HKEY_LOCAL_MACHINE, 'SOFTWARE\Khronos\OpenCL\Vendors', Names) then
+    begin
+      WgLog('OpenCL: no registered Intel CPU runtime found.');
+      exit;
+    end;
     for I := 0 to GetArrayLength(Names) - 1 do
     begin
       Dll := Names[I];
       { A DWORD value of 0 enables the ICD; any other value disables it. }
-      if not RegQueryDWordValue(Roots[Root], 'SOFTWARE\Khronos\OpenCL\Vendors',
+      if not RegQueryDWordValue(HKEY_LOCAL_MACHINE, 'SOFTWARE\Khronos\OpenCL\Vendors',
         Dll, Disabled) or (Disabled <> 0) then
         Continue;
       if (CompareText(ExtractFileName(Dll), 'intelocl64.dll') = 0) and FileExists(Dll) then

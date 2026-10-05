@@ -106,5 +106,7 @@ def test_runtime_detection_is_conservative(script: str) -> None:
     assert "Khronos" in detect and "OpenCL" in detect and "Vendors" in detect
     assert "'intelocl64.dll'" in detect and "FileExists(Dll)" in detect
     assert "(Disabled <> 0)" in detect
+    # The Khronos ICD loader reads the vendors key under HKLM only.
+    assert "HKEY_LOCAL_MACHINE" in detect and "HKEY_CURRENT_USER" not in detect
     # The default is "not found", so any doubt shows the full guidance.
     assert detect.split("begin\n", 1)[1].startswith("  Result := False;")
