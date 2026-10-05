@@ -774,6 +774,7 @@ def main(argv: list[str] | None = None) -> int:
             # The resolved default data root is also passed explicitly above,
             # so ordinary starts must still opt into the Documents default.
             workspace_dir=None if isolated_data_dir else default_runs_dir(),
+            adopt_legacy_workspace=not isolated_data_dir,
             solver_warmup=_solver_warmup_enabled(),
             update_request_path=(
                 args.status_control.with_name("update.json")

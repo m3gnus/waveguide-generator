@@ -482,6 +482,7 @@ def create_app(
     *,
     data_dir: str | Path | None = None,
     workspace_dir: str | Path | None = None,
+    adopt_legacy_workspace: bool | None = None,
     solver_warmup: bool = False,
     update_request_path: str | Path | None = None,
     update_staging_root: str | Path | None = None,
@@ -857,7 +858,14 @@ def create_app(
         # per migrated job, holding manifests and raw results -- and adopting
         # that as somebody's export folder would bury their runs among hundreds
         # of them, inside a directory Finder hides.
-        legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,)
+        # A data override means isolation, so the checkout's output is not
+        # adopted either. ``create_app`` cannot tell an override from the
+        # launcher's ordinary resolved data root, so the launcher says which
+        # it is; embedded and test callers default to isolation.
+        adopt = (
+            not isolated_data_dir if adopt_legacy_workspace is None else adopt_legacy_workspace
+        )
+        legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,) if adopt else ()
     elif not isolated_data_dir:
         resolved_workspace_dir = default_runs_dir()
         legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)

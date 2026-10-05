@@ -134,11 +134,7 @@ def test_create_app_data_override_isolates_workspace_startup(
 @pytest.mark.parametrize("source", ["argument", "environment"])
 @pytest.mark.parametrize("isolated_startup", [
     "missing",
-    pytest.param("populated", marks=pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="A data override with an explicit workspace default still adopts checkout output",
-    )),
+    "populated",
 ], indirect=True)
 def test_data_override_with_explicit_workspace_default_skips_legacy_adoption(
     source, isolated_startup, tmp_path, monkeypatch,
