@@ -245,11 +245,20 @@ def test_waitpid_waits_pump_the_wizard_message_queue(code: str) -> None:
     )
 
     running = _strip_comments_and_strings(_body(code, "function WaitForRunningApplicationExit(): Boolean;"))
-    assert "for Attempt := 0 to 1200 do" in running
-    # The sleep and pump never follow the last mutex check, so the refusal is
-    # always decided by a check made after any pump.
+    # The mutex cap is on the clock too: 1201 counted 100 ms sleeps took ~131 s.
+    assert "Attempt" not in running
+    assert "Start := GetTickCount();" in running
+    # The deadline is tested only right after a fresh mutex check, and the
+    # sleep and pump come after that test, so a refusal never follows a pump.
     assert re.search(
-        r"if Attempt < 1200 then\s+begin\s+Sleep\(WaitSliceMs\);\s+PumpMessages\(\);\s+end;\s+end;\s+WgLog\(",
+        r"while True do\s+begin\s+Handle := OpenMutexW\(SYNCHRONIZE, 0, \)",
+        running,
+    )
+    assert re.search(
+        r"CloseHandle\(Handle\);\s+if not WaitRequested then\s+begin\s+WgLog\(\);\s+exit;\s+end;\s+"
+        r"Elapsed := GetTickCount\(\) - Start;\s+if Elapsed >= WaitForProcessLimitMs then\s+break;\s+"
+        r"Slice := WaitForProcessLimitMs - Elapsed;\s+if Slice > WaitSliceMs then\s+Slice := WaitSliceMs;\s+"
+        r"Sleep\(Slice\);\s+PumpMessages\(\);\s+end;\s+WgLog\(\);",
         running,
     )
     # The pump is defined before either wait uses it.

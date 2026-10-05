@@ -1132,12 +1132,15 @@ end;
   until the app/worker exits, including a killed native parent. }
 function WaitForRunningApplicationExit(): Boolean;
 var
-  Handle, Attempt, Error: Integer;
+  Handle, Error, Start, Elapsed, Slice: Integer;
   WaitRequested: Boolean;
 begin
   Result := False;
   WaitRequested := ExpandConstant('{param:WAITPID|0}') <> '0';
-  for Attempt := 0 to 1200 do
+  { The 120 s cap is measured on the tick clock, as in WaitForApplicationExit:
+    counting 1201 sleeps of 100 ms stretched it to about 131 s. }
+  Start := GetTickCount();
+  while True do
   begin
     Handle := OpenMutexW(SYNCHRONIZE, 0, 'WaveguideGeneratorRunning');
     if Handle = 0 then
@@ -1152,13 +1155,17 @@ begin
       WgLog('Install refused: native application or worker is still running.');
       exit;
     end;
-    { No sleep or pump after the last check: a modal dialog held open in the
-      pump must always be followed by one more look at the mutex. }
-    if Attempt < 1200 then
-    begin
-      Sleep(WaitSliceMs);
-      PumpMessages();
-    end;
+    { The deadline is tested only here, right after a fresh check of the
+      mutex, so a refusal never follows a sleep or a pump -- a modal dialog
+      held open in the pump is always followed by one more look. }
+    Elapsed := GetTickCount() - Start;
+    if Elapsed >= WaitForProcessLimitMs then
+      break;
+    Slice := WaitForProcessLimitMs - Elapsed;
+    if Slice > WaitSliceMs then
+      Slice := WaitSliceMs;
+    Sleep(Slice);
+    PumpMessages();
   end;
   WgLog('Install refused: native Running handles remained after 120 seconds.');
 end;
