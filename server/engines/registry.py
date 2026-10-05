@@ -333,8 +333,7 @@ def detect_engines(
     if not any(name.startswith("beat-") for name in selected):
         return engines
     from server.solver.beat import (
-        BEAT_BACKENDS, BEAT_BACKEND_LABELS, beat_backend_statuses,
-        beat_engine_name, beat_geometry_sources,
+        BEAT_BACKENDS, beat_backend_statuses, beat_engine_name,
     )
     try:
         backend_statuses = beat_backend_statuses()
@@ -352,28 +351,36 @@ def detect_engines(
         name = beat_engine_name(backend)
         if name not in selected:
             continue
-        engines.append(
-            EngineInfo(
-                name=name,
-                label=BEAT_BACKEND_LABELS.get(backend, name),
-                available=bool(status.get("available")),
-                reason=str(
-                    status.get("reason") or f"{name} capability probe returned no reason"
-                ),
-                version=(str(status["version"]) if status.get("version") is not None else None),
-                formulations=("full-3d",),
-                # No "ground-plane": see _ground_plane_axes. The gap is in this
-                # application, not in hornlab-beat-bem.
-                mountings=("free-standing",),
-                # Declared by the adapter for each ready BEAT backend.
-                geometry_sources=beat_geometry_sources(backend),
-                symmetry_domains=_symmetry_domains(name),
-                field_traces=bool(status.get("surface_traces")),
-                di_sphere=True,
-                cancellation_granularity="between-frequencies",
-            )
-        )
+        engines.append(_beat_engine_info(backend, status))
     return engines
+
+
+def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
+    """Publish one complete BEAT verdict, for initial detection and refresh.
+
+    A preparation refresh can precede the slow accelerator probe or recover
+    a failed detection row. Reusing that row's declarations would make a ready
+    CPU keep the placeholder's parametric-only geometry (or no capabilities).
+    """
+
+    from server.solver.beat import BEAT_BACKEND_LABELS, beat_engine_name, beat_geometry_sources
+
+    name = beat_engine_name(backend)
+    return EngineInfo(
+        name=name,
+        label=BEAT_BACKEND_LABELS.get(backend, name),
+        available=bool(status.get("available")),
+        reason=str(status.get("reason") or f"{name} capability probe returned no reason"),
+        version=str(status["version"]) if status.get("version") is not None else None,
+        formulations=("full-3d",),
+        # No ground plane: the BEAT adapter does not translate one yet.
+        mountings=("free-standing",),
+        geometry_sources=beat_geometry_sources(backend),
+        symmetry_domains=_symmetry_domains(name),
+        field_traces=bool(status.get("surface_traces")),
+        di_sphere=True,
+        cancellation_granularity="between-frequencies",
+    )
 
 
 def _beat_row_updates(
@@ -969,7 +976,9 @@ class EngineRegistry:
         self._schedule_cpu_refresh()
 
     async def _refresh_cpu_backend(self) -> None:
-        from server.solver.beat import _cpu_backend_status, _load_api
+        from server.solver.beat import (
+            _cpu_backend_status, _load_api, _package_retains_surface_traces, beat_engine_backend,
+        )
 
         while not self._listener_removed:
             with self._refresh_state_lock:
@@ -986,8 +995,12 @@ class EngineRegistry:
                     async with self._lock:
                         if self._cache is not None and not self._listener_removed:
                             self._cache = tuple(
-                                replace(item, available=updates[item.name][0],
-                                        reason=updates[item.name][1])
+                                _beat_engine_info(beat_engine_backend(item.name), {
+                                    "available": updates[item.name][0],
+                                    "reason": updates[item.name][1],
+                                    "version": getattr(package, "__version__", item.version),
+                                    "surface_traces": _package_retains_surface_traces(package),
+                                })
                                 if item.name in updates
                                 else item
                                 for item in self._cache

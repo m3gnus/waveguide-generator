@@ -85,6 +85,97 @@ def _request(ingest_id: str, **geometry_changes: Any) -> SolveRequest:
     )
 
 
+@pytest.mark.parametrize("preparing", [True, False], ids=["preparing", "settled"])
+@pytest.mark.parametrize("detection", ["pending", "failed"])
+def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
+    monkeypatch: pytest.MonkeyPatch, preparing: bool, detection: str,
+) -> None:
+    """A ready CPU must accept CAD while the GPU probe is slow or has failed."""
+
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.engines import registry
+    from server.jobs.runtime import resolve_imported_submission
+    from server.solver import beat, beat_cpu_runtime, bempp
+
+    monkeypatch.setattr(registry, "CAPABILITIES_WAIT_SECONDS", 0.01)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: preparing)
+    monkeypatch.setattr(beat_cpu_runtime, "runtimes_prepared_this_process", lambda: False)
+    monkeypatch.setattr(beat, "_load_api", lambda: SimpleNamespace(
+        SolveConfig=lambda surface_traces=False: None,
+    ))
+    monkeypatch.setattr(beat, "_cpu_backend_status", lambda _package: (True, "CPU ready"))
+    monkeypatch.setattr(beat, "beat_backend_statuses", lambda: {
+        backend: {"available": backend == "cpu", "reason": "startup verdict",
+                  "version": "test", "surface_traces": True}
+        for backend in beat.BEAT_BACKENDS
+    })
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": True, "reason": "ready"})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "no OpenCL"})
+    engine_registry = registry.EngineRegistry(factory=lambda name: SimpleNamespace(name=name))
+    qualification_thread = engine_registry._qualification_thread
+
+    async def scenario() -> None:
+        release = asyncio.Event()
+        if detection == "failed":
+            release.set()
+
+        async def probe(function, *args, **kwargs):
+            if "beat-cpu" in kwargs.get("names", ()):
+                await release.wait()
+                if detection == "failed":
+                    raise RuntimeError("startup BEAT detection failed")
+            return await qualification_thread(function, *args, **kwargs)
+
+        monkeypatch.setattr(engine_registry, "_qualification_thread", probe)
+        try:
+            initial = await engine_registry.capabilities()
+            cpu = next(info for info in initial if info.name == "beat-cpu")
+            if detection == "pending":
+                assert not cpu.available
+                assert "imported" not in cpu.geometry_sources
+            else:
+                assert engine_registry._initial_probe_task.done()
+            # The preparation notification can arrive before the full BEAT
+            # detection publishes, or recover a row cleared by _failed_detection.
+            engine_registry._cpu_readiness_changed()
+            await asyncio.sleep(0)
+            async with asyncio.timeout(1):
+                while engine_registry._refresh_task is not None:
+                    await asyncio.shield(engine_registry._refresh_task)
+                    await asyncio.sleep(0)
+            payload = await capabilities_payload(engine_registry)
+            cpu = next(info for info in payload["engines"] if info["name"] == "beat-cpu")
+            assert cpu["available"] is True
+            assert payload["cpuPreparationInFlight"] is preparing
+            request = _request("wgi_" + "0" * 26)
+            request.options.engine = "beat-cpu"
+            resolution = await resolve_imported_submission(
+                request, engine_registry, symmetry_metadata={"resolved_quadrants": 14},
+            )
+            assert resolution.engine_name == "beat-cpu"
+            assert cpu["geometry_sources"] == ("parametric", "imported")
+            assert cpu["symmetry_domains"] == ("full", "half-yz", "quarter")
+            assert cpu["formulations"] == ("full-3d",)
+            assert cpu["mountings"] == ("free-standing",)
+            assert cpu["field_traces"] is True
+            assert cpu["di_sphere"] is True
+
+            # A late startup publication must also be repaired by the refresh.
+            release.set()
+            await engine_registry._initial_probe_task
+            async with asyncio.timeout(1):
+                while engine_registry._refresh_task is not None:
+                    await asyncio.shield(engine_registry._refresh_task)
+                    await asyncio.sleep(0)
+            again = await resolve_imported_submission(request, engine_registry)
+            assert again.engine_name == "beat-cpu"
+        finally:
+            release.set()
+            await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
 def test_geometry_union_round_trip_and_legacy_rewrite() -> None:
     imported = _request("wgi_" + "0" * 26)
     assert isinstance(imported.geometry, ImportedGeometrySource)
