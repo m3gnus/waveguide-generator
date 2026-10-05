@@ -10,7 +10,7 @@ from pathlib import Path
 import shutil
 from typing import Any
 
-from . import state
+from . import paths, state
 from .paths import runtime_dir
 
 JULIA_ENV_VAR = "WG2_BEAT_JULIA"
@@ -35,7 +35,7 @@ def executable_identity(path: Path) -> str:
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return record if isinstance(record, dict) else None
 
@@ -44,21 +44,31 @@ def read_julia_record(root: Path | None = None) -> dict[str, Any] | None:
     return state.read_julia(root)
 
 
-def write_julia_record(root: Path, executable: Path, *, origin: str, version: str | None) -> None:
+def write_julia_record(
+    root: Path, executable: Path, *, origin: str, version: str | None,
+    selection: str | None = None,
+) -> None:
     """Atomically record executable provenance, independently of backend state."""
-    state.write_julia({
-        "executable": str(executable.resolve()), "version": version,
+    root = paths.checked_root(root)
+    record = {
+        "executable": str(executable), "version": version,
         "origin": origin, "identity": executable_identity(executable),
-    }, root)
+    }
+    if selection is not None:
+        record["selection"] = selection
+    state.write_julia(record, root)
 
 
-def recorded_julia(root: Path | None = None) -> str | None:
+def recorded_julia(
+    root: Path | None = None, *, environ: Mapping[str, str] | None = None,
+) -> str | None:
     record = read_julia_record(root)
     if not record:
         return None
     path = Path(record["executable"]).expanduser()
     try:
-        if executable_file(path) and record["identity"] == executable_identity(path):
+        if (not paths.hbb_executable(path, environ=environ)
+                and executable_file(path) and record["identity"] == executable_identity(path)):
             return str(path)
     except OSError:
         pass
@@ -77,11 +87,14 @@ def discover_julia(
             path = Path(candidate.strip()).expanduser()
             if not executable_file(path):
                 raise JuliaDiscoveryError(f"Invalid {source} Julia executable: {path}")
-            return str(path)
-    recorded = recorded_julia(runtime_dir(environ=env) if root is None else root)
+            return None if paths.hbb_executable(path, environ=env) else str(path)
+    directory = runtime_dir(environ=env) if root is None else root
+    record = read_julia_record(directory)
+    recorded = None if record and record.get("selection") == "explicit" else recorded_julia(directory, environ=env)
     if recorded is not None:
         return recorded
-    return shutil.which("julia", path=env.get("PATH", os.defpath))
+    candidate = shutil.which("julia", path=env.get("PATH", os.defpath))
+    return candidate if candidate and not paths.hbb_executable(Path(candidate), environ=env) else None
 
 
 def legacy_executable_hint(legacy_root: Path) -> str | None:

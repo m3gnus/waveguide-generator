@@ -219,3 +219,77 @@ def test_external_julia_unknown_version_is_explicit(directory):
         state.write_julia({"origin": "external", "executable": "fake", "identity": "sha"})
     with pytest.raises(ValueError):
         state.write_julia({"origin": "managed", "executable": "fake", "identity": "sha", "version": None})
+
+
+@pytest.mark.parametrize("api", ["write_state", "write_julia", "atomic_json"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_explicit_directory_hbb_isolation_before_mutation(tmp_path, monkeypatch, record, api, alias):
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    keep = legacy / "keep"
+    keep.write_bytes(b"HBB")
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    root = tmp_path / "alias" if alias else legacy
+    if alias:
+        root.symlink_to(legacy, target_is_directory=True)
+    with pytest.raises(paths.RootConflict):
+        if api == "write_state":
+            state.write_state(record, root)
+        elif api == "write_julia":
+            state.write_julia({"origin": "external", "executable": "fake", "identity": "sha", "version": None}, root)
+        else:
+            state._atomic_write_json(root / "record.json", {})
+    assert list(legacy.iterdir()) == [keep] and keep.read_bytes() == b"HBB"
+
+
+@pytest.mark.parametrize("name", ["julia.json", "state-cpu.json"])
+def test_recursive_state_json_is_absent(directory, name):
+    directory.mkdir(parents=True)
+    (directory / name).write_text('[' * 1500 + '0' + ']' * 1500)
+    assert state.read_julia() is None
+    assert state.read_state(backend="cpu") is None
+
+
+@pytest.mark.parametrize("writer", ["state", "julia"])
+def test_stale_temporary_sweep_preserves_active_and_linked_siblings(directory, record, writer):
+    directory.mkdir(parents=True)
+    name = "state-cpu.json" if writer == "state" else "julia.json"
+    stale = directory / f".{name}.old.tmp"
+    active = directory / f".{name}.active.tmp"
+    linked = directory / f".{name}.link.tmp"
+    stale.write_bytes(b"old")
+    active.write_bytes(b"active")
+    state.os.utime(stale, (0, 0))
+    linked.symlink_to(stale)
+    if writer == "state":
+        state.write_state(record)
+    else:
+        state.write_julia({"origin": "external", "executable": "fake", "identity": "sha", "version": None})
+    assert not stale.exists() and active.read_bytes() == b"active" and linked.is_symlink()
+
+
+@pytest.mark.parametrize("failures", [1, 5])
+def test_windows_julia_record_sharing_violation_retry(directory, monkeypatch, failures):
+    saved = state.write_julia({"origin": "external", "executable": "old", "identity": "sha", "version": None})
+    original = state.os.replace
+    calls = []
+
+    def replace(source, target):
+        calls.append(target)
+        assert state.read_julia() == saved
+        if len(calls) <= failures:
+            raise PermissionError("sharing violation")
+        original(source, target)
+
+    monkeypatch.setattr(state, "_WINDOWS", True)
+    monkeypatch.setattr(state.os, "replace", replace)
+    monkeypatch.setattr(state.time, "sleep", lambda _: None)
+    replacement = dict(saved, executable="new")
+    if failures == 5:
+        with pytest.raises(PermissionError):
+            state.write_julia(replacement)
+        assert state.read_julia() == saved
+    else:
+        assert state.write_julia(replacement)["executable"] == "new"
+    assert len(calls) == min(failures + 1, 5)
+    assert list(directory.iterdir()) == [directory / "julia.json"]

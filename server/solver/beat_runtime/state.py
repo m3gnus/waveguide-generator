@@ -9,6 +9,7 @@ identity fields are explicit nulls, with an empty completion object until probed
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import datetime, timezone
 import json
 import os
@@ -33,7 +34,7 @@ _REPLACE_ATTEMPTS = 5
 
 
 def _directory(directory: Path | None) -> Path:
-    return paths.runtime_dir() if directory is None else Path(directory)
+    return paths.runtime_dir() if directory is None else paths.checked_root(directory)
 
 
 def backend_state_path(directory: Path | None = None, *, backend: str) -> Path:
@@ -50,7 +51,7 @@ def _reject_constant(value: str) -> None:
 def _read_json(path: Path) -> dict[str, Any] | None:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"), parse_constant=_reject_constant)
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return raw if isinstance(raw, dict) else None
 
@@ -84,6 +85,7 @@ def _julia_valid(record: dict[str, Any]) -> bool:
     return (
         _owned(record)
         and record.get("origin") in ("managed", "external")
+        and record.get("selection") in (None, "explicit", "configured", "path")
         and all(isinstance(record.get(name), str) and bool(record[name])
                 for name in ("executable", "identity"))
         and "version" in record
@@ -103,8 +105,14 @@ def _stamped(record: Mapping[str, Any]) -> dict[str, Any]:
 
 def _atomic_write_json(path: Path, record: Mapping[str, Any]) -> None:
     """Replace one complete record via a private, unique sibling temporary."""
+    paths.checked_root(path.parent)
     payload = json.dumps(record, indent=2, allow_nan=False) + "\n"
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # Unique siblings can survive a killed writer. Do not sweep active writers.
+    for stale in path.parent.glob(f".{path.name}.*.tmp"):
+        with suppress(OSError):
+            if not paths.is_link(stale) and stale.is_file() and stale.stat().st_mtime < time.time() - 86400:
+                stale.unlink(missing_ok=True)
     descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     scratch = Path(temporary)
     try:

@@ -61,7 +61,7 @@ def test_zip_and_tar_publish_version_platform_tree(tmp_path, windows):
     assert binary == root / "julia" / spec.directory / "bin" / ("julia.exe" if windows else "julia")
     assert binary.read_bytes() == b"new Julia"
     assert installer._owned(binary.parent.parent, spec)
-    assert not list((root / "downloads").iterdir())
+    assert not list((root / ("dl" if windows else "downloads")).iterdir())
 
 
 def test_mac_application_bundle_layout(tmp_path):
@@ -135,6 +135,7 @@ def test_interrupted_staging_is_recovered_and_download_removed(tmp_path, monkeyp
     root = paths.runtime_dir()
     stale = root / "downloads" / f"unpack-{spec.directory}"
     stale.mkdir(parents=True)
+    (stale / installer._STAGING_MARKER).write_text(json.dumps({"provider": paths.PROVIDER_ID}))
     (stale / "partial.txt").write_bytes(b"interrupted")
     calls = []
     def fetch(url, partial):
@@ -176,7 +177,7 @@ def test_published_tree_without_record_recovers_offline(tmp_path):
 def test_selected_external_is_recorded_without_claiming_version(tmp_path):
     external = executable(tmp_path / "external/bin/julia")
     assert installer.ensure_julia(explicit=str(external)) == str(external)
-    assert installer.ensure_julia() == str(external)
+    assert discovery.read_julia_record()["selection"] == "explicit"
     record = discovery.read_julia_record()
     assert record["origin"] == "external" and record["version"] is None
     assert not list(paths.runtime_dir().glob("state*.json"))
@@ -197,10 +198,7 @@ def test_external_and_legacy_trees_are_preserved_on_install(tmp_path, monkeypatc
         (root / "julia.json").write_text(json.dumps({
             "origin": "legacy", "julia_executable": str(external),
         }))
-    if origin == "external":
-        assert installer.ensure_julia() == str(external)
-    else:
-        assert installer.ensure_julia(fetcher=lambda url, partial: partial.write_bytes(source.read_bytes())) != str(external)
+    assert installer.ensure_julia(fetcher=lambda url, partial: partial.write_bytes(source.read_bytes())) != str(external)
     assert external.read_bytes() == b"old Julia"
     assert list(external.parent.iterdir()) == [external]
 

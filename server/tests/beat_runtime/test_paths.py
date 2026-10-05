@@ -14,7 +14,7 @@ from server.solver.beat_runtime import paths
 ])
 def test_runtime_os_layouts(system, env, expected):
     assert paths.runtime_dir(system=system, environ=env, home=Path("/home/test")) == (
-        Path(expected) / "WaveguideGenerator/beat-runtime/wg-beat-engine"
+        Path(expected) / ("WaveguideGenerator/beat" if system == "win32" else "WaveguideGenerator/beat-runtime/wg-beat-engine")
     )
 
 

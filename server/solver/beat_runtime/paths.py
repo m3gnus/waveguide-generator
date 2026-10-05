@@ -4,11 +4,14 @@ These accessors only select paths; future state/registry owners create private
 directories. WG overrides select bases, never the provider directory itself.
 """
 
+from __future__ import annotations
+
 from collections.abc import Mapping
 import os
 from pathlib import Path
 import sys
 import tempfile
+import stat
 
 PROVIDER_ID = "wg-beat-engine"
 STATE_SCHEMA = 1
@@ -84,6 +87,25 @@ def checked_root(
     return _isolated(Path(directory), env, system or sys.platform, home or Path.home())
 
 
+def is_link(path: Path) -> bool:
+    """Include Windows junctions and other reparse points in link checks."""
+    if path.is_symlink() or getattr(path, "is_junction", lambda: False)():
+        return True
+    try:
+        return bool(getattr(path.lstat(), "st_file_attributes", 0)
+                    & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+    except FileNotFoundError:
+        return False
+
+
+def hbb_executable(path: Path, *, environ: Mapping[str, str] | None = None) -> bool:
+    """Identify legacy-managed binaries, including aliases into HBB roots."""
+    env = os.environ if environ is None else environ
+    resolved = path.expanduser().resolve()
+    return any(resolved.is_relative_to(root.expanduser().resolve()) for root in
+               _hbb_roots(env, sys.platform, Path.home(), None, None).values())
+
+
 def _data_base(system: str, env: Mapping[str, str], home: Path) -> Path:
     if system == "darwin":
         return home / "Library" / "Application Support"
@@ -103,6 +125,9 @@ def runtime_dir(
     base = env.get(RUNTIME_DIR_ENV)
     if base:
         root = Path(base).expanduser() / PROVIDER_ID
+    elif system == "win32":
+        # Keep Julia's 155-character archive members below Windows MAX_PATH.
+        root = _data_base(system, env, home) / "WaveguideGenerator" / "beat"
     else:
         root = _data_base(system, env, home) / "WaveguideGenerator" / "beat-runtime" / PROVIDER_ID
     return _isolated(root, env, system, home)

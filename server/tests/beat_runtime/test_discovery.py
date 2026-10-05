@@ -128,3 +128,59 @@ def test_atomic_write_failure_preserves_old_record(tmp_path, monkeypatch):
         discovery.write_julia_record(root, path, origin="managed", version="1.12.7")
     assert (root / "julia.json").read_bytes() == before
     assert [p.name for p in root.iterdir()] == ["julia.json"]
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_discovery_record_directory_hbb_isolation_before_mutation(tmp_path, monkeypatch, alias):
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    root = tmp_path / "alias" if alias else legacy
+    if alias:
+        root.symlink_to(legacy, target_is_directory=True)
+    with pytest.raises(paths.RootConflict):
+        discovery.write_julia_record(root, tmp_path / "missing", origin="external", version=None)
+    assert list(legacy.iterdir()) == []
+
+
+def test_juliaup_launcher_path_is_preserved(tmp_path):
+    actual = executable(tmp_path / "actual/bin/julia")
+    launcher = tmp_path / "juliaup"
+    launcher.symlink_to(actual)
+    root = paths.runtime_dir()
+    discovery.write_julia_record(root, launcher, origin="external", version=None)
+    assert state.read_julia(root)["executable"] == str(launcher)
+    assert discovery.discover_julia() == str(launcher)
+
+
+def test_one_off_explicit_record_does_not_outrank_path(tmp_path, monkeypatch):
+    one_off = executable(tmp_path / "one-off")
+    default = executable(tmp_path / "default")
+    discovery.write_julia_record(paths.runtime_dir(), one_off, origin="external", version=None, selection="explicit")
+    monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(default))
+    assert discovery.discover_julia() == str(default)
+
+
+@pytest.mark.parametrize("source", ["explicit", "configured", "path", "record"])
+@pytest.mark.parametrize("alias", [False, True])
+def test_hbb_managed_executable_is_only_a_legacy_hint(tmp_path, monkeypatch, source, alias):
+    legacy = executable(tmp_path / "hbb/bin/julia")
+    candidate = tmp_path / "alias" if alias else legacy
+    if alias:
+        candidate.symlink_to(legacy)
+    kwargs = {}
+    if source in ("explicit", "configured"):
+        kwargs[source] = str(candidate)
+    elif source == "path":
+        monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: str(candidate))
+    else:
+        discovery.write_julia_record(paths.runtime_dir(), candidate, origin="external", version=None)
+    assert discovery.discover_julia(**kwargs) is None
+    assert legacy.read_bytes() == b"fake Julia"
+
+
+def test_recursive_legacy_json_returns_no_executable_hint(tmp_path):
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    (legacy / "state.json").write_text('[' * 1500 + '0' + ']' * 1500)
+    assert discovery.legacy_executable_hint(legacy) is None

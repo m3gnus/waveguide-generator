@@ -227,3 +227,33 @@ def test_default_root_is_provider_scoped(tmp_path, monkeypatch):
     with locks.provisioning_lock(backend="cpu"):
         assert locks.lock_holder()["provider"] == paths.PROVIDER_ID
     assert (paths.runtime_dir() / locks.LOCK_FILENAME).exists()
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_explicit_lock_directory_hbb_isolation_before_mutation(tmp_path, monkeypatch, alias):
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    monkeypatch.setenv("HORNLAB_BEAT_WORKER_DIR", str(legacy))
+    root = tmp_path / "alias" if alias else legacy
+    if alias:
+        root.symlink_to(legacy, target_is_directory=True)
+    with pytest.raises(paths.RootConflict):
+        with locks.provisioning_lock(root, backend="cpu"):
+            pytest.fail("entered HBB lock")
+    assert list(legacy.iterdir()) == []
+
+
+def test_symlinked_lock_file_cannot_touch_hbb(tmp_path, monkeypatch):
+    root = tmp_path / "wg"
+    root.mkdir()
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    keep = legacy / "lock"
+    keep.write_bytes(b"HBB lock")
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    (root / locks.LOCK_FILENAME).symlink_to(keep)
+    with pytest.raises(ValueError, match="Linked provisioning"):
+        with locks.provisioning_lock(root, backend="cpu"):
+            pytest.fail("opened linked lock")
+    assert keep.read_bytes() == b"HBB lock"
+    assert not (root / locks.HOLDER_FILENAME).exists()

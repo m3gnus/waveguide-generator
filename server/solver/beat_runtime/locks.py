@@ -53,7 +53,7 @@ def _unlock(descriptor: int) -> None:
 
 def lock_holder(directory: Path | None = None) -> dict[str, object]:
     """Read a possibly stale diagnostic; never use its PID for signaling."""
-    directory = paths.runtime_dir() if directory is None else Path(directory)
+    directory = paths.runtime_dir() if directory is None else paths.checked_root(directory)
     record = state._read_json(directory / HOLDER_FILENAME)
     if record is None or record.get("provider") != paths.PROVIDER_ID:
         return {}
@@ -70,8 +70,10 @@ def provisioning_lock(
     Polling keeps waits interruptible. Death releases the kernel lock, even if
     holder JSON remains. Provisioning orchestration records acquisition errors.
     """
-    directory = paths.runtime_dir() if directory is None else Path(directory)
+    directory = paths.runtime_dir() if directory is None else paths.checked_root(directory)
     state.backend_state_path(directory, backend=backend)  # Validate before creating files.
+    if paths.is_link(directory) or paths.is_link(directory / LOCK_FILENAME):
+        raise ValueError("Linked provisioning root or lock refused")
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     descriptor = os.open(directory / LOCK_FILENAME, os.O_CREAT | os.O_RDWR, 0o600)
     try:

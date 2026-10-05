@@ -7,6 +7,15 @@ production caller adopts beat-engine, no pins change, and HBB state is untouched
   `server/tests/beat_runtime/test_{paths,assets}.py`; this `CHANGES.md`.
   WG overrides select bases with `wg-beat-engine` appended. Asset discovery is
   lazy, uses beat-engine's public API, and reports missing package/wheel assets.
+  **Review round 1 fixes:**
+  - P1/B — fixed: Windows default is `%LOCALAPPDATA%/WaveguideGenerator/beat`;
+    overrides still append `wg-beat-engine`. Installer's Windows `dl/x` staging
+    and `julia/1.12.7` target keep the conservative worst member/backup length
+    at 246 characters with a 20-character username (below MAX_PATH).
+  - P1/D and P2/J — fixed: shared `paths.is_link` includes junctions/reparse
+    attributes; `paths.hbb_executable` compares resolved paths with the existing
+    HBB-root definitions, including aliases. No provider/protocol redefinition.
+
 - **PR 3 — identity:** `server/solver/beat_runtime/identity.py`;
   `server/tests/beat_runtime/test_identity.py`.
   Hash named bytes recursively, including versioned manifests and selected
@@ -35,6 +44,17 @@ or device qualification are included.
   temporaries, fsync and atomic replacement preserve the previous record on
   failure; backend failures never erase another backend's success or Julia's
   executable record. No legacy single-slot mirror or HBB writes.
+  **Review round 1 fixes:**
+  - P1/A — fixed: explicit directories and atomic JSON writers use
+    `paths.checked_root` before mutation; direct and aliased HBB roots are refused.
+  - P2/H — fixed: retain state.py's canonical executable/version/identity/origin
+    schema and required updated_at; discovery/installer delegate to it.
+  - P2/K — fixed: retain PR 10a's five-attempt Windows PermissionError retry;
+    backend and executable-record regressions cover success/exhaustion and cleanup.
+  - P3 recursion/stale temporaries — fixed: recursive JSON is absent; sweep only
+    regular, unlinked matching siblings older than one day, preserving active files.
+  - P3 origin — fixed: validate optional selection provenance in the one schema.
+
 - **PR 6 — locks:** `server/solver/beat_runtime/locks.py`;
   `server/tests/beat_runtime/test_locks.py`; this `CHANGES.md`.
   Serialize shared-Julia provisioning with POSIX flock or Windows msvcrt
@@ -45,6 +65,12 @@ or device qualification are included.
   Tests cover separate processes, owner death, same-process exclusion,
   persistent inode, descriptor cleanup and the Windows path with fakes,
   including contention during initial byte creation.
+
+  **Review round 1 fixes:**
+  - P1/A — fixed: explicit lock directories call `paths.checked_root` before
+    mkdir/open/holder writes; direct and aliased HBB roots remain untouched.
+  - P1/D — fixed: linked/junction/reparse provider roots and lock files are
+    refused before opening the persistent lock inode.
 
 PR 5/6 scope notes: target the official JWSound/BEAT_Engine package; neither
 module imports beat_engine or changes an existing caller. CPU/Metal only, as
@@ -61,6 +87,18 @@ a Windows qualification gate; the msvcrt path is exercised with fakes here.
   Invalid configured paths raise; removed/edited binaries and foreign records
   are ignored. Opt-in HBB reads supply only an executable hint, regardless of
   legacy status; no HBB directory is written and no readiness is imported.
+  **Review round 1 fixes:**
+  - P1/A — fixed: discovery record writes check explicit roots before hashing
+    or mutation; direct/aliased HBB roots have regression coverage.
+  - P2/H — fixed: retain state.py read/write delegation; roundtrip tests assert
+    canonical fields and timestamp. The earlier temporary discovery schema is obsolete.
+  - P2/J — fixed: explicit/configured/recorded/PATH executables resolving inside
+    HBB roots are only legacy hints; discovery returns no adoptable executable,
+    so the installer creates WG ownership. Alias regressions cover all sources.
+  - P3 origin/launcher/recursion — fixed: record optional selection source;
+    one-off explicit records cannot outrank future discovery. Keep launch paths
+    as supplied (including juliaup aliases); recursive legacy JSON is absent.
+
 - **PR 8 — downloads/checksums/disk:** `server/solver/beat_runtime/installer.py`
   (release matrix, fetch/checksum helpers and disk budgets);
   `server/tests/beat_runtime/test_installer_downloads.py`; this `CHANGES.md`.
@@ -68,6 +106,15 @@ a Windows qualification gate; the msvcrt path is exercised with fakes here.
   x86_64/aarch64. Injectable fetchers write `.part`; SHA-256 verification
   precedes atomic publication. CPU requires 2 GiB and GPU budgets remain 6 GiB.
   Offline/interrupted downloads and checksum failures preserve prior archives.
+  **Review round 1 fixes:**
+  - P1/A — fixed: standalone download destinations and optional provider roots
+    are checked before directory creation. Fixtures use separate WG/HBB trees.
+  - P1/D and P2/E — fixed: download directory/file checks include junctions
+    and reparse points; link checks stop at the provider root. Ancestor aliases
+    are allowed only with resolved containment below that root.
+  - P3 MB progress — fixed: default downloads report MB progress about every
+    five seconds via the guarded status callback; fake clock/response regression.
+
 - **PR 9 — extraction/recovery:** `server/solver/beat_runtime/installer.py`
   (extraction, ownership/recovery and executable selection);
   `server/tests/beat_runtime/test_installer_extraction.py`; this `CHANGES.md`.
@@ -78,13 +125,50 @@ a Windows qualification gate; the msvcrt path is exercised with fakes here.
   paths are refused; no external or legacy install is deleted. External choices
   are recorded without stamping the requested portable version onto them.
 
+  **Review round 1 fixes:**
+  - P1/A — fixed: ensure/extract and mutating directory helpers check explicit
+    roots before filesystem mutation, including recovery and staging cleanup.
+  - P1/B — fixed: short Windows staging/install layout and pre-download/extract
+    MAX_PATH gate. Without LongPathsEnabled, oversized roots produce a clear
+    shorter-WG2_BEAT_RUNTIME_DIR/enable-long-paths error before mutation.
+  - P1/C — fixed: write `.wg-staging.json` before unpack; refuse unowned staging
+    and reserved archive markers; remove only owned staging, retaining its marker
+    after interrupted cleanup. Regressions cover refused and owned stale trees.
+  - P1/D — fixed: every former symlink check includes junction/reparse points,
+    including root, downloads, staging, target, backup, markers and archive trees.
+  - P2/E — fixed: allow symlinked ancestors (e.g. /home, /tmp, /var, .local),
+    compare resolved containment, and refuse directory aliases at/below the
+    provider root. Internal archive library links are checked separately.
+  - P2/F — fixed: restore a valid owned backup over an owned invalid target;
+    recover before network/disk checks, including missing/invalid executable
+    records. Backup deletion is best-effort and retried even with a valid record;
+    markers survive open files and directory sharing violations. Unowned trees
+    are still refused, and publication cannot fail merely because cleanup is busy.
+  - P2/G — fixed: tar symbolic/hardlink targets must remain within their promoted
+    top-level tree; check again after extraction for indirect symbolic-link escapes.
+    Internal library links remain valid; escapes/chains/hardlinks have regressions.
+  - P2/H — fixed: executable records use state.py exclusively, retaining PR 10a.
+  - P2/I — fixed: obsolete legacy records are ignored by canonical reads; a
+    fresh valid PATH result is not excluded because an old record names it.
+  - P2/J — fixed: HBB binaries from explicit/configured/PATH/old external records
+    trigger a WG download; their files/records remain untouched. No HBB reuse.
+  - P3 ZIP/origin/launcher/caps — fixed: normalize backslashes before traversal
+    checks; keep one-off explicit choices out of future precedence; preserve launch
+    aliases; cap unpacked data at 4 GiB and member count at 100,000 for ZIP/tar.
+
+PR 9 review subdivisions: 9a archive/layout safety (`installer.py` layout,
+private-directory, unpack and publication helpers; `test_installer_safety.py`
+through archive limits, existing extraction tests); 9b recovery/selection
+(`installer.py` owned cleanup/recovery and ensure_julia; `test_installer_recovery.py`
+and selection regressions in `test_installer_safety.py`). Shared paths.py changes
+belong to PR 2 and discovery/state contracts remain in PRs 5/7/10a.
+
 PR 7–9 scope notes: the target is official JWSound/BEAT_Engine (`beat-engine` /
 `beat_engine`); these modules need no engine import or WG-specific engine API.
-`julia.json` uses provider/state_schema plus julia_executable, julia_version,
-origin and julia_identity (SHA-256 of executable bytes), never backend readiness.
-The temporary atomic record helpers in discovery.py have a TODO to delegate to
-state.py after the parallel state PR lands. Installer callers must hold the
-provisioning lock; lock/orchestration integration belongs to later PRs.
+`julia.json` now uses state.py's provider/state_schema/updated_at plus executable,
+version, origin and identity (SHA-256 of executable bytes), with optional selection
+provenance; never backend readiness. PR 10a completed read/write delegation.
+Installer callers must hold the provisioning lock; PR 10c owns orchestration.
 All five official artifact checksums are pinned, extending HBB's Windows-only
 pin to avoid a second checksum request. Archive layout checks additionally
 support macOS application bundles and reject escaping paths/links. Tests use
@@ -354,6 +438,12 @@ uncommitted as requested.
   ignored rather than accepted as executable authority. Windows replacement
   retries only PermissionError, at most five attempts with 250 ms total sleep;
   exhaustion preserves the previous record and removes the sibling temporary.
+  **Review round 1 fixes:**
+  - P2/H — fixed: retain the canonical schema and state.py-only publication;
+    old temporary records never become authority. PRs 5/7/9 exercise roundtrips.
+  - P2/K — fixed: keep bounded Windows replace retry; add julia.json reader
+    sharing-violation success/exhaustion regressions alongside backend coverage.
+
 - **PR 10b — Julia subprocess steps/status guard:**
   `server/solver/beat_runtime/julia_steps.py`;
   `server/tests/beat_runtime/test_julia_steps.py`; this `CHANGES.md`.
@@ -371,6 +461,17 @@ uncommitted as requested.
   survive CPU failures. Failed records are retryable on the next explicit call;
   force/retry bypass a matching ready record. Lock acquisition errors become
   best-effort failed records, retaining the original error if storage also fails.
+  **Review round 1 fixes:**
+  - P1/A — fixed: check explicit roots before lock acquisition or diagnostic
+    writes, including injected environments and aliases. Isolation errors raise
+    without attempting to stamp failure records in HBB directories.
+  - P1/B — fixed: readiness's upgrade test recognizes the short Windows version
+    directory as current, alongside POSIX version/platform directories.
+  - P2/J — fixed: discovery excludes HBB-managed binaries before a ready-state
+    shortcut; normal provisioning goes through WG-owned installation policy.
+  - P3 launcher — fixed: preserve juliaup/launcher paths for steps and the probe;
+    content identity and ownership comparisons still resolve the target separately.
+
 - **PR 10d — provisioning identity/reuse coverage:**
   `server/tests/beat_runtime/test_provision_identity.py`; this `CHANGES.md`.
   Project/manifest, executable, threads, effective environment and probe-fixture
@@ -409,3 +510,26 @@ passed (370 tests, 4.05 s); runtime/test Ruff and `git diff --check` passed.
 The requested combined pytest/Ruff commands could not include beat_adapter:
 `server/solver/beat_adapter` and `server/tests/beat_adapter` are absent from
 this worktree. The available targeted tests ran through scripts/run_tests.py.
+
+PR 5–10 review-round deviations: official JWSound/BEAT_Engine remains the target;
+no engine/HBB import or existing caller/pin/requirement change. The permitted
+Windows default/layout shortening departs from the original design's long
+provider directory only on Windows; override bases still append the provider.
+HBB executable hints download anew instead of copying a legacy tree, avoiding
+shared ownership. Invalid explicit roots raise before failure diagnostics because
+writing such diagnostics would break isolation. Optional selection provenance is
+additive in state schema 1; older canonical records stay readable. PR 9 is split
+into review subdivisions to keep archive safety and recovery independently reviewable.
+No findings are objected to; all P1/P2 and listed cheap P3 findings are fixed.
+
+PR 5–10 Review round 1 fixes validation: targeted launcher run of
+`server/tests/beat_runtime` and `server/tests/test_solver_beat.py`: **643 passed**
+in 6.17 s. Ruff on runtime sources/tests and `git diff --check` passed. Every
+check completed in under two minutes. The exact requested combined pytest
+command ran no tests (exit 4) because `server/tests/beat_adapter` is absent;
+the exact combined Ruff command reports only the two missing beat_adapter paths.
+No Julia, real downloads, user/HBB-directory mutation, donor-checkout edits,
+caller switch or pin/requirement changes occurred. Native Windows and Julia
+qualification are outside this fake-only review round; changes are uncommitted
+as explicitly requested. `julia_steps.py` needed no change: PR 10b's callback
+guard/subprocess tests are included in the passing targeted runtime run.

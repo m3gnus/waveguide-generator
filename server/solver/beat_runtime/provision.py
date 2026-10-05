@@ -64,7 +64,8 @@ def provision_cpu(
     """
     report = julia_steps.guarded_status(status_cb)
     env = dict(os.environ if environ is None else environ)
-    directory = (paths.runtime_dir(environ=env) if directory is None else Path(directory)).expanduser().resolve()
+    directory = (paths.runtime_dir(environ=env) if directory is None else paths.checked_root(directory, environ=env)).expanduser().absolute()
+    paths.checked_root(directory)
     record: dict[str, Any] = dict.fromkeys(state._IDENTITY_FIELDS)
     record.update(backend="cpu", status="in_progress", step="lock", error=None,
                   environment={}, completion={})
@@ -94,13 +95,16 @@ def provision_cpu(
             record["step"] = "resolve_julia"
             julia = discovery.discover_julia(julia_executable, root=directory, environ=env)
             if julia:
-                executable = str(Path(julia).resolve())
+                executable = str(Path(julia))
                 julia_record = state.read_julia(directory)
                 record.update(julia_executable=executable, julia_identity=discovery.executable_identity(Path(julia)),
                               julia_version=julia_record["version"] if julia_record and julia_record["executable"] == executable else None)
                 expected = {key: record[key] for key in (*state._IDENTITY_FIELDS, "environment")}
-                managed_tree = Path(executable).is_relative_to(directory / "julia")
-                outdated = managed_tree and not Path(executable).relative_to(directory / "julia").parts[0].startswith(f"{installer.JULIA_VERSION}-")
+                resolved = Path(executable).resolve()
+                managed_root = (directory / "julia").resolve()
+                managed_tree = resolved.is_relative_to(managed_root)
+                version_dir = resolved.relative_to(managed_root).parts[0] if managed_tree else ""
+                outdated = managed_tree and not (version_dir == installer.JULIA_VERSION or version_dir.startswith(f"{installer.JULIA_VERSION}-"))
                 selected = bool((julia_executable or "").strip() or env.get(discovery.JULIA_ENV_VAR, "").strip())
                 if not (force or retry or outdated and not selected) and _ready(previous, expected):
                     report("BEAT CPU runtime is already provisioned.")
@@ -111,7 +115,7 @@ def provision_cpu(
                 directory, explicit=julia_executable, environ=env, status_cb=report,
                 required_bytes=installer.CPU_REQUIRED_FREE_BYTES,
             )
-            julia = str(Path(julia).resolve())
+            julia = str(Path(julia))
             julia_record = state.read_julia(directory)
             record.update(julia_executable=julia,
                           julia_identity=discovery.executable_identity(Path(julia)),

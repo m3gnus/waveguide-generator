@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 import json
 import os
@@ -12,16 +13,22 @@ import re
 import shutil
 import stat
 import tarfile
+import time
 import urllib.request
 import zipfile
 
-from . import discovery
+from . import discovery, paths
 from .paths import PROVIDER_ID, runtime_dir
 
 JULIA_VERSION = "1.12.7"
 CPU_REQUIRED_FREE_BYTES = 2 * 1024**3
 GPU_REQUIRED_FREE_BYTES = 6 * 1024**3
 _BASE = "https://julialang-s3.julialang.org/bin"
+_WINDOWS = os.name == "nt"
+WINDOWS_LONGEST_MEMBER = 155
+MAX_EXTRACTED_BYTES = 4 * 1024**3
+MAX_ARCHIVE_MEMBERS = 100_000
+_STAGING_MARKER = ".wg-staging.json"
 # https://julialang-s3.julialang.org/bin/checksums/julia-1.12.7.sha256
 # Pin every platform so verification needs no
 # second network request. Windows retains HBB's pinned artifact checksum.
@@ -46,7 +53,7 @@ class JuliaDownload:
 
     @property
     def directory(self) -> str:
-        return f"{JULIA_VERSION}-{self.platform}"
+        return JULIA_VERSION if self.windows else f"{JULIA_VERSION}-{self.platform}"
 
 
 def julia_download(system: str | None = None, machine: str | None = None) -> JuliaDownload:
@@ -70,25 +77,38 @@ def _report(callback: StatusCallback | None, message: str) -> None:
             pass  # Progress reporting must never fail an installation.
 
 
-def _fetch(url: str, destination: Path) -> None:
+def _fetch(url: str, destination: Path, status_cb: StatusCallback | None = None) -> None:
     with urllib.request.urlopen(url, timeout=30) as response, destination.open("wb") as stream:
-        shutil.copyfileobj(response, stream, length=1024 * 1024)
+        total = int(response.headers.get("Content-Length") or 0)
+        read, last_report = 0, time.monotonic()
+        while chunk := response.read(1024 * 1024):
+            stream.write(chunk)
+            read += len(chunk)
+            now = time.monotonic()
+            if now - last_report >= 5:
+                last_report = now
+                progress = f"{read / 1e6:.0f} / {total / 1e6:.0f}" if total else f"{read / 1e6:.0f}"
+                _report(status_cb, f"Downloading {destination.name}: {progress} MB")
 
 
 def download_archive(
     spec: JuliaDownload, destination: Path, *, fetcher: Fetcher | None = None,
-    status_cb: StatusCallback | None = None,
+    status_cb: StatusCallback | None = None, root: Path | None = None,
 ) -> None:
     """Fetch into .part, verify SHA-256, then atomically publish the archive."""
     if not re.fullmatch(r"[0-9a-f]{64}", spec.sha256):
         raise ValueError("A pinned SHA-256 checksum is required")
-    _private_directory(destination.parent)
+    paths.checked_root(destination.parent)
+    _private_directory(destination.parent, root=root)
     partial = destination.with_name(destination.name + ".part")
-    if destination.is_symlink() or partial.is_symlink():
+    if paths.is_link(destination) or paths.is_link(partial):
         raise RuntimeError("Linked download destination refused")
     _report(status_cb, f"Downloading portable Julia {JULIA_VERSION}: {spec.filename}")
     try:
-        (fetcher or _fetch)(spec.url, partial)
+        if fetcher is None:
+            _fetch(spec.url, partial, status_cb)
+        else:
+            fetcher(spec.url, partial)
         actual = discovery.executable_identity(partial)
         if actual != spec.sha256:
             raise RuntimeError(f"SHA-256 mismatch for {spec.url}: expected {spec.sha256}, got {actual}")
@@ -108,36 +128,66 @@ def check_disk_space(root: Path, required_bytes: int = CPU_REQUIRED_FREE_BYTES) 
         raise RuntimeError(f"Not enough free disk space: {free / 1024**3:.1f} GiB free, {required_bytes / 1024**3:.0f} GiB needed")
 
 
-def _private_directory(path: Path) -> None:
-    # Refuse links at every existing component before writing or removing trees.
-    if any(parent.is_symlink() for parent in (path, *path.parents)):
+def _private_directory(path: Path, *, root: Path | None = None) -> None:
+    paths.checked_root(path)
+    root = paths.checked_root(root) if root is not None else path
+    path, root = path.absolute(), root.absolute()
+    if not path.is_relative_to(root) or not path.resolve().is_relative_to(root.resolve()):
+        raise RuntimeError(f"Runtime directory escapes provider root: {path}")
+    # Ancestor aliases (/tmp, /var, /home, stowed .local) are legitimate.
+    # Only the provider root and components below it must be unlinked.
+    if any(paths.is_link(parent) for parent in (path, *path.parents)
+           if parent == root or root in parent.parents):
         raise RuntimeError(f"Linked runtime directory refused: {path}")
     path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
-def _member_path(name: str) -> None:
-    path = PurePosixPath(name)
-    if path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name:
+def _member_path(name: str) -> str:
+    normalized = name.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or ".." in path.parts or ":" in normalized:
         raise RuntimeError(f"Unsafe archive member: {name}")
+    return normalized
+
+
+def _archive_budget(sizes: list[int]) -> None:
+    if len(sizes) > MAX_ARCHIVE_MEMBERS or sum(sizes) > MAX_EXTRACTED_BYTES:
+        raise RuntimeError("Julia archive exceeds extraction size/member limit")
 
 
 def _unpack(archive: Path, staging: Path) -> None:
+    paths.checked_root(staging)
     if archive.suffix == ".zip":
         with zipfile.ZipFile(archive) as bundle:
-            for member in bundle.infolist():
-                _member_path(member.filename)
+            members = bundle.infolist()
+            _archive_budget([member.file_size for member in members])
+            for member in members:
+                member.filename = _member_path(member.filename)
+                if _STAGING_MARKER in PurePosixPath(member.filename).parts:
+                    raise RuntimeError("Archive contains reserved staging marker")
                 mode = member.external_attr >> 16
                 if stat.S_ISLNK(mode):
                     raise RuntimeError(f"Linked ZIP member refused: {member.filename}")
-            bundle.extractall(staging)
-            for member in bundle.infolist():
+            bundle.extractall(staging, members=members)
+            for member in members:
                 mode = (member.external_attr >> 16) & 0o777
                 if mode and not member.is_dir():
                     (staging / member.filename).chmod(mode)
     else:
         with tarfile.open(archive, "r:gz") as bundle:
-            for member in bundle.getmembers():
+            members = bundle.getmembers()
+            _archive_budget([member.size for member in members])
+            for member in members:
                 _member_path(member.name)
+                if _STAGING_MARKER in PurePosixPath(member.name).parts:
+                    raise RuntimeError("Archive contains reserved staging marker")
+                tarfile.data_filter(member, str(staging))
+                if member.issym() or member.islnk():
+                    member_path = staging / member.name
+                    link = (member_path.parent if member.issym() else staging) / member.linkname
+                    top = staging / PurePosixPath(member.name).parts[0]
+                    if not link.resolve().is_relative_to(top.resolve()):
+                        raise RuntimeError(f"Archive link escapes published Julia tree: {member.name}")
             bundle.extractall(staging, filter="data")
 
 
@@ -148,9 +198,11 @@ def _executable(tree: Path, windows: bool) -> Path:
 
 
 def _owned(tree: Path, spec: JuliaDownload) -> bool:
+    if paths.is_link(tree) or paths.is_link(tree / ".wg-julia.json"):
+        return False
     try:
         marker = json.loads((tree / ".wg-julia.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return False
     return marker == {"provider": PROVIDER_ID, "version": JULIA_VERSION, "platform": spec.platform}
 
@@ -160,41 +212,152 @@ def _valid_tree(tree: Path, spec: JuliaDownload) -> bool:
     return executable.is_file() and (spec.windows or os.access(executable, os.X_OK)) and executable.resolve().is_relative_to(tree.resolve())
 
 
+def _layout(root: Path, spec: JuliaDownload) -> tuple[Path, Path, Path]:
+    staging = root / "dl/x" if spec.windows else root / "downloads" / f"unpack-{spec.directory}"
+    target = root / "julia" / spec.directory
+    return staging, target, target.with_name(f".{spec.directory}.previous")
+
+
+def _windows_long_paths_enabled() -> bool:
+    if not _WINDOWS:
+        return False
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\FileSystem") as key:
+            return winreg.QueryValueEx(key, "LongPathsEnabled")[0] == 1
+    except OSError:
+        return False
+
+
+def windows_path_length(root: Path, spec: JuliaDownload) -> int:
+    """Conservative full member length, including staging and recovery names."""
+    return max(len(str(path)) + 1 + WINDOWS_LONGEST_MEMBER for path in _layout(root, spec))
+
+
+def _check_windows_paths(root: Path, spec: JuliaDownload) -> None:
+    if spec.windows and windows_path_length(root, spec) >= 260 and not _windows_long_paths_enabled():
+        raise RuntimeError("Julia installation would exceed Windows MAX_PATH (260 characters); "
+                           "choose a shorter WG2_BEAT_RUNTIME_DIR or enable Windows long paths")
+
+
+def _remove_backup(backup: Path, spec: JuliaDownload) -> None:
+    # An open DLL on Windows can survive cleanup; retry on the next run.
+    paths.checked_root(backup)
+    if backup.exists():
+        if not _owned(backup, spec):
+            raise RuntimeError(f"Unowned recovery tree refused: {backup}")
+        _remove_marked_tree(backup, ".wg-julia.json")
+
+
+def _remove_marked_tree(tree: Path, marker_name: str) -> None:
+    """Keep ownership evidence when open files prevent complete cleanup."""
+    paths.checked_root(tree)
+    marker = tree / marker_name
+    with suppress(OSError):
+        evidence = marker.read_bytes()
+        for child in tree.iterdir():
+            if child == marker:
+                continue
+            with suppress(OSError):
+                if paths.is_link(child):
+                    child.unlink() if child.is_symlink() else child.rmdir()
+                elif child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    child.unlink(missing_ok=True)
+        if any(child != marker for child in tree.iterdir()):
+            return
+        marker.unlink()
+        try:
+            tree.rmdir()
+        except OSError:
+            # A directory reader can deny removal even after its contents close.
+            if tree.exists():
+                marker.write_bytes(evidence)
+
+
+def _recover(root: Path, spec: JuliaDownload) -> None:
+    paths.checked_root(root)
+    staging, target, backup = _layout(root, spec)
+    # Validate root/descendants without creating anything (disk checks stay early).
+    for path in (root, staging.parent, target.parent, staging, target, backup):
+        if paths.is_link(path):
+            raise RuntimeError(f"Linked installation or staging directory refused: {path}")
+    if target.exists() and not _owned(target, spec):
+        raise RuntimeError(f"Refusing to replace an unowned Julia installation: {target}")
+    if not backup.exists():
+        return
+    if not _owned(backup, spec):
+        raise RuntimeError(f"Unowned recovery tree refused: {backup}")
+    if target.exists() and _valid_tree(target, spec):
+        _remove_backup(backup, spec)
+    elif _valid_tree(backup, spec):
+        if target.exists():
+            _remove_marked_tree(target, ".wg-julia.json")
+            if target.exists():
+                raise RuntimeError(f"Incomplete Julia installation is still in use: {target}")
+        os.replace(backup, target)
+    else:
+        _remove_backup(backup, spec)
+
+
+def _staging_owned(staging: Path) -> bool:
+    marker = staging / _STAGING_MARKER
+    if paths.is_link(staging) or paths.is_link(marker):
+        return False
+    try:
+        return json.loads(marker.read_text(encoding="utf-8")) == {"provider": PROVIDER_ID}
+    except (OSError, ValueError, RecursionError):
+        return False
+
+
+def _validate_links(tree: Path) -> None:
+    # Tar's data filter contains links within staging, but publication removes
+    # the top-level directory. Every link must stay inside that promoted tree.
+    resolved = tree.resolve()
+    for path in tree.rglob("*"):
+        if paths.is_link(path) and not path.resolve().is_relative_to(resolved):
+            raise RuntimeError(f"Archive link escapes published Julia tree: {path}")
+
+
 def extract_julia(
     archive: Path, root: Path, spec: JuliaDownload, *, status_cb: StatusCallback | None = None,
 ) -> Path:
     """Validate staging before publication; recover only this WG-owned target."""
-    downloads, installs = root / "downloads", root / "julia"
-    _private_directory(downloads)
-    _private_directory(installs)
-    staging = downloads / f"unpack-{spec.directory}"
-    target = installs / spec.directory
-    backup = installs / f".{spec.directory}.previous"
-    if any(path.is_symlink() for path in (staging, target, backup)):
-        raise RuntimeError("Linked installation or staging directory refused")
+    root = paths.checked_root(root)
+    if _WINDOWS:
+        _check_windows_paths(root.absolute(), spec)
+    _recover(root, spec)
+    staging, target, backup = _layout(root, spec)
+    _private_directory(staging.parent, root=root)
+    _private_directory(target.parent, root=root)
     if backup.exists():
-        if not _owned(backup, spec):
-            raise RuntimeError(f"Unowned recovery tree refused: {backup}")
-        if not target.exists():
-            os.replace(backup, target)
-        elif _owned(target, spec) and _valid_tree(target, spec):
-            shutil.rmtree(backup)
-        else:
-            raise RuntimeError(f"Ambiguous interrupted installation: {target}")
-    if target.exists() and not _owned(target, spec):
-        raise RuntimeError(f"Refusing to replace an unowned Julia installation: {target}")
+        # Cleanup was denied, but publication already succeeded on an earlier run.
+        if _owned(target, spec) and _valid_tree(target, spec):
+            return _executable(target, spec.windows)
+        raise RuntimeError(f"Recovery tree is still in use: {backup}")
     if staging.exists():
-        shutil.rmtree(staging)
+        if not _staging_owned(staging):
+            raise RuntimeError(f"Unowned staging tree refused: {staging}")
+        _remove_marked_tree(staging, _STAGING_MARKER)
+        if staging.exists():
+            raise RuntimeError(f"Julia staging tree is still in use: {staging}")
     staging.mkdir(mode=0o700)
+    # A killed process before this marker is written leaves a refused tree.
+    (staging / _STAGING_MARKER).write_text(json.dumps({"provider": PROVIDER_ID}), encoding="utf-8")
     _report(status_cb, f"Unpacking {archive.name}")
     try:
         _unpack(archive, staging)
-        entries = list(staging.iterdir())
-        if len(entries) != 1 or not entries[0].is_dir() or entries[0].is_symlink():
+        entries = [entry for entry in staging.iterdir() if entry.name != _STAGING_MARKER]
+        if len(entries) != 1 or not entries[0].is_dir() or paths.is_link(entries[0]):
             raise RuntimeError(f"Unexpected archive layout in {archive.name}")
         tree = entries[0]
+        _validate_links(tree)
         if not _valid_tree(tree, spec):
             raise RuntimeError(f"Unpacked Julia has no executable inside {tree}")
+        if paths.is_link(tree / ".wg-julia.json"):
+            raise RuntimeError("Linked installation marker refused")
         (tree / ".wg-julia.json").write_text(json.dumps({
             "provider": PROVIDER_ID, "version": JULIA_VERSION, "platform": spec.platform,
         }), encoding="utf-8")
@@ -206,11 +369,11 @@ def extract_julia(
             if backup.exists() and not target.exists():
                 os.replace(backup, target)
             raise
-        if backup.exists():
-            shutil.rmtree(backup)
+        _remove_backup(backup, spec)
         return _executable(target, spec.windows)
     finally:
-        shutil.rmtree(staging, ignore_errors=True)
+        if _staging_owned(staging):
+            _remove_marked_tree(staging, _STAGING_MARKER)
 
 
 def ensure_julia(
@@ -221,7 +384,10 @@ def ensure_julia(
 ) -> str:
     """Reuse a selected executable or install Julia; never record readiness."""
     env = os.environ if environ is None else environ
-    root = runtime_dir(environ=env) if root is None else root
+    root = runtime_dir(environ=env) if root is None else paths.checked_root(root, environ=env)
+    paths.checked_root(root)
+    if paths.is_link(root):
+        raise RuntimeError(f"Linked runtime directory refused: {root}")
     existing = discovery.discover_julia(explicit, configured=configured, root=root, environ=env)
     configured_path = configured if configured is not None else env.get(discovery.JULIA_ENV_VAR, "")
     selected = bool((explicit or "").strip() or configured_path.strip())
@@ -232,30 +398,48 @@ def ensure_julia(
         resolved = Path(existing).resolve()
         relative = resolved.relative_to(root.resolve()) if resolved.is_relative_to(root.resolve()) else None
         managed = relative is not None and len(relative.parts) > 1 and relative.parts[0] == "julia"
-        current = managed and relative.parts[1].startswith(f"{JULIA_VERSION}-")
+        current = managed and (relative.parts[1] == JULIA_VERSION or relative.parts[1].startswith(f"{JULIA_VERSION}-"))
         if managed and not current:
             existing = shutil.which("julia", path=env.get("PATH", os.defpath))
             if existing and Path(existing).resolve().is_relative_to((root / "julia").resolve()):
                 existing = None
+    if existing and paths.hbb_executable(Path(existing), environ=env):
+        existing = None
     if existing:
+        resolved = Path(existing).resolve()
+        if resolved.is_relative_to((root / "julia").resolve()):
+            spec = julia_download(system, machine)
+            if resolved.is_relative_to((root / "julia" / spec.directory).resolve()):
+                _recover(root, spec)
         _report(status_cb, f"Using existing Julia: {existing}")
-        previous = record if discovery.recorded_julia(root) == existing else None
+        previous = record if record and record["executable"] == existing else None
+        selection = previous.get("selection") if previous else "path"
+        if (explicit or "").strip():
+            selection = "explicit"
+        elif configured_path.strip():
+            selection = "configured"
+        elif selection == "explicit":
+            selection = "path"
         _private_directory(root)
         discovery.write_julia_record(
             root, Path(existing),
             origin=previous.get("origin", "external") if previous else "external",
             version=previous.get("version") if previous else None,
+            selection=selection,
         )
         return existing
     spec = julia_download(system, machine)
+    if _WINDOWS:
+        _check_windows_paths(root.absolute(), spec)
+    _recover(root, spec)
     target = root / "julia" / spec.directory
-    if not target.is_symlink() and _owned(target, spec) and _valid_tree(target, spec):
+    if _owned(target, spec) and _valid_tree(target, spec):
         executable = _executable(target, spec.windows)
     else:
         check_disk_space(root, required_bytes)
         _private_directory(root)
-        archive = root / "downloads" / spec.filename
-        download_archive(spec, archive, fetcher=fetcher, status_cb=status_cb)
+        archive = root / ("dl" if spec.windows else "downloads") / spec.filename
+        download_archive(spec, archive, fetcher=fetcher, status_cb=status_cb, root=root)
         executable = extract_julia(archive, root, spec, status_cb=status_cb)
         archive.unlink(missing_ok=True)
     discovery.write_julia_record(root, executable, origin="managed", version=JULIA_VERSION)

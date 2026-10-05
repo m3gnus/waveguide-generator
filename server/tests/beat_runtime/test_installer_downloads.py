@@ -11,6 +11,7 @@ from server.solver.beat_runtime import discovery, installer, paths
 
 @pytest.fixture(autouse=True)
 def isolated(monkeypatch, tmp_path):
+    (tmp_path / "downloads").mkdir()
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "wg"))
     monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(tmp_path / "hbb"))
     monkeypatch.delenv(discovery.JULIA_ENV_VAR, raising=False)
@@ -61,7 +62,7 @@ def test_download_stages_verifies_and_publishes(tmp_path):
 @pytest.mark.parametrize("failure", ["offline", "partial", "checksum"])
 def test_download_failure_never_publishes_or_leaves_part(tmp_path, failure):
     spec = installer.julia_download("Linux", "x86_64")
-    destination = tmp_path / spec.filename
+    destination = tmp_path / "downloads" / spec.filename
     destination.write_bytes(b"previous verified archive")
     partial = destination.with_name(destination.name + ".part")
     partial.write_bytes(b"stale partial")
@@ -80,10 +81,10 @@ def test_download_failure_never_publishes_or_leaves_part(tmp_path, failure):
 def test_download_requires_checksum_and_refuses_symlink(tmp_path):
     spec = installer.julia_download("Linux", "x86_64")
     with pytest.raises(ValueError, match="pinned SHA-256"):
-        installer.download_archive(replace(spec, sha256=""), tmp_path / "archive")
+        installer.download_archive(replace(spec, sha256=""), tmp_path / "downloads" / "archive")
     external = tmp_path / "external"
     external.write_bytes(b"keep")
-    destination = tmp_path / "archive"
+    destination = tmp_path / "downloads" / "archive"
     destination.with_name("archive.part").symlink_to(external)
     with pytest.raises(RuntimeError, match="Linked"):
         installer.download_archive(spec, destination)
@@ -114,6 +115,29 @@ def test_callback_failure_does_not_fail_download(tmp_path):
     spec = replace(installer.julia_download("Linux", "x86_64"), sha256=hashlib.sha256(content).hexdigest())
     def callback(message):
         raise UnicodeEncodeError("ascii", "✓", 0, 1, "console")
-    destination = tmp_path / "archive"
+    destination = tmp_path / "downloads" / "archive"
     installer.download_archive(spec, destination, fetcher=lambda url, path: path.write_bytes(content), status_cb=callback)
     assert destination.read_bytes() == content
+
+
+def test_megabyte_download_progress_every_five_seconds(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+
+    content = b"x" * 1_000_000
+    spec = replace(installer.julia_download("Linux", "x86_64"), sha256=hashlib.sha256(content * 3).hexdigest())
+    chunks = iter([content, content, content, b""])
+    ticks = iter([0, 4, 5, 10])
+
+    @contextmanager
+    def response(*args, **kwargs):
+        yield SimpleNamespace(headers={"Content-Length": "3000000"}, read=lambda count: next(chunks))
+
+    monkeypatch.setattr(installer.urllib.request, "urlopen", response)
+    monkeypatch.setattr(installer.time, "monotonic", lambda: next(ticks))
+    messages = []
+    destination = tmp_path / "downloads" / "archive"
+    installer.download_archive(spec, destination, status_cb=messages.append)
+    assert [line for line in messages if line.endswith(" MB")] == [
+        "Downloading archive.part: 2 / 3 MB", "Downloading archive.part: 3 / 3 MB",
+    ]
+    assert destination.read_bytes() == content * 3
