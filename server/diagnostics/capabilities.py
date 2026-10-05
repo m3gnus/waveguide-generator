@@ -41,11 +41,21 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
 
     snapshot = await engine_registry.capabilities()
     engines = [asdict(engine) for engine in snapshot]
-    from server.solver.bempp_opencl import qualification_max_seconds, retry_pending
+    from server.solver.bempp_opencl import (
+        TRANSIENT_REASONS, qualification_max_seconds, retry_pending,
+    )
 
     for info, engine in zip(snapshot, engines, strict=True):
         engine["label"] = info.display_label()
-        engine["opencl_retry_pending"] = info.name == "bempp" and retry_pending()
+        # The interface reads this as "still checking OpenCL". Only a row
+        # whose published answer is itself a transient failure can be waiting
+        # on a retry; any other answer ends the retry state for this row,
+        # whatever a check elsewhere left pending in the shared state.
+        engine["opencl_retry_pending"] = (
+            info.name == "bempp"
+            and info.opencl_unavailable_reason in TRANSIENT_REASONS
+            and retry_pending()
+        )
     available = {item["name"] for item in engines if item.get("available") is True}
     # The planner's own order, asked for the same way it asks: the preference
     # puts ready BEAT CPU ahead of BEMPP on every platform. An interface

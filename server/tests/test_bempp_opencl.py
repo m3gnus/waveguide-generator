@@ -948,13 +948,13 @@ def test_a_failure_does_not_double_count_a_concurrent_attempt(monkeypatch):
         "ok": False, "opencl_unavailable_reason": "inventory_timeout", "reason": "slow"})
     snapshot = probe.qualification_revision()
     probe.qualified_opencl()  # another caller's attempt lands first
-    assert not probe.record_failed_attempt(RuntimeError("late"), snapshot)
+    assert not probe.record_failed_attempt(RuntimeError("late"), snapshot)[0]
     assert probe._timeout_attempts == 1
     assert probe._last_timeout["opencl_unavailable_reason"] == "inventory_timeout"
     # Within the interval nothing was skipped, so nothing is counted either.
-    assert not probe.record_failed_attempt(RuntimeError("again"), probe.qualification_revision())
+    assert not probe.record_failed_attempt(RuntimeError("again"), probe.qualification_revision())[0]
     clock[0] += probe.RETRY_INTERVAL_SECONDS
-    assert probe.record_failed_attempt(RuntimeError("due"), probe.qualification_revision())
+    assert probe.record_failed_attempt(RuntimeError("due"), probe.qualification_revision())[0]
     assert probe._timeout_attempts == 2
     assert "BEMPP status check" in probe._last_timeout["reason"]
     assert "OpenCL check" not in probe._last_timeout["reason"]
@@ -1018,7 +1018,8 @@ def test_an_embedder_detector_that_raises_is_never_pending(monkeypatch):
             assert capabilities and not any(item.available for item in capabilities)
             assert all(item.qualification != "pending" for item in capabilities)
             row = next(item for item in await registry.wait_for_bempp() if item.name == "bempp")
-            assert (row.qualification, row.opencl_unavailable_reason) == ("done", "probe_error")
+            # Terminal: nothing here can retry an embedder's own detector.
+            assert (row.qualification, row.opencl_unavailable_reason) == ("done", None)
             assert await registry.get_engine("bempp") is None
             payload = await capabilities_payload(registry)
             bempp_row = next(item for item in payload["engines"] if item["name"] == "bempp")
@@ -1037,3 +1038,88 @@ def test_an_embedder_detector_lets_shutdown_propagate():
     registry = EngineRegistry(detector=stopping, cpu_refresh=False)
     with pytest.raises(probe.ProbeCancelled):
         asyncio.run(registry._detect_initial())
+
+
+def test_a_failure_never_hides_a_verdict_recorded_right_after_it(monkeypatch):
+    """Another caller qualifies between the failure being counted and its
+    revision being read. Paired with that newer revision, the stale
+    unavailable row looked current and was never refreshed."""
+    import asyncio
+    from server.engines.registry import EngineRegistry
+    from server.solver import bempp
+
+    calls = []
+    def status():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("status processing failed")
+        return {"available": True, "reason": "OpenCL CPU passed", "version": "1",
+                "assembly_backend": "opencl", "assembly_device": {"type": "cpu"},
+                "opencl_unavailable_reason": None}
+    monkeypatch.setattr(bempp, "bempp_status", status)
+    real_record = probe.record_failed_attempt
+    def racing(exc, expected):
+        result = real_record(exc, expected)
+        with probe._selection_lock:  # another caller, just after the lock is released
+            probe._record_verdict({"ok": True, "opencl_unavailable_reason": None, "reason": "fine"})
+        return result
+    monkeypatch.setattr(probe, "record_failed_attempt", racing)
+    registry = EngineRegistry(detector=lambda: [_timed_out_bempp_row()], cpu_refresh=False)
+    async def exercise():
+        try:
+            await registry.capabilities()
+            await registry._refresh_bempp_timeout()
+            row = next(item for item in registry._cache if item.name == "bempp")
+            assert not row.available and row.opencl_unavailable_reason == "probe_error"
+            assert not probe.retry_pending()  # the newer verdict is final
+            # The failure stands for the revision it was counted at, so the
+            # newer verdict still reads as news and the row is refreshed.
+            assert registry._opencl_revision != probe.qualification_revision()
+            assert registry._bempp_needs_refresh()
+            row = next(item for item in await registry.wait_for_bempp() if item.name == "bempp")
+            assert row.available and row.assembly_backend == "opencl"
+        finally:
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
+
+
+def test_an_embedder_failure_after_a_recorded_timeout_settles_the_retry_flag(monkeypatch):
+    """The embedder's detector records a timeout in the shared state, then
+    raises; the built-in BEMPP status answers no_device without qualifying.
+    opencl_retry_pending must still settle, not read "checking" forever."""
+    import asyncio
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.engines.registry import EngineRegistry
+    from server.solver import bempp
+
+    bempp.bempp_status.cache_clear()
+    clock = [0.0]
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(probe, "_run_probe", lambda *a: {
+        "ok": False, "opencl_unavailable_reason": "smoke_test_timeout", "reason": "slow"})
+    monkeypatch.setattr(bempp, "_load_api", lambda: False)  # no_device before qualifying
+    def detector():
+        probe.qualified_opencl()  # a recorded transient timeout
+        raise RuntimeError("embedder detector failed")
+    async def due(_self):
+        clock[0] = max(clock[0], probe._retry_after)
+        await asyncio.sleep(0)
+    monkeypatch.setattr(EngineRegistry, "_wait_opencl_retry", due)
+    registry = EngineRegistry(detector=detector, cpu_refresh=False)
+    async def exercise():
+        try:
+            await registry.capabilities()
+            assert probe.retry_pending()  # the shared state still says "retry"
+            for _ in range(100):
+                payload = await capabilities_payload(registry)
+                row = next(item for item in payload["engines"] if item["name"] == "bempp")
+                await asyncio.sleep(0.01)
+            assert row["qualification"] == "done", row
+            assert row["opencl_retry_pending"] is False, row
+            assert not row["available"]
+        finally:
+            await registry.shutdown_prewarm()
+    try:
+        asyncio.run(exercise())
+    finally:
+        bempp.bempp_status.cache_clear()

@@ -417,14 +417,17 @@ def _beat_row_updates(
     return updates
 
 
-def _failed_detection(item: EngineInfo, exc: BaseException) -> EngineInfo:
+def _failed_detection(
+    item: EngineInfo, exc: BaseException, *, retryable: bool = True
+) -> EngineInfo:
     """A finished, unavailable row for a probe that raised instead of answering.
 
     Nothing the previous row declared is known any more, so every capability
     field is reset to empty rather than kept from it. BEMPP gets the same
     structured answer a failed OpenCL check gives: qualification done, no
     backend, and the transient ``probe_error`` code, so the retry and attempt
-    cap in ``bempp_opencl`` still apply.
+    cap in ``bempp_opencl`` still apply. A failure nothing here can retry (an
+    embedder's own detector) carries no code, so it ends the retry state.
     """
 
     detail = str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__
@@ -435,7 +438,7 @@ def _failed_detection(item: EngineInfo, exc: BaseException) -> EngineInfo:
         geometry_sources=(), di_sphere=False,
         cancellation_granularity=item.cancellation_granularity,
         qualification="done" if bempp else item.qualification,
-        opencl_unavailable_reason="probe_error" if bempp else None,
+        opencl_unavailable_reason="probe_error" if bempp and retryable else None,
     )
 
 
@@ -445,10 +448,12 @@ def _record_detection_failure(revision: int, exc: BaseException) -> int:
     Blocking: call it off the event loop. Returns the revision to publish.
     """
 
-    from server.solver.bempp_opencl import qualification_revision, record_failed_attempt
+    from server.solver.bempp_opencl import record_failed_attempt
 
-    record_failed_attempt(exc, revision)
-    return qualification_revision()
+    recorded, current = record_failed_attempt(exc, revision)
+    # Uncounted, the published failure reflects no verdict at all: keep the
+    # caller's snapshot so a newer one still reads as news and is refreshed.
+    return current if recorded else revision
 
 
 def _failed_bempp_status(exc: BaseException) -> dict[str, Any]:
@@ -488,15 +493,20 @@ def bempp_status_or_failure(status: Callable[[], dict[str, Any]]) -> tuple[dict[
         raise
     except Exception as exc:  # noqa: BLE001 - a failed probe is an unavailable engine
         log.warning("BEMPP status check failed", exc_info=True)
-        if record_failed_attempt(exc, revision):
-            return _failed_bempp_status(exc), qualification_revision()
-        revision = qualification_revision()
+        recorded, revision = record_failed_attempt(exc, revision)
+        if recorded:
+            # The revision this failure stands for, read under the lock: a
+            # verdict another caller records after it still reads as news.
+            return _failed_bempp_status(exc), revision
+        # A newer verdict exists (or nothing was due): answer from it. Every
+        # revision here is read before the status it is paired with, so a
+        # verdict recorded meanwhile can only cause one more refresh.
         try:
             return status(), revision
         except ProbeCancelled:
             raise
         except Exception as again:  # noqa: BLE001
-            return _failed_bempp_status(again), qualification_revision()
+            return _failed_bempp_status(again), revision
 
 
 def _beat_engine_backend(name: str) -> str | None:
@@ -797,11 +807,12 @@ class EngineRegistry:
                 raise
             except Exception as exc:  # noqa: BLE001 - a failed probe is an unavailable engine
                 # Never pending and never re-raised by later waits: every row
-                # is a finished, unavailable answer. No attempt is counted, so
-                # opencl_retry_pending keeps whatever qualification last said.
+                # is a finished, unavailable answer. Terminal, not retryable:
+                # the built-in BEMPP refresh is not this detector, and could
+                # answer without qualifying while a shared retry stays pending.
                 log.warning("Engine detection failed", exc_info=True)
                 detected = tuple(
-                    _failed_detection(EngineInfo(name, False, "", None), exc)
+                    _failed_detection(EngineInfo(name, False, "", None), exc, retryable=False)
                     for name in full3d_engine_order()
                     if name != "dryrun" or os.environ.get("WG2_ENABLE_DRYRUN") == "1"
                 )
