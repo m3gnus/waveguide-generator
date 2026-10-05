@@ -176,14 +176,15 @@ def test_dead_unix_socket_pruned_but_regular_file_retained(tmp_path, monkeypatch
     assert r.read_record(record.identifier, tmp_path) == record
 
 
-def test_dead_pid_does_not_authorize_cleanup_of_foreign_responder(tmp_path, host, monkeypatch):
+def test_dead_pid_with_foreign_responder_prunes_record_without_shutdown(tmp_path, host, monkeypatch):
     record, peer = host
     monkeypatch.setattr(c, "pid_alive", lambda pid: False)
     peer.reply["host_pid"] = record.pid + 1
-    with pytest.raises(r.RecordRefused, match="returned PID"):
-        c.cleanup_host(record, record.key, tmp_path)
+    # The responder fails authentication and is never asked to shut down; the
+    # recorded host's PID is gone, so only the stale record goes.
+    assert c.cleanup_host(record, record.key, tmp_path)
     assert [x["op"] for x in peer.sent] == ["hello"]
-    assert r.read_record(record.identifier, tmp_path) == record
+    assert r.read_record(record.identifier, tmp_path) is None
 
 
 @pytest.mark.parametrize("operation", ["hello", "shutdown"])
@@ -356,3 +357,20 @@ def test_cleanup_record_unlink_missing_ok_race(tmp_path, host, monkeypatch):
 
     monkeypatch.setattr(c, "unlink_record", already_removed)
     assert c.cleanup_host(record, record.key, tmp_path)
+
+
+@pytest.mark.parametrize(("start", "pruned"), [("different-start", True), (None, False)])
+def test_port_squatter_after_host_death_prunes_only_a_proven_gone_host(
+    tmp_path, host, monkeypatch, start, pruned
+):
+    record, peer = host
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: start)
+    peer.reply.update({"proof": "0" * 64})  # an unrelated listener cannot prove the token
+    if pruned:
+        assert c.cleanup_host(record, record.key, tmp_path)
+        assert r.read_record(record.identifier, tmp_path) is None
+    else:
+        with pytest.raises(r.RecordRefused):
+            c.cleanup_host(record, record.key, tmp_path)
+        assert r.read_record(record.identifier, tmp_path) == record
+    assert [x["op"] for x in peer.sent] == ["hello"]

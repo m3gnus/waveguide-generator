@@ -223,3 +223,16 @@ and Ruff commands cannot complete because `server/tests/beat_adapter` and
 `server/solver/beat_adapter` are absent from this worktree. No Julia, downloads
 or real user/HBB data directories were used; changes remain uncommitted as
 requested.
+
+Review round 2 (Sonnet), fixed directly:
+- N1 fixed: a stale TCP record whose loopback port another process now answers
+  is pruned when the recorded host is provably gone (dead PID or start-identity
+  mismatch). The responder is never asked to shut down; nothing is signalled.
+- N2 accepted: macOS start identity is `ps -o lstart=` (local time, 1 s); a TZ
+  or DST change can make a live host look restarted. Pruning still needs a
+  refused or unauthenticated endpoint, so a reachable live host is unaffected.
+- N3 accepted: an elevated Windows process creates files owned by
+  Administrators, which the owner-SID check refuses, so registry writes fail
+  closed for elevated users. WG runs its BEAT host unelevated.
+- Spawn-flow requirement (for PR 18): hold the slot's spawn lock until the host
+  listens, or the orphan-socket sweep may remove a bound-but-not-listening socket.

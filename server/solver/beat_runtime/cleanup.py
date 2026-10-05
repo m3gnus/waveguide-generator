@@ -86,6 +86,13 @@ def _cleanup_locked(
         if exc.errno not in {errno.ENOENT, errno.ECONNREFUSED} or _same_process(record):
             raise RecordRefused(f"Unverified live host refused: {exc}") from exc
         connection = None
+    except RecordRefused:
+        # Something else answers a recorded loopback port (port reuse after the
+        # host died). The recorded host provably no longer exists, so prune;
+        # nothing is signalled. A live or unidentifiable host stays refused.
+        if _same_process(record):
+            raise
+        connection = None
     if connection is not None:
         with connection:
             try:
