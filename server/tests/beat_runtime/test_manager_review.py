@@ -92,14 +92,30 @@ def test_destination_checks_refuse_hbb_project_and_inherited_depots(engine_tree,
     assert list(hbb.iterdir()) == []
 
 
-def test_depot_and_launch_path_entries_are_absolute(engine_tree, tmp_path, monkeypatch):
+def test_depot_entries_are_absolute_and_path_is_not_keyed(engine_tree, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    env = {'JULIA_DEPOT_PATH': os.pathsep.join(('depot', '', 'other')),
-           'PATH': os.pathsep.join(('bin', '', 'tools'))}
+    env = {'JULIA_DEPOT_PATH': os.pathsep.join(('depot', 'other')), 'PATH': os.pathsep.join(('bin', 'tools'))}
     key = manager.resolve_key('cpu', julia_executable=sys.executable, environment=env)
     assert key['depots'] == [str(tmp_path / 'depot'), str(tmp_path / 'other')]
     assert key['environment']['JULIA_DEPOT_PATH'] == os.pathsep.join(key['depots'])
-    assert all(Path(p).is_absolute() for p in key['environment']['PATH'].split(os.pathsep))
+    assert 'PATH' not in key['environment']
+    moved = manager.resolve_key('cpu', julia_executable=sys.executable,
+                                environment={**env, 'PATH': os.pathsep.join(('/usr/bin', 'elsewhere'))})
+    assert r.key_id(moved) == r.key_id(key)
+
+
+def test_empty_depot_entries_are_refused_as_in_provisioning(engine_tree, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    env = {'JULIA_DEPOT_PATH': os.pathsep.join(('depot', '', 'other'))}
+    with pytest.raises(ValueError, match='Empty JULIA_DEPOT_PATH'):
+        manager.resolve_key('cpu', julia_executable=sys.executable, environment=env)
+
+
+def test_named_julia_project_environment_is_kept(engine_tree, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    key = manager.resolve_key('cpu', julia_executable=sys.executable,
+                              environment={'JULIA_PROJECT': '@.', 'JULIA_DEPOT_PATH': str(tmp_path / 'd')})
+    assert key['environment']['JULIA_PROJECT'] == '@.'
 
 
 def test_stat_fingerprint_cache_invalidates_and_evicts_changed_client(engine_tree, monkeypatch):

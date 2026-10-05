@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from . import assets, discovery, identity, paths, registry, threads
+from . import assets, discovery, identity, julia_steps, registry, threads
 from .client import HostedWorker
 from .host import bounded_call, official_engine_factory
 from .ownership import OwnershipClosed, StreamOwnership
@@ -33,28 +33,21 @@ def resolve_key(backend: str, *, julia_executable: str | None = None,
     if executable is None:
         raise discovery.JuliaDiscoveryError("Julia executable is unavailable")
     engine = assets.engine_assets(backend)
-    # TODO: dedupe destination validation with provision.py on branch merge.
-    project = paths.checked_root(
-        (engine.project if julia_project is None else julia_project).expanduser().resolve(), environ=env)
     solver = (engine.system_solver if solver_script is None else solver_script).expanduser().resolve()
     sysimage = julia_sysimage.expanduser().resolve() if julia_sysimage is not None else None
-    if env.get("JULIA_PROJECT"):
-        env["JULIA_PROJECT"] = str(paths.checked_root(
-            Path(env["JULIA_PROJECT"]).expanduser().resolve(), environ=env))
+    jp = env.get("JULIA_PROJECT", "")
+    if jp and not jp.startswith("@"):  # "@." / "@v1.12" are named environments, not paths
+        env["JULIA_PROJECT"] = str(julia_steps.julia_environment(Path(jp), env)[0])
     count = threads.resolve_julia_threads(backend, julia_threads)
     env["JULIA_NUM_THREADS"] = str(count)
-    depot = env.get("JULIA_DEPOT_PATH", str(paths.runtime_dir(environ=env) / "depot"))
-    # An empty entry expands Julia's default depots, including a writable user
-    # depot. Use an explicit WG depot instead of implicit HBB/shared defaults.
-    depots = [str(paths.checked_root(Path(entry).expanduser().resolve(), environ=env))
-              for entry in depot.split(os.pathsep) if entry]
-    if not depots:
-        depots = [str(paths.runtime_dir(environ=env).resolve() / "depot")]
-    env["JULIA_DEPOT_PATH"] = os.pathsep.join(depots)
+    # The same destination checks provisioning uses: project and every depot
+    # entry, HBB refused, relative entries made absolute, empty entries refused.
+    project, env = julia_steps.julia_environment(
+        engine.project if julia_project is None else julia_project, env)
+    depots = env["JULIA_DEPOT_PATH"].split(os.pathsep)
+    # PATH is passed to the host unkeyed: the Julia executable is already keyed
+    # by path and content, and keying PATH breaks adoption across launches.
     keyed = {name: value for name, value in env.items() if name.startswith(("JULIA_", "BLAB_"))}
-    if "PATH" in env:
-        keyed["PATH"] = os.pathsep.join(str(Path(entry or ".").expanduser().resolve())
-                                       for entry in env["PATH"].split(os.pathsep))
     policy = (Path(__file__).resolve().parents[1] / "official_beat.py"
               if compiled_request_policy is None else compiled_request_policy)
     return registry.host_key({

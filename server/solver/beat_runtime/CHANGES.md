@@ -1305,3 +1305,16 @@ recorded test-owned processes. Native Windows open-file behavior is simulated;
 real engine/platform/installed qualification remains a later design gate. No
 requested fix is unfinished; only the missing adapter directories prevent the
 exact combined checks. All changes remain uncommitted as explicitly requested.
+
+PR 20 review round 2, fixed directly on the merged branch:
+- PATH is no longer keyed (it is passed to the host unkeyed); the Julia
+  executable is keyed by path and content, and keying PATH broke adoption
+  across launches from different shells.
+- resolve_key uses julia_steps.julia_environment, the same project and depot
+  destination checks as provisioning (empty depot entries refused, relative
+  entries absolute, HBB refused); the duplicate manager-side check is gone.
+- JULIA_PROJECT named environments ("@.", "@v1.12") are kept as names.
+- Accepted P3s: a cancelled adaptive sweep's partial result carries acquisition
+  rows (including coverage frequencies), the last batch's solver_log/timings,
+  and no frequency_status; the transparent retry reuses the first creation's
+  environment snapshot.
