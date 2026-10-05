@@ -585,13 +585,14 @@ def _operation_lock(
 ):
     """Serialize target changes with an OS lock released on process death.
 
-    With ``discard_when_unused`` (uninstall), the lock file goes too once
-    nothing of WGLink's is left in the folder, so an uninstall leaves Fusion's
-    AddIns folder as it found it. On POSIX it is unlinked while still held; a
-    waiter that then wins the old file sees that the path no longer names it
-    and opens the new one. Windows refuses to delete a file another process
-    has open, so there it is deleted after closing and simply stays when
-    anyone else has it open.
+    With ``discard_when_unused`` (uninstall) on Windows, the lock file goes too
+    once nothing of WGLink's is left in the folder, so an uninstall leaves
+    Fusion's AddIns folder as it found it. Windows refuses to delete a file
+    another process has open, so the file is deleted after closing and simply
+    stays when anyone else has it open. POSIX keeps the file: unlinking it
+    while held would let a process still running code that does not re-check
+    the path win the old inode while another caller creates and wins a new one.
+    The re-check in ``_acquire_operation_lock`` stays for callers that do.
     """
 
     addins_dir.mkdir(parents=True, exist_ok=True)
@@ -600,15 +601,15 @@ def _operation_lock(
     discard = False
     try:
         yield
-        discard = discard_when_unused and _nothing_of_wglink_left(addins_dir)
-        if discard and os.name != "nt":
-            lock_path.unlink(missing_ok=True)
+        discard = (
+            discard_when_unused and os.name == "nt" and _nothing_of_wglink_left(addins_dir)
+        )
     finally:
         try:
             _set_file_lock(handle, acquire=False)
         finally:
             handle.close()
-    if discard and os.name == "nt":
+    if discard:
         try:
             lock_path.unlink()
         except OSError:
