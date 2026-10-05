@@ -50,7 +50,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import signal
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -91,6 +90,8 @@ class JobStart:
     job: Any = None
     fired: bool = False
     pid: int | None = None
+    #: The handed-over child's process handle; the caller owns it.
+    process_handle: Any = None
 
 
 @dataclass
@@ -122,7 +123,7 @@ def windows_job_start(
     resumed once it is confined.
 
     The block must contain only that start: if it raises, the job made for
-    it is terminated and closed.
+    it is terminated and closed, or without a job the child is terminated.
 
     ``assign(pid, process_handle)`` runs while the child is suspended. It
     returns the job (anything with ``close()``) or ``None``; with
@@ -143,11 +144,23 @@ def windows_job_start(
     except BaseException:
         # The block is only the start, so a start that raised after the child
         # was handed over (an interrupt landing in Popen, say) left it with
-        # nobody: end its tree rather than leave it running in a job no one
-        # will ever close.
+        # nobody: end its tree, and without a job end the child itself. Its
+        # handles are not closed here: they belong to the caller's Popen
+        # now, which closes them itself, and a second close could hit a
+        # reused handle value. Until that Popen is collected the process
+        # handle is still open, so terminating through it is safe.
         job, result.job = result.job, None
-        _close_job(job)
+        handle, result.process_handle = result.process_handle, None
+        if job is not None:
+            _close_job(job)
+        elif handle is not None:
+            import _winapi
+
+            with contextlib.suppress(Exception):
+                _winapi.TerminateProcess(int(handle), 1)
         raise
+    else:
+        result.process_handle = None
     finally:
         _local.armed = previous
 
@@ -215,32 +228,39 @@ def _intercept(real: Callable[..., Any]) -> Callable[..., Any]:
 def _start_contained(real: Callable[..., Any], args: tuple[Any, ...], armed: _Armed) -> Any:
     """Create the child suspended, confine it, resume it, hand it over.
 
-    The child is owned here, and stopped on any exception, from the moment
-    ``CreateProcess`` returns until the single statement that hands it to the
-    caller. A Ctrl+C arriving meanwhile is held (:func:`_sigint_held`): it
-    cannot land between two statements, and once the child is ready it is
-    raised here, while the child is still ours to stop.
+    The child is owned here from the moment ``CreateProcess`` returns until
+    the single line that hands it to the caller. Any exception in between,
+    an interrupt included, stops it and closes both its handles and its job.
+
+    Accepted residual (Magnus, 2026-10-05): ``KeyboardInterrupt`` is raised
+    asynchronously on the main thread, so one arriving in the few
+    instructions between ``CreateProcess`` returning and its result being
+    stored, or between the handoff and ``Popen`` storing the handles, can
+    leak one child and its handles. Holding the signal across the start was
+    tried and removed: re-delivering it opened a window of its own, and
+    holding it around arbitrary ``assign`` code can deadlock, because signal
+    handlers run only on the main thread. In the app such an interrupt comes
+    only at server shutdown, where the job's kill-on-close takes the tree.
     """
 
     flags = int(args[_CREATION_FLAGS_INDEX])
     suspended = list(args)
     suspended[_CREATION_FLAGS_INDEX] = flags | CREATE_SUSPENDED
     child = _Owned()
-    with _sigint_held() as interrupt:
-        try:
-            child.handles = real(*suspended)
-            _confine_and_resume(real, args, armed, child)
-            interrupt.raise_if_held()
-            return child.hand_over(armed.result)
-        except BaseException:
-            if child.handles is None:
-                # Nothing was started (CreateProcess itself failed), so a
-                # retry by the caller is still the start this block is about.
-                _local.armed = armed
-            # Refused, interrupted, or failed: a child we still own never
-            # reaches the caller, so stop it. A suspended one never ran.
-            child.discard()
-            raise
+    try:
+        child.handles = real(*suspended)
+        _confine_and_resume(real, args, armed, child)
+        return child.hand_over(armed.result)
+    except BaseException:
+        if child.handles is None:
+            # Nothing was started (CreateProcess itself failed), so a retry
+            # by the caller is still the start this block is about.
+            _local.armed = armed
+        # Refused, interrupted, or failed: a child we still own never reaches
+        # the caller, so stop it and close its handles and job. A suspended
+        # one never ran.
+        child.discard()
+        raise
 
 
 def _confine_and_resume(
@@ -309,9 +329,9 @@ class _Owned:
         self.released = False
 
     def hand_over(self, result: JobStart) -> tuple[Any, Any, Any, Any]:
-        # One line, so no line event and no statement boundary splits it:
-        # from here the caller owns the handles and the job.
-        self.released = True; result.job = self.job; return self.handles  # type: ignore[return-value]  # noqa: E702
+        # One line and the last step, so no line event splits it: from here
+        # the caller owns the handles and the job.
+        self.released = True; result.job = self.job; result.process_handle = self.handles[0]; return self.handles  # type: ignore[index, return-value]  # noqa: E501, E702
 
     def discard(self) -> None:
         if self.released or self.handles is None:
@@ -319,55 +339,6 @@ class _Owned:
         self.released = True
         _close_job(self.job)
         _discard(self.handles[0], self.handles[1])
-
-
-class _HeldInterrupt:
-    def __init__(self, deliver_as_exception: bool) -> None:
-        self.held = False
-        self._deliver_as_exception = deliver_as_exception
-
-    def hold(self, _signum: int, _frame: Any) -> None:
-        self.held = True
-
-    def raise_if_held(self) -> None:
-        """Raise a held default Ctrl+C now, while the caller can still clean up."""
-
-        if self.held and self._deliver_as_exception:
-            self.held = False
-            raise KeyboardInterrupt
-
-
-@contextlib.contextmanager
-def _sigint_held() -> Iterator[_HeldInterrupt]:
-    """Hold Ctrl+C for the span of a contained start.
-
-    ``KeyboardInterrupt`` is raised asynchronously, between any two bytecodes
-    of the main thread, including right after ``CreateProcess`` returns and
-    before its result is stored. No ``try`` can own a child across that gap,
-    so the signal is recorded instead. Python's default handler is honoured
-    by :meth:`_HeldInterrupt.raise_if_held` before the child is handed over;
-    any other handler gets the signal again on the way out. Other threads
-    never receive it, and a handler not installed from Python is left alone.
-    """
-
-    if threading.current_thread() is not threading.main_thread():
-        yield _HeldInterrupt(False)
-        return
-    try:
-        previous = signal.getsignal(signal.SIGINT)
-        if previous is None:
-            raise ValueError("SIGINT handler was not installed from Python")
-        interrupt = _HeldInterrupt(previous is signal.default_int_handler)
-        signal.signal(signal.SIGINT, interrupt.hold)
-    except (ValueError, OSError, RuntimeError):
-        yield _HeldInterrupt(False)
-        return
-    try:
-        yield interrupt
-    finally:
-        signal.signal(signal.SIGINT, previous)
-        if interrupt.held:
-            signal.raise_signal(signal.SIGINT)
 
 
 def _kernel32() -> Any:

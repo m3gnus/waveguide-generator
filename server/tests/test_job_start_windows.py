@@ -860,25 +860,41 @@ def _contained_start_codes() -> set[Any]:
     return codes
 
 
-@pytest.mark.parametrize("required", [True, False])
+def _handle_is_open(handle: int) -> bool:
+    flags = wintypes.DWORD()
+    return bool(_kernel32.GetHandleInformation(wintypes.HANDLE(int(handle)), ctypes.byref(flags)))
+
+
+@pytest.mark.parametrize(
+    ("required", "assignment"),
+    [(True, "succeeds"), (False, "succeeds"), (False, "fails")],
+)
 def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
-    monkeypatch, required: bool
+    monkeypatch, required: bool, assignment: str
 ) -> None:
     """KeyboardInterrupt injected at each line in turn, from CreateProcess to
-    the handoff: every child is either handed over or stopped."""
+    the handoff: every child is either handed over or stopped, with both its
+    handles closed and no job published."""
 
     import _winapi
 
     from server.platform import job_start
     from server.platform.process_tree import confine_to_windows_job
 
+    _kernel32.GetHandleInformation.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    _kernel32.GetHandleInformation.restype = wintypes.BOOL
     underlying = getattr(_winapi.CreateProcess, "__wrapped__", _winapi.CreateProcess)
-    created: list[int] = []
+    created: list[tuple[int, int, int]] = []
 
     def recording(*args: Any) -> Any:
         result = underlying(*args)
-        created.append(int(result[2]))
+        created.append((int(result[0]), int(result[1]), int(result[2])))
         return result
+
+    def assign(pid: int, _handle: int) -> Any:
+        if assignment == "fails":
+            raise OSError(5, "the job API refused")
+        return confine_to_windows_job(pid, subject="the test child")
 
     monkeypatch.setattr(_winapi, "CreateProcess", job_start._intercept(recording))
     codes = _contained_start_codes()
@@ -887,7 +903,6 @@ def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
     for target in range(1, 200):
         created.clear()
         lines = 0
-
         where: list[str] = []
 
         def local(frame: Any, event: str, _arg: Any) -> Any:
@@ -906,9 +921,7 @@ def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
         process = None
         try:
             with job_start.windows_job_start(
-                lambda pid, _handle: confine_to_windows_job(pid, subject="the test child"),
-                required=required,
-                subject="the test child",
+                assign, required=required, subject="the test child"
             ) as started:
                 sys.settrace(tracer)
                 try:
@@ -917,83 +930,27 @@ def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
                     sys.settrace(previous)
         except KeyboardInterrupt:
             interrupted += 1
-            if created:
-                assert _wait_dead(created[0]), (
-                    f"interrupted at {where}: the child is still running or suspended"
-                )
+            # Read the handles first, before anything here opens a new one
+            # that could reuse a closed value.
+            still_open = [h for record in created for h in record[:2] if _handle_is_open(h)]
+            assert still_open == [], f"interrupted at {where}: handles left open"
+            for _hp, _ht, pid in created:
+                assert _wait_dead(pid), f"interrupted at {where}: the child survived"
             assert started.job is None, "a job was published for a child never handed over"
             continue
-        # Every line passed without an interrupt: the child was handed over intact.
-        assert process is not None and started.job is not None
-        assert _in_job(process.pid, started.job)
-        started.job.terminate()
-        started.job.close()
+        except job_start.ContainedStartError:
+            raise AssertionError("the contained start refused a child it could confine")
+        # Every line passed without an interrupt: the child was handed over.
+        assert process is not None
+        if assignment == "fails":
+            assert started.job is None
+            process.kill()
+        else:
+            assert started.job is not None and _in_job(process.pid, started.job)
+            started.job.terminate()
+            started.job.close()
         process.wait(timeout=WAIT_SECONDS)
         break
     else:
         raise AssertionError("the contained start never completed")
     assert interrupted >= 5, "the injection never reached the contained start"
-
-
-def test_a_held_ctrl_c_stops_the_child_and_still_interrupts() -> None:
-    import signal
-
-    from server.platform.job_start import windows_job_start
-
-    assert threading.current_thread() is threading.main_thread()
-    previous = signal.getsignal(signal.SIGINT)
-    seen: list[int] = []
-
-    def assign_then_interrupted(pid: int, _handle: int) -> None:
-        seen.append(pid)
-        signal.raise_signal(signal.SIGINT)
-
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    try:
-        with pytest.raises(KeyboardInterrupt):
-            with windows_job_start(
-                assign_then_interrupted, required=False, subject="the test child"
-            ):
-                subprocess.Popen(
-                    [BASE_PYTHON, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"]
-                )
-        assert seen and _wait_dead(seen[0])
-        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
-    finally:
-        signal.signal(signal.SIGINT, previous)
-
-
-def test_a_ctrl_c_with_its_own_handler_is_delivered_after_the_handoff() -> None:
-    import signal
-
-    from server.platform.job_start import windows_job_start
-    from server.platform.process_tree import confine_to_windows_job
-
-    previous = signal.getsignal(signal.SIGINT)
-    delivered: list[int] = []
-
-    def assign_then_signalled(pid: int, _handle: int) -> Any:
-        signal.raise_signal(signal.SIGINT)
-        assert delivered == [], "the signal reached its handler mid-start"
-        return confine_to_windows_job(pid, subject="the test child")
-
-    def handler(signum: int, _frame: Any) -> None:
-        delivered.append(signum)
-
-    signal.signal(signal.SIGINT, handler)
-    try:
-        with windows_job_start(
-            assign_then_signalled, required=True, subject="the test child"
-        ) as started:
-            process = subprocess.Popen(
-                [BASE_PYTHON, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"]
-            )
-        time.sleep(0.1)
-        assert delivered == [signal.SIGINT]
-        assert signal.getsignal(signal.SIGINT) is handler
-        assert _in_job(process.pid, started.job)
-        started.job.terminate()
-        started.job.close()
-        process.wait(timeout=WAIT_SECONDS)
-    finally:
-        signal.signal(signal.SIGINT, previous)
