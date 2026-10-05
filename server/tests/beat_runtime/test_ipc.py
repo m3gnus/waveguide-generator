@@ -111,3 +111,96 @@ def test_foreign_or_malformed_endpoints_refused(raw):
 def test_identifier_cannot_escape_registry(tmp_path):
     with pytest.raises(ValueError):
         ipc.endpoint_for("../foreign", tmp_path)
+
+
+def test_oversized_control_header_refused_before_body_allocation():
+    class HeaderOnly:
+        def __init__(self):
+            self.calls = 0
+
+        def recv(self, count):
+            self.calls += 1
+            assert self.calls == 1, "Oversized frame body read"
+            assert count == 4
+            return struct.pack("!I", ipc.CONTROL_FRAME_BYTES + 1)
+
+    with pytest.raises(ipc.FrameError, match="length"):
+        ipc.receive_frame(HeaderOnly())
+    assert ipc.receive_frame(FragmentedPeer(frame(b'{"a":1}')), max_bytes=7) == {"a": 1}
+
+
+def test_trickle_responder_exceeds_overall_receive_deadline(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(ipc.time, "monotonic", lambda: now[0])
+
+    class Trickle(FragmentedPeer):
+        def settimeout(self, timeout):
+            assert 0 < timeout <= 1
+
+        def recv(self, count):
+            now[0] += 0.3  # Every byte arrives within the original per-recv timeout.
+            return super().recv(count)
+
+    with pytest.raises(TimeoutError, match="deadline"):
+        ipc.receive_frame(Trickle(frame(b'{"a":1}')), deadline=1)
+    assert now[0] < 1.5
+
+
+@pytest.mark.parametrize("number", ["1e999", "-1e999", "NaN", "Infinity", "-Infinity"])
+def test_nonfinite_json_numbers_refused(number):
+    with pytest.raises(ipc.FrameError):
+        ipc.receive_frame(FragmentedPeer(frame(f'{{"a":{number}}}'.encode())))
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Unix socket residue")
+@pytest.mark.parametrize("failure", ["chmod", "listen"])
+def test_failed_post_bind_step_unlinks_only_own_socket(tmp_path, monkeypatch, failure):
+    endpoint = ipc.Endpoint("unix", path=tmp_path / "bound.sock")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ipc.Endpoint, "_address", lambda self: self.path.name)
+
+    def fail(*args):
+        raise OSError("post-bind failure")
+
+    if failure == "chmod":
+        monkeypatch.setattr(ipc.os, "chmod", fail)
+    else:
+        original = endpoint._socket
+
+        class FailedListen:
+            def __init__(self):
+                self.server = original()
+
+            def bind(self, address):
+                self.server.bind(address)
+
+            def listen(self, backlog):
+                fail()
+
+            def close(self):
+                self.server.close()
+
+        monkeypatch.setattr(endpoint, "_socket", FailedListen)
+    with pytest.raises(OSError, match="post-bind"):
+        endpoint.listen()
+    assert not endpoint.path.exists()
+    endpoint.path.write_text("keep existing endpoint")
+    with pytest.raises(OSError):
+        endpoint.listen()
+    assert endpoint.path.read_text() == "keep existing endpoint"
+
+
+def test_windows_loopback_exclusive_address_use(monkeypatch):
+    import types
+
+    events = []
+    server = types.SimpleNamespace(
+        setsockopt=lambda *args: events.append(("exclusive", args)),
+        bind=lambda *args: events.append(("bind", args)),
+        listen=lambda *args: None, getsockname=lambda: ("127.0.0.1", 1234), close=lambda: None)
+    monkeypatch.setattr(ipc, "os", types.SimpleNamespace(**{**vars(os), "name": "nt"}))
+    monkeypatch.setattr(ipc.socket, "SO_EXCLUSIVEADDRUSE", -5, raising=False)
+    monkeypatch.setattr(ipc.Endpoint, "_socket", lambda self: server)
+    assert ipc.Endpoint("tcp").listen() is server
+    assert events[0] == ("exclusive", (socket.SOL_SOCKET, -5, 1))
+    assert events[1][0] == "bind"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import errno
 import os
 import socket
 import struct
@@ -12,7 +13,9 @@ from server.solver.beat_runtime import cleanup as c, ipc, registry as r
 
 class FakeHost:
     def __init__(self, record):
-        self.reply = {**r.hello_message(record), "type": "hello_ok", "host_pid": record.pid}
+        self.record = record
+        self.reply = {}
+        self.shutdown_reply = {}
         self.sent = []
         self.wire = b""
         self.closed = False
@@ -20,13 +23,17 @@ class FakeHost:
     def sendall(self, wire):
         message = json.loads(wire[4:])
         self.sent.append(message)
-        reply = self.reply if message["op"] == "hello" else {"type": "shutdown_ok"}
+        reply = r.auth_reply(self.record, message)
+        reply.update(self.reply if message["op"] == "hello" else self.shutdown_reply)
         body = json.dumps(reply).encode()
         self.wire += struct.pack("!I", len(body)) + body
 
     def recv(self, count):
         chunk, self.wire = self.wire[:count], self.wire[count:]
         return chunk
+
+    def settimeout(self, timeout):
+        self.timeout = timeout
 
     def close(self):
         self.closed = True
@@ -46,6 +53,7 @@ def host(tmp_path, monkeypatch):
     peer = FakeHost(record)
     monkeypatch.setattr(ipc.Endpoint, "connect", lambda self, timeout: peer)
     monkeypatch.setattr(c, "pid_alive", lambda pid: not any(x["op"] == "shutdown" for x in peer.sent))
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: record.pid_start)
     monkeypatch.setattr(os, "kill", lambda *args: pytest.fail("Cleanup signalled a PID"))
     return record, peer
 
@@ -54,7 +62,8 @@ def test_authenticated_shutdown_and_dead_record_cleanup(tmp_path, host):
     record, peer = host
     assert c.cleanup_host(record, record.key, tmp_path)
     assert [x["op"] for x in peer.sent] == ["hello", "shutdown"]
-    assert peer.sent[0]["token"] == record.token
+    assert all("token" not in message and record.token not in json.dumps(message) for message in peer.sent)
+    assert peer.sent[0]["nonce"] != peer.sent[1]["nonce"]
     assert peer.closed
     assert r.read_record(record.identifier, tmp_path) is None
     assert not c.cleanup_host(record, record.key, tmp_path)
@@ -63,7 +72,7 @@ def test_authenticated_shutdown_and_dead_record_cleanup(tmp_path, host):
 
 @pytest.mark.parametrize(("field", "value"), [
     ("provider", "hornlab-beat-bem"), ("protocol", "beat-worker"),
-    ("protocol_version", 2), ("token", "foreign"), ("key", {}),
+    ("protocol_version", 2), ("proof", "foreign"), ("key", {}),
     ("key_id", "foreign"), ("host_pid", 999999), ("host_pid", True),
     ("type", "hello_refused"),
 ])
@@ -77,11 +86,11 @@ def test_reused_pid_or_unauthenticated_reply_never_shutdown_or_signal(tmp_path, 
     assert r.read_record(record.identifier, tmp_path) == record
 
 
-def test_unreachable_live_record_is_refused_and_retained(tmp_path, host, monkeypatch):
+def test_same_process_start_unreachable_live_host_refused_and_retained(tmp_path, host, monkeypatch):
     record, peer = host
 
     def unreachable(*args):
-        raise ConnectionRefusedError("nobody answers")
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "nobody answers")
 
     monkeypatch.setattr(ipc.Endpoint, "connect", unreachable)
     with pytest.raises(r.RecordRefused, match="Unverified live"):
@@ -122,7 +131,7 @@ def test_proven_dead_unreachable_record_pruned(tmp_path, host, monkeypatch):
     monkeypatch.setattr(c, "pid_alive", lambda pid: False)
 
     def unreachable(*args):
-        raise ConnectionRefusedError("dead host")
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "dead host")
 
     monkeypatch.setattr(ipc.Endpoint, "connect", unreachable)
     assert c.cleanup_host(record, record.key, tmp_path)
@@ -146,12 +155,12 @@ def test_foreign_record_refused_before_liveness_or_connect(tmp_path, host, monke
 def test_dead_unix_socket_pruned_but_regular_file_retained(tmp_path, monkeypatch):
     key = r.host_key({})
     endpoint = ipc.Endpoint("unix", path=tmp_path / f"{r.key_id(key)}.sock")
-    record = r.HostRecord(key, 12345, r.new_token(), endpoint)
+    record = r.HostRecord(key, 12345, r.new_token(), endpoint, "fixture-start")
     monkeypatch.setattr(c, "pid_alive", lambda pid: False)
     monkeypatch.chdir(tmp_path)
 
     def unreachable(*args):
-        raise ConnectionRefusedError("dead host")
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "dead host")
 
     monkeypatch.setattr(ipc.Endpoint, "connect", unreachable)
     with socket.socket(socket.AF_UNIX) as server:
@@ -175,3 +184,175 @@ def test_dead_pid_does_not_authorize_cleanup_of_foreign_responder(tmp_path, host
         c.cleanup_host(record, record.key, tmp_path)
     assert [x["op"] for x in peer.sent] == ["hello"]
     assert r.read_record(record.identifier, tmp_path) == record
+
+
+@pytest.mark.parametrize("operation", ["hello", "shutdown"])
+def test_nonce_hmac_reflection_squatter_refused(tmp_path, host, monkeypatch, operation):
+    record, peer = host
+    original = peer.sendall
+
+    def reflect(wire):
+        request = json.loads(wire[4:])
+        if request["op"] != operation:
+            return original(wire)
+        peer.sent.append(request)
+        reply = {**request, "type": f"{operation}_ok", "host_pid": record.pid}
+        body = json.dumps(reply).encode()
+        peer.wire += struct.pack("!I", len(body)) + body
+
+    monkeypatch.setattr(peer, "sendall", reflect)
+    with pytest.raises(r.RecordRefused, match="proof"):
+        c.cleanup_host(record, record.key, tmp_path)
+    assert all("token" not in request for request in peer.sent)
+    assert r.read_record(record.identifier, tmp_path) == record
+
+
+def test_nonce_hmac_replay_from_previous_connection_refused(tmp_path, host, monkeypatch):
+    record, peer = host
+    previous = r.auth_reply(record, r.hello_message(record))
+    peer.reply.update(previous)
+    with pytest.raises(r.RecordRefused, match="authentication"):
+        c.cleanup_host(record, record.key, tmp_path)
+    assert [x["op"] for x in peer.sent] == ["hello"]
+
+
+@pytest.mark.parametrize("error", [errno.ECONNREFUSED, errno.ENOENT])
+def test_reused_pid_process_start_mismatch_pruned(tmp_path, host, monkeypatch, error):
+    record, peer = host
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: "different-start")
+
+    def refused(*args):
+        raise OSError(error, "no listener")
+
+    monkeypatch.setattr(ipc.Endpoint, "connect", refused)
+    assert c.cleanup_host(record, record.key, tmp_path)
+    assert not peer.sent
+    assert r.read_record(record.identifier, tmp_path) is None
+
+
+@pytest.mark.parametrize("start", [None, "different-start"])
+def test_uncertain_endpoint_timeout_retains_even_reused_pid(tmp_path, host, monkeypatch, start):
+    record, peer = host
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: start)
+
+    def timeout(*args):
+        raise TimeoutError(errno.ETIMEDOUT, "unverified endpoint")
+
+    monkeypatch.setattr(ipc.Endpoint, "connect", timeout)
+    with pytest.raises(r.RecordRefused):
+        c.cleanup_host(record, record.key, tmp_path)
+    assert r.read_record(record.identifier, tmp_path) == record
+
+
+def test_cleanup_reuses_held_spawn_lock(tmp_path, host):
+    record, peer = host
+    with r.SpawnLock(r.spawn_lock_path(record.identifier, tmp_path)) as lock:
+        assert c.cleanup_host(record, record.key, tmp_path, lock=lock)
+        assert lock.held
+    assert not lock.held
+
+
+def test_cleanup_lock_busy_is_documented_refusal(tmp_path, host):
+    record, peer = host
+    with r.SpawnLock(r.spawn_lock_path(record.identifier, tmp_path)):
+        with pytest.raises(r.LockBusy, match="timed out"):
+            c.cleanup_host(record, record.key, tmp_path, timeout=0.01)
+    assert not peer.sent
+    assert r.read_record(record.identifier, tmp_path) == record
+
+
+def test_cleanup_rejects_unheld_or_wrong_slot_spawn_lock(tmp_path, host):
+    record, peer = host
+    unheld = r.SpawnLock(r.spawn_lock_path(record.identifier, tmp_path))
+    with pytest.raises(r.RecordRefused, match="held spawn lock"):
+        c.cleanup_host(record, record.key, tmp_path, lock=unheld)
+    with r.SpawnLock(tmp_path / "another.lock") as wrong:
+        with pytest.raises(r.RecordRefused, match="held spawn lock"):
+            c.cleanup_host(record, record.key, tmp_path, lock=wrong)
+    assert not peer.sent
+
+
+@pytest.mark.parametrize("phase", ["hello", "shutdown"])
+def test_control_trickle_deadline_spans_handshake_and_shutdown(tmp_path, host, monkeypatch, phase):
+    record, peer = host
+    now = [0.0]
+    monkeypatch.setattr(c.time, "monotonic", lambda: now[0])
+    original = peer.recv
+
+    def recv(count):
+        now[0] += 0.3 if peer.sent[-1]["op"] == phase else 0.01
+        # Trickle one byte within the per-recv timeout each time.
+        return original(1)
+
+    monkeypatch.setattr(peer, "recv", recv)
+    with pytest.raises(r.RecordRefused, match="deadline"):
+        c.cleanup_host(record, record.key, tmp_path, timeout=1)
+    assert peer.closed
+    assert r.read_record(record.identifier, tmp_path) == record
+
+
+def test_shutdown_shares_remaining_handshake_deadline(tmp_path, host, monkeypatch):
+    record, peer = host
+    now = [0.0]
+    monkeypatch.setattr(c.time, "monotonic", lambda: now[0])
+    original = peer.recv
+
+    def recv(count):
+        now[0] += 0.3
+        return original(count)  # Header and body consume 0.6 s per exchange.
+
+    monkeypatch.setattr(peer, "recv", recv)
+    with pytest.raises(r.RecordRefused, match="shutdown.*deadline"):
+        c.cleanup_host(record, record.key, tmp_path, timeout=1)
+    assert [x["op"] for x in peer.sent] == ["hello", "shutdown"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Unix socket residue")
+def test_locked_orphan_socket_sweep_recovers_refused_endpoint(tmp_path, monkeypatch):
+    identifier = r.key_id(r.host_key({}))
+    path = tmp_path / f"{identifier}.sock"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ipc.Endpoint, "_address", lambda self: self.path.name)
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(path.name)
+    with r.SpawnLock(r.spawn_lock_path(identifier, tmp_path)) as lock:
+        assert c.sweep_orphan_socket(identifier, tmp_path, lock=lock)
+        assert not path.exists()
+    assert not c.sweep_orphan_socket(identifier, tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Unix socket residue")
+def test_orphan_socket_sweep_retains_listener_nonregular_and_record(tmp_path, monkeypatch):
+    identifier = r.key_id(r.host_key({}))
+    path = tmp_path / f"{identifier}.sock"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(ipc.Endpoint, "_address", lambda self: self.path.name)
+    with socket.socket(socket.AF_UNIX) as server:
+        server.bind(path.name)
+        server.listen(1)
+        with pytest.raises(r.RecordRefused, match="listening"):
+            c.sweep_orphan_socket(identifier, tmp_path)
+        assert path.exists()
+    path.unlink()
+    path.write_text("keep")
+    with pytest.raises(r.RecordRefused, match="not a socket"):
+        c.sweep_orphan_socket(identifier, tmp_path)
+    assert path.read_text() == "keep"
+    path.unlink()
+    record = r.HostRecord(r.host_key({}), 12345, r.new_token(), ipc.Endpoint("tcp", port=1234), "fixture-start")
+    r.write_record(record, tmp_path)
+    with pytest.raises(r.RecordRefused, match="host record"):
+        c.sweep_orphan_socket(identifier, tmp_path)
+    assert r.read_record(identifier, tmp_path) == record
+
+
+def test_cleanup_record_unlink_missing_ok_race(tmp_path, host, monkeypatch):
+    record, peer = host
+    original = c.unlink_record
+
+    def already_removed(path):
+        path.unlink()
+        original(path)
+
+    monkeypatch.setattr(c, "unlink_record", already_removed)
+    assert c.cleanup_host(record, record.key, tmp_path)

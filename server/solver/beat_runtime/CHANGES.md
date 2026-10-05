@@ -91,33 +91,87 @@ support macOS application bundles and reject escaping paths/links. Tests use
 only temporary directories and fake fetchers; no Julia or network is invoked.
 - **PR 15 — IPC/endpoints:** `server/solver/beat_runtime/ipc.py`;
   `server/tests/beat_runtime/test_ipc.py`; this `CHANGES.md`.
-  Length-prefixed UTF-8 JSON objects retain HBB's 512 MiB frame ceiling.
+  Length-prefixed UTF-8 JSON objects default to a 1 MiB control frame ceiling;
+  numerical streams can explicitly opt into HBB's 512 MiB ceiling.
   Clean EOF is distinct from truncated headers/bodies; invalid JSON, nonfinite
   constants, nonobjects and oversized frames are refused. Endpoints are Unix
   sockets or IPv4 loopback only; encoded Unix paths above 100 bytes fall back
   to TCP, including an explicit Unix preference. Binding never removes an
   existing socket or enables address reuse. Bound sockets are private on POSIX.
+- **PR 15 — Review round 1 fixes:** `ipc.py`, `test_ipc.py`; this `CHANGES.md`.
+  - P2/D — fixed: explicit endpoint directories and direct Unix binds call
+    `paths.checked_root` before mutation.
+  - P2/F — fixed: `receive_frame(max_bytes=1 MiB, deadline=...)` rejects the
+    header before body allocation and applies one monotonic deadline to every
+    receive. Cleanup shares that deadline across connect/hello/shutdown/exit.
+  - P2/H (post-bind residue) — fixed: failed chmod/listen removes only the
+    socket successfully bound by this invocation; failed bind preserves it.
+  - P3 (exclusive Windows listener) — fixed: `SO_EXCLUSIVEADDRUSE` precedes bind.
+  - P3 (nonfinite JSON) — fixed: reject constants and overflowing floats such
+    as `1e999`, including nested values.
 - **PR 16 — registry/cleanup:** `server/solver/beat_runtime/{registry,cleanup}.py`;
-  `server/tests/beat_runtime/test_{registry,cleanup}.py`; this `CHANGES.md`.
+  `server/solver/beat_runtime/windows_security.py`;
+  `server/tests/beat_runtime/test_{registry,cleanup,windows_security}.py`;
+  this `CHANGES.md`.
   Reuse `paths.worker_dir()` outside swept sessions. Provider/protocol-scoped
   keys, strict records, unique atomic temporary files, 0700 roots and 0600
   record/spec/lock files replace HBB's permissive record handling. Corrupt,
   foreign, linked and nonprivate records raise `RecordRefused` and remain.
   Persistent advisory locks cover recheck/publish and cleanup; kernel release
   on owner death and fixed Windows byte zero preserve spawn exclusion.
-  Cleanup verifies provider/key/token and the host's returned PID before live
-  shutdown, using the authenticated connection instead of PID signals. An
-  unavailable endpoint plus a proven-dead PID permits scoped orphan pruning;
+  Cleanup verifies provider/key/HMAC and the host's returned PID before live
+  shutdown, using the authenticated connection instead of PID signals. A
+  refused/missing endpoint plus a proven-dead or reused PID permits scoped pruning;
   any answering peer must authenticate even when the recorded PID is dead.
   Unverified live hosts and changed/successor records are retained and reported.
   No unauthenticated HBB stale-PID termination path is carried over.
+- **PR 16 — Review round 1 fixes:** `registry.py`, `cleanup.py`,
+  `windows_security.py`, `test_{registry,cleanup,windows_security}.py`;
+  this `CHANGES.md`.
+  - P1/A — fixed: fresh nonce challenges and HMAC-SHA256 host proofs for hello
+    and shutdown, verified with `hmac.compare_digest`; tokens never go on the
+    wire. Shutdown requests additionally prove client knowledge of the secret.
+    Reflection regressions cover both operations; a previous hello proof is
+    also refused on replay.
+  - P1/B — fixed: records require `pid_start` (Linux boot ID + stat field 22,
+    POSIX `ps` start time, Windows GetProcessTimes creation time). Positive
+    ENOENT/ECONNREFUSED and a dead PID or start mismatch allow pruning; the same
+    live host or uncertain endpoint/identity remains refused. No PID signals.
+  - P1/C — fixed: ctypes checks the current process token SID against root/file
+    owners and validates DACLs. New Windows roots have a protected, inheritable
+    user-only DACL; foreign/nonprivate existing roots/files and junction/reparse
+    points are refused. Windows branches and native API calls use fakes.
+  - P2/D — fixed: explicit registry/cleanup directories and lock roots use
+    `paths.checked_root` before filesystem mutation, including TCP records.
+  - P2/E — fixed: `cleanup_host(..., lock=held_lock)` validates and reuses the
+    held slot lock. The wrapper still acquires exclusion; contention raises
+    documented `LockBusy(RecordRefused)` with descriptor cleanup.
+  - P2/F — fixed: cleanup uses the PR 15 control limit and one overall deadline.
+  - P2/G — fixed: lstat refuses nonregular records before open; O_NONBLOCK and
+    descriptor checks also prevent a FIFO swap from blocking record reads.
+  - P2/H (recordless socket) — fixed: `sweep_orphan_socket(..., lock=...)` holds
+    spawn exclusion, requires no record and S_ISSOCK, and removes only a refused
+    or missing endpoint. Listeners, other file types and changed inodes remain.
+  - P2/I — fixed: Linux stat and POSIX ps zombie states count as dead. PR 18
+    spawn must still reap its child with `process.wait()` as HBB did; liveness
+    detection is not a replacement for reaping.
+  - P2/J — fixed: strict integer PID range 1..2**31-1 on all platforms (within
+    Windows DWORD); invalid/oversized PIDs cannot reach native liveness APIs.
+  - P3 (missing unlink) — fixed: record/socket removal uses missing_ok=True.
+  - P3 (record recursion) — fixed: RecursionError becomes RecordRefused.
+  - P3 (Windows AF_UNIX record) — fixed: refused cleanly before socket creation.
+  - P3 (Windows record sharing) — fixed: replace/unlink retry PermissionError
+    at most four times with three 10 ms waits, then surface the failure.
 
-PR 16 review subdivisions (each below the design's roughly 400-line ceiling):
+PR 16 review subdivisions:
 16a records/private publication (`registry.py` through record/spec/token APIs,
 record tests); 16b spawn exclusion/liveness (remaining `registry.py`, process-race,
 owner-death, timeout and Windows-fake tests); 16c authenticated cleanup
-(`cleanup.py`, `test_cleanup.py`). These are review slices of the same requested
-PR 16 scope; no host/client/ownership implementation is included.
+(`cleanup.py`, `test_cleanup.py`); 16d Windows ownership/DACL primitives
+(`windows_security.py`, `test_windows_security.py`). Review-round record safety
+fixes stay in 16a, process identity/locks in 16b, and HMAC/cleanup in 16c. These
+are review slices of the same requested PR 16 scope; no host/client/ownership
+implementation is included.
 
 Future host/spawn callers use `host_key`, `key_id`, `new_token`, `HostRecord`,
 `write_record`, `write_launch_spec`, `launch_spec_path`, `log_path`,
@@ -127,10 +181,24 @@ resolved assets/project/sysimage, integer threads and effective environment);
 the key helper adds WG's provider/protocol namespace. Hold spawn exclusion from
 the second `read_record` through publication. Future clients use
 `validate_record`, `connect_authenticated`, `send_frame` and `receive_frame`;
-hosts must validate `hello_message` fields and return matching provider,
-protocol/version, key/id, token and their own `host_pid` in `hello_ok`.
-`cleanup_host` owns its own spawn exclusion and requests `shutdown_ok` followed
-by host exit. `pid_alive` is a conservative query, never authorization to signal.
+hosts use `auth_reply(record, request)` to validate control scope and generate
+matching provider/protocol/version, key/id, nonce, HMAC proof and their own
+`host_pid` in `hello_ok`/`shutdown_ok`. Clients call
+`validate_hello(record, reply, request["nonce"], operation="hello"|"shutdown")`.
+The exact HMAC bytes are UTF-8 concatenation of the 64-char lowercase hex nonce,
+16-char key ID, decimal host PID and `wg-beat-host:1:<operation>`. Separate
+`shutdown_request`/`shutdown` domains prevent reflecting a request proof as a
+host acknowledgement. PR 18 must require a client proof before admitting host
+submissions; hello proves host identity, while shutdown requests prove client
+identity too.
+`HostRecord` captures `pid_start` by default; future spawn callers may supply a
+verified creation identity explicitly. Missing identities are refused on read
+and publication, never replaced by the current process occupying that PID.
+`cleanup_host` acquires spawn exclusion or accepts the held slot lock, requests
+`shutdown_ok` and waits for host exit. `sweep_orphan_socket` uses the same locked
+boundary before a replacement bind. `pid_alive` remains a conservative query,
+never authorization to signal. Stream clients can reset the socket timeout
+after authentication and opt into the larger numerical frame ceiling.
 
 Deviations: the engine target is official JWSound/BEAT_Engine, as instructed;
 this layer imports neither engine nor HBB. Cleanup has no PID-termination API:
@@ -139,3 +207,19 @@ signalling. Missing records return None; malformed/foreign records raise rather
 than masquerading as missing and allowing replacement. PR 16 is subdivided for
 review size. Windows locking/liveness are fake-tested; real host lifecycle,
 installed qualification and Windows Job Objects remain later PR gates.
+
+Review-round deviations: HMAC domains include operation/version in the protocol
+suffix to prevent cross-operation replay; shutdown requests also authenticate
+the client. Pre-host records without process start identity are now refused,
+since inferring it from a reused PID would defeat the check. The ctypes Windows
+security implementation is a separate small module to keep registry policy
+readable. All review findings are fixed; real Windows ACL/kernel qualification
+and host/client lifecycle implementation remain later PR gates.
+
+Review-round validation: targeted launcher run of `server/tests/beat_runtime`
+and `server/tests/test_solver_beat.py`: 408 passed in 4.31 s. Ruff on runtime
+sources/tests and `git diff --check` passed. The exact requested combined pytest
+and Ruff commands cannot complete because `server/tests/beat_adapter` and
+`server/solver/beat_adapter` are absent from this worktree. No Julia, downloads
+or real user/HBB data directories were used; changes remain uncommitted as
+requested.

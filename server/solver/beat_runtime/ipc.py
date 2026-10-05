@@ -4,17 +4,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import re
 import socket
 import struct
+import time
 from typing import Any
 
 from . import paths
 
 _HEADER = struct.Struct("!I")
 MAX_FRAME_BYTES = 512 * 1024 * 1024
+CONTROL_FRAME_BYTES = 1024 * 1024
 MAX_UNIX_PATH_BYTES = 100
 
 
@@ -31,11 +34,24 @@ def send_frame(connection: socket.socket, payload: dict[str, Any]) -> None:
     connection.sendall(_HEADER.pack(len(body)) + body)
 
 
-def _receive_exactly(connection: socket.socket, count: int, *, eof_ok: bool = False) -> bytes | None:
+def remaining_time(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("Host control deadline exceeded")
+    return remaining
+
+
+def _receive_exactly(
+    connection: socket.socket, count: int, *, eof_ok: bool = False, deadline: float | None = None,
+) -> bytes | None:
     chunks = []
     remaining = count
     while remaining:
+        if deadline is not None:
+            connection.settimeout(remaining_time(deadline))
         chunk = connection.recv(min(remaining, 1 << 20))
+        if deadline is not None:
+            remaining_time(deadline)
         if not chunk:
             if eof_ok and remaining == count:
                 return None
@@ -49,17 +65,32 @@ def _invalid_constant(value: str) -> None:
     raise FrameError(f"Invalid JSON constant: {value}")
 
 
-def receive_frame(connection: socket.socket) -> dict[str, Any] | None:
-    """Return None only for clean EOF between frames."""
-    header = _receive_exactly(connection, _HEADER.size, eof_ok=True)
+def _finite_float(value: str) -> float:
+    result = float(value)
+    if not math.isfinite(result):
+        raise FrameError("Nonfinite JSON number")
+    return result
+
+
+def receive_frame(
+    connection: socket.socket, *, max_bytes: int = CONTROL_FRAME_BYTES, deadline: float | None = None,
+) -> dict[str, Any] | None:
+    """Bound allocation and total receive time; None means clean EOF between frames.
+
+    Numerical stream callers may explicitly opt into MAX_FRAME_BYTES. Control
+    callers pass one monotonic deadline across all frames in their exchange.
+    """
+    if not 0 < max_bytes <= MAX_FRAME_BYTES:
+        raise ValueError("Invalid host frame size limit")
+    header = _receive_exactly(connection, _HEADER.size, eof_ok=True, deadline=deadline)
     if header is None:
         return None
     length, = _HEADER.unpack(header)
-    if not 0 < length <= MAX_FRAME_BYTES:
+    if not 0 < length <= max_bytes:
         raise FrameError("Invalid host frame length")
-    body = _receive_exactly(connection, length)
+    body = _receive_exactly(connection, length, deadline=deadline)
     try:
-        decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant)
+        decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant, parse_float=_finite_float)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise FrameError("Malformed host JSON frame") from exc
     if not isinstance(decoded, dict):
@@ -104,6 +135,8 @@ class Endpoint:
         raise ValueError("Host endpoint must be local")
 
     def _socket(self) -> socket.socket:
+        if self.kind == "unix" and (os.name == "nt" or not hasattr(socket, "AF_UNIX")):
+            raise ValueError("Unix sockets unavailable")
         return socket.socket(socket.AF_UNIX if self.kind == "unix" else socket.AF_INET, socket.SOCK_STREAM)
 
     def _address(self) -> str | tuple[str, int]:
@@ -111,16 +144,24 @@ class Endpoint:
 
     def listen(self) -> socket.socket:
         """Bind without removing existing endpoints or enabling address reuse."""
+        if self.kind == "unix":
+            paths.checked_root(self.path.parent)
         server = self._socket()
+        bound = False
         try:
+            if self.kind == "tcp" and os.name == "nt":
+                server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             server.bind(self._address())
+            bound = True
             if self.kind == "unix" and os.name == "posix":
                 os.chmod(self.path, 0o600)
             server.listen(16)
             if self.kind == "tcp":
                 self.port = server.getsockname()[1]
-        except OSError:
+        except BaseException:
             server.close()
+            if bound and self.kind == "unix":
+                self.path.unlink(missing_ok=True)
             raise
         return server
 
@@ -131,7 +172,7 @@ class Endpoint:
         try:
             client.settimeout(timeout)
             client.connect(self._address())
-        except OSError:
+        except BaseException:
             client.close()
             raise
         return client
@@ -142,7 +183,8 @@ def endpoint_for(identifier: str, directory: Path | None = None, *, transport: s
     validate_identifier(identifier)
     if transport not in {None, "unix", "tcp"}:
         raise ValueError("Unknown host transport")
-    path = (paths.worker_dir() if directory is None else directory).absolute() / f"{identifier}.sock"
+    root = paths.worker_dir() if directory is None else paths.checked_root(directory)
+    path = root.absolute() / f"{identifier}.sock"
     available = os.name == "posix" and hasattr(socket, "AF_UNIX")
     if transport == "unix" and not available:
         raise ValueError("Unix sockets unavailable")
