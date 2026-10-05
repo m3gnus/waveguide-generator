@@ -107,6 +107,27 @@ class LockLocationUnavailable(OSError):
     """
 
 
+def ordinary_path(value: str) -> str:
+    """Use ordinary Win32 spelling for path identities; leave POSIX bytes alone.
+
+    Kept here because this stdlib-only module is also copied beside detached
+    recovery helpers, where neither the app nor server layer is importable.
+    The embedded pre-import counterpart is ``windows/startup_hook.py``'s
+    ``_ordinary_path``; keep its drive/UNC conversion in agreement with this.
+    """
+    if os.name == "nt":
+        if value[:8].upper() == "\\\\?\\UNC\\":
+            return "\\\\" + value[8:]
+        if value.startswith("\\\\?\\"):
+            return value[4:]
+    return value
+
+
+def resolved_path(value: str | os.PathLike[str], *, strict: bool = False) -> Path:
+    """Resolve links first, then remove Windows' extended-length spelling."""
+    return Path(ordinary_path(str(Path(value).resolve(strict=strict))))
+
+
 def installation_key(resources: str | os.PathLike[str]) -> str:
     """One key per *physical* installation, whatever it was spelled as.
 
@@ -124,7 +145,7 @@ def installation_key(resources: str | os.PathLike[str]) -> str:
     """
 
     physical = os.path.realpath(os.fspath(resources))
-    normalized = os.path.normcase(os.path.normpath(physical))
+    normalized = os.path.normcase(os.path.normpath(ordinary_path(physical)))
     return hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
@@ -486,4 +507,6 @@ __all__ = [
     "installation_key",
     "lock_path",
     "locking_is_available",
+    "ordinary_path",
+    "resolved_path",
 ]

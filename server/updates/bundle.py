@@ -20,6 +20,7 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+from launchers.update_lock import resolved_path
 from scripts.fetch_spa import SpaError, expected_digest, file_digest
 from shared import release_assets
 from shared.release_assets import is_release_tag
@@ -188,7 +189,7 @@ def archive_size_limit(layer: str) -> int:
 
 
 def _existing_ancestor(path: Path) -> Path:
-    candidate = path.resolve()
+    candidate = resolved_path(path)
     while not candidate.exists():
         parent = candidate.parent
         if parent == candidate:
@@ -686,9 +687,9 @@ class BundleUpdateInstaller:
         #: and they are staged in ``<data>/updates/<version>`` as before. Kept
         #: as given, not resolved, so a link at it is seen and refused.
         self.staging_root = Path(staging_root) if staging_root is not None else None
-        self.data_dir = Path(data_dir).resolve()
-        self.destination_app_dir = Path(destination_app_dir).resolve()
-        self.request_path = Path(request_path).resolve()
+        self.data_dir = resolved_path(data_dir)
+        self.destination_app_dir = resolved_path(destination_app_dir)
+        self.request_path = resolved_path(request_path)
         #: This installation's key (``installation_key``), named in the owner
         #: marker of every staging it starts; ``None`` when it has none.
         self.installation = installation
@@ -1054,7 +1055,7 @@ class BundleUpdateInstaller:
         stage_created = False
         requested = False
         try:
-            update_dir = (self.data_dir / "updates" / version).resolve()
+            update_dir = resolved_path(self.data_dir / "updates" / version)
             if not update_dir.is_relative_to(self.data_dir):
                 raise BundleInstallError("The bundle update directory escaped the data directory.")
             created = not os.path.lexists(update_dir)
@@ -1074,8 +1075,8 @@ class BundleUpdateInstaller:
                         "is staged through it."
                     )
                 staging_root.mkdir(exist_ok=True)
-                beside = staging_root.resolve(strict=True)
-                stage_dir = (beside / version).resolve()
+                beside = resolved_path(staging_root, strict=True)
+                stage_dir = resolved_path(beside / version)
                 if stage_dir == beside or not stage_dir.is_relative_to(beside):
                     raise BundleInstallError(
                         "The update staging directory escaped its folder beside the application."
@@ -1127,7 +1128,7 @@ class BundleUpdateInstaller:
             for layer, archive in archives.items():
                 destination = staged_root / layer
                 extract_layer_archive(archive, destination, layer=layer)
-                staged[layer] = destination.resolve()
+                staged[layer] = resolved_path(destination)
 
             app_manifest = _manifest(staged["app"], "APP-MANIFEST.json")
             if app_manifest.get("version") != version:

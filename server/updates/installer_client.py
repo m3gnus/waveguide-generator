@@ -16,6 +16,8 @@ import time
 from typing import Callable
 import urllib.request
 
+from launchers.update_lock import ordinary_path, resolved_path
+
 from .bundle import GITHUB_REPOSITORY, _validate_url, open_trusted_url, trusted_asset_url
 from .install_kind import current_platform, probe_install
 from .installer_checker import (
@@ -315,7 +317,7 @@ class InstallerClient:
                 raise InstallerClientError("The installer URL is outside this release.")
             folder = self.data_dir / "update-install" / release["version"]
             folder.mkdir(parents=True, exist_ok=True)
-            if folder.is_symlink() or folder.resolve() != folder.absolute():
+            if folder.is_symlink() or resolved_path(folder) != Path(ordinary_path(str(folder.absolute()))):
                 raise InstallerClientError("The update download folder is not a regular directory.")
             if self.disk_usage(folder).free < asset["size"] + SPACE_RESERVE:
                 raise InstallerClientError("There is not enough free space to download the installer.")
@@ -387,7 +389,9 @@ class InstallerClient:
                 != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)):
             raise InstallerClientError("The downloaded installer changed during verification.")
         checkout = self.install_probe(self.repo_root, self.running_version, self.platform_name)
-        if not checkout["updateSupported"] or Path(checkout["installRoot"]) != ready.install_root:
+        destination = Path(ordinary_path(str(ready.install_root)))
+        if (not checkout["updateSupported"]
+                or Path(ordinary_path(str(Path(checkout["installRoot"])))) != destination):
             raise InstallerClientError("The installation destination changed before handoff.")
         with self._lock:
             self._ensure_download_active()

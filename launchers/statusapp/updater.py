@@ -22,6 +22,8 @@ from launchers.update_lock import (
     UpdateInProgress,
     claim_update,
     consume_relaunch_grant,
+    ordinary_path,
+    resolved_path,
 )
 from launchers.apply_update import (
     BUNDLE_LAYERS,
@@ -55,7 +57,7 @@ def _accepted_staging_root(staging_root: Path | None) -> Path | None:
     if os.path.islink(candidate) or (is_junction is not None and is_junction(candidate)):
         return None
     try:
-        return candidate.resolve()
+        return resolved_path(candidate)
     except OSError:
         return None
 
@@ -163,14 +165,14 @@ def consume_update_request(
         roots = [
             allowed
             for allowed in (
-                data_dir.resolve() if data_dir is not None else None,
+                resolved_path(data_dir) if data_dir is not None else None,
                 _accepted_staging_root(staging_root),
             )
             if allowed is not None
         ]
         try:
-            staged_app = Path(raw_app).resolve() if isinstance(raw_app, str) else None
-            staged_runtime = Path(raw_runtime).resolve() if isinstance(raw_runtime, str) else None
+            staged_app = resolved_path(raw_app) if isinstance(raw_app, str) else None
+            staged_runtime = resolved_path(raw_runtime) if isinstance(raw_runtime, str) else None
             inside = staged_app is not None and any(
                 staged_app.is_relative_to(root)
                 and (staged_runtime is None or staged_runtime.is_relative_to(root))
@@ -282,14 +284,14 @@ def recover_interrupted_bundle_update(
         return None
     selected_platform = sys.platform if platform_name is None else platform_name
     try:
-        app_layer = Path(
+        app_layer = resolved_path(
             environment.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[2]
-        ).resolve()
+        )
         bundle = bundle_from_app_layer(app_layer, selected_platform)
         resources = resources_directory(bundle, selected_platform)
-        data_dir = resolve_data_dir(
+        data_dir = resolved_path(resolve_data_dir(
             _data_dir_override(server_args), environ=environment
-        ).resolve()
+        ))
     except (ApplyUpdateError, OSError, RuntimeError, TypeError, ValueError) as exc:
         # Nothing has been touched. A bundle whose own layout cannot be resolved
         # is not one this should start renaming directories inside.
@@ -588,16 +590,21 @@ def launch_bundle_update_handoff(
     selected_platform = sys.platform if platform_name is None else platform_name
     environment = dict(environ)
     environment.update(NO_USER_SITE_ENVIRONMENT)
-    data_dir = resolve_data_dir(
+    data_dir = resolved_path(resolve_data_dir(
         _data_dir_override(server_args),
         environ=environment,
-    ).resolve()
+    ))
     try:
         bundle = bundle_from_app_layer(app_layer, selected_platform)
     except Exception as exc:  # noqa: BLE001 - translate into the handoff contract
         raise UpdateHandoffError(str(exc)) from exc
     # The data directory, or the staging folder this launcher derives beside
     # its own bundle (the updater review §2.7) -- never one a request names.
+    request = BundleUpdateRequest(
+        request.version,
+        Path(ordinary_path(str(request.staged_app_dir))),
+        Path(ordinary_path(str(request.staged_runtime_dir))) if request.staged_runtime_dir is not None else None,
+    )
     roots = [
         root
         for root in (data_dir, _accepted_staging_root(destination_staging_root(bundle)))
@@ -628,7 +635,7 @@ def launch_bundle_update_handoff(
         else:
             python = request.staged_runtime_dir / "bin" / "python3.13"
     else:
-        python = Path(sys.executable).resolve()
+        python = resolved_path(sys.executable)
     if not python.is_file():
         raise UpdateHandoffError(f"The bundle updater Python is missing: {python}")
     command = [
@@ -699,7 +706,7 @@ def launch_bundle_update_handoff(
 def rollback_renamed_directories(bundle: Path, platform_name: str) -> tuple[Path, ...]:
     """Name every directory a rollback of ``bundle`` renames."""
 
-    resources = resources_directory(Path(bundle).resolve(), platform_name)
+    resources = resources_directory(resolved_path(bundle), platform_name)
     return tuple(
         resources / f"{layer}{suffix}"
         for layer in BUNDLE_LAYERS
@@ -726,13 +733,13 @@ def rollback_interpreter(bundle: Path, platform_name: str) -> Path:
     """
 
     candidate = (
-        Path(bundle).resolve() / WINDOWS_LAUNCHER_NAME
+        resolved_path(bundle) / WINDOWS_LAUNCHER_NAME
         if platform_name == "win32"
         else Path(sys.executable)
     )
     if not candidate.is_file():
         raise UpdateHandoffError(f"The rollback helper interpreter is missing: {candidate}")
-    resolved = candidate.resolve()
+    resolved = resolved_path(candidate)
     for directory in rollback_renamed_directories(bundle, platform_name):
         if resolved == directory or resolved.is_relative_to(directory):
             raise UpdateHandoffError(
@@ -769,8 +776,8 @@ def launch_rollback_handoff(
     """
 
     selected_platform = sys.platform if platform_name is None else platform_name
-    bundle = Path(bundle).resolve()
-    data_dir = Path(data_dir).resolve()
+    bundle = resolved_path(bundle)
+    data_dir = resolved_path(data_dir)
     if data_dir == bundle or data_dir.is_relative_to(bundle):
         raise UpdateHandoffError(
             f"Refusing a rollback helper whose data directory is inside the bundle: {data_dir}"

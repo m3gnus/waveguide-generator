@@ -38,6 +38,8 @@ try:  # inside the app layer, where this module is maintained
         UpdateInProgress,
         claim_update as _claim_update,
         grant_relaunch,
+        ordinary_path,
+        resolved_path,
     )
 except ImportError:  # a staged copy, running as a script beside its dependency
     # The directory is added explicitly rather than relied upon. The documented
@@ -53,6 +55,8 @@ except ImportError:  # a staged copy, running as a script beside its dependency
         UpdateInProgress,
         claim_update as _claim_update,
         grant_relaunch,
+        ordinary_path,
+        resolved_path,
     )
 
 
@@ -167,7 +171,7 @@ def append_update_log(data_dir: Path, message: str) -> None:
     """Append one updater/rollback event without affecting recovery control flow."""
 
     try:
-        logs = data_dir.resolve() / "logs"
+        logs = resolved_path(data_dir) / "logs"
         logs.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().isoformat(timespec="seconds")
         with (logs / "update.log").open("a", encoding="utf-8") as handle:
@@ -395,7 +399,8 @@ ROLLING_BACK_STATE = "rolling-back"
 def installation_key(resources: Path) -> str:
     """A stable, filename-safe name for one installed copy of the application."""
 
-    normalized = os.path.normcase(os.path.normpath(str(Path(resources))))
+    # Preserve the released plain-path hash so existing bridge markers agree.
+    normalized = os.path.normcase(os.path.normpath(ordinary_path(str(Path(resources)))))
     return hashlib.sha256(normalized.encode("utf-8", "surrogatepass")).hexdigest()[:16]
 
 
@@ -416,7 +421,7 @@ def transaction_open_marker_temp_path(resources: Path) -> Path:
 
 
 def _normalized_data_dir(data_dir: Path) -> str:
-    return os.path.normcase(os.path.normpath(str(Path(data_dir).resolve())))
+    return os.path.normcase(os.path.normpath(str(resolved_path(data_dir))))
 
 
 def _invalid_open_marker(detail: str) -> dict[str, Any]:
@@ -532,7 +537,7 @@ def _open_marker_mismatch(
         return f"the installation marker cannot be trusted ({marker.get('detail')})"
     if marker.get("installation") != installation_key(resources):
         return "the installation marker names another installation"
-    if marker.get("dataDir") != _normalized_data_dir(data_dir):
+    if ordinary_path(str(marker.get("dataDir"))) != _normalized_data_dir(data_dir):
         return "the installation marker names another data directory"
     if transaction is not None and marker.get("transaction") != transaction:
         return (
@@ -1266,7 +1271,7 @@ def reclaim_committed_staging(
         )
     containers = [container for container in (updates, staging) if container is not None]
     try:
-        application = Path(bundle).resolve() if bundle is not None else None
+        application = resolved_path(bundle) if bundle is not None else None
     except OSError:
         application = None
     roots = record.get("stagingRoots")
@@ -1332,7 +1337,7 @@ def _removable_staging_root(
     if root.is_symlink():
         return None, "it is a link, and cleanup never follows one"
     try:
-        resolved = root.resolve(strict=True)
+        resolved = resolved_path(root, strict=True)
     except FileNotFoundError:
         return None, None
     except OSError as exc:
@@ -1384,7 +1389,7 @@ def _staging_named_by_other_installations(
             )
         for root in journal_staging_roots(payload):
             try:
-                named.append(Path(root).resolve())
+                named.append(resolved_path(root))
             except OSError as exc:
                 return [], f"{path.name} names a staging root that cannot be resolved: {exc}"
     return named, None
@@ -1524,7 +1529,7 @@ def _request_staging_roots(request: Path) -> list[Path]:
             continue
         path = Path(staged)
         try:
-            roots.append((path.parent.parent if path.parent.name == "staged" else path.parent).resolve())
+            roots.append(resolved_path(path.parent.parent if path.parent.name == "staged" else path.parent))
         except OSError:
             continue
     return roots
@@ -1551,8 +1556,8 @@ def _updates_directory(data_dir: Path) -> tuple[Path | None, str | None]:
     if _is_link_or_junction(candidate):
         return None, f"{candidate} is a link, and cleanup never follows one"
     try:
-        resolved = candidate.resolve(strict=True)
-        data = Path(data_dir).resolve(strict=True)
+        resolved = resolved_path(candidate, strict=True)
+        data = resolved_path(data_dir, strict=True)
     except OSError as exc:
         return None, f"{candidate} could not be resolved: {exc}"
     if resolved.parent != data or not resolved.is_dir():
@@ -1588,8 +1593,8 @@ def _staging_directory(bundle: Path) -> tuple[Path | None, str | None]:
     if _is_link_or_junction(candidate):
         return None, f"{candidate} is a link, and cleanup never follows one"
     try:
-        resolved = candidate.resolve(strict=True)
-        beside = Path(bundle).resolve(strict=True).parent
+        resolved = resolved_path(candidate, strict=True)
+        beside = resolved_path(bundle, strict=True).parent
     except OSError as exc:
         return None, f"{candidate} could not be resolved: {exc}"
     if resolved.parent != beside or not resolved.is_dir():
@@ -1669,7 +1674,7 @@ def sweep_unowned_staging(
             if _text_or_none(text) is None:
                 continue
             try:
-                protected.append(Path(text).resolve())
+                protected.append(resolved_path(text))
             except OSError:
                 return []
     for request in requests:
@@ -1686,7 +1691,7 @@ def sweep_unowned_staging(
             try:
                 if _is_link_or_junction(entry) or not entry.is_dir():
                     continue
-                resolved = entry.resolve(strict=True)
+                resolved = resolved_path(entry, strict=True)
             except OSError:
                 continue
             if resolved.parent != container:
@@ -1768,8 +1773,8 @@ def journal_describes(journal: Mapping[str, Any], resources: Path) -> bool:
     if not isinstance(recorded, str) or not recorded:
         return False
     try:
-        return os.path.normcase(os.path.normpath(recorded)) == os.path.normcase(
-            os.path.normpath(str(resources))
+        return os.path.normcase(os.path.normpath(ordinary_path(recorded))) == os.path.normcase(
+            os.path.normpath(ordinary_path(str(resources)))
         )
     except (TypeError, ValueError):
         return False
@@ -1890,7 +1895,7 @@ def resources_directory(bundle: Path, platform_name: str) -> Path:
 def bundle_from_app_layer(app_layer: Path, platform_name: str) -> Path:
     """Resolve the application container around the current ``app`` layer."""
 
-    resolved = app_layer.resolve()
+    resolved = resolved_path(app_layer)
     if platform_name == "darwin":
         resources = resolved.parent
         if resources.name != "Resources" or resources.parent.name != "Contents":
@@ -1991,14 +1996,14 @@ def plan_layer_swap(
 
     layers: list[tuple[Path, Path]] = []
     if staged_runtime is not None:
-        layers.append((resources / "runtime", staged_runtime.resolve()))
+        layers.append((resources / "runtime", resolved_path(staged_runtime)))
     # Install the app last. Each rename is atomic but the sequence is not, and
     # process death cannot run the rollback handler below. Interrupted between
     # the two, an old app on a newer runtime is likelier to start than a new app
     # on the runtime it explicitly replaced -- and the app layer is the one whose
     # manifest names the runtime it needs, so the mismatch is detectable at
     # startup rather than silent.
-    layers.append((resources / "app", staged_app.resolve()))
+    layers.append((resources / "app", resolved_path(staged_app)))
     for target, staged in layers:
         previous = target.with_name(target.name + PREVIOUS_SUFFIX)
         if not target.is_dir():
@@ -3262,7 +3267,7 @@ def commit_transaction(
                     "the installation's open transaction marker cannot be trusted "
                     f"({open_marker.get('detail')}); the rollback material was kept"
                 )
-            if owner != _normalized_data_dir(data_dir):
+            if ordinary_path(str(owner)) != _normalized_data_dir(data_dir):
                 return False, (
                     f"update transaction {identifier} is still open for another data directory; "
                     "the rollback material was kept"
@@ -3396,7 +3401,7 @@ def repair_bundle(
     """Remove quarantine and restore the ad-hoc seal after a swap or rollback."""
 
     _repair_macos_bundle(
-        bundle.resolve(),
+        resolved_path(bundle),
         platform_name=platform_name,
         runner=runner,
         log=log or (lambda _message: None),
@@ -3734,7 +3739,7 @@ def apply_update(
     def report(message: str) -> None:
         _emit_log(selected_reporter, message)
 
-    resolved_bundle = bundle.resolve()
+    resolved_bundle = resolved_path(bundle)
     resources = resources_directory(resolved_bundle, platform_name)
     command = relaunch_command(resolved_bundle, platform_name, relaunch_arguments)
     environment, dropped = relaunch_environment(
@@ -4033,18 +4038,18 @@ def rollback_bundle(
         )
         return 1
 
-    resources = resources_directory(bundle.resolve(), platform_name)
+    resources = resources_directory(resolved_path(bundle), platform_name)
     try:
         begin_rollback_transaction(
             data_dir=data_dir,
-            bundle=bundle.resolve(),
+            bundle=resolved_path(bundle),
             resources=resources,
             platform_name=platform_name,
             reason=f"the application that failed to start (pid {parent_pid}) was rolled back",
             reseal=(
                 (
                     lambda: repair_bundle(
-                        bundle.resolve(), platform_name=platform_name, runner=runner, log=log
+                        resolved_path(bundle), platform_name=platform_name, runner=runner, log=log
                     )
                 )
                 if platform_name == "darwin"
@@ -4062,7 +4067,7 @@ def rollback_bundle(
     # unsealed bundle and the next start skipped the retry.
     restore = restore_previous_generation(
         resources,
-        bundle.resolve(),
+        resolved_path(bundle),
         platform_name=platform_name,
         renamer=renamer,
         runner=runner,
@@ -4092,7 +4097,7 @@ def rollback_bundle(
         )
         return 4
     return _relaunch(
-        bundle=bundle.resolve(),
+        bundle=resolved_path(bundle),
         data_dir=data_dir,
         platform_name=platform_name,
         arguments=relaunch_arguments,
@@ -4125,7 +4130,7 @@ def recover_bundle(
     """
 
     log = logger or (lambda message: append_update_log(data_dir, message))
-    resolved = bundle.resolve()
+    resolved = resolved_path(bundle)
     try:
         resources = resources_directory(resolved, platform_name)
     except ApplyUpdateError as exc:
