@@ -89,3 +89,53 @@ All five official artifact checksums are pinned, extending HBB's Windows-only
 pin to avoid a second checksum request. Archive layout checks additionally
 support macOS application bundles and reject escaping paths/links. Tests use
 only temporary directories and fake fetchers; no Julia or network is invoked.
+- **PR 15 — IPC/endpoints:** `server/solver/beat_runtime/ipc.py`;
+  `server/tests/beat_runtime/test_ipc.py`; this `CHANGES.md`.
+  Length-prefixed UTF-8 JSON objects retain HBB's 512 MiB frame ceiling.
+  Clean EOF is distinct from truncated headers/bodies; invalid JSON, nonfinite
+  constants, nonobjects and oversized frames are refused. Endpoints are Unix
+  sockets or IPv4 loopback only; encoded Unix paths above 100 bytes fall back
+  to TCP, including an explicit Unix preference. Binding never removes an
+  existing socket or enables address reuse. Bound sockets are private on POSIX.
+- **PR 16 — registry/cleanup:** `server/solver/beat_runtime/{registry,cleanup}.py`;
+  `server/tests/beat_runtime/test_{registry,cleanup}.py`; this `CHANGES.md`.
+  Reuse `paths.worker_dir()` outside swept sessions. Provider/protocol-scoped
+  keys, strict records, unique atomic temporary files, 0700 roots and 0600
+  record/spec/lock files replace HBB's permissive record handling. Corrupt,
+  foreign, linked and nonprivate records raise `RecordRefused` and remain.
+  Persistent advisory locks cover recheck/publish and cleanup; kernel release
+  on owner death and fixed Windows byte zero preserve spawn exclusion.
+  Cleanup verifies provider/key/token and the host's returned PID before live
+  shutdown, using the authenticated connection instead of PID signals. An
+  unavailable endpoint plus a proven-dead PID permits scoped orphan pruning;
+  any answering peer must authenticate even when the recorded PID is dead.
+  Unverified live hosts and changed/successor records are retained and reported.
+  No unauthenticated HBB stale-PID termination path is carried over.
+
+PR 16 review subdivisions (each below the design's roughly 400-line ceiling):
+16a records/private publication (`registry.py` through record/spec/token APIs,
+record tests); 16b spawn exclusion/liveness (remaining `registry.py`, process-race,
+owner-death, timeout and Windows-fake tests); 16c authenticated cleanup
+(`cleanup.py`, `test_cleanup.py`). These are review slices of the same requested
+PR 16 scope; no host/client/ownership implementation is included.
+
+Future host/spawn callers use `host_key`, `key_id`, `new_token`, `HostRecord`,
+`write_record`, `write_launch_spec`, `launch_spec_path`, `log_path`,
+`spawn_lock_path` and `SpawnLock`. Supply the complete launch identity to
+`host_key` (backend, executable/content identities, engine/runtime fingerprints,
+resolved assets/project/sysimage, integer threads and effective environment);
+the key helper adds WG's provider/protocol namespace. Hold spawn exclusion from
+the second `read_record` through publication. Future clients use
+`validate_record`, `connect_authenticated`, `send_frame` and `receive_frame`;
+hosts must validate `hello_message` fields and return matching provider,
+protocol/version, key/id, token and their own `host_pid` in `hello_ok`.
+`cleanup_host` owns its own spawn exclusion and requests `shutdown_ok` followed
+by host exit. `pid_alive` is a conservative query, never authorization to signal.
+
+Deviations: the engine target is official JWSound/BEAT_Engine, as instructed;
+this layer imports neither engine nor HBB. Cleanup has no PID-termination API:
+authenticated IPC shutdown avoids PID-reuse races between authentication and
+signalling. Missing records return None; malformed/foreign records raise rather
+than masquerading as missing and allowing replacement. PR 16 is subdivided for
+review size. Windows locking/liveness are fake-tested; real host lifecycle,
+installed qualification and Windows Job Objects remain later PR gates.
