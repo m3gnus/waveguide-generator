@@ -707,7 +707,8 @@ class EngineRegistry:
                 for item in self._cache or () if item.name in names
             ]
             if "bempp" in names:
-                revision = _record_bempp_failure(revision, exc)
+                # Off the loop: the attempt lock is held through a running check.
+                revision = await asyncio.to_thread(_record_bempp_failure, revision, exc)
         async with self._lock:
             results = {item.name: item for item in detected}
             self._cache = tuple(results.get(item.name, item) for item in self._cache or ())
@@ -849,7 +850,8 @@ class EngineRegistry:
             # The row is already "pending". Left there, nothing reschedules it
             # and every BEMPP wait re-raises this task's error as a 500.
             log.warning("BEMPP capability refresh failed", exc_info=True)
-            revision = _record_bempp_failure(revision, exc)
+            # Off the loop: the attempt lock is held through a running check.
+            revision = await asyncio.to_thread(_record_bempp_failure, revision, exc)
             async with self._lock:
                 self._cache = tuple(
                     _failed_detection(item, exc) if item.name == "bempp" else item
