@@ -958,3 +958,30 @@ def test_a_raise_answers_from_a_newer_verdict(monkeypatch):
     assert published["available"] and published["assembly_backend"] == "opencl"
     assert revision == probe.qualification_revision()
     assert probe._timeout_attempts == 0
+
+
+def test_a_failure_row_keeps_nothing_the_previous_row_declared():
+    from server.engines.registry import EngineInfo, _failed_detection
+
+    before = EngineInfo(
+        "bempp", True, "OpenCL passed", "1.0", label="BEMPP — CPU", qualification="done",
+        formulations=("full-3d",), mountings=("free-standing", "ground-plane"),
+        ground_plane_axes=("y",), ground_plane_composes_with_symmetry=True,
+        geometry_sources=("parametric", "imported"), imported_features=("x",),
+        symmetry_domains=("full", "half"), field_traces=True, di_sphere=True,
+        cancellation_granularity="intra-frequency", assembly_backend="opencl",
+        assembly_device={"type": "cpu"},
+    )
+    after = _failed_detection(before, RuntimeError("boom"))
+    assert (after.name, after.label, after.available, after.version) == ("bempp", "BEMPP — CPU", False, None)
+    assert after.reason == "bempp detection failed: boom"
+    assert (after.qualification, after.opencl_unavailable_reason) == ("done", "probe_error")
+    assert after.assembly_backend is None and after.assembly_device is None
+    assert after.formulations == after.mountings == after.ground_plane_axes == ()
+    assert after.geometry_sources == after.imported_features == after.symmetry_domains == ()
+    assert not after.ground_plane_composes_with_symmetry
+    assert not after.field_traces and not after.di_sphere
+    other = _failed_detection(EngineInfo("metal", True, "ok", "1", mountings=("free-standing",)),
+                              RuntimeError("x"))
+    assert other.mountings == () and other.qualification is None
+    assert other.opencl_unavailable_reason is None
