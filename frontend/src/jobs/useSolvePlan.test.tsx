@@ -1,4 +1,4 @@
-import { act } from 'react';
+import { act, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -33,10 +33,19 @@ const flushReact = () => act(async () => {
   await Promise.resolve();
 });
 
-/** Solve is disabled unless this reads "ready"; that is the whole point. */
-function Subject({ design }: { design: DesignDocument }) {
-  const { plan, error, isPending } = useSolvePlan(design, OPTIONS);
-  return <div data-tag="subject">{plan ? 'ready' : error ?? (isPending ? 'pending' : 'idle')}</div>;
+function Subject({ design, onSolve = () => undefined }: {
+  design: DesignDocument;
+  onSolve?: (plan: ReturnType<typeof useSolvePlan>['plan']) => void;
+}) {
+  const [engine, setEngine] = useState('auto');
+  const { plan, error, isPending } = useSolvePlan(design, { ...OPTIONS, engine });
+  return <>
+    <select value={engine} onChange={(event) => setEngine(event.target.value)}>
+      <option value="auto">AUTO</option><option value="metal">Metal</option>
+    </select>
+    <button onClick={() => onSolve(plan)}>Solve</button>
+    <div data-tag="subject">{plan ? 'ready' : error ?? (isPending ? 'pending' : 'idle')}</div>
+  </>;
 }
 
 describe('useSolvePlan', () => {
@@ -77,6 +86,34 @@ describe('useSolvePlan', () => {
   };
 
   const text = () => host.querySelector('[data-tag="subject"]')?.textContent ?? '';
+
+  it('hides the previous plan on a select change followed immediately by Solve', async () => {
+    const onSolve = vi.fn();
+    await act(async () => {
+      root.render(<QueryClientProvider client={client}><Subject design={design} onSolve={onSolve}/></QueryClientProvider>);
+    });
+    await flushReact();
+    expect(text()).toBe('ready');
+    const select = host.querySelector('select')!;
+    act(() => {
+      select.value = 'metal';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    act(() => host.querySelector('button')!.click());
+    expect(onSolve).toHaveBeenLastCalledWith(null);
+    expect(text()).toBe('pending');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    let resolve!: (response: Response) => void;
+    fetchMock.mockReturnValueOnce(new Promise<Response>((done) => { resolve = done; }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+    expect(text()).toBe('pending');
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).options.engine).toBe('metal');
+    await act(async () => { resolve(ok()); });
+    await flushReact();
+    act(() => host.querySelector('button')!.click());
+    expect(onSolve).toHaveBeenLastCalledWith(PLAN);
+  });
 
   it('retries a fault once, without the design changing', async () => {
     fetchMock.mockImplementationOnce(async () => { throw new TypeError('Failed to fetch'); });

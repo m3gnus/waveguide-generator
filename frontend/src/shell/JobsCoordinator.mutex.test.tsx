@@ -8,7 +8,8 @@ import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOpe
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
-import { SolveSubmissionRefused, type ImportedSolveSubmission } from '../jobs/actions';
+import { SolvePlanRefused, SolveSubmissionRefused, type ImportedSolveSubmission } from '../jobs/actions';
+import { SOLVE_PLAN_DEBOUNCE_MS } from '../jobs/planQueryPolicy';
 import { bundleIdentity, resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resolveOuterBodyMode } from '../design/ParamPanel';
 import { designForFamily, resetDesignStore, useDesignStore } from '../stores/design';
@@ -36,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   submitImported: vi.fn(),
   postImportedSolvePlan: vi.fn(),
   useRealImportedPlan: false,
+  useRealSolvePlan: false,
   createSetupRevision: vi.fn(),
   createCadOperation: vi.fn(),
   prepareCadOperation: vi.fn(),
@@ -98,13 +100,17 @@ vi.mock('../jobs/useCapabilities', () => ({
   useCapabilityRefreshOnReconnect: () => undefined,
   useLegacyBeatEngineMigration: () => undefined,
 }));
-vi.mock('../jobs/useSolvePlan', () => ({
-  useSolvePlan: () => ({
-    plan: mocks.solvePlan,
-    error: mocks.solvePlanError,
-    isPending: mocks.solvePlanPending,
-  }),
-}));
+vi.mock('../jobs/useSolvePlan', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../jobs/useSolvePlan')>();
+  return {
+    useSolvePlan: (...args: Parameters<typeof actual.useSolvePlan>) => mocks.useRealSolvePlan
+      ? actual.useSolvePlan(...args) : ({
+        plan: mocks.solvePlan,
+        error: mocks.solvePlanError,
+        isPending: mocks.solvePlanPending,
+      }),
+  };
+});
 vi.mock('../jobs/useImportedSolvePlan', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/useImportedSolvePlan')>();
   return {
@@ -211,6 +217,13 @@ function MainSolveButton() {
   return <button disabled={solve.disabled} title={solve.title} onClick={solve.solve}>{solve.label}</button>;
 }
 
+function EngineSelect() {
+  const options = useSolveOptionsStore();
+  return <select value={options.engine} onChange={(event) => options.setEngine(event.target.value)}>
+    <option value="auto">AUTO</option><option value="bempp">BEMPP</option><option value="metal">Metal</option>
+  </select>;
+}
+
 describe('solve invocation mutex', () => {
   let host: HTMLDivElement;
   let root: Root;
@@ -218,6 +231,7 @@ describe('solve invocation mutex', () => {
   beforeEach(async () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     mocks.useRealImportedPlan = false;
+    mocks.useRealSolvePlan = false;
     preferencesStore.resetForTests();
     resetDocumentStore();
     useDocumentStore.getState().setDesignName('horn');
@@ -270,6 +284,174 @@ describe('solve invocation mutex', () => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
     workspaceModeStore.setMode('parametric');
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  const flushPlan = async () => {
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+  };
+  const mountPlanning = async (mode: 'parametric' | 'cad') => {
+    act(() => root.unmount());
+    root = createRoot(host);
+    vi.useFakeTimers();
+    mocks.useRealSolvePlan = true;
+    mocks.useRealImportedPlan = true;
+    mocks.postImportedSolvePlan.mockReset().mockResolvedValue(mocks.importedPlan.plan);
+    const fetcher = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify(mocks.solvePlan)));
+    vi.stubGlobal('fetch', fetcher);
+    mocks.submitDesign.mockResolvedValue('job-fresh');
+    if (mode === 'cad') readyCad('wgi_select');
+    workspaceModeStore.setMode(mode);
+    const client = new QueryClient();
+    await act(async () => {
+      root.render(<QueryClientProvider client={client}><JobsCoordinator><EngineSelect/><MainSolveButton/></JobsCoordinator></QueryClientProvider>);
+    });
+    await flushPlan();
+    expect(host.querySelector('button')!.disabled).toBe(false);
+    return { client, fetcher };
+  };
+  const changeEngine = (engine = 'bempp') => act(() => {
+    const select = host.querySelector('select')!;
+    select.value = engine;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  const pressSolve = (press: string) => act(() => {
+    if (press === 'click') host.querySelector('button')!.click();
+    else window.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Enter', metaKey: press === 'Cmd+Enter', ctrlKey: press === 'Ctrl+Enter', bubbles: true, cancelable: true,
+    }));
+  });
+
+  describe.each(['parametric', 'cad'] as const)('%s planning gap', (mode) => {
+    it.each(['click', 'Cmd+Enter', 'Ctrl+Enter'])('queues one immediate Solve %s after a select change', async (press) => {
+      const { client, fetcher } = await mountPlanning(mode);
+      const parametric = deferred<Response>();
+      const imported = deferred<typeof mocks.importedPlan.plan>();
+      if (mode === 'parametric') fetcher.mockReturnValueOnce(parametric.promise);
+      else mocks.postImportedSolvePlan.mockReturnValueOnce(imported.promise);
+      changeEngine();
+      expect(host.querySelector('button')!.disabled).toBe(false);
+      pressSolve(press);
+      pressSolve(press);
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+      await act(async () => {
+        parametric.resolve(new Response(JSON.stringify(mocks.solvePlan)));
+        imported.resolve({ ...mocks.importedPlan.plan, requested: 'bempp', engine: 'bempp' });
+      });
+      await flushPlan();
+      if (mode === 'parametric') {
+        expect(mocks.submitDesign).toHaveBeenCalledOnce();
+        expect(mocks.submitDesign.mock.calls[0][1].engine).toBe('bempp');
+        expect(JSON.parse(fetcher.mock.calls[1][1]!.body as string).options.engine).toBe('bempp');
+      } else {
+        expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
+        expect((mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup).options.engine).toBe('bempp');
+        expect(JSON.parse(mocks.postImportedSolvePlan.mock.calls[1][0]).options.engine).toBe('bempp');
+      }
+      await flushPlan();
+      expect(mocks.submitDesign.mock.calls.length + mocks.createSetupRevision.mock.calls.length).toBe(1);
+      client.clear();
+    });
+
+    it('cancels the intent on plan error and does not replay it after recovery', async () => {
+      const { client, fetcher } = await mountPlanning(mode);
+      if (mode === 'parametric') {
+        fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'settings refused' }), { status: 422 }));
+      } else mocks.postImportedSolvePlan.mockRejectedValueOnce(new SolvePlanRefused('settings refused', 422));
+      changeEngine();
+      pressSolve('click');
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      await flushPlan();
+      expect(host.querySelector('button')!.disabled).toBe(true);
+      expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('settings refused');
+      changeEngine('metal');
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      await flushPlan();
+      expect(host.querySelector('button')!.disabled).toBe(false);
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+      client.clear();
+    });
+
+    it('cancels the intent when the workspace mode changes', async () => {
+      const { client } = await mountPlanning(mode);
+      changeEngine();
+      pressSolve('Ctrl+Enter');
+      act(() => workspaceModeStore.setMode(mode === 'cad' ? 'parametric' : 'cad'));
+      await flushPlan();
+      act(() => workspaceModeStore.setMode(mode));
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      await flushPlan();
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+      client.clear();
+    });
+
+    it('waits for the latest inputs when another select change races the pending response', async () => {
+      const { client, fetcher } = await mountPlanning(mode);
+      const oldParametric = deferred<Response>();
+      const oldImported = deferred<typeof mocks.importedPlan.plan>();
+      if (mode === 'parametric') fetcher.mockReturnValueOnce(oldParametric.promise);
+      else mocks.postImportedSolvePlan.mockReturnValueOnce(oldImported.promise);
+      changeEngine();
+      pressSolve('click');
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      changeEngine('metal');
+      await act(async () => {
+        oldParametric.resolve(new Response(JSON.stringify(mocks.solvePlan)));
+        oldImported.resolve({ ...mocks.importedPlan.plan, requested: 'bempp', engine: 'bempp' });
+      });
+      await flushPlan();
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      await flushPlan();
+      if (mode === 'parametric') {
+        expect(mocks.submitDesign).toHaveBeenCalledOnce();
+        expect(mocks.submitDesign.mock.calls[0][1].engine).toBe('metal');
+      } else {
+        expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
+        expect((mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup).options.engine).toBe('metal');
+      }
+      client.clear();
+    });
+
+    it('cancels the intent if an input blocker appears before planning finishes', async () => {
+      const { client } = await mountPlanning(mode);
+      changeEngine();
+      pressSolve('click');
+      act(() => useSolveOptionsStore.getState().updatePolar({ angleStep: 0 }));
+      expect(host.querySelector('button')!.disabled).toBe(true);
+      act(() => useSolveOptionsStore.getState().updatePolar({ angleStep: 5 }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+      await flushPlan();
+      expect(host.querySelector('button')!.disabled).toBe(false);
+      expect(mocks.submitDesign).not.toHaveBeenCalled();
+      expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+      client.clear();
+    });
+  });
+
+  it('cancels a queued CAD Solve when the fresh verdict has no eligible engine', async () => {
+    const { client } = await mountPlanning('cad');
+    mocks.postImportedSolvePlan.mockResolvedValueOnce({ ...mocks.importedPlan.plan, engine: null, reason: 'unsupported settings' });
+    changeEngine();
+    pressSolve('click');
+    await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+    await flushPlan();
+    expect(host.querySelector('button')!.disabled).toBe(true);
+    changeEngine('metal');
+    await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+    await flushPlan();
+    expect(host.querySelector('button')!.disabled).toBe(false);
+    expect(mocks.createSetupRevision).not.toHaveBeenCalled();
+    client.clear();
   });
 
   it('submits only once when run is invoked twice in the same tick', async () => {

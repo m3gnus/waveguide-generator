@@ -708,8 +708,22 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const solveAvailable = cadGeometryActive
     ? importedEngine !== null
     : solvePlan !== null && !solvePlanPending && solvePlanError === null;
+  const planPending = cadGeometryActive ? importedPlan.isPending : solvePlanPending;
+  const planError = cadGeometryActive ? importedPlan.error : solvePlanError;
+  // A press during the debounce or request belongs to the current inputs,
+  // never the previous plan. Repeated presses retain just one intent.
+  const [pendingSolve, setPendingSolve] = useState<'cad' | 'parametric' | null>(null);
+  const solveEnabled = (solveAvailable || planPending) && !solveOptionsError
+    && !planError && !submitting && !solveBlocker && !fileGeometryActive;
   const solve = useCallback(() => {
     // The button, the shortcut and the palette all arrive here: one command.
+    if (submissionInFlight.current || !solveEnabled) return;
+    if (planPending) {
+      solveAttention.armSolve();
+      setPendingSolve(cadGeometryActive ? 'cad' : 'parametric');
+      return;
+    }
+    setPendingSolve(null);
     solveAttention.armSolve();
     const action = async () => {
       if (fileGeometryActive) {
@@ -734,20 +748,33 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         await solveCurrentCadImport();
         return;
       }
-      await run(design, revision);
+      const current = useDesignStore.getState();
+      await run(current.design, current.designRevision);
     };
     void action().catch((error) => reportError(error instanceof Error ? error.message : String(error)));
-  }, [cadGeometryActive, design, fileGeometryActive, reportError, revision, run, solveCurrentCadImport]);
+  }, [cadGeometryActive, fileGeometryActive, planPending, reportError, run, solveCurrentCadImport, solveEnabled]);
+  useEffect(() => {
+    if (pendingSolve === null) return;
+    if (pendingSolve !== workspaceMode || !solveEnabled) {
+      setPendingSolve(null);
+      if (planError) reportError(planError);
+      return;
+    }
+    if (planPending) return;
+    // Clear before invoking: settlement and further presses cannot replay it.
+    setPendingSolve(null);
+    solve();
+  }, [pendingSolve, planError, planPending, reportError, solve, solveEnabled, workspaceMode]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveAvailable && !submitting && !solveBlocker && !fileGeometryActive) {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && solveEnabled) {
         event.preventDefault();
         solve();
       }
     };
     window.addEventListener('keydown', shortcut);
     return () => window.removeEventListener('keydown', shortcut);
-  }, [fileGeometryActive, solve, solveAvailable, solveBlocker, submitting]);
+  }, [solve, solveEnabled]);
 
   const notice = useMemo<SolveNotice | null>(
     () => cadGeometryActive && crossoverDraftError
@@ -764,7 +791,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   const control = useMemo<SolveControl>(() => ({
     solve,
     cadMode: cadGeometryActive,
-    disabled: !solveAvailable || submitting || Boolean(solveBlocker) || fileGeometryActive,
+    disabled: !solveEnabled,
     notice,
     submitting,
     label: 'Solve',
@@ -781,7 +808,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
               : cadGeometryActive
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable,
-  }), [cadGeometryActive, capabilityError, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, selectedEngine, solve, solveAvailable, solveBlocker, solvePlan, submitting]);
+  }), [cadGeometryActive, capabilityError, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, submitting]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }
