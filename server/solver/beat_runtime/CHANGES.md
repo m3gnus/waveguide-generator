@@ -55,3 +55,37 @@ storage. Lock wait callbacks are best-effort already. PR 10 must also translate
 lock acquisition errors into backend failure records, preserving the original
 error if that diagnostic write fails. Actual Windows kernel locking remains
 a Windows qualification gate; the msvcrt path is exercised with fakes here.
+- **PR 7 — discovery/legacy hint:** `server/solver/beat_runtime/discovery.py`;
+  `server/tests/beat_runtime/test_discovery.py`; this `CHANGES.md`.
+  Resolve explicit → configured (`WG2_BEAT_JULIA`) → WG `julia.json` → PATH.
+  Invalid configured paths raise; removed/edited binaries and foreign records
+  are ignored. Opt-in HBB reads supply only an executable hint, regardless of
+  legacy status; no HBB directory is written and no readiness is imported.
+- **PR 8 — downloads/checksums/disk:** `server/solver/beat_runtime/installer.py`
+  (release matrix, fetch/checksum helpers and disk budgets);
+  `server/tests/beat_runtime/test_installer_downloads.py`; this `CHANGES.md`.
+  Julia 1.12.7 covers macOS arm64/x86_64, Windows x86_64 and Linux
+  x86_64/aarch64. Injectable fetchers write `.part`; SHA-256 verification
+  precedes atomic publication. CPU requires 2 GiB and GPU budgets remain 6 GiB.
+  Offline/interrupted downloads and checksum failures preserve prior archives.
+- **PR 9 — extraction/recovery:** `server/solver/beat_runtime/installer.py`
+  (extraction, ownership/recovery and executable selection);
+  `server/tests/beat_runtime/test_installer_extraction.py`; this `CHANGES.md`.
+  Validate ZIP/tar staging before publishing a version/platform tree, recover
+  interrupted staging/replacement, and preserve older WG installs for workers.
+  External/custom executables and explicit older Julia remain usable; legacy
+  managed hints trigger a new WG download. Unowned trees and linked staging
+  paths are refused; no external or legacy install is deleted. External choices
+  are recorded without stamping the requested portable version onto them.
+
+PR 7–9 scope notes: the target is official JWSound/BEAT_Engine (`beat-engine` /
+`beat_engine`); these modules need no engine import or WG-specific engine API.
+`julia.json` uses provider/state_schema plus julia_executable, julia_version,
+origin and julia_identity (SHA-256 of executable bytes), never backend readiness.
+The temporary atomic record helpers in discovery.py have a TODO to delegate to
+state.py after the parallel state PR lands. Installer callers must hold the
+provisioning lock; lock/orchestration integration belongs to later PRs.
+All five official artifact checksums are pinned, extending HBB's Windows-only
+pin to avoid a second checksum request. Archive layout checks additionally
+support macOS application bundles and reject escaping paths/links. Tests use
+only temporary directories and fake fetchers; no Julia or network is invoked.
