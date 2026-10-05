@@ -671,3 +671,105 @@ def test_managed_bridge_reuses_worker_and_retains_cancelled_results(
         assert result["frequencies"] == ([500.0] if cancelled else [500.0, 1000.0, 2000.0])
     assert len(workers) == 1 and not workers[0].terminated
     assert len(streams) == 2 and all(stream.closed for stream in streams)
+
+
+@pytest.mark.parametrize('adaptive', [False, True])
+def test_adaptive_cancelled_short_batch_returns_partial_response(monkeypatch, runtime_boundary, adaptive):
+    import json
+
+    _fake_package(monkeypatch)
+    context = _context(num_frequencies=48, frequency_range=(500., 600.),
+                       adaptive_frequency_sampling=adaptive)
+    _, planes, angles, _ = bridge.build_compiled_request(
+        Path('/fake/surface.msh'), Path('/fake/cancel'), context, MESH.read_text(),
+        backend='cpu', precision='float32')
+
+    class Stream:
+        def __init__(self, frequency):
+            self.events = iter([{'type': 'result', 'result': _result(frequency, planes, angles)},
+                                {'type': 'cancelled', 'solved_count': 1}])
+
+        def __next__(self):
+            return next(self.events)
+
+        def close(self):
+            pass
+
+    class Worker:
+        worker_info = {'ready': True}
+
+        def __init__(self, **kwargs):
+            pass
+
+        def ensure_started(self):
+            pass
+
+        def submit(self, path, **kwargs):
+            return Stream(json.loads(path.read_text())['frequencies_hz'][0])
+
+        def terminate(self):
+            pass
+
+    result = bridge.solve_official_beat_from_msh_text(
+        MESH.read_text(), context, worker_manager=runtime_boundary(Worker))
+    assert result['metadata']['cancelled'] is True
+    assert result['frequencies'] == [500.0]
+
+
+def test_cooperative_zero_result_cancel_raises_callers_exception(monkeypatch, runtime_boundary):
+    from server.tests.beat_runtime.fake_host_worker import wait_until
+
+    _fake_package(monkeypatch)
+    cancelled = threading.Event()
+    error = RuntimeError('original caller JobCancelled')
+
+    def check():
+        if cancelled.is_set():
+            raise error
+
+    class Stream:
+        def __init__(self, path):
+            import json
+            self.marker = Path(json.loads(path.read_text())['cancel_path'])
+
+        def __next__(self):
+            cancelled.set()
+            wait_until(self.marker.exists, timeout=1)
+            return {'type': 'cancelled', 'solved_count': 0}
+
+        def close(self):
+            pass
+
+    class Worker:
+        worker_info = {'ready': True}
+
+        def __init__(self, **kwargs):
+            pass
+
+        def ensure_started(self):
+            pass
+
+        def submit(self, path, **kwargs):
+            return Stream(path)
+
+        def terminate(self):
+            pass
+
+    with pytest.raises(RuntimeError) as caught:
+        bridge.solve_official_beat_from_msh_text(
+            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
+            cancellation_callback=check)
+    assert caught.value is error
+
+
+@pytest.mark.parametrize('error_type', [bridge.JuliaDiscoveryError, bridge.AssetsUnavailable])
+def test_runtime_discovery_and_assets_unavailability_maps_to_prototype_fallback(monkeypatch, error_type):
+    _fake_package(monkeypatch)
+
+    class UnavailableManager:
+        def get_worker(self, *args, **kwargs):
+            raise error_type('runtime unavailable')
+
+    with pytest.raises(bridge.OfficialBeatUnavailable, match='runtime unavailable'):
+        bridge.solve_official_beat_from_msh_text(
+            MESH.read_text(), _context(), worker_manager=UnavailableManager())

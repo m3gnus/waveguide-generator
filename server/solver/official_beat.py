@@ -35,6 +35,8 @@ from .base import (
 )
 from .context import SolverContext
 from .beat_runtime.manager import WorkerManager, get_manager
+from .beat_runtime.assets import AssetsUnavailable
+from .beat_runtime.discovery import JuliaDiscoveryError
 from .beat_runtime.session import SolveSession
 from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
 from .frequency_sweep import live_execution_frequencies
@@ -325,6 +327,7 @@ def solve_official_beat_from_msh_text(
                           "engine": "official-beat-engine", "beat_backend": backend,
                           "phase_time_convention": PHASE_TIME_CONVENTION,
                           "phasor_convention": PHASOR,
+                          "cancelled": bool(getattr(native, "cancelled", False)),
                           "performance": {"total_time_seconds": time.time()-started}},
                 sound_speed_m_per_s=SOUND_SPEED_M_PER_S)
 
@@ -375,13 +378,19 @@ def solve_official_beat_from_msh_text(
             frame_override=frame,
         )
         contract.validate_solve_request(compiled)
-        worker = manager.get_worker(backend, julia_executable=julia_executable)
+        try:
+            worker = manager.get_worker(backend, julia_executable=julia_executable)
+        except (JuliaDiscoveryError, AssetsUnavailable) as exc:
+            raise OfficialBeatUnavailable(str(exc)) from exc
         frequencies = np.asarray(compiled["frequencies_hz"], dtype=float)
         pressure_rows: list[np.ndarray] = []
         impedance_rows: list[complex] = []
         if stage_callback:
             stage_callback("setup", 0.0, f"Starting official BEAT {backend} worker")
-        session.submit(worker, compiled, negotiate=contract.negotiate_submission)
+        try:
+            session.submit(worker, compiled, negotiate=contract.negotiate_submission)
+        except (JuliaDiscoveryError, AssetsUnavailable) as exc:
+            raise OfficialBeatUnavailable(str(exc)) from exc
         terminal = None
         for event in session.events():
             if not isinstance(event, dict):

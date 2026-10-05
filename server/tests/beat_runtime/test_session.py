@@ -284,3 +284,65 @@ def test_read_failure_is_not_masked_by_retirement_failure(staging):
             list(session.events())
     assert client.unusable and client._lease is None
     assert list(staging.iterdir()) == []
+
+
+def test_cooperative_empty_cancel_preserves_recorded_callback_exception(staging):
+    error = RuntimeError('caller JobCancelled')
+    cancelled = threading.Event()
+
+    def check():
+        if cancelled.is_set():
+            raise error
+
+    class EmptyStream:
+        def __next__(self):
+            cancelled.set()
+            from server.tests.beat_runtime.fake_host_worker import wait_until
+            wait_until(lambda: session.cancel_path.exists(), timeout=1)
+            return {'type': 'cancelled', 'solved_count': 0}
+
+        def close(self):
+            pass
+
+    class EmptyWorker(Worker):
+        def submit(self, path, **kwargs):
+            return EmptyStream()
+
+    with pytest.raises(RuntimeError) as caught:
+        with SolveSession(cancellation_callback=check, cancel_grace_s=10) as session:
+            session.submit(ManagedWorker(EmptyWorker(), 'child'), {})
+            list(session.events())
+    assert caught.value is error
+    assert list(staging.iterdir()) == []
+
+
+def test_windows_open_mesh_cleanup_error_does_not_mask_cancelled_result(staging, monkeypatch):
+    import tempfile
+
+    actual = tempfile.TemporaryDirectory
+    temporaries = []
+
+    def temporary(**kwargs):
+        assert kwargs['ignore_cleanup_errors'] is True
+        instance = actual(**kwargs)
+        cleanup = instance.cleanup
+        temporaries.append(cleanup)
+
+        def locked():
+            raise PermissionError('surface.msh still open')
+
+        instance.cleanup = locked
+        return instance
+
+    monkeypatch.setattr(tempfile, 'TemporaryDirectory', temporary)
+    try:
+        with SolveSession() as session:
+            session.submit(ManagedWorker(Worker(), 'child'), {})
+            stream = session.events()
+            assert next(stream)['type'] == 'result'
+            session.request_cancel()
+            assert next(stream)['type'] == 'cancelled'
+    finally:
+        for cleanup in temporaries:
+            cleanup()
+    assert list(staging.iterdir()) == []

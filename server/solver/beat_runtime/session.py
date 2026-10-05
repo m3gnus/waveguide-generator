@@ -50,7 +50,9 @@ class SolveSession:
         root = temporary_directory_root()
         if root is not None:
             paths.checked_root(Path(root))
-        self._temporary = tempfile.TemporaryDirectory(prefix="wg2-beat-solve-", dir=temporary_directory_root())
+        self._temporary = tempfile.TemporaryDirectory(prefix="wg2-beat-solve-",
+                                                      dir=temporary_directory_root(),
+                                                      ignore_cleanup_errors=True)
         self.directory = Path(self._temporary.name)
         self.cancel_path = self.directory / "cancel.marker"
         self.request_path = self.directory / "request.json"
@@ -108,7 +110,7 @@ class SolveSession:
             lease.start()
             self._check()
             if negotiate is not None:
-                negotiate(client.worker_info, request, "solve")
+                negotiate(lease.client.worker_info, request, "solve")
             self._check()
             self._stream = lease.submit(self.request_path)
         except BaseException:
@@ -116,6 +118,8 @@ class SolveSession:
                 self.close()
             if self._error is not None:
                 raise self._error
+            if self._cancel.is_set():
+                raise SessionCancelled("BEAT solve cancelled") from None
             raise
 
     def events(self) -> Iterator[dict]:
@@ -139,6 +143,8 @@ class SolveSession:
                     self._results += 1
                 if kind in {"completed", "cancelled", "failed"}:
                     self._lease.finish(kind)
+                    if kind == "cancelled" and not self._results and self._error is not None:
+                        raise self._error
                     yield event
                     return
                 yield event
@@ -171,7 +177,11 @@ class SolveSession:
                 error = exc
         finally:
             if self._temporary is not None:
-                self._temporary.cleanup()
+                # A hosted cancel may still have surface.msh open on Windows.
+                # TemporaryDirectory retries permission failures and defers
+                # remaining removal to the application's swept session root.
+                with contextlib.suppress(OSError):
+                    self._temporary.cleanup()
         if error is not None:
             raise error
 

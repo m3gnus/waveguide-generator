@@ -19,10 +19,16 @@ class EngineWorker:
         if kwargs["environment"].get("TEST_FAIL"):
             raise RuntimeError("fixture constructor failure")
         time.sleep(float(kwargs["environment"].get("TEST_DELAY", "0")))
+        # Fixture logs must never persist the test runner's ambient secrets.
+        logged_kwargs = dict(kwargs)
+        logged_kwargs["environment"] = {
+            name: value for name, value in kwargs["environment"].items()
+            if name.startswith(("JULIA_", "BLAB_", "TEST_")) or name == "PATH"
+        }
         with self.events.open("a") as stream:
             stream.write(json.dumps({"type": "built", "pid": os.getpid(), "cwd": os.getcwd(),
                                      "kwargs": {k: str(v) if isinstance(v, Path) else v
-                                                for k, v in kwargs.items()}}) + "\n")
+                                                for k, v in logged_kwargs.items()}}) + "\n")
 
     def terminate(self):
         time.sleep(float(self.environment.get("TEST_TERMINATE_DELAY", "0")))
@@ -48,7 +54,11 @@ class EngineWorker:
         if callback:
             callback("fixture startup")
         gate = self.environment.get("TEST_START_GATE")
-        if gate:
+        marker = self.environment.get("TEST_START_ONCE_MARKER")
+        skip = marker and Path(marker).exists()
+        if marker and not skip:
+            Path(marker).touch()
+        if gate and not skip:
             wait_until(lambda: Path(gate).exists(), timeout=20)
             if callback:
                 callback("fixture startup finished")

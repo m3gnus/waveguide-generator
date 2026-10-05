@@ -850,3 +850,126 @@ is absent; Ruff reports absent `server/solver/beat_adapter` and
 Real Julia/installed and Windows Job Object qualification, and app/warm-up hook
 integration, remain the later design gates; fake host subprocesses were used
 only in the fast host-mode tests. All changes remain uncommitted as requested.
+
+**Review round 1 fixes (PR 20)**
+
+Files per existing review slice (shared files support more than one slice):
+- **20a identity/cache:** `server/solver/beat_runtime/{manager,identity,spawn,client}.py`;
+  `server/tests/beat_runtime/test_manager_review.py`; this `CHANGES.md`.
+- **20b admission/retirement:** `server/solver/beat_runtime/{manager,host,client}.py`;
+  `server/tests/beat_runtime/{test_manager_review,test_spawn_platform,fake_host_worker}.py`;
+  this `CHANGES.md`. Host/client corrections also follow up design PR 19.
+- **20c sessions:** `server/solver/beat_runtime/session.py`;
+  `server/tests/beat_runtime/test_session.py`; this `CHANGES.md`.
+- **20d prototype/adaptive:** `server/solver/{official_beat,adaptive_sweep}.py`;
+  `server/tests/test_{official_beat_bridge,adaptive_sweep}.py`; this `CHANGES.md`.
+
+- **P1/A — fixed:** adoption keys and all launch/host records retain only
+  `JULIA_*`, `BLAB_*`, normalized absolute PATH entries, explicit absolute depot
+  entries and resolved thread/path/content identities. Snapshot ambient launch
+  settings separately, pass them through HostedWorker/start_host/Popen in memory,
+  and merge the host's inherited environment with keyed engine settings. Ambient
+  variables never enter key hashing or disk records. Named regressions cover
+  unrelated launch changes, Julia/BLAB invalidation, unkeyed secret forwarding
+  and record exclusion. Fake-engine logs now exclude ambient secrets too; the
+  packaged-root test checks keyed values within the inherited launch environment.
+- **P1/B — fixed:** every explicit depot entry (including inherited lists and
+  symlinks), the selected project and an inherited JULIA_PROJECT pass
+  `paths.checked_root` before any worker launch. Resolve entries absolutely and
+  eliminate implicit empty depot expansions; an empty-only list selects the WG
+  depot. Named regressions cover inherited mixed lists, projects and linked HBB
+  destinations without creating anything in them. `provision.py` is absent on
+  this branch; deduplicate these destination checks with its provision-branch
+  helper when merging commit 194af3ca.
+- **P2/C — fixed:** manager failed terminals retire hosted as well as child
+  engines before releasing the outer solve lease. The host additionally retires
+  an engine's failed terminal under its FIFO slot, protecting other remote
+  clients; retirement failure stops admission. A hosted failure/successor
+  regression proves a fresh engine startup precedes reuse on the same host.
+- **P2/D — fixed:** manager cancellation sends a connection-scoped cancel with
+  `retire_startup=True`, rather than only disconnecting ensure_started. Serialize
+  startup-send/cancel ordering and wait for its bounded completion before
+  condemning the client. Remote stream abandonment uses the same request for a
+  submit that is still starting. The host retains FIFO ownership through public
+  termination and late-start retirement, with one five-second budget; startup
+  that will not return stops host admission so a successor can respawn. Existing
+  PR 19 plain-cancel/disconnect semantics remain intact. Named slow-start and
+  non-returning-start regressions prove successor completion, including replacement
+  of the latter host. Admission EOF during closing-host handoff retries within
+  the original start budget; wrong authentication proofs still fail closed.
+- **P2/E — fixed:** a genuine zero-result cancelled terminal re-raises the
+  cancellation monitor's recorded callback exception. Startup transport
+  interruption after request_cancel also raises SessionCancelled. Session and
+  prototype regressions assert the exact original callback exception object.
+- **P2/F — fixed:** adaptive sweeps return acquired rows on cancelled shortened
+  batches before full-grid validation or another cancellation callback. Preserve
+  prior batches' complex/auxiliary rows and recompute SPL on their sorted actual
+  grid. Prototype adaptive response metadata includes cancelled=True. Named
+  regressions cover shortened initial batches and later cancellation after
+  earlier acquisitions; normal malformed-grid validation is unchanged.
+- **P2/G — fixed:** a waiter on a condemned managed client transparently calls
+  its owning manager's get_worker once and acquires the fresh client. Negotiation
+  uses that lease's worker_info. Actual manager shutdown still refuses admission.
+  Named regressions cover hosted startup cancellation, a cancellation retirement
+  error, fresh negotiation metadata and permanently closed manager admission.
+- **P2/H — fixed:** resolve identities and construct/close clients outside the
+  global manager lock. Pop condemned/content-stale clients under the lock before
+  attempting teardown, and proceed with replacement even after old cleanup
+  errors. Named blocked-resolution and blocked/raising-close regressions prove
+  Quit completes without waiting and no unusable client remains cached.
+- **P3 Windows staging cleanup — fixed:** TemporaryDirectory enables
+  ignore_cleanup_errors (including its permission retry path), and a remaining
+  open-file OSError defers removal to the swept application session root.
+  A simulated Windows open-surface failure cannot mask a cancelled result.
+- **P3 fingerprints/cache eviction — fixed:** resolve_key opts into bounded
+  per-file digest caching by resolved (path, mtime_ns, size); tree enumeration
+  and required-input stat checks still run each time. Identity APIs retain
+  uncached defaults for other callers. Evict/retire a cached client when content
+  identities change at the same configuration. The named regression counts
+  actual reads and proves changed bytes invalidate the key and remove the client.
+- **P3 compiled-request policy — fixed:** resolve_key/get_worker accept
+  compiled_request_policy, documented with official_beat.py as the default.
+  Selected-policy edits invalidate runtime identity in a named regression.
+- **P3 optional runtime fallback — fixed:** the prototype maps
+  JuliaDiscoveryError and AssetsUnavailable from initial worker lookup or waiter
+  replacement to OfficialBeatUnavailable; both have named fallback regressions.
+- **P3 default-manager lifetime — fixed:** document that shutdown/detach close
+  the process default for good. PR 21 must instantiate a new manager for a new
+  application lifetime (or explicitly implement reopening). Regressions cover
+  both operations; get_manager does not silently recreate a closed manager.
+- **P3 from PR 19 round-2, executable errors — fixed:** perform public
+  ensure_started before submit's request preparation, separating cold executable
+  FileNotFoundError/PermissionError from request-file failures. Deliver a clear
+  Julia executable failure to the admitted client before stopping admission;
+  request-file failures retain PR 19's recoverable behavior. Named missing and
+  non-executable Julia regressions assert the failure frame and fail-stop state.
+
+Design deviations: official JWSound/BEAT_Engine remains the target, with only
+public worker methods. The small host/client extension makes startup retirement
+explicit and bounded without changing PR 19's plain-cancel path or signalling
+any registry PID. Empty depot expansions become explicit WG-owned destinations
+so Julia cannot silently open an inherited HBB/default writable depot. The
+provision-branch helper must be deduplicated on merge, as noted above. These are
+additive review fixes: official_beat remains unregistered and OFF by default;
+no existing callers, pins, requirements, CUDA/ROCm or donor checkouts change.
+Changes remain uncommitted as requested.
+
+Review-round validation: **673 passed in 101.94 s** with the requested Python
+and `scripts/run_tests.py server/tests/beat_runtime
+server/tests/test_solver_beat.py -q -p no:cacheprovider`. The additional focused
+prototype/adaptive check, `scripts/run_tests.py
+server/tests/test_official_beat_bridge.py server/tests/test_adaptive_sweep.py
+-q -p no:cacheprovider`, passed **69 tests with 1 skipped in 3.09 s**. The skip
+is the existing optional installed beat-engine contract check; the package is
+absent as required. This round adds 29 mechanism regression cases (21 manager/
+host review, 2 session, 5 prototype and 1 adaptive). Ruff on runtime sources/tests
+plus both changed adapter/prototype sources and tests passed. `git diff --check`
+passed. The exact requested pytest command ran no tests because
+`server/tests/beat_adapter` is absent; the exact Ruff command reports absent
+`server/solver/beat_adapter` and `server/tests/beat_adapter`. Both were attempted.
+Every test/check invocation stayed below two minutes; no Julia, downloads or
+full WG suite ran. Tests use fake engines, tmp_path staging/records and only
+recorded test-owned processes. Native Windows open-file behavior is simulated;
+real engine/platform/installed qualification remains a later design gate. No
+requested fix is unfinished; only the missing adapter directories prevent the
+exact combined checks. All changes remain uncommitted as explicitly requested.
