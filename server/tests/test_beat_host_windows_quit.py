@@ -1,19 +1,15 @@
-"""Record what a packaged Quit on Windows does to BEAT's persistent host.
+"""Check clean BEAT shutdown and the Windows Job Object backstop.
 
-``hornlab_beat_bem`` keeps its Julia worker in a *persistent host* process
-meant to outlive the application, so the next launch adopts a warm runtime
-(``server/app.py``, ``shutdown_beat_worker``). On macOS and Linux the host
-calls ``setsid`` and does outlive it. On Windows it is started with
+Clean server exit stops its workers through ``shutdown_workers()``. On
+Windows the persistent host is started with
 ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` and without
 ``CREATE_BREAKAWAY_FROM_JOB``, and the packaged launcher runs the server in a
 kill-on-close Job Object that it closes at the end of every stop
 (``launchers/statusapp/controller.py``). A process a job member starts is in
 the job, so the host is terminated with the rest of the tree.
 
-That is recorded, not fixed: surviving would need both a breakaway flag in the
-BEAT package and ``JOB_OBJECT_LIMIT_BREAKAWAY_OK`` on the launcher's job, and
-the cost of not surviving is one cold BEAT start on the next launch, not a
-wrong result. ``docs/reference/SHUTDOWN-AND-RECOVERY.md`` states it.
+The job still stops the host if server cleanup fails or the server crashes.
+``docs/reference/SHUTDOWN-AND-RECOVERY.md`` states it.
 
 The Windows test drives the real ``_windows_job_for`` and a stand-in host
 started with the package's exact flags. The tripwire below it runs everywhere,
@@ -22,6 +18,7 @@ so a pin that changes those flags fails here and the record gets revisited.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import os
 from pathlib import Path
@@ -42,6 +39,37 @@ BEAT_HOST_CREATION_FLAGS = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 SELF_EXIT_SECONDS = 60.0
 
 _STILL_ACTIVE = 259
+
+
+def test_clean_server_exit_requests_shutdown_of_its_persistent_host(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Exercise the pinned package's real registry and shutdown dispatch."""
+
+    from hornlab_beat_bem import worker
+    from hornlab_beat_bem.worker_client import HostedBeatWorker
+    from server.app import create_app
+
+    called: list[object] = []
+    host = HostedBeatWorker.__new__(HostedBeatWorker)
+    monkeypatch.setattr(host, "refuse_submissions", lambda: called.append("refuse"))
+    monkeypatch.setattr(
+        host, "_say_and_close",
+        lambda message, terminal: called.append((message, terminal)),
+    )
+    monkeypatch.setattr(host, "detach", lambda: called.append("detach"))
+    owned_workers = {"test-host": host}
+    monkeypatch.setattr(worker, "_WORKERS", owned_workers)
+    application = create_app(data_dir=tmp_path)
+    hook = next(
+        handler for handler in application.router.on_shutdown
+        if handler.__name__ == "shutdown_beat_worker"
+    )
+
+    asyncio.run(hook())
+
+    assert called == ["refuse", ({"op": "shutdown"}, "shutdown_ok")]
+    assert owned_workers == {}
 
 
 def test_the_pinned_beat_host_is_started_without_breaking_away_from_a_job() -> None:

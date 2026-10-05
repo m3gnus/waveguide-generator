@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import threading
 import time
 from typing import Callable
 
@@ -73,6 +74,7 @@ BUILD_IDENTITY = build_identity(APP_ROOT)
 FRONTEND_DIST = APP_ROOT / "frontend" / "dist"
 LEGACY_WORKSPACE_DIR = APP_ROOT / "output"
 request_log = logging.getLogger("wg.requests")
+_BEAT_SHUTDOWN_TIMEOUT_SECONDS = 5.0
 DEFAULT_MAX_REQUEST_BODY_BYTES = 64 * 1024 * 1024
 MAX_REQUEST_BODY_BYTES = DEFAULT_MAX_REQUEST_BODY_BYTES
 _WORKSPACE_EXPORT_PATH = "/api/workspace/write-export"
@@ -612,10 +614,8 @@ def create_app(
         """Schedule the BEAT worker prewarm alongside the BEMPP one.
 
         Registered by default for the same reason: the work happens outside
-        this process, and ``shutdown_beat_worker`` below lets go of it in
-        bounded time -- detaching from a persistent host, terminating a child
-        under ``HORNLAB_BEAT_PERSISTENT_HOST=0`` -- so warming it cannot
-        lengthen a Quit.
+        this process, and ``shutdown_beat_worker`` below stops this server's
+        workers with a bounded wait, including their persistent hosts.
         """
 
         application.state.beat_prewarm_task = asyncio.create_task(
@@ -625,42 +625,66 @@ def create_app(
         )
 
     async def shutdown_beat_worker() -> None:
-        """Stop the prewarm and let go of the Julia worker without killing it.
+        """Stop the prewarm and this server's BEAT workers on clean exit.
 
         ``hornlab_beat_bem`` keeps its workers in a module-level registry with
         no exit hook of its own, and the prewarm means one can be alive for a
         session that never solved -- so this hook has to run either way.
 
-        What it releases changed with the pin to ``94deec1``: the worker now
-        lives in a persistent host process that outlives this one, so
-        ``detach_workers`` closes our connections and leaves the Julia runtime
-        running for the next launch to adopt, instead of throwing away a warm
-        runtime the user has already paid for. The hosts retire themselves
-        after ``HORNLAB_BEAT_WORKER_IDLE_S``, so nothing accumulates, and
-        ``HORNLAB_BEAT_PERSISTENT_HOST=0`` puts the worker back in a child
-        process -- which this hook terminates, exactly as it always did, since
-        such a worker has nothing to detach from.
-
-        ``detach_workers`` is ``shutdown_workers(detach=True)``; the named
-        sibling is what the package's application contract points a quit hook
-        at, and it says at the call site which of the two lifetimes we mean.
-
-        The guard below is what keeps an older ``hornlab_beat_bem`` -- one
-        predating ``detach_workers`` -- from turning Quit into a traceback:
-        importing a name a module does not have raises ``ImportError``, which
-        is already in the tuple.
+        ``shutdown_workers()`` stops the process-local worker registry,
+        including persistent hosts; detaching would leave Python and Julia
+        running until the host's idle timeout. Import and cleanup run on a
+        daemon thread: an executor thread would still be joined at Python
+        exit even if an async timeout had already expired.
         """
 
+        log = logging.getLogger("wg.solver.warmup")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + _BEAT_SHUTDOWN_TIMEOUT_SECONDS
         task = getattr(application.state, "beat_prewarm_task", None)
         if task is not None:
             task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+            done, _ = await asyncio.wait(
+                {task}, timeout=max(0.0, deadline - loop.time())
+            )
+            if done:
+                try:
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+                except Exception:
+                    log.warning("BEAT prewarm failed during shutdown", exc_info=True)
+            else:
+                log.warning("BEAT prewarm did not stop within the shutdown timeout")
+
+        finished = loop.create_future()
+
+        def mark_finished() -> None:
+            if not finished.done():
+                finished.set_result(None)
+
+        def stop_workers() -> None:
+            try:
+                from hornlab_beat_bem import shutdown_workers
+
+                shutdown_workers()
+            except Exception:
+                log.warning("BEAT worker shutdown failed; continuing exit", exc_info=True)
+            finally:
+                with contextlib.suppress(RuntimeError):  # the loop may have closed
+                    loop.call_soon_threadsafe(mark_finished)
+
         try:
-            from hornlab_beat_bem import detach_workers
-        except (ImportError, OSError):
-            return
-        await asyncio.to_thread(detach_workers)
+            threading.Thread(
+                target=stop_workers, name="wg-beat-shutdown", daemon=True
+            ).start()
+            await asyncio.wait_for(finished, timeout=max(0.0, deadline - loop.time()))
+        except TimeoutError:
+            log.warning(
+                "BEAT worker shutdown timed out after %.1f s; continuing exit",
+                _BEAT_SHUTDOWN_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            log.warning("BEAT worker shutdown failed; continuing exit", exc_info=True)
 
     async def shutdown_bempp_worker() -> None:
         """Stop the prewarm and the worker with the app, not at interpreter exit.

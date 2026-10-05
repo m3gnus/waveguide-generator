@@ -259,12 +259,8 @@ def test_the_beat_worker_prewarm_is_registered_and_stopped_by_default(
 
     BEAT's Julia worker pays that cost once, but nothing paid it until a user
     asked for a solve. Warming it is registered by default because the work
-    happens outside this process. The worker lives in a persistent host that
-    outlives the app: Quit only detaches from it, and the next launch can adopt
-    it. Under ``HORNLAB_BEAT_PERSISTENT_HOST=0`` it lives in a child process
-    that Quit terminates instead. Either way warming cannot lengthen a Quit.
-    The quit hook must still be registered: it cancels the prewarm and releases
-    the worker.
+    happens outside this process. Quit cancels the prewarm and stops this
+    server's workers, including persistent hosts, with a bounded wait.
     """
 
     application = create_app(data_dir=tmp_path)
@@ -288,55 +284,146 @@ def _beat_quit_hook(application: Any) -> Any:
     )
 
 
-def test_quitting_detaches_the_beat_worker_rather_than_killing_it(
+def test_quitting_stops_the_beat_worker_after_cancelling_prewarm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A warm Julia runtime should survive Quit, not be thrown away by it.
-
-    Since ``hornlab_beat_bem`` 94deec1 the worker lives in a persistent host
-    process that outlives this one, and the next launch adopts it instead of
-    paying the cold start again. That is opt-in at exactly one call site: the
-    quit hook asks for ``detach_workers``, not ``shutdown_workers``. Calling
-    the wrong sibling costs a user the whole Julia start-up on every launch
-    and would be invisible -- both hooks quit cleanly.
-    """
-
     application = create_app(data_dir=tmp_path)
-
     called: list[str] = []
     package = types.ModuleType("hornlab_beat_bem")
     package.detach_workers = lambda: called.append("detach")  # type: ignore[attr-defined]
-    package.shutdown_workers = lambda **_: called.append("shutdown")  # type: ignore[attr-defined]
+    package.shutdown_workers = lambda: called.append("shutdown")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
 
-    asyncio.run(_beat_quit_hook(application)())
+    async def prewarm() -> None:
+        try:
+            await asyncio.Event().wait()
+        finally:
+            called.append("prewarm cancelled")
 
-    assert called == ["detach"]
+    async def scenario() -> None:
+        application.state.beat_prewarm_task = asyncio.create_task(prewarm())
+        await asyncio.sleep(0)
+        await _beat_quit_hook(application)()
+        assert application.state.beat_prewarm_task.cancelled()
+
+    asyncio.run(scenario())
+
+    assert called == ["prewarm cancelled", "shutdown"]
 
 
-def test_quitting_survives_a_beat_package_that_predates_detach_workers(
+def test_quitting_stops_a_beat_package_without_detach_workers(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """An older module pin must not turn Quit into a traceback.
-
-    ``pins.json`` and the installed environment can disagree -- an editable
-    development install is the ordinary way it happens -- and the failure mode
-    is asymmetric: a missing name here fires while the app is already tearing
-    down. ``from ... import detach_workers`` raises ``ImportError`` against a
-    package that only has ``shutdown_workers``, which the hook's existing
-    ``(ImportError, OSError)`` guard already catches; this pins that, because
-    nothing else does.
-    """
+    """Older packages also expose the real shutdown entry point."""
 
     application = create_app(data_dir=tmp_path)
-
+    called: list[str] = []
     package = types.ModuleType("hornlab_beat_bem")
-    package.shutdown_workers = lambda **_: pytest.fail(  # type: ignore[attr-defined]
-        "an old package has no persistent host, so nothing should be stopped here"
-    )
+    package.shutdown_workers = lambda: called.append("shutdown")  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
 
     asyncio.run(_beat_quit_hook(application)())
+
+    assert called == ["shutdown"]
+
+
+def test_quitting_still_stops_workers_when_beat_prewarm_failed(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    application = create_app(data_dir=tmp_path)
+    called: list[str] = []
+    package = types.ModuleType("hornlab_beat_bem")
+    package.shutdown_workers = lambda: called.append("shutdown")  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+
+    async def fail() -> None:
+        raise RuntimeError("prewarm failed")
+
+    async def scenario() -> None:
+        application.state.beat_prewarm_task = asyncio.create_task(fail())
+        await asyncio.sleep(0)
+        await _beat_quit_hook(application)()
+
+    asyncio.run(scenario())
+
+    assert called == ["shutdown"]
+    assert "BEAT prewarm failed during shutdown" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [ImportError("missing API"), OSError("pipe closed"), RuntimeError("stop failed")],
+)
+def test_quitting_logs_beat_shutdown_failure_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    failure: Exception,
+) -> None:
+    application = create_app(data_dir=tmp_path)
+    package = types.ModuleType("hornlab_beat_bem")
+
+    def fail() -> None:
+        raise failure
+
+    package.shutdown_workers = fail  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+
+    asyncio.run(_beat_quit_hook(application)())
+
+    assert "BEAT worker shutdown failed; continuing exit" in caplog.text
+    assert str(failure) in caplog.text
+
+
+def test_quitting_logs_a_missing_beat_shutdown_api_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    application = create_app(data_dir=tmp_path)
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", types.ModuleType("hornlab_beat_bem"))
+
+    asyncio.run(_beat_quit_hook(application)())
+
+    assert "BEAT worker shutdown failed; continuing exit" in caplog.text
+    assert "shutdown_workers" in caplog.text
+
+
+def test_quitting_does_not_join_a_stuck_beat_shutdown_thread(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The hook and asyncio.run must return while the cleanup is still blocked."""
+
+    application = create_app(data_dir=tmp_path)
+    monkeypatch.setattr("server.app._BEAT_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+    release = threading.Event()
+    threads: list[threading.Thread] = []
+    package = types.ModuleType("hornlab_beat_bem")
+
+    def block() -> None:
+        threads.append(threading.current_thread())
+        release.wait(5.0)
+
+    package.shutdown_workers = block  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+
+    started = time.monotonic()
+    try:
+        asyncio.run(_beat_quit_hook(application)())
+        assert time.monotonic() - started < 1.0
+        assert len(threads) == 1
+        assert threads[0].daemon
+        assert threads[0].is_alive()
+        assert "BEAT worker shutdown timed out" in caplog.text
+    finally:
+        release.set()
+        for thread in threads:
+            thread.join(timeout=1.0)
+        assert all(not thread.is_alive() for thread in threads)
 
 
 def test_the_beat_worker_prewarm_only_warms_the_engine_auto_chose(

@@ -32,7 +32,9 @@ Within the budget, in this order:
    and waits for their next checkpoint only as long as the budget allows.
 4. The gmsh worker drops queued work and stops waiting for a running OCC call
    once the budget says so.
-5. The BEMPP worker is closed and BEAT's connection to its host is released.
+5. The BEMPP worker is closed and this server's BEAT workers are stopped,
+   including persistent hosts. BEAT cleanup waits at most 5 s, logs failures
+   or timeouts, and lets shutdown continue.
 6. The instance lock is released and the logs are flushed.
 
 If a non-daemon thread is still running when cleanup is done -- a gmsh or
@@ -95,24 +97,24 @@ skips is crash-safe by construction:
 
 ## BEAT's persistent host on Windows
 
-BEAT keeps its Julia worker in a *persistent host* process meant to outlive the
-application, so the next launch adopts a warm runtime.
+BEAT keeps its Julia worker in a *persistent host* process. WG's clean server
+shutdown calls `shutdown_workers()` to stop the workers in this server's
+registry, including these hosts, rather than leaving them until the 30-minute
+idle timeout. This applies on macOS, Linux and Windows, including a server
+run directly outside the status window.
 
-- **macOS and Linux:** the host starts its own session (`setsid`) and survives a
-  Quit, as designed.
-- **Windows, packaged app:** the host does **not** survive a Quit. It is started
-  with `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` and without
+- **macOS and Linux:** the host starts its own session (`setsid`), so stopping
+  the server alone is insufficient; the clean shutdown hook stops the host.
+- **Windows, packaged app:** the Job Object remains a backstop if cleanup
+  fails or the server crashes. The host is started with
+  `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` and without
   `CREATE_BREAKAWAY_FROM_JOB`, so it joins the status window's kill-on-close
   Job Object, and the status window closes that job at the end of every stop.
-  The next launch pays one cold BEAT start. A server run directly, outside the
-  status window, has no such job and its host survives.
+  The next launch pays one cold BEAT start.
 
-This is recorded rather than changed. Surviving would need both a breakaway
-flag in the BEAT package and `JOB_OBJECT_LIMIT_BREAKAWAY_OK` on the launcher's
-job, and the cost is start-up time, not a wrong result.
 `server/tests/test_beat_host_windows_quit.py` reproduces the mechanism on
-Windows with the launcher's real job and the package's exact flags, and fails
-if a BEAT pin changes those flags.
+Windows with the launcher's real job and the package's exact flags, and checks
+that clean exit requests host shutdown through the pinned package's registry.
 
 ## How this is qualified
 

@@ -222,10 +222,8 @@ def _warm_beat(backend: str) -> None:
     Unlike ``_warm_metal`` this needs no ``WG2_SOLVER_WARMUP=1`` opt-in. The
     objection that gates the Metal branch is that a non-cancellable native
     solve on a daemon thread can hold Quit open; BEAT's work happens in
-    another process that ``shutdown_beat_worker`` lets go of in bounded time
-    -- detaching from a persistent host, terminating a child under
-    ``HORNLAB_BEAT_PERSISTENT_HOST=0`` -- so this thread is only ever waiting
-    on a pipe.
+    another process that ``shutdown_beat_worker`` stops with a bounded wait,
+    including persistent hosts, so this thread is only ever waiting on a pipe.
 
     The backend is the caller's, not this function's to guess. Each BEAT
     backend is its own selectable engine and its own persistent Julia worker
