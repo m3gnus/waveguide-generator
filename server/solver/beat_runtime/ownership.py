@@ -219,6 +219,8 @@ class OwnedStream(Iterator[dict]):
             raise StopIteration
         try:
             event = next(self._events)
+            if self.callback_error is not None:
+                raise self.callback_error
             terminal = event.get("type") in {"completed", "cancelled", "failed"}
             if not terminal and not self._owner.holds(self.token):
                 raise OwnershipClosed("BEAT submission cancelled during read")
@@ -232,6 +234,8 @@ class OwnedStream(Iterator[dict]):
                 self.close()
             except Exception:
                 pass  # Keep the read/callback error; closure still released ownership.
+            if self.callback_error is not None:
+                raise self.callback_error
             raise
 
     def close(self) -> None:

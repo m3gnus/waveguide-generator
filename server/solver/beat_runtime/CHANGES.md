@@ -675,3 +675,420 @@ real user/HBB-directory write, donor edit, caller switch, dependency change or
 PID signalling occurred. All requested fixes are complete; native Julia/Metal
 qualification remains outside this fake-only round. Changes are uncommitted as
 explicitly requested.
+- **PR 18a — host lifecycle/bootstrap:** `server/solver/beat_runtime/host.py`
+  (worker construction, bind, bootstrap publication boundary and teardown);
+  `server/tests/beat_runtime/{conftest,fake_host_worker}.py` and lifecycle cases
+  in `server/tests/beat_runtime/test_host.py`; this `CHANGES.md`.
+  Own one lazily imported official `beat_engine.EngineWorker`, using only its
+  public constructor/terminate API. Publish before any Julia startup. Preserve
+  HBB's 1800-second idle window, authenticated connection lifetime and graceful
+  POSIX SIGTERM/SIGINT exit. Teardown is idempotent, compares the complete record
+  and socket inode, and retains successors. If authenticated cleanup holds the
+  spawn lock while awaiting exit, leave removal to cleanup.py rather than
+  deadlocking. Fixture workers refuse every numerical/start operation.
+- **PR 18b — hello/client authentication:** `host.py` (connection admission and
+  control dispatch); authentication cases in `test_host.py`; this `CHANGES.md`.
+  Reuse registry HMAC hello/shutdown proofs and IPC framing/control deadlines.
+  Provider, protocol/version, full key (including engine identity), key ID and
+  token proofs must match. A fresh host nonce and separate `client_auth` domain
+  authenticate clients before lifetime admission; reflected/replayed proofs
+  fail. Hello alone and silent peers cannot prevent idle exit. Bound unfinished
+  handshakes to two seconds and 32 connections. Authenticated ping is supported;
+  submission, ensure_started, retire and engine adoption return the named
+  `HostSubmissionNotImplemented` error until PR 19.
+- **PR 18c — spawn/publication:** `server/solver/beat_runtime/spawn.py`
+  (start/recheck/publication); `server/tests/beat_runtime/test_spawn.py`;
+  this `CHANGES.md`.
+  `start_host` holds SpawnLock from the second record lookup through launch,
+  private readiness, verified process-start identity, canonical publication and
+  authenticated hello. Concurrent threads/processes launch exactly one host and
+  construct exactly one worker. Reuse valid authenticated lifecycle records;
+  cleanup.py handles proven-dead/reused records and orphan sockets, while
+  foreign/unverified live records remain refused. Startup failure reaps only
+  the recorded Popen child and permits retry. Parent abandonment before
+  publication makes the bootstrap child time out and clean its own residue.
+- **PR 18d — subprocess/platform boundary:** `spawn.py` (launch flags, app root
+  and native-launcher identity), `host.py` (app cwd);
+  `server/tests/beat_runtime/test_spawn_platform.py`; this `CHANGES.md`.
+  Launch `sys.executable -m server.solver.beat_runtime.host` from
+  `server.platform.paths.app_root()` / `WG2_APP_ROOT`, with app-first PYTHONPATH,
+  stdin DEVNULL and a private `<key>.log`. POSIX uses start_new_session. A daemon
+  wait thread reaps the parent's child on every exit path. Windows uses
+  CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS and preserves native admission:
+  the public launcher is a stub, so verify its interpreter's parent/start link
+  and publish/authenticate the actual host PID. The packaged ._pth includes app;
+  host main restores app cwd after the native launcher starts from bundle root.
+  No breakaway flag or Job Object changes: packaged Windows Quit still kills
+  this host through the launcher's Job Object (the design's Windows exception).
+
+PR 18 review subdivisions keep lifecycle, authentication, spawn policy and
+platform handling independently reviewable; host.py/spawn.py are shared files
+across those subdivisions, not separate competing implementations.
+
+Future PR 19 callers use `spawn.start_host(key, directory=None,
+idle_timeout=1800, timeout=10)` to obtain an authenticated HostRecord. Keys must
+already include backend, julia_executable/julia_identity, solver_script,
+julia_project/julia_sysimage (explicit null when absent), integer julia_threads,
+engine_fingerprint/runtime_fingerprint and the effective environment dict;
+registry.host_key adds the provider/protocol namespace. The environment and
+integer count are passed unchanged to the public EngineWorker constructor.
+The caller remains responsible for computing complete content/asset identities.
+No EngineWorker PID/private fields are assumed, and this slice does not start,
+warm or submit to Julia.
+
+Client admission: send registry.hello_message and validate_hello as before;
+hello_ok additionally includes client_nonce. Send an `authenticate` frame with
+registry.host_key({}) scope, key/key_id, nonce=client_nonce and
+registry.auth_proof(record, client_nonce, "client_auth"). The `authenticated`
+reply proves the same nonce in the `client_auth_ok` domain. Only this completed
+exchange keeps the host alive until disconnect. Existing cleanup.py can send
+its independently authenticated shutdown request directly after hello; client
+admission is unnecessary for shutdown. Tokens never appear in wire frames or
+command arguments. PR 19 must retain this admission gate for engine operations.
+
+Deviations: the engine target is official JWSound/BEAT_Engine, as instructed.
+A transient private `<key>.ready.json` extends the proposed directory layout so
+the parent can hold spawn exclusion through publication on both POSIX and
+Windows without inheriting/transferring an advisory lock. It contains the
+child's record and launcher/start link, is atomically written with registry's
+private-file helpers, and is removed after publication or abandoned bootstrap.
+Unauthenticated hello does not extend lifetime, strengthening HBB's token-on-wire
+admission while retaining authenticated clients' idle behavior. Four review
+subdivisions replace the estimated single 250–350-line PR. Native launcher
+handling is included now because assuming Popen.pid equals host PID breaks
+current packaged Windows admission; breakaway remains entirely PR 22.
+
+PR 18 validation: 36 new fake-worker tests passed (17 host, 14 spawn, 5 platform).
+The targeted launcher run of `server/tests/beat_runtime` and
+`server/tests/test_solver_beat.py` passed: **444 passed in 15.27 s**. Ruff on
+runtime sources/tests and `git diff --check` passed. The exact requested combined
+pytest and Ruff commands were attempted, but `server/tests/beat_adapter` and
+`server/solver/beat_adapter` are absent; those checks cannot complete here.
+Real Windows Job Object/ACL and installed runtime qualification remain later
+platform gates; Windows flags/start linkage are fake-tested, and a real POSIX
+wrapper process tests the distinct launcher/host PID and cwd behavior. No Julia,
+downloads, real user data or HBB directories were used. All changes remain
+uncommitted, as requested; no pins, requirements or existing callers changed.
+
+- **PR 19a — host submission protocol/FIFO:** `server/solver/beat_runtime/host.py`
+  (`_Job`, submission runner/connection reader and authenticated dispatch);
+  FIFO, queued withdrawal and heartbeat cases in
+  `server/tests/beat_runtime/test_host_submissions.py`;
+  `server/tests/beat_runtime/{fake_host_worker,test_host}.py`; this `CHANGES.md`.
+  Replace HostSubmissionNotImplemented with authenticated file/inline submission,
+  operation forwarding, startup, metadata adoption and idle retirement. Receipt
+  order defines monotonically increasing queued sequence numbers; startup and
+  submissions share the FIFO. Keep the FIFO head until ownership retirement has
+  finished. Independent connection readers notice disconnect/cancel while the
+  engine reader blocks. Serialize status, heartbeat, metadata and event writes;
+  suppress late status/heartbeat frames after terminal delivery. A next control
+  request arriving immediately after a terminal reply cannot cancel completed
+  work or corrupt the next exchange.
+- **PR 19b — client authentication/control/adoption:**
+  `server/solver/beat_runtime/client.py` (connect_client, HostedWorker control,
+  lifetime lease, metadata and detach/shutdown);
+  admission-proof/control cases in `server/tests/beat_runtime/test_client.py`;
+  second-process adoption case in `test_host_submissions.py`; this `CHANGES.md`.
+  Reuse start_host and the registry's nonce/HMAC exchange, including verification
+  of the fresh client_auth_ok proof. Keep an authenticated lease until detach;
+  control requests share one lock, while each submission has its own connection.
+  Detach ends local admission and interrupts concurrent control reads. Shutdown
+  uses authenticated cleanup, never recorded-PID signalling. Expose a copied
+  worker_info, host_pid and host-owned worker_instance for future manager/session
+  callers; lazy optional engine construction remains solely inside the host.
+- **PR 19c — client streams/callback integration:** `client.py` (remote stream
+  and submitter); `server/solver/beat_runtime/ownership.py` (callback failure
+  arising inside a read); stream/cancellation cases in `test_client.py`;
+  two regressions in `server/tests/beat_runtime/test_ownership.py`; this `CHANGES.md`.
+  Public submit returns the existing token-checked OwnedStream and acknowledges
+  host queue admission before returning. Preserve Path/Mapping and operation
+  inputs, streamed engine events, status callbacks and negotiated metadata.
+  Close/cancel before the first read, blocked reads, callback failures and stale
+  closes all use the connection's submission and ownership.py's normal path.
+  A callback error arriving while next() consumes a remote status frame remains
+  the reported error even when cancellation closes the socket or an event arrives.
+  Completed streams do not cancel or retire a successor.
+- **PR 19d — bounded retirement/recovery:** `host.py` (checked public stream,
+  bounded retirement, cancellation and teardown); disconnect, retirement error/
+  hang, internal reader failure and active shutdown cases in
+  `test_host_submissions.py`; cancellation/failure behavior in
+  `fake_host_worker.py`; this `CHANGES.md`.
+  Public stream closure runs through StreamOwnership and is bounded to five
+  seconds. A closure error/timeout closes host admission before ownership can
+  release its slot, wakes queued jobs and exits through normal record/socket
+  cleanup. Engine termination at host teardown is also bounded; an unresponsive
+  public method cannot hang process exit. Normal cancellation may make official
+  EngineWorker's blocked reader raise; that expected error does not stop the host.
+  Unexpected submit/read errors conservatively stop the host because the public
+  API cannot distinguish an internal retirement failure from another engine
+  error. Queued clients never run on an engine whose retirement failed.
+
+PR 19 review subdivisions cover sections of shared files, as in PR 18; they are
+review slices of this one requested work item. No existing caller changes.
+
+Future PR 20 callers use `client.HostedWorker(key, directory=None, timeout=10,
+idle_timeout=1800)`, with the complete resolved key required by start_host.
+`adopt()` returns host_pid, worker_instance, worker_info and engine_pid=None.
+`ensure_started(status_callback=...)` explicitly starts the public worker;
+`submit(Path|Mapping, operation="solve"|"bem_field", status_callback=...)`
+returns OwnedStream (token, close, cancel, callback_error). Engine negotiation
+and operation validation remain official EngineWorker policy. Large requests
+can be staged as files: host command/inline envelopes retain IPC's 1 MiB control
+ceiling; result event envelopes opt into the 512 MiB numerical ceiling.
+`ping()` is bounded control; `terminate()` requests idle retirement and returns
+False while any host job is queued/active. `detach()` permanently closes this
+client's admission/streams and releases its lease; construct a new client for
+later adoption. `shutdown()` additionally shuts down the authenticated host.
+
+Wire details: admission uses the existing PR 18 handshake. Submit sends
+`{op: submit, request: absolute-path-or-object, operation: ...}` and first gets
+`{type: queued, sequence: ...}`. The host streams status, heartbeat, worker_info
+reports and `{type: event, event: <unchanged engine event>}` envelopes. Engine
+completed/cancelled/failed events are terminal; host failures use type=failed.
+A connection-specific `{op: cancel}` or EOF retires only that connection's job
+through OwnedStream.cancel/close. Cancellation acknowledgements follow retirement.
+Control frames have total deadlines, including partial frames after admission.
+Queued/startup/solve streams send 0.5-second heartbeats; clients renew a 10-second
+liveness deadline per received frame, with no total startup/solve deadline.
+Socket writes remain bounded so a client that stops consuming cannot hang the
+host. WG does not read/write request cancel markers here; engine stream closure
+provides retirement, and staged cancellation-monitor policy belongs to PR 20.
+
+Deviations and limits: official JWSound/BEAT_Engine supersedes the design's fork.
+Official worker.py exposes a copied ready announcement via worker_info, with
+engine name/version, protocol, contracts and capabilities, but no PID or unique
+Julia-process identity. The host reports its own stable random worker_instance
+and that metadata; neither proves the unchanged child Julia PID. The fake-worker
+second-process test proves same host PID, same owned EngineWorker identity and
+one startup only, not real Julia PID continuity. No `_process` or private engine
+submission attributes are read. Candidate generic upstream PR: **read-only
+EngineWorker.pid**, returning the live child PID or None. Real Julia/installed
+adoption qualification remains owed once that API exists. Unexpected public
+submit/read errors stop the host conservatively, rather than silently reusing
+an engine whose internal retirement may have failed. Host retirement failures
+are contained, but an unresponsive child cannot be proven dead through this
+public API; no unauthenticated PID signalling is added. Explicit startup/next
+submission handles re-start; automatic background warm-up is deferred to PR 21.
+Four review slices replace the design's estimated single small PR.
+
+PR 19 validation: **578 passed in 50.87 s** using the requested Python with
+`scripts/run_tests.py server/tests/beat_runtime server/tests/test_solver_beat.py
+-q -p no:cacheprovider`, including 27 new PR 19 cases (14 client, 11 host
+submission/recovery/adoption, 2 ownership callback integration). Runtime/test
+Ruff and `git diff --check` passed. Both exact requested combined checks were
+attempted: pytest collected no tests because `server/tests/beat_adapter` is
+absent; Ruff reports the two absent beat_adapter directories. No Julia,
+downloads, full WG suite, real user/HBB data writes, dependency/pin changes or
+reference-checkout edits occurred. Changes remain uncommitted as requested.
+
+**Review round 1 fixes (PR 18):**
+
+Files follow the existing PR 18 review slices; this is one fix round on top of
+PR 19, whose submission/client behavior is retained:
+- **18a lifecycle:** `host.py`; lifecycle/logging/path/accept regressions in
+  `server/tests/beat_runtime/test_host_review.py`; explicit factory calls in
+  `test_host.py`; this `CHANGES.md`.
+- **18b admission:** `host.py`; pending-peer/capacity regressions in
+  `test_host_review.py`; this `CHANGES.md`.
+- **18c spawn/recovery:** `spawn.py`; environment/stale-port/closing-host/failed
+  bootstrap regressions in `server/tests/beat_runtime/test_spawn_review.py`;
+  bounded retained-host test and test-process entry selection in `test_spawn.py`;
+  this `CHANGES.md`.
+- **18d platform/test boundary:** `spawn.py`; direct-interpreter and owned
+  launcher cases in `test_spawn_platform.py`, Windows handle tests in
+  `test_spawn_review.py`; `server/tests/beat_runtime/{conftest,fake_host_main,
+  fake_host_worker}.py`; `registry.py`'s optional append flag for private logs;
+  this `CHANGES.md`.
+
+- **P1/A — fixed:** WorkerHost accepts an explicit engine_factory. Production
+  main supplies a lazy factory that imports official beat_engine.EngineWorker;
+  no production environment factory switch remains. Tests select a tests-only
+  fake_host_main entry through the monkeypatchable spawn.HOST_MODULE constant.
+  The spawner strips all WG2_BEAT_TEST_* environment names (case-insensitive).
+  `test_production_spawn_ignores_test_worker_environment` exercises production
+  launch/main with an import sentinel while builtins:dict is configured; no
+  optional engine import or Julia launch occurs.
+- **P2/B — fixed:** authentication refusals and refused/missing connections use
+  cleanup_host under the held spawn lock. Its dead/reused-process proof remains
+  the only pruning authority. Refused live hosts retry within the original
+  start deadline; permanently refused live records remain. Host close removes
+  its own record/socket before slow engine retirement, with successor checks;
+  early record-removal failure still retires the engine and is logged.
+  Regressions cover reused TCP listeners, both authentication EOF and connection
+  refusal while a closing host remains alive, and replacement during blocked
+  retirement. No stale registry PID is signalled.
+- **P2/C — fixed:** accept a direct Popen child or a verified launcher/start link
+  plus verified interpreter creation identity, independently of executable name.
+  Regressions cover renamed Waveguide Generator.exe/pythonw and wg-python.exe
+  names for both layouts, invalid links and a real separate-process wrapper.
+- **P2/D — fixed:** failed startup stops the verified owned Windows interpreter
+  as well as the Popen child. Open one Windows process handle, compare its
+  creation time with the verified bootstrap identity, then terminate/wait on
+  that same handle to avoid a PID reuse race. Unverified interpreters are never
+  terminated. Popen wait TimeoutExpired escalates to kill and bounded reaping;
+  record cleanup still runs and teardown errors cannot mask the startup error.
+  Regressions cover both owned/unowned bootstrap, stub timeout, original-error
+  preservation, scoped record cleanup and changed/unavailable creation identity.
+- **P3 accept activity — fixed:** refresh the idle clock on every accept.
+  A successful hello now gets a fresh admission window. **PR 20's manager must
+  keep an admitted connection open** to hold the host alive; hello alone remains
+  a short handshake, not a lifetime lease.
+- **P3 absolute paths — fixed:** solver_script, julia_executable and non-null
+  julia_project/julia_sysimage must be absolute. Empty optional path strings
+  are refused; explicit null remains supported. Each field has a regression.
+- **P3 empty interpreter — fixed:** report a clear sys.executable-is-empty error
+  before Popen, with a no-child/no-record regression.
+- **P3 host logs — fixed:** serving, idle exit, startup/connection/submission and
+  retirement failures go to the private key log. Truncate at each new start;
+  O_APPEND in the existing private-file helper prevents redirected child output
+  and host diagnostics overwriting one another. Lifecycle/log regressions cover
+  truncation, serving, idle exit, refusal and constructor failure.
+- **P3 accept errors — fixed:** log non-timeout OSError and retry; five consecutive
+  errors stop admission with a bounded 20 ms backoff. Successful accepts reset
+  the budget. Regressions cover recovery and permanent accept failure.
+- **P3 unauthenticated capacity — fixed:** eight separate pending slots with a
+  0.5 s total pre-auth deadline; evict the oldest pending peer on overflow so
+  silent peers cannot occupy all 32 authenticated slots. Enforce the authenticated
+  cap at proof admission. Regressions cover a 32-silent-peer flood, hello without
+  client proof expiry, and authenticated-cap refusal.
+- **P3 shutdown replay note — fixed (note only):** replay of a captured shutdown request is
+  DoS-only by a local sniffer with access to local IPC; it grants no solve access
+  or token disclosure. No protocol change is requested in this round.
+- **P3 macOS ps note — fixed (note only):** ps timeout under load yields None for start
+  identity and therefore fails closed. The current registry bound is 0.5 s;
+  consider 2 s during platform qualification. No identity policy change here.
+
+Review-round deviations: official JWSound/BEAT_Engine remains the target. The
+private-file helper gains an optional append flag solely to safely share logs
+with redirected engine output; existing record/spec semantics stay unchanged.
+The pending budget is separate from authenticated capacity, with oldest-peer
+replacement allowing legitimate admission during silent-peer saturation.
+Windows termination applies only to this launch's verified bootstrap interpreter,
+not any process obtained solely from a stale registry record. Native Windows
+kernel/Job Object and real Julia/installed qualification remain later gates.
+No pins, requirements, existing callers, engine checkout or HBB directories change.
+Changes remain uncommitted as explicitly requested.
+
+PR 18 review-round validation: **608 passed in 57.69 s** with the requested
+Python and `scripts/run_tests.py server/tests/beat_runtime
+server/tests/test_solver_beat.py -q -p no:cacheprovider`, including all PR 19
+cases and 30 new regressions (16 host review, 10 spawn review, 4 platform).
+Ruff on runtime sources/tests and `git diff --check` passed. Both exact combined
+commands were attempted: pytest refuses the absent `server/tests/beat_adapter`
+directory (no tests ran); Ruff reports the absent `server/solver/beat_adapter`
+and `server/tests/beat_adapter` directories. No Julia, downloads, full WG suite,
+real user/HBB data directories or donor-checkout writes were used. Native
+Windows kernel/Job Object qualification remains unrun; Windows branches use
+fakes, with the distinct launcher/host process path also exercised on POSIX.
+All changes remain uncommitted as requested.
+
+**Review round 1 fixes (PR 19) and PR 18 fix regression:**
+
+Files follow the existing review slices; this round fixes the host/client runtime
+without switching production callers:
+- **18c spawn/recovery:** `server/solver/beat_runtime/{spawn,cleanup}.py`;
+  probe/pruning/deadline regressions in
+  `server/tests/beat_runtime/test_submission_review.py`; pruning-mode assertion
+  in `test_spawn_review.py`; this `CHANGES.md`.
+- **19a/19d submission/retirement:** `server/solver/beat_runtime/host.py`;
+  startup, request-input, cancel, reader and authentication regressions in
+  `test_submission_review.py`; `fake_host_worker.py`'s post-start status and
+  unexpected close error fixtures; this `CHANGES.md`.
+- **19b/19c client/adoption:** `server/solver/beat_runtime/client.py`;
+  delayed retirement, inline-size and replacement-report regressions in
+  `test_submission_review.py`; this `CHANGES.md`.
+- **18d/19 test boundary:** `server/tests/beat_runtime/conftest.py` and
+  `test_host_review.py` (native fixture paths, revised optional-path expectations
+  and authentication-expiry allowance); this `CHANGES.md`.
+
+- **P2/A — fixed:** start_host uses cleanup_host(prune_only=True), including
+  failed bootstrap cleanup. Recovery never sends authenticated shutdown.
+  Cleanup's existing dead-PID/start-mismatch and refused-endpoint policy still
+  controls pruning; authenticatable, live and uncertain hosts remain. Retry
+  transient failures with increasing probe deadlines inside the original start
+  deadline, including bare remaining_time TimeoutError. Regressions prove a
+  slow healthy host continues another client's solve without shutdown, dead and
+  reused hosts are pruned, even an authenticatable host with a gone-PID hint is
+  retained, connection resets/connect timeouts retry, and a deadline race does
+  not leak a bare TimeoutError. The closing-host test now models an endpoint
+  refusing admission until exit; SIGTERM delivery can race successful
+  authentication and is not proof that the listener already stopped.
+- **P2/B — fixed:** cancellation without a stream marks the job cancelled and
+  returns immediately. The FIFO runner retains ownership through startup and
+  closes a returned stream before admitting the next job. Disconnected status
+  callbacks cannot abort shared startup. Regressions hold fake startup beyond
+  five seconds for both submit and ensure_started, with both disconnect and
+  explicit cancel; the queued successor completes on the same host PID.
+- **P2/C — fixed:** validate file readability, JSON and object shape at admission.
+  Missing/unreadable/changed-file JSON failures from public submit also fail only
+  that job, with a clear request-file error. Engine/stream retirement failures
+  still stop admission. Regressions cover missing, unreadable, malformed and
+  nonobject files plus file-read failures racing admission, followed by a
+  successful submission on the same host PID. WG preserves file transport and
+  delegates engine contract/operation negotiation to official EngineWorker.
+- **P2/D — fixed:** client terminate waits RETIREMENT_TIMEOUT + CONTROL_TIMEOUT
+  (seven seconds), matching the host's five-second retirement plus reply margin.
+  A three-second successful fake termination keeps the lease and host PID.
+- **P2/E — fixed:** fixture launch paths derive from tmp_path and are native
+  absolute paths on every platform. A regression checks all four paths.
+- **P3 client cancel — fixed:** unexpected close exceptions during explicit
+  cancellation are logged and followed by bounded public engine.terminate while
+  the FIFO ownership slot is still held. Successful retirement serves the next
+  client on the same host; genuine termination failure still stops admission.
+  The regression raises LookupError during close and verifies termination
+  precedes the queued successor. Disconnect retirement-failure tests stay intact.
+- **P3 stream writes — fixed:** stream admission explicitly sets a bounded
+  ten-second send timeout. A socket with a small send buffer and a reader stalled
+  beyond the control deadline still receives its complete result and terminal.
+- **P3 authentication deadline — fixed:** hello retains the 0.5-second pre-auth
+  window; authenticate gets a fresh one-second deadline after the hello reply.
+  A regression spends most of the hello budget and delays proof past that
+  original deadline, then authenticates successfully. Pending capacity remains
+  bounded separately from authenticated clients.
+- **P3 oversized inline request — fixed:** serialize/check the complete submit
+  envelope against the 1 MiB control ceiling before adoption/connection, raising
+  HostError with file-staging guidance. A regression proves no host is contacted.
+- **P3 explicit Quit — fixed (documentation):** HostedWorker.shutdown() is the
+  explicit-quit path: detach local admission and streams, then shut down the
+  authenticated shared host. HostedWorker.detach() releases only this client;
+  terminate() requests idle engine retirement and declines queued/active work.
+- **P3 retirement overlap — fixed (documentation):** unpublication precedes
+  engine retirement so a replacement host can become available while the old
+  engine is still terminating. Brief engine overlap is possible during normal
+  retirement. Host exit bounds the wait for public retirement methods; it does
+  not prove an unresponsive old Julia child has died.
+- **P3 replacement report — fixed:** compare prior host_pid in _connect and
+  prior worker_instance/host_pid in _report. Expose sticky engine_replaced on
+  HostedWorker and in adopt()'s returned report; first adoption is False and a
+  later respawn is True. Clear stale negotiation metadata on host PID change.
+  Regressions cover real fake-host respawn and a changed worker_instance report.
+  This reports lost host-owned worker continuity, not a measured Julia PID.
+- **P3 empty optional paths — fixed:** validate_key returns a normalized copy;
+  empty julia_project/julia_sysimage strings become None before hashing,
+  publication, adoption and engine construction. Regressions prove each field
+  reaches the engine as None and shares the explicit-null host key.
+
+Design deviations: official JWSound/BEAT_Engine remains the target. The key
+validator now returns a normalized specification; runtime constructors/spawn use
+that copy without mutating caller input. prune_only is an additive cleanup mode;
+explicit shutdown's authenticated policy is unchanged. Engine PID continuity,
+native Windows Job Objects/ACLs and real Julia/installed qualification remain
+later gates. No engine-private fields or WG-specific engine behavior are assumed.
+No Julia, downloads, real user/HBB directories, pins, requirements or existing
+production callers are changed. Changes remain uncommitted as requested.
+
+Review-round validation: **634 passed in 77.06 s** using the requested Python
+with `scripts/run_tests.py server/tests/beat_runtime
+server/tests/test_solver_beat.py -q -p no:cacheprovider`. This includes 28 new
+mechanism regressions; two old empty-optional-path refusal cases are replaced
+by normalization/reuse regressions. The focused spawn-review run passed
+**10 tests in 2.61 s** after making its closing-endpoint fixture deterministic.
+Ruff on runtime sources/tests and `git diff --check` passed. Both exact requested
+combined commands were attempted: pytest ran no tests because
+`server/tests/beat_adapter` is absent; Ruff reports the absent
+`server/solver/beat_adapter` and `server/tests/beat_adapter` directories.
+All test/check runs stayed under two minutes. No Julia, downloads or full WG
+suite ran. Native Windows/installed-engine qualification was not run; tests
+use fake engines, temporary directories and only recorded test-owned processes.
+No requested fix remains unfinished; the missing adapter directories prevent
+completion of the exact combined checks. Changes remain uncommitted.
