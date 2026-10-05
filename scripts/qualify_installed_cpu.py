@@ -764,28 +764,26 @@ def _inside(candidate: object, parent: Path) -> bool:
 def workspace_isolation(base: str, work: Path) -> dict[str, Any]:
     """Put this run's workspace inside its own tree, before anything solves.
 
-    Current payloads isolate through ``--data-dir``; older ones use the private
-    Documents configured before startup. Keep the API fallback for a payload
-    that selects another default, and report whether startup was isolated.
+    Home and Documents are redirected before startup so older payloads cannot
+    touch the user's Documents. Current payloads also isolate their default
+    through ``--data-dir``. Neither qualifies workspace selection: always use
+    the API, then verify the chosen path before the first solve.
     """
 
     before = http(base, "/api/workspace/path")
     started_inside = _inside(before.get("path"), work)
-    established = False
-    if not started_inside:
-        target = work / "workspace"
-        target.mkdir(parents=True, exist_ok=True)
-        http(base, "/api/workspace/select", {"path": str(target)})
-        established = True
+    target = work / "workspace"
+    target.mkdir(parents=True, exist_ok=True)
+    http(base, "/api/workspace/select", {"path": str(target)})
     current = http(base, "/api/workspace/path")
-    if not _inside(current.get("path"), work):
+    if not _same_path(current.get("path"), target):
         raise QualificationError(
-            f"the workspace is outside this run's temporary tree: {current!r}"
+            f"the selected workspace is not {str(target)!r}: {current!r}"
         )
     return {
         "startup_path": before.get("path"),
         "startup_was_isolated": started_inside,
-        "established_through_the_api": established,
+        "established_through_the_api": True,
         "workspace_path": current.get("path"),
         "documents_override": (
             "XDG_DOCUMENTS_DIR"

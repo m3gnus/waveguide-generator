@@ -503,28 +503,75 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     documents = documents_root(system=system, environ=environment, home=environment["HOME"])
     assert documents.is_relative_to(work)
     assert documents.parent.is_dir()
+    if system != "Windows":
+        assert documents == work / "documents" / "Waveguide Generator"
+        # Older POSIX payloads may ignore XDG_DOCUMENTS_DIR and use HOME.
+        without_xdg = {key: value for key, value in environment.items() if key != "XDG_DOCUMENTS_DIR"}
+        fallback = documents_root(system=system, environ=without_xdg, home=environment["HOME"])
+        assert fallback == work / "profile" / "Documents" / "Waveguide Generator"
 
 
-@pytest.mark.parametrize("system", ("Windows", "Linux"))
-def test_an_already_isolated_startup_workspace_needs_no_selection(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str
+@pytest.mark.parametrize("system", ("Windows", "Linux", "Darwin"))
+@pytest.mark.parametrize("startup_kind", ("data", "documents", "home", "external", "selected"))
+def test_the_workspace_is_selected_even_when_startup_is_already_isolated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, startup_kind: str
 ) -> None:
+    from server.platform.paths import default_runs_dir
+
     work = tmp_path / "work"
-    startup = work / "data" / "workspace"
+    monkeypatch.setattr(gate.platform, "system", lambda: system)
+    environment = gate.isolated_user_directories(work)
+    if startup_kind == "home":
+        environment.pop("XDG_DOCUMENTS_DIR", None)
+    documents = default_runs_dir(system=system, environ=environment, home=environment["HOME"])
+    startup = {
+        "data": work / "data" / "workspace",
+        "documents": documents,
+        "home": documents,
+        "external": tmp_path / "external",
+        "selected": work / "workspace",
+    }[startup_kind]
+    current = startup
     requests = []
 
     def http(_base, route, *args):
+        nonlocal current
         requests.append((route, args))
-        assert route == "/api/workspace/path"
-        return {"path": str(startup)}
+        if route == "/api/workspace/select":
+            assert args == ({"path": str(work / "workspace")},)
+            assert (work / "workspace").is_dir()
+            current = Path(args[0]["path"])
+        else:
+            assert route == "/api/workspace/path"
+        return {"path": str(current)}
 
-    monkeypatch.setattr(gate.platform, "system", lambda: system)
     monkeypatch.setattr(gate, "http", http)
     report = gate.workspace_isolation("unused", work)
-    assert report["startup_was_isolated"] is True
-    assert report["established_through_the_api"] is False
+    assert report["startup_path"] == str(startup)
+    assert report["startup_was_isolated"] is (startup_kind != "external")
+    assert report["established_through_the_api"] is True
+    assert report["workspace_path"] == str(work / "workspace")
     assert report["documents_override"] == ("USERPROFILE" if system == "Windows" else "XDG_DOCUMENTS_DIR")
-    assert len(requests) == 2
+    assert [route for route, _ in requests] == [
+        "/api/workspace/path", "/api/workspace/select", "/api/workspace/path",
+    ]
+
+
+@pytest.mark.parametrize("reported", ("startup", "elsewhere", "child", "missing"))
+def test_workspace_selection_must_read_back_the_chosen_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reported: str
+) -> None:
+    work = tmp_path / "work"
+    answer = {
+        "startup": str(work / "data" / "workspace"),
+        "elsewhere": str(tmp_path / "elsewhere"),
+        "child": str(work / "workspace" / "child"),
+        "missing": None,
+    }[reported]
+
+    monkeypatch.setattr(gate, "http", lambda *_args: {"path": answer})
+    with pytest.raises(gate.QualificationError, match="selected workspace"):
+        gate.workspace_isolation("unused", work)
 
 
 # ---------------------------------------------------------------------------
@@ -1035,6 +1082,7 @@ class StubApplication:
                 (self.data / "ib-solve-request.json").write_text(json.dumps(body), encoding="utf-8")
                 return 200, {"job_id": "job-ib"}, {}
             if geometry.get("type") != "imported":
+                (self.data / "workspace-at-solve.json").write_text(json.dumps(self.workspace))
                 (self.data / "solve-request.json").write_text(json.dumps(body))
                 return 200, {"job_id": "job-1"}, {}
             sent = (
@@ -1450,7 +1498,7 @@ def test_a_failure_still_cleans_up_and_keeps_what_it_had_established(
 def test_the_workspace_is_moved_into_the_run_before_anything_solves(
     tmp_path: Path, _quick_timeouts: None
 ) -> None:
-    """An older payload's external default is moved before the first solve."""
+    """Even an isolated startup default must be selected through the API."""
 
     payload = _stub_payload(tmp_path)
     output = tmp_path / "out"
@@ -1469,8 +1517,62 @@ def test_the_workspace_is_moved_into_the_run_before_anything_solves(
     workspace = report["workspace"]
     assert workspace["established_through_the_api"] is True
     assert workspace["workspace_path"] == str(tmp_path / "work" / "workspace")
-    # And it happened before the solve: the request the stub recorded is there.
+    # Observe the workspace active when the stub receives the solve request.
+    at_solve = json.loads((tmp_path / "work" / "data" / "workspace-at-solve.json").read_text())
+    assert at_solve["path"] == workspace["workspace_path"]
     assert (tmp_path / "work" / "data" / "solve-request.json").is_file()
+
+
+@pytest.mark.parametrize("system", ("Windows", "Linux", "Darwin"))
+def test_workspace_selection_precedes_solving_on_every_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _in_process: None, system: str
+) -> None:
+    """Drive the entry point over HTTP with POSIX branches forced on Windows.
+
+    Only process launch, the pin probe and worker cleanup are replaced. The
+    original POSIX test above still exercises the real subprocess harness.
+    """
+    from server.platform.paths import default_runs_dir
+
+    monkeypatch.setattr(gate.platform, "system", lambda: system)
+    monkeypatch.setattr(gate, "check_pins", lambda *_args: {"stubbed": True})
+    monkeypatch.setattr(gate, "stop_our_workers", lambda *_args: {"stubbed": True})
+    requests = []
+    original_post = StubApplication.post
+
+    def post(application, route, body):
+        requests.append(route)
+        return original_post(application, route, body)
+
+    monkeypatch.setattr(StubApplication, "post", post)
+    original_init = _InProcessServer.__init__
+
+    def start(server, interpreter, app, environment, data, control, log):
+        work = tmp_path / "work"
+        for name in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA"):
+            assert Path(environment[name]).is_relative_to(work)
+        assert default_runs_dir(
+            system=system, environ=environment, home=environment["HOME"],
+        ).is_relative_to(work)
+        original_init(server, interpreter, app, environment, data, control, log)
+
+    monkeypatch.setattr(_InProcessServer, "__init__", start)
+    payload = _stub_payload(tmp_path)
+    output = tmp_path / "out"
+    assert gate.main([
+        "--payload", str(payload), "--payload-kind", "stub",
+        "--work", str(tmp_path / "work"), "--output", str(output),
+        "--expected-pin", f"hornlab-beat-bem={PINS['hornlab-beat-bem']}",
+    ]) == 0
+
+    report = json.loads((output / "cpu-qualification.json").read_text(encoding="utf-8"))
+    workspace = report["workspace"]
+    assert workspace["startup_was_isolated"] is True
+    assert workspace["established_through_the_api"] is True
+    assert workspace["workspace_path"] == str(tmp_path / "work" / "workspace")
+    assert requests == ["/api/workspace/select", "/api/solve"]
+    at_solve = json.loads((tmp_path / "work" / "data" / "workspace-at-solve.json").read_text())
+    assert at_solve["path"] == workspace["workspace_path"]
 
 
 # ---------------------------------------------------------------------------
