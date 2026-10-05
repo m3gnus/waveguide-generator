@@ -666,6 +666,26 @@ describe('accuracy explainer and the infinite baffle', () => {
   });
 });
 
+describe('accuracy explainer cost clause', () => {
+  it.each(['beat-cuda', 'beat-rocm', 'beat-metal'])(
+    'says Accurate is usually faster when Fast is BEAT CPU and Accurate is %s',
+    (gpu) => {
+      const accurate = accuracyExplainer('beat-cpu', gpu)[1];
+      expect(accurate).toContain('usually faster than Fast');
+      expect(accurate).not.toContain('about the same as Fast');
+      expect(accurate).not.toContain('can cost more than Fast');
+    },
+  );
+
+  it('keeps "about the same" when Fast and Accurate both run on BEAT CPU', () => {
+    expect(accuracyExplainer('beat-cpu', 'beat-cpu')[1]).toContain('Accurate costs about the same as Fast');
+  });
+
+  it('keeps "about the same" when both run on the same GPU backend', () => {
+    expect(accuracyExplainer('beat-cuda', 'beat-cuda')[1]).toContain('Accurate costs about the same as Fast');
+  });
+});
+
 describe('infinite baffle sweep hint and the recorded arc', () => {
   it('shows the front half-space hint only for an infinite-baffle design', () => {
     const host = document.createElement('div');
