@@ -12,3 +12,5 @@
 - Run targeted tests with `scripts/run_tests.py <paths/globs>` (it refuses an empty target
   list), and stop only your own processes by recorded PID/process group or `broker cancel <id>`,
   never `pkill -f <pattern>`. See `docs/DEVELOPMENT.md`, "Running targeted tests".
+- Use Node 20 for frontend checks (`npm ci`, `npm test`, `npm run build`). Node 24 has a known
+  undici flake in this workspace.
