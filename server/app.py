@@ -390,10 +390,31 @@ async def beat_worker_prewarm(
     BEAT is the engine the head start in ``worker_prewarm`` was measured for:
     its warmup is the long one, and a user who selected it explicitly is
     exactly the user whose first solve is otherwise blocked behind it.
+
+    An interrupted runtime is re-provisioned by the launcher's background
+    thread. Wait for that preparation and its published capability refresh
+    before attempting the one-shot prewarm: otherwise the saved choice can
+    fail against a partial project, or AUTO can resolve to a fallback, and
+    neither attempt is repeated when BEAT becomes ready. This task is itself
+    background work, and the async wait is cancelled promptly on shutdown.
     """
 
     from server.solver.beat import is_beat_engine
+    from server.solver.beat_cpu_runtime import cpu_preparation_in_flight
     from server.solver.warmup import prewarm_beat_worker_for_engine
+
+    if os.environ.get("WG2_SOLVER_WARMUP") != "0" and (
+        cpu_preparation_in_flight() or engine_registry.cpu_preparation_in_flight()
+    ):
+        logging.getLogger("wg.solver.warmup").info(
+            "BEAT worker prewarm deferred until runtime preparation finishes"
+        )
+        while cpu_preparation_in_flight() or engine_registry.cpu_preparation_in_flight():
+            # Start/join detection so readiness notifications have a snapshot
+            # to refresh. capabilities() schedules that refresh without waiting
+            # for it, so keep waiting until its revision has been published too.
+            await engine_registry.capabilities()
+            await asyncio.sleep(0.1)
 
     await worker_prewarm(
         engine_registry,

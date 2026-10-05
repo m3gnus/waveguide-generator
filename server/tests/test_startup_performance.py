@@ -1488,6 +1488,47 @@ def test_a_cancelled_prewarm_does_not_leave_its_head_start_running(
     assert head_start.cancelled()
 
 
+def test_stopping_during_runtime_preparation_cancels_deferred_prewarm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A quit does not wait for the provisioner's native/download work."""
+
+    from server.app import beat_worker_prewarm
+    from server.solver import beat_cpu_runtime, warmup as solver_warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    checked = threading.Event()
+
+    def in_flight() -> bool:
+        checked.set()
+        return True
+
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", in_flight)
+    monkeypatch.setattr(
+        solver_warmup, "prewarm_beat_worker_for_engine",
+        lambda _engine: pytest.fail("must not warm a partial runtime"),
+    )
+
+    async def scenario() -> None:
+        registry = EngineRegistry(detector=lambda: [EngineInfo("metal", True, "fake", None)])
+        task = asyncio.create_task(beat_worker_prewarm(registry, _persisted("beat-metal")))
+        try:
+            async with asyncio.timeout(1):
+                while not checked.is_set():
+                    await asyncio.sleep(0)
+            assert not task.done()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 0.5)
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+            await registry.shutdown_prewarm()
+
+    asyncio.run(scenario())
+
+
 def test_the_beat_prewarm_records_every_outcome_in_the_log(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

@@ -16,6 +16,7 @@ state: ``read_state``/``provisioned_julia``/``default_project``/
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 import shutil
@@ -1362,3 +1363,115 @@ def test_the_gpu_stage_reports_itself_and_not_as_cpu_provisioning(tmp_path, monk
     assert seen["cuda_reason"] is None
     assert seen["cpu_step"] is None
     assert beat_cpu_runtime.gpu_preparation_reason("metal") is None
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda"])
+@pytest.mark.parametrize("saved", ["auto", "explicit"])
+def test_interrupted_runtime_is_redone_before_background_prewarm(
+    tmp_path, monkeypatch, backend, saved
+) -> None:
+    """Restart with a partial record, then warm after the refreshed row is ready.
+
+    Both the provisioning work and its capability publication are parked
+    independently. No Julia is run; a fake first solve only checks whether the
+    startup hook has already paid its compile cost.
+    """
+
+    from server.app import beat_worker_prewarm
+    from server.engines import registry as registry_module
+    from server.solver import warmup
+
+    monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
+    project = _cpu_project(tmp_path)
+    julia = _julia(tmp_path)
+    states = {"cpu": _ready_state(project, julia)}
+    states[backend] = {
+        **_ready_state(project, julia), "backend": backend,
+        "status": "in_progress", "step": "cpu_probe" if backend == "cpu" else "instantiate",
+    }
+    preparing = threading.Event()
+    finish_provision = threading.Event()
+    publishing = threading.Event()
+    finish_publish = threading.Event()
+    calls = []
+    warmed = []
+
+    def provision(*_args, status_cb=print, **_kwargs):
+        calls.append((backend, threading.current_thread().name))
+        status_cb("Resuming interrupted preparation")
+        preparing.set()
+        assert finish_provision.wait(3)
+        states[backend] = {**states[backend], "status": "ready", "step": "done"}
+        return states[backend]
+
+    package = _install_stub_package(
+        monkeypatch, project=project, state=states["cpu"], backend_states=states,
+        provision_cpu=provision, provision_gpu=provision,
+        detect_gpu_backend=lambda: None if backend == "cpu" else backend,
+        backend_ready=lambda selected: states[selected]["status"] == "ready",
+    )
+    monkeypatch.setattr(beat, "_load_api", lambda: package)
+
+    def refresh(*_args):
+        if states[backend]["status"] == "ready":
+            publishing.set()
+            assert finish_publish.wait(3)
+        return {f"beat-{backend}": (states[backend]["status"] == "ready", "fake readiness")}
+
+    monkeypatch.setattr(registry_module, "_beat_row_updates", refresh)
+    monkeypatch.setattr(
+        warmup, "prewarm_beat_worker_for_engine",
+        lambda engine: warmed.append(engine) or True,
+    )
+    settings = SimpleNamespace(get=lambda _key: {"state": {"engine": (
+        "auto" if saved == "auto" else f"beat-{backend}"
+    )}})
+
+    async def wait_event(event):
+        async with asyncio.timeout(2):
+            while not event.is_set():
+                await asyncio.sleep(0.01)
+
+    async def scenario():
+        registry = registry_module.EngineRegistry(
+            detector=lambda: [
+                registry_module.EngineInfo(f"beat-{backend}", False, "partial runtime", None),
+                registry_module.EngineInfo("bempp", True, "fallback", None),
+            ],
+            cpu_refresh=True,
+        )
+        task = None
+        try:
+            # Cache the partial startup verdict before preparation completes.
+            await registry.capabilities()
+            task = asyncio.create_task(beat_worker_prewarm(registry, settings))
+            await asyncio.sleep(0.02)
+            assert warmed == []
+            finish_provision.set()
+            await wait_event(publishing)
+            assert warmed == [], "prewarm must wait for capability publication too"
+            finish_publish.set()
+            await asyncio.wait_for(task, 2)
+            assert warmed == [f"beat-{backend}"]
+            # A fake first solve consumes the same warmed worker.
+            assert await registry.resolve(f"beat-{backend}", solver_mode=None) in warmed
+        finally:
+            finish_provision.set()
+            finish_publish.set()
+            if task is not None and not task.done():
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+            await registry.shutdown_prewarm()
+
+    thread = beat_cpu_runtime.start_cpu_provisioning(environ={}, system="Darwin")
+    assert thread is not None
+    try:
+        assert preparing.wait(2)
+        asyncio.run(scenario())
+    finally:
+        finish_provision.set()
+        finish_publish.set()
+        thread.join(timeout=3)
+    assert not thread.is_alive()
+    assert calls == [(backend, beat_cpu_runtime.PROVISION_THREAD_NAME)]
