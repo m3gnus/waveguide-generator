@@ -788,10 +788,25 @@ class EngineRegistry:
             )))
         else:
             # Preserve the injectable whole-list detector used by embedders.
-            from server.solver.bempp_opencl import qualification_revision
+            from server.solver.bempp_opencl import ProbeCancelled, qualification_revision
 
-            self._opencl_revision = qualification_revision()
-            self._cache = tuple(await self._qualification_thread(self._detector))
+            revision = qualification_revision()
+            try:
+                detected = tuple(await self._qualification_thread(self._detector))
+            except ProbeCancelled:
+                raise
+            except Exception as exc:  # noqa: BLE001 - a failed probe is an unavailable engine
+                # Never pending and never re-raised by later waits: every row
+                # is a finished, unavailable answer. No attempt is counted, so
+                # opencl_retry_pending keeps whatever qualification last said.
+                log.warning("Engine detection failed", exc_info=True)
+                detected = tuple(
+                    _failed_detection(EngineInfo(name, False, "", None), exc)
+                    for name in full3d_engine_order()
+                    if name != "dryrun" or os.environ.get("WG2_ENABLE_DRYRUN") == "1"
+                )
+            self._opencl_revision = revision
+            self._cache = detected
         self._schedule_cpu_refresh()
         self._schedule_opencl_retry()
 

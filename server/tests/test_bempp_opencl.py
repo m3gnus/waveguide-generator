@@ -1002,3 +1002,38 @@ def test_a_failure_row_keeps_nothing_the_previous_row_declared():
                               RuntimeError("x"))
     assert other.mountings == () and other.qualification is None
     assert other.opencl_unavailable_reason is None
+
+
+def test_an_embedder_detector_that_raises_is_never_pending(monkeypatch):
+    import asyncio
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.engines.registry import EngineRegistry
+
+    def broken():
+        raise RuntimeError("embedder detector failed")
+    registry = EngineRegistry(detector=broken, cpu_refresh=False)
+    async def exercise():
+        try:
+            capabilities = await registry.capabilities()
+            assert capabilities and not any(item.available for item in capabilities)
+            assert all(item.qualification != "pending" for item in capabilities)
+            row = next(item for item in await registry.wait_for_bempp() if item.name == "bempp")
+            assert (row.qualification, row.opencl_unavailable_reason) == ("done", "probe_error")
+            assert await registry.get_engine("bempp") is None
+            payload = await capabilities_payload(registry)
+            bempp_row = next(item for item in payload["engines"] if item["name"] == "bempp")
+            assert bempp_row["opencl_retry_pending"] is False
+        finally:
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
+
+
+def test_an_embedder_detector_lets_shutdown_propagate():
+    import asyncio
+    from server.engines.registry import EngineRegistry
+
+    def stopping():
+        raise probe.ProbeCancelled("stopping")
+    registry = EngineRegistry(detector=stopping, cpu_refresh=False)
+    with pytest.raises(probe.ProbeCancelled):
+        asyncio.run(registry._detect_initial())
