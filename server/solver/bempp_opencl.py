@@ -514,7 +514,15 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
                 raise ProbeCancelled("the server's temporary session is gone")
             # In the BEMPP solve worker too, which the server spawns: the
             # parent's session, never the bare temporary directory.
-            channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=spawned_directory_root())
+            root = spawned_directory_root()
+            if root is None:
+                # Adoption can fail, or the parent can disappear after the
+                # lost-session check. None would silently select system temp.
+                raise RuntimeError(
+                    "OpenCL qualification requires a temporary session; "
+                    "refusing to use the bare system temporary directory"
+                )
+            channel = tempfile.TemporaryDirectory(prefix="wg2-opencl-", dir=root)
             _active_channels[channel] = _probe_owner.get()
         result_path = Path(channel.name) / "result.json"
         # Independent readers avoid backpressure on both pipes, on every OS.

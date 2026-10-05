@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from server.solver import bempp_opencl as probe
+from server.platform import temp_session
 
 
 _RESULT_PREFIX = "TEST_RESULT "
@@ -20,10 +21,27 @@ GPU = {"platform_index": 0, "device_index": 0, "type": "gpu", "platform": "Apple
 
 
 @pytest.fixture(autouse=True)
-def clear_cache():
+def clear_cache(probe_session):
     probe.clear_cache()
     yield
     probe.clear_cache()
+
+
+@pytest.fixture
+def probe_session(tmp_path_factory, monkeypatch):
+    """Parent-side probe tests need the session a launched server owns."""
+    native_platform = sys.platform
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    session = temp_session.TemporarySession.create(tmp_path_factory.mktemp("opencl-session"))
+    session.activate()
+    try:
+        yield session
+    finally:
+        # Tests may emulate Windows; release the lock on its actual platform.
+        with monkeypatch.context() as cleanup:
+            cleanup.setattr(sys, "platform", native_platform)
+            session.close(remove=True)
 
 
 @pytest.mark.parametrize("constant,value", [

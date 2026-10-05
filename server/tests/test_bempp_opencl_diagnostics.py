@@ -9,7 +9,7 @@ import types
 import pytest
 
 from server.solver import bempp_opencl as probe
-from server.tests.test_bempp_opencl import CPU
+from server.tests.test_bempp_opencl import CPU, probe_session as probe_session
 from server.tests.test_bempp_opencl_lifecycle import child_for
 from server.tests.test_real_pipeline import _opencl_diagnosis
 
@@ -20,7 +20,7 @@ BUILD_LOG = ("clBuildProgram failed: BUILD_PROGRAM_FAILURE\n"
 
 
 @pytest.fixture(autouse=True)
-def clear_probe():
+def clear_probe(probe_session):
     probe.clear_cache()
     yield
     probe.clear_cache()

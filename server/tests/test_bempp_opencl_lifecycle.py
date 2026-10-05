@@ -13,10 +13,11 @@ import pytest
 from server.engines import registry as reg
 from server.solver import bempp_opencl as probe
 from server.tests._symlinks import requires_symlinks
+from server.tests.test_bempp_opencl import probe_session as probe_session
 
 
 @pytest.fixture(autouse=True)
-def clean_probe():
+def clean_probe(probe_session):
     probe.clear_cache()
     yield
     probe.clear_cache()
@@ -562,6 +563,119 @@ def test_a_worker_whose_session_is_gone_makes_nothing(monkeypatch, tmp_path):
     assert not probe._active_channels
 
 
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+@pytest.mark.parametrize("loss", [
+    "no_session", "before_adoption", "during_resolution", "before_creation", "startup_failure",
+])
+def test_a_probe_refuses_missing_sessions_without_falling_back_to_system_temp(monkeypatch, tmp_path, mode, loss):
+    from server.platform import temp_session
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    session = None
+    if loss in {"before_adoption", "during_resolution", "before_creation"}:
+        session = temp_session.TemporarySession.create(tmp_path)
+        if loss == "before_adoption":
+            session.close(remove=True)
+        temp_session.adopt_parent_session(str(session.path))
+        if loss == "during_resolution":
+            original_lost = temp_session.parent_session_lost
+
+            def lost_then_deleted():
+                assert not original_lost()
+                session.close(remove=True)
+                return False
+
+            monkeypatch.setattr(temp_session, "parent_session_lost", lost_then_deleted)
+        elif loss == "before_creation":
+            original_root = temp_session.spawned_directory_root
+
+            def resolved_then_deleted():
+                root = original_root()
+                assert root == str(session.path)
+                session.close(remove=True)
+                return root
+
+            monkeypatch.setattr(temp_session, "spawned_directory_root", resolved_then_deleted)
+    elif loss == "startup_failure":
+        from launch import serve
+
+        def cannot_create(cls, base):
+            raise PermissionError("session creation refused")
+
+        monkeypatch.setattr(serve.TemporarySession, "create", classmethod(cannot_create))
+        assert serve._start_temporary_session() is None
+
+    allocations = []
+    original_directory = tempfile.TemporaryDirectory
+
+    def directory(*args, **kwargs):
+        allocations.append(kwargs.get("dir"))
+        return original_directory(*args, **kwargs)
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", directory)
+    monkeypatch.setattr(probe.subprocess, "Popen", lambda *a, **k: pytest.fail("spawn without a session"))
+    try:
+        verdict = probe._run_probe(mode, None, 5)
+        assert verdict["ok"] is False
+        assert verdict["opencl_unavailable_reason"] == "probe_error"
+        if loss == "before_creation":
+            assert "FileNotFoundError" in verdict["reason"]
+            assert allocations == [str(session.path)]
+        else:
+            assert "requires a temporary session" in verdict["reason"]
+            assert allocations == []
+        assert not list(tmp_path.glob("wg2-opencl-*"))
+        assert not probe._active_channels and not probe._active_probes
+    finally:
+        if session is not None:
+            session.close(remove=True)
+
+
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+@pytest.mark.parametrize("owner", ["active", "adopted"])
+def test_exhausted_windows_cleanup_leaves_the_probe_inside_its_session(monkeypatch, tmp_path, caplog, mode, owner):
+    from server.platform import temp_session
+
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    session = temp_session.TemporarySession.create(tmp_path)
+    if owner == "active":
+        session.activate()
+    else:
+        temp_session.adopt_parent_session(str(session.path))
+    monkeypatch.setattr(probe, "REMOVE_RETRY_SECONDS", 0.0)
+    channels, cleanup_calls = [], []
+    original_directory = tempfile.TemporaryDirectory
+
+    def directory(*args, **kwargs):
+        channel = original_directory(*args, **kwargs)
+        channels.append(channel)
+
+        def held_open():
+            cleanup_calls.append(channel.name)
+            raise PermissionError("held open by another process")
+
+        monkeypatch.setattr(channel, "cleanup", held_open)
+        return channel
+
+    monkeypatch.setattr(tempfile, "TemporaryDirectory", directory)
+    result = {"ok": True, "devices": []} if mode == "inventory" else {"ok": True, "smoke": {}}
+    child_for(monkeypatch, f"print({probe._READY_MARKER!r}, flush=True); import sys; "
+              f"open(sys.argv[1], 'w').write({json.dumps(result)!r})")
+    try:
+        assert probe._run_probe(mode, None, 5)["ok"]
+        assert len(cleanup_calls) == probe.REMOVE_ATTEMPTS
+        assert Path(channels[0].name).parent == session.path
+        assert Path(channels[0].name).is_dir()
+        assert not list(tmp_path.glob("wg2-opencl-*"))
+        assert "Could not remove the OpenCL check's directory" in caplog.text
+        assert not probe._active_channels and not probe._active_probes
+    finally:
+        session.close(remove=True)
+
+
 def test_a_held_probe_directory_is_retried_then_logged(monkeypatch, tmp_path, caplog):
     """Windows can refuse to delete a just-closed or scanned file for a moment.
     Removal retries; one that never succeeds is logged, not swallowed."""
@@ -688,7 +802,9 @@ def test_bempps_import_time_scratch_directory_moves_into_the_session(monkeypatch
 
 
 def test_bempps_scratch_directory_is_left_alone_when_used_or_without_a_session(monkeypatch, tmp_path):
+    from server.platform import temp_session
     from server.platform.temp_session import TemporarySession
+    monkeypatch.setattr(temp_session, "_active_root", None)
     scratch = tmp_path / "system" / "tmpbempp"
     scratch.mkdir(parents=True)
     api = _stub_bempp_api(monkeypatch, scratch)
