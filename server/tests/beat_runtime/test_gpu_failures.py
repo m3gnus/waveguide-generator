@@ -144,3 +144,79 @@ def test_no_device_preserves_both_existing_records(metal_provisioning, monkeypat
     assert (root / "state-cpu.json").read_bytes() == before
     assert (root / "state-metal.json").read_bytes() == metal_before
     assert state.read_state(root, backend="cpu")["status"] == "ready"
+
+
+@pytest.mark.parametrize("missing", ["both", "probe_contract", "probe_fixture_identity"])
+def test_custom_metal_probe_requires_declared_identity(metal_provisioning, missing):
+    root, _, _, _, workers, options, before = metal_provisioning
+    calls = []
+
+    def custom(**kwargs):
+        calls.append(kwargs)
+        return {"finite": True, "nonzero": True, "terminal_count": 1, "bem_backend": "metal"}
+
+    options.update(probe=custom, probe_contract="custom-contract", probe_fixture_identity="custom-fixture")
+    for field in ("probe_contract", "probe_fixture_identity"):
+        if missing in {"both", field}:
+            options.pop(field)
+    failed = gpu.provision_gpu(**options)
+    assert failed["status"] == "failed" and "identity are required" in failed["error"]
+    assert not calls and not workers
+    assert (root / "state-cpu.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("backend_evidence", [None, "cpu", "metal"])
+def test_custom_metal_completion_requires_backend_evidence(metal_provisioning, backend_evidence):
+    root, _, _, _, _, options, before = metal_provisioning
+    completion = {"finite": True, "nonzero": True, "terminal_count": 1}
+    if backend_evidence is not None:
+        completion["bem_backend"] = backend_evidence
+    result = gpu.provision_gpu(**options, probe=lambda **kw: completion,
+                               probe_contract="custom-contract", probe_fixture_identity="custom-fixture")
+    assert result["status"] == ("ready" if backend_evidence == "metal" else "failed")
+    assert (root / "state-cpu.json").read_bytes() == before
+
+
+def test_custom_probe_cannot_seed_default_metal_readiness(metal_provisioning):
+    _, _, _, calls, workers, options, _ = metal_provisioning
+    completion = {"finite": True, "nonzero": True, "terminal_count": 1, "bem_backend": "metal"}
+    # Even an injection declaring the built-in labels cannot claim default proof.
+    ready = gpu.provision_gpu(**options, probe=lambda **kw: completion,
+                              probe_contract=probe.PROBE_CONTRACT, probe_fixture_identity=probe.fixture_identity())
+    assert ready["status"] == "ready" and not workers
+    assert ready["probe_contract"] == f"custom:{probe.PROBE_CONTRACT}"
+    calls.clear()
+    default = gpu.provision_gpu(**options)
+    assert default["status"] == "ready" and len(workers) == 1 and len(calls) == 3
+    assert default["probe_contract"] == probe.PROBE_CONTRACT
+    assert default["completion"]["bem_backend"] == "metal"
+
+
+def test_default_metal_reproves_record_without_backend_evidence(metal_provisioning):
+    root, _, _, calls, workers, options, _ = metal_provisioning
+    ready = gpu.provision_gpu(**options)
+    ready["completion"].pop("bem_backend")
+    state.write_state(ready, root)
+    calls.clear()
+    workers.clear()
+    assert gpu.provision_gpu(**options)["status"] == "ready"
+    assert len(workers) == 1 and len(calls) == 3
+
+
+@pytest.mark.parametrize("destination", ["project", "depot", "depot_symlink"])
+def test_metal_julia_write_destinations_refuse_hbb(metal_provisioning, tmp_path, monkeypatch, destination):
+    root, _, _, calls, workers, options, before = metal_provisioning
+    legacy = tmp_path / "hbb"
+    legacy.mkdir()
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    options["environ"]["HORNLAB_BEAT_RUNTIME_DIR"] = str(legacy)
+    if destination == "project":
+        options["julia_project"] = legacy / "julia_metal"
+    elif destination == "depot":
+        options["environ"]["JULIA_DEPOT_PATH"] = str(legacy / "depot")
+    else:
+        (root / "depot").symlink_to(legacy, target_is_directory=True)
+    failed = gpu.provision_gpu(**options)
+    assert failed["status"] == "failed" and "overlaps" in failed["error"]
+    assert not workers and not calls and list(legacy.iterdir()) == []
+    assert (root / "state-cpu.json").read_bytes() == before

@@ -50,6 +50,7 @@ def write_julia_record(
 ) -> None:
     """Atomically record executable provenance, independently of backend state."""
     root = paths.checked_root(root)
+    executable = executable.expanduser().absolute()
     record = {
         "executable": str(executable), "version": version,
         "origin": origin, "identity": executable_identity(executable),
@@ -84,7 +85,7 @@ def discover_julia(
     configured = configured if configured is not None else env.get(JULIA_ENV_VAR)
     for source, candidate in (("explicit", explicit), ("configured", configured)):
         if candidate and candidate.strip():
-            path = Path(candidate.strip()).expanduser()
+            path = Path(candidate.strip()).expanduser().absolute()
             if not executable_file(path):
                 raise JuliaDiscoveryError(f"Invalid {source} Julia executable: {path}")
             return None if paths.hbb_executable(path, environ=env) else str(path)

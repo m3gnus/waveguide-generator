@@ -94,7 +94,7 @@ def is_link(path: Path) -> bool:
     try:
         return bool(getattr(path.lstat(), "st_file_attributes", 0)
                     & stat.FILE_ATTRIBUTE_REPARSE_POINT)
-    except FileNotFoundError:
+    except (FileNotFoundError, NotADirectoryError):
         return False
 
 

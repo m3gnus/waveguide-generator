@@ -12,12 +12,13 @@ from typing import Any
 from . import assets, discovery, identity, installer, julia_steps, locks, paths, state, threads
 
 
-def _completion_valid(completion: Mapping[str, Any]) -> bool:
+def _completion_valid(completion: Mapping[str, Any], *, backend: str = "cpu") -> bool:
     # PR 11 owns numerical/terminal validation; reject absent or vacuous evidence here.
     return (
         completion.get("finite") is True and completion.get("nonzero") is True
         and type(completion.get("terminal_count")) is int
         and completion["terminal_count"] == 1
+        and (backend != "metal" or completion.get("bem_backend") == "metal")
     )
 
 
@@ -29,7 +30,7 @@ def _ready(previous: dict[str, Any] | None, expected: dict[str, Any]) -> bool:
             "engine_fingerprint", "runtime_fingerprint", "julia_identity",
             "probe_contract", "probe_fixture_identity",
         ))
-        and _completion_valid(previous["completion"])
+        and _completion_valid(previous["completion"], backend=previous["backend"])
     )
 
 
@@ -40,7 +41,8 @@ def _failure(
     record.update(status="failed", error=str(exc), completion={})
     # A diagnostic write failure must not hide the provisioning/lock error.
     with suppress(Exception):
-        record = state.write_state(record, directory)
+        if not paths.is_link(directory):
+            record = state.write_state(record, directory)
     label = "CPU" if record["backend"] == "cpu" else "Metal"
     report(f"BEAT {label} runtime provisioning failed: {exc}")
     return record
@@ -71,9 +73,58 @@ def _provision_backend(
     env = dict(os.environ if environ is None else environ)
     directory = (paths.runtime_dir(environ=env) if directory is None else paths.checked_root(directory, environ=env)).expanduser().absolute()
     paths.checked_root(directory)
+    if paths.is_link(directory):
+        raise RuntimeError(f"Linked runtime directory refused: {directory}")
+    cwd = Path.cwd()
     record: dict[str, Any] = dict.fromkeys(state._IDENTITY_FIELDS)
     record.update(backend=backend, status="in_progress", step="lock", error=None,
                   environment={}, completion={})
+
+    def resolve_inputs(previous: dict[str, Any] | None) -> tuple[assets.EngineAssets, Path, int, bool]:
+        record["step"] = "resolve_assets"
+        engine = assets.engine_assets(backend)
+        selected_project = engine.project if julia_project is None else julia_project
+        count = threads.resolve_julia_threads(backend, julia_threads)
+        effective_depot = str(depot) if depot is not None else env.get("JULIA_DEPOT_PATH") or str(directory / "depot")
+        env.update(JULIA_DEPOT_PATH=effective_depot, JULIA_NUM_THREADS=str(count),
+                   BLAB_BEAT_ENGINE_GPU_BACKEND=backend)
+        project, effective_env = julia_steps.julia_environment(selected_project, env, cwd=cwd)
+        env.update(effective_env)
+        record.update(
+            project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
+            runtime_fingerprint=identity.runtime_fingerprint(), depot=env["JULIA_DEPOT_PATH"],
+            environment={key: value for key, value in env.items() if key.startswith(("JULIA_", "BLAB_"))},
+            probe_contract=probe_contract, probe_fixture_identity=probe_fixture_identity,
+        )
+        record["step"] = "resolve_julia"
+        julia = discovery.discover_julia(julia_executable, root=directory, environ=env)
+        if julia:
+            executable = str(Path(julia).expanduser().absolute())
+            julia_record = state.read_julia(directory)
+            record.update(julia_executable=executable, julia_identity=discovery.executable_identity(Path(julia)),
+                          julia_version=julia_record["version"] if julia_record and julia_record["executable"] == executable else None)
+            expected = {key: record[key] for key in (*state._IDENTITY_FIELDS, "environment")}
+            resolved = Path(executable).resolve()
+            managed_root = (directory / "julia").resolve()
+            managed_tree = resolved.is_relative_to(managed_root)
+            version_dir = resolved.relative_to(managed_root).parts[0] if managed_tree else ""
+            outdated = managed_tree and not (version_dir == installer.JULIA_VERSION or version_dir.startswith(f"{installer.JULIA_VERSION}-"))
+            selected = bool((julia_executable or "").strip() or env.get(discovery.JULIA_ENV_VAR, "").strip())
+            if not (force or retry or outdated and not selected) and _ready(previous, expected):
+                return engine, project, count, True
+        return engine, project, count, False
+
+    # Atomic records permit a lock-free ready check while another backend sets up.
+    previous = state.read_state(directory, backend=backend)
+    if previous and previous["status"] == "ready" and not (force or retry):
+        try:
+            if resolve_inputs(previous)[3]:
+                report(f"BEAT {label} runtime is already provisioned.")
+                return previous
+        except Exception:
+            # Resolve/report failures under exclusion, just like a fresh attempt.
+            pass
+    record["step"] = "lock"
     held = ExitStack()
     try:
         held.enter_context(locks.provisioning_lock(directory, backend=backend, status_cb=report))
@@ -84,43 +135,17 @@ def _provision_backend(
         try:
             # Recheck under exclusion: another provisioner may have finished waiting.
             previous = state.read_state(directory, backend=backend)
-            record["step"] = "resolve_assets"
-            engine = assets.engine_assets(backend)
-            project = (engine.project if julia_project is None else julia_project).expanduser().resolve()
-            count = threads.resolve_julia_threads(backend, julia_threads)
-            effective_depot = str(Path(depot).expanduser().resolve()) if depot is not None else env.get("JULIA_DEPOT_PATH") or str(directory / "depot")
-            env.update(JULIA_DEPOT_PATH=effective_depot, JULIA_NUM_THREADS=str(count),
-                       BLAB_BEAT_ENGINE_GPU_BACKEND=backend)
-            record.update(
-                project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
-                runtime_fingerprint=identity.runtime_fingerprint(), depot=str(effective_depot),
-                environment={key: value for key, value in env.items() if key.startswith(("JULIA_", "BLAB_"))},
-                probe_contract=probe_contract, probe_fixture_identity=probe_fixture_identity,
-            )
-            record["step"] = "resolve_julia"
-            julia = discovery.discover_julia(julia_executable, root=directory, environ=env)
-            if julia:
-                executable = str(Path(julia))
-                julia_record = state.read_julia(directory)
-                record.update(julia_executable=executable, julia_identity=discovery.executable_identity(Path(julia)),
-                              julia_version=julia_record["version"] if julia_record and julia_record["executable"] == executable else None)
-                expected = {key: record[key] for key in (*state._IDENTITY_FIELDS, "environment")}
-                resolved = Path(executable).resolve()
-                managed_root = (directory / "julia").resolve()
-                managed_tree = resolved.is_relative_to(managed_root)
-                version_dir = resolved.relative_to(managed_root).parts[0] if managed_tree else ""
-                outdated = managed_tree and not (version_dir == installer.JULIA_VERSION or version_dir.startswith(f"{installer.JULIA_VERSION}-"))
-                selected = bool((julia_executable or "").strip() or env.get(discovery.JULIA_ENV_VAR, "").strip())
-                if not (force or retry or outdated and not selected) and _ready(previous, expected):
-                    report(f"BEAT {label} runtime is already provisioned.")
-                    assert previous is not None
-                    return previous
+            engine, project, count, ready = resolve_inputs(previous)
+            if ready:
+                report(f"BEAT {label} runtime is already provisioned.")
+                assert previous is not None
+                return previous
             state.write_state(record, directory)
             julia = (ensure_julia or installer.ensure_julia)(
                 directory, explicit=julia_executable, environ=env, status_cb=report,
                 required_bytes=installer.CPU_REQUIRED_FREE_BYTES if backend == "cpu" else installer.GPU_REQUIRED_FREE_BYTES,
             )
-            julia = str(Path(julia))
+            julia = str(Path(julia).expanduser().absolute())
             julia_record = state.read_julia(directory)
             record.update(julia_executable=julia,
                           julia_identity=discovery.executable_identity(Path(julia)),
@@ -132,6 +157,7 @@ def _provision_backend(
             ) + setup_steps:
                 record["step"] = name
                 state.write_state(record, directory)
+                project, env = julia_steps.julia_environment(project, env, cwd=cwd)
                 step(julia, code, project=project, environment=env, label=step_label, status_cb=report)
             record["step"] = f"{backend}_probe"
             state.write_state(record, directory)
@@ -140,11 +166,12 @@ def _provision_backend(
                 raise RuntimeError(f"Compiled {label} readiness probe is not configured (PR 11)")
             if not probe_contract or not probe_fixture_identity:
                 raise RuntimeError(f"Compiled {label} probe contract and fixture identity are required")
+            project, env = julia_steps.julia_environment(project, env, cwd=cwd)
             completion = dict(probe(
                 backend=backend, julia_executable=julia, julia_project=project,
                 julia_threads=count, environment=env, status_cb=report,
             ))
-            if not _completion_valid(completion):
+            if not _completion_valid(completion, backend=backend):
                 raise RuntimeError(f"Compiled {label} probe returned incomplete readiness evidence")
             json.dumps(completion, allow_nan=False)
             # Pkg can change manifests; save the identity of the project actually proved.

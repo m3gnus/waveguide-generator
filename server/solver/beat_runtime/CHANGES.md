@@ -590,3 +590,88 @@ All checks were unpiped and below two minutes. Tests use temporary trees and
 fake steps/workers; no Julia, download, real user/HBB data directory or real
 Metal solve was used. Real installed-device qualification remains a later gate,
 as required by the no-Julia constraint. Changes remain uncommitted as requested.
+
+- **Review fixes (PR 10/12 round 1, PRs 5-9 round 2)** — files per review slice:
+  - PR 2: `server/solver/beat_runtime/paths.py`;
+    `server/tests/beat_runtime/test_paths.py`.
+  - PR 7: `server/solver/beat_runtime/discovery.py`;
+    `server/tests/beat_runtime/test_discovery.py`.
+  - PR 9: `server/solver/beat_runtime/installer.py`;
+    `server/tests/beat_runtime/test_installer_extraction.py`.
+  - PR 10: `server/solver/beat_runtime/{provision,julia_steps}.py`;
+    `server/tests/beat_runtime/test_{provision,provision_destinations,julia_steps}.py`.
+  - PR 12: `server/solver/beat_runtime/{gpu,hardware,probe}.py`, shared
+    `provision.py` completion validation;
+    `server/tests/beat_runtime/test_{gpu,gpu_failures,hardware,probe}.py`.
+    `probe.py`/`test_probe.py` extend PR 11's completion handoff for PR 12.
+  - This `CHANGES.md` accompanies all slices; no PR 5/6/8 edits are needed.
+
+  Findings:
+  - P1/A — fixed: shared `julia_steps.julia_environment(project, environment,
+    cwd=...)` resolves the project and every explicit/inherited depot entry and
+    calls `paths.checked_root` with both the launch and process environments.
+    Shared CPU/Metal orchestration validates before installation, each setup
+    step and the probe; the subprocess helper also checks before Popen. Depot
+    links resolving into HBB are refused, including WG's default depot link.
+    Regressions `test_julia_write_destinations_refuse_hbb_before_subprocess`,
+    `test_metal_julia_write_destinations_refuse_hbb` and
+    `test_subprocess_destination_isolation_precedes_popen` cover projects,
+    first/later inherited entries and symlinks; the default WG depot passes.
+    These entry points have no sysimage output destination or sysimage step.
+  - P2/B — fixed: relative depot entries use a captured launch cwd; the absolute
+    effective value is used by both children and readiness identity. Regression
+    `test_relative_depot_cwd_identity_prevents_false_readiness_reuse` covers
+    argument/inherited paths and changed cwd, with reuse only for the same
+    absolute depot. The direct launcher checks all relative list entries too.
+    Explicit/configured executable selection and executable records now store
+    absolute launch paths, preserving juliaup symlink aliases; discovery and
+    installer regressions cover both selection sources and cwd changes.
+  - P2/C — fixed: custom Metal probes receive no built-in identity defaults;
+    both declared identities are required, and the stored contract uses the
+    `custom:` namespace so the ordinary default call cannot adopt injected proof.
+    Metal completion requires `bem_backend="metal"`, including cached records.
+    PR 11 emits this evidence only after its existing result diagnostics checks.
+    Regressions cover missing identities, missing/CPU/Metal completion evidence,
+    custom proof followed by a default compiled solve, and older incomplete proof.
+  - P3/1 — fixed: extraction may rmdir an empty unmarked staging directory;
+    nonempty unowned trees and linked staging remain refused. The marker-write
+    failure regression proves the next extraction recovers without a download.
+  - P3/2 — fixed: a matching ready record returns before acquiring the shared
+    lock; any miss takes the lock and resolves/rechecks again. The CPU fast-path
+    regression holds a real Metal provisioning lock and forbids a second lock
+    attempt; CPU and Metal locked-recheck regressions still cover competing writes.
+  - P3/3 — fixed: linked provider roots are refused before any record read/write;
+    diagnostic failure writes also skip a root linked during lock acquisition.
+    Both refusal mechanisms have regressions preserving the destination tree.
+  - P3/4 — fixed: ignored explicit/configured HBB Julia selections report their
+    source and the WG-owned installation choice; both sources have regressions.
+  - P3/5 — fixed: Popen uses `stdin=subprocess.DEVNULL`; regression checks the
+    child arguments. Its cwd is pinned to the cwd used to resolve destinations.
+  - P3/6 — fixed: `paths.is_link` treats NotADirectoryError as an absent path;
+    regression uses a regular file ancestor.
+  - P3/7 — fixed: the old-SDK macOS `10.16` compatibility value falls back to
+    bounded `sw_vers -productVersion`; failures/malformed versions fail closed.
+    Hardware documentation explains why x86_64 Python under Rosetta is refused
+    (its Julia would also be x86_64); fallback and Rosetta have fake-tool tests.
+  No findings are objected to.
+
+Review-fix deviations: official JWSound/BEAT_Engine remains the target. The ready
+fast path supersedes PR 10's earlier all-checks-under-lock deviation. Empty
+components in a nonempty JULIA_DEPOT_PATH list are explicitly refused because
+they expand to Julia-selected implicit depots whose writable destinations WG
+cannot validate here; callers must name depot paths. An absent/empty variable
+still selects WG's default depot. Custom Metal probe contracts are namespaced
+within the existing identity field rather than adding a state schema or engine
+requirement. No sysimage generation API is introduced by this review round.
+
+Review-fix validation: the focused changed-area launcher run passed **306 tests**
+in 3.30 s. The available combined launcher run (`server/tests/beat_runtime`,
+`server/tests/test_solver_beat.py`) passed **731 tests** in 7.23 s. Runtime/test
+Ruff and `git diff --check` passed. The exact requested combined pytest command
+ran zero tests (exit 4) because `server/tests/beat_adapter` is absent; the exact
+combined Ruff command likewise cannot check the absent solver/test beat_adapter
+paths. All checks were unpiped and below two minutes. No Julia, network download,
+real user/HBB-directory write, donor edit, caller switch, dependency change or
+PID signalling occurred. All requested fixes are complete; native Julia/Metal
+qualification remains outside this fake-only round. Changes are uncommitted as
+explicitly requested.

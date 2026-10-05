@@ -112,6 +112,7 @@ def test_locked_recheck_reuses_only_metal(metal_provisioning, monkeypatch):
     workers.clear()
     locked = False
     read = state.read_state
+    reads = []
 
     @contextmanager
     def lock(*args, **kwargs):
@@ -123,13 +124,14 @@ def test_locked_recheck_reuses_only_metal(metal_provisioning, monkeypatch):
         locked = False
 
     def locked_read(*args, **kwargs):
-        assert locked
+        reads.append(locked)
         return read(*args, **kwargs)
 
     monkeypatch.setattr(locks, "provisioning_lock", lock)
     monkeypatch.setattr(state, "read_state", locked_read)
     assert gpu.provision_gpu(**options)["status"] == "ready"
     assert not calls and not workers
+    assert reads == [False, True]
     assert (root / "state-cpu.json").read_bytes() == before
 
 

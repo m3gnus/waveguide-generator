@@ -35,6 +35,7 @@ def test_locked_recheck_adopts_completed_record(cpu_provisioning, monkeypatch):
     calls.clear()
     locked = False
     original_read = state.read_state
+    reads = []
 
     @contextmanager
     def lock(*args, **kwargs):
@@ -45,13 +46,14 @@ def test_locked_recheck_adopts_completed_record(cpu_provisioning, monkeypatch):
         locked = False
 
     def read(*args, **kwargs):
-        assert locked, "state was checked outside provisioning exclusion"
+        reads.append(locked)
         return original_read(*args, **kwargs)
 
     monkeypatch.setattr(locks, "provisioning_lock", lock)
     monkeypatch.setattr(state, "read_state", read)
     assert provision.provision_cpu(**options)["status"] == "ready"
     assert calls == []
+    assert reads == [False, True]
 
 
 def test_raising_callback_is_reported_once_across_steps_and_lock(cpu_provisioning, monkeypatch, capsys):

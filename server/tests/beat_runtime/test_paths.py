@@ -132,3 +132,9 @@ def test_checked_root_refuses_hbb_directories_and_allows_wg_ones(tmp_path):
         )
     wg = tmp_path / "wg" / paths.PROVIDER_ID
     assert paths.checked_root(wg, environ=env, system="linux", home=tmp_path) == wg
+
+
+def test_is_link_with_file_ancestor_treats_not_a_directory_as_absent(tmp_path):
+    regular = tmp_path / "file"
+    regular.write_bytes(b"regular")
+    assert paths.is_link(regular / "child") is False

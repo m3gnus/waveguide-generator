@@ -339,12 +339,18 @@ def extract_julia(
         raise RuntimeError(f"Recovery tree is still in use: {backup}")
     if staging.exists():
         if not _staging_owned(staging):
-            raise RuntimeError(f"Unowned staging tree refused: {staging}")
-        _remove_marked_tree(staging, _STAGING_MARKER)
+            # A kill or marker-write failure can leave an empty directory.
+            # rmdir never removes unmarked contents or a linked tree.
+            try:
+                staging.rmdir()
+            except OSError as exc:
+                raise RuntimeError(f"Unowned staging tree refused: {staging}") from exc
+        else:
+            _remove_marked_tree(staging, _STAGING_MARKER)
         if staging.exists():
             raise RuntimeError(f"Julia staging tree is still in use: {staging}")
     staging.mkdir(mode=0o700)
-    # A killed process before this marker is written leaves a refused tree.
+    # An empty tree left before this marker is written is recoverable above.
     (staging / _STAGING_MARKER).write_text(json.dumps({"provider": PROVIDER_ID}), encoding="utf-8")
     _report(status_cb, f"Unpacking {archive.name}")
     try:
@@ -390,6 +396,11 @@ def ensure_julia(
         raise RuntimeError(f"Linked runtime directory refused: {root}")
     existing = discovery.discover_julia(explicit, configured=configured, root=root, environ=env)
     configured_path = configured if configured is not None else env.get(discovery.JULIA_ENV_VAR, "")
+    for source, candidate in (("explicit", explicit), ("configured", configured_path)):
+        if candidate and candidate.strip():
+            if paths.hbb_executable(Path(candidate.strip()), environ=env):
+                _report(status_cb, f"Ignoring {source} Julia in an HBB root: {candidate}; installing WG-owned Julia")
+            break
     selected = bool((explicit or "").strip() or configured_path.strip())
     record = discovery.read_julia_record(root)
     if existing and not selected:
@@ -406,6 +417,7 @@ def ensure_julia(
     if existing and paths.hbb_executable(Path(existing), environ=env):
         existing = None
     if existing:
+        existing = str(Path(existing).expanduser().absolute())
         resolved = Path(existing).resolve()
         if resolved.is_relative_to((root / "julia").resolve()):
             spec = julia_download(system, machine)

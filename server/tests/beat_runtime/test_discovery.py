@@ -184,3 +184,15 @@ def test_recursive_legacy_json_returns_no_executable_hint(tmp_path):
     legacy.mkdir()
     (legacy / "state.json").write_text('[' * 1500 + '0' + ']' * 1500)
     assert discovery.legacy_executable_hint(legacy) is None
+
+
+@pytest.mark.parametrize("selection", ["explicit", "configured"])
+def test_relative_julia_selection_is_absolute_without_resolving_launcher(tmp_path, monkeypatch, selection):
+    actual = executable(tmp_path / "actual/bin/julia")
+    launcher = tmp_path / "juliaup"
+    launcher.symlink_to(actual)
+    monkeypatch.chdir(tmp_path)
+    assert discovery.discover_julia(**{selection: "juliaup"}) == str(launcher)
+    root = paths.runtime_dir()
+    discovery.write_julia_record(root, Path("juliaup"), origin="external", version=None)
+    assert state.read_julia(root)["executable"] == str(launcher)

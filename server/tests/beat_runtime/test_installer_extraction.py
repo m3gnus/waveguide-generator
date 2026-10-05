@@ -263,3 +263,51 @@ def test_interrupted_replacement_backup_is_recovered(tmp_path):
     recovered = installer.extract_julia(source, root, spec)
     assert recovered == binary and recovered.read_bytes() == b"new Julia"
     assert not backup.exists()
+
+
+def test_empty_unmarked_staging_recovers_after_marker_write_failure(tmp_path, monkeypatch):
+    root = paths.runtime_dir()
+    spec = installer.julia_download("Linux", "x86_64")
+    source = archive(tmp_path)
+    staging, _, _ = installer._layout(root, spec)
+    original = Path.write_text
+
+    def fail_marker(path, *args, **kwargs):
+        if path == staging / installer._STAGING_MARKER:
+            raise OSError("marker write interrupted")
+        return original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "write_text", fail_marker)
+        with pytest.raises(OSError, match="marker write interrupted"):
+            installer.extract_julia(source, root, spec)
+    assert staging.exists() and list(staging.iterdir()) == []
+    assert installer.extract_julia(source, root, spec).read_bytes() == b"new Julia"
+    assert not staging.exists()
+
+
+@pytest.mark.parametrize("selection", ["explicit", "configured"])
+def test_relative_selected_julia_record_is_absolute_and_keeps_launcher(tmp_path, monkeypatch, selection):
+    actual = executable(tmp_path / "actual/bin/julia")
+    launcher = tmp_path / "juliaup"
+    launcher.symlink_to(actual)
+    monkeypatch.chdir(tmp_path)
+    root = paths.runtime_dir()
+    assert installer.ensure_julia(**{selection: "juliaup"}) == str(launcher)
+    assert discovery.read_julia_record(root)["executable"] == str(launcher)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    assert discovery.recorded_julia(root) == str(launcher)
+
+
+@pytest.mark.parametrize("selection", ["explicit", "configured"])
+def test_ignored_hbb_selected_julia_reports_status(tmp_path, monkeypatch, selection):
+    source = archive(tmp_path)
+    fake_download(monkeypatch, source)
+    legacy = executable(tmp_path / "hbb/bin/julia")
+    lines = []
+    binary = installer.ensure_julia(**{selection: str(legacy)}, status_cb=lines.append,
+                                    fetcher=lambda url, partial: partial.write_bytes(source.read_bytes()))
+    assert binary != str(legacy) and legacy.read_bytes() == b"old Julia"
+    assert any(f"Ignoring {selection} Julia in an HBB root" in line for line in lines)

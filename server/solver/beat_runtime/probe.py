@@ -198,6 +198,7 @@ def compiled_probe(worker: ProbeWorker, *, directory: Path, backend: str = "cpu"
             finally:
                 events.close()
         return ProbeResult(True, "Compiled probe solved", identity,
-                           {"result_count": 1, "solved_count": 1, "finite_nonzero": True}, _proof=_PROOF)
+                           {"result_count": 1, "solved_count": 1, "finite_nonzero": True,
+                            "bem_backend": backend}, _proof=_PROOF)
     except Exception as exc:
         return ProbeResult(False, f"Compiled probe failed: {exc}", identity)

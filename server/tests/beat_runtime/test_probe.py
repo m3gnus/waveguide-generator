@@ -79,7 +79,8 @@ def test_compiled_probe_stages_tiny_request_and_completion(tmp_path, backend, dt
                          result(real, imag, dtype, backend=backend), COMPLETED])
     verdict = probe.compiled_probe(worker, directory=tmp_path, backend=backend)
     assert verdict.ready, verdict.reason
-    assert verdict.completion == {"result_count": 1, "solved_count": 1, "finite_nonzero": True}
+    assert verdict.completion == {"result_count": 1, "solved_count": 1, "finite_nonzero": True,
+                                  "bem_backend": backend}
     assert verdict.fixture_identity == hashlib.sha256(worker.mesh).hexdigest()
     assert worker.stream.closed and not worker.path.exists() and list(tmp_path.iterdir()) == []
     request = worker.request

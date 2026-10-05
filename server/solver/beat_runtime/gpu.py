@@ -35,6 +35,8 @@ def provision_gpu(
     unsupported skip. Other options are provision_cpu's setup/retry/identity
     injections. The default probe launches the public EngineWorker against the
     selected system solver, then closes its stream and retires only that worker.
+    Custom probes require their own contract/fixture identity and Metal evidence;
+    their stored contract is namespaced so default probes always re-prove it.
     """
     if backend not in {None, "metal", "cuda", "rocm"}:
         raise ValueError(f"Unknown GPU backend: {backend!r}")
@@ -47,7 +49,7 @@ def provision_gpu(
         return {"backend": selected, "status": "skipped", "reason": facts["reason"]}
 
     root = (paths.runtime_dir(environ=options.get("environ"))
-            if directory is None else Path(directory)).expanduser().resolve()
+            if directory is None else Path(directory)).expanduser().absolute()
 
     def solve_probe(**launch: Any) -> Mapping[str, Any]:
         report("Proving a tiny compiled Metal solve")
@@ -70,9 +72,12 @@ def provision_gpu(
         finally:
             worker.terminate()
 
-    options.setdefault("probe_contract", compiled.PROBE_CONTRACT)
-    options.setdefault("probe_fixture_identity", compiled.fixture_identity())
+    if probe is None:
+        options.setdefault("probe_contract", compiled.PROBE_CONTRACT)
+        options.setdefault("probe_fixture_identity", compiled.fixture_identity())
+    elif options.get("probe_contract"):
+        options["probe_contract"] = f"custom:{options['probe_contract']}"
     return provision._provision_backend(
-        directory, backend="metal", status_cb=report, probe=probe or solve_probe,
+        directory, backend="metal", status_cb=report, probe=solve_probe if probe is None else probe,
         setup_steps=_METAL_STEPS, **options,
     )
