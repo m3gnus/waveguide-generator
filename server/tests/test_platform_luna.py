@@ -307,6 +307,13 @@ def test_launcher_requires_exact_solver_warmup_opt_in(
 def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The startup URL describes the fake reservation below, not a live server.
+    # Fail before any real bind so this test can run beside a WG instance.
+    def unexpected_bind(*_args: Any, **_kwargs: Any) -> None:
+        pytest.fail("launcher unit test must not bind a real socket")
+
+    monkeypatch.setattr(serve.socket.socket, "bind", unexpected_bind)
+
     paths = ensure_data_layout(tmp_path)
     monkeypatch.delenv(DATA_DIR_ENV, raising=False)
     config_kwargs: dict[str, Any] = {}
