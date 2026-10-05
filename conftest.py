@@ -19,8 +19,10 @@ Set it at import, not in a fixture, because module-level code in a test file run
 during collection, before any fixture. A leak there must not slip under a
 fixture-scoped guard.
 
-Runtime state: the same rule covers the BEAT, Julia and OpenCL runtime of the
-machine running the tests. The ``_no_prepared_runtime`` fixture below points
+Runtime state: the same rule covers the BEAT and Julia runtime of the machine
+running the tests (native Metal and OpenCL discovery are not disabled: the
+variables below do not reach them, so a test that needs those marks itself
+``real_runtime``). The ``_no_prepared_runtime`` fixture below points
 ``HORNLAB_BEAT_RUNTIME_DIR`` (where ``state-<backend>.json`` lives),
 ``HORNLAB_BEAT_JULIA``, ``HORNLAB_BEAT_WORKER_DIR`` and ``JULIA_DEPOT_PATH`` at
 per-test empty locations and clears the force-CPU switch and the ROCm/HIP
@@ -257,7 +259,11 @@ _runtime_isolation_counter = 0
 
 @pytest.fixture(autouse=True)
 def _no_prepared_runtime(request: pytest.FixtureRequest) -> Iterator[None]:
-    """Start every ordinary test with no prepared BEAT, Julia or OpenCL runtime.
+    """Start every ordinary test with no prepared BEAT or Julia runtime.
+
+    Only the BEAT/Julia lookup (state directory, Julia path, worker and depot
+    directories, force-CPU and ROCm/HIP variables) is redirected; native Metal and
+    OpenCL discovery still sees the host, so tests that rely on those are marked.
 
     A test that passes only because this machine has a provisioned runtime fails
     on every hosted runner (the BEAT OpenCL endpoint tests did, 2026-10-04).

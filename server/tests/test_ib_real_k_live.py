@@ -49,6 +49,7 @@ def _metal_available() -> bool:
 
 pytestmark = [
     pytest.mark.live,
+    pytest.mark.real_runtime,
     pytest.mark.skipif(
         not _live_enabled(),
         reason="set WG2_RUN_LIVE=1 and select -m live for native Metal qualification",

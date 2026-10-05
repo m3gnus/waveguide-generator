@@ -240,6 +240,7 @@ def test_every_record_level_fixture_carries_the_open_edge_evidence_bempp_needs()
     assert imported_bempp_preflight(quarter) is None
 
 
+@pytest.mark.real_runtime
 def test_bempp_meets_the_analytic_sphere_on_an_opencl_device() -> None:
     # The BEMPP arm of the qualification, where it can run at all. Checked
     # inside the test rather than at collection: the OpenCL probe is slow, and
@@ -261,6 +262,7 @@ def test_bempp_meets_the_analytic_sphere_on_an_opencl_device() -> None:
     assert float(np.max(errors)) <= qual.ANALYTIC_CEILINGS["pulsating"][qual.REFERENCE_LEVEL]
 
 
+@pytest.mark.real_runtime
 @pytest.mark.skipif(
     os.environ.get("WG2_QUALIFY_IMPORTED") != "1",
     reason="needs Metal and a provisioned BEAT CPU runtime; set WG2_QUALIFY_IMPORTED=1",

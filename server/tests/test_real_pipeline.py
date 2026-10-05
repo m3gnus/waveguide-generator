@@ -392,6 +392,7 @@ PARAMETRIC_BODY: dict[str, Any] = {
 }
 
 
+@pytest.mark.real_runtime
 def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = create_app(data_dir=tmp_path / "data")
@@ -439,6 +440,7 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
 # -- CAD import ------------------------------------------------------------------
 
 
+@pytest.mark.real_runtime
 def test_this_host_offers_an_imported_engine_where_one_is_expected(tmp_path: Path) -> None:
     """The CAD solve below may skip only on a host that is not expected to run it."""
 
@@ -461,6 +463,7 @@ def test_this_host_offers_an_imported_engine_where_one_is_expected(tmp_path: Pat
     asyncio.run(scenario())
 
 
+@pytest.mark.real_runtime
 def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path: Path) -> None:
     manifest = json.loads((ROUND_RETURN / "wgreturn.json").read_text(encoding="utf-8"))
     design_id = manifest["instances"][0]["design_id"]
