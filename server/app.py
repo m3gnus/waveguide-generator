@@ -47,7 +47,7 @@ from server.platform.acl_migration import (
     legacy_acl_repair_feedback,
     repair_legacy_acls,
 )
-from server.platform.paths import app_root, default_runs_dir, resolve_data_dir
+from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
 from server.settings import mount_settings
@@ -849,6 +849,7 @@ def create_app(
         restart_approval=restart_approval,
     )
     mount_integration(application)
+    isolated_data_dir = data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
     if workspace_dir is not None:
         resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
         # Only the checkout's ``output`` is a former *export* destination. The
@@ -857,12 +858,12 @@ def create_app(
         # that as somebody's export folder would bury their runs among hundreds
         # of them, inside a directory Finder hides.
         legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,)
-    elif data_dir is None:
+    elif not isolated_data_dir:
         resolved_workspace_dir = default_runs_dir()
         legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)
     else:
-        # Explicit data roots keep tests and embedded callers isolated unless
-        # they also opt into a separate user-document workspace.
+        # Argument and environment overrides isolate implicit output as well
+        # as application state. Saved workspace selections still take priority.
         resolved_workspace_dir = resolved_data_dir / "workspace"
         legacy_workspace_dirs = ()
     workspace_state = mount_workspace(

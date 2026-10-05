@@ -22,12 +22,19 @@ from server.platform.paths import (
     DATA_DIR_ENV,
     DOCUMENTS_DIRECTORY,
     data_paths,
+    default_runs_dir,
     resolve_data_dir,
 )
 
 # Resolve from this file rather than through app_root(), which honors
 # WG2_APP_ROOT and could aim the nested run at another checkout.
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_documents_defaults_are_inside_the_suite_sandbox(sandbox_data_dir: Path) -> None:
+    home = sandbox_data_dir / "home"
+    assert os.environ["USERPROFILE" if sys.platform == "win32" else "HOME"] == str(home)
+    assert default_runs_dir() == home / "Documents" / DOCUMENTS_DIRECTORY / "runs"
 
 
 def test_the_data_directory_is_the_sandbox_and_not_the_users_own(

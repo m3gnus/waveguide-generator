@@ -153,7 +153,9 @@ def test_the_guard_ignores_unrelated_events_and_arguments(
 
 @pytest.mark.skipif(sys.platform not in {"darwin", "win32"}, reason="Fusion is macOS/Windows only")
 def test_the_real_locations_are_the_ones_fusion_uses(root_conftest: ModuleType) -> None:
-    home = Path.home()
+    # Documents defaults use a sandboxed home after the real locations were
+    # captured; the add-in guard must continue protecting the original home.
+    home = root_conftest.REAL_HOME_DIR
     names = {path.as_posix() for path in root_conftest.REAL_FUSION_ADDINS_DIRS}
     if sys.platform == "darwin":
         base = home / "Library" / "Application Support" / "Autodesk"

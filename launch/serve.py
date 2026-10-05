@@ -50,7 +50,7 @@ from server.platform.instance import (  # noqa: E402
     watch_directory_entries,
 )
 from server.platform.logging_setup import flush_logs, setup_logging  # noqa: E402
-from server.platform.paths import app_root, default_runs_dir, ensure_data_layout  # noqa: E402
+from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, ensure_data_layout  # noqa: E402
 from server.platform.shutdown_backstop import ShutdownBackstop, lingering_threads  # noqa: E402
 from server.platform.temp_session import (  # noqa: E402
     TemporarySession,
@@ -655,8 +655,9 @@ def _start_temporary_session() -> TemporarySession | None:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    isolated_data_dir = args.data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
     if args.data_dir is not None:
-        os.environ["WG2_DATA_DIR"] = str(args.data_dir)
+        os.environ[DATA_DIR_ENV] = str(args.data_dir)
 
     lock: InstanceLock | None = None
     listener: socket.socket | None = None
@@ -769,7 +770,10 @@ def main(argv: list[str] | None = None) -> int:
         backstop.activate()
         app = create_app(
             data_dir=paths.root,
-            workspace_dir=default_runs_dir(),
+            # Let the app use <data_dir>/workspace for an operator's override.
+            # The resolved default data root is also passed explicitly above,
+            # so ordinary starts must still opt into the Documents default.
+            workspace_dir=None if isolated_data_dir else default_runs_dir(),
             solver_warmup=_solver_warmup_enabled(),
             update_request_path=(
                 args.status_control.with_name("update.json")

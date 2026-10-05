@@ -308,6 +308,7 @@ def test_launcher_aligns_websocket_transport_limits_with_frame_protocol(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     paths = ensure_data_layout(tmp_path)
+    monkeypatch.delenv(DATA_DIR_ENV, raising=False)
     config_kwargs: dict[str, Any] = {}
     app_kwargs: dict[str, Any] = {}
     listener_closed = False

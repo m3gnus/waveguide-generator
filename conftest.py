@@ -1,4 +1,4 @@
-"""Point the application data directory at a sandbox for the whole test run.
+"""Point application data and Documents at a sandbox for the whole test run.
 
 Without this, a test that reaches any un-injected ``server.platform.paths``
 accessor gets the user's own application directory. That is not hypothetical:
@@ -116,12 +116,13 @@ def pytest_unconfigure(config: pytest.Config) -> None:
 
 FUSION_ADDINS_DIR_ENV = "WG2_FUSION_ADDINS_DIR"
 SANDBOX_FUSION_ADDINS_DIR = SANDBOX_DATA_DIR / "fusion-addins"
+REAL_HOME_DIR = Path.home()
 
 
 def _real_fusion_addins_dirs() -> tuple[Path, ...]:
     """Both of Fusion's AddIns locations on this platform, legacy and current."""
 
-    home = Path.home()
+    home = REAL_HOME_DIR
     if sys.platform == "darwin":
         base = home / "Library" / "Application Support" / "Autodesk"
     elif sys.platform == "win32":
@@ -136,6 +137,13 @@ def _real_fusion_addins_dirs() -> tuple[Path, ...]:
 
 REAL_FUSION_ADDINS_DIRS = _real_fusion_addins_dirs()
 os.environ[FUSION_ADDINS_DIR_ENV] = str(SANDBOX_FUSION_ADDINS_DIR)
+
+# Capture the real add-in locations above before redirecting the home used by
+# Documents defaults. WG2_DATA_DIR alone does not cover default_runs_dir().
+SANDBOX_HOME_DIR = SANDBOX_DATA_DIR / "home"
+os.environ["USERPROFILE" if sys.platform == "win32" else "HOME"] = str(SANDBOX_HOME_DIR)
+# An ambient XDG override would otherwise defeat the redirected HOME.
+os.environ["XDG_DOCUMENTS_DIR"] = str(SANDBOX_HOME_DIR / "Documents")
 
 #: Every refused touch of a real AddIns directory, in order.
 REAL_ADDINS_TOUCHES: list[str] = []
