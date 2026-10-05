@@ -344,7 +344,7 @@ def test_every_routine_is_defined_before_it_is_called(code: str) -> None:
     entry_points = {
         "CurStepChanged", "CurUninstallStepChanged", "CurPageChanged", "InitializeWizard",
         "InitializeSetup", "DeinitializeSetup", "NextButtonClick", "PrepareToInstall",
-        "RelaunchRequested",
+        "RelaunchRequested", "ShouldSkipPage",
     }
     for name, position in definitions.items():
         if name in entry_points:
