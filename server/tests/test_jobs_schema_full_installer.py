@@ -323,3 +323,140 @@ def test_a_held_orphan_from_an_earlier_snapshot_is_logged_and_left(
     store.close()
     assert _user_version(db) == 6 and orphan.exists()
     assert any(str(orphan) in record.getMessage() for record in caplog.records)
+
+
+class _FakeClock:
+    """``store_module.time`` stand-in: sleeping advances the clock, nothing waits."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.slept = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        self.slept += seconds
+
+
+def _second_upgrade_with_invalid_snapshot(tmp_path: Path) -> tuple[Path, Path, dict]:
+    """A schema-5 DB again, beside an unreadable snapshot with every sidecar."""
+
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    snapshot.write_bytes(b"not a database")
+    for suffix in ("-wal", "-shm", "-journal"):
+        Path(str(snapshot) + suffix).write_bytes(b"stale " + suffix.encode())
+    return db, snapshot, _snapshot(db)
+
+
+def _unreadable_snapshot(monkeypatch: pytest.MonkeyPatch, snapshot: Path):
+    """Held sidecars are as untouchable for SQLite as for a rename: the
+    validity probe fails without consuming them. Returns the real connect."""
+
+    real_connect = sqlite3.connect
+
+    def connect(target, *args, **kwargs):
+        if str(target) == str(snapshot):
+            raise sqlite3.DatabaseError("file is not a database")
+        return real_connect(target, *args, **kwargs)
+
+    monkeypatch.setattr(store_module.sqlite3, "connect", connect)
+    return real_connect
+
+
+def test_a_held_stale_sidecar_never_sits_beside_a_new_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, snapshot, rows = _second_upgrade_with_invalid_snapshot(tmp_path)
+    wal = Path(str(snapshot) + "-wal")
+    real_replace = store_module.os.replace
+
+    def replace(source, destination):
+        if Path(source) == wal:
+            raise _held(wal)
+        return real_replace(source, destination)
+
+    real_connect = _unreadable_snapshot(monkeypatch, snapshot)
+    monkeypatch.setattr(store_module.os, "replace", replace)
+    monkeypatch.setattr(store_module, "time", _FakeClock())
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    monkeypatch.setattr(store_module.sqlite3, "connect", real_connect)
+
+    assert _user_version(db) == 6
+    assert wal.read_bytes() == b"stale -wal"
+    # The invalid main moved away, but the new snapshot is not published at
+    # the live name while the old WAL is still there.
+    assert not snapshot.exists()
+    held = list(db.parent.glob(snapshot.name + ".held-*"))
+    assert len(held) == 1 and _snapshot(held[0]) == rows
+
+
+@pytest.mark.parametrize("fallback", ["written", "also-held"])
+def test_a_failed_publication_after_rotation_reports_where_each_snapshot_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, fallback: str
+) -> None:
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    snapshot = store.rollback_snapshot_path
+    _restored_by_hand(db, snapshot)
+    first_snapshot = snapshot.read_bytes()
+    real_replace = store_module.os.replace
+
+    def replace(source, destination):
+        source = Path(source)
+        if source.name.startswith(".jobs-rollback-") and (
+            Path(destination) == snapshot or fallback == "also-held"
+        ):
+            raise _held(snapshot)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(store_module.os, "replace", replace)
+    monkeypatch.setattr(store_module, "time", _FakeClock())
+    store = JobStore(db)
+    store.initialize()  # never fails startup
+    store.close()
+
+    rotated = Path(str(snapshot) + ".1")
+    assert _user_version(db) == 6
+    assert rotated.read_bytes() == first_snapshot and not snapshot.exists()
+    held = list(db.parent.glob(snapshot.name + ".held-*"))
+    message = " ".join(record.getMessage() for record in caplog.records)
+    assert f"previous snapshot is at {rotated}" in message
+    if fallback == "written":
+        assert len(held) == 1
+    else:
+        assert not held and "no rollback snapshot" in message
+    assert not list(db.parent.glob(".jobs-rollback-*"))
+
+
+def test_every_held_file_shares_one_retry_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db, snapshot, _rows = _second_upgrade_with_invalid_snapshot(tmp_path)
+    real_replace = store_module.os.replace
+
+    def replace(source, destination):
+        if Path(source).name.startswith(snapshot.name):
+            raise _held(Path(source))
+        return real_replace(source, destination)
+
+    clock = _FakeClock()
+    real_connect = _unreadable_snapshot(monkeypatch, snapshot)
+    monkeypatch.setattr(store_module.os, "replace", replace)
+    monkeypatch.setattr(store_module, "time", clock)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    monkeypatch.setattr(store_module.sqlite3, "connect", real_connect)
+    assert all(Path(str(snapshot) + suffix).exists() for suffix in ("", "-wal", "-shm", "-journal"))
+    # Four held files (main and three sidecars) used to wait 20 s each.
+    assert _user_version(db) == 6
+    assert clock.slept <= store_module._HELD_FILE_RETRY_SECONDS + store_module._HELD_FILE_RETRY_INTERVAL

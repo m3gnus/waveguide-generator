@@ -154,16 +154,21 @@ logger = logging.getLogger(__name__)
 
 #: Windows sharing/access errors a held handle (a scanner, or a manual
 #: recovery tool holding a snapshot open) raises for a rename or unlink.
-#: Retried for as long as the bridge's layer renames retry them.
+#: Retried for as long as the bridge's layer renames retry them, but as one
+#: budget for the whole snapshot step: it runs under the upgrade's write lock.
 _HELD_FILE_WINERRORS = frozenset({5, 32, 33})
 _HELD_FILE_RETRY_SECONDS = 20.0
 _HELD_FILE_RETRY_INTERVAL = 0.25
+_SNAPSHOT_SIDECARS = ("-wal", "-shm", "-journal")
 
 
-def _replace_unless_held(source: Path, destination: Path) -> bool:
-    """``os.replace``, waiting out a held Windows file; False if it stays held."""
+def _replace_unless_held(source: Path, destination: Path, deadline: float) -> bool:
+    """``os.replace``, waiting out a held Windows file until ``deadline``.
 
-    deadline = time.monotonic() + _HELD_FILE_RETRY_SECONDS
+    False when it stays held. ``deadline`` is a ``time.monotonic()`` value
+    shared by every move of one snapshot step.
+    """
+
     while True:
         try:
             os.replace(source, destination)
@@ -469,6 +474,11 @@ class JobStore:
         if version >= 6 or exists is None:
             return
         target = self.rollback_snapshot_path
+        deadline = time.monotonic() + _HELD_FILE_RETRY_SECONDS
+        # True once any file of the previous snapshot set could not be moved:
+        # the new snapshot must then never be published beside a stale sidecar.
+        blocked = False
+        previous = target  # where the previous snapshot's main file is
         if target.exists():
             try:
                 with closing(sqlite3.connect(target)) as snapshot:
@@ -483,12 +493,15 @@ class JobStore:
                 valid = False
             if not valid:
                 invalid = target.with_name(target.name + ".invalid-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
-                if _replace_unless_held(target, invalid):
+                if _replace_unless_held(target, invalid, deadline):
                     logger.warning("Moved invalid jobs rollback snapshot to %s", invalid)
-                    for suffix in ("-wal", "-shm", "-journal"):
-                        sidecar = Path(str(target) + suffix)
-                        if sidecar.exists():
-                            _replace_unless_held(sidecar, Path(str(invalid) + suffix))
+                    previous = invalid
+                else:
+                    blocked = True
+                for suffix in _SNAPSHOT_SIDECARS:
+                    sidecar = Path(str(target) + suffix)
+                    if sidecar.exists() and not _replace_unless_held(sidecar, Path(str(invalid) + suffix), deadline):
+                        blocked = True
         # Keep one quarantined recovery set, including only its own sidecars.
         invalid_sets = sorted(path for path in target.parent.glob(target.name + ".invalid-*")
                               if not path.name.endswith(("-wal", "-shm", "-journal")))
@@ -507,21 +520,48 @@ class JobStore:
                         raise RuntimeError("The jobs rollback snapshot failed its integrity check")
             with temporary.open("r+b") as stream:
                 os.fsync(stream.fileno())
-            published = target
-            rotated = not target.exists() or _replace_unless_held(target, Path(str(target) + ".1"))
-            if not rotated or not _replace_unless_held(temporary, target):
-                # The previous snapshot is held open, for example during the
-                # manual recovery procedure. Keep it where it is, publish this
-                # upgrade's snapshot beside it under its own name, and record
-                # no automatic restore: a held file must not stop startup.
+            published: Path | None = target
+            rotated = Path(str(target) + ".1")
+            if not blocked and target.exists():
+                # Rotate the whole set, sidecars first: a WAL left at the
+                # live name would pair with the new snapshot's main file.
+                for suffix in _SNAPSHOT_SIDECARS:
+                    sidecar = Path(str(target) + suffix)
+                    if sidecar.exists():
+                        _unlink_or_log(Path(str(rotated) + suffix))
+                        if not _replace_unless_held(sidecar, Path(str(rotated) + suffix), deadline):
+                            blocked = True
+                if not blocked:
+                    if _replace_unless_held(target, rotated, deadline):
+                        previous = rotated
+                    else:
+                        blocked = True
+            if blocked or any(Path(str(target) + suffix).exists() for suffix in _SNAPSHOT_SIDECARS):
+                blocked = True
+            elif not _replace_unless_held(temporary, target, deadline):
+                blocked = True
+            if blocked:
+                # The previous snapshot set is held open, for example during
+                # the manual recovery procedure. Publish this upgrade's
+                # snapshot under its own name and record no automatic
+                # restore: a held file must not stop startup.
                 published = target.with_name(
                     target.name + ".held-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
-                os.replace(temporary, published)
-                logger.warning(
-                    "The jobs rollback snapshot %s is held open, so it was kept and this "
-                    "upgrade's snapshot was written to %s. Automatic jobs restore is off "
-                    "for this update; use the manual jobs recovery procedure with %s.",
-                    target, published, published)
+                try:
+                    os.replace(temporary, published)
+                except OSError as exc:
+                    logger.warning(
+                        "The jobs rollback snapshot set at %s is held open and this upgrade's "
+                        "snapshot could not be written to %s either (%s). This upgrade has no "
+                        "rollback snapshot and no automatic jobs restore; the previous snapshot "
+                        "is at %s.", target, published, exc, previous)
+                    published = None
+                else:
+                    logger.warning(
+                        "The jobs rollback snapshot set at %s is held open; the previous snapshot "
+                        "is at %s and this upgrade's snapshot was written to %s. Automatic jobs "
+                        "restore is off for this update; use the manual jobs recovery procedure "
+                        "with %s.", target, previous, published, published)
             if os.name != "nt":
                 directory = os.open(self.db_path.parent, os.O_RDONLY)
                 try:
