@@ -120,3 +120,15 @@ def test_sibling_of_hbb_default_root_is_allowed(tmp_path):
     env = {"XDG_DATA_HOME": str(tmp_path / "data"), paths.RUNTIME_DIR_ENV: str(tmp_path / "data")}
     root = paths.runtime_dir(environ=env, system="linux", home=tmp_path)
     assert root == tmp_path / "data" / paths.PROVIDER_ID
+
+
+def test_checked_root_refuses_hbb_directories_and_allows_wg_ones(tmp_path):
+    env = {"HORNLAB_BEAT_RUNTIME_DIR": str(tmp_path / "hbb")}
+    with pytest.raises(paths.RootConflict):
+        paths.checked_root(tmp_path / "hbb", environ=env, system="linux", home=tmp_path)
+    with pytest.raises(paths.RootConflict):
+        paths.checked_root(
+            tmp_path / ".local/share/hornlab-beat/runtime", environ={}, system="linux", home=tmp_path
+        )
+    wg = tmp_path / "wg" / paths.PROVIDER_ID
+    assert paths.checked_root(wg, environ=env, system="linux", home=tmp_path) == wg

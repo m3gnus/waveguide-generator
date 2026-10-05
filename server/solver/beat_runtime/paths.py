@@ -67,6 +67,23 @@ def _isolated(
     return root
 
 
+def checked_root(
+    directory: Path,
+    *,
+    environ: Mapping[str, str] | None = None,
+    system: str | None = None,
+    home: Path | None = None,
+) -> Path:
+    """Refuse an explicit runtime/worker directory that overlaps HBB's roots.
+
+    Every writer that accepts a directory argument calls this before touching
+    the filesystem; the defaults from runtime_dir()/worker_dir() already pass.
+    Path.resolve follows symlinks and, on Windows, junctions.
+    """
+    env = os.environ if environ is None else environ
+    return _isolated(Path(directory), env, system or sys.platform, home or Path.home())
+
+
 def _data_base(system: str, env: Mapping[str, str], home: Path) -> Path:
     if system == "darwin":
         return home / "Library" / "Application Support"
