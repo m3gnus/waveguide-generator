@@ -1,7 +1,8 @@
 """The run archive's folder rules and the captured CAD document.
 
-The archive is what outlives the job database: results there are pruned after
-thirty days unless a run is rated, while these folders are permanent. Runs group
+The archive is what outlives the job database: results there can be removed --
+by the user, or after thirty days unless a run is rated when automatic cleanup
+is on -- while these folders are permanent. Runs group
 by design rather than by pipeline, so one design's parametric and CAD history
 read as one story.
 

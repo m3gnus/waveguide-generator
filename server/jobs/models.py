@@ -1293,8 +1293,8 @@ class JobItem(JobModel):
     exported_files: list[str]
     auto_export_completed_at: str | None
     auto_export_formats: dict[str, Any]
-    #: When this run was written to the run archive. The job database prunes
-    #: results after 30 days; the archive folder is what survives that.
+    #: When this run was written to the run archive. The job database can lose
+    #: results (removal, or the optional 30-day cleanup); the archive survives.
     archived_at: str | None = None
     raw_results_file: str | None
     mesh_artifact_file: str | None
