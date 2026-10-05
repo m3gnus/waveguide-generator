@@ -855,3 +855,106 @@ def test_recording_a_failed_refresh_never_blocks_the_event_loop(monkeypatch):
             await registry.shutdown_prewarm()
     asyncio.run(exercise())
     holder.join(2)
+
+
+def test_initial_detection_never_leaves_opencl_retry_pending_behind(monkeypatch):
+    """Production detect_engines: a check that records a timeout, then status
+    processing that raises. That used to publish a bare "detection failed"
+    row with no retry while opencl_retry_pending stayed true, which the
+    interface shows as "Checking OpenCL…" forever."""
+    import asyncio
+    from server.diagnostics.capabilities import capabilities_payload
+    from server.engines import registry as reg
+    from server.solver import bempp
+
+    bempp.bempp_status.cache_clear()
+    clock = [0.0]
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(probe, "_run_probe", lambda mode, device, timeout: (
+        {"ok": True, "devices": [CPU]} if mode == "inventory"
+        else {"ok": False, "opencl_unavailable_reason": "smoke_test_timeout", "reason": "slow"}))
+    monkeypatch.setattr(bempp, "_load_api", lambda: True)
+    def broken_axes():
+        raise RuntimeError("status processing failed")
+    monkeypatch.setattr(bempp, "_probe_ground_plane_axes", broken_axes)
+    real_detect = reg.detect_engines
+    def detector(*, names=None, environ=None):
+        if "bempp" in names:
+            return real_detect(names=names)
+        return [reg.EngineInfo(name, False, "absent here", None) for name in names]
+    monkeypatch.setattr(reg, "detect_engines", detector)
+    async def due(_self):
+        clock[0] = max(clock[0], probe._retry_after)
+        await asyncio.sleep(0)
+    monkeypatch.setattr(reg.EngineRegistry, "_wait_opencl_retry", due)
+    registry = reg.EngineRegistry(detector=detector, cpu_refresh=False)
+    async def exercise():
+        try:
+            await registry.capabilities()
+            await registry.wait_for_bempp()
+            for _ in range(500):
+                payload = await capabilities_payload(registry)
+                row = next(item for item in payload["engines"] if item["name"] == "bempp")
+                if row["qualification"] == "done" and row["opencl_retry_pending"] is False:
+                    break
+                await asyncio.sleep(0.01)
+            assert row["qualification"] == "done", row
+            assert row["opencl_retry_pending"] is False, row
+            assert not row["available"]
+            assert "status check failed" in row["reason"]
+            assert probe._timeout_attempts == probe.MAX_TIMEOUT_ATTEMPTS
+        finally:
+            await registry.shutdown_prewarm()
+    try:
+        asyncio.run(exercise())
+    finally:
+        bempp.bempp_status.cache_clear()
+
+
+def test_detection_lets_shutdown_propagate(monkeypatch):
+    from server.engines import registry as reg
+    from server.solver import bempp
+
+    def cancelled():
+        raise probe.ProbeCancelled("stopping")
+    monkeypatch.setattr(bempp, "bempp_status", cancelled)
+    with pytest.raises(probe.ProbeCancelled):
+        reg.detect_engines(names=("bempp",))
+
+
+def test_a_failure_does_not_double_count_a_concurrent_attempt(monkeypatch):
+    """Decided under the attempt lock: a verdict recorded after the caller's
+    snapshot means its raise stood in for nothing, and is not counted."""
+    clock = [0.0]
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(probe, "_run_probe", lambda *a: {
+        "ok": False, "opencl_unavailable_reason": "inventory_timeout", "reason": "slow"})
+    snapshot = probe.qualification_revision()
+    probe.qualified_opencl()  # another caller's attempt lands first
+    assert not probe.record_failed_attempt(RuntimeError("late"), snapshot)
+    assert probe._timeout_attempts == 1
+    assert probe._last_timeout["opencl_unavailable_reason"] == "inventory_timeout"
+    # Within the interval nothing was skipped, so nothing is counted either.
+    assert not probe.record_failed_attempt(RuntimeError("again"), probe.qualification_revision())
+    clock[0] += probe.RETRY_INTERVAL_SECONDS
+    assert probe.record_failed_attempt(RuntimeError("due"), probe.qualification_revision())
+    assert probe._timeout_attempts == 2
+    assert "BEMPP status check" in probe._last_timeout["reason"]
+    assert "OpenCL check" not in probe._last_timeout["reason"]
+
+
+def test_a_raise_answers_from_a_newer_verdict(monkeypatch):
+    """A good verdict another caller recorded is published, not shadowed."""
+    from server.engines import registry as reg
+
+    calls = []
+    def status():
+        calls.append(1)
+        if len(calls) == 1:
+            probe._record_verdict({"ok": True, "opencl_unavailable_reason": None, "reason": "fine"})
+            raise RuntimeError("raced")
+        return {"available": True, "reason": "OpenCL CPU passed", "assembly_backend": "opencl"}
+    published, revision = reg.bempp_status_or_failure(status)
+    assert published["available"] and published["assembly_backend"] == "opencl"
+    assert revision == probe.qualification_revision()
+    assert probe._timeout_attempts == 0
