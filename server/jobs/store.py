@@ -282,10 +282,21 @@ def _copy_previous_snapshot(source: Path, rotated: Path, deadline: float) -> boo
     os.close(fd)
     temporary = Path(name)
 
-    def within_budget(status: int, _remaining: int, _total: int) -> None:
-        # Called after every step, including SQLite's own busy retries,
-        # which no busy timeout bounds: the shared deadline does.
-        if status & 0xFF in _SQLITE_HELD_CODES and time.monotonic() >= deadline:
+    fewest_remaining = [None]
+
+    def within_budget(status: int, remaining: int, _total: int) -> None:
+        # Called after every step, including SQLite's own busy retries and
+        # the restarts a writer to the source causes; no busy timeout
+        # bounds either. Past the shared deadline, any unfinished step that
+        # copied nothing new (busy, locked, or restarted by a write, whatever
+        # its status) abandons the copy. An undisturbed copy always moves
+        # forward and is never cut off, however large the snapshot.
+        progressed = fewest_remaining[0] is None or remaining < fewest_remaining[0]
+        if progressed:
+            fewest_remaining[0] = remaining
+        # ``remaining`` is 0 until a first step succeeds, so "unfinished" is
+        # read from the status, not from it.
+        if status != sqlite3.SQLITE_DONE and not progressed and time.monotonic() >= deadline:
             raise _SnapshotHeld
 
     try:

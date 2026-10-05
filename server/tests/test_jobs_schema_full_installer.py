@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from contextlib import closing
 import json
+import os
 from pathlib import Path
 import shutil
 import sqlite3
@@ -745,3 +746,79 @@ def test_only_the_newest_orphaned_sidecar_set_is_kept(tmp_path: Path) -> None:
     remaining = sorted(path.name for path in db.parent.glob(snapshot.name + ".orphan-*"))
     assert len(remaining) == 1 and remaining[0].endswith("-wal")
     assert (db.parent / remaining[0]).read_bytes() == b"this crash"
+
+
+def test_continuous_writes_to_the_previous_snapshot_cannot_stall_the_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    snapshot = store.rollback_snapshot_path
+    _restored_by_hand(db, snapshot)
+    _work_in_the_older_release(db)
+    live_rows = _snapshot(db)
+    # A large WAL-mode snapshot, so every copy pass takes many steps.
+    with closing(sqlite3.connect(snapshot)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE ballast (data BLOB)")
+        conn.executemany("INSERT INTO ballast VALUES (?)", [(os.urandom(64 * 1024),) for _ in range(320)])
+        conn.commit()
+
+    stop, writes = threading.Event(), []
+    real_validity = store_module._snapshot_validity
+
+    def write_continuously() -> None:
+        with closing(sqlite3.connect(snapshot, timeout=5, check_same_thread=False)) as writer:
+            while not stop.is_set():
+                writer.execute("UPDATE simulation_jobs SET label = ? WHERE id = 'a'", (f"write {len(writes)}",))
+                writer.commit()
+                writes.append(1)
+
+    writer_thread = threading.Thread(target=write_continuously, daemon=True)
+
+    def validity_then_writes(path, deadline):
+        valid = real_validity(path, deadline)
+        writer_thread.start()
+        while not writes:
+            time.sleep(0.001)
+        return valid
+
+    monkeypatch.setattr(store_module, "_snapshot_validity", validity_then_writes)
+    monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_SECONDS", 0.5)
+    monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_INTERVAL", 0.05)
+    failures = []
+
+    def start() -> None:
+        try:
+            upgrade = JobStore(db)
+            upgrade.initialize()
+            upgrade.close()
+        except BaseException as exc:  # reported below
+            failures.append(exc)
+
+    began = time.monotonic()
+    worker = threading.Thread(target=start, daemon=True)
+    worker.start()
+    worker.join(timeout=20)
+    try:
+        assert not worker.is_alive(), "startup stalled while the snapshot was being written"
+        assert not failures, failures
+        assert time.monotonic() - began < 15
+    finally:
+        stop.set()
+        if writer_thread.is_alive():
+            writer_thread.join(timeout=10)
+
+    assert len(writes) > 1
+    assert _user_version(db) == 6
+    held = list(db.parent.glob(snapshot.name + ".held-*"))
+    assert len(held) == 1 and _snapshot(held[0]) == live_rows
+    assert not Path(str(snapshot) + ".1").exists()
+    assert not list(db.parent.glob(".jobs-rollback-*"))
