@@ -183,9 +183,10 @@ def provision_command(*, production: bool = False) -> str:
         code = (f"import sys, runpy; sys.path.insert(0, {str(app_root())!r}); "
                 "runpy.run_module('server.solver.beat_runtime.cli', run_name='__main__')")
         command = [executable, "-c", code, "--backend", "cpu"]
-    else:
-        command = [executable, "-m", "hornlab_beat_bem.provision", "--backend", "cpu"]
-    return subprocess.list2cmdline(command) if platform.system() == "Windows" else shlex.join(command)
+        return subprocess.list2cmdline(command) if platform.system() == "Windows" else shlex.join(command)
+    if " " in executable:
+        executable = f'"{executable}"'
+    return f"{executable} -m hornlab_beat_bem.provision --backend cpu"
 
 
 def cpu_provisioning_step() -> str | None:
@@ -683,6 +684,8 @@ def _prepare_gpu_runtime(provision: Any, backend: str) -> None:
         global _gpu_stage_step
         with _provision_lock:
             _gpu_stage_step = message
+        if not official_selected():
+            _notify_readiness_listeners()
         log.info("BEAT %s runtime provisioning: %s", backend, message)
 
     try:
@@ -711,8 +714,14 @@ def _provision_status(message: str) -> None:
     """
 
     global _provision_step
-    with _provision_lock:
-        _provision_step = message
+    if official_selected():
+        # Official provisioning: status lines only update the step text; the
+        # registry is notified on step transitions, not on every Julia line.
+        with _provision_lock:
+            _provision_step = message
+    else:
+        _record_step(message)
+        _notify_readiness_listeners()
     log.info("BEAT CPU runtime provisioning: %s", message)
 
 
