@@ -262,6 +262,7 @@ class MesherChildHost:
         self._context = process_context or multiprocessing.get_context("spawn")
         self._target = target
         self._channel: _Channel | None = None
+        self._closing = False
         self._closed = False
         self._state = threading.RLock()  # short: the process fields, never a build
         self._serial = threading.Lock()  # one build at a time, as on the gmsh thread
@@ -293,22 +294,22 @@ class MesherChildHost:
     def _discard(self, channel: _Channel, *, respawn: bool = True) -> None:
         """Kill ``channel`` (if it is still the current one) and warm a new child.
 
-        ``respawn=False`` for a build abandoned because its awaiting task was
-        cancelled, which is what a Quit does before it closes the host.
+        Task cancellation suppresses respawn for an abandoned build. App
+        shutdown also suppresses it before requesting cooperative cancellation.
         """
 
         with self._state:
             if self._channel is channel:
                 self._channel = None
             channel.kill()
-            if respawn and not self._closed:
+            if respawn and not self._closing and not self._closed:
                 self.prewarm()
 
     def prewarm(self) -> None:
         """Start the child and queue its import warmup without waiting for it."""
 
         with self._state:
-            if self._closed:
+            if self._closing or self._closed:
                 return
             try:
                 channel = self._ensure_locked()
@@ -319,10 +320,17 @@ class MesherChildHost:
             except (BrokenPipeError, EOFError, OSError):
                 return
 
+    def begin_shutdown(self) -> None:
+        """Reject new builds and respawns while existing jobs reach their checkpoint."""
+
+        with self._state:
+            self._closing = True
+
     def close(self) -> None:
         """Kill the child now. Never waits for a running build: the kill ends it."""
 
         with self._state:
+            self._closing = True
             self._closed = True
             channel, self._channel = self._channel, None
         if channel is not None:
@@ -358,7 +366,7 @@ class MesherChildHost:
             checkpoint(None)
             request_id = next(self._ids)
             with self._state:
-                if self._closed:
+                if self._closing or self._closed:
                     raise RuntimeError("mesher child is shutting down; submission rejected")
                 channel = self._ensure_locked()
                 try:
@@ -446,6 +454,16 @@ def get_mesher_child() -> MesherChildHost:
         return _host
 
 
+def begin_mesher_child_shutdown() -> None:
+    """Suppress shared-child respawn before the app cooperatively cancels jobs.
+
+    Keep a closing host even if no build has used it yet, so a late submission
+    cannot create a child between this hook and the final close.
+    """
+
+    get_mesher_child().begin_shutdown()
+
+
 def close_mesher_child() -> None:
     """Kill the shared child, if any. Safe to call repeatedly."""
 
@@ -489,6 +507,7 @@ __all__ = [
     "MesherCrashError",
     "MesherChildHost",
     "CRASH_MESSAGE",
+    "begin_mesher_child_shutdown",
     "close_mesher_child",
     "get_mesher_child",
     "prewarm_mesher_child",

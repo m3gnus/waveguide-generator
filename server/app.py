@@ -36,6 +36,7 @@ from server.jobs import mount_jobs
 from server.integration import mount_integration
 from server.mesh.api import mount_solver_mesh
 from server.cadlink.addin_update import shutdown_addin_refresh, start_addin_refresh
+from server.mesh.child import begin_mesher_child_shutdown
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import (
@@ -955,6 +956,20 @@ def create_app(
     application.mount(
         "/", _HashedAssetStaticFiles(directory=FRONTEND_DIST, html=True), name="frontend"
     )
+    # Wrap the assembled lifespan: included routers unwind before the app's
+    # own shutdown handlers, so even its first handler is too late to suppress
+    # respawn during the job router's cooperative cancellation.
+    lifespan = application.router.lifespan_context
+
+    @contextlib.asynccontextmanager
+    async def shutdown_mesh_child_first(app: FastAPI):
+        async with lifespan(app) as state:
+            try:
+                yield state
+            finally:
+                begin_mesher_child_shutdown()
+
+    application.router.lifespan_context = shutdown_mesh_child_first
     return application
 
 

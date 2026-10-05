@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 import signal
 import sys
+import threading
 import time
 from typing import Any
 
@@ -47,6 +49,11 @@ def exit_build(*_args: Any) -> None:
 
 def hang_build(*_args: Any) -> None:
     time.sleep(120)
+
+
+def marked_hang_build(marker: str) -> None:
+    Path(marker).write_text("building", encoding="utf-8")
+    hang_build()
 
 
 def raising_build(*_args: Any) -> None:
@@ -227,6 +234,18 @@ def test_close_kills_the_child(host) -> None:
     while _alive(pid) and time.monotonic() < deadline:
         time.sleep(0.05)
     assert not _alive(pid)
+
+
+def test_begin_shutdown_rejects_new_builds_and_prewarm_without_spawning(host) -> None:
+    async def scenario() -> None:
+        host.begin_shutdown()
+        host.begin_shutdown()
+        host.prewarm()
+        with pytest.raises(RuntimeError, match="shutting down"):
+            await host.run(ok_build)
+        assert host._channel is None
+
+    asyncio.run(scenario())
 
 
 def test_in_process_switch_is_ignored_in_a_bundled_app(monkeypatch) -> None:
@@ -545,7 +564,7 @@ def test_repeated_cancel_and_respawn_never_crosses_replies(host) -> None:
 
 
 def test_a_cancelled_task_does_not_respawn_a_child(host) -> None:
-    """What a Quit does: cancel the build's task, then close. No child in between."""
+    """Task cancellation alone must not prewarm a replacement child."""
 
     async def scenario() -> None:
         task = asyncio.create_task(host.run(hang_build))
@@ -558,5 +577,110 @@ def test_a_cancelled_task_does_not_respawn_a_child(host) -> None:
             await asyncio.sleep(0.05)
         await asyncio.sleep(1.0)
         assert host._channel is None
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["cooperative", "task_cancel", "completed"])
+def test_app_shutdown_does_not_respawn_the_mesh_child(
+    mode, monkeypatch, tmp_path, shared_child,
+) -> None:
+    """Use the app's handlers and real runtime: cooperative cancel precedes task cancel."""
+    import server.app as app_module
+    import server.mesh.child as child_module
+    import server.jobs.runtime as runtime_module
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.models import SolveRequest
+    from server.solver.base import EngineRunResult
+
+    # Static assets are unused here; keep app construction independent of a SPA build.
+    monkeypatch.setattr(app_module, "FRONTEND_DIST", tmp_path)
+    monkeypatch.setattr(app_module, "detect_engines", lambda: [])
+    # This build uses the child; it needs no unrelated in-process native warmup.
+    async def skip_gmsh_thread_warmup():
+        pass
+
+    monkeypatch.setattr(app_module, "prewarm_gmsh_worker", skip_gmsh_thread_warmup)
+    monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
+    monkeypatch.setattr(runtime_module, "SHUTDOWN_TASK_TIMEOUT_SECONDS", 1.5)
+    host = child_module.get_mesher_child()
+    processes = set()
+    ensure = host._ensure_locked
+
+    def track_child():
+        channel = ensure()
+        processes.add(channel.process)
+        return channel
+
+    monkeypatch.setattr(host, "_ensure_locked", track_child)
+    marker = tmp_path / "building"
+    cooperative_cancel = threading.Event()
+    task_cancel = asyncio.Event()
+
+    class MeshEngine:
+        name = "bempp"
+
+        async def run(self, _request, *, cancel_cb, stage_cb):
+            def checkpoint():
+                try:
+                    cancel_cb()
+                except runtime_module._CancelledAtCheckpoint:
+                    cooperative_cancel.set()
+                    raise
+
+            try:
+                if mode == "completed":
+                    await run_mesh_build(ok_build, cancel_cb=checkpoint)
+                    return EngineRunResult(results={"metadata": {}})
+                await run_mesh_build(marked_hang_build, str(marker), cancel_cb=checkpoint)
+            except runtime_module._CancelledAtCheckpoint:
+                if mode == "task_cancel":
+                    # Leave cleanup pending so runtime.shutdown also exercises task.cancel().
+                    try:
+                        await asyncio.Event().wait()
+                    except asyncio.CancelledError:
+                        task_cancel.set()
+                        raise
+                raise
+
+    async def scenario():
+        app = app_module.create_app(data_dir=tmp_path / "data")
+        runtime = app.state.jobs_runtime
+        runtime.engine_registry = EngineRegistry(
+            detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+            factory=lambda _name: MeshEngine(),
+        )
+        request = SolveRequest.model_validate({
+            "design": {"formula": "OSSE", "L": 120, "a": 45},
+            "options": {"engine": "bempp", "stage_delay_ms": 0},
+        })
+        lifespan = app.router.lifespan_context(app)
+        await lifespan.__aenter__()
+        shutdown_finished = False
+        try:
+            job_id = await runtime.submit(request)
+            if mode == "completed":
+                await asyncio.wait_for(runtime.wait_idle(), 30)
+                assert runtime.store.get_job_row(job_id)["status"] == "complete"
+            else:
+                deadline = time.monotonic() + 30
+                while not marker.exists() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.05)
+                assert marker.exists(), "the build never entered the child"
+            channel = host._channel
+            assert channel is not None and len(processes) == 1
+            began = time.monotonic()
+            await asyncio.wait_for(lifespan.__aexit__(None, None, None), 3)
+            shutdown_finished = True
+            assert time.monotonic() - began < 3
+            assert cooperative_cancel.is_set() == (mode != "completed")
+            assert task_cancel.is_set() == (mode == "task_cancel")
+            assert len(processes) == 1, "shutdown spawned a replacement mesh child"
+            assert host._channel is None
+            assert not channel.process.is_alive() and not channel.reader.is_alive()
+        finally:
+            close_mesher_child()
+            if not shutdown_finished:
+                await lifespan.__aexit__(None, None, None)
 
     asyncio.run(scenario())
