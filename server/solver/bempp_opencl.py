@@ -327,8 +327,8 @@ def owned_qualification(owner: threading.Event, function: Any, *args: Any, **kwa
 
 
 class _ProbeHandle:
-    def __init__(self, child: Any, readers: Any, events: Any) -> None:
-        self.child, self.readers, self.events = child, readers, events
+    def __init__(self, child: Any, readers: Any, events: Any, job: Any = None) -> None:
+        self.child, self.readers, self.events, self.job = child, readers, events, job
         self.lock = threading.Lock()
         self.closed = False
 
@@ -336,24 +336,46 @@ class _ProbeHandle:
         with self.lock:
             if self.closed:
                 return
-            if self.child.poll() is None:
-                if graceful:
-                    self.child.terminate()
-                    try:
-                        self.child.wait(timeout=0.25)
-                    except subprocess.TimeoutExpired:
+            try:
+                if self.job is not None:
+                    # The whole tree: in the Windows bundle the child is the
+                    # native stub and the interpreter holding the pipes is its
+                    # own child (server.platform.process_tree.popen_in_windows_job).
+                    self.job.terminate()
+                if self.child.poll() is None:
+                    if graceful:
+                        self.child.terminate()
+                        try:
+                            self.child.wait(timeout=0.25)
+                        except subprocess.TimeoutExpired:
+                            self.child.kill()
+                    else:
                         self.child.kill()
+                # Always reap, even if poll/terminate already observed an exit.
+                self.child.wait(timeout=1.5)
+                for reader in self.readers:
+                    reader.join(timeout=1.0)
+                stuck = [reader for reader in self.readers if reader.is_alive()]
+                if stuck:
+                    # A process the child started still holds the pipes. That
+                    # is no verdict on the device, and raising here replaced
+                    # the caller's verdict and wedged the registry on
+                    # "Checking OpenCL…". The readers are daemons and end with
+                    # the pipe; a stream they are blocked on is not closed.
+                    logging.getLogger(__name__).warning(
+                        "The OpenCL check's output did not close after its process "
+                        "was stopped (pid %s); a process it started may still be "
+                        "running.", self.child.pid,
+                    )
                 else:
-                    self.child.kill()
-            # Always reap, even if poll/terminate already observed an exit.
-            self.child.wait(timeout=1.5)
-            for reader in self.readers:
-                reader.join(timeout=1.0)
-                if reader.is_alive():
-                    raise RuntimeError("OpenCL probe reader did not stop")
-            self.child.stdout.close()
-            self.child.stderr.close()
-            self.closed = True
+                    self.child.stdout.close()
+                    self.child.stderr.close()
+                self.closed = True
+            finally:
+                if self.job is not None:
+                    # Kill-on-close: whatever is still in the job dies with it.
+                    self.job.close()
+                    self.job = None
 
 
 REMOVE_ATTEMPTS = 20
@@ -461,7 +483,9 @@ def _validate_probe_result(result: Any, mode: str) -> None:
 
 
 def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> dict[str, Any]:
-    # Parent-only import: the standalone native child never allocates a channel.
+    # Parent-only imports: the standalone native child never allocates a
+    # channel or starts a check of its own.
+    from server.platform.process_tree import popen_in_windows_job
     from server.platform.temp_session import parent_session_lost, spawned_directory_root
 
     handle = None
@@ -491,8 +515,9 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
         # The result travels through an atomic file, never through library logs.
         with _probe_lock:
             _check_cancelled()
-            child = subprocess.Popen(
+            child, job = popen_in_windows_job(
                 [sys.executable, str(Path(__file__).resolve()), mode, json.dumps(device), str(result_path)],
+                subject="the OpenCL check",
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, errors="replace",
                 env={**os.environ, "NUMBA_DISABLE_JIT": "1", "PYOPENCL_COMPILER_OUTPUT": "0"},
             )
@@ -501,7 +526,7 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
                 threading.Thread(target=_read_probe_output, args=(child.stdout, events), daemon=True),
                 threading.Thread(target=_read_probe_stderr, args=(child.stderr, stderr_tail), daemon=True),
             ]
-            handle = _ProbeHandle(child, readers, events)
+            handle = _ProbeHandle(child, readers, events, job)
             _active_probes[handle] = _probe_owner.get()
             for reader in readers:
                 reader.start()
@@ -549,6 +574,12 @@ def _run_probe(mode: str, device: Mapping[str, Any] | None, timeout: float) -> d
             if handle is not None:
                 try:
                     handle.close()
+                except Exception:
+                    # Raised here it would replace this run's verdict, and a
+                    # verdict is what bounds the retries; log it instead.
+                    logging.getLogger(__name__).warning(
+                        "Could not stop the OpenCL %s check's process cleanly", mode, exc_info=True,
+                    )
                 finally:
                     with _probe_lock:
                         _active_probes.pop(handle, None)
@@ -680,30 +711,65 @@ def qualification_revision() -> int:
     return _revision
 
 
-def qualified_opencl() -> dict[str, Any]:
+def _internal_error_verdict(exc: BaseException) -> dict[str, Any]:
+    detail = str(exc).splitlines()[0][:200] if str(exc) else ""
+    return {
+        "ok": False, "opencl_unavailable_reason": "probe_error",
+        "reason": "WG's OpenCL check could not complete (internal error: "
+                  f"{type(exc).__name__}{': ' + detail if detail else ''}).",
+    }
+
+
+def _record_verdict(verdict: dict[str, Any]) -> None:
+    """Count one attempt. The caller holds ``_selection_lock``."""
     global _cached_verdict, _last_timeout, _timeout_attempts, _retry_after, _revision
+    if verdict.get("opencl_unavailable_reason") in TRANSIENT_REASONS:
+        _timeout_attempts += 1
+        _last_timeout = verdict
+        _retry_after = time.monotonic() + RETRY_INTERVAL_SECONDS
+        if _timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
+            # Bound repeated timeouts/internal errors; retain the true code
+            # rather than misreporting an absent or numerically bad device.
+            _cached_verdict = verdict
+    else:
+        _cached_verdict = verdict
+        _last_timeout = None
+        _timeout_attempts = 0
+    _revision += 1
+
+
+def qualified_opencl() -> dict[str, Any]:
     with _selection_lock:
         _check_cancelled()
         if _cached_verdict is not None:
             return dict(_cached_verdict)
         if _last_timeout is not None and not retry_due():
             return dict(_last_timeout)
-        verdict = _qualified_opencl()
+        try:
+            verdict = _qualified_opencl()
+        except ProbeCancelled:
+            raise
+        except Exception as exc:
+            # Never leave an attempt unrecorded: retry_pending() would stay
+            # true with no verdict behind it, and the attempt cap could not end
+            # the retries. An internal failure is a transient probe error.
+            logging.getLogger(__name__).warning("OpenCL qualification failed internally", exc_info=True)
+            verdict = _internal_error_verdict(exc)
         _check_cancelled()
-        if verdict.get("opencl_unavailable_reason") in TRANSIENT_REASONS:
-            _timeout_attempts += 1
-            _last_timeout = verdict
-            _retry_after = time.monotonic() + RETRY_INTERVAL_SECONDS
-            if _timeout_attempts >= MAX_TIMEOUT_ATTEMPTS:
-                # Bound repeated timeouts/internal errors; retain the true code
-                # rather than misreporting an absent or numerically bad device.
-                _cached_verdict = verdict
-        else:
-            _cached_verdict = verdict
-            _last_timeout = None
-            _timeout_attempts = 0
-        _revision += 1
+        _record_verdict(verdict)
         return dict(verdict)
+
+
+def record_failed_attempt(exc: BaseException) -> None:
+    """Count a status check that raised before qualification could record it.
+
+    The registry retries BEMPP on this module's interval and attempt cap. A
+    failure that recorded nothing would leave a retry due forever, and the
+    interface reads ``retry_pending()`` as "still checking".
+    """
+    with _selection_lock:
+        if _cached_verdict is None:
+            _record_verdict(_internal_error_verdict(exc))
 
 
 def clear_cache() -> None:
