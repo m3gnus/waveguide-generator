@@ -1067,6 +1067,11 @@ begin
         Elapsed := GetTickCount() - Start;
       end;
     end;
+    { A modal dialog opened inside the pump (Cancel's confirmation, say) can
+      hold it past the deadline after the process has exited. Look once more
+      before calling it a timeout, as the single blocking wait would have. }
+    if not Exited then
+      Exited := WaitForSingleObject(Handle, 0) = WAIT_OBJECT_0;
     if Exited then
       WgLog('/WAITPID: process ' + IntToStr(Pid) + ' exited.')
     else
@@ -1188,8 +1193,13 @@ begin
       WgLog('Install refused: native application or worker is still running.');
       exit;
     end;
-    Sleep(WaitSliceMs);
-    PumpMessages();
+    { No sleep or pump after the last check: a modal dialog held open in the
+      pump must always be followed by one more look at the mutex. }
+    if Attempt < 1200 then
+    begin
+      Sleep(WaitSliceMs);
+      PumpMessages();
+    end;
   end;
   WgLog('Install refused: native Running handles remained after 120 seconds.');
 end;

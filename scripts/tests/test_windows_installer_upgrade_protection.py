@@ -236,9 +236,22 @@ def test_waitpid_waits_pump_the_wizard_message_queue(code: str) -> None:
     # No single wait may block for the whole cap again.
     assert not re.search(r"WaitForSingleObject\(\w+, WaitForProcessLimitMs\)", plain_code)
 
+    # A modal dialog inside the pump can outlast the deadline after the process
+    # exited, so the timeout verdict must follow one final non-blocking look.
+    after_loop = wait.split("Elapsed := GetTickCount() - Start;", 1)[1]
+    assert re.search(
+        r"if not Exited then\s+Exited := WaitForSingleObject\(Handle, 0\) = WAIT_OBJECT_0;\s+if Exited then",
+        after_loop,
+    )
+
     running = _strip_comments_and_strings(_body(code, "function WaitForRunningApplicationExit(): Boolean;"))
-    assert re.search(r"Sleep\(WaitSliceMs\);\s+PumpMessages\(\);", running)
     assert "for Attempt := 0 to 1200 do" in running
+    # The sleep and pump never follow the last mutex check, so the refusal is
+    # always decided by a check made after any pump.
+    assert re.search(
+        r"if Attempt < 1200 then\s+begin\s+Sleep\(WaitSliceMs\);\s+PumpMessages\(\);\s+end;\s+end;\s+WgLog\(",
+        running,
+    )
     # The pump is defined before either wait uses it.
     assert code.index("procedure PumpMessages();") < code.index("function WaitForApplicationExit(): Boolean;")
 
