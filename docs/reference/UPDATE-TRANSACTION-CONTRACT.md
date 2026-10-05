@@ -742,6 +742,12 @@ The evidence each mode has for these:
     Both manifests must have schema 1 and matching runtime identities, with a
     complete app build identity. The live layers must not resolve through links,
     and the running interpreter/helper must not use the retained backups or staging.
+    The live layers are also walked for internal links or junctions into any
+    retained material; the first hit or filesystem error refuses reclamation.
+    Settlement holds the same installation process claim as the updater and
+    rollback helpers through validation, closure and all cleanup. The journal
+    identity and state and the installation marker are read again before removal;
+    changed evidence keeps the recovery records and rollback material.
     The completion record saves the supersession and the original staging roots
     before the journal and matching installation marker are closed; normal scoped
     cleanup then reclaims the obsolete `.previous` layers and staging. A version

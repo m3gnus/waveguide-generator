@@ -24,6 +24,7 @@ commit there would pre-empt the evidence the controller waits for.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 import os
 from pathlib import Path
 import shutil
@@ -43,6 +44,7 @@ from launchers.apply_update import (
     read_build_identity,
     read_completion_record,
     read_journal,
+    read_transaction_open_marker,
     reclaim_committed_staging,
     repair_bundle,
     resources_directory,
@@ -50,6 +52,7 @@ from launchers.apply_update import (
     sweep_unowned_staging,
     superseding_installed_build,
 )
+from launchers.update_lock import UpdateInProgress, claim_update
 from server.platform.instance import pid_is_running
 
 
@@ -273,7 +276,7 @@ class HealthyStartSettlement:
         with nothing to search for.
         """
 
-        with self._lock:
+        with self._lock, ExitStack() as claims:
             if self._settled:
                 return True
             paths = self._paths()
@@ -289,7 +292,15 @@ class HealthyStartSettlement:
                 if line is not None:
                     log(line)
                 return False
-            retained_record = read_journal(data_dir, resources) or read_completion_record(data_dir, resources)
+            # The detached updater/rollback helpers take this same process
+            # claim. Keep it through validation, closure and all reclamation.
+            try:
+                claims.enter_context(claim_update(resources))
+            except (UpdateInProgress, OSError, RuntimeError, ValueError) as exc:
+                log(f"Not reclaiming the previous layers: could not claim the update: {exc}.")
+                return False
+            validated_journal = read_journal(data_dir, resources)
+            retained_record = validated_journal or read_completion_record(data_dir, resources)
             if running_build_uses_retained_material(resources, retained_record):
                 line = unconfirmed_line(
                     data_dir, resources, "the running build still uses retained rollback or staging material"
@@ -331,9 +342,20 @@ class HealthyStartSettlement:
             if not committed:
                 log(f"Not reclaiming the previous layers: {commit_detail}.")
                 return False
-            self._settled = True
+            expected_journal = (
+                None
+                if validated_journal is not None and journal_describes(validated_journal, resources)
+                else validated_journal
+            )
+            if (
+                read_journal(data_dir, resources) != expected_journal
+                or read_transaction_open_marker(resources) is not None
+            ):
+                log("Not reclaiming the previous layers: the update transaction changed during settlement.")
+                return False
             if commit_detail.startswith("update transaction"):
                 log(f"Healthy start: {commit_detail}.")
+            self._settled = True
             _reclaim(
                 bundle,
                 resources,

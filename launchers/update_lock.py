@@ -19,6 +19,8 @@ Who takes it:
 * the in-application startup recovery in ``launchers/statusapp/updater.py``,
   which decides a transaction on every start;
 * the detached rollback helper, which is the same CLI running from a copy.
+* healthy-start settlement, through validation, transaction closure and
+  reclamation of the rollback layers and staging.
 
 Every one of them **fails closed**: an installation whose update is owned by a
 live process is left exactly as that process left it, and a start that finds the

@@ -2750,6 +2750,316 @@ def _valid_bridge_target(tmp_path: Path) -> tuple[Installation, str]:
     return installation, _decided_update(installation, "win32")
 
 
+def _replacement_bridge_target(tmp_path: Path) -> tuple[Installation, str]:
+    installation, transaction = _valid_bridge_target(tmp_path)
+    _stamp_build(installation.resources / "app", "0.3.5", "c" * 40, "b" * 12)
+    return installation, transaction
+
+
+def test_settlement_holds_the_helpers_process_claim_through_reclamation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    checked: set[str] = set()
+
+    def guarded(module: Any, name: str) -> None:
+        original = getattr(module, name)
+
+        def check_claim(*args: Any, **kwargs: Any) -> Any:
+            # A separate descriptor uses the exact claim used by the CLI,
+            # including a detached rollback helper. It must never acquire it
+            # between validation and deletion of the final staging directory.
+            with pytest.raises(update_lock.UpdateInProgress):
+                with apply_update_module._claim_update(installation.resources):
+                    pytest.fail("the rollback helper acquired the settlement's claim")
+            checked.add(name)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(module, name, check_claim)
+
+    guarded(healthy_start, "superseding_installed_build")
+    for name in ("write_completion_record", "remove_transaction_open_marker", "remove_journal"):
+        guarded(apply_update_module, name)
+    for name in ("cleanup_previous_layers", "reclaim_committed_staging", "sweep_unowned_staging"):
+        guarded(healthy_start, name)
+
+    assert healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy replacement", report=lambda _message: None
+    )
+    assert len(checked) == 7
+    with apply_update_module._claim_update(installation.resources):
+        pass  # released only after the whole sequence
+
+
+@pytest.mark.parametrize("problem", ["held", "unavailable"])
+def test_settlement_refuses_when_the_process_claim_cannot_be_taken(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    before = read_journal(installation.data_dir, installation.resources)
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+
+    def settle() -> bool:
+        return settlement.settle(ready=True, evidence="healthy replacement", report=lambda _m: None)
+
+    if problem == "held":
+        with apply_update_module._claim_update(installation.resources):
+            assert not settle()
+    else:
+        def unavailable(_resources: Path) -> Any:
+            raise OSError("claim directory unreadable")
+
+        monkeypatch.setattr(healthy_start, "claim_update", unavailable)
+        assert not settle()
+    assert not settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) == before
+    assert apply_update_module.read_transaction_open_marker(installation.resources) is not None
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir()
+    assert _completion_record(installation.data_dir, installation.resources) is None
+
+
+@pytest.mark.parametrize("boundary", ["validation", "completion", "marker-close"])
+@pytest.mark.parametrize("change", ["rollback", "journal-state", "marker-owner"])
+def test_commit_does_not_erase_recovery_evidence_changed_after_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, change: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    resources, data = installation.resources, installation.data_dir
+    replacement_journal: dict[str, Any] | None = None
+    replacement_marker: dict[str, Any] | None = None
+    (resources / "runtime.failed").mkdir()
+
+    def interleave() -> None:
+        nonlocal replacement_journal, replacement_marker
+        if change == "rollback":
+            apply_update_module.begin_rollback_transaction(
+                data_dir=data, bundle=installation.bundle, resources=resources,
+                platform_name="win32", reason="interrupted rollback",
+            )
+        elif change == "journal-state":
+            set_journal_state(data, resources, "restoring")
+        else:
+            marker = resources / ".update-transaction-open.json"
+            payload = json.loads(marker.read_text()) if marker.exists() else {
+                "schema": apply_update_module.TRANSACTION_OPEN_MARKER_SCHEMA,
+                "installation": installation_key(resources),
+            }
+            payload.update(transaction="d" * 32, dataDir=str(data))
+            marker.write_text(json.dumps(payload))
+        replacement_journal = read_journal(data, resources)
+        replacement_marker = apply_update_module.read_transaction_open_marker(resources)
+
+    if boundary in {"validation", "completion"}:
+        name = "superseding_installed_build" if boundary == "validation" else "write_completion_record"
+        original = getattr(apply_update_module, name)
+
+        def changed(*args: Any, **kwargs: Any) -> Any:
+            result = original(*args, **kwargs)
+            interleave()
+            return result
+
+        monkeypatch.setattr(apply_update_module, name, changed)
+
+    allowed, detail = commit_transaction(
+        data, resources=resources, supersede_installed=True,
+        platform_name="darwin" if boundary == "marker-close" else "win32",
+        reseal=interleave if boundary == "marker-close" else None,
+    )
+    assert not allowed and "changed during settlement" in detail
+    assert replacement_journal is not None
+    assert read_journal(data, resources) == replacement_journal
+    assert apply_update_module.read_transaction_open_marker(resources) == replacement_marker
+    assert (resources / "app.previous").is_dir()
+    assert (resources / "runtime.previous").is_dir()
+    assert (resources / "runtime.failed").is_dir()
+    assert (data / "updates" / "9.9.9").is_dir()
+
+
+def test_settlement_rechecks_recovery_evidence_before_reclaiming_layers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    original = healthy_start.commit_transaction
+    rollback: dict[str, Any] = {}
+
+    def commit_then_publish(*args: Any, **kwargs: Any) -> Any:
+        result = original(*args, **kwargs)
+        assert result[0]
+        rollback.update(apply_update_module.begin_rollback_transaction(
+            data_dir=installation.data_dir, bundle=installation.bundle,
+            resources=installation.resources, platform_name="win32", reason="interrupted rollback",
+        ))
+        return result
+
+    monkeypatch.setattr(healthy_start, "commit_transaction", commit_then_publish)
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+    assert not settlement.settle(ready=True, evidence="healthy replacement", report=lambda _m: None)
+    assert not settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) == rollback
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir()
+
+
+@pytest.mark.parametrize("replacement", [False, True], ids=["confirmed-target", "replacement"])
+@pytest.mark.parametrize("retained", ["previous", "failed", "staging"])
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_internal_live_layer_links_keep_retained_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, replacement: bool, retained: str, kind: str
+) -> None:
+    installation, _transaction = _valid_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    resources, data = installation.resources, installation.data_dir
+    if replacement:
+        _stamp_build(resources / "app", "0.3.5", "c" * 40, "b" * 12)
+    target_root = data / "updates" / "9.9.9" if retained == "staging" else resources / f"runtime.{retained}"
+    dependency = target_root / "bempp"
+    dependency.mkdir(parents=True)
+    module = dependency / "__init__.py"
+    module.write_text("retained dependency")
+    link = resources / "runtime" / "lib" / "python3.13" / "site-packages" / "bempp"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(dependency if kind == "directory" else module, target_is_directory=kind == "directory")
+    before = read_journal(data, resources)
+    marker = apply_update_module.read_transaction_open_marker(resources)
+
+    assert apply_update_module.running_build_uses_retained_material(resources, before)
+    assert apply_update_module.superseding_installed_build(resources, before or {}) is None
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy interface", report=lambda _message: None
+    )
+    assert read_journal(data, resources) == before
+    assert apply_update_module.read_transaction_open_marker(resources) == marker
+    assert module.read_text() == "retained dependency"
+    assert (resources / "runtime.previous").is_dir()
+    assert (data / "updates" / "9.9.9").is_dir()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows junction")
+def test_an_internal_windows_junction_keeps_the_retained_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    link = installation.resources / "runtime" / "bempp"
+    target = installation.resources / "runtime.previous"
+    subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert apply_update_module.running_build_uses_retained_material(installation.resources, journal)
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy interface", report=lambda _message: None
+    )
+    assert target.is_dir()
+    assert read_journal(installation.data_dir, installation.resources) == journal
+
+
+def test_an_internal_link_keeps_staging_after_the_journal_is_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _valid_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    allowed, detail = commit_transaction(installation.data_dir, resources=installation.resources,
+        platform_name="win32")
+    assert allowed, detail
+    staging = installation.data_dir / "updates" / "9.9.9"
+    dependency = staging / "bempp"
+    dependency.mkdir()
+    (installation.resources / "runtime" / "bempp").symlink_to(dependency, target_is_directory=True)
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy interface", report=lambda _message: None
+    )
+    assert dependency.is_dir()
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert (_completion_record(installation.data_dir, installation.resources) or {})["rollbackMaterial"] == "retained"
+
+
+def test_the_retention_walk_recognizes_directory_reparse_points_without_symlink_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    link = installation.resources / "runtime" / "bempp"
+    link.symlink_to(installation.resources / "runtime.previous", target_is_directory=True)
+    original_stat = os.DirEntry.stat
+
+    def junction_stat(entry: Any, **kwargs: Any) -> Any:
+        if Path(entry.path) == link:
+            return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400)
+        return original_stat(entry, **kwargs)
+
+    monkeypatch.setattr(os.DirEntry, "stat", junction_stat)
+    assert apply_update_module.running_build_uses_retained_material(
+        installation.resources, read_journal(installation.data_dir, installation.resources)
+    )
+
+
+def test_internal_links_within_the_live_layers_allow_reclamation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    runtime = installation.resources / "runtime"
+    (runtime / "python3.13").write_text("live interpreter")
+    (runtime / "python").symlink_to(runtime / "python3.13")
+    assert healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy interface", report=lambda _message: None
+    )
+    assert (runtime / "python").read_text() == "live interpreter"
+    assert not (installation.resources / "runtime.previous").exists()
+
+
+@pytest.mark.parametrize("problem", ["unreadable-directory", "unreadable-entry", "dangling-link", "link-loop"])
+def test_the_internal_retention_walk_refuses_on_filesystem_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    runtime = installation.resources / "runtime"
+    if problem == "unreadable-directory":
+        original = os.scandir
+
+        def unreadable(path: Any) -> Any:
+            if Path(path) == runtime:
+                raise PermissionError("unreadable runtime")
+            return original(path)
+
+        monkeypatch.setattr(apply_update_module.os, "scandir", unreadable)
+    elif problem == "unreadable-entry":
+        original_stat = os.DirEntry.stat
+
+        def unreadable_stat(entry: Any, **kwargs: Any) -> Any:
+            if Path(entry.path).parent == runtime:
+                raise PermissionError("unreadable entry")
+            return original_stat(entry, **kwargs)
+
+        monkeypatch.setattr(os.DirEntry, "stat", unreadable_stat)
+    else:
+        link = runtime / "bempp"
+        link.symlink_to(link if problem == "link-loop" else runtime / "missing")
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert apply_update_module.running_build_uses_retained_material(installation.resources, journal)
+    assert apply_update_module.superseding_installed_build(installation.resources, journal or {}) is None
+
+
+def test_the_internal_retention_walk_stops_at_the_first_retained_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    runtime = installation.resources / "runtime"
+    (runtime / "bempp").symlink_to(installation.resources / "runtime.previous", target_is_directory=True)
+    original = os.scandir
+
+    def do_not_walk_app(path: Any) -> Any:
+        if Path(path) == installation.resources / "app":
+            pytest.fail("continued walking after finding a retained dependency")
+        return original(path)
+
+    monkeypatch.setattr(apply_update_module.os, "scandir", do_not_walk_app)
+    assert apply_update_module.running_build_uses_retained_material(
+        installation.resources, read_journal(installation.data_dir, installation.resources)
+    )
+
+
 @pytest.mark.parametrize("changed", ["commit", "runtime", "both"])
 def test_a_healthy_full_installer_build_supersedes_the_installed_bridge_transaction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str

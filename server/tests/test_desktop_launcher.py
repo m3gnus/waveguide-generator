@@ -16,6 +16,7 @@ import pytest
 
 from launchers import apply_update as apply_update_module
 from launchers import desktop
+from launchers import update_lock
 from launchers.statusapp import healthy_start
 from launchers.statusapp.controller import (
     LampStatus,
@@ -42,6 +43,13 @@ WINDOWS_WEBVIEW_READY = {
     "pythonnet_loader": lambda: object(),
     "webview2_probe": lambda: True,
 }
+
+
+@pytest.fixture(autouse=True)
+def _update_claims_stay_in_this_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Healthy-start settlement takes the helper's real claim, in a private cache."""
+
+    monkeypatch.setattr(update_lock, "cache_root", lambda **_kwargs: tmp_path / "cache")
 
 
 @pytest.fixture(autouse=True)

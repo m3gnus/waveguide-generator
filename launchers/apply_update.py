@@ -1052,23 +1052,49 @@ def running_build_uses_retained_material(
 
     Recovery launchers may still use runtime.previous. Resolving the live layer
     paths also catches a symlink or Windows junction into a retained layer.
-    Ambiguous paths retain the material.
+    Walk inside the live layers too: a dependency can link into a backup even
+    when both roots are ordinary directories. Stop at the first dependency or
+    filesystem error; do not follow directory links into unbounded trees.
     """
 
     try:
         root = resolved_path(resources, strict=True)
         live_paths = [resolved_path(root / name) for name in BUNDLE_LAYERS]
         live_paths.extend((resolved_path(sys.executable), resolved_path(__file__)))
-        retained = list(root.glob("*.previous")) + list(root.glob("*.failed*"))
+        with os.scandir(root) as entries:
+            retained = [
+                Path(entry.path) for entry in entries
+                if entry.name.endswith(".previous") or ".failed" in entry.name
+            ]
         retained.extend(Path(text) for text in journal_staging_roots(record or {}))
         # A previous start may have closed the journal but deferred cleanup.
         roots = (record or {}).get("stagingRoots")
         if isinstance(roots, list):
             retained.extend(Path(text) for text in roots if isinstance(text, str) and text)
-        for path in retained:
-            candidate = resolved_path(path)
-            if any(live == candidate or candidate in live.parents for live in live_paths):
-                return True
+        candidates = [resolved_path(path) for path in retained]
+
+        def uses_retained(path: Path) -> bool:
+            return any(path == candidate or candidate in path.parents for candidate in candidates)
+
+        if any(uses_retained(live) for live in live_paths):
+            return True
+        pending = [root / name for name in BUNDLE_LAYERS]
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    info = entry.stat(follow_symlinks=False)
+                    # Junctions are directory reparse points on Windows and
+                    # need not be reported as symbolic links.
+                    linked = stat.S_ISLNK(info.st_mode) or bool(
+                        getattr(info, "st_file_attributes", 0)
+                        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+                    )
+                    if linked:
+                        if uses_retained(resolved_path(entry.path, strict=True)):
+                            return True
+                    elif stat.S_ISDIR(info.st_mode):
+                        pending.append(Path(entry.path))
     except (OSError, RuntimeError, ValueError):
         return True
     return False
@@ -3641,6 +3667,9 @@ def commit_transaction(
     ``supersede_installed`` is only requested by a healthy start of a different
     build, and revalidates the app/runtime replacement before recording it as
     superseded. The normal commit path retains its target-confirmation rules.
+    The caller holds the installation's process claim through reclamation.
+    Re-read the journal and marker before removal as well, so changed recovery
+    evidence is never erased using an earlier validation.
     """
 
     journal = read_journal(data_dir, resources)
@@ -3651,6 +3680,12 @@ def commit_transaction(
         if platform_name is not None
         else (str(journal_platform) if isinstance(journal_platform, str) else sys.platform)
     )
+
+    def transaction_unchanged(expected_marker: Mapping[str, Any] | None) -> bool:
+        return (
+            read_journal(data_dir, resources) == journal
+            and read_transaction_open_marker(resources) == expected_marker
+        )
 
     def restore_open_marker(marker: Mapping[str, Any], identifier: str) -> str | None:
         try:
@@ -3668,6 +3703,8 @@ def commit_transaction(
         return None
 
     def close_open_marker(marker: Mapping[str, Any], identifier: str) -> tuple[bool, str]:
+        if not transaction_unchanged(marker):
+            return False, "the update transaction changed during settlement"
         if effective_platform == "darwin" and reseal is None:
             return False, "no macOS bundle reseal was provided"
         if not remove_transaction_open_marker(resources, log=log):
@@ -3762,6 +3799,12 @@ def commit_transaction(
                 f"update transaction {identifier} has no valid replacement build evidence; "
                 "the rollback material was kept"
             )
+    changed_detail = (
+        f"update transaction {identifier} changed during settlement; "
+        "the recovery records and rollback material were kept"
+    )
+    if not transaction_unchanged(open_marker):
+        return False, changed_detail
     # The journal is the only record of how this transaction ended, and it is
     # about to go. Save the outcome first, and if that cannot be done keep the
     # journal -- and with it the rollback material -- for the next start.
@@ -3785,6 +3828,8 @@ def commit_transaction(
             f"update transaction {identifier} ended {state!r}, but its outcome could not be "
             "recorded, so its journal was kept and the rollback material may not be reclaimed"
         )
+    if not transaction_unchanged(open_marker):
+        return False, changed_detail
     if open_marker is not None:
         marker_closed, marker_detail = close_open_marker(open_marker, identifier)
         if not marker_closed:
@@ -3793,6 +3838,8 @@ def commit_transaction(
                 f"could not be committed ({marker_detail}), so its journal was kept and the "
                 "rollback material may not be reclaimed"
             )
+    if not transaction_unchanged(None):
+        return False, changed_detail
     if not remove_journal(data_dir, resources, log=log):
         restore_error = (
             restore_open_marker(open_marker, identifier) if open_marker is not None else None
