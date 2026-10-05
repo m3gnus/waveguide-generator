@@ -253,6 +253,8 @@ var
   OpenClHelpButton: TNewButton;
   OpenClNotice: TNewMemo;
   WgLinkStatus: String;
+  { Set by InitializeWizard, spent by the first visit to the tasks page. }
+  WgLinkPreselectPending: Boolean;
   PreviousVersion: String;
   { True once replacement began at ssInstall: this run owns the layer folders. }
   ProtectionStarted: Boolean;
@@ -673,6 +675,23 @@ end;
 function FusionDetected(): Boolean;
 begin
   Result := WgLinkAddInsDirectory() <> '';
+end;
+
+function TaskChoiceOnCommandLine(): Boolean;
+var
+  Index: Integer;
+  Argument: String;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    Argument := Uppercase(ParamStr(Index));
+    if (Pos('/TASKS=', Argument) = 1) or (Pos('/MERGETASKS=', Argument) = 1) then
+    begin
+      Result := True;
+      exit;
+    end;
+  end;
 end;
 
 procedure RecordWGLinkSetupChoice();
@@ -1284,12 +1303,16 @@ begin
   end;
   { A normal interactive setup may make the Fusion-aware recommendation. A
     silent invocation has no user to make that choice, so it must opt in with
-    /TASKS="wglink" instead. }
+    /TASKS="wglink" instead. The tasks list is still empty here: Inno builds it
+    only when the wizard moves to the tasks page, so WizardSelectTasks would
+    have nothing to select. CurPageChanged applies the choice on that page. An
+    explicit /TASKS or /MERGETASKS on the command line is the user's choice and
+    is left alone. }
+  WgLinkPreselectPending := False;
   if FusionDetected() then
   begin
     WgLog('WGLink: Fusion AddIns directory detected at ' + WgLinkAddInsDirectory() + '.');
-    if not WizardSilent() then
-      WizardSelectTasks(WgLinkTaskName);
+    WgLinkPreselectPending := not WizardSilent() and not TaskChoiceOnCommandLine();
   end
   else
     WgLog('WGLink: no Fusion AddIns directory detected; task remains unchecked.');
@@ -1683,6 +1706,14 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
+  { Only the first visit preselects: a later visit, after Back, keeps
+    whatever the user chose, and Inno itself restores that state. }
+  if (CurPageID = wpSelectTasks) and WgLinkPreselectPending and not WizardSilent() then
+  begin
+    WgLinkPreselectPending := False;
+    WizardSelectTasks(WgLinkTaskName);
+    WgLog('WGLink: task preselected because Fusion was detected.');
+  end;
   if (CurPageID <> wpFinished) or WizardSilent() then
     exit;
   if WgLinkStatus <> '' then

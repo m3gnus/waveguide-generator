@@ -91,7 +91,28 @@ def test_silent_upgrade_still_never_reuses_or_forces_wglink(script: str) -> None
     assert "\nUsePreviousTasks=no\n" in script
     # No task is defaulted on by the installer for a silent run.
     assert "Flags: unchecked" in script.split('Name: "wglink"', 1)[1].splitlines()[0]
-    assert "if not WizardSilent() then\n      WizardSelectTasks(WgLinkTaskName);" in script
+    # The Fusion-aware preselection is armed only for an interactive run that
+    # named no task choice of its own, and it is the only selection setup makes.
+    init = _body(script, "procedure InitializeWizard();")
+    assert "WgLinkPreselectPending := False;" in init
+    assert "WgLinkPreselectPending := not WizardSilent() and not TaskChoiceOnCommandLine();" in init
+    assert "WizardSelectTasks(" not in init
+    assert script.count("WizardSelectTasks(") == 1
+
+
+def test_fusion_preselection_runs_on_the_first_interactive_tasks_page(script: str) -> None:
+    # Inno builds the tasks list only on the way to wpSelectTasks; selecting a
+    # task in InitializeWizard finds an empty list and does nothing (observed
+    # 2026-10-05 with Inno Setup 6.7.3). The selection belongs on that page.
+    page = _body(script, "procedure CurPageChanged(CurPageID: Integer);")
+    guard = "if (CurPageID = wpSelectTasks) and WgLinkPreselectPending and not WizardSilent() then"
+    preselect = page.split(guard, 1)[1].split("\n  end;", 1)[0]
+    assert "WgLinkPreselectPending := False;" in preselect
+    assert "WizardSelectTasks(WgLinkTaskName);" in preselect
+    assert preselect.index("WgLinkPreselectPending := False;") < preselect.index("WizardSelectTasks(")
+    # A command-line task choice, interactive or not, is never overridden.
+    choice = _body(script, "function TaskChoiceOnCommandLine(): Boolean;")
+    assert "(Pos('/TASKS=', Argument) = 1) or (Pos('/MERGETASKS=', Argument) = 1)" in choice
 
 
 def test_setup_choice_is_recorded_only_for_the_selected_task_before_install(code: str) -> None:
