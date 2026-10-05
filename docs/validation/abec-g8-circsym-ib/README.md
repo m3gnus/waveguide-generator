@@ -76,6 +76,12 @@ quantity that is independent of the observation geometry entirely.
 
 ## Running it
 
+The public ATH source and echoed config use `Output.DestDir = out`. For
+ATH regeneration, run from this fixture directory so the relative output stays
+in `out/`. Only the output location in `ath-config-as-run.txt` has been
+normalized from the historical local path; the recorded inputs and ABEC
+results are unchanged.
+
 ABEC3 exposes no command line and its UI is invisible to UI Automation, so this
 is a manual step (ABEC3 Pro v360b07, `ABEC3_Pro_64r.exe`):
 

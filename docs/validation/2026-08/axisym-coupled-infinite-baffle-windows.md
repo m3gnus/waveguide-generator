@@ -2,7 +2,7 @@
 
 Date: 2026-08-21  
 Host: Windows 11 Pro 24H2, build 26100.1742  
-Artifact root: `C:\Users\Docker\Desktop\Hornlab - Workspace\validation-artifacts\2026-08-21-axisym-coupled-ib`
+Artifact root (workspace-relative; local prefix omitted): `validation-artifacts/2026-08-21-axisym-coupled-ib`
 
 ## Executive verdict
 
@@ -213,7 +213,7 @@ No tolerances or reference data were changed.
 
 ## Retained artifacts
 
-Artifact root: `C:\Users\Docker\Desktop\Hornlab - Workspace\validation-artifacts\2026-08-21-axisym-coupled-ib`
+Artifact root (workspace-relative; local prefix omitted): `validation-artifacts/2026-08-21-axisym-coupled-ib`
 
 Key files:
 
