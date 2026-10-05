@@ -200,7 +200,9 @@ earlier attempt at the same upgrade, is replaced in place so it never pushes
 the real previous snapshot out of `.bak.1`. A snapshot another SQLite
 connection holds (busy or locked) counts as held, never as invalid: it is not
 quarantined to `.invalid-*`. If any file of the previous set is held open
-(Windows), the moves retry within one 20-second budget for the whole step; if a file stays held, the new snapshot is never published at
+(Windows), the moves retry within one 20-second budget for the whole step; the
+copy runs in small backup steps checked against the same budget, so a connection
+that takes the snapshot after validation cannot stall startup either; if a file stays held, the new snapshot is never published at
 the live name beside a stale sidecar. It is written to
 `simulations.db.pre-schema-6.bak.held-<timestamp>` instead, the log names where
 the previous snapshot is (`.bak`, `.bak.1` or `.invalid-*`), and automatic restore

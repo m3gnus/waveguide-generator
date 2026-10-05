@@ -260,6 +260,14 @@ def _same_content(first: Path, second: Path) -> bool:
         return False
 
 
+#: Pages per backup step, so the budget is checked often.
+_BACKUP_STEP_PAGES = 64
+
+
+class _SnapshotHeld(Exception):
+    """Another connection held the previous snapshot past the shared budget."""
+
+
 def _copy_previous_snapshot(source: Path, rotated: Path, deadline: float) -> bool:
     """Publish the previous snapshot set as one standalone ``rotated`` file.
 
@@ -273,16 +281,27 @@ def _copy_previous_snapshot(source: Path, rotated: Path, deadline: float) -> boo
     fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=source.parent)
     os.close(fd)
     temporary = Path(name)
+
+    def within_budget(status: int, _remaining: int, _total: int) -> None:
+        # Called after every step, including SQLite's own busy retries,
+        # which no busy timeout bounds: the shared deadline does.
+        if status & 0xFF in _SQLITE_HELD_CODES and time.monotonic() >= deadline:
+            raise _SnapshotHeld
+
     try:
         while True:
             try:
                 with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as old:
                     with closing(sqlite3.connect(temporary)) as copy:
-                        old.backup(copy)
+                        old.backup(copy, pages=_BACKUP_STEP_PAGES, progress=within_budget,
+                                   sleep=_HELD_FILE_RETRY_INTERVAL)
                         copy.execute("PRAGMA journal_mode=DELETE")
                         if copy.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                             raise RuntimeError("The rotated jobs rollback snapshot failed its integrity check")
                 break
+            except _SnapshotHeld:
+                logger.warning("The jobs rollback snapshot %s is held by another connection", source)
+                return False
             except sqlite3.Error as exc:
                 code = getattr(exc, "sqlite_errorcode", None)
                 if code is None or code & 0xFF not in _SQLITE_HELD_CODES:

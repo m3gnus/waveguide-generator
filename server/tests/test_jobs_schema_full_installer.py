@@ -664,3 +664,67 @@ def test_sidecars_left_without_their_main_file_are_set_aside(tmp_path: Path) -> 
     assert not Path(str(snapshot) + "-wal").exists()
     # The new snapshot never pairs with the orphaned WAL.
     assert _snapshot(snapshot) == before
+
+
+def test_a_holder_taken_after_validation_cannot_stall_the_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    snapshot = store.rollback_snapshot_path
+    _restored_by_hand(db, snapshot)
+    _work_in_the_older_release(db)
+    live_rows, first_rows, first_bytes = _snapshot(db), _snapshot(snapshot), snapshot.read_bytes()
+
+    holders = []
+    real_validity = store_module._snapshot_validity
+
+    def validity_then_held(path, deadline):
+        valid = real_validity(path, deadline)
+        # Between validation and the copy, another connection takes it.
+        holder = sqlite3.connect(path, timeout=0, check_same_thread=False)
+        holder.execute("PRAGMA locking_mode=EXCLUSIVE")
+        holder.execute("BEGIN EXCLUSIVE")
+        holders.append(holder)
+        return valid
+
+    monkeypatch.setattr(store_module, "_snapshot_validity", validity_then_held)
+    monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_SECONDS", 0.5)
+    monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_INTERVAL", 0.05)
+    failures = []
+
+    def start() -> None:
+        try:
+            upgrade = JobStore(db)
+            upgrade.initialize()
+            upgrade.close()
+        except BaseException as exc:  # reported below
+            failures.append(exc)
+
+    began = time.monotonic()
+    worker = threading.Thread(target=start, daemon=True)
+    worker.start()
+    worker.join(timeout=15)
+    try:
+        assert not worker.is_alive(), "startup stalled on a held snapshot"
+        assert not failures, failures
+        assert time.monotonic() - began < 10
+    finally:
+        for holder in holders:
+            holder.rollback()
+            holder.close()
+
+    assert _user_version(db) == 6
+    held = list(db.parent.glob(snapshot.name + ".held-*"))
+    assert len(held) == 1 and _snapshot(held[0]) == live_rows
+    # The previous snapshot is untouched, with no partial copy anywhere.
+    assert snapshot.read_bytes() == first_bytes and _snapshot(snapshot) == first_rows
+    assert not Path(str(snapshot) + ".1").exists()
+    assert not list(db.parent.glob(".jobs-rollback-*"))
