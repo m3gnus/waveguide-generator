@@ -13,8 +13,10 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
@@ -1041,6 +1043,93 @@ def journal_live_build(journal: Mapping[str, Any]) -> dict[str, str | None] | No
         ("rollback", "rolled-back"),
     }
     return _journal_build(journal, "to" if restored_or_installed else "from")
+
+
+def running_build_uses_retained_material(
+    resources: Path, record: Mapping[str, Any] | None
+) -> bool:
+    """Whether reclaiming backups/staging could remove a live app or interpreter.
+
+    Recovery launchers may still use runtime.previous. Resolving the live layer
+    paths also catches a symlink or Windows junction into a retained layer.
+    Ambiguous paths retain the material.
+    """
+
+    try:
+        root = resolved_path(resources, strict=True)
+        live_paths = [resolved_path(root / name) for name in BUNDLE_LAYERS]
+        live_paths.extend((resolved_path(sys.executable), resolved_path(__file__)))
+        retained = list(root.glob("*.previous")) + list(root.glob("*.failed*"))
+        retained.extend(Path(text) for text in journal_staging_roots(record or {}))
+        # A previous start may have closed the journal but deferred cleanup.
+        roots = (record or {}).get("stagingRoots")
+        if isinstance(roots, list):
+            retained.extend(Path(text) for text in roots if isinstance(text, str) and text)
+        for path in retained:
+            candidate = resolved_path(path)
+            if any(live == candidate or candidate in live.parents for live in live_paths):
+                return True
+    except (OSError, RuntimeError, ValueError):
+        return True
+    return False
+
+
+def superseding_installed_build(
+    resources: Path, journal: Mapping[str, Any]
+) -> dict[str, str | None] | None:
+    """A valid replacement of an installed bridge target, or no supersession evidence.
+
+    A full installer can replace the app/runtime without touching the bridge's
+    journal. Its different commit/runtime plus a healthy start (the caller's
+    evidence) supersedes that transaction; a version label alone does not.
+    Missing/partial manifests, undecided swaps and rollbacks never qualify.
+    The live layers must be independent directories, so a runtime or app that
+    still points into rollback/staging material cannot authorize its removal.
+    """
+
+    if (journal.get("operation"), journal.get("state")) != ("update", "installed"):
+        return None
+    if not journal_describes(journal, resources):
+        return None
+    if running_build_uses_retained_material(resources, journal):
+        return None
+    expected = journal_live_build(journal)
+    if expected is None:
+        return None
+    installed = read_build_identity(resources / "app")
+    if not any(
+        expected.get(field) is not None and installed.get(field) != expected[field]
+        for field in ("commit", "runtimeId")
+    ):
+        return None
+    if (
+        not installed.get("version")
+        or re.fullmatch(r"[0-9a-f]{40}", installed.get("commit") or "") is None
+        or re.fullmatch(r"[0-9a-f]{12}", installed.get("runtimeId") or "") is None
+    ):
+        return None
+    try:
+        root = resolved_path(resources, strict=True)
+        for name in BUNDLE_LAYERS:
+            layer = root / name
+            if not layer.is_dir() or resolved_path(layer, strict=True) != layer:
+                return None
+            manifest = layer / layer_manifest_name(name)
+            info = manifest.lstat()
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 64 * 1024:
+                return None
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            if (
+                not isinstance(payload, dict)
+                or payload.get("schemaVersion") != 1
+                or payload.get("runtimeId") != installed["runtimeId"]
+            ):
+                return None
+            if name == "app" and any(payload.get(field) != value for field, value in installed.items()):
+                return None
+    except (OSError, RuntimeError, ValueError):
+        return None
+    return installed
 
 
 def journal_staging_roots(journal: Mapping[str, Any]) -> list[str]:
@@ -3538,6 +3627,7 @@ def commit_transaction(
     platform_name: str | None = None,
     reseal: Callable[[], None] | None = None,
     log: LogCallable | None = None,
+    supersede_installed: bool = False,
 ) -> tuple[bool, str]:
     """Close a decided transaction so its ``.previous`` may be reclaimed.
 
@@ -3548,6 +3638,9 @@ def commit_transaction(
 
     Returns whether reclaiming may proceed. A transaction that is still open
     means recovery has not run or did not finish, and the answer is no.
+    ``supersede_installed`` is only requested by a healthy start of a different
+    build, and revalidates the app/runtime replacement before recording it as
+    superseded. The normal commit path retains its target-confirmation rules.
     """
 
     journal = read_journal(data_dir, resources)
@@ -3661,6 +3754,14 @@ def commit_transaction(
             f"update transaction {identifier} is unresolved (state {state!r}); "
             "the rollback material was kept"
         )
+    superseded_by = None
+    if supersede_installed:
+        superseded_by = superseding_installed_build(resources, journal)
+        if superseded_by is None:
+            return False, (
+                f"update transaction {identifier} has no valid replacement build evidence; "
+                "the rollback material was kept"
+            )
     # The journal is the only record of how this transaction ended, and it is
     # about to go. Save the outcome first, and if that cannot be done keep the
     # journal -- and with it the rollback material -- for the next start.
@@ -3669,8 +3770,14 @@ def commit_transaction(
         data_dir,
         resources,
         journal,
-        outcome=state,
-        detail=f"committed by a healthy start from state {state!r}"
+        outcome="superseded" if superseded_by is not None else state,
+        detail=(
+            "superseded by a healthy full-installer replacement "
+            f"(version {superseded_by['version']}, commit {superseded_by['commit']}, "
+            f"runtime {superseded_by['runtimeId']})"
+            if superseded_by is not None
+            else f"committed by a healthy start from state {state!r}"
+        )
         + (f": {recorded_detail}" if recorded_detail else ""),
         log=log,
     ):
@@ -3686,7 +3793,21 @@ def commit_transaction(
                 f"could not be committed ({marker_detail}), so its journal was kept and the "
                 "rollback material may not be reclaimed"
             )
-    remove_journal(data_dir, resources, log=log)
+    if not remove_journal(data_dir, resources, log=log):
+        restore_error = (
+            restore_open_marker(open_marker, identifier) if open_marker is not None else None
+        )
+        return False, (
+            f"update transaction {identifier}'s journal could not be removed; "
+            "the rollback material was kept"
+            + (f"; restoring its open marker also failed: {restore_error}" if restore_error else "")
+        )
+    if superseded_by is not None:
+        return True, (
+            f"update transaction {identifier} superseded by healthy full-installer build "
+            f"{superseded_by['version']} (commit {superseded_by['commit'][:12]}, "
+            f"runtime {superseded_by['runtimeId']})"
+        )
     return True, f"update transaction {identifier} committed from state {state!r}"
 
 

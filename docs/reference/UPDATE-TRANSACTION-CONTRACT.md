@@ -731,11 +731,23 @@ The evidence each mode has for these:
   layer's `APP-MANIFEST.json` identity `(version, commit, runtimeId)` with the build the
   decided journal left installed: the `to` build of an update that installed and of a
   rollback that restored, and the `from` build of an update that rolled back or was
-  abandoned. Every field the journal names must match. A mismatch commits nothing,
+  abandoned. Every field the journal names must match. A mismatch normally commits nothing,
   reclaims nothing, and writes the "did not confirm the build" line of §4.5. A journal
   that names no build, which an older helper wrote, is not compared. In the code:
   `installed_build_mismatch` in `launchers/statusapp/healthy_start.py`, and
   `journal_live_build` in `launchers/apply_update.py`.
+  - A full installer can replace an `installed` bridge update without closing its
+    journal. A healthy start of a valid replacement app/runtime whose commit or
+    runtime differs from the target settles that transaction as **superseded**.
+    Both manifests must have schema 1 and matching runtime identities, with a
+    complete app build identity. The live layers must not resolve through links,
+    and the running interpreter/helper must not use the retained backups or staging.
+    The completion record saves the supersession and the original staging roots
+    before the journal and matching installation marker are closed; normal scoped
+    cleanup then reclaims the obsolete `.previous` layers and staging. A version
+    change alone, an undecided transaction, a rollback or an unconfirmed start
+    never authorizes supersession. The same target still needs normal healthy-start
+    confirmation. `update.log` names the transaction and replacement build.
 - The window and browser modes take the first two from a served `/health` and interface
   route. In a bundle, the controller's own server must name the installed app layer's
   build label in `/health`. A `.dirty` suffix is ignored, and the label the layer's own

@@ -99,6 +99,39 @@ def test_complete_signed_release_downloads_then_reverifies_before_callback(tmp_p
     instance.close()
 
 
+def test_open_installed_bridge_transaction_does_not_change_check_or_download(tmp_path, release):
+    from launchers import apply_update
+    from server.updates.install_kind import probe_install
+
+    app, runtime, data = tmp_path / "app", tmp_path / "runtime", tmp_path / "data"
+    app.mkdir()
+    runtime.mkdir()
+    (app / "APP-MANIFEST.json").write_text(json.dumps({"schemaVersion": 1,
+        "version": "0.3.3", "commit": "a" * 40, "runtimeId": "a" * 12}))
+    (runtime / "RUNTIME-MANIFEST.json").write_text(json.dumps({"schemaVersion": 1,
+        "runtimeId": "a" * 12, "platform": assets.WINDOWS_PLATFORM}))
+    apply_update.begin_update_transaction(data_dir=data, bundle=tmp_path,
+        resources=tmp_path, layers=[], platform_name="win32")
+    apply_update.set_journal_state(data, tmp_path, "installed")
+    (tmp_path / "app.previous").mkdir()
+    (tmp_path / "runtime.previous").mkdir()
+    before = apply_update.read_journal(data, tmp_path)
+    instance = client(tmp_path, release, install_probe=lambda *args: probe_install(*args,
+        environ={"WG2_BUNDLE": "1"}, registry_reader=lambda: str(tmp_path)))
+    try:
+        status = checked(instance)
+        assert status["availability"] == "available" and status["canInstall"] is True
+        assert status["action"]["kind"] == "full_installer"
+        callbacks = []
+        assert downloaded(instance, callbacks.append)["installState"] == "ready"
+        assert len(callbacks) == 1 and instance.verified_installer() == callbacks[0]
+        assert apply_update.read_journal(data, tmp_path) == before
+        assert (tmp_path / ".update-transaction-open.json").is_file()
+        assert (tmp_path / "app.previous").is_dir()
+    finally:
+        instance.close()
+
+
 @pytest.mark.parametrize("mutation", ["missing-linux", "bad-signature", "wrong-version", "foreign-url", "wrong-size", "duplicate", "draft", "companion", "bad-numeric", "unuploaded"])
 def test_ineligible_releases_never_become_available(release, mutation):
     payload, files, opener = copy.deepcopy(release[0]), dict(release[1]), release[2]

@@ -874,7 +874,7 @@ def update_action(
 
 #: The interim build identity of contract §2.3, as the completion record writes it.
 BUILD_IDENTITY_FIELDS = ("version", "commit", "runtimeId")
-_RECORDED_OUTCOMES = frozenset({"installed", "rolled-back", "aborted", "unverified"})
+_RECORDED_OUTCOMES = frozenset({"installed", "rolled-back", "aborted", "unverified", "superseded"})
 _RECORDED_OPERATIONS = frozenset({"update", "rollback"})
 
 

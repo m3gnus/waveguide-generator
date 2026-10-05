@@ -200,6 +200,34 @@ def _with_interface(app_layer: Path) -> None:
     (dist / "index.html").write_text("<!doctype html><html></html>", encoding="utf-8")
 
 
+@pytest.mark.parametrize("blocker", ["previous-layers", "open-marker"])
+def test_an_installed_bridge_transaction_refuses_another_apply_but_relaunches(
+    tmp_path: Path, blocker: str
+) -> None:
+    installation = _installation(tmp_path, "win32")
+    transaction = _decided_update(installation, "win32")
+    if blocker == "open-marker":
+        apply_update_module.cleanup_previous_layers(installation.resources)
+    installation.staged_app.mkdir()
+    (installation.staged_app / "marker.txt").write_text("next app")
+    (installation.resources / apply_update_module.WINDOWS_LAUNCHER_NAME).write_text("launcher")
+    before = read_journal(installation.data_dir, installation.resources)
+    launched, logged = [], []
+    result = apply_update_module.apply_update(
+        bundle=installation.bundle, data_dir=installation.data_dir,
+        staged_app=installation.staged_app, staged_runtime=None, parent_pid=123,
+        platform_name="win32", waiter=lambda _pid: True,
+        relauncher=lambda *args, **kwargs: launched.append(args), confirm=lambda _process: None,
+        logger=logged.append, failure_reporter=lambda _message: None,
+    )
+    assert result == 2 and len(launched) == 1
+    assert read_journal(installation.data_dir, installation.resources) == before
+    assert before is not None and before["transaction"] == transaction
+    assert (installation.staged_app / "marker.txt").read_text() == "next app"
+    refusal = "healthy-start check" if blocker == "previous-layers" else "still marked open"
+    assert any(refusal in line and "current version was reopened" in line for line in logged)
+
+
 def _update_log(installation: Installation) -> str:
     log = installation.data_dir / "logs" / "update.log"
     return log.read_text(encoding="utf-8") if log.is_file() else ""
@@ -2711,6 +2739,163 @@ def _build_fields(side: str, identity: dict[str, str]) -> dict[str, str]:
         f"{side}Commit": identity["commit"],
         f"{side}RuntimeId": identity["runtimeId"],
     }
+
+
+def _valid_bridge_target(tmp_path: Path) -> tuple[Installation, str]:
+    installation = _installation(tmp_path, "win32")
+    _stamp_build(installation.staged_app, "0.3.4", "b" * 40, "b" * 12)
+    (installation.staged_runtime / "RUNTIME-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "runtimeId": "b" * 12})
+    )
+    return installation, _decided_update(installation, "win32")
+
+
+@pytest.mark.parametrize("changed", ["commit", "runtime", "both"])
+def test_a_healthy_full_installer_build_supersedes_the_installed_bridge_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    from scripts.build_bundle import windows_launcher_files
+
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    installation, transaction = _valid_bridge_target(tmp_path)
+    resources, data = installation.resources, installation.data_dir
+    # Same version label, different actual build: the observed 0.3.4 -> hotfix case.
+    replacement = _stamp_build(resources / "app", "0.3.4",
+        ("c" if changed != "runtime" else "b") * 40,
+        ("c" if changed != "commit" else "b") * 12)
+    (resources / "runtime" / "RUNTIME-MANIFEST.json").write_text(
+        json.dumps({"schemaVersion": 1, "runtimeId": replacement["runtimeId"]})
+    )
+    for _source, name in windows_launcher_files():
+        (resources / name).write_text("current launcher")
+        (resources / (name + ".previous")).write_text("old launcher")
+    staging = data / "updates" / "9.9.9"
+    (staging / "runtime.zip").write_bytes(b"old download")
+    other = data / "updates" / "other-installation"
+    _staging_owner(other, installation="another-installation", pid=os.getpid())
+    live_before = {path: path.read_bytes() for path in resources.rglob("*")
+        if path.is_file() and ".previous" not in str(path)
+        and path.name != ".update-transaction-open.json"}
+
+    assert healthy_start.HealthyStartSettlement(
+        lambda: (installation.bundle, resources, data)
+    ).settle(ready=True, evidence="healthy replacement", report=lambda _message: None)
+
+    assert read_journal(data, resources) is None
+    assert not (resources / ".update-transaction-open.json").exists()
+    assert not list(resources.glob("*.previous"))
+    assert not staging.exists() and other.is_dir()
+    for path, content in live_before.items():
+        assert path.read_bytes() == content
+    record = _completion_record(data, resources) or {}
+    assert record.get("transaction") == transaction and record.get("outcome") == "superseded"
+    assert record.get("rollbackMaterial") == "reclaimed"
+    assert replacement["commit"] in record["detail"]
+    from server.updates.service import last_outcome
+
+    assert (last_outcome(record) or {}).get("outcome") == "superseded"
+    written = _update_log(installation)
+    assert transaction in written and "superseded by healthy full-installer build" in written
+    assert "Removed the update downloads" in written
+
+
+@pytest.mark.parametrize("replacement", [False, True], ids=["same-target", "different-build"])
+def test_an_unconfirmed_start_never_spends_the_installed_bridge_transaction(
+    tmp_path: Path, replacement: bool
+) -> None:
+    installation, transaction = _valid_bridge_target(tmp_path)
+    if replacement:
+        _stamp_build(installation.resources / "app", "0.3.5", "c" * 40, "b" * 12)
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=False, evidence="interface not confirmed", report=lambda _message: None
+    )
+    assert (read_journal(installation.data_dir, installation.resources) or {})["transaction"] == transaction
+    assert (installation.resources / ".update-transaction-open.json").is_file()
+    assert (installation.resources / "app.previous").is_dir()
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir()
+    assert "stays open" in _update_log(installation)
+
+
+def test_a_closed_transactions_staging_is_retained_if_the_interpreter_uses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _valid_bridge_target(tmp_path)
+    committed, detail = commit_transaction(installation.data_dir,
+        resources=installation.resources, platform_name="win32")
+    assert committed, detail
+    staging = installation.data_dir / "updates" / "9.9.9"
+    interpreter = staging / "python.exe"
+    interpreter.write_text("running interpreter")
+    monkeypatch.setattr(apply_update_module.sys, "executable", str(interpreter))
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy interface", report=lambda _message: None
+    )
+    assert interpreter.read_text() == "running interpreter"
+    assert (installation.resources / "runtime.previous").is_dir()
+
+
+@pytest.mark.parametrize("problem", [
+    "missing-app-manifest", "partial-identity", "wrong-schema", "runtime-mismatch",
+    "version-only", "linked-app", "linked-runtime", "running-previous", "running-staging",
+    "foreign-marker", "outcome-write-failed", "journal-remove-failed", "confirmed-target-using-previous",
+])
+def test_a_superseding_start_keeps_material_when_replacement_evidence_is_unsafe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    installation, _transaction = _valid_bridge_target(tmp_path)
+    resources, data = installation.resources, installation.data_dir
+    app_manifest = resources / "app" / "APP-MANIFEST.json"
+    _stamp_build(resources / "app", "0.3.5", "c" * 40, "b" * 12)
+    if problem == "missing-app-manifest":
+        app_manifest.unlink()
+    elif problem in {"partial-identity", "wrong-schema"}:
+        manifest = json.loads(app_manifest.read_text())
+        if problem == "partial-identity":
+            manifest.pop("commit")
+        else:
+            manifest["schemaVersion"] = 999
+        app_manifest.write_text(json.dumps(manifest))
+    elif problem == "runtime-mismatch":
+        (resources / "runtime" / "RUNTIME-MANIFEST.json").write_text(
+            json.dumps({"schemaVersion": 1, "runtimeId": "d" * 12}))
+    elif problem == "version-only":
+        _stamp_build(resources / "app", "0.3.5", "b" * 40, "b" * 12)
+    elif problem.startswith("linked-"):
+        layer = resources / problem.removeprefix("linked-")
+        saved = resources / (layer.name + ".full-installer")
+        layer.rename(saved)
+        layer.symlink_to(saved, target_is_directory=True)
+    elif problem in {"running-previous", "running-staging"}:
+        directory = (resources / "runtime.previous" if problem == "running-previous"
+            else data / "updates" / "9.9.9")
+        interpreter = directory / "python.exe"
+        interpreter.write_text("running interpreter")
+        monkeypatch.setattr(apply_update_module.sys, "executable", str(interpreter))
+    elif problem == "confirmed-target-using-previous":
+        _stamp_build(resources / "app", "0.3.4", "b" * 40, "b" * 12)
+        interpreter = resources / "runtime.previous" / "python.exe"
+        interpreter.write_text("running interpreter")
+        monkeypatch.setattr(apply_update_module.sys, "executable", str(interpreter))
+    elif problem == "foreign-marker":
+        marker = resources / ".update-transaction-open.json"
+        payload = json.loads(marker.read_text())
+        payload["dataDir"] = str(tmp_path / "other-data")
+        marker.write_text(json.dumps(payload))
+    elif problem == "outcome-write-failed":
+        monkeypatch.setattr(apply_update_module, "write_completion_record", lambda *a, **k: False)
+    elif problem == "journal-remove-failed":
+        monkeypatch.setattr(apply_update_module, "remove_journal", lambda *a, **k: False)
+    before = read_journal(data, resources)
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy interface", report=lambda _message: None
+    )
+    assert read_journal(data, resources) == before
+    assert (resources / ".update-transaction-open.json").exists()
+    assert (resources / "app.previous").is_dir() and (resources / "runtime.previous").is_dir()
+    assert (data / "updates" / "9.9.9").is_dir()
+    assert "Not reclaiming" in _update_log(installation)
 
 
 @pytest.mark.parametrize(

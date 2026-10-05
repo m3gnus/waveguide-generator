@@ -4,8 +4,9 @@
 ``commit_transaction``, which writes the completion record and closes the
 journal, and the healthy-start cleanup that is scoped to the committed
 transaction (§2.5). Until a start settles, the transaction keeps ``.previous``
-and the next update is refused, so a mode that never settles can update once
-and never again.
+and the next bridge layer update is refused. Full-installer updates can replace
+the installed build independently; a healthy replacement settles the bridge
+transaction as superseded and reclaims its obsolete rollback material.
 
 This module is the one code path. The window and browser modes reach it through
 ``StatusController.settle_update_transaction`` -- the controller settles on the
@@ -45,7 +46,9 @@ from launchers.apply_update import (
     reclaim_committed_staging,
     repair_bundle,
     resources_directory,
+    running_build_uses_retained_material,
     sweep_unowned_staging,
+    superseding_installed_build,
 )
 from server.platform.instance import pid_is_running
 
@@ -286,10 +289,24 @@ class HealthyStartSettlement:
                 if line is not None:
                     log(line)
                 return False
-            # A healthy interface of some other build confirms nothing about
-            # this transaction, and nothing it would reclaim is spent.
+            retained_record = read_journal(data_dir, resources) or read_completion_record(data_dir, resources)
+            if running_build_uses_retained_material(resources, retained_record):
+                line = unconfirmed_line(
+                    data_dir, resources, "the running build still uses retained rollback or staging material"
+                )
+                if line is not None:
+                    log(line)
+                return False
+            # A different valid app/runtime installed over a bridge target
+            # supersedes it. Mere readiness, a version change or an unreadable
+            # manifest is insufficient, and the same unconfirmed target never
+            # reaches here because readiness was required above.
             mismatch = installed_build_mismatch(data_dir, resources)
-            if mismatch is not None:
+            journal = read_journal(data_dir, resources) if mismatch is not None else None
+            superseded = (
+                journal is not None and superseding_installed_build(resources, journal) is not None
+            )
+            if mismatch is not None and not superseded:
                 line = unconfirmed_line(data_dir, resources, mismatch)
                 if line is not None:
                     log(line)
@@ -309,6 +326,7 @@ class HealthyStartSettlement:
                     else None
                 ),
                 log=log,
+                supersede_installed=superseded,
             )
             if not committed:
                 log(f"Not reclaiming the previous layers: {commit_detail}.")

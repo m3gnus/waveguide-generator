@@ -180,6 +180,19 @@ Filename: "{cmd}"; Parameters: "/C ping -n 4 127.0.0.1 >nul & start """" ""{app}
 ; left that folder behind, and {app} with it.
 Type: filesandordirs; Name: "{app}\runtime"
 Type: filesandordirs; Name: "{app}\app"
+; Bridge backups are outside Inno's file log. Use exact owned names so an
+; uninstall after a full-installer upgrade also removes the old bridge layers.
+Type: filesandordirs; Name: "{app}\app.previous"
+Type: filesandordirs; Name: "{app}\runtime.previous"
+Type: files; Name: "{app}\wg-python.exe.previous"
+Type: files; Name: "{app}\python313.dll.previous"
+Type: files; Name: "{app}\python3.dll.previous"
+Type: files; Name: "{app}\vcruntime140.dll.previous"
+Type: files; Name: "{app}\vcruntime140_1.dll.previous"
+Type: files; Name: "{app}\msvcp140.dll.previous"
+Type: files; Name: "{app}\Waveguide Generator.exe.previous"
+Type: files; Name: "{app}\.update-transaction-open.json"
+Type: files; Name: "{app}\.update-transaction-open.json.new"
 ; Left by an upgrade that was killed mid-copy; see BeginProtectedReplace.
 Type: filesandordirs; Name: "{app}\.app.old"
 Type: filesandordirs; Name: "{app}\.runtime.old"

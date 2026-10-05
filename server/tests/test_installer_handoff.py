@@ -99,6 +99,47 @@ def test_approval_precedes_reverification_and_atomic_publication(tmp_path):
     assert service.restart_approval.pending == "0.3.4"  # consumption cannot admit solves
 
 
+def test_installed_bridge_transaction_does_not_gate_windows_installer_handoff(tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from launchers import apply_update
+    from shared.release_assets import WINDOWS_PLATFORM, windows_setup_name
+
+    service, client, path, ready, app, data = facade(tmp_path)
+    asset = ready.path.with_name(windows_setup_name(ready.version))
+    ready.path.rename(asset)
+    ready = replace(ready, path=asset, platform=WINDOWS_PLATFORM)
+    client.ready = ready
+    apply_update.begin_update_transaction(data_dir=data, bundle=app.parent,
+        resources=app.parent, layers=[], platform_name="win32")
+    apply_update.set_journal_state(data, app.parent, "installed")
+    for name in ("app.previous", "runtime.previous"):
+        (app.parent / name).mkdir()
+    before = apply_update.read_journal(data, app.parent)
+    marker = app.parent / ".update-transaction-open.json"
+    marker_before = marker.read_bytes()
+
+    def download(callback):
+        callback(ready)
+        return {"accepted": True}
+
+    monkeypatch.setattr(client, "request_download", download, raising=False)
+    assert service.get_status(force=True)["canInstall"] is True
+    assert service.request_install()["accepted"] is True
+    assert service.get_status()["restartPending"] == ready.version
+    handled, request = consume_full_installer_request(path, repo_root=app,
+        data_dir=data, now=json.loads(path.read_text())["readyAtEpoch"] + 1)
+    assert handled and request is not None
+    launched = []
+    monkeypatch.setattr(subprocess, "Popen", lambda command, **kwargs: launched.append(command))
+    launch_full_installer(app, request, 12345, data_dir=data)
+    assert len(launched) == 1
+    assert "/WAITPID=12345" in launched[0] and "/RELAUNCH" in launched[0]
+    assert apply_update.read_journal(data, app.parent) == before
+    assert marker.read_bytes() == marker_before
+    assert (app.parent / "app.previous").is_dir()
+
+
 def test_reverification_failure_releases_exact_approval_without_a_request(tmp_path):
     service, client, path, ready, _, _ = facade(tmp_path)
     client.error = ValueError("changed bytes")

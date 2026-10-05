@@ -123,3 +123,21 @@ def test_uninstall_removes_every_directory_the_bundle_owns() -> None:
     section = script.split("[UninstallDelete]", 1)[1].split("\n[", 1)[0]
     for directory in ("runtime", "app", build_bundle.RECOVERY_DIRECTORY_NAME):
         assert rf'Type: filesandordirs; Name: "{{app}}\{directory}"' in section, directory
+
+
+def test_uninstall_removes_the_bridges_exact_previous_layers_and_launchers() -> None:
+    from scripts import build_bundle
+
+    script = (ROOT / "installers/windows/bundle-setup.iss").read_text(encoding="utf-8")
+    section = script.split("[UninstallDelete]", 1)[1].split("\n[", 1)[0]
+    for directory in ("app", "runtime"):
+        assert rf'Type: filesandordirs; Name: "{{app}}\{directory}.previous"' in section
+    for _source, target in build_bundle.windows_launcher_files():
+        assert rf'Type: files; Name: "{{app}}\{target}.previous"' in section
+    from launchers.apply_update import TRANSACTION_OPEN_MARKER_NAME, TRANSACTION_OPEN_MARKER_TEMP_NAME
+
+    for name in (TRANSACTION_OPEN_MARKER_NAME, TRANSACTION_OPEN_MARKER_TEMP_NAME):
+        assert rf'Type: files; Name: "{{app}}\{name}"' in section
+    # No recursive wildcard at the install root: user-added files stay there.
+    entries = [line for line in section.splitlines() if line.startswith("Type:")]
+    assert all("*" not in line for line in entries)
