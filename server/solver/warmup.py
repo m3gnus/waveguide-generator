@@ -234,6 +234,15 @@ def _warm_beat(backend: str) -> None:
     name that was actually selected.
     """
 
+    from .beat_runtime.provider import official_provider_enabled
+
+    if official_provider_enabled():
+        from .beat_runtime.warmup import warm_up
+
+        with beat_warmup_recorded():
+            warm_up(beat_backend=backend, mode="tiny")
+        return
+
     import hornlab_beat_bem
 
     from .beat_threads import beat_julia_threads

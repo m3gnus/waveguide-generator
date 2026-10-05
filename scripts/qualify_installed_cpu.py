@@ -247,6 +247,20 @@ print(json.dumps({"verified": verified, "refused": refused,
                   "effective_worker_dir": effective, "contained": True}))
 """
 
+_IDENTIFY_AND_STOP_OFFICIAL = r"""
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["WG2_APP_ROOT"])
+from server.solver.beat_runtime import paths
+from server.solver.beat_runtime.inspection import inspect_hosts
+from server.solver.beat_runtime.provider import official_provider_enabled
+
+if not official_provider_enabled():
+    raise RuntimeError("Official BEAT inspection requires WG2_BEAT_PROVIDER=official")
+directory = Path(sys.argv[1]) / paths.PROVIDER_ID
+print(json.dumps(inspect_hosts(directory, stop=sys.argv[2] == "stop")))
+"""
+
 #: Read PEP 610 metadata from the packaged interpreter. Asked of the runtime
 #: that will run the solve, never of the interpreter running this file: an
 #: editable install resolves to a working tree and would qualify whatever
@@ -390,6 +404,9 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         HORNLAB_BEAT_WORKER_DIR=str(work / "beat-registry"),
     )
     environment.update(isolated_user_directories(work))
+    if environment.get("WG2_BEAT_PROVIDER") == "official":
+        environment.update(WG2_BEAT_RUNTIME_DIR=str(work / "official-beat-runtime"),
+                           WG2_BEAT_WORKER_DIR=str(work / "official-beat-registry"))
     return environment
 
 
@@ -1255,7 +1272,8 @@ def stop_our_workers(
 ) -> dict[str, Any]:
     """Stop the BEAT hosts this run started, and only those.
 
-    The registry is this run's own directory, and every record in it must
+    The official provider uses authenticated WG IPC shutdown. The registry
+    is this run's own directory, and every record in it must
     authenticate as itself over its own endpoint before it is signalled. A
     record that will not is reported and left alone -- a recorded pid may since
     have been reissued to something that has nothing to do with this.
@@ -1268,12 +1286,14 @@ def stop_our_workers(
     qualification, keeping an earlier failure if there was one.
     """
 
+    official = environment.get("WG2_BEAT_PROVIDER") == "official"
+    worker_directory = environment["WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"]
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
         [
             str(interpreter),
             "-c",
-            _IDENTIFY_AND_STOP,
-            environment["HORNLAB_BEAT_WORKER_DIR"],
+            _IDENTIFY_AND_STOP_OFFICIAL if official else _IDENTIFY_AND_STOP,
+            worker_directory,
             "stop",
         ],
         env=environment,
@@ -1308,8 +1328,10 @@ def stop_our_workers(
         raise QualificationError(
             "the isolated worker registry did not take effect: the package resolves "
             f"{answer.get('effective_worker_dir')!r}, not "
-            f"{environment['HORNLAB_BEAT_WORKER_DIR']!r}. Nothing was signalled."
+            f"{worker_directory!r}. Nothing was signalled."
         )
+    if official and answer.get("refused"):
+        raise QualificationError(f"official worker inspection refused records: {answer['refused']}")
     return answer
 
 
@@ -1959,8 +1981,12 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         "interpreter": str(interpreter),
         "isolated": {
             "data_dir": str(data_dir),
-            "beat_runtime_dir": environment["HORNLAB_BEAT_RUNTIME_DIR"],
-            "worker_registry": environment["HORNLAB_BEAT_WORKER_DIR"],
+            "beat_runtime_dir": environment[
+                "WG2_BEAT_RUNTIME_DIR" if environment.get("WG2_BEAT_PROVIDER") == "official"
+                else "HORNLAB_BEAT_RUNTIME_DIR"],
+            "worker_registry": environment[
+                "WG2_BEAT_WORKER_DIR" if environment.get("WG2_BEAT_PROVIDER") == "official"
+                else "HORNLAB_BEAT_WORKER_DIR"],
             "julia_depot": environment["JULIA_DEPOT_PATH"],
             "python_cache": environment["PYTHONPYCACHEPREFIX"],
             "numba_cache": environment["NUMBA_CACHE_DIR"],

@@ -41,6 +41,52 @@ PINS = {
 }
 
 
+@pytest.mark.parametrize("provider", [None, "hbb", "official"])
+def test_registry_probe_selector_and_isolation(tmp_path, monkeypatch, provider):
+    if provider is None:
+        monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
+    environment = gate.isolated_environment(tmp_path / "app", tmp_path / "work")
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(
+            {"contained": True, "verified": [], "refused": []}), stderr="")
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
+    official = provider == "official"
+    assert commands[0][2] == (gate._IDENTIFY_AND_STOP_OFFICIAL if official else gate._IDENTIFY_AND_STOP)
+    expected = "WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"
+    assert commands[0][3] == environment[expected]
+    if official:
+        assert Path(environment[expected]).is_relative_to(tmp_path / "work")
+        assert environment[expected] != environment["HORNLAB_BEAT_WORKER_DIR"]
+
+
+def test_official_probe_runs_in_app_root_without_engine_or_registry(tmp_path):
+    root = Path(__file__).resolve().parents[2]
+    environment = {
+        "WG2_APP_ROOT": str(root), "WG2_BEAT_PROVIDER": "official",
+        "WG2_BEAT_WORKER_DIR": str(tmp_path / "workers"),
+        "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime"),
+    }
+    report = gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
+    assert report["contained"] and report["verified"] == report["refused"] == []
+    assert not (tmp_path / "workers").exists()
+
+
+def test_official_refused_records_fail_qualification(tmp_path, monkeypatch):
+    environment = {"WG2_BEAT_PROVIDER": "official", "WG2_BEAT_WORKER_DIR": str(tmp_path)}
+    monkeypatch.setattr(gate.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, stdout=json.dumps({"contained": True, "verified": [],
+                                      "refused": [{"reason": "wrong token"}]}), stderr=""))
+    with pytest.raises(gate.QualificationError, match="refused records"):
+        gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
+
+
 def _app_layer(tmp_path: Path, **manifest: object) -> Path:
     app = tmp_path / "payload" / "app"
     app.mkdir(parents=True)

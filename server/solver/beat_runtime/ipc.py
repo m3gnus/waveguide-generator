@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 import math
@@ -43,13 +44,26 @@ def remaining_time(deadline: float) -> float:
 
 def _receive_exactly(
     connection: socket.socket, count: int, *, eof_ok: bool = False, deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> bytes | None:
     chunks = []
     remaining = count
     while remaining:
+        if cancelled is not None and cancelled():
+            raise ConnectionAbortedError("BEAT host receive cancelled")
         if deadline is not None:
-            connection.settimeout(remaining_time(deadline))
-        chunk = connection.recv(min(remaining, 1 << 20))
+            budget = remaining_time(deadline)
+            connection.settimeout(min(budget, 0.05) if cancelled is not None else budget)
+        elif cancelled is not None:
+            connection.settimeout(0.05)
+        try:
+            chunk = connection.recv(min(remaining, 1 << 20))
+        except TimeoutError:
+            if cancelled is None:
+                raise
+            # Preserve partial headers/bodies while checking cancellation and
+            # the original deadline; closing a socket need not wake its reader.
+            continue
         if deadline is not None:
             remaining_time(deadline)
         if not chunk:
@@ -74,6 +88,7 @@ def _finite_float(value: str) -> float:
 
 def receive_frame(
     connection: socket.socket, *, max_bytes: int = CONTROL_FRAME_BYTES, deadline: float | None = None,
+    cancelled: Callable[[], bool] | None = None,
 ) -> dict[str, Any] | None:
     """Bound allocation and total receive time; None means clean EOF between frames.
 
@@ -82,13 +97,14 @@ def receive_frame(
     """
     if not 0 < max_bytes <= MAX_FRAME_BYTES:
         raise ValueError("Invalid host frame size limit")
-    header = _receive_exactly(connection, _HEADER.size, eof_ok=True, deadline=deadline)
+    header = _receive_exactly(connection, _HEADER.size, eof_ok=True, deadline=deadline,
+                              cancelled=cancelled)
     if header is None:
         return None
     length, = _HEADER.unpack(header)
     if not 0 < length <= max_bytes:
         raise FrameError("Invalid host frame length")
-    body = _receive_exactly(connection, length, deadline=deadline)
+    body = _receive_exactly(connection, length, deadline=deadline, cancelled=cancelled)
     try:
         decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant, parse_float=_finite_float)
     except (UnicodeError, ValueError, RecursionError) as exc:
