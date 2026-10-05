@@ -81,6 +81,10 @@ class MesherChildError(RuntimeError):
     """A failure inside the child that could not be sent back as itself."""
 
 
+class MesherShuttingDownError(RuntimeError):
+    """App shutdown interrupted a build or rejected its submission."""
+
+
 def child_enabled() -> bool:
     if os.environ.get("WG2_BUNDLE") == "1":
         return True
@@ -352,7 +356,7 @@ class MesherChildHost:
                 if abort.is_set():
                     raise asyncio.CancelledError()
                 if self._closed:
-                    raise RuntimeError("mesher child is shutting down; build abandoned")
+                    raise MesherShuttingDownError("mesher child is shutting down; build abandoned")
                 if cancel_cb is not None:
                     cancel_cb()
             except BaseException:
@@ -367,7 +371,7 @@ class MesherChildHost:
             request_id = next(self._ids)
             with self._state:
                 if self._closing or self._closed:
-                    raise RuntimeError("mesher child is shutting down; submission rejected")
+                    raise MesherShuttingDownError("mesher child is shutting down; submission rejected")
                 channel = self._ensure_locked()
                 try:
                     channel.connection.send(("run", request_id, fn, args))
@@ -391,7 +395,7 @@ class MesherChildHost:
                     continue
                 if kind == "eof":
                     if self._closed:
-                        raise RuntimeError("mesher child is shutting down; build abandoned")
+                        raise MesherShuttingDownError("mesher child is shutting down; build abandoned")
                     raise self._crashed(channel)
                 if kind == "badframe":
                     self._discard(channel)
@@ -505,6 +509,7 @@ async def run_mesh_build(
 __all__ = [
     "MesherChildError",
     "MesherCrashError",
+    "MesherShuttingDownError",
     "MesherChildHost",
     "CRASH_MESSAGE",
     "begin_mesher_child_shutdown",

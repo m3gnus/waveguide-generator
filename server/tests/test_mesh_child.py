@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 import signal
@@ -23,6 +24,8 @@ from server.mesh.child import (
     MesherChildError,
     MesherChildHost,
     MesherCrashError,
+    MesherShuttingDownError,
+    begin_mesher_child_shutdown,
     build_timeout_seconds,
     child_enabled,
     close_mesher_child,
@@ -241,11 +244,140 @@ def test_begin_shutdown_rejects_new_builds_and_prewarm_without_spawning(host) ->
         host.begin_shutdown()
         host.begin_shutdown()
         host.prewarm()
-        with pytest.raises(RuntimeError, match="shutting down"):
+        with pytest.raises(MesherShuttingDownError, match="shutting down"):
             await host.run(ok_build)
         assert host._channel is None
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("stop", ["quit", "marked_quit", "update_restart"])
+def test_a_job_reaching_mesh_after_child_shutdown_is_interrupted(
+    stop, monkeypatch, tmp_path, shared_child,
+) -> None:
+    """Reject a real builder submission before runtime.shutdown requests cancellation."""
+    from server.engines.registry import EngineInfo, EngineRegistry
+    from server.jobs.models import SolveRequest
+    from server.jobs.runtime import (
+        JobRuntime,
+        QUIT_INTERRUPTED_MESSAGE,
+        QUIT_INTERRUPTED_STAGE_MESSAGE,
+        UPDATE_RESTART_MESSAGE,
+        UPDATE_RESTART_STAGE_MESSAGE,
+    )
+    from server.jobs.store import JobStore
+    from server.mesh.child import get_mesher_child
+
+    async def scenario():
+        ready = asyncio.Event()
+        reach_mesh = asyncio.Event()
+
+        class MeshEngine:
+            name = "bempp"
+
+            async def run(self, request, *, cancel_cb, stage_cb):
+                stage_cb("mesh", 0.0, "Building solver mesh")
+                ready.set()
+                await reach_mesh.wait()
+                await mesh_builder.build_solver_mesh(
+                    request.design, request.options, cancel_cb=cancel_cb, force_rebuild=True,
+                )
+                raise AssertionError("shutdown must reject the mesh submission")
+
+        runtime = JobRuntime(
+            JobStore(tmp_path / "jobs.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: MeshEngine(),
+            ),
+        )
+        try:
+            job_id = await runtime.submit(SolveRequest.model_validate({
+                "design": {"formula": "OSSE", "L": 120, "a": 45},
+                "options": {"engine": "bempp", "stage_delay_ms": 0},
+            }))
+            await asyncio.wait_for(ready.wait(), 5)
+            begin_mesher_child_shutdown()
+            if stop == "update_restart":
+                monkeypatch.setattr(runtime, "_restart_pending", lambda: True)
+            if stop != "quit":
+                runtime.mark_running_interrupted_by_quit("test quit")
+            assert runtime.store.cancellation_state(job_id) == ("running", False)
+            reach_mesh.set()
+            await asyncio.wait_for(runtime.wait_idle(), 5)
+            row = runtime.store.get_job_row(job_id)
+            assert row["status"] == "cancelled"
+            assert row["stage"] == "cancelled"
+            assert row["stage_message"] == (
+                UPDATE_RESTART_STAGE_MESSAGE if stop == "update_restart"
+                else QUIT_INTERRUPTED_STAGE_MESSAGE
+            )
+            assert row["error_message"] == (
+                UPDATE_RESTART_MESSAGE if stop == "update_restart"
+                else QUIT_INTERRUPTED_MESSAGE
+            )
+            assert row["cancellation_requested"] is False
+            assert get_mesher_child()._channel is None
+        finally:
+            reach_mesh.set()
+            await runtime.shutdown()
+            clear_solver_mesh_cache()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path", ["/api/solver-mesh", "/api/export/stl"])
+def test_mesh_http_request_during_child_shutdown_returns_503(path, shared_child) -> None:
+    from fastapi import FastAPI
+    from server.exports.api import router as export_router
+    from server.mesh.api import mount_solver_mesh
+    from server.mesh.child import get_mesher_child
+
+    app = FastAPI()
+    mount_solver_mesh(app)
+    app.include_router(export_router)
+    clear_solver_mesh_cache()
+    begin_mesher_child_shutdown()
+
+    async def post():
+        payload = {
+            "design": {"formula": "OSSE", "L": 120, "a": 45},
+        }
+        if path == "/api/export/stl":
+            payload["designRevision"] = 0
+        body = json.dumps(payload).encode()
+        delivered = False
+        messages = []
+
+        async def receive():
+            nonlocal delivered
+            if not delivered:
+                delivered = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            # Keep the viewport connected so its watcher cannot win over shutdown.
+            await asyncio.Event().wait()
+
+        async def send(message):
+            messages.append(message)
+
+        await app({
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "POST", "scheme": "http", "path": path,
+            "raw_path": path.encode(), "query_string": b"", "root_path": "",
+            "headers": [(b"host", b"testserver"), (b"content-type", b"application/json")],
+            "client": ("testclient", 123), "server": ("testserver", 80),
+        }, receive, send)
+        status = next(m["status"] for m in messages if m["type"] == "http.response.start")
+        content = b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")
+        return status, json.loads(content)
+
+    try:
+        status, response = asyncio.run(asyncio.wait_for(post(), 5))
+        assert status == 503, response
+        assert "shutting down" in response["detail"]
+        assert get_mesher_child()._channel is None
+    finally:
+        clear_solver_mesh_cache()
 
 
 def test_in_process_switch_is_ignored_in_a_bundled_app(monkeypatch) -> None:
@@ -396,7 +528,7 @@ def test_close_does_not_wait_for_a_running_build(host) -> None:
         began = time.monotonic()
         await asyncio.to_thread(host.close)
         assert time.monotonic() - began < 3
-        with pytest.raises(RuntimeError, match="shutting down"):
+        with pytest.raises(MesherShuttingDownError, match="shutting down"):
             await asyncio.wait_for(task, 5)
 
     asyncio.run(scenario())

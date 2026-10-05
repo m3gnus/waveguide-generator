@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from server.contracts.geometry import CUT_PLANES_BY_QUADRANTS as CUT_PLANES_BY_QUADRANTS
 from server.design.schema import DesignConfig, Expr
+from server.mesh.child import MesherShuttingDownError
 from server.solver.symmetry import resolve_symmetry, validate_symmetry_mode
 
 #: How often the disconnect watcher samples the request socket. Coarse on
@@ -98,6 +99,8 @@ async def solver_mesh_response(
         # Nobody is listening; 499 mirrors the conventional client-closed
         # status and keeps the abandoned build out of the error logs.
         raise HTTPException(status_code=499, detail=str(exc)) from exc
+    except MesherShuttingDownError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except (RuntimeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:

@@ -85,6 +85,7 @@ from server.jobs.store import ACTIVE_STATUSES, ALLOWED_STATUSES, JobStore
 from server.integration.provenance import canonical_json_sha256, enrich_result_contract
 from server.platform.instance import LOCK_OPEN_FLAGS, lock_exclusive, unlock
 from server.platform.shutdown_backstop import shutdown_wait_limit
+from server.mesh.child import MesherShuttingDownError
 from server.mesh.imported import verify_artifact_reduced_orientation
 from server.solver.imported import (
     AXIAL_CONTRACT_VERSION,
@@ -2661,7 +2662,6 @@ class JobRuntime:
         # replace it (contract §4.3). It marks its jobs as ended by the update
         # restart, not by Quit.
         update_restart = self._restart_pending()
-        requested = "Update restart requested" if update_restart else "Shutdown requested"
         # Stop accepting new buffered callbacks, then persist the last accepted
         # checkpoint before requesting cancellation. Cancelling first could
         # abandon an asyncio.to_thread file/SQLite write that is already running.
@@ -2670,35 +2670,8 @@ class JobRuntime:
 
         cancellation_signalled = False
         for job_id in tuple(self._running):
-            try:
-                event = self.store.request_cancellation(
-                    job_id,
-                    {
-                        "stage": "cancelling",
-                        "stage_message": f"{requested}; waiting for current stage checkpoint",
-                        "cancellation_requested": True,
-                    },
-                    {"stage": "cancelling", "message": requested},
-                    interrupted_by_quit=True,
-                    interrupted_by_update_restart=update_restart,
-                )
-            except Exception:
-                logger.exception(
-                    "Could not request cancellation during shutdown for job %s",
-                    job_id,
-                )
-            else:
-                if event is not None:
-                    # None means the user had already asked to stop it; that
-                    # job stays a user cancellation.
-                    self._quit_interrupted.add(job_id)
-                    if update_restart:
-                        self._restart_interrupted.add(job_id)
-                    self.events.publish(event)
-                state = self.store.cancellation_state(job_id)
-                cancellation_signalled = cancellation_signalled or bool(
-                    state is not None and state[0] == "running" and state[1]
-                )
+            signalled = self._request_shutdown_cancellation(job_id, update_restart)
+            cancellation_signalled = cancellation_signalled or signalled
 
         pending: set[asyncio.Task[Any]] = set(tasks)
         if tasks and cancellation_signalled:
@@ -2722,6 +2695,37 @@ class JobRuntime:
         self._quit_interrupted.clear()
         self._restart_interrupted.clear()
         self._started = False
+
+    def _request_shutdown_cancellation(self, job_id: str, update_restart: bool) -> bool:
+        """Record the stop reason before a job takes its cancellation path."""
+
+        requested = "Update restart requested" if update_restart else "Shutdown requested"
+        try:
+            event = self.store.request_cancellation(
+                job_id,
+                {
+                    "stage": "cancelling",
+                    "stage_message": f"{requested}; waiting for current stage checkpoint",
+                    "cancellation_requested": True,
+                },
+                {"stage": "cancelling", "message": requested},
+                interrupted_by_quit=True,
+                interrupted_by_update_restart=update_restart,
+            )
+        except Exception:
+            logger.exception(
+                "Could not request cancellation during shutdown for job %s", job_id,
+            )
+            return False
+        if event is not None:
+            # None means the user had already asked to stop it; that
+            # job stays a user cancellation.
+            self._quit_interrupted.add(job_id)
+            if update_restart:
+                self._restart_interrupted.add(job_id)
+            self.events.publish(event)
+        state = self.store.cancellation_state(job_id)
+        return bool(state is not None and state[0] == "running" and state[1])
 
     async def submit(
         self,
@@ -4525,6 +4529,12 @@ class JobRuntime:
                 self._check_cancelled(job_id)
                 return
             self.events.publish(event)
+        except MesherShuttingDownError:
+            # Mesher admission closes before runtime.shutdown requests job
+            # cancellation. A job reaching mesh in that gap is already stopped
+            # by Quit (or an update restart), not a simulation failure.
+            self._request_shutdown_cancellation(job_id, self._restart_pending())
+            await self._cancel_job(job_id)
         except _CancelledAtCheckpoint:
             await self._cancel_job(job_id)
         except asyncio.CancelledError:
