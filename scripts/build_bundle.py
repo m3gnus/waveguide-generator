@@ -28,24 +28,31 @@ import urllib.request
 import zipfile
 
 
-_IMPORT_ROOT = (
-    Path(os.environ.get("WG2_APP_ROOT") or Path(__file__).resolve().parents[1])
-    .expanduser()
-    .resolve()
-)
-if str(_IMPORT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_IMPORT_ROOT))
+# A build always belongs to this checkout, even when invoked from an installed
+# application's environment. WG2_APP_ROOT is a runtime override, not a source
+# selector for release tooling.
+_IMPORT_ROOT = Path(__file__).resolve().parents[1]
+if str(_IMPORT_ROOT) in sys.path:
+    sys.path.remove(str(_IMPORT_ROOT))
+sys.path.insert(0, str(_IMPORT_ROOT))
 
-from scripts import fetch_spa  # noqa: E402
-from launchers.macos import generate_icon  # noqa: E402
-from server.platform.instance import PORT_ENV  # noqa: E402
-from server.platform.paths import DATA_DIR_ENV, app_root  # noqa: E402
-from shared.runtime_id import compute_runtime_id  # noqa: E402
-from shared import release_assets  # noqa: E402
-from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
+# fetch_spa has its own runtime-aware import bootstrap. Keep that import in
+# this checkout too, without changing the caller's environment afterwards.
+_CALLER_APP_ROOT = os.environ.pop("WG2_APP_ROOT", None)
+try:
+    from scripts import fetch_spa  # noqa: E402
+    from launchers.macos import generate_icon  # noqa: E402
+    from server.platform.instance import PORT_ENV  # noqa: E402
+    from server.platform.paths import DATA_DIR_ENV  # noqa: E402
+    from shared.runtime_id import compute_runtime_id  # noqa: E402
+    from shared import release_assets  # noqa: E402
+    from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
+finally:
+    if _CALLER_APP_ROOT is not None:
+        os.environ["WG2_APP_ROOT"] = _CALLER_APP_ROOT
 
 
-REPO_ROOT = app_root()
+REPO_ROOT = _IMPORT_ROOT
 # ``uv python list`` resolved the 3.13 request to this python-build-standalone
 # patch release when the bundle implementation was written. Release builds use
 # the full string so a later uv catalog update cannot silently change a layer.
@@ -2734,19 +2741,46 @@ Nothing is sent anywhere; it runs entirely on your machine.
         *,
         data_name: str = "data",
     ) -> dict[str, str]:
-        """Force both side-effect roots into the build's private work area.
+        """Isolate imports and user state in the build's private work area.
 
         Serve publishes its CLI data directory to WG2_DATA_DIR, while startup
         WGLink activation resolves AddIns from WG2_FUSION_ADDINS_DIR. Set both
         before starting any child, including interpreter and backend probes.
         Never trust the caller's overrides, even for standalone launcher checks.
         """
+        scratch = scratch.resolve()
         private = dict(environment)
+        # User-site .pth files run before our scripts can select the app layer.
+        # Neither they nor a caller's Python search paths may select an install.
+        # BEAT overrides can likewise select a previously provisioned runtime
+        # or engine project instead of the package in the bundle.
+        for name in (
+            "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE",
+            "HORNLAB_BEAT_JULIA", "HORNLAB_BEAT_PROBE_ENGINE_DIR",
+            "JULIA_PROJECT", "JULIA_LOAD_PATH",
+        ):
+            private.pop(name, None)
+        private["PYTHONNOUSERSITE"] = "1"
+        home = scratch / "home"
         for name, directory in (
             (DATA_DIR_ENV, scratch / data_name),
             ("WG2_FUSION_ADDINS_DIR", scratch / "fusion-addins"),
+            ("HOME", home),
+            ("USERPROFILE", home),
+            ("APPDATA", home / "AppData" / "Roaming"),
+            ("LOCALAPPDATA", home / "AppData" / "Local"),
+            ("XDG_DATA_HOME", home / ".local" / "share"),
+            ("XDG_CONFIG_HOME", home / ".config"),
+            ("XDG_CACHE_HOME", home / ".cache"),
+            ("XDG_STATE_HOME", home / ".local" / "state"),
+            ("XDG_RUNTIME_DIR", home / "runtime"),
+            ("XDG_DOCUMENTS_DIR", home / "Documents"),
+            ("HORNLAB_BEAT_RUNTIME_DIR", scratch / "beat-runtime"),
+            ("HORNLAB_BEAT_WORKER_DIR", scratch / "beat-workers"),
+            ("JULIA_DEPOT_PATH", scratch / "julia-depot"),
+            *((name, scratch / "caches" / name.lower()) for name in CACHE_ENVIRONMENT),
         ):
-            directory.mkdir(parents=True, exist_ok=True)
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
             private[name] = str(directory.resolve())
         return private
 
@@ -2814,6 +2848,8 @@ Nothing is sent anywhere; it runs entirely on your machine.
         free port travel in the environment instead.
         """
 
+        launcher = launcher.resolve()
+        scratch = scratch.resolve()
         port = self._free_port()
         launch_environment = self.verification_environment(
             scratch, environment, data_name="bare-launch-data"
@@ -2912,6 +2948,8 @@ Nothing is sent anywhere; it runs entirely on your machine.
         would hide the failure this exists to catch.
         """
 
+        launcher = launcher.resolve()
+        scratch = scratch.resolve()
         port = self._free_port()
         launch_environment = self.verification_environment(
             scratch, environment, data_name="bare-launch-data"
@@ -2984,6 +3022,8 @@ Nothing is sent anywhere; it runs entirely on your machine.
         *,
         platform_name: str = MACOS_PLATFORM,
     ) -> None:
+        bundle = bundle.resolve()
+        scratch = scratch.resolve()
         copied_bundle = scratch / bundle.name
         shutil.copytree(bundle, copied_bundle, symlinks=True)
         resources = (
@@ -2998,14 +3038,8 @@ Nothing is sent anywhere; it runs entirely on your machine.
             else resources / "runtime" / "bin" / "python3.13"
         )
         environment = self.verification_environment(scratch, self.command_environment)
-        environment.pop("PYTHONHOME", None)
-        environment.pop("PYTHONPATH", None)
         environment["WG2_BUNDLE"] = "1"
         environment["WG2_APP_ROOT"] = str(app)
-        # The same redirection the launcher stub performs, so that the seal
-        # check below proves the bundle can run without modifying itself.
-        for name in CACHE_ENVIRONMENT:
-            environment[name] = str(scratch / "caches" / name.lower())
 
         if platform_name == WINDOWS_PLATFORM:
             launcher = copied_bundle / WINDOWS_LAUNCHER_NAME

@@ -1941,8 +1941,8 @@ def test_bare_windows_launcher_gate_starts_with_no_arguments_and_kills_the_tree(
     # the failure this gate exists to catch.
     assert "WG2_BUNDLE" not in environment
     assert "WG2_APP_ROOT" not in environment
-    # The cache redirection stays, so a verified bundle is never written into.
-    assert environment["PYTHONPYCACHEPREFIX"] == str(tmp_path / "caches")
+    # Caller cache paths are replaced with private verification directories.
+    assert Path(environment["PYTHONPYCACHEPREFIX"]).is_relative_to(scratch)
     assert Path(environment[DATA_DIR_ENV]).is_relative_to(scratch)
     assert 1 <= int(environment[PORT_ENV]) <= 65535
     assert options["cwd"] == launcher.parent
@@ -3535,8 +3535,22 @@ def test_every_verification_child_forces_private_data_and_addins(
 ) -> None:
     """Capture every child, including probes, seal check and Windows tree cleanup."""
     ambient = tmp_path / "ambient"
-    for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR"):
+    private_names = (
+        DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR", "HOME", "USERPROFILE",
+        "APPDATA", "LOCALAPPDATA", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "XDG_DOCUMENTS_DIR",
+        "PYTHONPYCACHEPREFIX", "NUMBA_CACHE_DIR",
+        "HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR", "JULIA_DEPOT_PATH",
+    )
+    removed_names = (
+        "PYTHONHOME", "PYTHONPATH", "PYTHONUSERBASE",
+        "HORNLAB_BEAT_JULIA", "HORNLAB_BEAT_PROBE_ENGINE_DIR",
+        "JULIA_PROJECT", "JULIA_LOAD_PATH",
+    )
+    for name in (*private_names, *removed_names):
         monkeypatch.setenv(name, str(ambient / name))
+    monkeypatch.setenv("WG2_APP_ROOT", str(ambient / "app"))
+    monkeypatch.setenv("PYTHONNOUSERSITE", "0")
     bundle = tmp_path / "bundle"
     resources = bundle / "Contents" / "Resources" if platform_name == build_bundle.MACOS_PLATFORM else bundle
     (resources / "app").mkdir(parents=True)
@@ -3547,13 +3561,19 @@ def test_every_verification_child_forces_private_data_and_addins(
 
     def check(command, options):
         environment = options["env"]
-        for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR"):
+        assert environment["PYTHONNOUSERSITE"] == "1"
+        for name in removed_names:
+            assert name not in environment
+        for name in private_names:
             directory = Path(environment[name])
             assert directory.is_dir()
             assert directory.is_relative_to(scratch)
             assert not directory.is_relative_to(ambient)
         if "--data-dir" in command:
             assert command[command.index("--data-dir") + 1] == environment[DATA_DIR_ENV]
+        if "WG2_APP_ROOT" in environment:
+            expected_app = scratch / bundle.name / resources.relative_to(bundle) / "app"
+            assert Path(environment["WG2_APP_ROOT"]) == expected_app
         children.append(command)
 
     def runner(command, **options):
@@ -3580,6 +3600,125 @@ def test_every_verification_child_forces_private_data_and_addins(
     assert not ambient.exists()
 
 
+def test_builder_imports_cannot_pick_up_an_existing_install(tmp_path: Path) -> None:
+    installed = tmp_path / "installed" / "app"
+    (installed / "scripts").mkdir(parents=True)
+    (installed / "scripts" / "fetch_spa.py").write_text(
+        "raise RuntimeError('existing install imported')\n", encoding="utf-8"
+    )
+    (installed / "server").mkdir()
+    (installed / "server" / "__init__.py").write_text(
+        "raise RuntimeError('existing install imported')\n", encoding="utf-8"
+    )
+    environment = dict(os.environ, WG2_APP_ROOT=str(installed), PYTHONPATH=str(installed))
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "import os, runpy; "
+         f"module = runpy.run_path({build_bundle.__file__!r}); "
+         f"assert os.environ['WG2_APP_ROOT'] == {str(installed)!r}; "
+         "print(module['REPO_ROOT'])"],
+        cwd=installed,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert Path(result.stdout.strip()) == Path(build_bundle.__file__).resolve().parents[1]
+
+
+def test_verification_subprocess_uses_relocated_bundle_despite_existing_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run fixture imports for real with the verification commands/environment."""
+    installed = tmp_path / "installed"
+    (installed / "app").mkdir(parents=True)
+    (installed / "app" / "bundle_identity.py").write_text(
+        "IDENTITY = 'installed'\n", encoding="utf-8"
+    )
+    user_base = installed / "user-site"
+    user_site_result = subprocess.run(
+        [sys.executable, "-c", "import site; print(site.getusersitepackages())"],
+        env=dict(os.environ, PYTHONUSERBASE=str(user_base)),
+        check=True, capture_output=True, text=True, timeout=30,
+    )
+    user_site = Path(user_site_result.stdout.strip())
+    user_site.mkdir(parents=True)
+    picked_up = installed / "picked-up"
+    (user_site / "existing-install.pth").write_text(
+        f"import pathlib; pathlib.Path({str(picked_up)!r}).write_text('loaded')\n"
+        + str(installed / "app") + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WG2_APP_ROOT", str(installed / "app"))
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    monkeypatch.setenv("PYTHONPATH", str(installed / "app"))
+    monkeypatch.setenv("PYTHONHOME", str(installed / "runtime"))
+    monkeypatch.setenv("PYTHONUSERBASE", str(user_base))
+    monkeypatch.setenv("HOME", str(installed / "home"))
+    monkeypatch.setenv("USERPROFILE", str(installed / "home"))
+    monkeypatch.setenv(DATA_DIR_ENV, str(installed / "data"))
+    bundle = tmp_path / "built.app"
+    app = bundle / "Contents" / "Resources" / "app"
+    (app / "scripts").mkdir(parents=True)
+    (app / "launch").mkdir()
+    (app / "bundle_identity.py").write_text("IDENTITY = 'built'\n", encoding="utf-8")
+    probe = (
+        "import json, os, site, sys\n"
+        "from pathlib import Path\n"
+        "root = Path(os.environ['WG2_APP_ROOT']).resolve()\n"
+        "sys.path.insert(0, str(root))\n"
+        "import bundle_identity\n"
+        "print(json.dumps({'identity': bundle_identity.IDENTITY, "
+        "'module': bundle_identity.__file__, 'script': str(Path(__file__).resolve()), "
+        "'home': str(Path.home()), 'data': os.environ['WG2_DATA_DIR'], "
+        "'userSiteEnabled': site.ENABLE_USER_SITE, 'path': sys.path}))\n"
+        "print('Metal (Apple Silicon): ready')\n"
+    )
+    for script in (app / "scripts" / "check_backends.py", app / "launch" / "serve.py"):
+        script.write_text(probe, encoding="utf-8")
+    scratch = tmp_path / "verification"
+    copied_app = scratch / bundle.name / "Contents" / "Resources" / "app"
+    observations = []
+
+    def runner(command, **options):
+        if command[0] == "codesign":
+            return subprocess.CompletedProcess(command, 0, "", "")
+        assert Path(command[0]) == copied_app.parent / "runtime" / "bin" / "python3.13"
+        # Use the pinned test interpreter to execute the lightweight fixture
+        # scripts; building a standalone release runtime is outside this test.
+        result = subprocess.run([sys.executable, *command[1:]], timeout=30, **options)
+        assert result.returncode == 0, result.stderr
+        observations.append(json.loads(result.stdout.splitlines()[0]))
+        return result
+
+    def process_factory(command, **options):
+        options.pop("start_new_session")
+        options.pop("stdout")
+        options.pop("stderr")
+        runner(command, capture_output=True, check=False, **options)
+        return _FakeLauncherProcess()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(BundleBuilder, "_free_port", staticmethod(lambda: 43110))
+    monkeypatch.setattr(BundleBuilder, "_http_status", staticmethod(lambda _url: 200))
+    builder = BundleBuilder(tmp_path, runner=runner, process_factory=process_factory)
+    # Relative inputs must be made absolute before changing the child's cwd.
+    builder.verify_bundle(Path(bundle.name), Path(scratch.name))
+    assert len(observations) == 2
+    for observation in observations:
+        assert observation["identity"] == "built"
+        assert Path(observation["module"]) == copied_app / "bundle_identity.py"
+        assert Path(observation["script"]).is_relative_to(copied_app)
+        assert Path(observation["home"]) == scratch / "home"
+        assert Path(observation["data"]) == scratch / "data"
+        assert observation["userSiteEnabled"] is False
+        assert not any(str(installed) in entry for entry in observation["path"])
+    assert not (installed / "home").exists()
+    assert not (installed / "data").exists()
+    assert not picked_up.exists()
+
+
 @pytest.mark.parametrize("platform_name", [WINDOWS_PLATFORM, LINUX_PLATFORM])
 def test_standalone_bare_launcher_verification_replaces_caller_overrides(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform_name: str
@@ -3592,11 +3731,19 @@ def test_standalone_bare_launcher_verification_replaces_caller_overrides(
     verify(launcher, scratch=scratch, environment={
         DATA_DIR_ENV: str(tmp_path / "external-data"),
         "WG2_FUSION_ADDINS_DIR": str(tmp_path / "external-addins"),
+        "HOME": str(tmp_path / "external-home"),
+        "USERPROFILE": str(tmp_path / "external-home"),
+        "PYTHONPATH": str(tmp_path / "installed-app"),
+        "PYTHONHOME": str(tmp_path / "installed-runtime"),
+        "PYTHONUSERBASE": str(tmp_path / "user-site"),
     })
     environment = starts[0][1]["env"]
-    for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR"):
+    for name in (DATA_DIR_ENV, "WG2_FUSION_ADDINS_DIR", "HOME", "USERPROFILE"):
         assert Path(environment[name]).is_dir()
         assert Path(environment[name]).is_relative_to(scratch)
+    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE"):
+        assert name not in environment
+    assert environment["PYTHONNOUSERSITE"] == "1"
 
 
 def test_build_package_uses_private_state_even_with_installed_ambient_environment(
