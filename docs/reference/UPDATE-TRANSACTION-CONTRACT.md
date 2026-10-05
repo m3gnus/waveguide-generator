@@ -828,7 +828,14 @@ These are recorded, not designed.
      no layer rollback occurs. An explicit rollback, including the desktop window
      fallback, that supersedes that update inherits this ownership.
    - Ownership is bounded: the snapshot must be at most **one hour** old, and the
-     live database must hold exactly the snapshot's content. Every table in the
+     live database must hold exactly the content the new build's own startup left.
+     The migrating start records that baseline in the journal
+     (`jobsRestoreBaseline`: per table, its columns, row count and a digest over
+     all rows) after startup recovery and result/mesh pruning and before it serves
+     any request; a later start never moves it, and a superseding rollback
+     inherits it. The restore still puts back the pre-migration snapshot. If the
+     new build died before recording it, no request was ever served, and the live
+     database must hold exactly the snapshot's content instead (the rule below). Every table in the
      snapshot is compared row for row on all of its columns (a multiset of row
      digests), so an added, changed or deleted job, a write that leaves
      `updated_at` alone (task metadata, discarded results or meshes), and any
@@ -837,10 +844,10 @@ These are recorded, not designed.
      Only `wg_install_provenance` is ignored: every start rewrites it, the upgrade
      included, and the older row is harmless to restore. Nothing is parsed, so the
      result does not depend on the time zone. A backwards clock step of up to 60
-     seconds is tolerated by the age bound. **This fails safe:** a job that the new
-     build's startup recovery touched (for example one interrupted by the update
-     restart) also prevents the automatic restore, which then leaves the user the
-     manual procedure below, never a silent loss of newer work. A rollback with no
+     seconds is tolerated by the age bound. **This fails safe:** any change after
+     the baseline (or, without one, after the snapshot) prevents the automatic
+     restore and leaves the user the manual procedure below, never a silent loss
+     of newer work. A rollback with no
      recorded snapshot logs that it leaves the jobs database as it is.
      Otherwise automatic jobs restore is skipped and the reason is logged. This prevents
      an old installed journal from replacing later work.

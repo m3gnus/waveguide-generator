@@ -28,6 +28,7 @@ import os
 from collections.abc import Callable
 from pathlib import Path
 import signal
+import sqlite3
 import stat
 import subprocess
 import sys
@@ -2400,7 +2401,27 @@ def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_pa
 
 # Jobs restore regression cases use a stopped installation and actual SQLite
 # migrations; no real installation or data directory is touched.
-def _jobs_rollback_installation(tmp_path, monkeypatch, before_upgrade=None):
+def _start_like_the_runtime(db):
+    """``JobRuntime.start()``'s store calls, in its order (server/jobs/runtime.py)."""
+    from server.jobs import runtime as job_runtime
+    from server.jobs.store import JobStore
+    store = JobStore(db)
+    store.initialize()
+    store.recover_on_startup(
+        job_runtime.RESTART_RECOVERY_MESSAGE,
+        quit_stage_message=job_runtime.QUIT_INTERRUPTED_STAGE_MESSAGE,
+        quit_error_message=job_runtime.QUIT_INTERRUPTED_MESSAGE,
+        update_restart_stage_message=job_runtime.UPDATE_RESTART_STAGE_MESSAGE,
+        update_restart_error_message=job_runtime.UPDATE_RESTART_MESSAGE,
+        preparing_error_message=job_runtime.CAD_INTERRUPTED_MESSAGE,
+    )
+    store.unheld_preparing_job_ids()
+    store.prune_terminal_jobs(retention_days=30, max_terminal_jobs=1000)
+    store.record_restore_baseline_after_startup()
+    store.close()
+
+
+def _jobs_rollback_installation(tmp_path, monkeypatch, before_upgrade=None, *, full_startup=False):
     from server.jobs.store import JobStore
     from server.jobs import store as job_store_module
     from test_job_status_preparing import _old_shaped_database, _fill_old_database
@@ -2416,9 +2437,12 @@ def _jobs_rollback_installation(tmp_path, monkeypatch, before_upgrade=None):
     swap_staged_layers(resources, staged_app, staged_runtime)
     apply_update_module.set_journal_state(data_dir, resources, "installed")
     monkeypatch.setattr(job_store_module, "app_root", lambda: resources / "app")
-    store = JobStore(db)
-    store.initialize()
-    store.close()
+    if full_startup:
+        _start_like_the_runtime(db)
+    else:
+        store = JobStore(db)
+        store.initialize()
+        store.close()
     return resources, data_dir, db
 
 
@@ -2489,6 +2513,85 @@ def test_jobs_restore_vetoes_any_change_the_snapshot_does_not_hold(tmp_path, mon
     assert "changed since the snapshot" in " ".join(logs) and "manual" in " ".join(logs)
     with closing(sqlite3.connect(db)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+
+
+def _set_job_times(db, job_id, when, **columns):
+    stamp = when.isoformat()
+    assignments = ", ".join(["created_at = ?", "updated_at = ?", "queued_at = ?", "completed_at = ?",
+                             *(f"{name} = ?" for name in columns)])
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute(f"UPDATE simulation_jobs SET {assignments} WHERE id = ?",
+                     (stamp, stamp, stamp, stamp, *columns.values(), job_id))
+        conn.commit()
+
+
+def _recent_fixture(db):
+    from datetime import datetime, timedelta
+    for job_id in "abcd":
+        _set_job_times(db, job_id, datetime.now() - timedelta(minutes=5))
+
+
+def _mesh_artifact_past_grace(db):
+    from datetime import datetime, timedelta
+    _recent_fixture(db)
+    _set_job_times(db, "a", datetime.now() - timedelta(minutes=90), has_mesh_artifact=1)
+
+
+def _results_past_retention(db):
+    from datetime import datetime, timedelta
+    _recent_fixture(db)
+    _set_job_times(db, "a", datetime.now() - timedelta(days=40))
+
+
+@pytest.mark.parametrize("startup_writes", [None, _mesh_artifact_past_grace, _results_past_retention],
+                         ids=["fixture-dates", "mesh-artifact-past-grace", "results-past-retention"])
+def test_the_new_builds_own_startup_writes_never_veto_the_restore(tmp_path, monkeypatch, startup_writes):
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch, startup_writes, full_startup=True)
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    # Startup recovery and pruning did change the jobs after the snapshot:
+    # the pre-startup rule alone would veto this restore.
+    with closing(sqlite3.connect(snapshot)) as before, closing(sqlite3.connect(db)) as live:
+        assert apply_update_module.jobs_changed_since_snapshot(before, live) is not None
+    assert "jobsRestoreBaseline" in read_journal(data_dir, resources)
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored", logs
+    with closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+
+
+@pytest.mark.parametrize("edit", ["label", "delete", "event"])
+def test_a_user_change_after_startup_still_vetoes_the_restore(tmp_path, monkeypatch, edit):
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch, _recent_fixture, full_startup=True)
+    statement = {
+        "label": "UPDATE simulation_jobs SET label = 'renamed after startup' WHERE id = 'b'",
+        "delete": "DELETE FROM simulation_jobs WHERE id = 'd'",
+        "event": "INSERT INTO job_events (created_at, job_id, event_type, payload_json) "
+                 "VALUES ('2000-01-01T00:00:00', 'a', 'deleted', '{}')",
+    }[edit]
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(statement)
+        conn.commit()
+    # A later start of the same build never moves the baseline.
+    _start_like_the_runtime(db)
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert "jobsRestore" not in read_journal(data_dir, resources)
+    assert "since the new version started" in " ".join(logs) and "manual" in " ".join(logs)
+
+
+def test_without_a_baseline_the_pre_startup_rule_applies(tmp_path, monkeypatch):
+    """The new build died before startup finished: no request was ever served."""
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    assert "jobsRestoreBaseline" not in read_journal(data_dir, resources)
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("UPDATE simulation_jobs SET label = 'x' WHERE id = 'a'")
+        conn.commit()
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert "jobsRestore" not in read_journal(data_dir, resources)
+    assert "since the snapshot" in " ".join(logs)
 
 
 def test_jobs_restore_ignores_only_the_install_provenance_row(tmp_path, monkeypatch):

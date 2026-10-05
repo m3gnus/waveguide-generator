@@ -2576,6 +2576,11 @@ class JobRuntime:
                     retention_days=30,
                     max_terminal_jobs=1000,
                 )
+                # Last startup write: the update's automatic jobs restore
+                # compares later work against what startup itself left.
+                record_baseline = getattr(self.store, "record_restore_baseline_after_startup", None)
+                if record_baseline is not None:
+                    await asyncio.to_thread(record_baseline)
             except BaseException:
                 await asyncio.to_thread(self._ownership.release)
                 raise

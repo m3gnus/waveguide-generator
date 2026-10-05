@@ -484,6 +484,29 @@ class JobStore:
             if rebuild_needs_foreign_keys_off:
                 raw.execute("PRAGMA foreign_keys = ON")
 
+    #: Set when this process's own migration recorded its snapshot in the
+    #: installation's update journal; only that start records a baseline.
+    _recorded_upgrade_snapshot = False
+
+    def record_restore_baseline_after_startup(self) -> None:
+        """Record the post-startup jobs content for the update's automatic restore.
+
+        Called by the runtime after startup recovery and pruning, before any
+        request is served, and only by the start that migrated. A failure is
+        logged: without a baseline the restore uses the stricter
+        pre-migration rule, which only sends the user to manual recovery.
+        """
+
+        if not self._recorded_upgrade_snapshot:
+            return
+        self._recorded_upgrade_snapshot = False
+        try:
+            from launchers.apply_update import record_jobs_restore_baseline
+
+            record_jobs_restore_baseline(self.db_path.parent.parent, app_root().parent, self.db_path)
+        except Exception as exc:  # noqa: BLE001 - never fatal to startup
+            logger.warning("Could not record the jobs restore baseline: %s", exc)
+
     @property
     def rollback_snapshot_path(self) -> Path:
         return self.db_path.with_name(self.db_path.name + ".pre-schema-6.bak")
@@ -603,7 +626,8 @@ class JobStore:
                     raise
             else:
                 if published == target:
-                    record_jobs_upgrade_snapshot(self.db_path.parent.parent, app_root().parent, target)
+                    self._recorded_upgrade_snapshot = bool(record_jobs_upgrade_snapshot(
+                        self.db_path.parent.parent, app_root().parent, target))
         finally:
             for suffix in ("", "-wal", "-shm", "-journal"):
                 _unlink_or_log(Path(str(temporary) + suffix))

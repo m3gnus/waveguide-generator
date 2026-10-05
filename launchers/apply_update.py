@@ -2134,6 +2134,61 @@ def jobs_changed_since_snapshot(snapshot: sqlite3.Connection, live: sqlite3.Conn
     return None
 
 
+def jobs_content_baseline(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    """One digest per table over all of its rows, in any order (journal-sized)."""
+
+    baseline = {}
+    for table, columns in _jobs_table_columns(conn).items():
+        digest = hashlib.sha256()
+        rows = _jobs_row_digests(conn, table, columns)
+        for row in rows:
+            digest.update(row)
+        baseline[table] = {"columns": columns, "rows": len(rows), "sha256": digest.hexdigest()}
+    return baseline
+
+
+def jobs_changed_since_baseline(live: sqlite3.Connection, baseline: Mapping[str, Any]) -> str | None:
+    """Why the live jobs DB differs from the post-startup baseline, or None."""
+
+    current = _jobs_table_columns(live)
+    if set(current) != set(baseline):
+        return "tables were added or removed"
+    for table, recorded in baseline.items():
+        if not isinstance(recorded, Mapping) or current[table] != recorded.get("columns"):
+            return f"columns of {table} changed"
+        digest = hashlib.sha256()
+        for row in _jobs_row_digests(live, table, current[table]):
+            digest.update(row)
+        if digest.hexdigest() != recorded.get("sha256"):
+            return f"rows of {table} were added, changed or deleted"
+    return None
+
+
+def record_jobs_restore_baseline(data_dir: Path, resources: Path, db: Path) -> bool:
+    """After the migrating start's own recovery and pruning, before any request.
+
+    Records what the live jobs DB holds once the new build's startup writes
+    are done, so the automatic restore compares later work against that, not
+    against the pre-migration snapshot. Recorded once, for the transaction
+    that owns the snapshot; a later start never moves the baseline.
+    """
+
+    from contextlib import closing
+
+    journal = read_journal(data_dir, resources)
+    if journal is None or not journal_describes(journal, resources):
+        return False
+    owned = journal.get("jobsUpgradeSnapshot")
+    if (not isinstance(owned, dict) or owned.get("transaction") != journal.get("transaction")
+            or "jobsRestoreBaseline" in journal or "jobsRestore" in journal):
+        return False
+    with closing(sqlite3.connect(Path(db).resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        tables = jobs_content_baseline(conn)
+    journal["jobsRestoreBaseline"] = {"transaction": owned["transaction"], "tables": tables}
+    write_journal(data_dir, resources, journal)
+    return True
+
+
 def jobs_snapshot_identity(path: Path, *, metadata_only: bool = False,
                            expected: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
     """Check cheap file identity first; hash only a candidate matching ownership."""
@@ -2153,7 +2208,7 @@ def jobs_snapshot_identity(path: Path, *, metadata_only: bool = False,
         return None
 
 
-def record_jobs_upgrade_snapshot(data_dir: Path, resources: Path, snapshot: Path) -> None:
+def record_jobs_upgrade_snapshot(data_dir: Path, resources: Path, snapshot: Path) -> bool:
     """New-build startup records its snapshot in this installation's update.
 
     Only the layer transaction that installed the running build may own the
@@ -2168,17 +2223,18 @@ def record_jobs_upgrade_snapshot(data_dir: Path, resources: Path, snapshot: Path
             or journal.get("state") not in {"swapped", "launchers-refreshed", "installed"}
             or not journal_describes(journal, resources)
             or snapshot.resolve() != expected.resolve()):
-        return
+        return False
     installed = _journal_build(journal, "to")
     if installed is not None and installed != read_build_identity(Path(resources) / "app"):
-        return
+        return False
     metadata = jobs_snapshot_identity(snapshot, metadata_only=True)
     before = journal.get("jobsSnapshotBefore")
     if metadata is None or (before and all(metadata[k] == before.get(k) for k in metadata)):
-        return
+        return False
     identity = jobs_snapshot_identity(snapshot)
     journal["jobsUpgradeSnapshot"] = {"transaction": journal["transaction"], "identity": identity}
     write_journal(data_dir, resources, journal)
+    return True
 
 
 def sync_jobs_restore_file(path: Path, *, log: LogCallable | None = None) -> None:
@@ -2215,10 +2271,21 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
         with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
             if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
                 return  # No upgrade to undo; never used to decide an in-progress replay.
-            with closing(sqlite3.connect(snapshot.resolve().as_uri() + "?mode=ro", uri=True)) as before:
-                changed = jobs_changed_since_snapshot(before, conn)
+            baseline = journal.get("jobsRestoreBaseline")
+            if (isinstance(baseline, dict) and baseline.get("transaction") == owned.get("transaction")
+                    and isinstance(baseline.get("tables"), dict)):
+                # The migrating start recorded what its own recovery and
+                # pruning left: anything else is the user's later work.
+                changed = jobs_changed_since_baseline(conn, baseline["tables"])
+                compared = "since the new version started"
+            else:
+                # It died before startup finished, so no request was ever
+                # served: the pre-migration content is the rule.
+                with closing(sqlite3.connect(snapshot.resolve().as_uri() + "?mode=ro", uri=True)) as before:
+                    changed = jobs_changed_since_snapshot(before, conn)
+                compared = "since the snapshot"
         if changed is not None:
-            _emit_log(log, f"Jobs DB changed since the snapshot (newer work: {changed}); use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+            _emit_log(log, f"Jobs DB changed {compared} (newer work: {changed}); use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
             return
         # Schema 6 may itself still be only in the WAL after an unclean exit.
         # Moving that WAL away from a schema-5 main would let the old store
@@ -2489,6 +2556,8 @@ def begin_rollback_transaction(
     ):
         if existing.get("jobsUpgradeSnapshot"):
             payload["jobsUpgradeSnapshot"] = existing["jobsUpgradeSnapshot"]
+            if existing.get("jobsRestoreBaseline"):
+                payload["jobsRestoreBaseline"] = existing["jobsRestoreBaseline"]
         inherited = journal_staging_roots(existing)
         if inherited:
             payload["supersededStagingRoots"] = inherited
