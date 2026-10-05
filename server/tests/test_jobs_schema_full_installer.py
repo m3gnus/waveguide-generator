@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+import subprocess
 import sys
 import textwrap
 
@@ -252,6 +253,12 @@ def _restored_by_hand(db: Path, snapshot: Path) -> None:
     shutil.copy2(snapshot, db)
 
 
+def _work_in_the_older_release(db: Path) -> None:
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("UPDATE simulation_jobs SET label = 'older release work' WHERE id = 'c'")
+        conn.commit()
+
+
 @pytest.mark.parametrize("held_for", ["transient", "whole-start"])
 def test_a_held_previous_snapshot_never_stops_a_second_upgrade(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held_for: str
@@ -269,18 +276,20 @@ def test_a_held_previous_snapshot_never_stops_a_second_upgrade(
         conn.execute("UPDATE simulation_jobs SET label = 'after restore' WHERE id = 'a'")
         conn.commit()
     second_rows = _snapshot(db)
+    first_rows = _snapshot(snapshot)
     first_snapshot = snapshot.read_bytes()
 
-    real_replace = store_module.os.replace
+    real_unlink = Path.unlink
     refusals = []
 
-    def replace(source, destination):
-        if Path(source) == snapshot and (held_for == "whole-start" or not refusals):
-            refusals.append(source)
+    def unlink(self, missing_ok=False):
+        # A handle without delete sharing: the copy succeeds, the removal not.
+        if self == snapshot and (held_for == "whole-start" or not refusals):
+            refusals.append(self)
             raise _held(snapshot)
-        return real_replace(source, destination)
+        return real_unlink(self, missing_ok=missing_ok)
 
-    monkeypatch.setattr(store_module.os, "replace", replace)
+    monkeypatch.setattr(Path, "unlink", unlink)
     monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_SECONDS", 0.05)
     monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_INTERVAL", 0.01)
     store = JobStore(db)
@@ -292,12 +301,13 @@ def test_a_held_previous_snapshot_never_stops_a_second_upgrade(
     if held_for == "transient":
         # Retried like the bridge's renames: rotated, then published normally.
         assert len(refusals) == 1 and not held_copies
-        assert Path(str(snapshot) + ".1").read_bytes() == first_snapshot
+        assert _snapshot(Path(str(snapshot) + ".1")) == first_rows
         assert _snapshot(snapshot) == second_rows
     else:
-        # Kept where it is; this upgrade's snapshot is written beside it.
+        # Kept where it is, unchanged, with a complete copy at .bak.1; this
+        # upgrade's snapshot is written beside it.
         assert len(refusals) > 1 and snapshot.read_bytes() == first_snapshot
-        assert not Path(str(snapshot) + ".1").exists()
+        assert _snapshot(Path(str(snapshot) + ".1")) == first_rows
         assert len(held_copies) == 1 and _snapshot(held_copies[0]) == second_rows
     assert not list(db.parent.glob(".jobs-rollback-*"))
 
@@ -409,12 +419,14 @@ def test_a_failed_publication_after_rotation_reports_where_each_snapshot_is(
     store.close()
     snapshot = store.rollback_snapshot_path
     _restored_by_hand(db, snapshot)
-    first_snapshot = snapshot.read_bytes()
+    _work_in_the_older_release(db)
+    first_rows = _snapshot(snapshot)
     real_replace = store_module.os.replace
+    rotated = Path(str(snapshot) + ".1")
 
     def replace(source, destination):
         source = Path(source)
-        if source.name.startswith(".jobs-rollback-") and (
+        if source.name.startswith(".jobs-rollback-") and Path(destination) != rotated and (
             Path(destination) == snapshot or fallback == "also-held"
         ):
             raise _held(snapshot)
@@ -426,9 +438,8 @@ def test_a_failed_publication_after_rotation_reports_where_each_snapshot_is(
     store.initialize()  # never fails startup
     store.close()
 
-    rotated = Path(str(snapshot) + ".1")
     assert _user_version(db) == 6
-    assert rotated.read_bytes() == first_snapshot and not snapshot.exists()
+    assert _snapshot(rotated) == first_rows and not snapshot.exists()
     held = list(db.parent.glob(snapshot.name + ".held-*"))
     message = " ".join(record.getMessage() for record in caplog.records)
     assert f"previous snapshot is at {rotated}" in message
@@ -518,19 +529,138 @@ def test_a_snapshot_held_by_another_connection_is_held_not_invalid(
     assert not list(db.parent.glob(snapshot.name + ".invalid-*"))
     held = list(db.parent.glob(snapshot.name + ".held-*"))
     if released:
-        assert Path(str(snapshot) + ".1").read_bytes() == original
+        assert _snapshot(Path(str(snapshot) + ".1")) == rows
         assert not held and _snapshot(snapshot) == rows
     else:
         assert snapshot.read_bytes() == original and not Path(str(snapshot) + ".1").exists()
         assert len(held) == 1 and _snapshot(held[0]) == rows
 
 
-def test_validating_the_previous_snapshot_never_changes_it(tmp_path: Path) -> None:
+def test_a_wal_mode_previous_snapshot_rotates_as_one_standalone_copy(tmp_path: Path) -> None:
     db, snapshot, rows = _wal_mode_previous_snapshot(tmp_path)
-    original = snapshot.read_bytes()
     store = JobStore(db)
     store.initialize()
     store.close()
-    # Rotated byte for byte: no journal-mode change, no checkpoint into it.
-    assert Path(str(snapshot) + ".1").read_bytes() == original
-    assert _snapshot(snapshot) == rows
+    rotated = Path(str(snapshot) + ".1")
+    assert _snapshot(rotated) == rows and _snapshot(snapshot) == rows
+    for path in (snapshot, rotated):
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert not any(Path(str(path) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+
+
+REPOSITORY = Path(__file__).resolve().parents[2]
+WAL_ONLY_LABEL = "committed only in the wal"
+
+_CRASHING_UPGRADE = textwrap.dedent(
+    """\
+    import os
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, sys.argv[3])
+    from server.jobs import store as m
+    from server.jobs.store import JobStore
+
+    db, step = Path(sys.argv[1]), sys.argv[2]
+    target = db.with_name(db.name + ".pre-schema-6.bak")
+    rotated = Path(str(target) + ".1")
+    real_replace, real_unlink = m._replace_unless_held, m._unlink_unless_held
+
+    def replace(source, destination, deadline):
+        if step == "before-copy-published" and Path(destination) == rotated:
+            os._exit(17)
+        moved = real_replace(source, destination, deadline)
+        if (step, Path(destination)) in {("copy-published", rotated), ("published", target)}:
+            os._exit(17)
+        return moved
+
+    def unlink(path, deadline):
+        removed = real_unlink(path, deadline)
+        if (step, Path(path)) in {("main-removed", target), ("wal-removed", Path(str(target) + "-wal"))}:
+            os._exit(17)
+        return removed
+
+    m._replace_unless_held, m._unlink_unless_held = replace, unlink
+    JobStore(db).initialize()
+    os._exit(0)
+    """
+)
+
+
+def _label_in_set(main: Path, scratch: Path) -> str | None:
+    """Job a's label as SQLite reads the set, on a copy so nothing is touched."""
+
+    if not main.exists():
+        return None
+    scratch.mkdir()
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        if Path(str(main) + suffix).exists():
+            shutil.copyfile(Path(str(main) + suffix), scratch / ("copy.db" + suffix))
+    with closing(sqlite3.connect(scratch / "copy.db")) as conn:
+        return conn.execute("SELECT label FROM simulation_jobs WHERE id = 'a'").fetchone()[0]
+
+
+def _upgrade_child(db: Path, step: str) -> int:
+    driver = db.parent.parent / "crashing_upgrade.py"
+    driver.write_text(_CRASHING_UPGRADE, encoding="utf-8")
+    return subprocess.run([sys.executable, str(driver), str(db), step, str(REPOSITORY)],
+                          cwd=REPOSITORY, stdin=subprocess.DEVNULL, capture_output=True, timeout=120).returncode
+
+
+@pytest.mark.parametrize("step", ["before-copy-published", "copy-published", "main-removed", "wal-removed", "published"])
+def test_a_crash_at_any_rotation_step_loses_no_committed_snapshot_row(tmp_path: Path, step: str) -> None:
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    snapshot = store.rollback_snapshot_path
+    _restored_by_hand(db, snapshot)
+    _work_in_the_older_release(db)
+    # An earlier build's WAL-mode snapshot whose last commit is only in its WAL.
+    subprocess.run([sys.executable, "-c", textwrap.dedent(f"""\
+        import os, sqlite3, sys
+        c = sqlite3.connect(sys.argv[1])
+        c.execute("PRAGMA journal_mode=WAL")
+        c.execute("PRAGMA wal_autocheckpoint=0")
+        c.execute("UPDATE simulation_jobs SET label = '{WAL_ONLY_LABEL}' WHERE id = 'a'")
+        c.commit()
+        os._exit(0)
+        """), str(snapshot)], check=True, stdin=subprocess.DEVNULL)
+    assert Path(str(snapshot) + "-wal").stat().st_size > 0
+    main_only = tmp_path / "main-only.db"
+    shutil.copyfile(snapshot, main_only)
+    with closing(sqlite3.connect(main_only)) as conn:
+        assert conn.execute("SELECT label FROM simulation_jobs WHERE id = 'a'").fetchone()[0] != WAL_ONLY_LABEL
+    live_rows = _snapshot(db)
+    rotated = Path(str(snapshot) + ".1")
+
+    assert _upgrade_child(db, step) == 17, "the crash point was not reached"
+    found = {_label_in_set(snapshot, tmp_path / "crash-bak"), _label_in_set(rotated, tmp_path / "crash-bak1")}
+    assert WAL_ONLY_LABEL in found, found
+    assert _user_version(db) == 5  # the migration never committed
+
+    assert _upgrade_child(db, "none") == 0
+    assert _user_version(db) == 6
+    assert _label_in_set(rotated, tmp_path / "after-bak1") == WAL_ONLY_LABEL
+    assert _snapshot(snapshot) == live_rows
+    assert not any(Path(str(snapshot) + suffix).exists() for suffix in ("-wal", "-journal"))
+    assert not any(Path(str(rotated) + suffix).exists() for suffix in ("-wal", "-shm", "-journal"))
+
+
+def test_sidecars_left_without_their_main_file_are_set_aside(tmp_path: Path) -> None:
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    Path(str(snapshot) + "-wal").write_bytes(b"orphaned wal")
+    before = _snapshot(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    orphans = list(db.parent.glob(snapshot.name + ".orphan-*-wal"))
+    assert len(orphans) == 1 and orphans[0].read_bytes() == b"orphaned wal"
+    assert not Path(str(snapshot) + "-wal").exists()
+    # The new snapshot never pairs with the orphaned WAL.
+    assert _snapshot(snapshot) == before

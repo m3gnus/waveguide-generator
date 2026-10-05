@@ -187,13 +187,20 @@ release.** SQLite backup includes pre-upgrade WAL commits, so the snapshot is
 standalone and opens cleanly under both tags. Never restore while a runtime is
 open. Every upgrade from a live schema below 6 refreshes the snapshot and rotates
 the previous copy to `.bak.1` (keep one), preserving work from a restored older
-release. The previous snapshot is validated read-only, so its main file is
-never changed (a WAL-mode snapshot from an earlier build keeps its WAL, and
-SQLite may add an empty `-shm` beside it); its sidecars move with it. A snapshot
-another SQLite connection holds (busy or locked) counts as held, never as
-invalid: it is not quarantined to `.invalid-*`. If any file of the
-previous set is held open (Windows), the moves retry within one 20-second budget
-for the whole step; if a file stays held, the new snapshot is never published at
+release. The previous snapshot is validated read-only and never changed in
+place. Rotation copies, then deletes: SQLite's backup reads the previous set
+read-only (WAL content included) into one standalone file, which is flushed and
+renamed to `.bak.1` in a single step; only then is the old main file removed,
+and its sidecars after it. A crash therefore leaves the complete old set, or a
+complete `.bak.1`; never a main file without its WAL. Sidecars found without a
+main file are moved aside to `.orphan-<timestamp>-*` and never paired with a
+new snapshot (SQLite applies a WAL to whatever main file sits beside it). A
+standalone snapshot that already holds exactly the live data, left by an
+earlier attempt at the same upgrade, is replaced in place so it never pushes
+the real previous snapshot out of `.bak.1`. A snapshot another SQLite
+connection holds (busy or locked) counts as held, never as invalid: it is not
+quarantined to `.invalid-*`. If any file of the previous set is held open
+(Windows), the moves retry within one 20-second budget for the whole step; if a file stays held, the new snapshot is never published at
 the live name beside a stale sidecar. It is written to
 `simulations.db.pre-schema-6.bak.held-<timestamp>` instead, the log names where
 the previous snapshot is (`.bak`, `.bak.1` or `.invalid-*`), and automatic restore

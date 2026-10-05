@@ -211,6 +211,102 @@ def _snapshot_validity(path: Path, deadline: float) -> bool | None:
             time.sleep(_HELD_FILE_RETRY_INTERVAL)
 
 
+def _unlink_unless_held(path: Path, deadline: float) -> bool:
+    """Remove ``path``, waiting out a held Windows file; False if it stays held."""
+
+    while True:
+        try:
+            path.unlink(missing_ok=True)
+            return True
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in _HELD_FILE_WINERRORS:
+                raise
+            if time.monotonic() >= deadline:
+                logger.warning("Could not remove %s; it is held open: %s", path, exc)
+                return False
+            time.sleep(_HELD_FILE_RETRY_INTERVAL)
+
+
+def _flush_directory(path: Path) -> None:
+    if os.name != "nt":
+        directory = os.open(path, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+
+
+def _content_digest(path: Path) -> str:
+    """Every table's rows, in any order, as one digest (read-only)."""
+
+    digest = sha256()
+    with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as conn:
+        tables = [name for (name,) in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+        for table in tables:
+            columns = [str(row[1]) for row in conn.execute(f'PRAGMA table_info("{table}")')]
+            rows = sorted(sha256(repr(tuple(row)).encode("utf-8")).digest()
+                          for row in conn.execute(f'SELECT * FROM "{table}"'))
+            digest.update(json.dumps([table, columns, len(rows)]).encode("utf-8"))
+            for row in rows:
+                digest.update(row)
+    return digest.hexdigest()
+
+
+def _same_content(first: Path, second: Path) -> bool:
+    try:
+        return _content_digest(first) == _content_digest(second)
+    except sqlite3.Error:
+        return False
+
+
+def _copy_previous_snapshot(source: Path, rotated: Path, deadline: float) -> bool:
+    """Publish the previous snapshot set as one standalone ``rotated`` file.
+
+    Copy, then delete: SQLite's backup reads the set read-only, WAL content
+    included, into a private file that is flushed and then renamed over
+    ``rotated`` in one step. Nothing of ``source`` is touched, so a crash
+    leaves the complete old set, and from the rename on a complete copy too.
+    False when the set (or the old ``rotated``) stays held.
+    """
+
+    fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=source.parent)
+    os.close(fd)
+    temporary = Path(name)
+    try:
+        while True:
+            try:
+                with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as old:
+                    with closing(sqlite3.connect(temporary)) as copy:
+                        old.backup(copy)
+                        copy.execute("PRAGMA journal_mode=DELETE")
+                        if copy.execute("PRAGMA quick_check").fetchone()[0] != "ok":
+                            raise RuntimeError("The rotated jobs rollback snapshot failed its integrity check")
+                break
+            except sqlite3.Error as exc:
+                code = getattr(exc, "sqlite_errorcode", None)
+                if code is None or code & 0xFF not in _SQLITE_HELD_CODES:
+                    raise
+                if time.monotonic() >= deadline:
+                    logger.warning("The jobs rollback snapshot %s is held by another connection: %s", source, exc)
+                    return False
+                time.sleep(_HELD_FILE_RETRY_INTERVAL)
+        with temporary.open("r+b") as stream:
+            os.fsync(stream.fileno())
+        # The generation being discarded: its sidecars must never pair with
+        # the standalone copy, and its main file goes in the rename below.
+        for suffix in _SNAPSHOT_SIDECARS:
+            if not _unlink_unless_held(Path(str(rotated) + suffix), deadline):
+                return False
+        if not _replace_unless_held(temporary, rotated, deadline):
+            return False
+        _flush_directory(rotated.parent)
+        return True
+    finally:
+        for suffix in ("", "-wal", "-shm", "-journal"):
+            _unlink_or_log(Path(str(temporary) + suffix))
+
+
 def _unlink_or_log(path: Path) -> None:
     """Remove a leftover snapshot file; one held open stays for the next start."""
 
@@ -548,6 +644,17 @@ class JobStore:
                     sidecar = Path(str(target) + suffix)
                     if sidecar.exists() and not _replace_unless_held(sidecar, Path(str(invalid) + suffix), deadline):
                         blocked = True
+        elif any(Path(str(target) + suffix).exists() for suffix in _SNAPSHOT_SIDECARS):
+            # Sidecars with no main file: a rotation that stopped after
+            # removing the main (its content is already in .bak.1), or files
+            # of unknown origin. SQLite would apply a WAL to any new main
+            # file, so set them aside, never beside the new snapshot.
+            orphan = target.with_name(target.name + ".orphan-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
+            for suffix in _SNAPSHOT_SIDECARS:
+                sidecar = Path(str(target) + suffix)
+                if sidecar.exists() and not _replace_unless_held(sidecar, Path(str(orphan) + suffix), deadline):
+                    blocked = True
+            logger.warning("Moved jobs rollback snapshot sidecars without a main file to %s*", orphan)
         # Keep one quarantined recovery set, including only its own sidecars.
         invalid_sets = sorted(path for path in target.parent.glob(target.name + ".invalid-*")
                               if not path.name.endswith(("-wal", "-shm", "-journal")))
@@ -568,20 +675,31 @@ class JobStore:
                 os.fsync(stream.fileno())
             published: Path | None = target
             rotated = Path(str(target) + ".1")
-            if not blocked and target.exists():
-                # Rotate the whole set, sidecars first: a WAL left at the
-                # live name would pair with the new snapshot's main file.
-                for suffix in _SNAPSHOT_SIDECARS:
-                    sidecar = Path(str(target) + suffix)
-                    if sidecar.exists():
-                        _unlink_or_log(Path(str(rotated) + suffix))
-                        if not _replace_unless_held(sidecar, Path(str(rotated) + suffix), deadline):
-                            blocked = True
-                if not blocked:
-                    if _replace_unless_held(target, rotated, deadline):
-                        previous = rotated
-                    else:
+            if (not blocked and target.exists()
+                    and not any(Path(str(target) + suffix).exists() for suffix in _SNAPSHOT_SIDECARS)
+                    and _same_content(target, self.db_path)):
+                # A standalone snapshot already holding exactly this data: an
+                # earlier attempt at this same upgrade published it and
+                # stopped before committing. Rotating it would push the real
+                # previous snapshot out of .bak.1; replace it in place.
+                previous = Path(str(target) + ".1")
+            elif not blocked and target.exists():
+                # Copy, then delete. Once .bak.1 is a complete standalone
+                # copy, remove the old main file first and its sidecars
+                # after: a crash then leaves either the complete old set, or
+                # sidecars with no main (set aside at the next start) beside
+                # the complete copy. Never a main file without its WAL.
+                if not _copy_previous_snapshot(target, rotated, deadline):
+                    blocked = True
+                else:
+                    previous = rotated
+                    if not _unlink_unless_held(target, deadline):
                         blocked = True
+                    else:
+                        for suffix in _SNAPSHOT_SIDECARS:
+                            if not _unlink_unless_held(Path(str(target) + suffix), deadline):
+                                blocked = True
+                        _flush_directory(target.parent)
             if blocked or any(Path(str(target) + suffix).exists() for suffix in _SNAPSHOT_SIDECARS):
                 blocked = True
             elif not _replace_unless_held(temporary, target, deadline):
@@ -608,12 +726,7 @@ class JobStore:
                         "is at %s and this upgrade's snapshot was written to %s. Automatic jobs "
                         "restore is off for this update; use the manual jobs recovery procedure "
                         "with %s.", target, previous, published, published)
-            if os.name != "nt":
-                directory = os.open(self.db_path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory)
-                finally:
-                    os.close(directory)
+            _flush_directory(self.db_path.parent)
             # The installed helper records only a snapshot made by this build
             # during its own update, before any schema write can commit.
             # The full-installer path has no layer journal to record in, and
