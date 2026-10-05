@@ -7,10 +7,14 @@ import sys
 def _ordinary_path(value):
     # Pre-import counterpart of launchers.update_lock.ordinary_path. This hook
     # is embedded in the runtime and cannot import the app layer; keep both
-    # drive/UNC conversions in agreement.
-    if value[:8].upper() == "\\\\?\\UNC\\":
+    # drive/UNC conversions in agreement, preserving other extended forms.
+    if (value[:8].upper() == "\\\\?\\UNC\\"
+            and len(parts := value[8:].split("\\")) >= 2
+            and parts[0] and parts[1]):
         return "\\\\" + value[8:]
-    if value.startswith("\\\\?\\"):
+    if (value.startswith("\\\\?\\") and len(value) >= 7
+            and value[4] in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+            and value[5:7] == ":\\"):
         return value[4:]
     return value
 
