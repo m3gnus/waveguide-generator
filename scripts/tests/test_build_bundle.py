@@ -946,13 +946,14 @@ def test_installer_points_every_shown_icon_at_the_staged_ico() -> None:
     assert "SetupIconFile={#PayloadDir}" + chr(92) + WINDOWS_ICON_NAME in script
 
 
-def test_the_shell_redraws_shortcut_icons_after_the_ico_is_committed() -> None:
+def test_shortcuts_are_rewritten_once_the_ico_is_committed() -> None:
     """[Icons] runs before ssPostInstall, while the .ico is still staged.
 
-    The shortcuts are first drawn with a missing icon file, and Explorer keeps
-    that blank image. The launcher itself has no icon resource to point at
-    instead, so the shell's icon cache is flushed once the commit has moved
-    the .ico into place.
+    The shortcuts are first written with an icon file that does not exist,
+    and Explorer keeps that blank image. The launcher has no icon resource to
+    point at instead, so after the commit both shortcuts are written again at
+    the paths [Icons] logged (so the uninstaller still removes them), and only
+    then is the shell's icon cache flushed.
     """
 
     script = (
@@ -960,8 +961,24 @@ def test_the_shell_redraws_shortcut_icons_after_the_ico_is_committed() -> None:
     ).read_text(encoding="utf-8")
     post_install = script.split("if CurStep = ssPostInstall then", 1)[1]
     commit = post_install.index("CommitProtectedReplace();")
-    notify = post_install.index("SHChangeNotify($08000000, 0, 0, 0);")
-    assert commit < notify < post_install.index("WizardIsTaskSelected(WgLinkTaskName)")
+    rewrite = post_install.index("RewriteShortcutIcons();")
+    assert commit < rewrite < post_install.index("WizardIsTaskSelected(WgLinkTaskName)")
+
+    helper = script.split("procedure RewriteShortcutIcons();", 1)[1].split("end;", 1)[0]
+    start_menu = helper.index("RewriteShortcut(ExpandConstant('{group}" + chr(92) + "Waveguide Generator.lnk'))")
+    desktop = helper.index("RewriteShortcut(ExpandConstant('{autodesktop}" + chr(92) + "Waveguide Generator.lnk'))")
+    assert helper.index("WizardIsTaskSelected('desktopicon')") < desktop
+    assert start_menu < desktop < helper.index("SHChangeNotify($08000000, 0, 0, 0);")
+
+    one = script.split("procedure RewriteShortcut(const Link: String);", 1)[1].split(chr(10) + "end;", 1)[0]
+    assert "ExpandConstant('{app}" + chr(92) + WINDOWS_ICON_NAME + "')" in one
+    assert "CreateShellLink(Link, '', ExpandConstant('{app}" + chr(92) + "Waveguide Generator.exe'), '', '', Icon, 0, SW_SHOWNORMAL)" in one
+    assert "if not FileExists(Link) or not FileExists(Icon) then" in one
+
+    # The same two paths stay in [Icons], which is what the uninstaller removes.
+    icons = script.split("[Icons]", 1)[1].split(chr(10) + "[", 1)[0]
+    assert 'Name: "{group}' + chr(92) + 'Waveguide Generator"; Filename:' in icons
+    assert 'Name: "{autodesktop}' + chr(92) + 'Waveguide Generator"; Filename:' in icons
     assert "external 'SHChangeNotify@shell32.dll stdcall setuponly'" in script
 
 
