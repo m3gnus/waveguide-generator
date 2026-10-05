@@ -1046,7 +1046,11 @@ begin
     'waveguide generator.exe|wg-python.exe|wg-python._pth|waveguide generator._pth|' +
     'pyvenv.cfg|python313.dll|python3.dll|vcruntime140.dll|vcruntime140_1.dll|' +
     'msvcp140.dll|waveguidegenerator.ico|read me first.txt|.upgrade-in-progress|' +
-    '.wg-install-lock|.native-start|') > 0;
+    '.wg-install-lock|.native-start|' +
+    'app.previous|runtime.previous|wg-python.exe.previous|python313.dll.previous|' +
+    'python3.dll.previous|vcruntime140.dll.previous|vcruntime140_1.dll.previous|' +
+    'msvcp140.dll.previous|waveguide generator.exe.previous|' +
+    '.update-transaction-open.json|.update-transaction-open.json.new|') > 0;
   if not Result then
     Result := (Length(Lower) = 12) and (Copy(Lower, 1, 5) = 'unins') and
       ((Copy(Lower, 9, 4) = '.exe') or (Copy(Lower, 9, 4) = '.dat')) and
