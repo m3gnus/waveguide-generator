@@ -224,7 +224,9 @@ def build_request(
                "regular_quadrature_mode": "wavelength" if backend == "cpu" else "fixed",
                "quadrature_order": quadrature_order, "singular_order": singular_order,
                "wavelength_mesh_stat": "p90", "wavelength_kh_q1_max": 0.,
-               "wavelength_kh_q2_max": 2., "ground_plane_min_clearance_m": ground_plane_min_clearance_m}
+               "wavelength_kh_q2_max": 2.}
+    if mode == "ground":  # HBB sent the clearance only with a ground plane
+        options["ground_plane_min_clearance_m"] = ground_plane_min_clearance_m
     system = {"id": "system:waveguide-generator", "name": "WG exterior radiation",
               "contract_version": 2 if any(b.motion == "axial" for b in bases) else 1,
               "meshes": [{"id": "mesh:surface", "name": "Surface", "file": "",

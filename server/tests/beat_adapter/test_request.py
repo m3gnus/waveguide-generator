@@ -385,3 +385,7 @@ def test_pure_request_parity_runs_without_optional_checkout_or_packages(build, m
     row = parse_compiled_frequency(compiled_result(built, boundary_pressure=[[3 + 2j] * 4]),
                                     built, frequency_hz=500.)["ch"]
     assert row.impedance == pytest.approx((3 + 2j) * acceleration_scale(500.))
+
+
+def test_ground_clearance_is_sent_only_with_a_ground_plane(build):
+    assert "ground_plane_min_clearance_m" not in build(ground_plane_min_clearance_m=.4).wire["solver_options"]
