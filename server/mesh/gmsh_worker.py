@@ -334,7 +334,7 @@ async def shutdown_gmsh_worker() -> None:
     # build that cannot be asked to stop.
     from server.mesh.child import close_mesher_child
 
-    await asyncio.to_thread(close_mesher_child)
+    await asyncio.to_thread(close_mesher_child, keep_shutdown_guard=True)
 
     # Drain first. The warmup owns a queued executor future, and tearing the
     # executor down underneath it would abandon a task that is about to touch a

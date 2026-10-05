@@ -36,7 +36,7 @@ from server.jobs import mount_jobs
 from server.integration import mount_integration
 from server.mesh.api import mount_solver_mesh
 from server.cadlink.addin_update import shutdown_addin_refresh, start_addin_refresh
-from server.mesh.child import begin_mesher_child_shutdown
+from server.mesh.child import begin_mesher_child_shutdown, close_mesher_child
 from server.mesh.gmsh_worker import prewarm_gmsh_worker, shutdown_gmsh_worker
 from server.mesh.prewarm import prewarm_mesher, shutdown_mesher_prewarm
 from server.platform.origin import (
@@ -963,11 +963,16 @@ def create_app(
 
     @contextlib.asynccontextmanager
     async def shutdown_mesh_child_first(app: FastAPI):
-        async with lifespan(app) as state:
-            try:
-                yield state
-            finally:
-                begin_mesher_child_shutdown()
+        try:
+            async with lifespan(app) as state:
+                try:
+                    yield state
+                finally:
+                    begin_mesher_child_shutdown()
+        finally:
+            # Release the guard only after every router/handler has unwound,
+            # including when one fails or skips its native-worker cleanup.
+            await asyncio.to_thread(close_mesher_child)
 
     application.router.lifespan_context = shutdown_mesh_child_first
     return application

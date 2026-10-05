@@ -468,14 +468,23 @@ def begin_mesher_child_shutdown() -> None:
     get_mesher_child().begin_shutdown()
 
 
-def close_mesher_child() -> None:
-    """Kill the shared child, if any. Safe to call repeatedly."""
+def close_mesher_child(*, keep_shutdown_guard: bool = False) -> None:
+    """Kill the shared child, if any. Safe to call repeatedly.
+
+    Intermediate worker cleanup keeps an app's closing host as a submission
+    guard. The app's final lifespan cleanup releases it for subsequent apps or
+    builds in the same process. Standalone worker cleanup releases it normally.
+    """
 
     global _host
     with _host_lock:
-        host, _host = _host, None
+        host = _host
+        keep_host = host is not None and keep_shutdown_guard and host._closing
     if host is not None:
         host.close()
+        with _host_lock:
+            if _host is host and not keep_host:
+                _host = None
 
 
 def prewarm_mesher_child() -> None:

@@ -380,6 +380,36 @@ def test_mesh_http_request_during_child_shutdown_returns_503(path, shared_child)
         clear_solver_mesh_cache()
 
 
+def test_shared_host_is_released_only_after_close_finishes(monkeypatch, shared_child) -> None:
+    import server.mesh.child as child_module
+
+    host = child_module.get_mesher_child()
+    begin_mesher_child_shutdown()
+    closing = threading.Event()
+    release = threading.Event()
+    close = host.close
+
+    def blocked_close():
+        close()
+        closing.set()
+        assert release.wait(5), "test did not release the final close"
+
+    monkeypatch.setattr(host, "close", blocked_close)
+    closer = threading.Thread(target=close_mesher_child)
+    closer.start()
+    try:
+        assert closing.wait(5)
+        assert child_module.get_mesher_child() is host
+        with pytest.raises(MesherShuttingDownError):
+            asyncio.run(run_mesh_build(ok_build))
+        assert host._channel is None
+    finally:
+        release.set()
+        closer.join(5)
+    assert not closer.is_alive()
+    assert child_module._host is None
+
+
 def test_in_process_switch_is_ignored_in_a_bundled_app(monkeypatch) -> None:
     monkeypatch.setenv("WG2_TEST_MESH_IN_PROCESS", "1")
     monkeypatch.setenv("WG2_BUNDLE", "1")

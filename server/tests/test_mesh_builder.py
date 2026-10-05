@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ctypes
 import importlib.util
 import json
@@ -1147,6 +1148,76 @@ def test_solver_mesh_cache_key_ignores_solve_sampling_but_tracks_geometry(
         asyncio.run(scenario())
         assert calls == 2
     finally:
+        clear_solver_mesh_cache()
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("hornlab_mesher") is None,
+    reason="hornlab-waveguide-mesher is not installed",
+)
+@pytest.mark.parametrize("cleanup", ["real", "skipped", "error"])
+def test_app_shutdown_allows_a_later_real_occ_mesh_build(
+    cleanup, monkeypatch, tmp_path,
+) -> None:
+    """Keep submissions blocked through teardown, then permit a fresh shared host."""
+    import server.app as app_module
+    import server.mesh.child as child_module
+
+    async def no_native_warmup():
+        pass
+
+    monkeypatch.setattr(app_module, "FRONTEND_DIST", tmp_path)
+    monkeypatch.setattr(app_module, "detect_engines", lambda: [])
+    for name in ("prewarm_gmsh_worker", "prewarm_mesher"):
+        monkeypatch.setattr(app_module, name, no_native_warmup)
+    monkeypatch.setenv("WG2_SOLVER_WARMUP", "0")
+    if cleanup == "skipped":
+        # Reproduce an app test that stubs out the unrelated gmsh cleanup.
+        monkeypatch.setattr(app_module, "shutdown_gmsh_worker", no_native_warmup)
+    monkeypatch.delenv("WG2_TEST_MESH_IN_PROCESS", raising=False)
+    child_module.close_mesher_child()
+    clear_solver_mesh_cache()
+
+    async def scenario():
+        application = app_module.create_app(data_dir=tmp_path / "data")
+        host = child_module.get_mesher_child()
+        checked_teardown = False
+
+        async def check_late_submission():
+            nonlocal checked_teardown
+            # This runs after the gmsh shutdown handler: clearing the global
+            # there would allow a new child while the app is still stopping.
+            assert child_module.get_mesher_child() is host
+            with pytest.raises(child_module.MesherShuttingDownError):
+                await child_module.run_mesh_build(os.getpid)
+            host.prewarm()
+            assert host._channel is None
+            checked_teardown = True
+            if cleanup == "error":
+                raise RuntimeError("shutdown handler failed")
+
+        application.router.add_event_handler("shutdown", check_late_submission)
+        expected_error = (
+            pytest.raises(RuntimeError, match="shutdown handler failed")
+            if cleanup == "error" else contextlib.nullcontext()
+        )
+        with expected_error:
+            async with application.router.lifespan_context(application):
+                pass
+        assert checked_teardown
+        assert host._closed and host._channel is None
+        assert child_module._host is None
+
+        result = await build_solver_mesh(_tiny_design(), {}, force_rebuild=True)
+        assert child_module.get_mesher_child() is not host
+        assert result["msh_text"].startswith("$MeshFormat")
+        assert result["stats"]["triangle_count"] > 20
+        assert result["integrity"]["valid"] is True
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        child_module.close_mesher_child()
         clear_solver_mesh_cache()
 
 
