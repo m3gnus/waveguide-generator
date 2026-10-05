@@ -191,10 +191,12 @@ def test_identical_unordered_sweeps_are_sorted_together_for_resonances(reference
         "peaks": [1040.], "dips": [1070.]}
 
 
-def bind_record(result, method):
-    record = {"mesh_sha256": hashlib.sha256(result.mesh_bytes).hexdigest(),
+def bind_record(result, method, mesh_sha256="packed-request-mesh", **overrides):
+    record = {"mesh_sha256": mesh_sha256, "evidence_mode": "real", "status": "passed",
+              "case": {"backend": result.settings["backend"], "precision": result.settings["precision"]},
               "runtime": {"engine_revision": result.revision},
               "result": {"solver_log": [{"native_diagnostics": {"linear_solver": "cpu_dense_" + method}}]}}
+    record.update(overrides)
     digest = hashlib.sha256(json.dumps(record, sort_keys=True, allow_nan=False).encode()).hexdigest()
     return replace(result, recorder_record=record, recorder_sha256=digest)
 
@@ -250,7 +252,8 @@ def test_backend_freeze_refuses_undeclared_cross_backend_agreement(reference):
     assert not report["passed"] and "Frozen settings" in " ".join(report["failures"])
 
 
-@pytest.mark.parametrize("mutation", ["hash", "mesh", "revision", "one_binding"])
+@pytest.mark.parametrize("mutation", ["hash", "mesh", "revision", "one_binding", "synthetic", "failed",
+                                      "backend", "precision"])
 def test_recorder_binding_rejects_detached_agreement(reference, mutation):
     a = bind_record(reference, "lu")
     b = bind_record(replace(reference, revision="official-exact-sha"), "lu")
@@ -258,8 +261,15 @@ def test_recorder_binding_rejects_detached_agreement(reference, mutation):
     if mutation == "hash":
         b = replace(b, recorder_sha256="bad")
     elif mutation == "mesh":
-        b = bind_record(replace(b, mesh_bytes=b"wrong mesh"), "lu")
-        b = replace(b, mesh_bytes=reference.mesh_bytes)
+        b = bind_record(replace(reference, revision="official-exact-sha"), "lu", mesh_sha256="other mesh")
+    elif mutation == "synthetic":
+        b = bind_record(replace(reference, revision="official-exact-sha"), "lu", evidence_mode="synthetic")
+    elif mutation == "failed":
+        b = bind_record(replace(reference, revision="official-exact-sha"), "lu", status="failed")
+    elif mutation in {"backend", "precision"}:
+        recorded = {"backend": "metal", "precision": "float32"}[mutation]
+        case = {**b.recorder_record["case"], mutation: recorded}
+        b = bind_record(replace(reference, revision="official-exact-sha"), "lu", case=case)
     elif mutation == "revision":
         b = replace(b, revision="unrecorded-revision")
     else:

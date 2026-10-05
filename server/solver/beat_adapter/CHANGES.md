@@ -242,3 +242,14 @@ budgets remain unchanged. Real CPU/Metal/installed/performance runs are deferred
 compute-broker evidence, not claimed by fake tests. This fix round is left
 uncommitted at the user's explicit request; previous rounds' stale commit-state
 wording is removed.
+
+Review round 2 (conformance), fixed directly:
+- Bound agreement records must be passed real-solve records whose case backend
+  and precision equal the compared settings; a synthetic, failed or
+  cross-backend record is refused.
+- Mesh binding now compares the two records' recorder-computed packed-mesh
+  hashes with each other (the recorder never hashed raw mesh file bytes).
+- Accepted: a monotone reference passes unless the corpus declares
+  expected_resonance_columns; the corpus owner must declare them. A Python
+  caller can still pass a canonical-named case with its own accept callable;
+  the CLI cannot.

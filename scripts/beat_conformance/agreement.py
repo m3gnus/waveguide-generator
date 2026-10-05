@@ -154,10 +154,18 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
                 digest = record_sha256(record)
                 if digest != result.recorder_sha256:
                     raise ValueError("Recorder record hash differs")
-                if record.get("mesh_sha256") != hashlib.sha256(result.mesh_bytes).hexdigest():
-                    raise ValueError("Recorder mesh hash differs from ResultSet mesh")
+                if record.get("evidence_mode") != "real" or record.get("status") != "passed":
+                    raise ValueError("Recorder records must be passed real-solve records")
+                case = record.get("case", {})
+                for name in ("backend", "precision"):
+                    if case.get(name) != result.settings.get(name):
+                        raise ValueError(f"Recorder case {name} differs from ResultSet settings")
                 if record.get("runtime", {}).get("engine_revision") != result.revision:
                     raise ValueError("Recorder revision differs from ResultSet revision")
+            # The recorder hashes the packed request mesh; both runs must share it.
+            meshes = {r.recorder_record.get("mesh_sha256") for r in (reference, candidate)}
+            if len(meshes) != 1 or None in meshes:
+                raise ValueError("Recorder mesh hashes differ or are missing")
             rows = reference.recorder_record.get("result", {}).get("solver_log", [])
             forced_lu_reference = bool(rows) and all(
                 row.get("native_diagnostics", {}).get("linear_solver")
