@@ -16,13 +16,13 @@ def clear_core_cache():
 
 @pytest.mark.parametrize(("system", "total"), [("Linux", 8), ("Windows", 4), ("Linux", None), ("Linux", 0)])
 def test_non_mac_falls_back_to_total_without_sysctl(monkeypatch, system, total):
-    monkeypatch.setattr(threads.platform, "system", lambda: system)
-    monkeypatch.setattr(threads.os, "cpu_count", lambda: total)
+    monkeypatch.setattr(beat_threads.platform, "system", lambda: system)
+    monkeypatch.setattr(beat_threads.os, "cpu_count", lambda: total)
 
     def forbidden(*args, **kwargs):
         pytest.fail("sysctl should not run")
 
-    monkeypatch.setattr(threads.subprocess, "run", forbidden)
+    monkeypatch.setattr(beat_threads.subprocess, "run", forbidden)
     assert threads._performance_core_count() == (total or 1)
 
 
@@ -31,15 +31,15 @@ def test_non_mac_falls_back_to_total_without_sysctl(monkeypatch, system, total):
     ("", 0, 10), ("unknown", 0, 10), ("8", 1, 8),
 ])
 def test_mac_performance_cores_and_fallback(monkeypatch, output, code, expected):
-    monkeypatch.setattr(threads.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(threads.os, "cpu_count", lambda: 10)
+    monkeypatch.setattr(beat_threads.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(beat_threads.os, "cpu_count", lambda: 10)
     calls = []
 
     def run(*args, **kwargs):
         calls.append((args, kwargs))
         return SimpleNamespace(stdout=output, returncode=code)
 
-    monkeypatch.setattr(threads.subprocess, "run", run)
+    monkeypatch.setattr(beat_threads.subprocess, "run", run)
     assert threads._performance_core_count() == expected
     assert threads._performance_core_count() == expected
     assert len(calls) == 1
@@ -49,13 +49,13 @@ def test_mac_performance_cores_and_fallback(monkeypatch, output, code, expected)
 
 @pytest.mark.parametrize("error", [OSError("missing"), subprocess.TimeoutExpired("sysctl", 5)])
 def test_mac_sysctl_errors_fall_back(monkeypatch, error):
-    monkeypatch.setattr(threads.platform, "system", lambda: "Darwin")
-    monkeypatch.setattr(threads.os, "cpu_count", lambda: 10)
+    monkeypatch.setattr(beat_threads.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(beat_threads.os, "cpu_count", lambda: 10)
 
     def fail(*args, **kwargs):
         raise error
 
-    monkeypatch.setattr(threads.subprocess, "run", fail)
+    monkeypatch.setattr(beat_threads.subprocess, "run", fail)
     assert threads._performance_core_count() == 10
 
 

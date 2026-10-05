@@ -1201,3 +1201,96 @@ real GPU solve, user/HBB data writes or reference-checkout mutation occurred.
 Real engine/bundle/installed-device qualification remains intentionally unrun
 under the task constraints. No requested implementation remains unfinished;
 changes and this handoff remain uncommitted as explicitly requested.
+
+**Review round 1 fixes (PRs 13-14):**
+- **P1/A — fixed:** default-off imports/subscriptions/cache clearing are gated
+  by the stdlib-only provider selector. The previously transitive threads import
+  is gated too: beat_threads owns the shared stdlib core detector, and the
+  official resolver imports that detector. A fresh-interpreter regression imports
+  bootstrap, beat_cpu_runtime, beat and EngineRegistry, constructs the registry,
+  clears caches and removes its listener; only provider loads below the inert
+  beat_runtime package. Official events use a guarded bridge and cannot reach
+  registry subscribers with the selector unset.
+- **P1/B — fixed:** production beat_status/beat_backend_statuses and CPU registry
+  readiness remain attached to HBB, including their remediation commands.
+  Official readiness is published separately as EngineRegistry's
+  official_runtime_statuses and diagnostics' officialBeatRuntime field. Official
+  proof with absent HBB cannot enable beat-cpu/beat-metal; ready HBB with stale
+  official proof keeps its production availability. This supersedes PR 13c's
+  earlier presentation-wrapper/registry behavior; numerical adapters stay HBB.
+- **P1/C — fixed:** raw CPU/Metal/legacy GPU stdout updates progress text and
+  logging only. Guarded step_cb callbacks from shared provisioning publish
+  instantiate/precompile/setup/probe transitions; start/finish publish lifecycle
+  changes. In-flight official diagnostics use the cheap facade text and do not
+  call readiness APIs. Settled snapshots compute CPU once. The 1,000-line burst
+  regression produces three notifications and one CPU identity computation.
+- **P2/D — fixed:** engine_fingerprint includes shared engine sources but only
+  the selected backend's bundled project/manifest set (including versioned and
+  bundle manifests), plus any explicitly selected project/sysimage. Provisioning
+  and readiness pass the same backend. A Metal instantiate changes its manifest
+  and fails; the CPU record and CPU readiness survive. Shared-source edits still
+  revoke every backend's proof.
+- **P2/E — fixed:** each capabilities request checks a cheap root + mtime_ns/size
+  stamp for state-cpu.json, state-metal.json and julia.json. Changed stamps
+  coalesce through the existing refresh revisions and refresh official diagnostics.
+  CLI clear-cache touches existing records to publish cross-process invalidation;
+  it neither deletes proof nor creates an absent runtime. Separate Python
+  processes exercise terminal-state writes and clear-cache, while unchanged
+  stamps cause no additional identity work. Production HBB rows stay independent.
+- **P2/F — fixed:** the official remediation command names the current interpreter
+  and uses -c/runpy with app_root inserted in sys.path, independent of cwd and
+  compatible with WG2_APP_ROOT's packaged source layer. POSIX uses shlex.join;
+  Windows uses list2cmdline. Tests cover spaces/quotes and an actual invocation
+  from an unrelated cwd with a deliberately missing optional engine.
+- **P3 GPU-only thread — fixed:** prepare_gpu requires reported eligible Metal
+  hardware. A settled CPU on Linux/Windows with no Metal starts no thread and
+  emits no notification. CPU provisioning still runs when needed, preserving
+  the design's required CPU-only-host setup. Hardware detection failures skip
+  GPU work without breaking startup.
+- **P3 unsupported CLI — fixed:** explicit cuda/rocm without a GPU gate exits 1
+  with "not supported in this build"; --if-gpu remains a quiet no-op.
+- **P3 active provisioning — fixed:** provisioning_active checks the existing
+  persistent kernel lock without creating files or trusting/signaling a holder
+  PID. An in-progress record under a held lock reports provisioning before
+  identity hashing; after release it can report interrupted. A separate-process
+  lock regression exercises both readiness and cpu_runtime_readiness.
+- **P3 selector — fixed:** accept exactly stripped "official"; warn once per
+  distinct unknown non-empty value. Every application selection site reads the
+  process environment, including launcher selection; injected provisioning env
+  remains launch configuration and cannot select a different reporting provider.
+
+Review-round files per PR (relative to repository root):
+- **PR 13:** server/solver/beat_runtime/{provider,readiness,identity,locks,provision,
+  threads}.py; server/solver/{beat_cpu_runtime,beat,beat_threads}.py;
+  server/engines/registry.py; server/diagnostics/capabilities.py;
+  server/tests/beat_runtime/test_{identity,threads,readiness_facade,review_round1}.py;
+  this CHANGES.md. Shared step_cb is optional; stdout callbacks retain their API.
+- **PR 14:** server/solver/beat_runtime/cli.py;
+  server/tests/beat_runtime/test_cli.py; command/quoting changes in the shared
+  beat_cpu_runtime.py and CLI/command cases in test_review_round1.py; this
+  CHANGES.md. scripts/bootstrap.py needs no further edit: its provider helper
+  now enforces the same exact selector and its subprocess cwd already works.
+
+Review-round validation: the available common targets (beat_runtime plus
+server/tests/test_solver_beat.py) passed **937 tests in 82.39 s**. The requested
+CPU runtime, test_engines*.py and three bootstrap files passed **196 tests,
+1 skipped in 4.62 s**. Focused facade/review regressions passed **26 tests in
+2.31 s**; the final mechanism-only rerun (adding an assertion through the CPU
+facade to the lock regression) passed **17 tests**. Tests used the requested
+Python via scripts/run_tests.py, unpiped, each run below two minutes. Ruff passes
+for all available runtime/tests and changed facade/registry/diagnostic/bootstrap
+paths; git diff --check passes.
+
+Both exact common commands were attempted. Pytest cannot collect because
+server/tests/beat_adapter is absent; Ruff reports only absent
+server/solver/beat_adapter and server/tests/beat_adapter. These later-slice
+paths are not created by this review fix. test_startup_performance.py and the
+full scripts/WG suites were not run. No Julia, downloads, real user/HBB data
+writes, donor-checkout edits, pin/requirements changes, or commits occurred.
+
+Design deviations: official JWSound/BEAT_Engine remains the target; backend-local
+manifest identities supersede the design's all-backend hash to preserve CPU
+proof during Metal setup. Official status is diagnostic until later solve
+adapter slices; cross-process invalidation uses existing file stamps rather
+than a watcher/thread or new dependency. All requested fixes are implemented;
+missing beat_adapter directories prevent only the exact combined checks.

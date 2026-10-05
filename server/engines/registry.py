@@ -383,6 +383,20 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
     )
 
 
+def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
+    from server.solver import beat_cpu_runtime
+
+    if beat_cpu_runtime.cpu_preparation_in_flight():
+        cpu = beat_cpu_runtime.cpu_runtime_readiness(None)
+        return {backend: {"available": False, "state": "provisioning", "backend": backend,
+                          "reason": cpu.reason if backend == "cpu" else (
+                              beat_cpu_runtime.gpu_preparation_reason(backend) or "Waiting for BEAT CPU preparation.")}
+                for backend in ("cpu", "metal")}
+    from server.solver.beat_runtime import readiness
+
+    return readiness.beat_backend_statuses()
+
+
 def _beat_row_updates(
     package: Any, cpu_backend_status: Callable[[Any], tuple[bool, str]]
 ) -> dict[str, tuple[bool, str]]:
@@ -402,8 +416,8 @@ def _beat_row_updates(
     from server.solver.beat_runtime.provider import official_selected
 
     if official_selected():
-        return {beat.beat_engine_name(backend): (entry["available"], entry["reason"])
-                for backend, entry in beat.beat_backend_statuses().items()}
+        # Official preparation cannot change the HBB solve adapter's readiness.
+        return {}
 
     updates = {"beat-cpu": cpu_backend_status(package)}
     if beat_cpu_runtime.cpu_preparation_in_flight():
@@ -698,6 +712,8 @@ class EngineRegistry:
         self._refresh_revision = 0
         self._refresh_applied_revision = 0
         self._listener_removed = False
+        self._official_state_stamp: tuple[Any, ...] | None = None
+        self.official_runtime_statuses: dict[str, dict[str, Any]] | None = None
         self._cpu_listener: Callable[[], None] | None = None
         self._cpu_refresh_enabled = detector is detect_engines if cpu_refresh is None else cpu_refresh
         if self._cpu_refresh_enabled:
@@ -891,6 +907,7 @@ class EngineRegistry:
         if self._cache is None:
             return tuple(EngineInfo(name, False, "Engine detection is in progress.", None)
                          for name in full3d_engine_order() if name != "dryrun")
+        self._check_official_state()
         self._schedule_cpu_refresh()
         # The first snapshot already contains the attempt that just finished.
         # Do not turn its timeout into another pending snapshot immediately.
@@ -956,6 +973,26 @@ class EngineRegistry:
             )
             self._opencl_revision = revision
 
+    def _check_official_state(self) -> None:
+        from server.solver.beat_runtime.provider import official_selected
+
+        if not self._cpu_refresh_enabled or self._listener_removed or not official_selected():
+            return
+        from server.solver.beat_runtime import paths
+
+        root = paths.runtime_dir()
+        stamp = []
+        for name in ("state-cpu.json", "state-metal.json", "julia.json"):
+            try:
+                info = (root / name).stat()
+                stamp.append((info.st_mtime_ns, info.st_size))
+            except OSError:
+                stamp.append(None)
+        current = (str(root), *stamp)
+        if current != self._official_state_stamp:
+            self._official_state_stamp = current
+            self._cpu_readiness_changed()
+
     def _cpu_readiness_changed(self) -> None:
         if self._listener_removed:
             return
@@ -983,10 +1020,11 @@ class EngineRegistry:
     async def _refresh_cpu_backend(self) -> None:
         from server.solver.beat import (
             _cpu_backend_status,
-            _load_readiness_api as _load_api,
+            _load_api,
             _package_retains_surface_traces,
             beat_engine_backend,
         )
+        from server.solver.beat_runtime.provider import official_selected
 
         while not self._listener_removed:
             with self._refresh_state_lock:
@@ -995,6 +1033,8 @@ class EngineRegistry:
             if target_revision <= applied_revision:
                 return
             try:
+                if official_selected():
+                    self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
                 package = _load_api()
                 if package is not None:
                     updates = await asyncio.to_thread(

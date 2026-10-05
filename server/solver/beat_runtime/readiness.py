@@ -10,7 +10,7 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from . import assets, discovery, gpu, hardware, identity, julia_steps, paths, probe, provision, state, threads
+from . import assets, discovery, gpu, hardware, identity, julia_steps, locks, paths, probe, provision, state, threads
 
 BACKENDS = ("cpu", "metal", "cuda", "rocm")
 log = logging.getLogger(__name__)
@@ -37,13 +37,23 @@ def remove_readiness_listener(listener: Callable[[], None]) -> None:
             _listeners.remove(listener)
 
 
-def probe_cache_clear(*, notify: bool = True) -> None:
+def probe_cache_clear(*, notify: bool = True, directory: Path | None = None, persist: bool = False) -> None:
     """Publish invalidation; verdicts themselves are deliberately never cached.
 
     Each query re-reads records and hashes source/executable bytes, so in-place
     changes and another process's provisioning cannot retain a stale success.
     Listeners run outside the lock and cannot break provisioning or each other.
     """
+    if persist:
+        root = paths.runtime_dir() if directory is None else paths.checked_root(directory)
+        for name in ("state-cpu.json", "state-metal.json", "julia.json"):
+            target = root / name
+            if paths.is_link(root) or paths.is_link(target):
+                raise ValueError("Linked readiness state refused")
+            try:
+                os.utime(target, None)
+            except FileNotFoundError:
+                pass
     if not notify:
         return
     with _listener_lock:
@@ -71,7 +81,7 @@ def expected_identity(
     )
     expected = dict.fromkeys(state._IDENTITY_FIELDS)
     expected.update(
-        project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
+        project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, backend=backend, julia_project=project),
         runtime_fingerprint=identity.runtime_fingerprint(), depot=env["JULIA_DEPOT_PATH"],
         environment={key: value for key, value in env.items() if key.startswith(("JULIA_", "BLAB_"))},
         probe_contract=probe.PROBE_CONTRACT, probe_fixture_identity=probe.fixture_identity(),
@@ -102,6 +112,8 @@ def backend_readiness(
     try:
         root = paths.runtime_dir(environ=options.get("environ")) if directory is None else paths.checked_root(directory)
         record = state.read_state(root, backend=backend)
+        if record and record["status"] == "in_progress" and locks.provisioning_active(root):
+            return BackendReadiness(False, "provisioning", f"BEAT {backend} provisioning is active (step: {record['step']}).")
         expected = expected_identity(backend, root, **options)
     except assets.AssetsUnavailable as exc:
         return BackendReadiness(False, "package-unusable", str(exc))

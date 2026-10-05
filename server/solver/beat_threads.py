@@ -31,7 +31,34 @@ a worker no solve will use.
 
 from __future__ import annotations
 
-from .beat_runtime.threads import _performance_core_count, resolve_julia_threads
+from functools import lru_cache
+import os
+import platform
+import subprocess
+
+from .beat_runtime.provider import official_selected
+
+
+@lru_cache(maxsize=1)
+def _performance_core_count() -> int:
+    total = max(1, os.cpu_count() or 1)
+    if platform.system() != "Darwin":
+        return total
+    try:
+        result = subprocess.run(["/usr/sbin/sysctl", "-n", "hw.perflevel0.logicalcpu"],
+                                capture_output=True, text=True, timeout=5)
+        count = int(result.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return total
+    return min(count, total) if count >= 1 else total
+
+
+def resolve_julia_threads(backend: str, *, performance_cores: int) -> int:
+    if official_selected():
+        from .beat_runtime.threads import resolve_julia_threads as resolve
+
+        return resolve(backend, performance_cores=performance_cores)
+    return max(1, performance_cores - performance_cores // 4)
 
 
 def beat_julia_threads(backend: str | None) -> int | str:

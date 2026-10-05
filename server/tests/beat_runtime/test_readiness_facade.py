@@ -5,13 +5,15 @@ import threading
 
 import pytest
 
-from server.engines.registry import EngineInfo, EngineRegistry
+from server.engines.registry import EngineInfo, EngineRegistry, _official_runtime_statuses
 from server.solver import beat, beat_cpu_runtime as facade
-from server.solver.beat_runtime import provider, readiness
+from server.solver.beat_runtime import hardware, provider, readiness
 
 
 @pytest.fixture
-def official(monkeypatch):
+def official(monkeypatch, tmp_path):
+    monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": True}})
     monkeypatch.setenv(provider.PROVIDER_ENV, "official")
     for name, value in (("_provision_thread", None), ("_provision_step", None),
                         ("_preparation_in_flight", False), ("_runtimes_prepared", False),
@@ -35,17 +37,15 @@ def test_official_presentation_does_not_load_hbb(official, monkeypatch):
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
                         readiness.BackendReadiness(backend == "cpu", "ready", "compiled proof"))
     assert facade.cpu_runtime_readiness(None).ready
-    assert beat.beat_status()["backend"] == "cpu"
-    assert beat.beat_backend_statuses()["cpu"]["available"]
-    assert beat.reprobe_package_backend_statuses()["cpu"]["available"]
-    assert "server.solver.beat_runtime.cli --backend cpu" in facade.provision_command()
+    assert _official_runtime_statuses()["cpu"]["available"]
+    assert "server.solver.beat_runtime.cli" in facade.provision_command()
 
 
 def test_alternative_does_not_change_solve_api(official, monkeypatch):
     sentinel = object()
     monkeypatch.setattr(beat, "_beat", sentinel)
     assert beat._load_api() is sentinel
-    assert beat._load_readiness_api() is readiness
+    assert beat._load_readiness_api() is sentinel
 
 
 def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypatch, tmp_path):
@@ -59,6 +59,7 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
 
     def cpu(**kwargs):
         calls.append(("cpu", kwargs["environ"], threading.current_thread().name))
+        kwargs["step_cb"]("probe")
         kwargs["status_cb"]("probe")
         begun.set()
         assert finish.wait(2)
@@ -67,8 +68,9 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
 
     def metal(**kwargs):
         calls.append(("metal", kwargs["environ"], threading.current_thread().name))
+        kwargs["step_cb"]("offline")
         kwargs["status_cb"]("offline")
-        status = beat.beat_backend_statuses()["metal"]
+        status = _official_runtime_statuses()["metal"]
         assert not status["available"] and status["state"] == "provisioning"
         assert "offline" in status["reason"]
         return {"status": "failed"}
@@ -84,7 +86,7 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
         thread = facade.start_cpu_provisioning(environ=env, system="Darwin")
         assert thread is not None and begun.wait(2)
         assert facade.cpu_runtime_readiness(None).state == "provisioning"
-        assert beat.beat_backend_statuses()["cpu"]["state"] == "provisioning"
+        assert _official_runtime_statuses()["cpu"]["state"] == "provisioning"
         assert facade.start_cpu_provisioning(environ=env, system="Darwin") is thread
         finish.set()
         thread.join(2)
@@ -116,7 +118,7 @@ def test_skip_cpu_switch_skips_both_stages(official, monkeypatch):
 
 def test_invalidation_updates_live_registry_without_hbb(official, monkeypatch):
     usable = set()
-    monkeypatch.setattr(beat, "_load_api", lambda: pytest.fail("HBB optional package"))
+    monkeypatch.setattr(beat, "_load_api", lambda: None)
     monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
                         readiness.BackendReadiness(backend in usable, "ready" if backend in usable else "stale", f"{backend} proof"))
 
@@ -130,7 +132,8 @@ def test_invalidation_updates_live_registry_without_hbb(official, monkeypatch):
             readiness.probe_cache_clear()
             await asyncio.wait_for(registry._refresh_cpu_backend(), 2)
             entries = {entry.name: entry for entry in await registry.capabilities()}
-            assert entries["beat-cpu"].available and not entries["beat-metal"].available
+            assert not entries["beat-cpu"].available and not entries["beat-metal"].available
+            assert registry.official_runtime_statuses["cpu"]["available"]
             usable.clear()
             readiness.probe_cache_clear()
             await asyncio.wait_for(registry._refresh_cpu_backend(), 2)

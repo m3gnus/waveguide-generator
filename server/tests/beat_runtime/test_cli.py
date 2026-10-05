@@ -74,9 +74,9 @@ def test_status_without_engine_and_cache_clear_are_read_only(tmp_path, monkeypat
     status = json.loads(capsys.readouterr().out)["cpu"]
     assert not status["available"] and status["state"] == "package-unusable"
     calls = []
-    monkeypatch.setattr(readiness, "probe_cache_clear", lambda: calls.append("cleared"))
+    monkeypatch.setattr(readiness, "probe_cache_clear", lambda **kwargs: calls.append(kwargs))
     assert cli.main(["clear-cache", "--dir", str(root)]) == 0
-    assert calls == ["cleared"] and not root.exists()
+    assert calls == [dict(directory=root, persist=True)] and not root.exists()
 
 
 def test_default_auto_never_provisions_cpu(monkeypatch):

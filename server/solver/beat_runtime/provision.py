@@ -71,6 +71,7 @@ def _provision_backend(
     run_step: Callable[..., None] | None = None,
     ensure_julia: Callable[..., str] | None = None,
     setup_steps: tuple[tuple[str, str, str], ...] = (),
+    step_cb: julia_steps.StatusCallback | None = None,
 ) -> dict[str, Any]:
     """Resolve, instantiate, precompile and prove one backend; failures can always retry.
 
@@ -83,6 +84,7 @@ def _provision_backend(
         raise ValueError(f"Unsupported provisioning backend: {backend!r}")
     label = "CPU" if backend == "cpu" else "Metal"
     report = julia_steps.guarded_status(status_cb)
+    transition = julia_steps.guarded_status(step_cb) if step_cb is not None else lambda step: None
     env = dict(os.environ if environ is None else environ)
     directory = (paths.runtime_dir(environ=env) if directory is None else paths.checked_root(directory, environ=env)).expanduser().absolute()
     paths.checked_root(directory)
@@ -104,7 +106,7 @@ def _provision_backend(
         project, effective_env = julia_steps.julia_environment(selected_project, env, cwd=cwd)
         env.update(effective_env)
         record.update(
-            project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
+            project=str(project), engine_fingerprint=identity.engine_fingerprint(engine, backend=backend, julia_project=project),
             runtime_fingerprint=identity.runtime_fingerprint(), depot=env["JULIA_DEPOT_PATH"],
             environment={key: value for key, value in env.items() if key.startswith(("JULIA_", "BLAB_"))},
             probe_contract=probe_contract, probe_fixture_identity=probe_fixture_identity,
@@ -170,10 +172,12 @@ def _provision_backend(
             ) + setup_steps:
                 record["step"] = name
                 state.write_state(record, directory)
+                transition(name)
                 project, env = julia_steps.julia_environment(project, env, cwd=cwd)
                 step(julia, code, project=project, environment=env, label=step_label, status_cb=report)
             record["step"] = f"{backend}_probe"
             state.write_state(record, directory)
+            transition(record["step"])
             # TODO(PR 11): wire the compiled solve probe and its contract/fixture identity.
             if probe is None:
                 raise RuntimeError(f"Compiled {label} readiness probe is not configured (PR 11)")
@@ -188,7 +192,7 @@ def _provision_backend(
                 raise RuntimeError(f"Compiled {label} probe returned incomplete readiness evidence")
             json.dumps(completion, allow_nan=False)
             # Pkg can change manifests; save the identity of the project actually proved.
-            record.update(engine_fingerprint=identity.engine_fingerprint(engine, julia_project=project),
+            record.update(engine_fingerprint=identity.engine_fingerprint(engine, backend=backend, julia_project=project),
                           completion=completion, status="ready", step="done", error=None)
             saved = state.write_state(record, directory)
             report(f"BEAT {label} runtime is ready.")
@@ -206,6 +210,7 @@ def provision_cpu(
     probe_contract: str | None = None, probe_fixture_identity: str | None = None,
     run_step: Callable[..., None] | None = None,
     ensure_julia: Callable[..., str] | None = None,
+    step_cb: julia_steps.StatusCallback | None = None,
 ) -> dict[str, Any]:
     """Provision CPU with the shared lock, identity and injectable compiled probe."""
     return _provision_backend(
@@ -213,5 +218,5 @@ def provision_cpu(
         julia_executable=julia_executable, julia_project=julia_project,
         julia_threads=julia_threads, environ=environ, depot=depot, probe=probe,
         probe_contract=probe_contract, probe_fixture_identity=probe_fixture_identity,
-        run_step=run_step, ensure_julia=ensure_julia,
+        run_step=run_step, ensure_julia=ensure_julia, step_cb=step_cb,
     )

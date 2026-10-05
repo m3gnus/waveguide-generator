@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
         "julia_executable", "julia_project", "julia_threads", "depot",
     )}
     if args.command == "clear-cache":
-        readiness.probe_cache_clear()
+        readiness.probe_cache_clear(directory=args.dir, persist=True)
         return 0
     if args.command == "status":
         statuses = (readiness.beat_backend_statuses(args.dir, **options) if args.backend == "auto"
@@ -54,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     if backend in {"cuda", "rocm"}:
         if not args.if_gpu:
             print(f"BEAT {backend}: {hardware.UNSUPPORTED}.")
+            return 1
         return 0
     if backend == "metal" and not hardware.gpu_hardware()["metal"]["available"]:
         if not args.if_gpu:
