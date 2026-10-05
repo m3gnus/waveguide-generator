@@ -1218,6 +1218,11 @@ end;
 // commit has put the .ico in place, the shortcuts are written again at the same
 // paths (the uninstaller still removes them from the [Icons] log), and the
 // shell is asked to drop its cached icons (SHCNE_ASSOCCHANGED, SHCNF_IDLIST).
+// ABI: this assumes a 32-bit Setup, as every external in this script does by
+// passing HANDLEs as Integer. There Integer and Cardinal match LONG, UINT and
+// the two LPCVOID items, which are always nil here. Inno Setup 6.7 builds a
+// 32-bit Setup (PE machine 0x14C, measured 2026-10-05). If Setup ever becomes
+// 64-bit, every external here needs pointer-sized types.
 procedure SHChangeNotify(EventId: Integer; Flags: Cardinal; Item1, Item2: Cardinal);
   external 'SHChangeNotify@shell32.dll stdcall setuponly';
 
