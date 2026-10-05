@@ -245,6 +245,7 @@ def _child_environment(
     tmp_dir: Path,
     addins_dir: Path,
     preview_marker: Path | None = None,
+    in_process_mesher: bool = False,
 ) -> dict[str, str]:
     # The suite's own WG2_* settings describe the test process, not this
     # server; start from none of them and say exactly what the server gets.
@@ -266,6 +267,8 @@ def _child_environment(
         environment["WG2_SOLVER_WARMUP"] = "0"
     if marker is not None:
         environment["WG2_TEST_GMSH_BLOCK_FILE"] = str(marker)
+    if in_process_mesher:
+        environment["WG2_MESH_IN_PROCESS"] = "1"
     if preview_marker is not None:
         environment["WG2_TEST_PREVIEW_BLOCK_FILE"] = str(preview_marker)
     return environment
@@ -298,6 +301,7 @@ def _launch(
     parent_pid: int | None = None,
     tmp_dir: Path | None = None,
     block_preview: bool = False,
+    in_process_mesher: bool = False,
 ) -> _Server:
     root.mkdir(parents=True, exist_ok=True)
     data = data_dir or (root / "data")
@@ -341,6 +345,7 @@ def _launch(
                 tmp_dir=temporary,
                 addins_dir=addins,
                 preview_marker=preview_marker,
+                in_process_mesher=in_process_mesher,
             ),
             stdin=subprocess.DEVNULL,
             stdout=sink,
@@ -732,7 +737,12 @@ def test_the_next_start_sweeps_what_a_stopped_build_left_behind(
         held = Path(holder.stdout.readline().strip())
         assert held.is_dir()
 
-        server = _launch(tmp_path / "first", started, block=True, tmp_dir=temporary)
+        # The parked build must be one a Quit cannot stop and so leaves without
+        # cleanup: the gmsh worker thread. A build in the mesher child is killed
+        # with the server and the exit is clean (the test above covers that).
+        server = _launch(
+            tmp_path / "first", started, block=True, tmp_dir=temporary, in_process_mesher=True
+        )
         _submit_parked_job(server)
         own = _sessions(temporary) - {held}
         assert len(own) == 1, f"expected one session for the server, found {sorted(own)}"
