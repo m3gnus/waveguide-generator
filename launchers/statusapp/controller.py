@@ -32,7 +32,9 @@ from scripts.frontend_freshness import (
 from launch.serve_options import UPDATE_RELEASED_FILENAME, UPDATE_STAGING_ROOT_ENV
 from launchers.apply_update import append_update_log, destination_staging_root
 from server.platform.instance import requested_port
+from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root, resolve_data_dir
+from server.platform.process_tree import cancel_blocked_reads
 from shared.build_identity import build_label
 from launchers.full_installer import FullInstallerRequest, consume_full_installer_request, launch_full_installer
 from .healthy_start import BundlePaths, HealthyStartSettlement, Report, resolve_bundle_paths
@@ -259,8 +261,13 @@ def missing_frontend_reason() -> str:
     return f"frontend/dist missing — run {installer_hint()} or scripts/fetch_spa.py"
 
 
-def _windows_job_for(process: subprocess.Popen[str]) -> object | None:
-    """Put the server tree in a kill-on-close Job Object when Win32 permits it."""
+def _windows_job_for(process: subprocess.Popen[str] | int) -> object | None:
+    """Put the server tree in a kill-on-close Job Object when Win32 permits it.
+
+    ``process`` is the server or its process handle. ``start()`` passes the
+    handle of a server created suspended, so the tree is owned before it runs
+    (``server/platform/job_start.py``).
+    """
 
     if os.name != "nt":
         return None
@@ -330,7 +337,8 @@ def _windows_job_for(process: subprocess.Popen[str]) -> object | None:
         ctypes.byref(limits),
         ctypes.sizeof(limits),
     )
-    process_handle = wintypes.HANDLE(int(process._handle))  # type: ignore[attr-defined]
+    raw_handle = process if isinstance(process, int) else int(process._handle)  # type: ignore[attr-defined]
+    process_handle = wintypes.HANDLE(raw_handle)
     if not configured or not kernel32.AssignProcessToJobObject(handle, process_handle):
         error = ctypes.get_last_error()
         kernel32.CloseHandle(handle)
@@ -655,6 +663,9 @@ class StatusController:
                 if clean:
                     with self._output_lock:
                         output.append(clean)
+        except OSError:
+            # A read cancelled by cancel_blocked_reads: the end of this output.
+            pass
         finally:
             stream.close()
 
@@ -741,9 +752,26 @@ class StatusController:
                 popen_options["start_new_session"] = True
 
             self._log_before_start = self._server_log_contents()
+            # On Windows the server is created suspended and owned before it
+            # runs. In the bundle the command starts the native stub, which
+            # starts the real server as its own child at once; a Job Object
+            # assigned after Popen returns can miss that server, which then
+            # outlives Quit holding the instance lock and the port.
+            started = JobStart()
             try:
-                process = subprocess.Popen(
-                    self._command(preferred, self._control_path), **popen_options
+                with windows_job_start(
+                    lambda _pid, handle: _windows_job_for(handle),
+                    required=True,
+                    subject="the backend server",
+                ) as started:
+                    process = subprocess.Popen(
+                        self._command(preferred, self._control_path), **popen_options
+                    )
+            except ContainedStartError as exc:
+                self._cleanup_temporary_directory()
+                return self._set_error(
+                    f"Could not establish Windows process-tree ownership: {exc}",
+                    "Frontend not started because clean shutdown could not be guaranteed",
                 )
             except OSError as exc:
                 self._cleanup_temporary_directory()
@@ -754,7 +782,9 @@ class StatusController:
 
             self._process = process
             try:
-                self._windows_job = _windows_job_for(process)
+                self._windows_job = (
+                    started.job if started.fired else _windows_job_for(process)
+                )
             except OSError as exc:
                 if process.poll() is None:
                     process.terminate()
@@ -913,8 +943,16 @@ class StatusController:
         thread, self._output_thread = self._output_thread, None
         if thread is not None:
             thread.join(timeout=1.0)
+            cancel_blocked_reads([thread])
         process, self._process = self._process, None
-        if process is not None and process.stdout is not None:
+        if (
+            process is not None
+            and process.stdout is not None
+            and (thread is None or not thread.is_alive())
+        ):
+            # A collector still reading owns the stream and closes it at EOF.
+            # Closing it from here would wait behind that read, forever if
+            # something outside the tree still holds the pipe's far end.
             process.stdout.close()
         self._frontend_served = None
         self._served_build = _UNANSWERED
@@ -1466,10 +1504,16 @@ class StatusController:
         return_code = process.poll()
         if return_code is None:
             process.kill()
-            return_code = process.wait(timeout=2.0)
+            try:
+                return_code = process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                return_code = process.poll()
         output_thread = self._output_thread
         if output_thread is not None:
             output_thread.join(timeout=1.0)
+            # Its pipe may still be held by a process outside the tree, and
+            # then EOF never comes: end the read rather than leave it parked.
+            cancel_blocked_reads([output_thread])
         watcher = self._watcher
         if watcher is not None:
             watcher.join(timeout=1.0)

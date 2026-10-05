@@ -54,6 +54,7 @@ import traceback
 from typing import Any, Callable, Mapping
 import uuid
 
+from server.platform.job_start import start_in_windows_job
 from server.platform.process_tree import (
     adopt_process_group,
     kill_own_process_group,
@@ -637,15 +638,19 @@ class BemppProcessHost:
                 # object / process group for the workers underneath.
                 daemon=False,
             )
-            process.start()
+            # Contain the tree before the child can run: a parallel sweep
+            # forks its own workers, and Stop must reclaim all of them, whether
+            # or not the image started is a launcher stub
+            # (server/platform/job_start.py).
+            job = start_in_windows_job(
+                process, confine=confine_to_windows_job, subject="the BEMPP worker"
+            )
         except BaseException:
             if stderr is not None:
                 stderr.discard()
             raise
         child.close()
-        # Contain the tree before any work reaches the child: a parallel sweep
-        # forks its own workers, and Stop must reclaim all of them.
-        self._job = confine_to_windows_job(process.pid) if process.pid else None
+        self._job = job
         self._connection = parent
         self._process = process
         self._stderr = stderr

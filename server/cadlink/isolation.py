@@ -58,7 +58,9 @@ from server.cadlink.limits import (
     MESH_MEMORY_BYTES,
     MESH_TIMEOUT_S,
 )
+from server.platform.job_start import ContainedStartError, JobStart, windows_job_start
 from server.platform.paths import app_root
+from server.platform.process_tree import cancel_blocked_reads
 from server.platform.temp_session import remove_tree, temporary_directory_root
 
 
@@ -377,19 +379,28 @@ class _BoundedDrain:
         self._thread.start()
 
     def _run(self) -> None:
-        with contextlib.suppress(Exception):
-            while True:
-                chunk = self._stream.read(8192)
-                if not chunk:
-                    return
-                with self._lock:
-                    self._tail += chunk
-                    if len(self._tail) > self._limit:
-                        del self._tail[: len(self._tail) - self._limit]
-                        self._truncated = True
+        try:
+            with contextlib.suppress(Exception):
+                while True:
+                    chunk = self._stream.read(8192)
+                    if not chunk:
+                        return
+                    with self._lock:
+                        self._tail += chunk
+                        if len(self._tail) > self._limit:
+                            del self._tail[: len(self._tail) - self._limit]
+                            self._truncated = True
+        finally:
+            # Only this thread closes the stream: a close from another thread
+            # blocks behind a read in progress, for as long as that read lasts.
+            with contextlib.suppress(Exception):
+                self._stream.close()
 
     def text(self) -> str:
         self._thread.join(timeout=1.0)
+        # A process outside the tree that still holds the pipe would keep the
+        # read blocked for good; cancel it so the thread ends and closes it.
+        cancel_blocked_reads([self._thread])
         with self._lock:
             body = bytes(self._tail).decode("utf-8", errors="replace")
             prefix = "...(earlier output discarded)...\n" if self._truncated else ""
@@ -788,11 +799,25 @@ def _run_child(
     else:
         popen_kwargs["creationflags"] = _windows_creation_flags()
 
-    process = start_child_process(command, popen_kwargs, stage=stage)
+    # On Windows the child is created suspended and confined before it runs.
+    # In the bundle sys.executable is the native stub, which starts the real
+    # interpreter as its own child at once; a job assigned after Popen returns
+    # can miss that interpreter, which would then run outside every limit.
+    started = JobStart()
+    try:
+        with windows_job_start(
+            lambda _pid, handle: _assign_windows_job(handle, budget),
+            required=True,
+            subject="the isolated CAD child",
+        ) as started:
+            process = start_child_process(command, popen_kwargs, stage=stage)
+    except ContainedStartError as exc:
+        # The child was stopped before it ran a single instruction.
+        raise ChildRefusal(stage, str(exc)) from exc
 
     process_group = _posix_process_group(process) if os.name == "posix" else None
-    job = None
-    if os.name == "nt":
+    job = started.job
+    if os.name == "nt" and not started.fired:
         try:
             job = _required_windows_job(process, budget, stage=stage)
         except ChildRefusal:
@@ -823,11 +848,10 @@ def _run_child(
         # result while one of its native helpers still owns the process group
         # and can mutate staging.
         terminate_process_tree(process, job, group=process_group)
-        # Drain first, close second: the tail is the only diagnostic there is.
+        # The drain owns the pipe and closes it at EOF. Closing it from here
+        # while a read is blocked would wait for that read, which never ends
+        # if something outside the tree still holds the far end.
         diagnostics = drain.text()
-        with contextlib.suppress(Exception):
-            if process.stdout is not None:
-                process.stdout.close()
         if job is not None:
             with contextlib.suppress(Exception):
                 job.close()
@@ -1087,8 +1111,12 @@ def _configure_windows_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> Non
     kernel32.CloseHandle.restype = wintypes.BOOL
 
 
-def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -> Any:
-    """Create a memory-capped, kill-on-close job and put the child in it."""
+def _assign_windows_job(process: subprocess.Popen[bytes] | int, budget: ChildBudget) -> Any:
+    """Create a memory-capped, kill-on-close job and put the child in it.
+
+    ``process`` is the child or its process handle; a suspended child has only
+    the handle ``CreateProcess`` returned (``server/platform/job_start.py``).
+    """
 
     try:
         import ctypes
@@ -1153,7 +1181,8 @@ def _assign_windows_job(process: subprocess.Popen[bytes], budget: ChildBudget) -
         error = ctypes.get_last_error()
         kernel32.CloseHandle(handle)
         raise OSError(error, "SetInformationJobObject failed")
-    if not kernel32.AssignProcessToJobObject(handle, int(process._handle)):  # type: ignore[attr-defined]
+    process_handle = process if isinstance(process, int) else int(process._handle)  # type: ignore[attr-defined]
+    if not kernel32.AssignProcessToJobObject(handle, process_handle):
         error = ctypes.get_last_error()
         kernel32.CloseHandle(handle)
         raise OSError(error, "AssignProcessToJobObject failed")

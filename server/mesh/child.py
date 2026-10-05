@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import atexit
+import contextlib
 import logging
 import multiprocessing
 from multiprocessing.connection import Connection
@@ -53,6 +54,7 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
+from server.platform.job_start import start_in_windows_job
 from server.platform.process_tree import confine_to_windows_job
 
 log = logging.getLogger("wg.mesh")
@@ -235,22 +237,36 @@ class _Channel:
                 pass
 
     def kill(self) -> None:
-        """Kill the child, then wait for the reader to see EOF and close its end."""
+        """Kill the child and its tree, then give the reader a bounded wait for EOF."""
 
         process = self.process
+        job, self.job = self.job, None
+        # The job first: it takes the whole tree in one call, including an
+        # interpreter the child started, which also holds the pipe's far end.
+        if job is not None:
+            with contextlib.suppress(Exception):
+                job.terminate()
         try:
             if process.is_alive():
                 process.kill()
             process.join(_JOIN_SECONDS)
         except (OSError, ValueError):
             pass
-        if self.job is not None:
-            self.job.terminate()
-            self.job.close()
-        # The child is dead, so the pipe reports EOF and the reader leaves on
+        if job is not None:
+            with contextlib.suppress(Exception):
+                job.close()
+        # The tree is dead, so the pipe reports EOF and the reader leaves on
         # its own. Never close the descriptor from here: the reader may still
-        # be about to read it.
+        # be about to read it, and a close racing a blocked read waits for it.
         self.reader.join(_READER_JOIN_SECONDS)
+        if self.reader.is_alive():
+            # Something outside the job still holds the child's end, so EOF may
+            # never come. The daemon reader keeps the descriptor and closes it
+            # if it ever does; this channel is discarded either way.
+            log.warning(
+                "mesher child pipe still open %.0f s after the kill; leaving its reader behind",
+                _READER_JOIN_SECONDS,
+            )
 
 
 class MesherChildHost:
@@ -288,9 +304,15 @@ class MesherChildHost:
             name="hornlab-mesher-child",
             daemon=True,
         )
-        process.start()
+        # Confined before it can run, so nothing it ever starts is outside the
+        # job, whether or not the image started is a launcher stub
+        # (server/platform/job_start.py).
+        job = start_in_windows_job(
+            process,
+            confine=lambda pid: confine_to_windows_job(pid, subject="the mesher child"),
+            subject="the mesher child",
+        )
         child.close()
-        job = confine_to_windows_job(process.pid) if process.pid else None
         self._channel = _Channel(process, parent, job)
         return self._channel
 
