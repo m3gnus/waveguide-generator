@@ -117,6 +117,9 @@ def windows_job_start(
             process = subprocess.Popen(command)
         job = started.job
 
+    The caller must not pass ``CREATE_SUSPENDED`` itself: the child is
+    resumed once it is confined.
+
     ``assign(pid, process_handle)`` runs while the child is suspended. It
     returns the job (anything with ``close()``) or ``None``; with
     ``required=True``, ``None`` or an exception stops the child. A failed
@@ -177,7 +180,20 @@ def _install() -> None:
 def _intercept(real: Callable[..., Any]) -> Callable[..., Any]:
     def create_process(*args: Any, **kwargs: Any) -> Any:
         armed = getattr(_local, "armed", None)
-        if armed is None or kwargs or len(args) != _CREATE_PROCESS_ARGUMENTS:
+        if armed is None:
+            return real(*args, **kwargs)
+        if kwargs or len(args) != _CREATE_PROCESS_ARGUMENTS:
+            # Not the shape subprocess and multiprocessing use: start it as
+            # asked, and say so, because the caller then falls back to
+            # assigning after the start, which is the race this module exists
+            # to close.
+            logger.warning(
+                "Starting %s without suspending it: CreateProcess was called "
+                "with an unexpected shape (%d positional, %s keyword arguments).",
+                armed.subject,
+                len(args),
+                sorted(kwargs),
+            )
             return real(*args, **kwargs)
         # One shot: nothing else this thread starts inside the block, and no
         # call this one makes, is captured.
@@ -203,36 +219,41 @@ def _start_contained(real: Callable[..., Any], args: tuple[Any, ...], armed: _Ar
     process_handle, thread_handle, pid, tid = real(*suspended)
     armed.result.fired = True
     armed.result.pid = int(pid)
-
-    job = None
+    child = _Suspended(process_handle, thread_handle)
     try:
-        job = armed.assign(int(pid), int(process_handle))
-    except Exception as exc:  # noqa: BLE001 - the policy below decides
+        job = None
+        try:
+            job = armed.assign(int(pid), int(process_handle))
+        except Exception as exc:  # noqa: BLE001 - the policy below decides
+            if armed.required:
+                raise ContainedStartError(
+                    f"could not confine {armed.subject} in a Windows job: {exc}"
+                ) from exc
+            logger.warning(
+                "Could not confine %s in a Windows job object (%s); starting it "
+                "without one, so processes it starts may outlive it.",
+                armed.subject,
+                exc,
+            )
+        child.job = job
+        if job is None and armed.required:
+            raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
+        if _resume(thread_handle):
+            child.released = True
+            armed.result.job = job
+            return process_handle, thread_handle, pid, tid
         if armed.required:
-            _discard(process_handle, thread_handle)
-            raise ContainedStartError(
-                f"could not confine {armed.subject} in a Windows job: {exc}"
-            ) from exc
-        logger.warning(
-            "Could not confine %s in a Windows job object (%s); starting it "
-            "without one, so processes it starts may outlive it.",
-            armed.subject,
-            exc,
-        )
-    if job is None and armed.required:
-        _discard(process_handle, thread_handle)
-        raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
+            raise ContainedStartError(f"could not resume {armed.subject} after confining it")
+    except BaseException:
+        # Refused, or interrupted (a KeyboardInterrupt inside assign, say): a
+        # child left suspended would hold its pipes and handles for good. It
+        # never ran, so stopping it loses nothing.
+        child.discard()
+        raise
 
-    if _resume(thread_handle):
-        armed.result.job = job
-        return process_handle, thread_handle, pid, tid
-
-    # It never ran, so it started nothing: stop it rather than leave a
-    # suspended child holding its pipes and the parent's wait forever.
-    _close_job(job)
-    _discard(process_handle, thread_handle)
-    if armed.required:
-        raise ContainedStartError(f"could not resume {armed.subject} after confining it")
+    # Best effort, and the child could not be resumed. It never ran, so it
+    # started nothing: stop it, then start it the plain way.
+    child.discard()
     logger.warning(
         "Could not resume %s after starting it suspended; starting it again "
         "and confining it afterwards, so processes it starts first may outlive it.",
@@ -245,6 +266,27 @@ def _start_contained(real: Callable[..., Any], args: tuple[Any, ...], armed: _Ar
     except Exception:  # noqa: BLE001 - best effort, as before this module
         armed.result.job = None
     return process_handle, thread_handle, pid, tid
+
+
+class _Suspended:
+    """A child created suspended that is still ours to stop, exactly once.
+
+    Its handles are closed here and never reach the caller, so they must be
+    closed only once: a second close could hit a reused handle value.
+    """
+
+    def __init__(self, process_handle: Any, thread_handle: Any) -> None:
+        self.process_handle = process_handle
+        self.thread_handle = thread_handle
+        self.job: Any = None
+        self.released = False
+
+    def discard(self) -> None:
+        if self.released:
+            return
+        self.released = True
+        _close_job(self.job)
+        _discard(self.process_handle, self.thread_handle)
 
 
 def _kernel32() -> Any:

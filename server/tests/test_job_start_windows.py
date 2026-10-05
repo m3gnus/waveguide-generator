@@ -612,3 +612,227 @@ def test_the_desktop_quit_takes_the_stubs_server(tree, tmp_path, monkeypatch) ->
     finally:
         controller.stop()
     assert _wait_dead(grandchild)
+
+
+# -- review follow-ups: interruption, shape, refusals, and readers without EOF --
+
+
+def test_an_interrupted_assign_stops_the_suspended_child(tree) -> None:
+    from server.platform.job_start import windows_job_start
+
+    stub, pidfile = tree
+    seen: list[int] = []
+
+    def interrupted(pid: int, _handle: int) -> None:
+        seen.append(pid)
+        raise KeyboardInterrupt
+
+    for required in (True, False):
+        seen.clear()
+        with pytest.raises(KeyboardInterrupt):
+            with windows_job_start(interrupted, required=required, subject="the test stub"):
+                subprocess.Popen(_stub_command(stub, pidfile))
+        assert seen and _wait_dead(seen[0]), "an interrupted start left its child suspended"
+    time.sleep(0.5)
+    assert not pidfile.exists(), "the interrupted child ran"
+
+
+def test_an_armed_call_of_an_unexpected_shape_is_started_and_reported(caplog) -> None:
+    from server.platform import job_start
+
+    calls: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def real(*args: Any, **kwargs: Any) -> str:
+        calls.append((args, kwargs))
+        return "started"
+
+    create_process = job_start._intercept(real)
+    with job_start.windows_job_start(
+        lambda _pid, _handle: None, required=True, subject="the odd caller"
+    ) as started:
+        with caplog.at_level("WARNING", logger="wg.process"):
+            assert create_process("app", "cmd", creation_flags=0) == "started"
+    assert calls == [(("app", "cmd"), {"creation_flags": 0})]
+    assert not started.fired
+    assert "without suspending it" in caplog.text and "the odd caller" in caplog.text
+
+
+def _cad_staging(tmp_path: Path) -> Path:
+    staging = tmp_path / "staging"
+    for directory in (staging / "tmp", staging / "home", staging / "out"):
+        directory.mkdir(parents=True)
+    return staging
+
+
+def _run_cad_child(isolation: Any, staging: Path) -> None:
+    isolation._run_child(
+        {"task": "test"},
+        staging=staging,
+        out_dir=staging / "out",
+        budget=isolation.ChildBudget(wall_time_s=3.0, memory_bytes=1024**3),
+        allowed_artifacts=(),
+        stage="test",
+        entrypoint="unused",
+    )
+
+
+def test_a_cad_child_whose_job_is_refused_never_runs(tree, tmp_path, monkeypatch) -> None:
+    from server.cadlink import isolation
+
+    stub, pidfile = tree
+    assigned: list[int] = []
+
+    def refuse(process: Any, _budget: Any) -> Any:
+        assigned.append(process)
+        raise OSError(5, "the job API refused")
+
+    monkeypatch.setattr(isolation, "_assign_windows_job", refuse)
+    monkeypatch.setattr(isolation, "child_command", lambda _entry: _stub_command(stub, pidfile))
+    with pytest.raises(isolation.ChildRefusal, match="could not confine the isolated CAD child"):
+        _run_cad_child(isolation, _cad_staging(tmp_path))
+    assert len(assigned) == 1 and isinstance(assigned[0], int)
+    time.sleep(0.5)
+    assert not pidfile.exists(), "the refused CAD child ran"
+
+
+def test_a_refused_breakaway_retry_is_still_confined_before_it_runs(
+    tree, tmp_path, monkeypatch
+) -> None:
+    """The production path under the desktop's job, which allows no breakaway.
+
+    The first CreateProcess really fails (an image that does not exist), so
+    the armed thread must survive it for the retry.
+    """
+
+    from server.cadlink import isolation
+
+    stub, pidfile = tree
+    seen: list[bool] = []
+    monkeypatch.setattr(
+        isolation, "_assign_windows_job", _late(isolation._assign_windows_job, pidfile, seen)
+    )
+    monkeypatch.setattr(isolation, "child_command", lambda _entry: _stub_command(stub, pidfile))
+    real_popen = subprocess.Popen
+    attempts: list[int] = []
+
+    def no_breakaway(*args: Any, **kwargs: Any) -> Any:
+        flags = int(kwargs.get("creationflags", 0))
+        attempts.append(flags)
+        if flags & 0x01000000:
+            kwargs["executable"] = str(tmp_path / "no-such-image.exe")
+        return real_popen(*args, **kwargs)
+
+    monkeypatch.setattr(isolation.subprocess, "Popen", no_breakaway)
+    in_job: list[bool] = []
+    real_supervise = isolation._supervise
+
+    def supervise(process: Any, budget: Any, *, job: Any = None, group: Any = None) -> Any:
+        in_job.append(_in_job(_read_pid(pidfile), job))
+        return real_supervise(process, budget, job=job, group=group)
+
+    monkeypatch.setattr(isolation, "_supervise", supervise)
+    with pytest.raises(isolation.ChildRefusal, match="deadline"):
+        _run_cad_child(isolation, _cad_staging(tmp_path))
+    assert len(attempts) == 2
+    assert attempts[0] & 0x01000000 and not attempts[1] & 0x01000000
+    assert seen == [False] and in_job == [True]
+    assert _wait_dead(_read_pid(pidfile))
+
+
+def test_a_desktop_server_whose_job_is_refused_never_runs(tree, tmp_path, monkeypatch) -> None:
+    from launchers.statusapp import controller as controller_module
+
+    stub, pidfile = tree
+    checkout = tmp_path / "checkout"
+    (checkout / "frontend" / "dist").mkdir(parents=True)
+    (checkout / "frontend" / "dist" / "index.html").write_text("<html></html>", encoding="utf-8")
+    server = tmp_path / "server.py"
+    server.write_text(FAKE_SERVER, encoding="utf-8")
+
+    def refuse(_process: Any) -> Any:
+        raise OSError(5, "the job API refused")
+
+    monkeypatch.setattr(controller_module, "_windows_job_for", refuse)
+    controller = controller_module.StatusController(
+        repo_root=checkout,
+        server_command=(BASE_PYTHON, str(stub), str(server)),
+        server_args=("--grandchild-pid", str(pidfile)),
+    )
+    snapshot = controller.start()
+    assert "process-tree ownership" in snapshot.backend.reason
+    assert controller.process is None
+    time.sleep(1.0)
+    assert not pidfile.exists(), "the refused server ran"
+
+
+def _pipe_with_an_outside_writer() -> tuple[int, int]:
+    """A pipe whose writer this test holds open, so its reader never sees EOF."""
+
+    return os.pipe()
+
+
+def test_the_cad_drain_does_not_wait_forever_on_a_pipe_held_elsewhere() -> None:
+    from server.cadlink.isolation import _BoundedDrain
+
+    read_fd, writer = _pipe_with_an_outside_writer()
+    stream = open(read_fd, "rb", buffering=0)
+    try:
+        os.write(writer, b"partial output\n")
+        drain = _BoundedDrain(stream)
+        started = time.monotonic()
+        text = drain.text()
+        assert time.monotonic() - started < 5.0
+        assert "partial output" in text
+        assert not drain._thread.is_alive(), "the blocked read was not cancelled"
+        assert stream.closed
+    finally:
+        os.close(writer)
+
+
+def test_the_desktop_discards_a_collector_whose_pipe_is_held_elsewhere(tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from launchers.statusapp.controller import StatusController
+
+    controller = StatusController(repo_root=tmp_path)
+    read_fd, writer = _pipe_with_an_outside_writer()
+    stream = open(read_fd, "r", encoding="utf-8")
+    try:
+        os.write(writer, b"a line\n")
+        thread = threading.Thread(
+            target=controller._collect_output, args=(stream, controller._output), daemon=True
+        )
+        thread.start()
+        deadline = time.monotonic() + 5.0
+        while not list(controller._output) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        controller._output_thread = thread
+        controller._process = SimpleNamespace(stdout=stream)
+        started = time.monotonic()
+        controller._discard_dead_child()
+        assert time.monotonic() - started < 5.0
+        assert not thread.is_alive(), "the blocked read was not cancelled"
+        assert stream.closed
+        assert list(controller._output) == ["a line"]
+    finally:
+        os.close(writer)
+
+
+def test_the_mesher_kill_returns_when_its_reader_never_sees_eof(caplog) -> None:
+    from types import SimpleNamespace
+
+    from server.mesh import child as mesh_child
+
+    parent, held = multiprocessing.get_context("spawn").Pipe(duplex=True)
+    process = SimpleNamespace(is_alive=lambda: False, kill=lambda: None, join=lambda _t=None: None)
+    channel = mesh_child._Channel(process, parent, None)
+    try:
+        started = time.monotonic()
+        with caplog.at_level("WARNING", logger="wg.mesh"):
+            channel.kill()
+        assert time.monotonic() - started < mesh_child._READER_JOIN_SECONDS + 3.0
+        assert "pipe still open" in caplog.text
+    finally:
+        held.close()
+        channel.reader.join(10.0)
+    assert not channel.reader.is_alive()
