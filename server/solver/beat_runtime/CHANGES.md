@@ -343,3 +343,69 @@ runtime plus existing solver tests passed (436). Runtime/test ruff and
 only because both beat_adapter directories are absent. No Julia, downloads,
 real user data writes or donor-checkout edits were performed; fixes remain
 uncommitted as requested.
+- **PR 10a — executable records/Windows publication:**
+  `server/solver/beat_runtime/{state,discovery,installer}.py`;
+  `server/tests/beat_runtime/test_{state,discovery,installer_extraction}.py`;
+  this `CHANGES.md`.
+  Discovery now delegates executable records to state.py. Canonical julia.json
+  fields are `executable`, `version`, `identity`, `origin`, provider/schema and
+  update time; external version may be explicitly null, managed version must
+  be known. Installer uses this schema; temporary discovery/legacy records are
+  ignored rather than accepted as executable authority. Windows replacement
+  retries only PermissionError, at most five attempts with 250 ms total sleep;
+  exhaustion preserves the previous record and removes the sibling temporary.
+- **PR 10b — Julia subprocess steps/status guard:**
+  `server/solver/beat_runtime/julia_steps.py`;
+  `server/tests/beat_runtime/test_julia_steps.py`; this `CHANGES.md`.
+  Injectable Popen streams UTF-8 progress, retains a bounded error tail and
+  retires only its own child on interruption. `guarded_status` is idempotent,
+  continues offering every line after callback errors, and reports the first
+  exception once on stderr (even a broken stderr cannot fail setup).
+- **PR 10c — CPU provisioning orchestration:**
+  `server/solver/beat_runtime/provision.py`;
+  `server/tests/beat_runtime/{conftest,test_provision}.py`; this `CHANGES.md`.
+  `provision_cpu` takes the shared provisioning lock before rechecking state,
+  resolves official beat-engine CPU assets and a single integer thread budget,
+  installs/reuses Julia, then runs instantiate, precompile and a compiled probe.
+  Steps and failures are backend-local; Julia discovery and Metal readiness
+  survive CPU failures. Failed records are retryable on the next explicit call;
+  force/retry bypass a matching ready record. Lock acquisition errors become
+  best-effort failed records, retaining the original error if storage also fails.
+- **PR 10d — provisioning identity/reuse coverage:**
+  `server/tests/beat_runtime/test_provision_identity.py`; this `CHANGES.md`.
+  Project/manifest, executable, threads, effective environment and probe-fixture
+  changes invalidate reuse. Instantiation-created manifests participate in the
+  saved identity. A ready old portable Julia still goes through the installer
+  upgrade policy; explicit older executables remain valid selections. Missing
+  optional engine assets and missing probe identities are recorded failures.
+
+PR 10 handoff: `provision_cpu(directory=None, ..., probe=callable,
+probe_contract=..., probe_fixture_identity=..., run_step=callable,
+ensure_julia=callable)` is additive and returns a ready/failed record. The probe
+receives keyword arguments `backend`, `julia_executable`, `julia_project`,
+`julia_threads` (the same resolved integer as JULIA_NUM_THREADS), `environment`
+(the complete subprocess environment) and `status_cb`. It returns a completion
+mapping with `finite=True`, `nonzero=True`, `terminal_count=1` plus any further
+JSON evidence. The PR 11 callable must actually validate a tiny COMPILED solve;
+these minimum evidence checks do not replace its numerical/terminal validation.
+Until PR 11 is wired, a missing probe fails with an explicit TODO diagnostic;
+instantiate/precompile alone never produce ready. Current contract and fixture
+identities must be supplied for proof and reuse. `run_step` has julia_steps.py's
+signature; `ensure_julia` receives the existing installer's arguments.
+
+PR 10 deviations: subdivided for review size. All reuse checks run under the
+lock, including already-ready calls, to avoid trusting a pre-lock snapshot.
+HBB's bundle-specific Julia probe code is deliberately not transplanted: WG
+adapts to the official engine through the injectable PR 11 probe. External
+versions remain unknown rather than being stamped Julia 1.12.7. The effective
+JULIA_*/BLAB_* environment participates in state identity; unrelated process
+environment (including credentials) is passed to children but not persisted.
+Readiness façade integration and real Julia/Windows qualification remain later
+gates. Tests use temporary trees, fake subprocesses/probes and fake replacement
+errors; no Julia, download, GPU setup or HBB write occurs.
+
+PR 10 validation: targeted runtime plus `server/tests/test_solver_beat.py`
+passed (370 tests, 4.05 s); runtime/test Ruff and `git diff --check` passed.
+The requested combined pytest/Ruff commands could not include beat_adapter:
+`server/solver/beat_adapter` and `server/tests/beat_adapter` are absent from
+this worktree. The available targeted tests ran through scripts/run_tests.py.

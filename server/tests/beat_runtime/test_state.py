@@ -167,3 +167,55 @@ def test_writer_refuses_foreign_and_unserializable_records(directory, record):
         with pytest.raises(ValueError):
             state.write_state(dict(record, **extra))
     assert not directory.exists()
+
+
+@pytest.mark.parametrize("failures", [1, 4, 5])
+def test_windows_reader_replace_retry_is_bounded(directory, record, monkeypatch, failures):
+    saved = state.write_state(record)
+    replace = state.os.replace
+    attempts, delays = [], []
+
+    def sharing_violation(source, target):
+        attempts.append((source, target))
+        if len(attempts) <= failures:
+            assert state.read_state(backend="cpu") == saved
+            raise PermissionError("reader denies delete sharing")
+        replace(source, target)
+
+    monkeypatch.setattr(state, "_WINDOWS", True)
+    monkeypatch.setattr(state.os, "replace", sharing_violation)
+    monkeypatch.setattr(state.time, "sleep", delays.append)
+    if failures == 5:
+        with pytest.raises(PermissionError):
+            state.write_state(dict(record, status="failed"))
+        assert state.read_state(backend="cpu") == saved
+    else:
+        assert state.write_state(dict(record, status="failed"))["status"] == "failed"
+    assert len(attempts) == min(failures + 1, 5)
+    assert len(delays) == min(failures, 4) and sum(delays) <= 0.25
+    assert len({str(source) for source, _ in attempts}) == 1
+    assert [p.name for p in directory.iterdir()] == ["state-cpu.json"]
+
+
+@pytest.mark.parametrize("error", [PermissionError, OSError])
+def test_replace_other_errors_and_posix_are_not_retried(directory, record, monkeypatch, error):
+    attempts = []
+
+    def fail(*args):
+        attempts.append(args)
+        raise error("failed replacement")
+
+    monkeypatch.setattr(state, "_WINDOWS", False)
+    monkeypatch.setattr(state.os, "replace", fail)
+    with pytest.raises(error):
+        state.write_state(record)
+    assert len(attempts) == 1 and list(directory.iterdir()) == []
+
+
+def test_external_julia_unknown_version_is_explicit(directory):
+    saved = state.write_julia({"origin": "external", "executable": "fake", "identity": "sha", "version": None})
+    assert state.read_julia() == saved
+    with pytest.raises(ValueError):
+        state.write_julia({"origin": "external", "executable": "fake", "identity": "sha"})
+    with pytest.raises(ValueError):
+        state.write_julia({"origin": "managed", "executable": "fake", "identity": "sha", "version": None})

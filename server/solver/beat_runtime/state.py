@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import time
 from typing import Any
 
 from . import paths
@@ -27,6 +28,8 @@ _IDENTITY_FIELDS = (
 )
 _STATUSES = ("in_progress", "ready", "failed", "skipped")
 _BACKENDS = ("cpu", "metal")
+_WINDOWS = os.name == "nt"
+_REPLACE_ATTEMPTS = 5
 
 
 def _directory(directory: Path | None) -> Path:
@@ -82,7 +85,10 @@ def _julia_valid(record: dict[str, Any]) -> bool:
         _owned(record)
         and record.get("origin") in ("managed", "external")
         and all(isinstance(record.get(name), str) and bool(record[name])
-                for name in ("executable", "version", "identity"))
+                for name in ("executable", "identity"))
+        and "version" in record
+        and (record["version"] is None and record["origin"] == "external"
+             or isinstance(record["version"], str) and bool(record["version"]))
     )
 
 
@@ -106,7 +112,15 @@ def _atomic_write_json(path: Path, record: Mapping[str, Any]) -> None:
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(scratch, path)
+        for attempt in range(_REPLACE_ATTEMPTS):
+            try:
+                os.replace(scratch, path)
+                break
+            except PermissionError:
+                # Windows readers can briefly deny replacement of an open file.
+                if not _WINDOWS or attempt == _REPLACE_ATTEMPTS - 1:
+                    raise
+                time.sleep(0.025 * (attempt + 1))
     finally:
         scratch.unlink(missing_ok=True)
 

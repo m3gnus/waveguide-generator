@@ -233,10 +233,9 @@ def ensure_julia(
         relative = resolved.relative_to(root.resolve()) if resolved.is_relative_to(root.resolve()) else None
         managed = relative is not None and len(relative.parts) > 1 and relative.parts[0] == "julia"
         current = managed and relative.parts[1].startswith(f"{JULIA_VERSION}-")
-        legacy = record is not None and record.get("origin") == "legacy"
-        if legacy or (managed and not current):
+        if managed and not current:
             existing = shutil.which("julia", path=env.get("PATH", os.defpath))
-            if existing and (Path(existing).resolve().is_relative_to((root / "julia").resolve()) or (legacy and Path(existing).resolve() == resolved)):
+            if existing and Path(existing).resolve().is_relative_to((root / "julia").resolve()):
                 existing = None
     if existing:
         _report(status_cb, f"Using existing Julia: {existing}")
@@ -245,7 +244,7 @@ def ensure_julia(
         discovery.write_julia_record(
             root, Path(existing),
             origin=previous.get("origin", "external") if previous else "external",
-            version=previous.get("julia_version") if previous else None,
+            version=previous.get("version") if previous else None,
         )
         return existing
     spec = julia_download(system, machine)

@@ -1,0 +1,70 @@
+"""CPU package setup through injectable Julia subprocesses."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from contextlib import suppress
+from pathlib import Path
+import subprocess
+import sys
+
+StatusCallback = Callable[[str], None]
+
+
+def guarded_status(status_cb: StatusCallback) -> StatusCallback:
+    """Pass progress through; report callback errors once without failing setup."""
+    if getattr(status_cb, "_wg_beat_guarded", False):
+        return status_cb
+    reported = False
+
+    def guarded(message: str) -> None:
+        nonlocal reported
+        try:
+            status_cb(message)
+        except Exception as exc:
+            if not reported:
+                reported = True
+                with suppress(Exception):
+                    sys.stderr.write(
+                        f"BEAT provisioning status callback failed ({type(exc).__name__}); "
+                        "continuing without that status line.\n"
+                    )
+
+    guarded._wg_beat_guarded = True  # type: ignore[attr-defined]
+    return guarded
+
+
+def run_julia_step(
+    julia: str, code: str, *, project: Path, environment: Mapping[str, str],
+    label: str, status_cb: StatusCallback, popen: Callable | None = None,
+) -> None:
+    """Stream UTF-8 progress and keep a bounded failure tail; own only this child."""
+    report = guarded_status(status_cb)
+    report(label)
+    process = (popen or subprocess.Popen)(
+        [julia, f"--project={project}", "--startup-file=no", "-e", code],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        encoding="utf-8", errors="replace", env=dict(environment),
+    )
+    tail: list[str] = []
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            text = line.rstrip()
+            if text:
+                tail.append(text)
+                del tail[:-15]
+                report(text)
+        returncode = process.wait()
+        if returncode != 0:
+            raise RuntimeError(f"{label} failed (exit {returncode}).\n" + "\n".join(tail[-10:]))
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+        if process.stdout is not None:
+            process.stdout.close()

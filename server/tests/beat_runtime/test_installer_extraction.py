@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import hashlib
 import io
+import json
 from pathlib import Path
 import tarfile
 import zipfile
@@ -169,7 +170,7 @@ def test_published_tree_without_record_recovers_offline(tmp_path):
     binary = installer.extract_julia(archive(tmp_path), root, spec)
     assert not (root / "julia.json").exists()
     assert installer.ensure_julia(system="Linux", machine="x86_64") == str(binary)
-    assert discovery.read_julia_record()["julia_version"] == "1.12.7"
+    assert discovery.read_julia_record()["version"] == "1.12.7"
 
 
 def test_selected_external_is_recorded_without_claiming_version(tmp_path):
@@ -177,7 +178,7 @@ def test_selected_external_is_recorded_without_claiming_version(tmp_path):
     assert installer.ensure_julia(explicit=str(external)) == str(external)
     assert installer.ensure_julia() == str(external)
     record = discovery.read_julia_record()
-    assert record["origin"] == "external" and record["julia_version"] is None
+    assert record["origin"] == "external" and record["version"] is None
     assert not list(paths.runtime_dir().glob("state*.json"))
 
 
@@ -187,7 +188,15 @@ def test_external_and_legacy_trees_are_preserved_on_install(tmp_path, monkeypatc
     source = archive(tmp_path)
     fake_download(monkeypatch, source)
     external = executable(tmp_path / "hbb/julia-1.12.6/bin/julia")
-    discovery.write_julia_record(root, external, origin=origin, version="1.12.6")
+    if origin == "external":
+        discovery.write_julia_record(root, external, origin=origin, version="1.12.6")
+    else:
+        # Temporary discovery records (including legacy hints) are not readiness
+        # or executable authority in the canonical state.py schema.
+        root.mkdir(parents=True)
+        (root / "julia.json").write_text(json.dumps({
+            "origin": "legacy", "julia_executable": str(external),
+        }))
     if origin == "external":
         assert installer.ensure_julia() == str(external)
     else:

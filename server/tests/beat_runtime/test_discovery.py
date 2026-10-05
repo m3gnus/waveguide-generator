@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from server.solver.beat_runtime import discovery, paths
+from server.solver.beat_runtime import discovery, paths, state
 
 
 @pytest.fixture(autouse=True)
@@ -34,10 +34,11 @@ def test_precedence_and_record_has_no_readiness(tmp_path, monkeypatch):
     monkeypatch.delenv(discovery.JULIA_ENV_VAR)
     assert discovery.discover_julia() == str(selected[2])
     record = discovery.read_julia_record(root)
-    assert record == {
+    assert record == state.read_julia(root)
+    assert {key: value for key, value in record.items() if key != "updated_at"} == {
         "provider": paths.PROVIDER_ID, "state_schema": paths.STATE_SCHEMA,
-        "julia_executable": str(selected[2]), "origin": "external",
-        "julia_version": None, "julia_identity": discovery.executable_identity(selected[2]),
+        "executable": str(selected[2]), "origin": "external",
+        "version": None, "identity": discovery.executable_identity(selected[2]),
     }
     assert not list(root.glob("state*.json"))
     selected[2].unlink()
