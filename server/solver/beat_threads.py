@@ -31,35 +31,12 @@ a worker no solve will use.
 
 from __future__ import annotations
 
-from functools import lru_cache
-import os
-import platform
-import subprocess
-
-
-@lru_cache(maxsize=1)
-def _performance_core_count() -> int:
-    total = os.cpu_count() or 1
-    if platform.system() != "Darwin":
-        return total
-    try:
-        count = int(
-            subprocess.run(
-                ["/usr/sbin/sysctl", "-n", "hw.perflevel0.logicalcpu"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            ).stdout.strip()
-        )
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return total
-    return min(count, total) if count >= 1 else total
+from .beat_runtime.threads import _performance_core_count, resolve_julia_threads
 
 
 def beat_julia_threads(backend: str | None) -> int | str:
-    """The ``julia_threads`` to hand ``hornlab_beat_bem`` for ``backend``."""
+    """Legacy HBB façade; keep its non-Metal AUTO contract until migration."""
 
     if backend != "metal":
         return "auto"
-    cores = _performance_core_count()
-    return max(1, cores - cores // 4)
+    return resolve_julia_threads(backend, performance_cores=_performance_core_count())
