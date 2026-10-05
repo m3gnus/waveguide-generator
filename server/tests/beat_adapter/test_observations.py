@@ -8,11 +8,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from hornlab_beat_bem import ObservationConfig, ObservationFrame, SolveConfig
-from hornlab_beat_bem.sweep import _request_payload, _validated_frame_translation
-
 from server.solver.beat_adapter.observations import build_observations
 
+CONTROLS = json.loads((Path(__file__).parent / "fixtures/hbb_controls.json").read_text())
 EXPECTED = json.loads((Path(__file__).parent / "fixtures/hbb_observations.json").read_text())
 
 
@@ -58,25 +56,32 @@ def test_37x72_sphere_has_exact_axes_endpoints_and_theta_major_order(precision, 
                                np.broadcast_to(points[::72, 2, None], (37, 72)), atol=0, rtol=0)
 
 
-def test_frame_origin_matches_hbb_mesh_translation_and_request(tmp_path):
-    origin = np.array([0.2, -0.4, 0.25])
-    frame = ObservationFrame(axis=np.array([0, 0, 1]), origin=origin,
-                             u=np.array([1, 0, 0]), v=np.array([0, 1, 0]))
-    observation = ObservationConfig(planes=["diagonal", "horizontal"], distance_m=2,
-                                    angle_min_deg=-90, angle_max_deg=90, angle_count=5,
-                                    inclination_deg=30, sphere_grid=(3, 4), origin="throat")
-    config = SolveConfig(observation=observation, frame_override=frame)
-    translation = _validated_frame_translation(frame)
-    payload = _request_payload(tmp_path / "unused.msh", np.array([500.0]), config, translation)
-    assert payload["config"]["step_size"] == 45
-    assert payload["config"]["diagonal_inclination_deg"] == 30
-    layout = build_observations(angle_range=(-90, 90, 5), planes=observation.planes,
-                                origin_m=origin, inclination_deg=30, sphere_grid=(3, 4), precision="float64")
-    for name in observation.planes:
-        # Moving HBB's mesh by -origin is identical to observing origin+local
-        # points on the original WG mesh; no translation inside official BEAT.
-        np.testing.assert_allclose(layout.points_m[name] + translation,
+def test_frozen_frame_translation_control_without_hbb():
+    control = CONTROLS["frame"]
+    layout = build_observations(angle_range=(-90, 90, 5), planes=control["planes"],
+                                origin_m=control["origin_m"], inclination_deg=control["diagonal_inclination_deg"],
+                                sphere_grid=(3, 4), precision="float64")
+    np.testing.assert_array_equal(layout.angles_deg, np.arange(-90, 91, control["step_size"]))
+    for name in control["planes"]:
+        np.testing.assert_allclose(layout.points_m[name] + control["translation_m"],
                                    EXPECTED["cuts_radius_2_inclination_30"][name], atol=5e-16, rtol=0)
+
+
+def test_optional_hbb_private_frame_controls_crosscheck(tmp_path):
+    hbb = pytest.importorskip("hornlab_beat_bem", reason="Optional HBB frame cross-check needs hornlab_beat_bem")
+    sweep = pytest.importorskip("hornlab_beat_bem.sweep")
+    control = CONTROLS["frame"]
+    frame = hbb.ObservationFrame(axis=np.array([0, 0, 1]), origin=np.array(control["origin_m"]),
+                                 u=np.array([1, 0, 0]), v=np.array([0, 1, 0]))
+    observation = hbb.ObservationConfig(planes=control["planes"], distance_m=2,
+                                       angle_min_deg=-90, angle_max_deg=90, angle_count=5,
+                                       inclination_deg=30, sphere_grid=(3, 4), origin="throat")
+    translation = sweep._validated_frame_translation(frame)
+    np.testing.assert_array_equal(translation, control["translation_m"])
+    payload = sweep._request_payload(tmp_path / "unused.msh", np.array([500.]),
+                                     hbb.SolveConfig(observation=observation, frame_override=frame), translation)
+    assert payload["config"]["step_size"] == control["step_size"]
+    assert payload["config"]["diagonal_inclination_deg"] == control["diagonal_inclination_deg"]
 
 
 def test_imported_global_frame_maps_all_cuts_and_sphere_together():

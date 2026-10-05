@@ -73,14 +73,14 @@ def _backend(engine_id: str, backend: str | None) -> str:
 
 
 def _image_frame(symmetry: str, ground: GroundPlane | None) -> tuple[str, np.ndarray, np.ndarray]:
-    aliases = {"full": "off", "off": "off", "x": "x", "xy": "xy",
-               "yz": "x", "yz+xz": "xy", "xz": "x", "y": "x"}
+    # WG plane names differ from BEAT image modes: legacy "xy" is z=0.
+    aliases = {"full": "off", "off": "off", "yz": "x", "yz+xz": "xy", "xz": "x"}
     if symmetry not in aliases:
         raise ValueError(f"Unsupported BEAT symmetry {symmetry!r}")
     mode = aliases[symmetry]
     rotation, translation = np.eye(3), np.zeros(3)
     # A proper rotation represents a y-only half with official X symmetry.
-    if symmetry in {"xz", "y"}:
+    if symmetry == "xz":
         rotation = np.array([[0., 1., 0.], [-1., 0., 0.], [0., 0., 1.]])
     if ground is not None:
         if mode != "off":
@@ -141,8 +141,8 @@ def build_request(
     with np.errstate(over="ignore", under="ignore"):
         wire_frequencies = frequencies.astype(precision)
     if (frequencies.ndim != 1 or not frequencies.size or not np.isfinite(wire_frequencies).all()
-            or np.any(wire_frequencies <= 0) or len(np.unique(wire_frequencies)) != len(frequencies)):
-        raise ValueError("Frequencies must be positive, finite and distinct at solver precision")
+            or np.any(wire_frequencies <= 0) or len(np.unique(frequencies)) != len(frequencies)):
+        raise ValueError("Frequencies must be positive, finite and distinct in Float64")
     if not np.isfinite(ground_plane_min_clearance_m) or ground_plane_min_clearance_m < 0:
         raise ValueError("Ground clearance must be finite and non-negative")
     mesh = read_surface(msh_text, scale_to_m=mesh_scale_to_m)

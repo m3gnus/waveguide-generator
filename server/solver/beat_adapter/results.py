@@ -327,9 +327,8 @@ def map_sweep(
             raise ValueError("Trace counts must be positive (node, face) integers")
         with np.errstate(over="ignore", under="ignore"):
             wire_frequencies = frequencies.astype(precision)
-        if (not np.isfinite(wire_frequencies).all() or np.any(wire_frequencies <= 0)
-                or np.unique(wire_frequencies).size != frequencies.size):
-            raise ValueError("Frequencies are indistinguishable or invalid at solver precision")
+        if not np.isfinite(wire_frequencies).all() or np.any(wire_frequencies <= 0):
+            raise ValueError("Frequencies are invalid at solver precision")
         rows: list[FrequencyResult] = []
         logs: list[dict[str, Any]] = []
         terminal = None

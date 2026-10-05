@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import base64
+import importlib
+import importlib.resources
+import importlib.util
+import json
+import os
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -81,34 +87,66 @@ def run_sweep(layout):
     return run
 
 
-@pytest.fixture(scope="session")
-def official_contract():
-    """Load the checkout's schema validator without importing the engine package."""
-    import importlib.util
-    import json
-    from pathlib import Path
+def _workspace_contract_roots() -> list[Path]:
+    roots = [parent / "BEAT_Engine/src/beat_engine/beat_contract"
+             for parent in Path(__file__).resolve().parents]
+    # The suite redirects HOME; retain the supplied read-only workspace fallback.
+    roots.append(Path("/Users/magnus/Code/hornlab-workspace/BEAT_Engine/src/beat_engine/beat_contract"))
+    return roots
 
-    roots = [Path("/Users/magnus/Code/hornlab-workspace/BEAT_Engine/src/beat_engine/beat_contract"),
-             Path("/private/tmp/beat-batch1-candidate/src/beat_engine/beat_contract")]
+
+def _official_contract():
+    """Prefer installed resources, then an explicit source tree, then workspace."""
+    try:
+        root = importlib.resources.files("beat_engine").joinpath("beat_contract")
+        if root.joinpath("system-v1.schema.json").is_file():
+            schema = json.loads(root.joinpath("system-v1.schema.json").read_text())
+            return importlib.import_module("beat_engine.beat_contract"), schema
+    except ImportError:
+        pass
+    roots = []
+    if source := os.environ.get("WG_BEAT_ENGINE_SRC"):
+        source = Path(source).expanduser()
+        roots.extend([source / "beat_contract", source / "beat_engine/beat_contract",
+                      source / "src/beat_engine/beat_contract"])
+    roots.extend(_workspace_contract_roots())
     for root in roots:
         schema_path = root / "system-v1.schema.json"
-        if not schema_path.is_file():
+        if not schema_path.is_file() or not (root / "__init__.py").is_file():
             continue
         schema = json.loads(schema_path.read_text())
-        if 2 not in schema["$defs"]["compiled_system"]["properties"]["contract_version"].get("enum", []):
-            continue  # Main can predate PR #18; use the read-only batch-1 candidate.
         spec = importlib.util.spec_from_file_location("wg_test_official_contract", root / "__init__.py")
         contract = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(contract)
+        return contract, schema
+    return None
 
-        def validate(request):
-            # JSON round-trip proves requests contain ordinary durable wire values.
-            wire_request = json.loads(json.dumps(request.wire, allow_nan=False))
-            contract.validate_solve_request(wire_request)
-            return request
-        return validate
-    pytest.skip("Official BEAT system-v1 JSON schema with PR #18 contract v2 is absent "
-                "from the BEAT checkout and /private/tmp/beat-batch1-candidate")
+
+@pytest.fixture
+def durable_request():
+    """Pure parity assertions require only durable JSON, never a checkout."""
+    def validate(request):
+        assert json.loads(json.dumps(request.wire, allow_nan=False)) == request.wire
+        return request
+    return validate
+
+
+@pytest.fixture(scope="session")
+def official_contract():
+    found = _official_contract()
+    if found is None:
+        pytest.skip("Missing beat_contract/system-v1.schema.json and validator: install beat-engine, "
+                    "set WG_BEAT_ENGINE_SRC, or provide the workspace BEAT_Engine checkout")
+    contract, schema = found
+
+    def validate(request):
+        version = request.wire["compiled_system"]["contract_version"]
+        versions = schema["$defs"]["compiled_system"]["properties"]["contract_version"]
+        if version not in versions.get("enum", [versions.get("const")]):
+            pytest.skip(f"Missing system-v1.schema.json support for compiled contract v{version}")
+        contract.validate_solve_request(json.loads(json.dumps(request.wire, allow_nan=False)))
+        return request
+    return validate
 
 
 @pytest.fixture

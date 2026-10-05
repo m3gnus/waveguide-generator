@@ -17,3 +17,11 @@ every full-grid row/column's axes and radius. All values precede frame mapping.
 
 Float32 geometry is checked at its arithmetic precision. Exact Float64 sphere
 axes come from HBB `sweep.py:311–336`, rather than Float32 radian echoes.
+
+`hbb_controls.json` freezes the donor's frame translation (-origin), polar
+request step/inclination, impedance force factor (10), and directivity reference.
+Its null-reference directivity values use an independent scalar `math.log10`
+transcription of `hornlab_beat_bem/result.py:127–161` on the two small pressure
+arrays in `test_results.py`, after unit-acceleration conversion. The floor is
+20 µPa × 1e-6. Main assertions need no HBB install; separate optional cross-checks
+compare the frozen controls with HBB's private helpers when available.

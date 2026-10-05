@@ -19,7 +19,7 @@ class SurfaceMesh:
 
     @property
     def areas_m2(self) -> np.ndarray:
-        triangles = self.points_m[self.faces]
+        triangles = np.asarray(self.points_m[self.faces], dtype=np.float64)
         return np.linalg.norm(np.cross(triangles[:, 1] - triangles[:, 0],
                                        triangles[:, 2] - triangles[:, 0]), axis=1) / 2
 
@@ -65,9 +65,9 @@ def read_surface(msh_text: str, *, scale_to_m: float = 1.0) -> SurfaceMesh:
             row = [int(value) for value in line.split()]
             if len(row) < 3:
                 raise ValueError("Invalid Gmsh element row")
+            if row[1] not in {1, 2, 15}:
+                raise ValueError(f"Unsupported Gmsh element type {row[1]}; expected points (15), lines (1) or triangles (2)")
             if row[1] != 2:
-                if row[1] in {9, 4, 11}:
-                    raise ValueError("Only linear surface triangles are supported")
                 continue  # Physical lines/points do not enter the BEM surface.
             n_tags = row[2]
             if n_tags < 1 or len(row) != 6 + n_tags or row[3] <= 0:

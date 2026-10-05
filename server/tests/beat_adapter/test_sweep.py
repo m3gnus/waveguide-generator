@@ -82,9 +82,8 @@ def test_sweep_contract_violations_close_stream(raw_result, run_sweep, case):
 
 
 @pytest.mark.parametrize("frequencies", [[], [0], [-1], [float("nan")], [float("inf")],
-                                        [500, 500], [[500]], [1e40], [1e-50],
-                                        [500, 500 + 1e-8]])
-def test_invalid_or_indistinguishable_frequency_requests_are_refused(run_sweep, frequencies):
+                                        [500, 500], [[500]], [1e40], [1e-50]])
+def test_invalid_or_duplicate_float64_frequency_requests_are_refused(run_sweep, frequencies):
     stream = EventStream([])
     with pytest.raises(ValueError, match="[Ff]requencies"):
         run_sweep(stream, frequencies, precision="float32")

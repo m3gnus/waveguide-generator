@@ -3,18 +3,20 @@
 from __future__ import annotations
 
 import copy
+import json
+from pathlib import Path
 
 import numpy as np
 import pytest
-
-from hornlab_beat_bem import MeshInfo, SolveConfig, SolveResult
-from hornlab_beat_bem.sweep import _BEAT_IMPEDANCE_FORCE_FACTOR
 
 from server.solver.beat_adapter.results import (
     ResultContractError, acceleration_scale, decode_complex_values,
     mean_pressure_from_force, parse_frequency,
 )
 from .conftest import EventStream, wire
+
+
+CONTROLS = json.loads((Path(__file__).parent / "fixtures/hbb_controls.json").read_text())
 
 
 def parse(raw, layout, **kwargs):
@@ -39,9 +41,9 @@ def test_force_impedance_round_trip_and_symmetry_matches_hbb(layout, raw_result,
     assert row.radiation_impedance == pytest.approx(force)
     # Independently invert HBB's legacy display packing; official has neither
     # the factor ten nor the negated/halved imaginary wire component.
-    legacy_force = _BEAT_IMPEDANCE_FORCE_FACTOR * force
+    legacy_force = CONTROLS["impedance_force_factor"] * force
     pair = [legacy_force.real / 2, -legacy_force.imag / 2]
-    hbb_mean = (2 * pair[0] - 2j * pair[1]) / (_BEAT_IMPEDANCE_FORCE_FACTOR * reduced_area * copies)
+    hbb_mean = (2 * pair[0] - 2j * pair[1]) / (CONTROLS["impedance_force_factor"] * reduced_area * copies)
     assert row.impedance == pytest.approx(hbb_mean / (-1j * omega))
     rho_c = 1.2041 * 343
     assert np.conj(-1j * omega * row.impedance) / rho_c == pytest.approx(np.conj(mean_pressure) / rho_c)
@@ -91,14 +93,10 @@ def test_absolute_spl_and_per_cut_directivity_match_hbb_with_null_reference(layo
         events.append({"type": "result", "result": raw})
     events.append({"type": "completed", "solved_count": 2})
     mapped = run_sweep(EventStream(events))
-    hbb = SolveResult(frequencies_hz=mapped.frequencies_hz, pressure_complex=mapped.pressure_complex,
-                      spl_db=mapped.spl_db, impedance=mapped.impedance,
-                      observation_angles_deg=layout.angles_deg, observation_planes=list(layout.planes),
-                      config=SolveConfig(), mesh_info=MeshInfo(4, 2, {2: 0.004}))
-    np.testing.assert_array_equal(mapped.directivity_db, hbb.directivity_db)
-    np.testing.assert_array_equal(mapped.spl_norm_db, hbb.spl_norm_db)
-    assert mapped.directivity_reference_index == hbb.directivity_reference_index == 1
-    assert mapped.directivity_reference_deg == hbb.directivity_reference_deg == 0
+    np.testing.assert_allclose(mapped.directivity_db, CONTROLS["null_reference_directivity_db"], atol=1e-13, rtol=0)
+    np.testing.assert_array_equal(mapped.spl_norm_db, mapped.directivity_db)
+    assert mapped.directivity_reference_index == CONTROLS["directivity_reference_index"]
+    assert mapped.directivity_reference_deg == CONTROLS["directivity_reference_deg"]
     assert np.isfinite(mapped.directivity_db).all()
     assert np.isneginf(mapped.spl_db[0, 1, 1])
     assert mapped.directivity_db[0, 1, 2] == pytest.approx(150.0570025461)
@@ -151,3 +149,9 @@ def test_invalid_source_area_is_refused(area):
 def test_decoder_preserves_c_order_for_multiple_excitation_rows():
     values = np.array([[1 + 2j, 3 - 4j], [5 + 6j, 7 - 8j]])
     np.testing.assert_array_equal(decode_complex_values(wire(values), (2, 2)), values)
+
+
+def test_optional_hbb_private_impedance_factor_crosscheck():
+    sweep = pytest.importorskip("hornlab_beat_bem.sweep",
+                               reason="Optional HBB impedance cross-check needs hornlab_beat_bem")
+    assert sweep._BEAT_IMPEDANCE_FORCE_FACTOR == CONTROLS["impedance_force_factor"]

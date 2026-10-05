@@ -22,10 +22,10 @@ from .test_request import FRAME
 
 
 @pytest.mark.parametrize("shape", ["flat", "curved", "tilted", "rear"])
-@pytest.mark.parametrize("symmetry,copies", [("full", 1), ("x", 2), ("xy", 4), ("ground", 1)])
+@pytest.mark.parametrize("symmetry,copies", [("full", 1), ("yz", 2), ("yz+xz", 4), ("ground", 1)])
 @pytest.mark.parametrize("motion", ["normal", "axial"])
 def test_old_pressure_acoustic_and_electrical_loading_survive_generalized_force(
-    shape, symmetry, copies, motion, make_mesh, official_contract, compiled_result,
+    shape, symmetry, copies, motion, make_mesh, durable_request, compiled_result,
 ):
     points = np.array([[0., 0., 0.], [.2, 0., 0.], [0., .1, 0.], [.2, .1, 0.]])
     faces = [[0, 1, 2], [1, 3, 2]]
@@ -37,7 +37,7 @@ def test_old_pressure_acoustic_and_electrical_loading_survive_generalized_force(
         faces = [list(reversed(face)) for face in faces]
     # Every case lies in the positive x/y quadrant. Source winding may reverse.
     msh = make_mesh(points, faces, [101, 101], node_ids=[10, 7, 22, 30])
-    built = official_contract(build_request(
+    built = durable_request(build_request(
         msh, sources=[SourceBasis("driver", 101, motion, [0, 0, 1] if motion == "axial" else None, "port")],
         channel_ports={"driver-ch": ["port"]}, frame=FRAME, frequencies_hz=[500],
         layout=build_observations(sphere_grid=None), precision="float64",
@@ -80,9 +80,9 @@ def test_old_pressure_acoustic_and_electrical_loading_survive_generalized_force(
     assert mapped_payload["electrical_impedance_ohm"] == expected_payload["electrical_impedance_ohm"]
 
 
-def test_generalized_force_on_a_rear_axis_is_separate_from_pressure_loading(make_mesh, official_contract, compiled_result):
+def test_generalized_force_on_a_rear_axis_is_separate_from_pressure_loading(make_mesh, durable_request, compiled_result):
     msh = make_mesh([[0, 0, 0], [.2, 0, 0], [0, .1, 0]], [[2, 1, 0]], [101])
-    built = official_contract(build_request(
+    built = durable_request(build_request(
         msh, sources=[SourceBasis("rear", 101, "axial", [0, 0, -1], "rear")],
         channel_ports={"ch": ["rear"]}, frame=FRAME, frequencies_hz=[500],
         layout=build_observations(sphere_grid=None), precision="float64"))
@@ -93,11 +93,11 @@ def test_generalized_force_on_a_rear_axis_is_separate_from_pressure_loading(make
 
 
 def test_multisource_channels_sum_independent_pressures_and_keep_diagonal_forces(
-    make_mesh, official_contract, compiled_result,
+    make_mesh, durable_request, compiled_result,
 ):
     msh = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 2], [2, 0, 2], [0, 1, 2]],
                     [[0, 1, 2], [3, 5, 4]], [101, 102])
-    built = official_contract(build_request(
+    built = durable_request(build_request(
         msh, sources=[SourceBasis("a", 101, "axial", [0, 0, 1], "a"),
                       SourceBasis("b", 102, "axial", [0, 0, -1], "b")],
         channel_ports={"one": ["a"], "two": ["b"], "both": ["a", "b"]},
@@ -123,10 +123,10 @@ def test_multisource_channels_sum_independent_pressures_and_keep_diagonal_forces
 
 
 def test_boundary_loading_in_sweep_preserves_cancellation_and_generalized_force(
-    make_mesh, official_contract, compiled_result,
+    make_mesh, durable_request, compiled_result,
 ):
     msh = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0]], [[0, 1, 2]], [2])
-    built = official_contract(build_request(
+    built = durable_request(build_request(
         msh, sources=[SourceBasis("source", 2, "axial", [0, 0, 1], "port")],
         channel_ports={"ch": ["port"]}, frame=FRAME, frequencies_hz=[500, 100],
         layout=build_observations(sphere_grid=None), precision="float64"))
