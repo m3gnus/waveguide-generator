@@ -343,3 +343,97 @@ runtime plus existing solver tests passed (436). Runtime/test ruff and
 only because both beat_adapter directories are absent. No Julia, downloads,
 real user data writes or donor-checkout edits were performed; fixes remain
 uncommitted as requested.
+- **PR 18a — host lifecycle/bootstrap:** `server/solver/beat_runtime/host.py`
+  (worker construction, bind, bootstrap publication boundary and teardown);
+  `server/tests/beat_runtime/{conftest,fake_host_worker}.py` and lifecycle cases
+  in `server/tests/beat_runtime/test_host.py`; this `CHANGES.md`.
+  Own one lazily imported official `beat_engine.EngineWorker`, using only its
+  public constructor/terminate API. Publish before any Julia startup. Preserve
+  HBB's 1800-second idle window, authenticated connection lifetime and graceful
+  POSIX SIGTERM/SIGINT exit. Teardown is idempotent, compares the complete record
+  and socket inode, and retains successors. If authenticated cleanup holds the
+  spawn lock while awaiting exit, leave removal to cleanup.py rather than
+  deadlocking. Fixture workers refuse every numerical/start operation.
+- **PR 18b — hello/client authentication:** `host.py` (connection admission and
+  control dispatch); authentication cases in `test_host.py`; this `CHANGES.md`.
+  Reuse registry HMAC hello/shutdown proofs and IPC framing/control deadlines.
+  Provider, protocol/version, full key (including engine identity), key ID and
+  token proofs must match. A fresh host nonce and separate `client_auth` domain
+  authenticate clients before lifetime admission; reflected/replayed proofs
+  fail. Hello alone and silent peers cannot prevent idle exit. Bound unfinished
+  handshakes to two seconds and 32 connections. Authenticated ping is supported;
+  submission, ensure_started, retire and engine adoption return the named
+  `HostSubmissionNotImplemented` error until PR 19.
+- **PR 18c — spawn/publication:** `server/solver/beat_runtime/spawn.py`
+  (start/recheck/publication); `server/tests/beat_runtime/test_spawn.py`;
+  this `CHANGES.md`.
+  `start_host` holds SpawnLock from the second record lookup through launch,
+  private readiness, verified process-start identity, canonical publication and
+  authenticated hello. Concurrent threads/processes launch exactly one host and
+  construct exactly one worker. Reuse valid authenticated lifecycle records;
+  cleanup.py handles proven-dead/reused records and orphan sockets, while
+  foreign/unverified live records remain refused. Startup failure reaps only
+  the recorded Popen child and permits retry. Parent abandonment before
+  publication makes the bootstrap child time out and clean its own residue.
+- **PR 18d — subprocess/platform boundary:** `spawn.py` (launch flags, app root
+  and native-launcher identity), `host.py` (app cwd);
+  `server/tests/beat_runtime/test_spawn_platform.py`; this `CHANGES.md`.
+  Launch `sys.executable -m server.solver.beat_runtime.host` from
+  `server.platform.paths.app_root()` / `WG2_APP_ROOT`, with app-first PYTHONPATH,
+  stdin DEVNULL and a private `<key>.log`. POSIX uses start_new_session. A daemon
+  wait thread reaps the parent's child on every exit path. Windows uses
+  CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS and preserves native admission:
+  the public launcher is a stub, so verify its interpreter's parent/start link
+  and publish/authenticate the actual host PID. The packaged ._pth includes app;
+  host main restores app cwd after the native launcher starts from bundle root.
+  No breakaway flag or Job Object changes: packaged Windows Quit still kills
+  this host through the launcher's Job Object (the design's Windows exception).
+
+PR 18 review subdivisions keep lifecycle, authentication, spawn policy and
+platform handling independently reviewable; host.py/spawn.py are shared files
+across those subdivisions, not separate competing implementations.
+
+Future PR 19 callers use `spawn.start_host(key, directory=None,
+idle_timeout=1800, timeout=10)` to obtain an authenticated HostRecord. Keys must
+already include backend, julia_executable/julia_identity, solver_script,
+julia_project/julia_sysimage (explicit null when absent), integer julia_threads,
+engine_fingerprint/runtime_fingerprint and the effective environment dict;
+registry.host_key adds the provider/protocol namespace. The environment and
+integer count are passed unchanged to the public EngineWorker constructor.
+The caller remains responsible for computing complete content/asset identities.
+No EngineWorker PID/private fields are assumed, and this slice does not start,
+warm or submit to Julia.
+
+Client admission: send registry.hello_message and validate_hello as before;
+hello_ok additionally includes client_nonce. Send an `authenticate` frame with
+registry.host_key({}) scope, key/key_id, nonce=client_nonce and
+registry.auth_proof(record, client_nonce, "client_auth"). The `authenticated`
+reply proves the same nonce in the `client_auth_ok` domain. Only this completed
+exchange keeps the host alive until disconnect. Existing cleanup.py can send
+its independently authenticated shutdown request directly after hello; client
+admission is unnecessary for shutdown. Tokens never appear in wire frames or
+command arguments. PR 19 must retain this admission gate for engine operations.
+
+Deviations: the engine target is official JWSound/BEAT_Engine, as instructed.
+A transient private `<key>.ready.json` extends the proposed directory layout so
+the parent can hold spawn exclusion through publication on both POSIX and
+Windows without inheriting/transferring an advisory lock. It contains the
+child's record and launcher/start link, is atomically written with registry's
+private-file helpers, and is removed after publication or abandoned bootstrap.
+Unauthenticated hello does not extend lifetime, strengthening HBB's token-on-wire
+admission while retaining authenticated clients' idle behavior. Four review
+subdivisions replace the estimated single 250–350-line PR. Native launcher
+handling is included now because assuming Popen.pid equals host PID breaks
+current packaged Windows admission; breakaway remains entirely PR 22.
+
+PR 18 validation: 36 new fake-worker tests passed (17 host, 14 spawn, 5 platform).
+The targeted launcher run of `server/tests/beat_runtime` and
+`server/tests/test_solver_beat.py` passed: **444 passed in 15.27 s**. Ruff on
+runtime sources/tests and `git diff --check` passed. The exact requested combined
+pytest and Ruff commands were attempted, but `server/tests/beat_adapter` and
+`server/solver/beat_adapter` are absent; those checks cannot complete here.
+Real Windows Job Object/ACL and installed runtime qualification remain later
+platform gates; Windows flags/start linkage are fake-tested, and a real POSIX
+wrapper process tests the distinct launcher/host PID and cwd behavior. No Julia,
+downloads, real user data or HBB directories were used. All changes remain
+uncommitted, as requested; no pins, requirements or existing callers changed.
