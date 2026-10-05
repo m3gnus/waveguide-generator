@@ -143,6 +143,7 @@ Gate 1 "installer built by ISCC from bundle-setup.iss" $true `
 $zone = "$Setup`:Zone.Identifier"
 Set-Content -Path $Setup -Stream "Zone.Identifier" -Value "[ZoneTransfer]`r`nZoneId=3" -Encoding ascii
 $marked = $null -ne (Get-Item -Path $Setup -Stream "Zone.Identifier" -ErrorAction SilentlyContinue)
+$installerZoneId = (Get-Content -Path $Setup -Stream "Zone.Identifier" -ErrorAction SilentlyContinue | Where-Object { $_ -match '^ZoneId=' }) -replace '^ZoneId=', ''
 "       installer marked with ZoneId=3: $marked"
 
 # --- Gate 4 / 3: a too-long install root must be refused with an exit code -----
@@ -596,7 +597,7 @@ $uacPolicy = Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Microsoft\Windows\Cur
 $uacOn = $null -ne $uacPolicy -and $uacPolicy.EnableLUA -eq 1
 $elevated = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 Gate 7 "SmartScreen / first-run experience" $null `
-    "NOT RUN: a script cannot see the SmartScreen prompt; check it by hand by opening the downloaded setup from an unelevated session with UAC on. Here: UAC on: $uacOn; this session elevated: $elevated; installer marked ZoneId=3: $marked."
+    "NOT RUN: automated launches cannot observe the SmartScreen shell dialog; use gate7-prepare.ps1, then double-click the marked setup in Explorer from an unelevated session with UAC on. Here: UAC on: $uacOn; this session elevated: $elevated; installer ZoneId: $installerZoneId."
 
 ""
 "summary: " + (($results | Group-Object Result | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join "  ")
