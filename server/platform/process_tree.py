@@ -33,6 +33,7 @@ import multiprocessing
 import os
 import signal
 import subprocess
+import time
 from typing import Any
 
 
@@ -223,20 +224,24 @@ def popen_in_windows_job(
 
     Elsewhere, and whenever the job cannot be made, this is a plain ``Popen``
     and the job is ``None``; containment is best-effort, as for the worker.
+    A child that cannot be resumed is killed before it ran and started again
+    the plain way: a host that blocks the thread snapshot loses containment,
+    never the child.
     """
 
     if os.name != "nt":
         return subprocess.Popen(command, **popen_kwargs), None  # noqa: S603
-    flags = int(popen_kwargs.pop("creationflags", 0)) | _CREATE_SUSPENDED
-    child = subprocess.Popen(command, creationflags=flags, **popen_kwargs)  # noqa: S603
+    flags = int(popen_kwargs.pop("creationflags", 0))
+    child = subprocess.Popen(command, creationflags=flags | _CREATE_SUSPENDED, **popen_kwargs)  # noqa: S603
     job = None
     resumed = False
     try:
         job = confine_to_windows_job(child.pid, subject=subject)
     finally:
-        resumed = _resume_windows_process(child.pid)
+        resumed = _resume_with_retries(child.pid)
         if not resumed:
-            # A child that never runs would hold its pipes and our wait forever.
+            # It never ran, so it started nothing; a suspended child would
+            # hold its pipes and our wait forever.
             if job is not None:
                 job.terminate()
                 job.close()
@@ -248,9 +253,28 @@ def popen_in_windows_job(
                 if stream is not None:
                     with contextlib.suppress(Exception):
                         stream.close()
-    if not resumed:
-        raise OSError(f"could not resume {subject} after starting it suspended")
-    return child, job
+    if resumed:
+        return child, job
+    logger.warning(
+        "Could not resume %s after starting it suspended; starting it again "
+        "without a Windows job object, so processes it starts may outlive it.",
+        subject,
+    )
+    return subprocess.Popen(command, creationflags=flags, **popen_kwargs), None  # noqa: S603
+
+
+#: A transient snapshot or thread-open failure is retried this often.
+_RESUME_ATTEMPTS = 5
+_RESUME_RETRY_SECONDS = 0.02
+
+
+def _resume_with_retries(pid: int) -> bool:
+    for attempt in range(_RESUME_ATTEMPTS):
+        if _resume_windows_process(pid):
+            return True
+        if attempt + 1 < _RESUME_ATTEMPTS:
+            time.sleep(_RESUME_RETRY_SECONDS)
+    return False
 
 
 def _resume_windows_process(pid: int) -> bool:
