@@ -289,6 +289,10 @@ class Run:
     output: Path
     base: str = ""
     children: set[int] = field(default_factory=set)
+    #: The server's own pid, which names its temporary session
+    #: (``wg2-run-<pid>-``). Not always :attr:`pid`: a virtual environment's
+    #: ``python.exe`` on Windows is a launcher that runs the server as its child.
+    server_pid: int = 0
 
     @property
     def pid(self) -> int:
@@ -352,6 +356,7 @@ class Run:
             interval=0.5,
             budgeted=True,
         )
+        run.server_pid = server_pid(data_dir)
         return run
 
     def fail_if_exited(self, doing: str) -> None:
@@ -396,6 +401,25 @@ class Run:
             self.process.wait(timeout=30)
         except subprocess.TimeoutExpired:
             pass
+
+
+def server_pid(data_dir: Path) -> int:
+    """The pid of the server holding ``data_dir``: its instance lock's metadata.
+
+    Read once the server answers, when the lock is its own. The process this
+    gate started is not always the server: on Windows a virtual environment's
+    ``python.exe`` runs the interpreter as a child, so the server's
+    ``wg2-run-<pid>-`` session carries the child's pid.
+    """
+
+    lock = data_dir / "locks" / "server.pid"
+    try:
+        pid = json.loads(lock.read_text(encoding="utf-8"))["pid"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise QualificationError(f"could not read the server's pid from {lock}: {exc}") from exc
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        raise QualificationError(f"the instance lock {lock} names no pid: {pid!r}")
+    return pid
 
 
 def _prefer_bempp(data_dir: Path) -> None:
@@ -497,7 +521,7 @@ def run_gate(
         }
         if status.get("status") != "cancelled" or status.get("stage_message") != "Interrupted by Quit":
             raise QualificationError(f"the next start did not read the job as interrupted by Quit: {status}")
-        leftovers = _temporary_leftovers(temporary, except_pid=second.pid)
+        leftovers = _temporary_leftovers(temporary, except_pid=second.server_pid)
         report["left_behind_after_restart"] = leftovers
         if leftovers:
             raise QualificationError(f"the next start left stale temporary directories: {leftovers}")
@@ -505,7 +529,7 @@ def run_gate(
         report["clean_stop_seconds"] = round(second.stop_and_time(grace), 2)
         remaining = _temporary_leftovers(temporary)
         report["left_by_clean_stop"] = remaining
-        own = f"wg2-run-{second.pid}-"
+        own = f"wg2-run-{second.server_pid}-"
         others = [name for name in remaining if not name.startswith(own)]
         if others:
             raise QualificationError(f"a clean stop left temporary directories: {others}")

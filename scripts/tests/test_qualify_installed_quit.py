@@ -66,6 +66,35 @@ def test_the_process_table_sees_this_process_and_its_parent() -> None:
     assert os.getpid() in gate.descendants(os.getppid(), table)
 
 
+def test_the_servers_own_session_is_named_by_its_lock_not_the_launched_process(tmp_path: Path) -> None:
+    """On Windows a virtual environment's ``python.exe`` runs the server as its
+    child, so the process the gate starts is not the server, and the server's
+    live session carries the child's pid. Judged by the launched pid, that
+    session read as a stale one the next start had left behind."""
+
+    gate = _gate()
+    data = tmp_path / "data"
+    (data / "locks").mkdir(parents=True)
+    (data / "locks" / "server.pid").write_text('{"pid": 4242, "port": 3100}\n', encoding="utf-8")
+    temporary = tmp_path / "tmp"
+    for name in ("wg2-run-4242-live", "wg2-run-17-stale", "tmpunrelated"):
+        (temporary / name).mkdir(parents=True)
+
+    assert gate.server_pid(data) == 4242
+    assert gate._temporary_leftovers(temporary, except_pid=gate.server_pid(data)) == ["wg2-run-17-stale"]
+
+
+@pytest.mark.parametrize("content", [None, "", "{}", '{"pid": 0}', '{"pid": true}', '{"pid": "12"}'])
+def test_a_server_pid_that_cannot_be_read_is_a_failure(tmp_path: Path, content: str | None) -> None:
+    gate = _gate()
+    (tmp_path / "locks").mkdir()
+    if content is not None:
+        (tmp_path / "locks" / "server.pid").write_text(content, encoding="utf-8")
+
+    with pytest.raises(gate.QualificationError):
+        gate.server_pid(tmp_path)
+
+
 @pytest.mark.slow
 def test_the_gate_passes_against_this_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = _gate()
