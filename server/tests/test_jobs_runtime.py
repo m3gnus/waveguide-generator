@@ -2035,3 +2035,32 @@ def test_historical_axisymmetric_job_and_result_remain_readable(tmp_path: Path) 
         await runtime.shutdown()
 
     asyncio.run(scenario())
+
+
+class _BareEOFEngine:
+    """An engine whose failure has no text, like a solver child whose pipe closed."""
+
+    name = "bempp"
+
+    async def run(self, request: SolveRequest, *, cancel_cb: Any, stage_cb: Any) -> Any:
+        raise EOFError
+
+
+def test_a_failure_without_text_still_gets_an_error_message(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        runtime = JobRuntime(
+            JobStore(tmp_path / "bare-failure.db"),
+            engine_registry=EngineRegistry(
+                detector=lambda: [EngineInfo("bempp", True, "test", "test")],
+                factory=lambda _name: _BareEOFEngine(),
+            ),
+        )
+        job_id = await runtime.submit(_bare_request(engine="bempp", wall=5))
+        await runtime.wait_idle()
+        row = await runtime.get_job(job_id)
+        assert row["status"] == "error"
+        assert row["error_message"].strip()
+        assert "EOFError" in row["error_message"]
+        await runtime.shutdown()
+
+    asyncio.run(scenario())

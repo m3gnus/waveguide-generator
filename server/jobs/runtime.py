@@ -115,6 +115,10 @@ MAX_LOG_LINES = 200
 MAX_LOG_CHARS = 32_000
 MAX_LOG_EVENT_CHARS = 2_000
 CANCELLED_MESSAGE = "Simulation cancelled by user"
+#: A failed job's error when its exception said nothing at all. A bare
+#: ``EOFError`` from a dead solver child has an empty ``str()``, and an empty
+#: error message reads as no reason given.
+FAILED_WITHOUT_DETAIL_MESSAGE = "The simulation failed without reporting a reason."
 #: What a job that Quit interrupted reads as. That covers a job stopped at a
 #: checkpoint during shutdown, and one the shutdown budget cut off and the next
 #: start recovered. It is distinct from the crash reason an unmarked orphan
@@ -400,6 +404,15 @@ def merge_provisional_results(
     if current is None:
         return _copy_provisional_result(delta)
     return _extend_provisional_results(_copy_provisional_result(current), delta)
+
+
+def _failure_message(exc: BaseException) -> str:
+    """A failed job's error message: the exception's text, never empty."""
+
+    text = str(exc).strip()
+    if text:
+        return text
+    return f"The simulation failed without reporting a reason ({type(exc).__name__})."
 
 
 def _now_iso() -> str:
@@ -4448,7 +4461,7 @@ class JobRuntime:
             raise
         except Exception as exc:
             logger.error("Simulation error for job %s: %s", job_id, exc, exc_info=True)
-            await self._fail_job(job_id, str(exc))
+            await self._fail_job(job_id, _failure_message(exc))
 
     async def _cancel_job(self, job_id: str) -> None:
         # A job that this process's own shutdown stopped at a checkpoint ends
@@ -5046,6 +5059,8 @@ class JobRuntime:
             await self._flush_runtime_update(job_id, forget=forget)
 
     async def _fail_job(self, job_id: str, message: str) -> None:
+        if not message.strip():
+            message = FAILED_WITHOUT_DETAIL_MESSAGE
         self._partial_results.pop(job_id, None)
         await self._discard_channel_bases(job_id)
         await self._discard_radiation_impedance(job_id)

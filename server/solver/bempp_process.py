@@ -45,6 +45,9 @@ import asyncio
 import multiprocessing
 from multiprocessing.connection import Connection
 import os
+import signal
+import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -82,12 +85,265 @@ class BemppWorkerError(RuntimeError):
     """A native BEMPP worker failed or exited without a result."""
 
 
+# -- what a dead worker leaves behind ------------------------------------------
+#
+# A native crash inside the worker -- PoCL's LLVM aborting with "Cannot select
+# ... fsqrt" on some CPUs, an access violation in a kernel -- raises no Python
+# exception, so nothing crosses the pipe. The parent only sees the pipe close
+# (EOFError, whose ``str()`` is empty: that empty string once became the job's
+# whole error message) or the process gone. What says *why* is the exit status
+# and whatever the native code printed on its way down, and the printing goes to
+# file descriptor 2, not to Python. So the worker's fd 2 goes to a file the
+# parent reads (a file, not a pipe: a pipe nobody drains while the parent is
+# busy would block the child once full, and the bytes still in a pipe die with
+# a crashed reader). The parent forwards it to its own stderr as it arrives, so
+# nothing that used to reach the console stops reaching it, and keeps a bounded
+# tail for the failure message.
+
+#: Bytes of the worker's most recent stderr kept in memory for a failure message.
+_STDERR_TAIL_BYTES = 16 * 1024
+#: Above this, the parent empties the file after forwarding it, so a chatty
+#: worker that lives for the whole app session cannot fill the disk.
+_STDERR_FILE_CAP_BYTES = 4 * 1024 * 1024
+#: How much of that tail a job's error message may carry.
+_STDERR_MESSAGE_LINES = 12
+_STDERR_MESSAGE_LINE_CHARS = 300
+_STDERR_MESSAGE_CHARS = 2000
+#: How long to wait for a worker whose pipe closed to be reaped, so its exit
+#: status can be read. A crashed process is gone within milliseconds.
+_DEATH_JOIN_SECONDS = 2.0
+
+#: Windows NTSTATUS values a crashed worker is likely to exit with.
+_NTSTATUS_NAMES = {
+    0xC0000005: "access violation",
+    0xC000001D: "illegal instruction",
+    0xC0000017: "out of memory",
+    0xC0000094: "integer division by zero",
+    0xC00000FD: "stack overflow",
+    0xC000013A: "interrupted with Ctrl+C",
+    0xC0000374: "heap corruption",
+    0xC0000409: "fail-fast exception (stack buffer overrun)",
+    0xC0000420: "assertion failure",
+}
+
+
+def _describe_exit(exitcode: int | None, *, windows: bool | None = None) -> str:
+    """Say in plain words how a worker process ended."""
+
+    if windows is None:
+        windows = os.name == "nt"
+    if exitcode is None:
+        return "its exit status could not be read"
+    if exitcode < 0:
+        try:
+            name = signal.Signals(-exitcode).name
+        except ValueError:
+            return f"it was stopped by signal {-exitcode}"
+        return f"it was stopped by signal {name} ({-exitcode})"
+    if windows and exitcode >= 0x80000000:
+        status = f"0x{exitcode:08X}"
+        name = _NTSTATUS_NAMES.get(exitcode)
+        return f"it ended with status {status}" + (f" ({name})" if name else "")
+    return f"it ended with exit code {exitcode}"
+
+
+def _stderr_excerpt(raw: bytes, *, truncated: bool = False) -> str:
+    """The last meaningful lines of a worker's stderr, bounded for a job record."""
+
+    lines = raw.decode("utf-8", "replace").splitlines()
+    if truncated and lines:
+        # The bounded buffer may have cut its first line in half.
+        lines = lines[1:]
+    lines = [line.rstrip() for line in lines if line.strip()]
+    lines = lines[-_STDERR_MESSAGE_LINES:]
+    lines = [
+        line if len(line) <= _STDERR_MESSAGE_LINE_CHARS
+        else line[: _STDERR_MESSAGE_LINE_CHARS - 3] + "..."
+        for line in lines
+    ]
+    text = "\n".join(lines)
+    if len(text) > _STDERR_MESSAGE_CHARS:
+        text = "..." + text[-(_STDERR_MESSAGE_CHARS - 3):]
+    return text
+
+
+def _worker_death_message(exitcode: int | None, stderr_tail: str) -> str:
+    """The job's error for a worker that died without reporting a result.
+
+    Never empty: an unknown exit still says what stopped.
+    """
+
+    message = (
+        "The BEMPP solve process exited unexpectedly before returning a result: "
+        f"{_describe_exit(exitcode)}."
+    )
+    if stderr_tail:
+        message += f"\nLast output from the solve process:\n{stderr_tail}"
+    else:
+        message += " It printed nothing before it stopped."
+    return message
+
+
+class _WorkerStderr:
+    """The parent's side of the worker's redirected stderr file."""
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+        self._offset = 0
+        self._tail = bytearray()
+        self._truncated = False
+        self._lock = threading.Lock()
+
+    def drain(self) -> None:
+        """Forward what the worker wrote since the last call; keep the tail.
+
+        Never raises: this is diagnostics, and a solve must not fail over it.
+        """
+
+        with self._lock:
+            try:
+                size = os.stat(self.path).st_size
+                if size < self._offset:
+                    self._offset = 0
+                if size == self._offset:
+                    return
+                start = max(self._offset, size - _STDERR_FILE_CAP_BYTES)
+                with open(self.path, "rb") as handle:
+                    handle.seek(start)
+                    data = handle.read(size - start)
+                self._offset = start + len(data)
+                if self._offset >= _STDERR_FILE_CAP_BYTES:
+                    # Anything the worker writes between the read and this
+                    # truncation is lost; only a flood gets here.
+                    with open(self.path, "r+b") as handle:
+                        handle.truncate(0)
+                    self._offset = 0
+            except OSError:
+                return
+            self._tail += data
+            if len(self._tail) > _STDERR_TAIL_BYTES:
+                del self._tail[: len(self._tail) - _STDERR_TAIL_BYTES]
+                self._truncated = True
+            stream = sys.stderr
+            if stream is not None:
+                try:
+                    stream.write(data.decode("utf-8", "replace"))
+                    stream.flush()
+                except (OSError, ValueError):
+                    pass
+
+    def clear_tail(self) -> None:
+        """Start a new job's tail; earlier output is not this job's cause."""
+
+        self.drain()
+        with self._lock:
+            self._tail.clear()
+            self._truncated = False
+
+    def excerpt(self) -> str:
+        self.drain()
+        with self._lock:
+            return _stderr_excerpt(bytes(self._tail), truncated=self._truncated)
+
+    def discard(self) -> None:
+        """Forward the rest and remove the file. Call once the worker is gone."""
+
+        self.drain()
+        try:
+            os.remove(self.path)
+        except OSError:
+            # Still open in a process that has not quite exited (Windows).
+            # It lives in the session directory, which goes with the session.
+            pass
+
+
+def _new_stderr_file() -> str | None:
+    try:
+        from server.platform.temp_session import temporary_directory_root
+
+        handle, path = tempfile.mkstemp(
+            prefix="wg2-bempp-stderr-", suffix=".log", dir=temporary_directory_root()
+        )
+    except OSError:
+        return None
+    os.close(handle)
+    return path
+
+
+def _send_stderr_to(path: str | None) -> None:
+    """In the worker: point file descriptor 2 -- native code's stderr as well
+    as Python's -- at ``path``.
+
+    A failure leaves stderr where it was: the capture is diagnostic, and a
+    worker that cannot redirect can still solve.
+    """
+
+    if not path:
+        return
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | getattr(os, "O_BINARY", 0))
+    except OSError:
+        return
+    try:
+        if sys.stderr is not None:
+            try:
+                sys.stderr.flush()
+            except (OSError, ValueError):
+                pass
+        # Inheritable, so a split sweep's own workers write here too.
+        os.dup2(fd, 2)
+        if os.name == "nt":
+            # Native code that asks the OS for its stderr handle instead of
+            # using the C runtime's descriptor 2 must find the file as well.
+            import ctypes
+            import msvcrt
+
+            ctypes.windll.kernel32.SetStdHandle(
+                ctypes.c_uint32(-12 & 0xFFFFFFFF), ctypes.c_void_p(msvcrt.get_osfhandle(2))
+            )
+        # On a Windows console, Python's stderr writes to the console directly,
+        # not through descriptor 2; under pythonw there is no stderr at all.
+        sys.stderr = os.fdopen(
+            2, "w", encoding="utf-8", errors="backslashreplace", buffering=1, closefd=False
+        )
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
 def _poll_and_recv(connection: Connection) -> tuple[Any, ...] | None:
     """Wait briefly for and deserialize one worker event off the event loop."""
 
     if not connection.poll(_POLL_SECONDS):
         return None
     return connection.recv()
+
+
+def _poll_and_drain(
+    connection: Connection, stderr: _WorkerStderr | None
+) -> tuple[Any, ...] | None:
+    """:func:`_poll_and_recv`, forwarding the worker's stderr between events."""
+
+    if stderr is not None:
+        stderr.drain()
+    return _poll_and_recv(connection)
+
+
+def _worker_death_error(
+    process: multiprocessing.process.BaseProcess | None, stderr: _WorkerStderr | None
+) -> BemppWorkerError:
+    """Describe a worker that stopped without a result. Blocks briefly; call off-loop."""
+
+    exitcode: int | None = None
+    if process is not None:
+        try:
+            process.join(_DEATH_JOIN_SECONDS)
+            exitcode = process.exitcode
+        except (AssertionError, OSError, ValueError):
+            exitcode = None
+    excerpt = stderr.excerpt() if stderr is not None else ""
+    return BemppWorkerError(_worker_death_message(exitcode, excerpt))
 
 
 def _warm_this_process() -> dict[str, Any]:
@@ -206,12 +462,16 @@ def _solve_payload(
 
 
 def _start_in_parent_session(
-    target: Callable[[Connection], None], session_root: str | None, connection: Connection
+    target: Callable[[Connection], None],
+    session_root: str | None,
+    connection: Connection,
+    stderr_path: str | None = None,
 ) -> None:
-    """The spawned worker's entry: adopt the server's session, then serve."""
+    """The spawned worker's entry: capture stderr, adopt the server's session, then serve."""
 
     from server.platform.temp_session import adopt_parent_session
 
+    _send_stderr_to(stderr_path)
     adopt_parent_session(session_root)
     target(connection)
 
@@ -292,6 +552,8 @@ class BemppProcessHost:
         #: Windows containment for the worker and its sweep workers; None
         #: elsewhere, where the POSIX process group serves the same purpose.
         self._job: Any = None
+        #: The worker's redirected stderr; None when it could not be set up.
+        self._stderr: _WorkerStderr | None = None
         self._warm_requested = False
         self._state_lock = threading.Lock()
 
@@ -304,40 +566,49 @@ class BemppProcessHost:
         parent, child = self._context.Pipe(duplex=True)
         from server.platform.temp_session import temporary_directory_root
 
-        process = self._context.Process(
-            # The worker has no session of its own: hand it the server's, so
-            # the directories it makes (its OpenCL check's) live and die there.
-            target=_start_in_parent_session,
-            args=(self._target, temporary_directory_root(), child),
-            name="hornlab-bempp-worker",
-            # NOT daemon. A daemonic multiprocessing process is forbidden from
-            # having children at all -- ``start()`` asserts on it -- and the
-            # native sweep splits with a ProcessPoolExecutor. With daemon=True
-            # every split sweep dies with "daemonic processes are not allowed to
-            # have children", which made the parallel default unusable for
-            # exactly the long sweeps it was meant to speed up.
-            #
-            # What daemon=True bought was teardown when the parent exits, and
-            # three mechanisms already cover that better: atexit -> _HOST.close()
-            # for a normal exit (registered after multiprocessing's own hook, so
-            # it runs first and terminates rather than joins), the sentinel
-            # watchdog in _exit_when_parent_does for a force-kill, and the job
-            # object / process group for the workers underneath.
-            daemon=False,
-        )
-        process.start()
+        stderr_path = _new_stderr_file()
+        stderr = _WorkerStderr(stderr_path) if stderr_path else None
+        try:
+            process = self._context.Process(
+                # The worker has no session of its own: hand it the server's, so
+                # the directories it makes (its OpenCL check's) live and die there.
+                target=_start_in_parent_session,
+                args=(self._target, temporary_directory_root(), child, stderr_path),
+                name="hornlab-bempp-worker",
+                # NOT daemon. A daemonic multiprocessing process is forbidden from
+                # having children at all -- ``start()`` asserts on it -- and the
+                # native sweep splits with a ProcessPoolExecutor. With daemon=True
+                # every split sweep dies with "daemonic processes are not allowed to
+                # have children", which made the parallel default unusable for
+                # exactly the long sweeps it was meant to speed up.
+                #
+                # What daemon=True bought was teardown when the parent exits, and
+                # three mechanisms already cover that better: atexit -> _HOST.close()
+                # for a normal exit (registered after multiprocessing's own hook, so
+                # it runs first and terminates rather than joins), the sentinel
+                # watchdog in _exit_when_parent_does for a force-kill, and the job
+                # object / process group for the workers underneath.
+                daemon=False,
+            )
+            process.start()
+        except BaseException:
+            if stderr is not None:
+                stderr.discard()
+            raise
         child.close()
         # Contain the tree before any work reaches the child: a parallel sweep
         # forks its own workers, and Stop must reclaim all of them.
         self._job = confine_to_windows_job(process.pid) if process.pid else None
         self._connection = parent
         self._process = process
+        self._stderr = stderr
         return parent
 
     def _terminate_sync(self) -> None:
         connection, self._connection = self._connection, None
         process, self._process = self._process, None
         job, self._job = self._job, None
+        stderr, self._stderr = self._stderr, None
         self._warm_requested = False
         if connection is not None:
             try:
@@ -348,6 +619,8 @@ class BemppProcessHost:
             if job is not None:
                 job.terminate()
                 job.close()
+            if stderr is not None:
+                stderr.discard()
             return
         # Resolve the group while the child is still reapable: once it has been
         # joined, ``getpgid`` can no longer find it and the workers would be
@@ -369,6 +642,8 @@ class BemppProcessHost:
             kill_process_group(group)
         if not process.is_alive():
             process.join()
+        if stderr is not None:
+            stderr.discard()
 
     def _prewarm_locked(self) -> None:
         """Start the worker and queue its warmup.  Caller holds ``_state_lock``.
@@ -486,19 +761,30 @@ class BemppProcessHost:
             job_id = uuid.uuid4().hex
             self._active_job_id = job_id
             connection = self._ensure_started()
+            process = self._process
+            stderr = self._stderr
 
         try:
-            await asyncio.to_thread(connection.send, (job_id, payload))
+            if stderr is not None:
+                await asyncio.to_thread(stderr.clear_tail)
+            try:
+                await asyncio.to_thread(connection.send, (job_id, payload))
+            except (EOFError, BrokenPipeError, OSError) as exc:
+                raise await asyncio.to_thread(
+                    _worker_death_error, process, stderr
+                ) from exc
             while True:
                 cancel_cb()
-                if not self._process or not self._process.is_alive():
-                    raise BemppWorkerError(
-                        "The native BEMPP worker exited before returning a result"
-                    )
+                if process is None or not process.is_alive():
+                    raise await asyncio.to_thread(_worker_death_error, process, stderr)
                 try:
-                    event = await asyncio.to_thread(_poll_and_recv, connection)
+                    event = await asyncio.to_thread(_poll_and_drain, connection, stderr)
                 except (EOFError, BrokenPipeError, OSError) as exc:
-                    raise BemppWorkerError("The native BEMPP worker disconnected before returning a result") from exc
+                    # A native crash closes the pipe without a word; the
+                    # exception's own text is empty. Say what stopped and why.
+                    raise await asyncio.to_thread(
+                        _worker_death_error, process, stderr
+                    ) from exc
                 if event is None:
                     continue
                 kind, event_job_id, value = event
