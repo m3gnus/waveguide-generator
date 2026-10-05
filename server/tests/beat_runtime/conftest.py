@@ -4,12 +4,12 @@ import os
 
 import pytest
 
-from server.solver.beat_runtime import cleanup, host, registry as r, spawn
+from server.solver.beat_runtime import cleanup, registry as r, spawn
 
 
 @pytest.fixture
 def launch(tmp_path, monkeypatch):
-    monkeypatch.setenv(host.TEST_WORKER_ENV, "server.tests.beat_runtime.fake_host_worker:EngineWorker")
+    monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
     monkeypatch.setenv("WG2_BEAT_WORKER_DIR", str(tmp_path / "workers"))
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
     key = r.host_key({"backend": "cpu", "julia_executable": "/fixture/julia",
@@ -23,7 +23,7 @@ def launch(tmp_path, monkeypatch):
 
     def popen(*args, **kwargs):
         child = original(*args, **kwargs)
-        if "server.solver.beat_runtime.host" in args[0]:
+        if spawn.HOST_MODULE in args[0]:
             children.append(child)
         return child
 

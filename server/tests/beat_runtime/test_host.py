@@ -6,7 +6,7 @@ import time
 import pytest
 
 from server.solver.beat_runtime import cleanup, host, ipc, registry as r, spawn
-from server.tests.beat_runtime.fake_host_worker import events, wait_until
+from server.tests.beat_runtime.fake_host_worker import EngineWorker, events, wait_until
 
 
 def authenticated(record):
@@ -149,7 +149,7 @@ def test_partial_frame_deadline_and_malformed_peer(launch):
 
 def test_close_retains_successor_and_is_idempotent(launch):
     key, directory, _ = launch
-    owner = host.WorkerHost(key, directory)
+    owner = host.WorkerHost(key, directory, engine_factory=EngineWorker)
     with r.SpawnLock(r.spawn_lock_path(owner.identifier, directory)):
         record = owner.bind()
         r.write_record(record, directory)
@@ -185,7 +185,7 @@ def test_close_removes_own_unix_socket_and_record(launch, monkeypatch):
     monkeypatch.setattr(ipc.Endpoint, "_address", lambda self: self.path.name)
     monkeypatch.setattr(host, "endpoint_for", lambda identifier, root:
                         ipc.Endpoint("unix", path=root / f"{identifier}.sock"))
-    owner = host.WorkerHost(key, directory)
+    owner = host.WorkerHost(key, directory, engine_factory=EngineWorker)
     with r.SpawnLock(r.spawn_lock_path(owner.identifier, directory)):
         record = owner.bind()
         r.write_record(record, directory)

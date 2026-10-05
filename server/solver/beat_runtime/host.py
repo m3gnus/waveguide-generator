@@ -7,7 +7,6 @@ from collections import deque
 from collections.abc import Callable
 import contextlib
 import hmac
-import importlib
 import json
 import math
 import os
@@ -30,7 +29,17 @@ DEFAULT_IDLE_TIMEOUT = 1800.0
 CONTROL_TIMEOUT = 2.0
 HEARTBEAT_INTERVAL = 0.5
 RETIREMENT_TIMEOUT = 5.0
-TEST_WORKER_ENV = "WG2_BEAT_TEST_WORKER"
+PREAUTH_TIMEOUT = 0.5
+MAX_CLIENTS = 32
+MAX_PENDING = 8
+ACCEPT_ERROR_BUDGET = 5
+
+
+def official_engine_factory(**kwargs: Any) -> Any:
+    """Import the optional official worker only inside the host."""
+    from beat_engine import EngineWorker
+
+    return EngineWorker(**kwargs)
 
 
 def bounded_call(action: Callable[[], Any]) -> Any:
@@ -74,7 +83,8 @@ class _HostStream:
     def close(self) -> None:
         try:
             bounded_call(self.events.close)
-        except BaseException:
+        except BaseException as exc:
+            self.host._log(f"stream retirement failed: {exc}")
             # Fail admission before ownership releases its slot on closure error.
             self.host._fail_stop()
             raise
@@ -145,6 +155,9 @@ def validate_key(key: dict[str, Any]) -> None:
     for name in ("julia_project", "julia_sysimage"):
         if name not in key or (key[name] is not None and not isinstance(key[name], str)):
             raise r.RecordRefused(f"Invalid launch path: {name}")
+    for name in ("solver_script", "julia_executable", "julia_project", "julia_sysimage"):
+        if key[name] is not None and not Path(key[name]).is_absolute():
+            raise r.RecordRefused(f"Launch path must be absolute: {name}")
     environment = key.get("environment")
     if not isinstance(environment, dict) or any(
         not isinstance(k, str) or not isinstance(v, str) for k, v in environment.items()
@@ -153,9 +166,15 @@ def validate_key(key: dict[str, Any]) -> None:
 
 
 class WorkerHost:
-    """Publish before Julia startup; only authenticated clients extend lifetime."""
+    """Publish before Julia startup; admitted connections keep the host alive.
 
-    def __init__(self, key: dict[str, Any], directory: Path, *, idle_timeout: float = DEFAULT_IDLE_TIMEOUT):
+    Managers retain an admitted connection between submissions, until detach.
+    """
+
+    def __init__(
+        self, key: dict[str, Any], directory: Path, *, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+        engine_factory: Callable[..., Any] | None = None,
+    ) -> None:
         validate_key(key)
         if not math.isfinite(idle_timeout) or idle_timeout <= 0:
             raise ValueError("Host idle timeout must be positive and finite")
@@ -167,6 +186,9 @@ class WorkerHost:
         self._engine: Any = None
         self._state = threading.Lock()
         self._connections: set[socket.socket] = set()
+        self._pending: dict[socket.socket, float] = {}
+        self._engine_factory = engine_factory if engine_factory is not None else official_engine_factory
+        self._logging = threading.Lock()
         self._clients = 0
         self._last_activity = time.monotonic()
         self._stopping = threading.Event()
@@ -177,16 +199,7 @@ class WorkerHost:
         self._ownership: StreamOwnership | None = None
 
     def _build_engine(self) -> Any:
-        # Only tests set this hook; no BEAT import occurs in the application parent.
-        injected = os.environ.get(TEST_WORKER_ENV)
-        if injected:
-            module, name = injected.split(":", 1)
-            factory = getattr(importlib.import_module(module), name)
-        else:
-            from beat_engine import EngineWorker
-
-            factory = EngineWorker
-        return factory(
+        return self._engine_factory(
             julia_executable=self.key["julia_executable"],
             solver_script=Path(self.key["solver_script"]),
             julia_threads=self.key["julia_threads"],
@@ -194,6 +207,11 @@ class WorkerHost:
             julia_sysimage=Path(self.key["julia_sysimage"]) if self.key["julia_sysimage"] else None,
             environment=self.key["environment"],
         )
+
+    def _log(self, message: str) -> None:
+        with self._logging, contextlib.suppress(OSError, r.RecordRefused):
+            with r._private_file(r.log_path(self.identifier, self.directory), create=True, append=True) as fd:
+                os.write(fd, f"{time.strftime('%Y-%m-%d %H:%M:%S')} {message}\n".encode())
 
     def bind(self) -> r.HostRecord:
         """Bind while the caller holds spawn exclusion; publication is separate."""
@@ -264,15 +282,18 @@ class WorkerHost:
         except (OSError, ValueError, RuntimeError) as exc:
             # Transport failure can recover through stream closure. Other
             # engine errors are reported; failed closure itself stops admission.
+            self._log(f"submission failed: {exc}")
             reply = {"type": "failed", "error": str(exc)}
         except BaseException as exc:
             self._fail_stop()
+            self._log(f"submission failed: {exc}")
             reply = {"type": "failed", "error": str(exc)}
         finally:
             try:
                 if job.stream is not None:
                     job.stream.close()
-            except BaseException:
+            except BaseException as exc:
+                self._log(f"submission retirement failed: {exc}")
                 self._fail_stop()
             finally:
                 with self._jobs:
@@ -289,7 +310,8 @@ class WorkerHost:
                 job.stream.cancel()  # Token-checked public stream retirement.
             if not job.done.wait(RETIREMENT_TIMEOUT):
                 raise TimeoutError("BEAT submission did not retire")
-        except BaseException:
+        except BaseException as exc:
+            self._log(f"cancellation retirement failed: {exc}")
             self._fail_stop()
 
     def _serve_job(self, connection: socket.socket, message: dict,
@@ -343,25 +365,45 @@ class WorkerHost:
                 signal.signal(value, stop)
         self._server.settimeout(min(0.1, self.idle_timeout))
         self._last_activity = time.monotonic()
+        self._log(f"serving {self.identifier} (idle {self.idle_timeout:g}s)")
+        accept_errors = 0
         while not self._stopping.is_set():
             with self._state:
                 if self._clients == 0 and time.monotonic() - self._last_activity >= self.idle_timeout:
+                    self._log("idle exit")
                     self._stopping.set()
                     break
             try:
                 connection, _ = self._server.accept()
             except socket.timeout:
                 continue
+            except OSError as exc:
+                accept_errors += 1
+                self._log(f"accept failed ({accept_errors}/{ACCEPT_ERROR_BUDGET}): {exc}")
+                if accept_errors >= ACCEPT_ERROR_BUDGET:
+                    self._fail_stop()
+                    break
+                self._stopping.wait(0.02)
+                continue
+            accept_errors = 0
             with self._state:
-                if len(self._connections) >= 32:
-                    connection.close()
-                    continue
+                self._last_activity = time.monotonic()
+                # Pending peers have their own small budget. Evict the oldest
+                # so silent peers cannot reserve every authenticated client slot.
+                if len(self._pending) >= MAX_PENDING:
+                    oldest = next(iter(self._pending))
+                    self._pending.pop(oldest)
+                    with contextlib.suppress(OSError):
+                        oldest.shutdown(socket.SHUT_RDWR)
+                    oldest.close()
+                self._pending[connection] = self._last_activity + PREAUTH_TIMEOUT
                 self._connections.add(connection)
             threading.Thread(target=self._serve_connection, args=(connection,), daemon=True).start()
 
     def _serve_connection(self, connection: socket.socket) -> None:
         admitted = False
-        deadline = time.monotonic() + CONTROL_TIMEOUT
+        with self._state:
+            deadline = self._pending.get(connection, time.monotonic() + PREAUTH_TIMEOUT)
         sending = threading.Lock()
 
         def send(message: dict) -> None:
@@ -401,6 +443,9 @@ class WorkerHost:
                     with self._state:
                         if self._stopping.is_set():
                             return
+                        if self._clients >= MAX_CLIENTS:
+                            raise r.RecordRefused("Authenticated client capacity reached")
+                        self._pending.pop(connection, None)
                         self._clients += 1
                         admitted = True
                     connection.settimeout(CONTROL_TIMEOUT)
@@ -435,11 +480,13 @@ class WorkerHost:
                 else:
                     send({"type": "failed", "error": f"Unknown host operation: {operation}"})
         except (OSError, ValueError, RuntimeError) as exc:
+            self._log(f"connection failed: {exc}")
             with contextlib.suppress(OSError, ValueError):
                 send({"type": "failed" if admitted else "hello_refused",
                       "reason": str(exc), "error": str(exc)})
         finally:
             with self._state:
+                self._pending.pop(connection, None)
                 self._connections.discard(connection)
                 if admitted:
                     self._clients -= 1
@@ -455,14 +502,24 @@ class WorkerHost:
             for connection in self._connections:
                 with contextlib.suppress(OSError):
                     connection.shutdown(socket.SHUT_RDWR)
+        # Unpublish before slow retirement. A spawner holding the lock can
+        # instead prune after our exit through the locked cleanup policy.
+        try:
+            self._remove_own_record()
+        except (OSError, r.RecordRefused) as exc:
+            self._log(f"record removal failed: {exc}")
         try:
             engine, self._engine = self._engine, None
             if self._ownership is not None:
-                with contextlib.suppress(BaseException):
+                try:
                     bounded_call(self._ownership.shutdown)
+                except BaseException as exc:
+                    self._log(f"ownership retirement failed: {exc}")
             if engine is not None:
-                with contextlib.suppress(BaseException):
+                try:
                     bounded_call(engine.terminate)
+                except BaseException as exc:
+                    self._log(f"engine retirement failed: {exc}")
         finally:
             self._remove_own_record()
 
@@ -502,9 +559,11 @@ def main(argv: list[str] | None = None) -> int:
     key = read_private_json(Path(args.key))
     # The Windows native entry starts its interpreter from the bundle root.
     os.chdir(app_root())
-    host = WorkerHost(key, directory, idle_timeout=args.idle_timeout)
+    host = WorkerHost(key, directory, idle_timeout=args.idle_timeout, engine_factory=official_engine_factory)
     if Path(args.key).absolute() != r.launch_spec_path(host.identifier, directory):
         raise r.RecordRefused("Launch specification outside this host slot")
+    with r._private_file(r.log_path(host.identifier, directory), create=True) as fd:
+        os.ftruncate(fd, 0)
     try:
         if args.ready:
             # The parent keeps spawn exclusion until this exact child is published.
@@ -526,6 +585,9 @@ def main(argv: list[str] | None = None) -> int:
                 sweep_orphan_socket(host.identifier, directory, lock=lock)
                 r.write_record(host.bind(), directory)
         host.serve()
+    except BaseException as exc:
+        host._log(f"host failed: {exc}")
+        raise
     finally:
         host.close()
     return 0

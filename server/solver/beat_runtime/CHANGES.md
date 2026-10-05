@@ -548,3 +548,104 @@ attempted: pytest collected no tests because `server/tests/beat_adapter` is
 absent; Ruff reports the two absent beat_adapter directories. No Julia,
 downloads, full WG suite, real user/HBB data writes, dependency/pin changes or
 reference-checkout edits occurred. Changes remain uncommitted as requested.
+
+**Review round 1 fixes (PR 18):**
+
+Files follow the existing PR 18 review slices; this is one fix round on top of
+PR 19, whose submission/client behavior is retained:
+- **18a lifecycle:** `host.py`; lifecycle/logging/path/accept regressions in
+  `server/tests/beat_runtime/test_host_review.py`; explicit factory calls in
+  `test_host.py`; this `CHANGES.md`.
+- **18b admission:** `host.py`; pending-peer/capacity regressions in
+  `test_host_review.py`; this `CHANGES.md`.
+- **18c spawn/recovery:** `spawn.py`; environment/stale-port/closing-host/failed
+  bootstrap regressions in `server/tests/beat_runtime/test_spawn_review.py`;
+  bounded retained-host test and test-process entry selection in `test_spawn.py`;
+  this `CHANGES.md`.
+- **18d platform/test boundary:** `spawn.py`; direct-interpreter and owned
+  launcher cases in `test_spawn_platform.py`, Windows handle tests in
+  `test_spawn_review.py`; `server/tests/beat_runtime/{conftest,fake_host_main,
+  fake_host_worker}.py`; `registry.py`'s optional append flag for private logs;
+  this `CHANGES.md`.
+
+- **P1/A — fixed:** WorkerHost accepts an explicit engine_factory. Production
+  main supplies a lazy factory that imports official beat_engine.EngineWorker;
+  no production environment factory switch remains. Tests select a tests-only
+  fake_host_main entry through the monkeypatchable spawn.HOST_MODULE constant.
+  The spawner strips all WG2_BEAT_TEST_* environment names (case-insensitive).
+  `test_production_spawn_ignores_test_worker_environment` exercises production
+  launch/main with an import sentinel while builtins:dict is configured; no
+  optional engine import or Julia launch occurs.
+- **P2/B — fixed:** authentication refusals and refused/missing connections use
+  cleanup_host under the held spawn lock. Its dead/reused-process proof remains
+  the only pruning authority. Refused live hosts retry within the original
+  start deadline; permanently refused live records remain. Host close removes
+  its own record/socket before slow engine retirement, with successor checks;
+  early record-removal failure still retires the engine and is logged.
+  Regressions cover reused TCP listeners, both authentication EOF and connection
+  refusal while a closing host remains alive, and replacement during blocked
+  retirement. No stale registry PID is signalled.
+- **P2/C — fixed:** accept a direct Popen child or a verified launcher/start link
+  plus verified interpreter creation identity, independently of executable name.
+  Regressions cover renamed Waveguide Generator.exe/pythonw and wg-python.exe
+  names for both layouts, invalid links and a real separate-process wrapper.
+- **P2/D — fixed:** failed startup stops the verified owned Windows interpreter
+  as well as the Popen child. Open one Windows process handle, compare its
+  creation time with the verified bootstrap identity, then terminate/wait on
+  that same handle to avoid a PID reuse race. Unverified interpreters are never
+  terminated. Popen wait TimeoutExpired escalates to kill and bounded reaping;
+  record cleanup still runs and teardown errors cannot mask the startup error.
+  Regressions cover both owned/unowned bootstrap, stub timeout, original-error
+  preservation, scoped record cleanup and changed/unavailable creation identity.
+- **P3 accept activity — fixed:** refresh the idle clock on every accept.
+  A successful hello now gets a fresh admission window. **PR 20's manager must
+  keep an admitted connection open** to hold the host alive; hello alone remains
+  a short handshake, not a lifetime lease.
+- **P3 absolute paths — fixed:** solver_script, julia_executable and non-null
+  julia_project/julia_sysimage must be absolute. Empty optional path strings
+  are refused; explicit null remains supported. Each field has a regression.
+- **P3 empty interpreter — fixed:** report a clear sys.executable-is-empty error
+  before Popen, with a no-child/no-record regression.
+- **P3 host logs — fixed:** serving, idle exit, startup/connection/submission and
+  retirement failures go to the private key log. Truncate at each new start;
+  O_APPEND in the existing private-file helper prevents redirected child output
+  and host diagnostics overwriting one another. Lifecycle/log regressions cover
+  truncation, serving, idle exit, refusal and constructor failure.
+- **P3 accept errors — fixed:** log non-timeout OSError and retry; five consecutive
+  errors stop admission with a bounded 20 ms backoff. Successful accepts reset
+  the budget. Regressions cover recovery and permanent accept failure.
+- **P3 unauthenticated capacity — fixed:** eight separate pending slots with a
+  0.5 s total pre-auth deadline; evict the oldest pending peer on overflow so
+  silent peers cannot occupy all 32 authenticated slots. Enforce the authenticated
+  cap at proof admission. Regressions cover a 32-silent-peer flood, hello without
+  client proof expiry, and authenticated-cap refusal.
+- **P3 shutdown replay note — fixed (note only):** replay of a captured shutdown request is
+  DoS-only by a local sniffer with access to local IPC; it grants no solve access
+  or token disclosure. No protocol change is requested in this round.
+- **P3 macOS ps note — fixed (note only):** ps timeout under load yields None for start
+  identity and therefore fails closed. The current registry bound is 0.5 s;
+  consider 2 s during platform qualification. No identity policy change here.
+
+Review-round deviations: official JWSound/BEAT_Engine remains the target. The
+private-file helper gains an optional append flag solely to safely share logs
+with redirected engine output; existing record/spec semantics stay unchanged.
+The pending budget is separate from authenticated capacity, with oldest-peer
+replacement allowing legitimate admission during silent-peer saturation.
+Windows termination applies only to this launch's verified bootstrap interpreter,
+not any process obtained solely from a stale registry record. Native Windows
+kernel/Job Object and real Julia/installed qualification remain later gates.
+No pins, requirements, existing callers, engine checkout or HBB directories change.
+Changes remain uncommitted as explicitly requested.
+
+PR 18 review-round validation: **608 passed in 57.69 s** with the requested
+Python and `scripts/run_tests.py server/tests/beat_runtime
+server/tests/test_solver_beat.py -q -p no:cacheprovider`, including all PR 19
+cases and 30 new regressions (16 host review, 10 spawn review, 4 platform).
+Ruff on runtime sources/tests and `git diff --check` passed. Both exact combined
+commands were attempted: pytest refuses the absent `server/tests/beat_adapter`
+directory (no tests ran); Ruff reports the absent `server/solver/beat_adapter`
+and `server/tests/beat_adapter` directories. No Julia, downloads, full WG suite,
+real user/HBB data directories or donor-checkout writes were used. Native
+Windows kernel/Job Object qualification remains unrun; Windows branches use
+fakes, with the distinct launcher/host process path also exercised on POSIX.
+All changes remain uncommitted as requested.

@@ -25,6 +25,7 @@ class EngineWorker:
                                                 for k, v in kwargs.items()}}) + "\n")
 
     def terminate(self):
+        time.sleep(float(self.environment.get("TEST_TERMINATE_DELAY", "0")))
         if self.environment.get("TEST_TERMINATE_HANG"):
             self.log("termination_hung")
             threading.Event().wait()

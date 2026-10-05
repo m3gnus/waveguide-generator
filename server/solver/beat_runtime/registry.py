@@ -116,7 +116,7 @@ def log_path(identifier: str, directory: Path | None = None) -> Path:
 
 
 @contextmanager
-def _private_file(path: Path, *, create: bool = False) -> Iterator[int]:
+def _private_file(path: Path, *, create: bool = False, append: bool = False) -> Iterator[int]:
     info = path.parent.lstat()
     if not stat.S_ISDIR(info.st_mode):
         raise RecordRefused("Unsafe registry root")
@@ -124,6 +124,8 @@ def _private_file(path: Path, *, create: bool = False) -> Iterator[int]:
     if os.name == "posix" and stat.S_IMODE(info.st_mode) & 0o077:
         raise RecordRefused("Registry directory is not owner-private")
     flags = os.O_RDWR | os.O_CREAT if create else os.O_RDONLY
+    if append:
+        flags |= os.O_APPEND
     try:
         info = path.lstat()
     except FileNotFoundError:

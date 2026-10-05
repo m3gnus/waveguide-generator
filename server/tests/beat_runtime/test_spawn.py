@@ -40,7 +40,9 @@ def test_separate_processes_race_single_host(launch, tmp_path):
     gate = tmp_path / "go"
     code = (
         "import json,sys,time; from pathlib import Path; "
-        "from server.solver.beat_runtime.spawn import start_host; "
+        "from server.solver.beat_runtime import spawn; "
+        "spawn.HOST_MODULE='server.tests.beat_runtime.fake_host_main'; "
+        "start_host=spawn.start_host; "
         "key=json.loads(Path(sys.argv[1]).read_text()); "
         "gate=Path(sys.argv[3]);\n"
         "while not gate.exists(): time.sleep(.01)\n"
@@ -102,7 +104,7 @@ def test_live_unreachable_record_retained(launch, monkeypatch):
         record = r.HostRecord(key, os.getpid(), r.new_token(), endpoint)
         r.write_record(record, directory)
         with pytest.raises(r.RecordRefused, match="Unverified live"):
-            spawn.start_host(key, directory)
+            spawn.start_host(key, directory, timeout=0.25)
         assert not children
         assert r.read_record(record.identifier, directory) == record
         r.unlink_record(r.record_path(record.identifier, directory))
