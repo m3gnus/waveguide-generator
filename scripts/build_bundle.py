@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 import gzip
 import hashlib
 import importlib.util
@@ -36,10 +37,25 @@ if str(_IMPORT_ROOT) in sys.path:
     sys.path.remove(str(_IMPORT_ROOT))
 sys.path.insert(0, str(_IMPORT_ROOT))
 
+
+@contextmanager
+def _checkout_source_root(root: Path) -> Iterator[None]:
+    """Bind runtime-aware helpers to the build's checkout, then restore the caller."""
+
+    caller_app_root = os.environ.get("WG2_APP_ROOT")
+    os.environ["WG2_APP_ROOT"] = str(root.resolve())
+    try:
+        yield
+    finally:
+        if caller_app_root is None:
+            os.environ.pop("WG2_APP_ROOT", None)
+        else:
+            os.environ["WG2_APP_ROOT"] = caller_app_root
+
+
 # fetch_spa has its own runtime-aware import bootstrap. Keep that import in
 # this checkout too, without changing the caller's environment afterwards.
-_CALLER_APP_ROOT = os.environ.pop("WG2_APP_ROOT", None)
-try:
+with _checkout_source_root(_IMPORT_ROOT):
     from scripts import fetch_spa  # noqa: E402
     from launchers.macos import generate_icon  # noqa: E402
     from server.platform.instance import PORT_ENV  # noqa: E402
@@ -47,9 +63,6 @@ try:
     from shared.runtime_id import compute_runtime_id  # noqa: E402
     from shared import release_assets  # noqa: E402
     from shared.safe_names import UnsafeName, collision_key, validate_relative_name  # noqa: E402
-finally:
-    if _CALLER_APP_ROOT is not None:
-        os.environ["WG2_APP_ROOT"] = _CALLER_APP_ROOT
 
 
 REPO_ROOT = _IMPORT_ROOT
@@ -727,31 +740,34 @@ def install_wglink_package(
     like every other shipped file.
     """
 
-    installer = _load_script(repo_root / "scripts" / "install_wglink.py", "wg_install_wglink")
-    builder = _load_script(
-        repo_root / "scripts" / "build_wglink_package.py", "wg_build_wglink_package"
-    )
-    spec = builder.source_spec(repo_root / "integrations" / "wglink" / "source.json")
-    version = builder.declared_version(repo_root / "shared" / "version.json")
-    destination = app_root / "integrations" / "wglink" / "packages"
-    # state_root can otherwise fall back to shared user data when an ambient
-    # WG2_BUNDLE marks this build as installed, or the checkout is unwritable.
-    # Package construction owns a private cache alongside the staged app.
-    with tempfile.TemporaryDirectory(prefix="wglink-package-", dir=app_root.parent) as state:
-        package = installer.ensure_package(repo_root, state=Path(state))
-        expected = installer.shipped_package(repo_root, version, str(spec["commit"])).name
-        if package.name != expected:
-            raise BundleError(
-                f"WGLink package {package.name} does not match the pin {expected}"
-            )
-        destination = destination / package.name
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(package, destination)
-    # tree_digest takes the executable bit from Git, and this file is not in
-    # Git; a mode with any x bit would fail the layer's own mode assertion.
-    destination.chmod(0o644)
-    print(f"Shipped the pinned WGLink package: {destination.name}")
-    return destination
+    # ensure_package dynamically imports the builder again; keep the checkout
+    # selected through that nested load as well as the direct helper imports.
+    with _checkout_source_root(repo_root):
+        installer = _load_script(repo_root / "scripts" / "install_wglink.py", "wg_install_wglink")
+        builder = _load_script(
+            repo_root / "scripts" / "build_wglink_package.py", "wg_build_wglink_package"
+        )
+        spec = builder.source_spec(repo_root / "integrations" / "wglink" / "source.json")
+        version = builder.declared_version(repo_root / "shared" / "version.json")
+        destination = app_root / "integrations" / "wglink" / "packages"
+        # state_root can otherwise fall back to shared user data when an ambient
+        # WG2_BUNDLE marks this build as installed, or the checkout is unwritable.
+        # Package construction owns a private cache alongside the staged app.
+        with tempfile.TemporaryDirectory(prefix="wglink-package-", dir=app_root.parent) as state:
+            package = installer.ensure_package(repo_root, state=Path(state))
+            expected = installer.shipped_package(repo_root, version, str(spec["commit"])).name
+            if package.name != expected:
+                raise BundleError(
+                    f"WGLink package {package.name} does not match the pin {expected}"
+                )
+            destination = destination / package.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(package, destination)
+        # tree_digest takes the executable bit from Git, and this file is not in
+        # Git; a mode with any x bit would fail the layer's own mode assertion.
+        destination.chmod(0o644)
+        print(f"Shipped the pinned WGLink package: {destination.name}")
+        return destination
 
 
 def _load_script(path: Path, name: str):

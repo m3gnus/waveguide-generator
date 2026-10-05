@@ -3627,6 +3627,87 @@ def test_builder_imports_cannot_pick_up_an_existing_install(tmp_path: Path) -> N
     assert Path(result.stdout.strip()) == Path(build_bundle.__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("foreign_helper", [False, True])
+def test_wglink_helpers_use_checkout_despite_inherited_app_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign_helper: bool
+) -> None:
+    checkout = tmp_path / "checkout"
+    (checkout / "scripts").mkdir(parents=True)
+    for name in ("install_wglink.py", "build_wglink_package.py"):
+        shutil.copy2(build_bundle.REPO_ROOT / "scripts" / name, checkout / "scripts" / name)
+    for name in ("integrations/wglink/source.json", "shared/version.json"):
+        destination = checkout / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(build_bundle.REPO_ROOT / name, destination)
+
+    spec = json.loads((checkout / "integrations/wglink/source.json").read_text())
+    version = json.loads((checkout / "shared/version.json").read_text())["version"]
+    package = checkout / "integrations/wglink/packages" / f"wglink-{version}-{spec['commit']}.zip"
+    package.parent.mkdir()
+    payload = b"checkout WGLink payload"
+    provenance = {
+        "schema": 1,
+        "sourceRepository": spec["repository"],
+        "sourceCommit": spec["commit"],
+        "sourceLicense": spec["license"],
+        "addinVersion": spec["addinVersion"],
+        "waveguideGeneratorVersion": version,
+        "files": {"wglink/LICENSE": hashlib.sha256(payload).hexdigest()},
+    }
+    with zipfile.ZipFile(package, "w") as archive:
+        archive.writestr("wglink/LICENSE", payload)
+        archive.writestr("wglink/provenance.json", json.dumps(provenance))
+
+    installed = tmp_path / "older-install" / "app"
+    (installed / "scripts").mkdir(parents=True)
+    if foreign_helper:
+        (installed / "scripts/build_wglink_package.py").write_text(
+            "raise RuntimeError('foreign WGLink helper executed')\n", encoding="utf-8"
+        )
+    monkeypatch.setenv("WG2_APP_ROOT", str(installed))
+    app = tmp_path / "build" / "app"
+    app.mkdir(parents=True)
+    load_script = build_bundle._load_script
+    helpers = []
+
+    def checked_load(path, name):
+        helper = load_script(path, name)
+        assert helper.REPO_ROOT == checkout
+        helpers.append(name)
+        if name == "wg_install_wglink":
+            assert helper.BUILDER_PATH == checkout / "scripts/build_wglink_package.py"
+            load_builder = helper._load_builder
+
+            def checked_builder():
+                nested = load_builder()
+                assert nested.REPO_ROOT == checkout
+                assert nested.source_spec() == spec
+                assert nested.declared_version() == version
+                helpers.append("nested WGLink builder")
+                return nested
+
+            monkeypatch.setattr(helper, "_load_builder", checked_builder)
+        return helper
+
+    monkeypatch.setattr(build_bundle, "_load_script", checked_load)
+    shipped = build_bundle.install_wglink_package(app, repo_root=checkout)
+
+    assert shipped.read_bytes() == package.read_bytes()
+    assert helpers == ["wg_install_wglink", "wg_build_wglink_package", "nested WGLink builder", "nested WGLink builder"]
+    assert os.environ["WG2_APP_ROOT"] == str(installed)
+    assert not list(app.parent.glob("wglink-package-*"))
+
+
+def test_wglink_helper_load_failure_restores_caller_app_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed = str(tmp_path / "older-install")
+    monkeypatch.setenv("WG2_APP_ROOT", installed)
+    with pytest.raises(FileNotFoundError):
+        build_bundle.install_wglink_package(tmp_path / "app", repo_root=tmp_path / "checkout")
+    assert os.environ["WG2_APP_ROOT"] == installed
+
+
 def test_verification_subprocess_uses_relocated_bundle_despite_existing_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
