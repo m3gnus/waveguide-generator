@@ -19,6 +19,20 @@ Set it at import, not in a fixture, because module-level code in a test file run
 during collection, before any fixture. A leak there must not slip under a
 fixture-scoped guard.
 
+Runtime state: the same rule covers the BEAT, Julia and OpenCL runtime of the
+machine running the tests. The ``_no_prepared_runtime`` fixture below points
+``HORNLAB_BEAT_RUNTIME_DIR`` (where ``state-<backend>.json`` lives),
+``HORNLAB_BEAT_JULIA``, ``HORNLAB_BEAT_WORKER_DIR`` and ``JULIA_DEPOT_PATH`` at
+per-test empty locations and clears the force-CPU switch and the ROCm/HIP
+variables, so every ordinary test starts from "no prepared runtime" whether it
+runs on a Mac with a provisioned BEAT or on a bare hosted runner. A test that
+needs a runtime states one explicitly (a fake, or a state file it writes into
+the redirected directory). A test whose purpose is to qualify the runtime really
+installed on this machine opts out with ``@pytest.mark.real_runtime`` (or a
+module-level ``pytestmark``); such a test keeps the ambient environment and must
+skip itself when no runtime is present. Mutating tests that need a *real*
+sandbox rather than none are not opted out: they set their own directory.
+
 This file sits at the repository root so it covers ``server/tests`` and
 ``scripts/tests`` whether pytest invokes them together or as separate CI jobs.
 """
@@ -214,6 +228,64 @@ def _no_test_touches_the_installed_addin(request: pytest.FixtureRequest) -> Iter
             f"{FUSION_ADDINS_DIR_ENV}, which the suite points at a sandbox.",
             pytrace=False,
         )
+
+
+#: Variables through which a BEAT/Julia/OpenCL runtime prepared on the host is
+#: found. Name -> value for the test (``{dir}`` is a per-test empty folder), or
+#: ``None`` to remove it. HORNLAB_BEAT_JULIA names a file that does not exist:
+#: the package treats a configured-but-missing path as "no Julia" and does not
+#: fall through to PATH or the provisioned runtime.
+_RUNTIME_ISOLATION: dict[str, str | None] = {
+    "HORNLAB_BEAT_RUNTIME_DIR": "{dir}/beat-runtime",
+    "HORNLAB_BEAT_JULIA": "{dir}/no-julia",
+    "HORNLAB_BEAT_WORKER_DIR": "{dir}/beat-workers",
+    "HORNLAB_BEAT_PERSISTENT_HOST": "0",
+    "JULIA_DEPOT_PATH": "{dir}/julia-depot",
+    "JULIA_PROJECT": None,
+    "JULIA_LOAD_PATH": None,
+    "HORNLAB_BEAT_FORCE_CPU": None,
+    "HORNLAB_BEAT_PROBE_ENGINE_DIR": None,
+    "BLAB_ROCM_PATH": None,
+    "ROCM_PATH": None,
+    "HIP_PATH": None,
+    "ROCM_HOME": None,
+    "XDG_DATA_HOME": "{dir}/xdg-data",
+    "XDG_RUNTIME_DIR": None,
+}
+_runtime_isolation_counter = 0
+
+
+@pytest.fixture(autouse=True)
+def _no_prepared_runtime(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Start every ordinary test with no prepared BEAT, Julia or OpenCL runtime.
+
+    A test that passes only because this machine has a provisioned runtime fails
+    on every hosted runner (the BEAT OpenCL endpoint tests did, 2026-10-04).
+    ``@pytest.mark.real_runtime`` opts out. No ``monkeypatch``: see
+    ``_no_test_leaks_application_environment`` for why a suite-wide fixture
+    avoids it.
+    """
+
+    if request.node.get_closest_marker("real_runtime") is not None:
+        yield
+        return
+    global _runtime_isolation_counter
+    _runtime_isolation_counter += 1
+    base = SANDBOX_DATA_DIR / "runtime-isolation" / f"{os.getpid()}-{_runtime_isolation_counter}"
+    saved = {name: os.environ.get(name) for name in _RUNTIME_ISOLATION}
+    for name, template in _RUNTIME_ISOLATION.items():
+        if template is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = template.format(dir=base)
+    try:
+        yield
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 @pytest.fixture(scope="session", autouse=True)

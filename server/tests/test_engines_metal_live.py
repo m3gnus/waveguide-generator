@@ -22,6 +22,7 @@ if _pytest_config is not None:
 
 
 @pytest.mark.live
+@pytest.mark.real_runtime
 @pytest.mark.skipif(
     os.environ.get("WG2_RUN_LIVE") != "1",
     reason="set WG2_RUN_LIVE=1 and select -m live for native Metal qualification",

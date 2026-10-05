@@ -999,6 +999,8 @@ def test_the_real_package_record_proves_an_identical_copy_elsewhere(
     runtime_dir.mkdir()
     monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(runtime_dir))
     julia = _julia(tmp_path)
+    # The Julia is the fake's, not whatever this host has provisioned or on PATH.
+    monkeypatch.setenv("HORNLAB_BEAT_JULIA", str(julia))
     here = runtime.default_project("cpu")
     copy = tmp_path / "installed-app" / "hornlab_beat_bem"
     shutil.copytree(
