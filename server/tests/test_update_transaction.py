@@ -21,6 +21,7 @@ reached by killing a process.
 from __future__ import annotations
 
 import builtins
+from contextlib import closing
 import errno
 import json
 import os
@@ -2736,6 +2737,7 @@ def test_jobs_restore_checks_both_naive_time_interpretations_in_non_utc_process(
     subprocess.run(
         [sys.executable, "-c", textwrap.dedent("""
             import sqlite3, sys, time
+            from contextlib import closing
             from datetime import datetime, timezone
             from pathlib import Path
             from launchers.apply_update import read_journal, restore_jobs_upgrade_snapshot
@@ -2750,8 +2752,9 @@ def test_jobs_restore_checks_both_naive_time_interpretations_in_non_utc_process(
             else:
                 snapshot_time = read_journal(data, resources)["jobsUpgradeSnapshot"]["identity"]["mtimeNs"] / 1e9
                 newer = datetime.fromtimestamp(snapshot_time + 3600, timezone.utc).replace(tzinfo=None).isoformat()
-                with sqlite3.connect(db) as conn:
+                with closing(sqlite3.connect(db)) as conn:
                     conn.execute("UPDATE simulation_jobs SET updated_at=? WHERE id='a'", (newer,))
+                    conn.commit()
             logs = []
             restore_jobs_upgrade_snapshot(data, resources, log=logs.append)
             assert "jobsRestore" not in read_journal(data, resources)
@@ -2767,8 +2770,9 @@ def test_jobs_restore_checks_both_naive_time_interpretations_in_non_utc_process(
 def test_jobs_restore_refuses_a_row_changed_to_any_value(tmp_path, monkeypatch, column, value):
     import sqlite3
     resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn:
         conn.execute(f"UPDATE simulation_jobs SET {column}=? WHERE id='a'", (value,))
+        conn.commit()
     logs = []
     apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
     assert "jobsRestore" not in read_journal(data_dir, resources)
@@ -2790,14 +2794,17 @@ def test_jobs_restore_is_not_vetoed_by_recent_naive_local_times_in_any_time_zone
     stamp = local.replace(tzinfo=None).isoformat()
 
     def touched_before_update(db):
-        with sqlite3.connect(db) as conn:
+        # Closed, not just committed: an open handle blocks the restore's
+        # final replace on Windows.
+        with closing(sqlite3.connect(db)) as conn:
             conn.execute("UPDATE simulation_jobs SET created_at=?, updated_at=? WHERE id='a'", (stamp, stamp))
+            conn.commit()
 
     resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch, touched_before_update)
     logs = []
     apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
     assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored", logs
-    with sqlite3.connect(db) as conn:
+    with closing(sqlite3.connect(db)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
         assert conn.execute("SELECT updated_at FROM simulation_jobs WHERE id='a'").fetchone()[0] == stamp
 
@@ -2915,7 +2922,7 @@ def test_jobs_restore_handles_directory_flush_errors(tmp_path, monkeypatch, erro
             apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
         assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "failed"
         assert not any("Restored this update" in line for line in logs)
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
         # Failed replay cannot declare success, even after flushing recovers.
         monkeypatch.setattr(apply_update_module.os, "fsync", real_fsync)
@@ -2925,6 +2932,6 @@ def test_jobs_restore_handles_directory_flush_errors(tmp_path, monkeypatch, erro
     else:
         apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
         assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored"
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn:
             assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
     assert failures
