@@ -1,0 +1,12 @@
+{
+  "modules": {
+    "hornlab-sim": {
+      "repo": "https://github.com/m3gnus/hornlab-sim.git",
+      "sha": "abcdef0123456789abcdef0123456789abcdef01"
+    },
+    "beat-engine": {
+      "repo": "https://github.com/m3gnus/BEAT_Engine.git",
+      "sha": "0123456789abcdef0123456789abcdef01234567"
+    }
+  }
+}

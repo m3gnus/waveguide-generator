@@ -26,6 +26,9 @@ REPO_ROOT = app_root()
 DEFAULT_PINS = REPO_ROOT / "pins.json"
 DEFAULT_OUTPUT = REPO_ROOT / "server" / "requirements-pins.txt"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+# Distribution names remain the manifest keys and #egg identities. Only these
+# explicit exceptions may use a different repository name under m3gnus.
+REPOSITORY_NAMES = {"beat-engine": "BEAT_Engine"}
 
 
 def render_requirements(pins_path: Path = DEFAULT_PINS) -> str:
@@ -43,7 +46,8 @@ def render_requirements(pins_path: Path = DEFAULT_PINS) -> str:
             raise ValueError(f"Invalid module entry {module!r} in {pins_path}")
         repo = pin.get("repo")
         sha = pin.get("sha")
-        expected_repo = f"https://github.com/m3gnus/{module}.git"
+        repository_name = REPOSITORY_NAMES.get(module, module)
+        expected_repo = f"https://github.com/m3gnus/{repository_name}.git"
         if repo != expected_repo:
             raise ValueError(
                 f"Pin {module!r} has repo {repo!r}; expected {expected_repo!r}"
