@@ -4,6 +4,8 @@ The real two-level tree is exercised in ``test_bempp_opencl_lifecycle.py``.
 """
 from __future__ import annotations
 
+import sys
+import time
 from types import SimpleNamespace as NS
 
 import pytest
@@ -90,3 +92,36 @@ def test_a_child_that_cannot_be_resumed_is_replaced_without_a_job(windows, caplo
     assert events[-1] == ("popen", 0x10)
     assert child.pid != first
     assert "without a Windows job object" in caplog.text
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="CancelSynchronousIo is Windows-only")
+def test_a_read_blocked_on_a_held_pipe_is_cancelled():
+    import os
+    import threading
+
+    read_end, write_end = os.pipe()  # this process keeps the writer: no EOF
+    stream = os.fdopen(read_end, "rb", buffering=0)
+    outcome = []
+    def reader():
+        try:
+            outcome.append(stream.read(1))
+        except OSError as exc:
+            outcome.append(exc)
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    try:
+        thread.join(0.2)
+        assert thread.is_alive()
+        started = time.monotonic()
+        assert process_tree.cancel_blocked_reads([thread]) == []
+        assert time.monotonic() - started < 1
+        assert isinstance(outcome[0], OSError)
+    finally:
+        stream.close()
+        os.close(write_end)
+
+
+def test_elsewhere_blocked_readers_are_left_alone(monkeypatch):
+    monkeypatch.setattr(process_tree, "os", NS(name="posix"))
+    alive, gone = NS(is_alive=lambda: True), NS(is_alive=lambda: False)
+    assert process_tree.cancel_blocked_reads([alive, gone]) == [alive]

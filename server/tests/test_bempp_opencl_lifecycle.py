@@ -940,19 +940,30 @@ def _grandchild(pid_file):
 def test_without_the_job_the_grandchild_survives_the_kill(monkeypatch, tmp_path, caplog):
     """The instrument check for the test below: a bare kill of the stub must
     leave the grandchild running here, or a pass there would prove nothing.
-    It also exercises the stuck-reader path with a real orphaned pipe."""
+    It also exercises the no-job fallback with a real orphaned pipe: the
+    blocked reads are cancelled, so the readers end and the pipes close."""
     from server.platform import process_tree
     monkeypatch.setattr(process_tree, 'popen_in_windows_job',
                         lambda command, *, subject, **kwargs: (subprocess.Popen(command, **kwargs), None))
+    readers = []
+    for name in ('_read_probe_output', '_read_probe_stderr'):
+        def observed(*args, _real=getattr(probe, name)):
+            readers.append(threading.current_thread())
+            return _real(*args)
+        monkeypatch.setattr(probe, name, observed)
     pid_file, children = _stub_chain(monkeypatch, tmp_path)
     grandchild = None
     try:
+        started = time.monotonic()
         verdict = probe._run_probe('smoke', None, 1.0)
         grandchild = _grandchild(pid_file)
         assert verdict['opencl_unavailable_reason'] == 'smoke_test_timeout', verdict
+        assert time.monotonic() - started < 10
         assert children[0].poll() is not None
         assert _windows_alive(grandchild), 'the harness killed the grandchild itself'
-        assert "output did not close" in caplog.text
+        assert "reads were cancelled" in caplog.text
+        assert len(readers) == 2 and not any(reader.is_alive() for reader in readers)
+        assert children[0].stdout.closed and children[0].stderr.closed
     finally:
         if grandchild is None and pid_file.exists():
             grandchild = _grandchild(pid_file)
