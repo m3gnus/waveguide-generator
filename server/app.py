@@ -51,7 +51,7 @@ from server.platform.acl_migration import (
 from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
-from server.settings import mount_settings
+from server.settings import SettingsStore, mount_settings
 from server.solver.symmetry import resolve_symmetry
 from server.workspace import mount_workspace
 from server.workspace.api import MAX_EXPORT_REQUEST_BODY_BYTES
@@ -865,11 +865,16 @@ def create_app(
     # start installation-owned work refuse while it is set.
     restart_approval = RestartApproval()
     application.state.update_restart = restart_approval
+    # Created here, served by ``mount_settings`` below (where its routes have
+    # always been registered): the jobs runtime reads the automatic result
+    # cleanup preference from this same instance, at startup and after jobs.
+    settings_store = SettingsStore(Path(application.state.data_dir))
     mount_jobs(
         application,
         engine_registry,
         extra_ws_origins=extra_ws_origins,
         restart_approval=restart_approval,
+        settings=settings_store,
     )
     mount_integration(application)
     isolated_data_dir = data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
@@ -936,7 +941,7 @@ def create_app(
     if onshape_enabled():
         mount_onshape(application)
     mount_charts(application)
-    settings_store = mount_settings(application)
+    mount_settings(application, settings_store)
     mount_drivers(application)
     mount_updates(
         application,

@@ -420,8 +420,9 @@ also keep each retained drive channel's complex pressure basis. WG copies the re
 mesh, pressure bases, and radiation matrix from one database snapshot before it starts
 building files, so result retention cannot leave a mixed or half-pruned archive.
 **Archive every completed run** is on by default. Results in the app's job database
-are kept for 30 days, or until the run limit is passed, and rating a run exempts it;
-the Workspace archive is kept until you delete it. Archiving is frontend automation,
+are kept until you remove them. If you turn on **Clean up old results automatically**
+(off by default), results are kept for 30 days, or until the run limit of 1,000 is
+passed, and rating a run exempts it. The Workspace archive is kept until you delete it. Archiving is frontend automation,
 so a run solved through the CLI is not automatically added to this design-grouped
 Workspace history.
 

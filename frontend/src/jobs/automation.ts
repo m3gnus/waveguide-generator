@@ -82,8 +82,8 @@ export class JobAutomation {
     });
     // Archiving is deliberately independent of auto-export: it writes the run
     // record and results whatever export formats are selected, because its job
-    // is to outlive the 30-day result retention rather than to produce the
-    // files a person picked.
+    // is to outlive the job database -- its optional 30-day cleanup, or a run
+    // being removed -- rather than to produce the files a person picked.
     if (preferences.archiveRunsOnComplete) jobs.filter(needsArchiving).forEach((job) => {
       if (this.archiveStarted.has(job.id)) return;
       this.archiveStarted.add(job.id);

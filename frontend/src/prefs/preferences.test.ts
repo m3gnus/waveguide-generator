@@ -48,6 +48,27 @@ describe('client preferences', () => {
     expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).showContourNames).toBe(true);
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { showContourNames: 'true' } })).showContourNames).toBe(false);
   });
+  it('keeps automatic result cleanup off unless explicitly turned on, without a storage bump', () => {
+    // A user lost reference runs to the cleanup that used to run regardless.
+    expect(loadPreferences(null).autoCleanupResults).toBe(false);
+    // A profile written before the setting existed reads as off, at the current
+    // version and at an older one carried through the migrations alike...
+    const current = readPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { archiveRunsOnComplete: false } }));
+    expect(current.value.autoCleanupResults).toBe(false);
+    expect(current.migrated).toBe(false);
+    expect(readPreferences(JSON.stringify({ version: 13, preferences: {} })).value.autoCleanupResults).toBe(false);
+    // ...and nothing but an explicit true turns it on: the server reads the
+    // same field with the same rule.
+    for (const value of ['true', 1, null, {}]) {
+      expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: { autoCleanupResults: value } })).autoCleanupResults).toBe(false);
+    }
+    preferencesStore.update({ autoCleanupResults: true });
+    const stored = JSON.parse(localStorage.getItem('waveguide-v2-g3-preferences') ?? '{}') as { version: number; preferences: Record<string, unknown> };
+    // The persisted shape the server parses: `{version, preferences: {autoCleanupResults}}`.
+    expect(stored.version).toBe(STORAGE_VERSION);
+    expect(stored.preferences.autoCleanupResults).toBe(true);
+    expect(loadPreferences(localStorage.getItem('waveguide-v2-g3-preferences')).autoCleanupResults).toBe(true);
+  });
   it('reads group delay in milliseconds until cycles is asked for', () => {
     expect(loadPreferences(null).groupDelayUnit).toBe('ms');
     expect(loadPreferences(JSON.stringify({ version: STORAGE_VERSION, preferences: {} })).groupDelayUnit).toBe('ms');

@@ -52,6 +52,9 @@ export const PREFERENCE_EFFECTS: Record<keyof Preferences, PreferenceEffect> = {
   autoExportFormats: 'inert',
   autoExportOnComplete: 'inert',
   archiveRunsOnComplete: 'inert',
+  // Read by the server when it prunes, at startup and after each job; the
+  // interface only redraws its own explanatory copy.
+  autoCleanupResults: 'inert',
   autoDownloadMesh: 'inert',
   // The run-naming settings all decide the label a queued job is submitted
   // under, so a change to any of them changes the next submission. The name

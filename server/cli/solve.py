@@ -32,7 +32,9 @@ from server.jobs.runtime import (
     UnknownEngineError,
 )
 from server.cadlink.store import CadLinkStore
+from server.jobs.retention import settings_auto_cleanup_policy
 from server.jobs.store import JobStore, SubmissionConflictError
+from server.settings.store import SettingsStore
 from server.platform.paths import ensure_data_layout
 from server.platform.signal_rearm import (
     register_signal_rearm,
@@ -436,6 +438,10 @@ async def solve_path(
             JobStore.for_data_dir(data_dir),
             engine_registry=engine_registry,
             cadlink_store=cadlink_store,
+            # The GUI's automatic result cleanup preference, from the same data
+            # directory: a CLI solve against a shared job database must not
+            # prune results the user chose to keep.
+            results_auto_cleanup=settings_auto_cleanup_policy(SettingsStore(data_dir)),
         )
         await runtime.start()
     except JobConflictError as exc:

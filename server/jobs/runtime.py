@@ -24,7 +24,7 @@ import math
 import os
 from pathlib import Path
 import time
-from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Mapping, Sequence
 import uuid
 
 from server.cadlink.ingest import get_ingestion_record
@@ -71,6 +71,7 @@ from server.jobs.cad_intent import (
     solve_again_intent,
 )
 from server.jobs.design_availability import resolve_job_design
+from server.jobs.retention import MAX_RETAINED_RESULTS, RESULT_RETENTION_DAYS
 from server.jobs.models import (
     PORT_APERTURE_NAME_GROUPS,
     CadIdentityProvenance,
@@ -2428,8 +2429,15 @@ class JobRuntime:
         persistence_interval_seconds: float = RUNTIME_PERSIST_INTERVAL_SECONDS,
         metal_permit: MetalPermit | None = None,
         restart_approval: RestartApproval | None = None,
+        results_auto_cleanup: Callable[[], bool] | None = None,
     ) -> None:
         self.store = store
+        #: Whether stored results are pruned by age and count (the user's
+        #: "clean up old results" preference, ``server/jobs/retention.py``).
+        #: Asked at startup and after every job, so a change applies without
+        #: a restart. Without one -- an embedded caller with no settings --
+        #: results are kept, which is the preference's default.
+        self._results_auto_cleanup = results_auto_cleanup
         #: The server's restart-approved latch (contract §4.2, §4.3). While it
         #: is set no queued job starts, and a shutdown ends running jobs as
         #: ended by the update restart rather than by Quit.
@@ -2494,6 +2502,18 @@ class JobRuntime:
     @property
     def running_job_ids(self) -> frozenset[str]:
         return frozenset(self._running)
+
+    def _results_cleanup_enabled(self) -> bool:
+        """Whether this prune may remove results; anything but a clear yes keeps them."""
+
+        policy = self._results_auto_cleanup
+        if policy is None:
+            return False
+        try:
+            return policy() is True
+        except Exception:
+            logger.exception("Could not read the automatic result cleanup preference")
+            return False
 
     def _restart_pending(self) -> bool:
         """Whether an update restart is approved, so no queued job may start."""
@@ -2585,10 +2605,14 @@ class JobRuntime:
                 unheld_preparations = await asyncio.to_thread(
                     self.store.unheld_preparing_job_ids
                 )
+                # Read on the loop, where the settings routes write it. Before
+                # any client has connected, so this is the persisted value.
+                prune_results = self._results_cleanup_enabled()
                 await asyncio.to_thread(
                     self.store.prune_terminal_jobs,
-                    retention_days=30,
-                    max_terminal_jobs=1000,
+                    retention_days=RESULT_RETENTION_DAYS,
+                    max_terminal_jobs=MAX_RETAINED_RESULTS,
+                    prune_results=prune_results,
                 )
                 # Last startup write: the update's automatic jobs restore
                 # compares later work against what startup itself left.
@@ -4251,10 +4275,12 @@ class JobRuntime:
                     finally:
                         self._running.discard(job_id)
                         try:
+                            prune_results = self._results_cleanup_enabled()
                             _removed_ids, prune_events = await asyncio.to_thread(
                                 self.store.prune_terminal_jobs_with_events,
-                                retention_days=30,
-                                max_terminal_jobs=1000,
+                                retention_days=RESULT_RETENTION_DAYS,
+                                max_terminal_jobs=MAX_RETAINED_RESULTS,
+                                prune_results=prune_results,
                             )
                             for event in prune_events:
                                 self.events.publish(event)

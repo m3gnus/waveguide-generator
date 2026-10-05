@@ -4,10 +4,12 @@ import { archiveFolderForJob, exportStemForJob, runSourceForJob } from './export
 /**
  * The permanent record of a solve.
  *
- * The job database prunes result payloads after 30 days, or sooner when the
- * terminal-run cap is passed, and only a rated run is exempt. Nothing else on
- * disk said a run had ever happened, so a CAD solve that was not manually
- * exported simply disappeared. These two files are what survives that: a run
+ * With automatic cleanup on (`autoCleanupResults`, off by default), the job
+ * database prunes result payloads after 30 days, or sooner when the
+ * terminal-run cap is passed, and only a rated run is exempt; and a user can
+ * remove a run at any time. Nothing else on disk said a run had ever
+ * happened, so a CAD solve that was not manually exported could simply
+ * disappear. These two files are what survives that: a run
  * record beside the exported curves, and one pointer file naming the design
  * the folder belongs to.
  *

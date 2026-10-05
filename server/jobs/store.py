@@ -2852,17 +2852,26 @@ class JobStore:
         max_terminal_jobs: int = 1000,
         *,
         mesh_grace_minutes: int = MESH_ARTIFACT_GRACE_MINUTES,
+        prune_results: bool = True,
     ) -> int:
         """Prune result payloads by age/count while retaining every job record.
 
         This deliberately breaks v1 parity: records are the durable run index,
         while only the heavier result tier remains subject to retention.
+
+        ``prune_results=False`` keeps every result payload, whatever its age or
+        count -- automatic result cleanup is a user preference, off by default
+        (``server/jobs/retention.py``). Transient artifacts are still cleaned
+        up: solve meshes past their grace period, and the pressure bases,
+        traces and radiation data of failed runs or of runs whose results are
+        already gone.
         """
 
         removed_ids, _affected_ids, _events = self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
             mesh_grace_minutes=mesh_grace_minutes,
+            prune_results=prune_results,
             emit_events=False,
         )
         return len(removed_ids)
@@ -2873,18 +2882,21 @@ class JobStore:
         max_terminal_jobs: int = 1000,
         *,
         mesh_grace_minutes: int = MESH_ARTIFACT_GRACE_MINUTES,
+        prune_results: bool = True,
     ) -> tuple[list[str], list[dict[str, Any]]]:
         """Prune results and retain matching WS availability events atomically.
 
         Startup uses :meth:`prune_terminal_jobs` before clients can subscribe.
         Runtime pruning, however, must publish every affected id so an already
-        connected client can converge from events alone.
+        connected client can converge from events alone. ``prune_results`` is
+        as for :meth:`prune_terminal_jobs`.
         """
 
         _removed_ids, affected_ids, events = self._prune_terminal_jobs(
             retention_days=retention_days,
             max_terminal_jobs=max_terminal_jobs,
             mesh_grace_minutes=mesh_grace_minutes,
+            prune_results=prune_results,
             emit_events=True,
         )
         return affected_ids, events
@@ -2895,6 +2907,7 @@ class JobStore:
         retention_days: int,
         max_terminal_jobs: int,
         mesh_grace_minutes: int,
+        prune_results: bool,
         emit_events: bool,
     ) -> tuple[list[str], list[str], list[dict[str, Any]]]:
         """Shared retention transaction for silent startup and live pruning."""
@@ -2907,44 +2920,48 @@ class JobStore:
         events: list[dict[str, Any]] = []
         removed_trace_rows: list[sqlite3.Row] = []
         with self._lock, self._transaction() as conn:
-            aged = conn.execute(
-                """SELECT id FROM simulation_jobs
-                   WHERE status IN ('complete', 'error', 'cancelled')
-                     AND has_results = 1
-                     AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
-                     AND COALESCE(
-                       json_extract(task_metadata_json, '$.imported_at'),
-                       completed_at, created_at
-                     ) < ?""",
-                (cutoff,),
-            ).fetchall()
-            removed_ids.extend(str(row["id"]) for row in aged)
-            # Ask SQLite for the overflow rather than materialising every
-            # retained result and slicing in Python. Rated payloads do not
-            # count toward the cap because they are exempt from retention.
-            overflow = [
-                row["id"]
-                for row in conn.execute(
-                    """
-                    SELECT id FROM simulation_jobs
-                    WHERE status IN ('complete', 'error', 'cancelled')
-                      AND has_results = 1
-                      AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
-                      AND COALESCE(
-                        json_extract(task_metadata_json, '$.imported_at'),
-                        completed_at, created_at
-                      ) >= ?
-                    ORDER BY COALESCE(
-                      json_extract(task_metadata_json, '$.imported_at'),
-                      completed_at, created_at
-                    ) DESC
-                    LIMIT -1 OFFSET ?
-                    """,
-                    (cutoff, int(max_terminal_jobs)),
+            # With automatic cleanup off no result is selected by age or count,
+            # so ``removed_ids`` stays empty and nothing below touches a run
+            # that still has its results.
+            if prune_results:
+                aged = conn.execute(
+                    """SELECT id FROM simulation_jobs
+                       WHERE status IN ('complete', 'error', 'cancelled')
+                         AND has_results = 1
+                         AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
+                         AND COALESCE(
+                           json_extract(task_metadata_json, '$.imported_at'),
+                           completed_at, created_at
+                         ) < ?""",
+                    (cutoff,),
                 ).fetchall()
-            ]
-            removed_ids.extend(str(value) for value in overflow)
-            removed_ids = list(dict.fromkeys(removed_ids))
+                removed_ids.extend(str(row["id"]) for row in aged)
+                # Ask SQLite for the overflow rather than materialising every
+                # retained result and slicing in Python. Rated payloads do not
+                # count toward the cap because they are exempt from retention.
+                overflow = [
+                    row["id"]
+                    for row in conn.execute(
+                        """
+                        SELECT id FROM simulation_jobs
+                        WHERE status IN ('complete', 'error', 'cancelled')
+                          AND has_results = 1
+                          AND COALESCE(CAST(json_extract(task_metadata_json, '$.rating') AS INTEGER), 0) <= 0
+                          AND COALESCE(
+                            json_extract(task_metadata_json, '$.imported_at'),
+                            completed_at, created_at
+                          ) >= ?
+                        ORDER BY COALESCE(
+                          json_extract(task_metadata_json, '$.imported_at'),
+                          completed_at, created_at
+                        ) DESC
+                        LIMIT -1 OFFSET ?
+                        """,
+                        (cutoff, int(max_terminal_jobs)),
+                    ).fetchall()
+                ]
+                removed_ids.extend(str(value) for value in overflow)
+                removed_ids = list(dict.fromkeys(removed_ids))
             failed_channel_base_rows = conn.execute(
                 """SELECT simulation_jobs.id
                    FROM simulation_channel_bases
@@ -2982,15 +2999,19 @@ class JobStore:
                          ) AS INTEGER), 0) <= 0
                      AND (
                        simulation_jobs.has_results = 0
-                       OR COALESCE(
-                         json_extract(
-                           simulation_jobs.task_metadata_json, '$.imported_at'
-                         ),
-                         simulation_jobs.completed_at,
-                         simulation_jobs.created_at
-                       ) < ?
+                       OR (
+                         ? = 1
+                         AND COALESCE(
+                           json_extract(
+                             simulation_jobs.task_metadata_json, '$.imported_at'
+                           ),
+                           simulation_jobs.completed_at,
+                           simulation_jobs.created_at
+                         ) < ?
+                       )
                      )""",
-                (cutoff,),
+                # A radiation matrix is a result: it ages out only with them.
+                (1 if prune_results else 0, cutoff),
             ).fetchall()
             removed_radiation_ids: list[str] = []
             if removed_ids:

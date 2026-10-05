@@ -69,8 +69,17 @@ def create_settings_router(store: SettingsStore) -> APIRouter:
     return router
 
 
-def mount_settings(application: FastAPI) -> SettingsStore:
-    store = SettingsStore(Path(application.state.data_dir))
+def mount_settings(application: FastAPI, store: SettingsStore | None = None) -> SettingsStore:
+    """Serve the settings store, creating it unless a caller already shares one.
+
+    The jobs runtime reads a preference from the same instance the routes
+    write, which is why it can be created first and passed in here: a second
+    instance over the same file would cache its first read and never see a
+    change.
+    """
+
+    if store is None:
+        store = SettingsStore(Path(application.state.data_dir))
     application.state.settings = store
     application.include_router(create_settings_router(store))
     return store

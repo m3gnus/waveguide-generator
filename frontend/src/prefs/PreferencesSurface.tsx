@@ -85,12 +85,20 @@ function ResultsPreferencesContent() {
           Off by default — it is a diagnostic, not part of the response. */}
       <label className="ui-check"><input type="checkbox" checked={preferences.showReverseNull} onChange={(event) => preferencesStore.update({ showReverseNull: event.target.checked })}/>Show reverse null</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.archiveRunsOnComplete} onChange={(event) => preferencesStore.update({ archiveRunsOnComplete: event.target.checked })}/>Archive every completed run</label>
+      {/* Off by default: the server used to prune results unconditionally,
+          and a run nobody removed is often a reference someone still needs.
+          The server reads this preference itself, at startup and after every
+          job (server/jobs/retention.py). */}
+      <label className="ui-check"><input type="checkbox" checked={preferences.autoCleanupResults} onChange={(event) => preferencesStore.update({ autoCleanupResults: event.target.checked })}/>Clean up old results automatically</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
     </div>
     {/* The two retentions must not be left to be discovered: results in the
-        run list are pruned, the Workspace folder is not. */}
-    <p className="preferences-section-copy">Results stay in the run list for 30 days, or until the run limit is passed — rating a run keeps it. Archived runs are written to the Workspace folder and are kept until you delete them.{!preferences.archiveRunsOnComplete && ' Archiving is off, so a solve you do not export leaves nothing behind.'}</p>
+        run list are pruned only when automatic cleanup is on, the Workspace
+        folder never is. */}
+    <p className="preferences-section-copy">{preferences.autoCleanupResults
+      ? 'Results stay in the run list for 30 days, or until the run limit of 1,000 is passed — rating a run keeps it.'
+      : 'Results stay in the run list until you remove them.'} Archived runs are written to the Workspace folder and are kept until you delete them.{preferences.autoCleanupResults && !preferences.archiveRunsOnComplete && ' Archiving is off, so a solve you do not export leaves nothing behind.'}</p>
     <fieldset className="preferences-formats">
       <legend>Preferred manual export formats</legend>
       <p className="preferences-section-copy">Used by the Results toolbar Export button and each run’s primary Export action.</p>

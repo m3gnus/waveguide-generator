@@ -33,6 +33,8 @@ from server.jobs.models import (
     StopResponse,
 )
 from server.jobs.result_contracts import ResultEnvelope
+from server.jobs.retention import settings_auto_cleanup_policy
+from server.settings.store import SettingsStore
 from server.solver.errors import RecombineError
 from server.solver.field_plane import (
     FieldPlaneInvalidSelection,
@@ -960,8 +962,13 @@ def mount_jobs(
     *,
     extra_ws_origins: Collection[str] = (),
     restart_approval: RestartApproval | None = None,
+    settings: SettingsStore | None = None,
 ) -> JobRuntime:
-    """Attach one data-dir-bound runtime before the frontend catch-all mount."""
+    """Attach one data-dir-bound runtime before the frontend catch-all mount.
+
+    ``settings`` is the store the settings routes write. The runtime reads the
+    automatic result cleanup preference from it; without one, results are kept.
+    """
 
     data_dir = Path(application.state.data_dir)
     runtime = JobRuntime(
@@ -972,6 +979,9 @@ def mount_jobs(
         # job starts either, and a shutdown ends running jobs as ended by the
         # update restart (contract §4.3).
         restart_approval=restart_approval,
+        results_auto_cleanup=(
+            settings_auto_cleanup_policy(settings) if settings is not None else None
+        ),
     )
     application.state.jobs_runtime = runtime
     application.include_router(

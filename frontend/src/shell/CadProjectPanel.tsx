@@ -24,7 +24,7 @@ import {
   type DesignOpenTicket,
 } from '../design/openCadProject';
 import { selectJob } from './JobsPanel';
-import { runDisplayName } from '../prefs/preferences';
+import { runDisplayName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDocumentStore } from '../stores/document';
 import { discardConfirmation, replacingWouldLose } from '../design/replacementCheck';
@@ -365,6 +365,7 @@ export function CadProjectHistory() {
   const snapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
   const selection = useSyncExternalStore(compareSelection.subscribe, compareSelection.getSnapshot, compareSelection.getSnapshot);
   const liveIngestId = useCadReturnStore((state) => state.ingestRecord?.ingest_id ?? null);
+  const { autoCleanupResults } = usePreferences();
   const [documents, setDocuments] = useState<CadProjectDocument[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [removeError, setRemoveError] = useState<string | null>(null);
@@ -434,7 +435,9 @@ export function CadProjectHistory() {
       <h3>Runs</h3>
       <span
         className="cad-detail cad-runs-count"
-        title="Newest first. A dashed break marks where the CAD model changed and offers the Fusion file those runs were solved from. Older runs are cleaned out of the database after 30 days unless they are rated; the archive folder keeps every run's files."
+        title={`Newest first. A dashed break marks where the CAD model changed and offers the Fusion file those runs were solved from. ${autoCleanupResults
+          ? 'Automatic cleanup is on, so older runs are cleaned out of the database after 30 days unless they are rated'
+          : 'Runs stay in the database until you remove them'}; the archive folder keeps every run's files.`}
       >{runs.length ? `${runs.length} · ` : ''}<Icon name="info"/></span>
     </header>
     {error && <div className="cad-alert cad-alert-notice" role="status">Could not read the archived Fusion files: {error}</div>}

@@ -176,10 +176,24 @@ export interface Preferences {
   autoExportOnComplete: boolean;
   /**
    * Write a run record and its result curves to the workspace when a solve
-   * finishes. On by default: the job database prunes results after 30 days, so
-   * without this a solve leaves nothing behind that outlives that.
+   * finishes. On by default: with automatic cleanup on, the job database prunes
+   * results after 30 days, and without this a solve leaves nothing behind that
+   * outlives that.
    */
   archiveRunsOnComplete: boolean;
+  /**
+   * Let the job database remove stored results by itself: unrated runs older
+   * than 30 days, and any beyond the newest 1,000. The server reads this field
+   * from the persisted profile (`server/jobs/retention.py`), at startup and
+   * after every job, and only an explicit `true` turns it on.
+   *
+   * Off by default, and off for every profile written before it existed -- an
+   * absent key normalizes to false, so this needs no `STORAGE_VERSION` bump
+   * (see `RETIRED_EXPORT_FORMATS` for why a bump would cost a rollback the
+   * whole profile). Results a user has not removed are reference data; losing
+   * them silently is worse than a database that grows.
+   */
+  autoCleanupResults: boolean;
   autoDownloadMesh: boolean;
   runNameDatePosition: RunNameDatePosition;
   runNameDateFormat: RunNameDateFormat;
@@ -239,6 +253,7 @@ const defaults: Preferences = {
   autoExportFormats: [],
   autoExportOnComplete: false,
   archiveRunsOnComplete: true,
+  autoCleanupResults: false,
   autoDownloadMesh: false,
   runNameDatePosition: 'off',
   runNameDateFormat: 'yymmdd',
@@ -314,6 +329,7 @@ export function normalize(raw: Partial<Preferences> = {}): Preferences {
     autoExportFormats: autoFormats,
     autoExportOnComplete: raw.autoExportOnComplete === true,
     archiveRunsOnComplete: raw.archiveRunsOnComplete !== false,
+    autoCleanupResults: raw.autoCleanupResults === true,
     autoDownloadMesh: raw.autoDownloadMesh === true,
     runNameDatePosition: runNameDatePositions.has(raw.runNameDatePosition as RunNameDatePosition)
       ? raw.runNameDatePosition as RunNameDatePosition

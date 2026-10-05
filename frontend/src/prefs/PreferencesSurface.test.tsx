@@ -205,14 +205,46 @@ describe('preferences surfaces', () => {
       .querySelector('input') as HTMLInputElement;
 
     expect(archive.checked).toBe(true);
-    expect(host.textContent).toContain('30 days');
+    // Automatic cleanup is off by default, so the run list keeps everything.
+    expect(host.textContent).toContain('Results stay in the run list until you remove them');
+    expect(host.textContent).not.toContain('30 days');
     expect(host.textContent).toContain('kept until you delete them');
     expect(host.textContent).not.toContain('leaves nothing behind');
 
     await act(async () => { archive.click(); await Promise.resolve(); });
 
     expect(preferencesStore.getSnapshot().archiveRunsOnComplete).toBe(false);
-    // Turning it off is allowed, but not quietly: the run list prunes.
+    // With nothing pruning the run list, archiving off loses nothing.
+    expect(host.textContent).not.toContain('leaves nothing behind');
+  });
+
+  it('offers automatic result cleanup off by default and says what turning it on does', async () => {
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
+    const cleanup = [...host.querySelectorAll('label.ui-check')]
+      .find((label) => label.textContent?.includes('Clean up old results automatically'))!
+      .querySelector('input') as HTMLInputElement;
+
+    expect(cleanup.checked).toBe(false);
+    expect(preferencesStore.getSnapshot().autoCleanupResults).toBe(false);
+
+    await act(async () => { cleanup.click(); await Promise.resolve(); });
+
+    expect(preferencesStore.getSnapshot().autoCleanupResults).toBe(true);
+    expect(cleanup.checked).toBe(true);
+    expect(host.textContent).toContain('30 days');
+    expect(host.textContent).toContain('rating a run keeps it');
+    expect(host.textContent).not.toContain('until you remove them');
+
+    // Cleanup on and archiving off: now a solve really can leave nothing.
+    const archive = [...host.querySelectorAll('label.ui-check')]
+      .find((label) => label.textContent?.includes('Archive every completed run'))!
+      .querySelector('input') as HTMLInputElement;
+    await act(async () => { archive.click(); await Promise.resolve(); });
     expect(host.textContent).toContain('leaves nothing behind');
+
+    await act(async () => { cleanup.click(); await Promise.resolve(); });
+    expect(preferencesStore.getSnapshot().autoCleanupResults).toBe(false);
+    expect(host.textContent).toContain('until you remove them');
+    expect(host.textContent).not.toContain('leaves nothing behind');
   });
 });

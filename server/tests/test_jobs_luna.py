@@ -267,7 +267,8 @@ def test_post_job_retention_runs_for_each_completed_work_item(
         store.create_job(_record("expired", "complete"))
         store.update_job("expired", completed_at="2000-01-01T00:00:00")
         store.store_results("expired", {"frequencies": [1000.0]})
-        runtime = JobRuntime(store)
+        # Result cleanup is a preference, off by default; this one turned it on.
+        runtime = JobRuntime(store, results_auto_cleanup=lambda: True)
         runtime._started = True
         runtime._queue.append("one")
         subscriber = runtime.events.subscribe()
