@@ -360,7 +360,7 @@ def _unreadable_snapshot(monkeypatch: pytest.MonkeyPatch, snapshot: Path):
     real_connect = sqlite3.connect
 
     def connect(target, *args, **kwargs):
-        if str(target) == str(snapshot):
+        if str(target).split("?")[0].endswith(snapshot.name):
             raise sqlite3.DatabaseError("file is not a database")
         return real_connect(target, *args, **kwargs)
 
@@ -460,3 +460,77 @@ def test_every_held_file_shares_one_retry_budget(tmp_path: Path, monkeypatch: py
     # Four held files (main and three sidecars) used to wait 20 s each.
     assert _user_version(db) == 6
     assert clock.slept <= store_module._HELD_FILE_RETRY_SECONDS + store_module._HELD_FILE_RETRY_INTERVAL
+
+
+def _wal_mode_previous_snapshot(tmp_path: Path) -> tuple[Path, Path, dict]:
+    """A first upgrade's snapshot, turned WAL-mode as earlier builds wrote it, then a manual restore."""
+
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    snapshot = store.rollback_snapshot_path
+    with closing(sqlite3.connect(snapshot)) as conn:
+        conn.execute("PRAGMA journal_mode=WAL")
+    _restored_by_hand(db, snapshot)
+    return db, snapshot, _snapshot(db)
+
+
+class _HoldingClock(_FakeClock):
+    """Lets the holder go after ``release_after`` seconds of retrying, if at all."""
+
+    def __init__(self, holder: sqlite3.Connection, release_after: float | None) -> None:
+        super().__init__()
+        self.holder, self.release_after = holder, release_after
+
+    def sleep(self, seconds: float) -> None:
+        super().sleep(seconds)
+        if self.release_after is not None and self.slept >= self.release_after and self.holder is not None:
+            self.holder.rollback()
+            self.holder.close()
+            self.holder = None
+
+
+@pytest.mark.parametrize("released", [True, False], ids=["released-within-budget", "held-whole-start"])
+def test_a_snapshot_held_by_another_connection_is_held_not_invalid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, released: bool
+) -> None:
+    db, snapshot, rows = _wal_mode_previous_snapshot(tmp_path)
+    original = snapshot.read_bytes()
+    holder = sqlite3.connect(snapshot, timeout=0)
+    holder.execute("PRAGMA locking_mode=EXCLUSIVE")
+    holder.execute("BEGIN EXCLUSIVE")
+    clock = _HoldingClock(holder, 1.0 if released else None)
+    monkeypatch.setattr(store_module, "time", clock)
+    try:
+        store = JobStore(db)
+        store.initialize()
+        store.close()
+    finally:
+        if clock.holder is not None:
+            clock.holder.rollback()
+            clock.holder.close()
+
+    assert _user_version(db) == 6
+    # Never quarantined as invalid, and its main file never rewritten.
+    assert not list(db.parent.glob(snapshot.name + ".invalid-*"))
+    held = list(db.parent.glob(snapshot.name + ".held-*"))
+    if released:
+        assert Path(str(snapshot) + ".1").read_bytes() == original
+        assert not held and _snapshot(snapshot) == rows
+    else:
+        assert snapshot.read_bytes() == original and not Path(str(snapshot) + ".1").exists()
+        assert len(held) == 1 and _snapshot(held[0]) == rows
+
+
+def test_validating_the_previous_snapshot_never_changes_it(tmp_path: Path) -> None:
+    db, snapshot, rows = _wal_mode_previous_snapshot(tmp_path)
+    original = snapshot.read_bytes()
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    # Rotated byte for byte: no journal-mode change, no checkpoint into it.
+    assert Path(str(snapshot) + ".1").read_bytes() == original
+    assert _snapshot(snapshot) == rows

@@ -182,6 +182,35 @@ def _replace_unless_held(source: Path, destination: Path, deadline: float) -> bo
             time.sleep(_HELD_FILE_RETRY_INTERVAL)
 
 
+#: SQLite's primary result codes for a database another connection holds.
+_SQLITE_HELD_CODES = frozenset({5, 6})  # SQLITE_BUSY, SQLITE_LOCKED
+
+
+def _snapshot_validity(path: Path, deadline: float) -> bool | None:
+    """Whether a previous snapshot is a readable pre-schema-6 jobs DB.
+
+    Read-only, so the old snapshot's main file is never changed (a WAL-mode
+    snapshot from an earlier build is read with its sidecars, which then
+    rotate with it). ``None`` when another connection still holds it at
+    ``deadline``: a held snapshot is not an invalid one.
+    """
+
+    while True:
+        try:
+            with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0)) as snapshot:
+                return (snapshot.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+                        and snapshot.execute("PRAGMA user_version").fetchone()[0] < 6
+                        and snapshot.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone() is not None)
+        except sqlite3.Error as exc:
+            code = getattr(exc, "sqlite_errorcode", None)
+            if code is None or code & 0xFF not in _SQLITE_HELD_CODES:
+                return False
+            if time.monotonic() >= deadline:
+                logger.warning("The jobs rollback snapshot %s is held by another connection: %s", path, exc)
+                return None
+            time.sleep(_HELD_FILE_RETRY_INTERVAL)
+
+
 def _unlink_or_log(path: Path) -> None:
     """Remove a leftover snapshot file; one held open stays for the next start."""
 
@@ -480,18 +509,12 @@ class JobStore:
         blocked = False
         previous = target  # where the previous snapshot's main file is
         if target.exists():
-            try:
-                with closing(sqlite3.connect(target)) as snapshot:
-                    valid = (snapshot.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-                             and snapshot.execute("PRAGMA user_version").fetchone()[0] < 6
-                             and snapshot.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone() is not None)
-                    if valid:
-                        # Earlier builds published WAL-mode snapshots. Settle
-                        # their sidecars before rotating the previous copy.
-                        snapshot.execute("PRAGMA journal_mode=DELETE")
-            except sqlite3.Error:
-                valid = False
-            if not valid:
+            valid = _snapshot_validity(target, deadline)
+            if valid is None:
+                # Held by another SQLite connection past the budget: neither
+                # judged invalid nor rotated, and never published beside.
+                blocked = True
+            elif not valid:
                 invalid = target.with_name(target.name + ".invalid-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
                 if _replace_unless_held(target, invalid, deadline):
                     logger.warning("Moved invalid jobs rollback snapshot to %s", invalid)

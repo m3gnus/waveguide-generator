@@ -628,7 +628,7 @@ def test_restore_old_release_write_reupgrade_and_second_rollback_keeps_new_row(t
     assert original["simulation_jobs"] != _snapshot(snapshot)["simulation_jobs"]
 
 
-def test_refresh_converts_an_earlier_wal_snapshot_before_rotation(tmp_path):
+def test_refresh_rotates_an_earlier_wal_snapshot_whole_and_unchanged(tmp_path):
     store = _store(tmp_path)
     _old_shaped_database(store.db_path)
     _fill_old_database(store.db_path)
@@ -637,14 +637,22 @@ def test_refresh_converts_an_earlier_wal_snapshot_before_rotation(tmp_path):
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("UPDATE simulation_jobs SET label = 'earlier snapshot' WHERE id = 'a'")
         conn.commit()
+    earlier = store.rollback_snapshot_path.read_bytes()
     store.initialize()
     store.close()
-    for snapshot in (store.rollback_snapshot_path, Path(str(store.rollback_snapshot_path) + ".1")):
-        with closing(sqlite3.connect(snapshot)) as conn:
-            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
-            assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
-        assert not Path(str(snapshot) + "-wal").exists()
-        assert not Path(str(snapshot) + "-shm").exists()
+    # The new snapshot is standalone; the earlier one is validated read-only
+    # and rotated as a whole set, its main file byte for byte.
+    snapshot = store.rollback_snapshot_path
+    with closing(sqlite3.connect(snapshot)) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+    assert not Path(str(snapshot) + "-wal").exists()
+    assert not Path(str(snapshot) + "-shm").exists()
+    rotated = Path(str(snapshot) + ".1")
+    assert rotated.read_bytes() == earlier
+    with closing(sqlite3.connect(rotated.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+        assert conn.execute("SELECT label FROM simulation_jobs WHERE id = 'a'").fetchone()[0] == "earlier snapshot"
 
 
 def test_snapshot_holds_the_upgrade_write_transaction(tmp_path, monkeypatch):
