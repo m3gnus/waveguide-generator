@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+import contextlib
 import shutil
 import time
 from pathlib import Path
@@ -99,7 +100,8 @@ async def _run_job(data_dir: Path, store: Any, request: Any, timeout_s: float = 
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
 
-    runtime = JobRuntime(JobStore(data_dir / "jobs.db"), engine_registry=EngineRegistry(), cadlink_store=store)
+    jobs = JobStore(data_dir / "jobs.db")
+    runtime = JobRuntime(jobs, engine_registry=EngineRegistry(), cadlink_store=store)
     try:
         job_id = await runtime.submit(request)
         deadline = time.monotonic() + timeout_s
@@ -112,13 +114,25 @@ async def _run_job(data_dir: Path, store: Any, request: Any, timeout_s: float = 
             await asyncio.sleep(0.5)
         return {"job_id": job_id, "row": row, "results": runtime.store.get_results(job_id)}
     finally:
-        await runtime.shutdown()
+        try:
+            await runtime.shutdown()
+        finally:
+            # The runtime does not own the store: shutdown leaves its
+            # connections open, and an open database blocks deleting the data
+            # directory on Windows.
+            jobs.close()
 
 
 def _reopen(data_dir: Path, job_id: str) -> dict[str, Any] | None:
     from server.jobs.store import JobStore
 
-    return JobStore(data_dir / "jobs.db").get_results(job_id)
+    jobs = JobStore(data_dir / "jobs.db")
+    try:
+        return jobs.get_results(job_id)
+    finally:
+        # Not left to garbage collection: the store is in a reference cycle,
+        # so its connection outlives this call until a cyclic collection runs.
+        jobs.close()
 
 
 async def _plan(data_dir: Path, store: Any, request: Any) -> dict[str, Any]:
@@ -126,11 +140,15 @@ async def _plan(data_dir: Path, store: Any, request: Any) -> dict[str, Any]:
     from server.jobs.runtime import JobRuntime
     from server.jobs.store import JobStore
 
-    runtime = JobRuntime(JobStore(data_dir / "jobs.db"), engine_registry=EngineRegistry(), cadlink_store=store)
+    jobs = JobStore(data_dir / "jobs.db")
+    runtime = JobRuntime(jobs, engine_registry=EngineRegistry(), cadlink_store=store)
     try:
         return await runtime.plan_imported(request)
     finally:
-        await runtime.shutdown()
+        try:
+            await runtime.shutdown()
+        finally:
+            jobs.close()
 
 
 def _fresh_job_verdict(
@@ -172,7 +190,31 @@ def _fresh_job_verdict(
     return ok, detail
 
 
+def _ingest(opened: contextlib.ExitStack, bundle: Path, data_dir: Path, **options: Any) -> fixtures.Ingested:
+    """``fixtures.ingest``, with its CAD Link store closed when the run ends."""
+
+    ingested = fixtures.ingest(bundle, data_dir, **options)
+    close = getattr(ingested.store, "close", None)
+    if close is not None:
+        opened.callback(close)
+    return ingested
+
+
 def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[Row], Row]) -> dict[str, Any]:
+    """Every ingest-level row, recorded through ``record_row``; returns the facts.
+
+    Every database the run opens under ``root`` is closed before it returns,
+    so the caller can delete ``root``: on Windows an open SQLite connection
+    keeps its database, and so the directory holding it, from being deleted.
+    """
+
+    with contextlib.ExitStack() as opened:
+        return _run_ingest_level(engines, root, record_row, opened)
+
+
+def _run_ingest_level(
+    engines: Sequence[str], root: Path, record_row: Callable[[Row], Row], opened: contextlib.ExitStack
+) -> dict[str, Any]:
     facts: dict[str, Any] = {}
     workspace = root / "workspace"
     bundle = fixtures.linked_return(workspace, "round")
@@ -185,7 +227,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     ladder: dict[str, dict[str, Solved]] = {engine: {} for engine in engines}
     ingests: dict[str, fixtures.Ingested] = {}
     for label, deviation in HORN_LADDER:
-        ingests[label] = fixtures.ingest(bundle, root / f"data-round-{label}", surface_deviation_mm=deviation)
+        ingests[label] = _ingest(opened, bundle, root / f"data-round-{label}", surface_deviation_mm=deviation)
         for engine in engines:
             ladder[engine][label] = _solve_record(engine, ingests[label])
     reference = ingests["reference"]
@@ -212,7 +254,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
         record_row(Row("same mesh: horn quarter return, normal", a, b, "complex, all points", errors.tolist(), tolerance=pair_tolerance(a, b, HORN_TOLERANCE)))
 
     # Fixture 6 on a real return: WG's quarter against the forced full domain.
-    full = fixtures.ingest(bundle, root / "data-round", symmetry_mode="full")
+    full = _ingest(opened, bundle, root / "data-round", symmetry_mode="full")
     facts["horn_full_triangles"] = full.record["mesh"]["stats"]["triangle_count"]
     for engine in engines:
         whole = _solve_record(engine, full)
@@ -233,9 +275,9 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     from server.cadlink.ingest import IngestRefusal
 
     rear = fixtures.linked_return(workspace, "rearcap", source_shape=1)
-    rear_full = fixtures.ingest(rear, root / "data-rearcap", symmetry_mode="full")
+    rear_full = _ingest(opened, rear, root / "data-rearcap", symmetry_mode="full")
     try:
-        rear_quarter = fixtures.ingest(rear, root / "data-rearcap")
+        rear_quarter = _ingest(opened, rear, root / "data-rearcap")
     except IngestRefusal as exc:
         facts["rear_cap_quarter"] = {"refused_at_ingest": str(exc)}
         record_row(Row("source on the plug's rear: WG's quarter refused at ingest", "ingest", "full", "refusal", [0.0], note=str(exc)))
@@ -270,7 +312,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     # attempt stays here so the fixture runs the day ingestion keeps the plane.
     placement = fixtures.placement_matrix([0.3, 1.0, 0.2], 70.0, [120.0, -40.0, 55.0])
     try:
-        placed = fixtures.ingest(fixtures.linked_return(workspace, "placed", placement=placement), root / "data-placed")
+        placed = _ingest(opened, fixtures.linked_return(workspace, "placed", placement=placement), root / "data-placed")
     except IngestRefusal as exc:
         facts["placed_refusal"] = str(exc)
         # Only the known refusal is the known block. Any other refusal is a
@@ -288,7 +330,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
             record_row(Row("horn: placed in CAD (rotated + translated) vs unplaced", engine, "unplaced", "complex, all points", errors.tolist(), tolerance=HORN_TOLERANCE, note="normalisation undoes the placement; OCC re-meshes the placed body"))
 
     # Fixture 7: a y-only half, through the real plan and detector.
-    skewed = fixtures.ingest(fixtures.linked_return(workspace, "skewed", skew_mm=12.0), root / "data-skewed")
+    skewed = _ingest(opened, fixtures.linked_return(workspace, "skewed", skew_mm=12.0), root / "data-skewed")
     plan = asyncio.run(_plan(root / "data-skewed", skewed.store, fixtures.request_for_record(skewed, engine="auto", frequencies=HORN_FREQUENCIES_HZ)))
     verdicts = {entry["name"]: entry for entry in plan["engines"]}
     facts["y_only_plan"] = {name: {key: verdicts[name].get(key) for key in ("solves", "stage", "code", "reason")} for name in engines if name in verdicts}
@@ -314,7 +356,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     copied.parent.mkdir(parents=True)
     shutil.copytree(bundle, copied)
     fresh_dir = root / "App Data – Ärende 1"
-    fresh = fixtures.ingest(copied, fresh_dir)
+    fresh = _ingest(opened, copied, fresh_dir)
     facts["fresh_findings"] = [(item["kind"], item.get("verdict"), item.get("blocking")) for item in fresh.record.get("findings") or []]
     jobs: dict[str, Any] = {}
     for engine in engines:
@@ -329,7 +371,7 @@ def run_ingest_level(engines: Sequence[str], root: Path, record_row: Callable[[R
     # it. The STEP is the unedited body -- only the fingerprints differ -- so
     # the exact match is expected by construction: what this row tests is that
     # acknowledging the blocking freshness finding leaves the solve unchanged.
-    edited = fixtures.ingest(fixtures.linked_return(workspace, "edited", body_state="modified"), root / "data-edited")
+    edited = _ingest(opened, fixtures.linked_return(workspace, "edited", body_state="modified"), root / "data-edited")
     facts["edited_findings"] = [(item["kind"], item.get("verdict"), item.get("blocking")) for item in edited.record.get("findings") or []]
     for engine in engines:
         solved = _solve_record(engine, edited)

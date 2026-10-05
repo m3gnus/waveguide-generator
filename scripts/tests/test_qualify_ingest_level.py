@@ -406,3 +406,110 @@ def test_a_horn_solve_answered_by_another_engine_is_refused(
     monkeypatch.setattr(registry, "create_engine", lambda _name: _Adapter("metal"))
     with pytest.raises(qual.EngineAnswerMismatch, match="'metal'"):
         ingest._solve_record("beat-cpu", ingested)
+
+
+class _Store:
+    """A CAD Link store that records whether it was closed."""
+
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_every_cad_link_store_the_run_opens_is_closed(
+    stubs: Stubs, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """On Windows an open store keeps its database, and so the caller's
+    temporary directory, from being deleted: the qualification then fails in
+    its cleanup after every row has run."""
+
+    opened: list[_Store] = []
+    stub_ingest = stubs.ingest
+
+    def ingest_with_a_store(*args: Any, **kwargs: Any) -> fixtures.Ingested:
+        ingested = stub_ingest(*args, **kwargs)
+        opened.append(_Store())
+        return fixtures.Ingested(
+            record=ingested.record, store=opened[-1], data_dir=ingested.data_dir, sizes=ingested.sizes
+        )
+
+    monkeypatch.setattr(fixtures, "ingest", ingest_with_a_store)
+    _run(tmp_path)
+    assert len(opened) >= 8
+    assert [store.closed for store in opened] == [True] * len(opened)
+
+    # Also when a step fails part-way.
+    opened.clear()
+    stub_solve = stubs.solve_record
+
+    def fail_on_the_full_domain(engine: str, ingested: fixtures.Ingested) -> qual.Solved:
+        if ingested.record["_stub"][1] == "full":
+            raise RuntimeError("solve failed")
+        return stub_solve(engine, ingested)
+
+    monkeypatch.setattr(ingest, "_solve_record", fail_on_the_full_domain)
+    with pytest.raises(RuntimeError, match="solve failed"):
+        _run(tmp_path / "failing")
+    assert opened and [store.closed for store in opened] == [True] * len(opened)
+
+
+def test_the_job_steps_close_the_job_store_they_open(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``JobRuntime.shutdown`` leaves its store open, and a store dropped
+    without ``close`` keeps its connection until a cyclic garbage collection:
+    each step closes the one it opened, so its data directory can be deleted."""
+
+    import asyncio
+    import shutil
+
+    from server.engines import registry
+    from server.jobs import runtime as runtime_module
+    from server.jobs.store import JobStore
+
+    closed: list[Path] = []
+    real_close = JobStore.close
+
+    def recording_close(self: JobStore) -> None:
+        closed.append(Path(self.db_path))
+        real_close(self)
+
+    class Runtime:
+        def __init__(self, store: JobStore, **_options: Any) -> None:
+            self._jobs = store
+            self.store = SimpleNamespace(
+                get_job_row=lambda _job: {"status": "complete"}, get_results=lambda _job: {}
+            )
+
+        async def submit(self, _request: Any) -> str:
+            self._jobs.initialize()  # opens a connection, as a real submission does
+            return "job"
+
+        async def plan_imported(self, _request: Any) -> dict[str, Any]:
+            self._jobs.initialize()
+            return {}
+
+        async def shutdown(self) -> None:
+            return None
+
+    monkeypatch.setattr(JobStore, "close", recording_close)
+    monkeypatch.setattr(runtime_module, "JobRuntime", Runtime)
+    monkeypatch.setattr(registry, "EngineRegistry", lambda: None)
+
+    for step in ("run", "plan", "reopen"):
+        data = tmp_path / step
+        data.mkdir()
+        if step == "run":
+            asyncio.run(ingest._run_job(data, None, None))
+        elif step == "plan":
+            asyncio.run(ingest._plan(data, None, None))
+        else:
+            seeded = JobStore(data / "jobs.db")
+            seeded.initialize()
+            real_close(seeded)
+            assert ingest._reopen(data, "missing") is None
+        assert closed == [data / "jobs.db"], step
+        closed.clear()
+        shutil.rmtree(data)  # WinError 32 here while a connection is open
