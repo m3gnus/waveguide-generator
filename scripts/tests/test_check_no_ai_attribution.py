@@ -174,6 +174,101 @@ def _rev(repo: Path, revision: str) -> str:
     ).stdout.strip()
 
 
+def test_a_local_base_ref_catches_a_trailer_below_head(tmp_path: Path) -> None:
+    repo = _repo(tmp_path)
+    base = _rev(repo, "HEAD")
+    _commit(repo, "two\n", f"First new commit\n\n{REAL_TRAILER}")
+    offending_commit = _rev(repo, "HEAD")
+    _commit(repo, "three\n", "Clean tip")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(Path(__file__).resolve().parents[1] / "check_no_ai_attribution.py"),
+            "--base-ref",
+            base,
+        ],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert f"checking {base}..HEAD" in result.stdout
+    assert "1 of 2 new commit(s)" in result.stderr
+    assert offending_commit[:7] in result.stderr
+    assert REAL_TRAILER in result.stderr
+
+
+@pytest.mark.parametrize("base_kind", ["sha", "branch", "tag"])
+def test_a_local_base_ref_reads_only_new_commits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    base_kind: str,
+) -> None:
+    repo = _repo(tmp_path)
+    _commit(repo, "two\n", f"Old history\n\n{REAL_TRAILER}")
+    if base_kind == "branch":
+        _git("branch", "base", cwd=repo)
+        base = "base"
+    elif base_kind == "tag":
+        _git("tag", "-a", "base-tag", "-m", "Base tag", cwd=repo)
+        base = "base-tag"
+    else:
+        base = _rev(repo, "HEAD")
+    _commit(repo, "three\n", "First clean commit")
+    _commit(repo, "four\n", "Second clean commit")
+    monkeypatch.chdir(repo)
+
+    assert main(["--base-ref", base]) == 0
+    out = capsys.readouterr().out
+    assert f"checking {base}..HEAD" in out
+    assert "No AI attribution in 2 new commit(s)." in out
+
+
+@pytest.mark.parametrize("base", ["missing-ref", "f" * 40, "HEAD:f.txt", ""])
+def test_an_invalid_local_base_ref_is_a_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, base: str
+) -> None:
+    monkeypatch.chdir(_repo(tmp_path))
+
+    with pytest.raises(SystemExit, match="--base-ref: .* does not resolve to a commit"):
+        main(["--base-ref", base])
+
+
+@pytest.mark.parametrize("extra_args", [["--since-last-release"], ["--head", "HEAD~1"]])
+def test_a_local_base_ref_respects_the_selected_head_and_overrides_release_lookup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    extra_args: list[str],
+) -> None:
+    repo = _repo(tmp_path)
+    base = _rev(repo, "HEAD")
+    _commit(repo, "two\n", f"New work\n\n{REAL_TRAILER}")
+    _commit(repo, "three\n", "Clean tip")
+    monkeypatch.chdir(repo)
+
+    assert main(["--base-ref", base, *extra_args]) == 1
+    err = capsys.readouterr().err
+    count = 1 if "--head" in extra_args else 2
+    assert f"1 of {count} new commit(s)" in err
+
+
+def test_upstream_still_overrides_a_local_base_ref(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = _repo(tmp_path)
+    base = _rev(repo, "HEAD")
+    _commit(repo, "two\n", f"New work\n\n{REAL_TRAILER}")
+    _commit(repo, "three\n", "Clean tip")
+    monkeypatch.chdir(repo)
+
+    assert main(["--upstream", base, "--base-ref", "missing-ref"]) == 1
+
+
 def test_a_push_is_measured_against_the_commit_the_ref_was_at() -> None:
     assert (
         select_upstream(event_name="push", base_ref="", before="abc1234") == "abc1234"

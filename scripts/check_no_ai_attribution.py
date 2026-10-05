@@ -33,6 +33,10 @@ the checkout is the pushed commit and `origin/main` is that same commit, so
 without reading one message. That was the state until 2026-09-08, on the primary
 landing path.
 
+A local run with no `--event` accepts `--base-ref <revision>` as the exact base
+of `<revision>..HEAD`. It must resolve to a commit; an invalid explicit base is
+a refusal, never a fallback to the tip. `--upstream` still overrides it.
+
 A dispatch names no base, and neither does a release workflow calling ci.yml:
 the called run reports the caller's `workflow_dispatch`. Trunk is no answer for
 a release commit, which is ON main, so `origin/main..HEAD` is empty for exactly
@@ -217,7 +221,10 @@ def main(argv: list[str] | None = None) -> int:
         "--event", default="", help="GITHUB_EVENT_NAME: push, pull_request, ..."
     )
     parser.add_argument(
-        "--base-ref", default="", help="github.base_ref: a pull request's base branch."
+        "--base-ref",
+        default=None,
+        help="With no --event, measure from this revision. With --event, "
+        "github.base_ref: a pull request's base branch.",
     )
     parser.add_argument(
         "--before",
@@ -233,7 +240,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    from_event = args.upstream is None
+    explicit_upstream = args.upstream
+    if explicit_upstream is None and not args.event and args.base_ref is not None:
+        if not resolves(args.base_ref):
+            raise SystemExit(
+                f"--base-ref: {args.base_ref!r} does not resolve to a commit."
+            )
+        explicit_upstream = args.base_ref
+
+    from_event = explicit_upstream is None
     last_release = None
     if from_event and args.since_last_release:
         last_release = last_release_tag(args.head)
@@ -247,12 +262,12 @@ def main(argv: list[str] | None = None) -> int:
     upstream = (
         select_upstream(
             event_name=args.event,
-            base_ref=args.base_ref,
+            base_ref=args.base_ref or "",
             before=args.before,
             last_release=last_release,
         )
         if from_event
-        else args.upstream
+        else explicit_upstream
     )
 
     if upstream is None:
