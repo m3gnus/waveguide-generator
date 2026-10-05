@@ -336,14 +336,17 @@ def _drive_worker_in_thread(commands, expected, monkeypatch):
     # still buffered in it.
     events = []
     deadline = time.monotonic() + 20.0
-    while len(events) < expected and time.monotonic() < deadline:
+    while len(events) < expected + 1 and time.monotonic() < deadline:
         if parent.poll(0.1):
             events.append(parent.recv())
     parent.send(None)
     worker.join(20.0)
     assert not worker.is_alive()
     parent.close()
-    return warmed, events
+    # The loop announces its process group before reading any command; driven
+    # in-process it claims none (adopt_process_group declines without a parent).
+    assert events[:1] == [(bempp_process._GROUP_EVENT, None, None)]
+    return warmed, events[1:]
 
 
 def test_worker_warms_when_nothing_else_is_waiting(
@@ -685,13 +688,13 @@ def test_exit_statuses_are_described_plainly(exitcode, windows, expected) -> Non
 # -- a crashed worker's sweep children must still be reached --------------------
 #
 # Reading a dead worker's exit status reaps it, and a reaped pid no longer
-# resolves to its POSIX process group. The group has to be known before that,
-# or ``_terminate_sync`` skips the group kill and a split sweep's workers keep
-# running after the job failed.
+# resolves to its POSIX process group. The worker therefore announces its group
+# over the pipe before it reads any command -- before any sweep child can exist
+# -- and the parent takes the group from that announcement, never from getpgid.
 
 
 class _DyingProcess:
-    """A worker whose pipe closes mid-solve; reaping it hides its group."""
+    """A worker that has already died; reaping it hides its group."""
 
     def __init__(self, **_kwargs) -> None:
         self.pid = 424242
@@ -702,16 +705,17 @@ class _DyingProcess:
     def start(self) -> None:
         return None
 
-    def is_alive(self) -> bool:
+    def _reap(self) -> None:
         if self.dead:
             self.reaped = True
             self.exitcode = 3
+
+    def is_alive(self) -> bool:
+        self._reap()
         return not self.dead
 
     def join(self, _timeout=None) -> None:
-        if self.dead:
-            self.reaped = True
-            self.exitcode = 3
+        self._reap()
 
     def terminate(self) -> None:
         return None
@@ -720,9 +724,13 @@ class _DyingProcess:
         return None
 
 
-class _ClosingConnection:
-    def __init__(self, process_slot: list) -> None:
+class _BufferedConnection:
+    """The parent's end of the pipe: what the worker wrote, then EOF."""
+
+    def __init__(self, process_slot: list, buffered: list) -> None:
         self._process_slot = process_slot
+        self._buffered = buffered
+        self.received: list = []
 
     def send(self, _value) -> None:
         return None
@@ -731,6 +739,10 @@ class _ClosingConnection:
         return True
 
     def recv(self):
+        if self._buffered:
+            event = self._buffered.pop(0)
+            self.received.append(event)
+            return event
         self._process_slot[0].dead = True
         raise EOFError
 
@@ -738,27 +750,23 @@ class _ClosingConnection:
         return None
 
 
-def test_a_crashed_workers_group_is_resolved_before_it_is_reaped(monkeypatch) -> None:
+def _host_over_a_dying_worker(monkeypatch, buffered: list, *, dead_at_start: bool):
     slot: list = [None]
+    parents: list = []
 
     class Context:
         def Pipe(self, duplex=True):
-            return _ClosingConnection(slot), _ClosingConnection(slot)
+            parent = _BufferedConnection(slot, buffered)
+            parents.append(parent)
+            return parent, _BufferedConnection(slot, [])
 
         def Process(self, **kwargs):
             slot[0] = _DyingProcess(**kwargs)
+            slot[0].dead = dead_at_start
             return slot[0]
 
-    resolved: list[tuple[int, bool]] = []
     killed: list[int | None] = []
-
-    def resolve(pid: int) -> int | None:
-        process = slot[0]
-        resolved.append((pid, process.reaped))
-        return None if process.reaped else pid
-
     monkeypatch.setattr(bempp_process, "confine_to_windows_job", lambda _pid: None)
-    monkeypatch.setattr(bempp_process, "resolve_process_group", resolve)
     monkeypatch.setattr(bempp_process, "kill_process_group", killed.append)
 
     async def exercise() -> str:
@@ -768,12 +776,100 @@ def test_a_crashed_workers_group_is_resolved_before_it_is_reaped(monkeypatch) ->
             await _run_once(host)
         return str(raised.value)
 
-    message = asyncio.run(exercise())
+    return asyncio.run(exercise()), slot[0], parents[0], killed
+
+
+def test_a_crashed_workers_announced_group_is_killed_after_it_is_reaped(
+    monkeypatch,
+) -> None:
+    message, process, _parent, killed = _host_over_a_dying_worker(
+        monkeypatch,
+        [(bempp_process._GROUP_EVENT, None, 424242)],
+        dead_at_start=False,
+    )
 
     assert "exit code 3" in message, "the exit status was still read"
-    assert slot[0].reaped
-    assert resolved and resolved[0] == (424242, False), "resolved while reapable"
+    assert process.reaped
     assert killed == [424242], "the sweep's group was killed, not skipped"
+
+
+def test_a_worker_dead_before_the_first_poll_still_has_its_group_killed(
+    monkeypatch,
+) -> None:
+    """setsid, start a sweep, die -- all before the parent first looks.
+
+    The first ``is_alive()`` reaps the worker, so nothing in the event loop ever
+    reads the pipe. The announcement is still in it, and cleanup reads it there.
+    """
+
+    message, process, parent, killed = _host_over_a_dying_worker(
+        monkeypatch,
+        [
+            (bempp_process._GROUP_EVENT, None, 424242),
+            ("stage", "unread", ("frequency_solve", 0.1, "sweep started")),
+        ],
+        dead_at_start=True,
+    )
+
+    assert "exit code 3" in message
+    assert process.reaped
+    assert killed == [424242], "the group was killed although no poll resolved it"
+    assert parent.received == [(bempp_process._GROUP_EVENT, None, 424242)], (
+        "cleanup reads the announcement and nothing after it"
+    )
+
+
+def test_a_worker_dead_before_announcing_has_no_group_to_kill(monkeypatch) -> None:
+    _message, _process, _parent, killed = _host_over_a_dying_worker(
+        monkeypatch, [], dead_at_start=True
+    )
+
+    assert killed == [None]
+
+
+def test_a_windows_job_is_used_and_the_pipe_is_not_read_for_a_group(
+    monkeypatch,
+) -> None:
+    terminated: list[str] = []
+
+    class Job:
+        def terminate(self) -> None:
+            terminated.append("terminate")
+
+        def close(self) -> None:
+            terminated.append("close")
+
+    slot: list = [None]
+    parents: list = []
+
+    class Context:
+        def Pipe(self, duplex=True):
+            parent = _BufferedConnection(
+                slot, [(bempp_process._GROUP_EVENT, None, None)]
+            )
+            parents.append(parent)
+            return parent, _BufferedConnection(slot, [])
+
+        def Process(self, **kwargs):
+            slot[0] = _DyingProcess(**kwargs)
+            slot[0].dead = True
+            return slot[0]
+
+    killed: list = []
+    monkeypatch.setattr(bempp_process, "confine_to_windows_job", lambda _pid: Job())
+    monkeypatch.setattr(bempp_process, "kill_process_group", killed.append)
+
+    async def exercise() -> None:
+        host = BemppProcessHost(process_context=Context())
+        monkeypatch.setattr(host, "prewarm", lambda: None)
+        with pytest.raises(bempp_process.BemppWorkerError, match="exit code 3"):
+            await _run_once(host)
+
+    asyncio.run(exercise())
+
+    assert terminated == ["terminate", "close"]
+    assert killed == []
+    assert parents[0].received == []
 
 
 def _worker_with_a_sweep_child_that_crashes(connection) -> None:
@@ -782,7 +878,8 @@ def _worker_with_a_sweep_child_that_crashes(connection) -> None:
 
     from server.platform.process_tree import adopt_process_group
 
-    adopt_process_group()  # what the real worker does first
+    # What the real worker does first: claim the group, then announce it.
+    connection.send((bempp_process._GROUP_EVENT, None, adopt_process_group()))
     while True:
         command = connection.recv()
         job_id, _payload = command
