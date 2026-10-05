@@ -775,21 +775,25 @@ def qualified_opencl() -> dict[str, Any]:
         return dict(verdict)
 
 
-def record_failed_attempt(exc: BaseException, expected_revision: int) -> bool:
+def record_failed_attempt(exc: BaseException, expected_revision: int) -> tuple[bool, int]:
     """Count a status check that raised in place of an attempt that was due.
 
     The registry retries BEMPP on this module's interval and attempt cap. A
     raise that recorded nothing while a retry was due would leave it due
     forever, and the interface reads ``retry_pending()`` as "still checking".
-    Nothing is counted, and False returned, when there is nothing to stand in
-    for: a final verdict, a verdict newer than ``expected_revision`` (the call
-    ran an attempt, or another caller did), or a retry that is not yet due.
-    Decided under the attempt lock, so a concurrent attempt is never doubled.
+    Nothing is counted when there is nothing to stand in for: a final verdict,
+    a verdict newer than ``expected_revision`` (the call ran an attempt, or
+    another caller did), or a retry that is not yet due.
+
+    Returns whether it counted, and the revision the caller's failure stands
+    for, both read under the attempt lock: once it is released another caller
+    may record a newer verdict, and a revision read after that would pair this
+    failure with it and hide it from the registry's refresh.
     """
     with _selection_lock:
         if (_cached_verdict is not None or _revision != expected_revision
                 or (_last_timeout is not None and not retry_due())):
-            return False
+            return False, _revision
         detail = str(exc).splitlines()[0][:200] if str(exc) else ""
         # Not an OpenCL verdict: the status check failed around it.
         _record_verdict({
@@ -797,7 +801,7 @@ def record_failed_attempt(exc: BaseException, expected_revision: int) -> bool:
             "reason": "WG's BEMPP status check could not complete (internal error: "
                       f"{type(exc).__name__}{': ' + detail if detail else ''}).",
         })
-        return True
+        return True, _revision
 
 
 def clear_cache() -> None:
