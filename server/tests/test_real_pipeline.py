@@ -474,7 +474,7 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
     shutil.copytree(ROUND_RETURN, workspace / "wgreturn" / "round.wgreturn")
     mesh_request = {"rigid_size_mm": 20.0, "transition_mm": 30.0, "source_size_mm": {source_id: source_size}}
 
-    async def scenario() -> tuple[str, str, dict[str, Any]]:
+    async def scenario() -> tuple[str, str, dict[str, Any], str]:
         app = create_app(data_dir=tmp_path / "data")
         try:
             engine, reason = await _imported_engine(app)
@@ -561,20 +561,24 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
             )["operation"]
             assert (submitted["state"], submitted["stage"]) == ("accepted", "submitted"), submitted
             assert submitted["preparationId"] == held["preparationId"], submitted
+            # The refused first job keeps no run; approving continues as its
+            # Solve-again child (S4-F1).
+            parent = app.state.jobs_runtime.store.job_for_submission_key("cad-solve:real-pipeline-cad")
+            assert parent is not None and parent != submitted["jobId"], (parent, submitted)
             result = await _finish(app, submitted["jobId"])
             elapsed = time.perf_counter() - started
             assert elapsed < SOLVE_BUDGET_S, (
                 f"imported solve on {engine} took {elapsed:.2f} s; "
                 f"budget is {SOLVE_BUDGET_S:.0f} s"
             )
-            return engine, held["preparationId"], result
+            return engine, held["preparationId"], result, parent
         finally:
             await _close(app)
 
-    engine, ingest_id, result = asyncio.run(scenario())
+    engine, ingest_id, result, parent = asyncio.run(scenario())
 
     assert result["result_kind"] == "multi_channel", result["result_kind"]
-    assert result["client_request_id"] == "cad-solve:real-pipeline-cad"
+    assert result["client_request_id"] == f"cad-solve-again:{parent}"
     assert result["frequencies"] == IMPORTED_FREQUENCIES, result["frequencies"]
     metadata = result["metadata"]
     assert metadata["geometry_type"] == "imported"
