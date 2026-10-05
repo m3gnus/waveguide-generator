@@ -90,13 +90,25 @@ def engine_fingerprint(
     julia_project: Path | None = None, julia_sysimage: Path | None = None,
     cache: bool = False,
 ) -> str:
-    """Hash beat-engine Python/contracts, Julia and every bundled project/manifest.
+    """Hash shared engine sources and the selected backend project/manifests.
 
     Explicit project and sysimage bytes participate too. Their resolved paths,
     executable and environment belong in the future host key, not this hash.
     """
     assets = engine_assets(backend) if assets is None else assets
     files = _tree(assets.root, "engine")
+    projects = {"cpu": "julia_local", "metal": "julia_metal", "cuda": "julia_cuda", "rocm": "julia_rocm"}
+    for name in tuple(files):
+        path = files[name]
+        if path.suffix != ".toml":
+            continue
+        parts = path.relative_to(assets.root).parts
+        for other, project in projects.items():
+            if other != backend and (project in parts or any(
+                part in {f"BeatEngine{other.title()}Bundle", f"Compiled{other.title()}"} for part in parts
+            )):
+                del files[name]
+                break
     # Require entry points/schema even when an incomplete wheel omitted them.
     for path in (assets.root / "__init__.py", assets.root / "beat_contract/system-v1.schema.json",
                  assets.project / "Project.toml", assets.system_solver, assets.source_solver):

@@ -50,7 +50,7 @@ def test_same_bytes_relocated_are_identical(engine, tmp_path):
                                        julia_sysimage=copied / "renamed-image.so") == original
 
 
-@pytest.mark.parametrize("name", ENGINE_FILES)
+@pytest.mark.parametrize("name", [name for name in ENGINE_FILES if not name.startswith("julia_metal/")])
 def test_every_engine_input_invalidates_without_a_cache(engine, name):
     before = identity.engine_fingerprint(engine)
     path = engine.root / name

@@ -74,6 +74,7 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
         "hostPlatform": platform.system().lower(),
         "opencl_qualification_max_seconds": qualification_max_seconds(),
         "engines": engines,
+        "officialBeatRuntime": getattr(engine_registry, "official_runtime_statuses", None),
         "cpuPreparationInFlight": bool(
             getattr(engine_registry, "cpu_preparation_in_flight", lambda: False)()
         ),

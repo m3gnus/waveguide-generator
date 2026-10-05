@@ -87,9 +87,12 @@ import os
 from pathlib import Path
 import platform
 import sys
+import shlex
+import subprocess
 import threading
 from typing import Any, Mapping
 
+from .beat_runtime.provider import official_selected
 
 log = logging.getLogger("wg.solver.beat")
 
@@ -164,7 +167,7 @@ def _import(name: str) -> Any | None:
         return None
 
 
-def provision_command() -> str:
+def provision_command(*, production: bool = False) -> str:
     """The exact command that provisions the CPU runtime on this install.
 
     The interpreter is named rather than assumed: the packaged application's
@@ -174,9 +177,15 @@ def provision_command() -> str:
     """
 
     executable = sys.executable or "python"
-    if " " in executable:
-        executable = f'"{executable}"'
-    return f"{executable} -m hornlab_beat_bem.provision --backend cpu"
+    if official_selected() and not production:
+        from server.platform.paths import app_root
+
+        code = (f"import sys, runpy; sys.path.insert(0, {str(app_root())!r}); "
+                "runpy.run_module('server.solver.beat_runtime.cli', run_name='__main__')")
+        command = [executable, "-c", code, "--backend", "cpu"]
+    else:
+        command = [executable, "-m", "hornlab_beat_bem.provision", "--backend", "cpu"]
+    return subprocess.list2cmdline(command) if platform.system() == "Windows" else shlex.join(command)
 
 
 def cpu_provisioning_step() -> str | None:
@@ -245,10 +254,17 @@ def cpu_preparation_in_flight() -> bool:
 def _record_step(step: str | None) -> None:
     global _provision_step
     with _provision_lock:
+        changed = _provision_step != step
         _provision_step = step
+    if changed:
+        _notify_readiness_listeners()
 
 
 def add_readiness_listener(listener: Any) -> None:
+    if official_selected():
+        from .beat_runtime import readiness
+
+        readiness.add_readiness_listener(_official_readiness_changed)
     with _provision_lock:
         if listener not in _readiness_listeners:
             _readiness_listeners.append(listener)
@@ -258,6 +274,16 @@ def remove_readiness_listener(listener: Any) -> None:
     with _provision_lock:
         if listener in _readiness_listeners:
             _readiness_listeners.remove(listener)
+        empty = not _readiness_listeners
+    if empty and official_selected():
+        from .beat_runtime import readiness
+
+        readiness.remove_readiness_listener(_official_readiness_changed)
+
+
+def _official_readiness_changed() -> None:
+    if official_selected():
+        _notify_readiness_listeners()
 
 
 def _notify_readiness_listeners() -> None:
@@ -383,7 +409,7 @@ def _cpu_project_and_fingerprint(runtime: Any) -> tuple[Path | None, str | None]
         return project, None
 
 
-def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
+def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRuntimeReadiness:
     """Whether a BEAT CPU solve can start here, without paying a Julia startup.
 
     Cheap on purpose, and cheap in the same way the accelerator rows are not:
@@ -393,6 +419,16 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
     provisioning record, which is one small JSON read plus a content hash of the
     package's own files, rather than a second Julia launch on every boot.
     """
+
+    if official_selected() and not production:
+        if cpu_preparation_in_flight():
+            step = cpu_provisioning_step() or "starting"
+            return CpuRuntimeReadiness(False, "provisioning", f"WG is preparing the BEAT CPU runtime (step: {step}).")
+        from .beat_runtime.readiness import backend_readiness
+
+        verdict = backend_readiness(CPU_BACKEND)
+        remedy = "" if verdict.ready else f" Run: {provision_command(production=production)}"
+        return CpuRuntimeReadiness(verdict.ready, verdict.state, verdict.reason + remedy)
 
     provision = _import("hornlab_beat_bem.provision")
     runtime = _import("hornlab_beat_bem.runtime")
@@ -435,10 +471,10 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             "fingerprint-unavailable",
             "The BEAT CPU package identity could not be verified, so a recorded "
             "provisioning result is not trusted. Run: "
-            f"{provision_command()} --force",
+            f"{provision_command(production=production)} --force",
         )
 
-    step = cpu_provisioning_step()
+    step = None if production and official_selected() else cpu_provisioning_step()
     if step is not None:
         return CpuRuntimeReadiness(
             False,
@@ -476,7 +512,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             False,
             "julia-gone",
             "The BEAT CPU runtime was provisioned, but the Julia it recorded is "
-            f"no longer on disk. Provision it again: {provision_command()}",
+            f"no longer on disk. Provision it again: {provision_command(production=production)}",
         )
     if status == "failed" and _matches_cpu_request(state, project, fingerprint):
         return CpuRuntimeReadiness(
@@ -484,7 +520,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             "failed",
             "BEAT CPU runtime provisioning failed here: "
             f"{state.get('error') or 'no reason was recorded'}. It is not "
-            f"retried automatically. Retry with: {provision_command()} --force",
+            f"retried automatically. Retry with: {provision_command(production=production)} --force",
         )
     if status == "in_progress" and _matches_cpu_request(state, project, fingerprint):
         return CpuRuntimeReadiness(
@@ -492,7 +528,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             "interrupted",
             "An earlier BEAT CPU runtime provisioning did not finish (it stopped "
             f"at step: {state.get('step', 'unknown')}). Run it again: "
-            f"{provision_command()}",
+            f"{provision_command(production=production)}",
         )
 
     if (
@@ -531,7 +567,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
             False,
             "no-julia",
             "No Julia executable was found and the BEAT CPU runtime has not been "
-            f"provisioned here. Run: {provision_command()} -- it downloads a "
+            f"provisioned here. Run: {provision_command(production=production)} -- it downloads a "
             "portable Julia, instantiates the CPU project, and proves it with a "
             f"1 kHz solve.{additive}",
         )
@@ -541,7 +577,7 @@ def cpu_runtime_readiness(package: Any) -> CpuRuntimeReadiness:
         f"Julia is present ({julia}) but the BEAT CPU runtime has not been "
         "instantiated and probed here, and a Julia executable alone is not "
         "evidence that a solve would run -- an uninstantiated or offline depot "
-        f"fails at the first solve instead. Run: {provision_command()}{additive}",
+        f"fails at the first solve instead. Run: {provision_command(production=production)}{additive}",
     )
 
 
@@ -647,7 +683,6 @@ def _prepare_gpu_runtime(provision: Any, backend: str) -> None:
         global _gpu_stage_step
         with _provision_lock:
             _gpu_stage_step = message
-        _notify_readiness_listeners()
         log.info("BEAT %s runtime provisioning: %s", backend, message)
 
     try:
@@ -675,8 +710,9 @@ def _provision_status(message: str) -> None:
     user is already sent for "why is this not available", so send it there.
     """
 
-    _record_step(message)
-    _notify_readiness_listeners()
+    global _provision_step
+    with _provision_lock:
+        _provision_step = message
     log.info("BEAT CPU runtime provisioning: %s", message)
 
 
@@ -730,6 +766,78 @@ def _gpu_backend_present(provision: Any) -> str | None:
         return None
 
 
+def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | None:
+    """Prepare WG-owned CPU/Metal records using the existing launcher lifecycle."""
+    from .beat_runtime import hardware, readiness
+
+    global _preparation_in_flight, _provision_thread
+    verdict = readiness.backend_readiness(CPU_BACKEND, environ=env)
+    if verdict.state == "package-unusable":
+        return None
+    prepare_cpu = not verdict.ready and verdict.state != "failed"
+    prepare_gpu = False
+    if str(env.get(SKIP_GPU_PROVISION_ENV_VAR, "")).strip() != "1":
+        try:
+            prepare_gpu = bool(hardware.gpu_hardware()["metal"]["available"])
+        except Exception:
+            log.info("BEAT Metal hardware inventory failed; skipping GPU preparation", exc_info=True)
+    if not prepare_cpu and not prepare_gpu:
+        return None
+    snapshot = dict(env)
+
+    def worker() -> None:
+        global _preparation_in_flight, _provision_step, _gpu_stage_backend, _gpu_stage_step
+        try:
+            if prepare_cpu:
+                _mark_runtimes_prepared()
+                _record_step("starting")
+                try:
+                    readiness.provision_cpu(environ=snapshot, status_cb=_provision_status, step_cb=_record_step)
+                finally:
+                    _record_step(None)
+            if prepare_gpu:
+                verdict = readiness.backend_readiness("metal", environ=snapshot)
+                if verdict.ready or verdict.state in {"failed", "no-device", "package-unusable"}:
+                    return
+                _mark_runtimes_prepared()
+                with _provision_lock:
+                    _gpu_stage_backend, _gpu_stage_step = "metal", "starting"
+                _notify_readiness_listeners()
+
+                def status(message: str) -> None:
+                    global _gpu_stage_step
+                    with _provision_lock:
+                        _gpu_stage_step = message
+                    log.info("BEAT Metal runtime provisioning: %s", message)
+
+                def step_changed(step: str) -> None:
+                    global _gpu_stage_step
+                    with _provision_lock:
+                        changed = _gpu_stage_step != step
+                        _gpu_stage_step = step
+                    if changed:
+                        _notify_readiness_listeners()
+
+                readiness.provision_metal(environ=snapshot, status_cb=status, step_cb=step_changed)
+        except Exception:
+            log.warning("WG-owned BEAT preparation could not run", exc_info=True)
+        finally:
+            with _provision_lock:
+                _preparation_in_flight = False
+                _provision_step = _gpu_stage_backend = _gpu_stage_step = None
+            _notify_readiness_listeners()
+
+    with _provision_lock:
+        if _provision_thread is not None and _provision_thread.is_alive():
+            return _provision_thread
+        _preparation_in_flight = True
+        _provision_thread = threading.Thread(target=worker, name=PROVISION_THREAD_NAME, daemon=True)
+        _provision_thread.start()
+        started = _provision_thread
+    _notify_readiness_listeners()
+    return started
+
+
 def start_cpu_provisioning(
     *, environ: Mapping[str, str] | None = None, system: str | None = None
 ) -> threading.Thread | None:
@@ -755,6 +863,9 @@ def start_cpu_provisioning(
             host,
         )
         return None
+
+    if official_selected():
+        return _start_official_provisioning(env)
 
     package = _import("hornlab_beat_bem")
     provision = _import("hornlab_beat_bem.provision")

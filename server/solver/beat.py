@@ -191,6 +191,10 @@ def is_beat_engine(engine: str) -> bool:
 logger = logging.getLogger(__name__)
 
 
+def _load_readiness_api() -> Any | None:
+    return _load_api()
+
+
 def _load_api() -> Any | None:
     global _beat
     if _beat is not None:
@@ -304,7 +308,7 @@ def _cpu_backend_status(package: Any) -> tuple[bool, str]:
 
     from .beat_cpu_runtime import cpu_runtime_readiness
 
-    readiness = cpu_runtime_readiness(package)
+    readiness = cpu_runtime_readiness(package, production=True)
     return readiness.ready, readiness.reason
 
 
@@ -506,6 +510,12 @@ def _clear_status_caches() -> None:
 
     _cached_successful_beat_status.cache_clear()
     _cached_available_package_statuses.cache_clear()
+    from .beat_runtime.provider import official_selected
+
+    if official_selected():
+        from .beat_runtime import readiness
+
+        readiness.probe_cache_clear(notify=False)
 
 
 beat_status.cache_clear = _clear_status_caches  # type: ignore[attr-defined]

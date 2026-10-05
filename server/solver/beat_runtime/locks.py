@@ -60,6 +60,25 @@ def lock_holder(directory: Path | None = None) -> dict[str, object]:
     return record
 
 
+def provisioning_active(directory: Path | None = None) -> bool:
+    """Check kernel exclusion without creating files or trusting stale holder PIDs."""
+    root = paths.runtime_dir() if directory is None else paths.checked_root(directory)
+    target = root / LOCK_FILENAME
+    if paths.is_link(root) or paths.is_link(target):
+        raise ValueError("Linked provisioning root or lock refused")
+    try:
+        descriptor = os.open(target, os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    try:
+        if not _try_lock(descriptor):
+            return True
+        _unlock(descriptor)
+        return False
+    finally:
+        os.close(descriptor)
+
+
 @contextmanager
 def provisioning_lock(
     directory: Path | None = None, *, backend: str,
