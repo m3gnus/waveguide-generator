@@ -530,3 +530,153 @@ def test_a_daemonic_worker_could_not_have_had_children() -> None:
         process.join(30)
         if process.is_alive():  # pragma: no cover - defensive
             process.terminate()
+
+
+# -- a worker that dies in native code ----------------------------------------
+#
+# PoCL's LLVM aborting inside the worker ("Cannot select ... fsqrt", seen on a
+# hosted Ubuntu runner) raises no Python exception: the pipe just closes. The
+# job's error message used to be ``str(EOFError())`` -- empty.
+
+_LLVM_LINES = (
+    b"LLVM ERROR: Cannot select: 0x7f68c91ce480: i64 = fsqrt 0x7f68c91ce7c0\n"
+    b"  0x7f68c91ce7c0: i64,ch = CopyFromReg 0x7f68c9037be8, Register:i64 %0\n"
+    b"In function: _Z8_cl_sqrtDv16_f\n"
+)
+
+
+def _serve_until_a_solve(connection) -> None:
+    """Answer warmups like a real worker; return on the first solve."""
+
+    while True:
+        command = connection.recv()
+        if command is None:
+            connection.close()
+            os._exit(0)
+        job_id, _payload = command
+        if job_id == _WARMUP_JOB_ID:
+            connection.send(("warm", job_id, {"warmed": True}))
+            continue
+        return
+
+
+def _worker_dying_in_native_code(connection) -> None:
+    _serve_until_a_solve(connection)
+    # Straight to descriptor 2 and out without unwinding, as native code does.
+    os.write(2, _LLVM_LINES)
+    os._exit(3)
+
+
+def _worker_flooding_then_dying(connection) -> None:
+    _serve_until_a_solve(connection)
+    line = b"numba warning: " + b"x" * 200 + b"\n"
+    for _ in range(4000):  # ~860 KB, far beyond any job-record budget
+        os.write(2, line)
+    os.write(2, b"\n\n" + b"y" * 5000 + b"\n" + _LLVM_LINES + b"\n\n")
+    os._exit(3)
+
+
+def _worker_dying_silently(connection) -> None:
+    _serve_until_a_solve(connection)
+    os._exit(7)
+
+
+def _worker_dying_with_an_access_violation(connection) -> None:
+    _serve_until_a_solve(connection)
+    os._exit(-1073741819)  # 0xC0000005 as a signed int; Windows only
+
+
+async def _run_once(host: BemppProcessHost) -> None:
+    await host.run(
+        "mesh",
+        _context(),
+        mesh_metadata={},
+        mesh_stats={},
+        cancel_cb=lambda: None,
+        stage_cb=lambda *_event: None,
+        result_cb=None,
+    )
+
+
+def _death_message(target) -> str:
+    async def exercise() -> str:
+        host = BemppProcessHost(target=target)
+        try:
+            with pytest.raises(bempp_process.BemppWorkerError) as raised:
+                await _run_once(host)
+            return str(raised.value)
+        finally:
+            host.close()
+
+    return asyncio.run(exercise())
+
+
+def test_a_native_crash_names_the_process_its_exit_and_its_last_output(capfd) -> None:
+    message = _death_message(_worker_dying_in_native_code)
+
+    assert message.strip()
+    assert message.startswith("The BEMPP solve process exited unexpectedly")
+    assert "exit code 3" in message
+    assert "LLVM ERROR: Cannot select" in message and "fsqrt" in message
+    assert "In function: _Z8_cl_sqrtDv16_f" in message
+    # What the worker printed still reaches the server's own stderr.
+    assert "LLVM ERROR: Cannot select" in capfd.readouterr().err
+
+
+def test_a_stderr_flood_cannot_bloat_the_job_error() -> None:
+    message = _death_message(_worker_flooding_then_dying)
+
+    assert len(message) < 2600
+    assert message.rstrip().endswith("In function: _Z8_cl_sqrtDv16_f")
+    assert "LLVM ERROR: Cannot select" in message
+    assert "y" * 300 not in message, "an over-long line is cut"
+
+
+def test_a_silent_death_still_says_what_stopped() -> None:
+    message = _death_message(_worker_dying_silently)
+
+    assert "BEMPP solve process" in message
+    assert "exit code 7" in message
+    assert "printed nothing" in message
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTSTATUS exit codes are Windows-only")
+def test_a_windows_crash_status_is_shown_in_hex() -> None:
+    message = _death_message(_worker_dying_with_an_access_violation)
+
+    assert "0xC0000005 (access violation)" in message
+
+
+def test_the_worker_respawns_after_a_native_crash() -> None:
+    async def exercise() -> None:
+        host = BemppProcessHost(target=_worker_dying_in_native_code)
+        try:
+            with pytest.raises(bempp_process.BemppWorkerError):
+                await _run_once(host)
+            # The eager respawn's worker gets its own stderr file.
+            assert host._stderr is not None
+            with pytest.raises(bempp_process.BemppWorkerError, match="LLVM ERROR"):
+                await _run_once(host)
+        finally:
+            host.close()
+        assert host._stderr is None
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("exitcode", "windows", "expected"),
+    [
+        (None, False, "its exit status could not be read"),
+        (0, False, "it ended with exit code 0"),
+        (-15, False, "it was stopped by signal SIGTERM (15)"),
+        (-99, False, "it was stopped by signal 99"),
+        (-11, False, "it was stopped by signal SIGSEGV (11)"),
+        (0xC0000005, True, "it ended with status 0xC0000005 (access violation)"),
+        (0xC0000409, True, "it ended with status 0xC0000409 (fail-fast exception"),
+        (0xE0434352, True, "it ended with status 0xE0434352"),
+        (3, True, "it ended with exit code 3"),
+    ],
+)
+def test_exit_statuses_are_described_plainly(exitcode, windows, expected) -> None:
+    assert bempp_process._describe_exit(exitcode, windows=windows).startswith(expected)
