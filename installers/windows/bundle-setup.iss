@@ -997,13 +997,30 @@ begin
     (Copy(Candidate, 1, Length(Prefix)) = Prefix);
 end;
 
+function IsDriveRoot(const Dir: String): Boolean;
+var
+  Drive: String;
+begin
+  Drive := ExtractFileDrive(ExpandFileName(Trim(Dir)));
+  Result := (Drive <> '') and
+    (RemoveBackslash(ComparableDir(Dir)) = RemoveBackslash(AnsiLowerCase(Drive)));
+end;
+
+{ A root counts only when it is a real folder. Were a Program Files constant
+  ever to expand to a bare drive root, that whole drive would otherwise count
+  as standard, which is the opposite of what the rule is for. }
+function InsideStandardRoot(const Dir, Root: String): Boolean;
+begin
+  Result := (not IsDriveRoot(Root)) and DirIsInside(Dir, Root);
+end;
+
 function IsStandardInstallDir(const Dir: String): Boolean;
 begin
   Result :=
-    DirIsInside(Dir, ExpandConstant('{localappdata}\Programs')) or
-    DirIsInside(Dir, ExpandConstant('{userpf}')) or
-    DirIsInside(Dir, ExpandConstant('{commonpf64}')) or
-    DirIsInside(Dir, ExpandConstant('{commonpf32}'));
+    InsideStandardRoot(Dir, ExpandConstant('{localappdata}\Programs')) or
+    InsideStandardRoot(Dir, ExpandConstant('{userpf}')) or
+    InsideStandardRoot(Dir, ExpandConstant('{commonpf64}')) or
+    InsideStandardRoot(Dir, ExpandConstant('{commonpf32}'));
 end;
 
 { Advisory only, never a licence to delete: a copy is still there if either
@@ -1013,6 +1030,56 @@ begin
   Result := (Dir <> '') and
     (FileExists(AddBackslash(Dir) + 'Waveguide Generator.exe') or
      FileExists(AddBackslash(Dir) + 'app\APP-MANIFEST.json'));
+end;
+
+{ The names setup and the native helper write at the root of an install,
+  lowercase and bar-delimited: every <app> entry the UninstallDelete section
+  names, plus Inno's own uninstaller files (matched in IsWaveguideGeneratorEntry).
+  A test keeps this list and that section in step. }
+function IsWaveguideGeneratorEntry(const Name: String): Boolean;
+var
+  Lower: String;
+begin
+  Lower := AnsiLowerCase(Name);
+  Result := Pos('|' + Lower + '|',
+    '|app|runtime|recovery|.app.old|.runtime.old|.wg-install-old|.wg-install-new|' +
+    'waveguide generator.exe|wg-python.exe|wg-python._pth|waveguide generator._pth|' +
+    'pyvenv.cfg|python313.dll|python3.dll|vcruntime140.dll|vcruntime140_1.dll|' +
+    'msvcp140.dll|waveguidegenerator.ico|read me first.txt|.upgrade-in-progress|' +
+    '.wg-install-lock|.native-start|') > 0;
+  if not Result then
+    Result := (Length(Lower) = 12) and (Copy(Lower, 1, 5) = 'unins') and
+      ((Copy(Lower, 9, 4) = '.exe') or (Copy(Lower, 9, 4) = '.dat')) and
+      (StrToIntDef(Copy(Lower, 6, 3), -1) >= 0);
+end;
+
+{ Reads only the top level of Dir: Owned lists our entries that are present,
+  Foreign is True when anything else is there too. Read-only. }
+procedure ListPreviousCopy(const Dir: String; var Owned: String; var Foreign: Boolean);
+var
+  FindRec: TFindRec;
+begin
+  Owned := '';
+  Foreign := False;
+  if not FindFirst(AddBackslash(Dir) + '*', FindRec) then
+    exit;
+  try
+    repeat
+      if (FindRec.Name <> '.') and (FindRec.Name <> '..') then
+      begin
+        if IsWaveguideGeneratorEntry(FindRec.Name) then
+        begin
+          if Owned <> '' then
+            Owned := Owned + ', ';
+          Owned := Owned + FindRec.Name;
+        end
+        else
+          Foreign := True;
+      end;
+    until not FindNext(FindRec);
+  finally
+    FindClose(FindRec);
+  end;
 end;
 
 { Called from InitializeWizard, before any page is shown. Only an interactive
@@ -1054,7 +1121,7 @@ begin
   PreviousDirNotice.Anchors := [akLeft, akTop, akRight, akBottom];
   { A path has no spaces to wrap at, so it gets a line of its own, shortened
     with an ellipsis to the width it has rather than clipped. }
-  Notice := 'Waveguide Generator is currently installed in:' + #13#10 +
+  Notice := 'The previous installation is registered in:' + #13#10 +
     MinimizePathName(PreviousInstallDir, PreviousDirNotice.Font, PreviousDirNotice.Width) + #13#10#13#10 +
     'That is not a standard location, so Setup suggests the folder above instead. ' +
     'You can still choose any folder, including that one.';
@@ -1075,6 +1142,63 @@ begin
     not OfferStandardDir;
 end;
 
+function GetFinalPathNameByHandleW(Handle: Integer; Path: String; Size, Flags: Integer): Integer;
+  external 'GetFinalPathNameByHandleW@kernel32.dll stdcall setuponly';
+
+{ The path Windows itself resolves Dir to, or empty if it cannot be opened.
+  This sees through 8.3 short names, junctions and symbolic links, SUBST
+  drives, and a mapped drive versus its UNC path. The directory is opened
+  with no access rights (FILE_FLAG_BACKUP_SEMANTICS is what lets a directory
+  be opened at all), so nothing is read or changed.
+
+  Measured 2026-10-05, Inno Setup 6.7.3 on Windows 11: an 8.3 name resolves.
+  A junction an unelevated user made does not: setup runs with redirection
+  trust, so opening it fails with error 448 (an untrusted mount point), and
+  an install into such a path fails the same way. HoldsWaveguideGenerator
+  cannot see through it either, so no note is shown in that case. }
+function CanonicalDir(const Dir: String): String;
+var
+  Handle, Size: Integer;
+begin
+  Result := '';
+  if Trim(Dir) = '' then
+    exit;
+  Handle := CreateFileW(RemoveBackslashUnlessRoot(ExpandFileName(Trim(Dir))), 0, 7, 0, 3, $02000000, 0);
+  if Handle = -1 then
+    exit;
+  try
+    Result := StringOfChar(' ', 1024);
+    Size := GetFinalPathNameByHandleW(Handle, Result, 1024, 0);
+    if (Size <= 0) or (Size >= 1024) then
+      Result := ''
+    else
+      Result := Copy(Result, 1, Size);
+  finally
+    CloseHandle(Handle);
+  end;
+  if Copy(Result, 1, 8) = '\\?\UNC\' then
+    Result := '\\' + Copy(Result, 9, Length(Result))
+  else if Copy(Result, 1, 4) = '\\?\' then
+    Result := Copy(Result, 5, Length(Result));
+end;
+
+{ True when A and B are the same folder or either lies inside the other,
+  compared both as spelled and as Windows resolves them. A folder that
+  cannot be resolved is compared as spelled only. }
+function DirsOverlap(const A, B: String): Boolean;
+var
+  CanonicalA, CanonicalB: String;
+begin
+  Result := SameDir(A, B) or DirIsInside(A, B) or DirIsInside(B, A);
+  if Result then
+    exit;
+  CanonicalA := CanonicalDir(A);
+  CanonicalB := CanonicalDir(B);
+  if (CanonicalA <> '') and (CanonicalB <> '') then
+    Result := SameDir(CanonicalA, CanonicalB) or
+      DirIsInside(CanonicalA, CanonicalB) or DirIsInside(CanonicalB, CanonicalA);
+end;
+
 { After commit: when the install landed somewhere other than the previous
   folder, the old tree is still there, about 600 MB. Nothing removes it, by
   design. Running the old copy's own uninstaller from here would run an older
@@ -1087,24 +1211,54 @@ end;
   another root manages. So the user is told, in the log and on the finish
   page, and decides. }
 procedure NotePreviousCopy();
+var
+  Owned, Removal, Shortcuts: String;
+  Foreign: Boolean;
 begin
   PreviousCopyNotice := '';
-  if (PreviousInstallDir = '') or SameDir(PreviousInstallDir, ExpandConstant('{app}')) then
+  if PreviousInstallDir = '' then
     exit;
+  { Never point at the install just made: the same folder spelled another way,
+    or one folder nested in the other, gets no note at all. }
+  if DirsOverlap(PreviousInstallDir, ExpandConstant('{app}')) then
+  begin
+    if not SameDir(PreviousInstallDir, ExpandConstant('{app}')) then
+      WgLog('Install folder: ' + ExpandConstant('{app}') + ' and the previous folder ' +
+        PreviousInstallDir + ' are the same or nested; no note about the previous copy.');
+    exit;
+  end;
   if not HoldsWaveguideGenerator(PreviousInstallDir) then
   begin
     WgLog('Install folder: moved from ' + PreviousInstallDir + '; no copy remains there.');
     exit;
   end;
+  ListPreviousCopy(PreviousInstallDir, Owned, Foreign);
   WgLog('Install folder: moved from ' + PreviousInstallDir + ' to ' +
-    ExpandConstant('{app}') + '; the previous copy was left in place.');
+    ExpandConstant('{app}') + '; the previous copy was left in place: ' + Owned + '.');
+  { Never "delete that folder": it may be a drive root, or a folder the user
+    shares with other things. Name exactly what is ours unless the folder
+    holds nothing else. }
+  if IsDriveRoot(PreviousInstallDir) or Foreign then
+    Removal := 'Once you have closed Waveguide Generator, delete only these Waveguide Generator items in ' +
+      PreviousInstallDir + ', and nothing else there: ' + Owned + '.'
+  else
+    Removal := 'Once you have closed Waveguide Generator and moved out anything of yours, ' +
+      'delete the Waveguide Generator files in ' + PreviousInstallDir + '.';
+  { desktopicon is never remembered (UsePreviousTasks=no), so the old desktop
+    shortcut was replaced only if this run ticked the task. A pinned taskbar
+    or Start shortcut is never replaced. }
+  if WizardIsTaskSelected('desktopicon') then
+    Shortcuts := 'The desktop shortcut now opens this installation, but a taskbar or Start pin made from the old copy still opens the old one: unpin it, and pin Waveguide Generator again from the Start menu.'
+  else
+    Shortcuts := 'A desktop shortcut, or a taskbar or Start pin, made for the old copy still opens the old one: remove it, and pin Waveguide Generator again from the Start menu if you want.';
   PreviousCopyNotice :=
     'The previous copy in ' + PreviousInstallDir + ' was left in place and still takes up space. ' +
-    'Once you have moved out anything of yours, delete that folder. ' +
-    'Do not run the uninstaller inside it: it would also remove this installation''s ' +
+    Removal + ' ' +
+    'Do not run the uninstaller there: it would also remove this installation''s ' +
     'Start menu shortcut and its entry in Installed apps.' + #13#10#13#10 +
+    Shortcuts + #13#10#13#10 +
     'If you use WGLink in Fusion and it was installed from the old copy, it still runs from there. ' +
-    'After deleting the old folder, also delete the WGLink folder in Fusion''s AddIns folder, ' +
+    'After removing the old copy, also delete the WGLink folder in Fusion''s AddIns folder, ' +
     'then run this installer again with WGLink selected.';
 end;
 
