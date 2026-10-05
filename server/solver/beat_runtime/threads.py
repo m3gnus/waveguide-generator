@@ -21,7 +21,8 @@ def _performance_core_count() -> int:
             ["/usr/sbin/sysctl", "-n", "hw.perflevel0.logicalcpu"],
             capture_output=True, text=True, timeout=5,
         )
-        count = int(result.stdout.strip()) if result.returncode == 0 else 0
+        # Like the HBB-era facade, trust a parsable count whatever the exit status.
+        count = int(result.stdout.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
         return total
     return min(count, total) if count >= 1 else total

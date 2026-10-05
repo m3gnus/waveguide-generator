@@ -16,6 +16,24 @@ HOST_PROTOCOL = "wg-beat-host"
 HOST_PROTOCOL_VERSION = 1
 RUNTIME_DIR_ENV = "WG2_BEAT_RUNTIME_DIR"
 WORKER_DIR_ENV = "WG2_BEAT_WORKER_DIR"
+# HBB's overrides. Its default roots never coincide with ours; an override can.
+HBB_ROOT_ENVS = ("HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR")
+
+
+class RootConflict(ValueError):
+    """A WG root would share a directory tree with HBB's state or registry."""
+
+
+def _isolated(root: Path, env: Mapping[str, str]) -> Path:
+    resolved = root.expanduser().resolve()
+    for name in HBB_ROOT_ENVS:
+        value = env.get(name, "").strip()
+        if not value:
+            continue
+        legacy = Path(value).expanduser().resolve()
+        if resolved == legacy or legacy in resolved.parents or resolved in legacy.parents:
+            raise RootConflict(f"{root} overlaps HBB's {name} ({legacy}); choose separate directories")
+    return root
 
 
 def _data_base(system: str, env: Mapping[str, str], home: Path) -> Path:
@@ -34,8 +52,14 @@ def runtime_dir(
     env = os.environ if environ is None else environ
     base = env.get(RUNTIME_DIR_ENV)
     if base:
-        return Path(base).expanduser() / PROVIDER_ID
-    return _data_base(system or sys.platform, env, home or Path.home()) / "WaveguideGenerator" / "beat-runtime" / PROVIDER_ID
+        return _isolated(Path(base).expanduser() / PROVIDER_ID, env)
+    return _isolated(
+        _data_base(system or sys.platform, env, home or Path.home())
+        / "WaveguideGenerator"
+        / "beat-runtime"
+        / PROVIDER_ID,
+        env,
+    )
 
 
 def worker_dir(
@@ -44,7 +68,16 @@ def worker_dir(
 ) -> Path:
     """Root of detached host records, locks and endpoints; outside sessions."""
     env = os.environ if environ is None else environ
-    system = system or sys.platform
+    return _isolated(_worker_dir(env, system or sys.platform, home, temp_dir, uid), env)
+
+
+def _worker_dir(
+    env: Mapping[str, str],
+    system: str,
+    home: Path | None,
+    temp_dir: Path | None,
+    uid: int | None,
+) -> Path:
     if env.get(WORKER_DIR_ENV):
         return Path(env[WORKER_DIR_ENV]).expanduser() / PROVIDER_ID
     if system == "win32":

@@ -28,7 +28,7 @@ def test_non_mac_falls_back_to_total_without_sysctl(monkeypatch, system, total):
 
 @pytest.mark.parametrize(("output", "code", "expected"), [
     ("8\n", 0, 8), ("20", 0, 10), ("0", 0, 10), ("-1", 0, 10),
-    ("", 0, 10), ("unknown", 0, 10), ("8", 1, 10),
+    ("", 0, 10), ("unknown", 0, 10), ("8", 1, 8),
 ])
 def test_mac_performance_cores_and_fallback(monkeypatch, output, code, expected):
     monkeypatch.setattr(threads.platform, "system", lambda: "Darwin")

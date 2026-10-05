@@ -1,4 +1,4 @@
-"""Locate fork-owned assets through its public API, without HBB fallback."""
+"""Locate beat-engine-owned assets through its public API, without HBB fallback."""
 
 from dataclasses import dataclass
 from pathlib import Path

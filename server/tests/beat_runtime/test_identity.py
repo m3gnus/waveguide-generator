@@ -149,3 +149,15 @@ def test_wg_runtime_and_compiled_policy_identity_is_separate(engine, tmp_path):
     policy.unlink()
     with pytest.raises(identity.IdentityUnavailable):
         identity.runtime_fingerprint(runtime, **args)
+
+
+@pytest.mark.parametrize(
+    "name", ["JuliaProject.toml", "JuliaManifest.toml", "JuliaManifest-v1.12.toml"]
+)
+def test_julia_prefixed_project_and_manifest_edits_invalidate(engine, tmp_path, name):
+    project = tmp_path / "custom"
+    _write(project, ["Project.toml", name])
+    args = dict(julia_project=project / "Project.toml")
+    before = identity.engine_fingerprint(engine, **args)
+    (project / name).write_text("changed")
+    assert identity.engine_fingerprint(engine, **args) != before

@@ -19,8 +19,8 @@ class IdentityUnavailable(RuntimeError):
 def _identity_file(path: Path) -> bool:
     return (
         path.suffix in {".py", ".jl", ".json"}
-        or path.name == "Project.toml"
-        or (path.name.startswith("Manifest") and path.suffix == ".toml")
+        or path.name in {"Project.toml", "JuliaProject.toml"}
+        or (path.name.startswith(("Manifest", "JuliaManifest")) and path.suffix == ".toml")
     )
 
 
@@ -66,7 +66,7 @@ def engine_fingerprint(
     assets: EngineAssets | None = None, *, backend: str = "cpu",
     julia_project: Path | None = None, julia_sysimage: Path | None = None,
 ) -> str:
-    """Hash fork Python/contracts, Julia and every bundled project/manifest.
+    """Hash beat-engine Python/contracts, Julia and every bundled project/manifest.
 
     Explicit project and sysimage bytes participate too. Their resolved paths,
     executable and environment belong in the future host key, not this hash.
