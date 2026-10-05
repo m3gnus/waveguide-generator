@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 import json
 from pathlib import Path
 from typing import Any
@@ -34,15 +34,22 @@ def warm_up(*, beat_backend: str = "cpu", mode: str = "worker",
 
         class ProbeWorker:
             worker_info: dict | None = None
+            events: Generator[dict, None, None] | None = None
 
-            def submit(self, request_path: Path) -> Iterator[dict]:
+            def submit(self, request_path: Path) -> Generator[dict, None, None]:
                 def negotiated(info: dict | None, request: dict, operation: str) -> None:
                     self.worker_info = info
 
                 session.submit(client, json.loads(request_path.read_text(encoding="utf-8")),
                                negotiate=negotiated)
-                return session.events()
+                self.events = session.events()
+                return self.events
 
-        proof = compiled_probe(ProbeWorker(), directory=session.directory, backend=beat_backend)
-        if not proof.ready:
-            raise RuntimeError(proof.reason)
+        worker = ProbeWorker()
+        try:
+            proof = compiled_probe(worker, directory=session.directory, backend=beat_backend)
+            if not proof.ready:
+                raise RuntimeError(proof.reason)
+        finally:
+            if worker.events is not None:
+                worker.events.close()

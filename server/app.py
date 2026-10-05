@@ -662,7 +662,10 @@ def create_app(
 
         The explicit official provider instead closes its process-default
         manager for good: idle hosts detach, active sessions retire their
-        engine, and child mode terminates. Host idle exit has its own timeout.
+        engine, and child mode terminates. After idle or completed-warm-up Quit,
+        hosts keep Julia warm for relaunch until DEFAULT_IDLE_TIMEOUT (1800 s).
+        After active-solve or aborted-warm-up Quit the engine retires, but the
+        host Python process remains until its idle exit.
         """
 
         log = logging.getLogger("wg.solver.warmup")

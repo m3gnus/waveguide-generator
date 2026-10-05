@@ -60,6 +60,10 @@ import unicodedata
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+# Direct script invocation must find the WG-owned provider selector.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from server.solver.beat_runtime import provider  # noqa: E402
+
 
 #: Small, finite and quick: two frequencies over a coarse mesh. The gate is
 #: "did the CPU backend really run and return usable numbers", not "is the
@@ -253,9 +257,9 @@ from pathlib import Path
 sys.path.insert(0, os.environ["WG2_APP_ROOT"])
 from server.solver.beat_runtime import paths
 from server.solver.beat_runtime.inspection import inspect_hosts
-from server.solver.beat_runtime.provider import official_provider_enabled
+from server.solver.beat_runtime.provider import official_selected
 
-if not official_provider_enabled():
+if not official_selected():
     raise RuntimeError("Official BEAT inspection requires WG2_BEAT_PROVIDER=official")
 directory = Path(sys.argv[1]) / paths.PROVIDER_ID
 print(json.dumps(inspect_hosts(directory, stop=sys.argv[2] == "stop")))
@@ -404,7 +408,7 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         HORNLAB_BEAT_WORKER_DIR=str(work / "beat-registry"),
     )
     environment.update(isolated_user_directories(work))
-    if environment.get("WG2_BEAT_PROVIDER") == "official":
+    if provider.official_selected(environment):
         environment.update(WG2_BEAT_RUNTIME_DIR=str(work / "official-beat-runtime"),
                            WG2_BEAT_WORKER_DIR=str(work / "official-beat-registry"))
     return environment
@@ -1286,7 +1290,7 @@ def stop_our_workers(
     qualification, keeping an earlier failure if there was one.
     """
 
-    official = environment.get("WG2_BEAT_PROVIDER") == "official"
+    official = provider.official_selected(environment)
     worker_directory = environment["WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"]
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
         [
@@ -1982,10 +1986,10 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         "isolated": {
             "data_dir": str(data_dir),
             "beat_runtime_dir": environment[
-                "WG2_BEAT_RUNTIME_DIR" if environment.get("WG2_BEAT_PROVIDER") == "official"
+                "WG2_BEAT_RUNTIME_DIR" if provider.official_selected(environment)
                 else "HORNLAB_BEAT_RUNTIME_DIR"],
             "worker_registry": environment[
-                "WG2_BEAT_WORKER_DIR" if environment.get("WG2_BEAT_PROVIDER") == "official"
+                "WG2_BEAT_WORKER_DIR" if provider.official_selected(environment)
                 else "HORNLAB_BEAT_WORKER_DIR"],
             "julia_depot": environment["JULIA_DEPOT_PATH"],
             "python_cache": environment["PYTHONPYCACHEPREFIX"],

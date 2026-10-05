@@ -41,8 +41,8 @@ PINS = {
 }
 
 
-@pytest.mark.parametrize("provider", [None, "hbb", "official"])
-def test_registry_probe_selector_and_isolation(tmp_path, monkeypatch, provider):
+@pytest.mark.parametrize("provider", [None, "hbb", "official", " official ", "Official"])
+def test_shared_selector_registry_probe_and_isolation(tmp_path, monkeypatch, provider):
     if provider is None:
         monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
     else:
@@ -57,7 +57,7 @@ def test_registry_probe_selector_and_isolation(tmp_path, monkeypatch, provider):
 
     monkeypatch.setattr(gate.subprocess, "run", run)
     gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
-    official = provider == "official"
+    official = provider in {"official", " official "}
     assert commands[0][2] == (gate._IDENTIFY_AND_STOP_OFFICIAL if official else gate._IDENTIFY_AND_STOP)
     expected = "WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"
     assert commands[0][3] == environment[expected]
@@ -3020,3 +3020,25 @@ def test_ib_opt_in_runs_on_the_cpu_server_and_keeps_its_report(
     assert report["worker_cleanup"]["contained"] is True
     state = json.loads((tmp_path / "work" / "data" / "stub-state.json").read_text())
     assert state["starts"] == 1
+
+
+@pytest.mark.parametrize("selector,official", [(" official ", True), ("Official", False)])
+def test_shared_selector_qualifier_report_paths(tmp_path, monkeypatch, selector, official):
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
+    monkeypatch.setattr(gate, "resolve_payload", lambda payload: (tmp_path, tmp_path, Path(sys.executable)))
+    monkeypatch.setattr(gate, "pins_from_file", lambda path: {})
+    monkeypatch.setattr(gate, "expectations_from_build_manifest", lambda path: {})
+
+    def stop_before_server(*args):
+        raise gate.QualificationError("stop after isolated report")
+
+    monkeypatch.setattr(gate, "check_manifest", stop_before_server)
+    args = gate.build_parser().parse_args(["--payload", str(tmp_path), "--work", str(tmp_path / "work"),
+                                          "--output", str(tmp_path / "out")])
+    report = {}
+    with pytest.raises(gate.QualificationError, match="isolated report"):
+        gate.qualify(args, report)
+    environment = gate.isolated_environment(tmp_path, tmp_path / "work")
+    prefix = "WG2" if official else "HORNLAB"
+    assert report["isolated"]["beat_runtime_dir"] == environment[f"{prefix}_BEAT_RUNTIME_DIR"]
+    assert report["isolated"]["worker_registry"] == environment[f"{prefix}_BEAT_WORKER_DIR"]

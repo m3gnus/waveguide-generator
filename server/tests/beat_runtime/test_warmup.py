@@ -4,13 +4,14 @@ import asyncio
 import sys
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
 from server.app import create_app
 from server.platform import temp_session
-from server.solver import warmup as app_warmup
-from server.solver.beat_runtime import cleanup, manager, paths, probe, registry, warmup
+from server.solver import beat_cpu_runtime as facade, warmup as app_warmup
+from server.solver.beat_runtime import cleanup, manager, paths, probe, readiness, registry, warmup
 from server.solver.beat_runtime.ownership import OwnershipClosed
 from server.solver.beat_runtime.session import SolveSession
 from server.tests.beat_runtime.fake_host_worker import EngineWorker, events, wait_until
@@ -154,3 +155,86 @@ def test_worker_mode_starts_without_a_submission_or_closing_admission(runtime_fa
     assert client.worker.worker_info is not None
     assert not any(e["type"] == "submitted" for e in events(key))
     assert runtime.get_worker() is client
+
+
+@pytest.mark.parametrize("warmup_mode", ["tiny", "worker"])
+def test_quit_cancels_cold_start_before_ensure_started_completes(runtime_factory, monkeypatch,
+                                                               tmp_path, warmup_mode):
+    make, key, _ = runtime_factory
+    gate = tmp_path / "startup-release"
+    marker = tmp_path / "startup-entered"
+    monkeypatch.setenv("TEST_START_GATE", str(gate))
+    monkeypatch.setenv("TEST_START_ONCE_MARKER", str(marker))
+    runtime = make()
+    errors = []
+
+    def work():
+        try:
+            warmup.warm_up(mode=warmup_mode)
+        except RuntimeError as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=work, daemon=True)
+    thread.start()
+    try:
+        wait_until(marker.exists, timeout=5)
+        assert not any(e["type"] == "started" for e in events(key))
+        started = time.monotonic()
+        asyncio.run(_beat_quit_hook(create_app(data_dir=tmp_path / "data"))())
+        thread.join(1)
+        assert time.monotonic() - started < 2
+        assert not thread.is_alive() and errors
+        # Release only after proving Quit woke the cold-start caller.
+        gate.touch()
+        wait_until(lambda: any(e["type"] == "terminated" for e in events(key)))
+        with pytest.raises(OwnershipClosed):
+            runtime.get_worker()
+    finally:
+        gate.touch()
+        thread.join(3)
+
+
+def test_tiny_probe_failure_before_iteration_explicitly_closes_events(runtime_factory, monkeypatch):
+    make, _, _ = runtime_factory
+    make()
+    closed = []
+
+    class UnreadEvents:
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(SolveSession, "events", lambda self: UnreadEvents())
+
+    def fail_before_iteration(worker, *, directory, backend):
+        request = directory / "probe.json"
+        request.write_text('{"name":"unread probe"}')
+        worker.submit(request)
+        return SimpleNamespace(ready=False, reason="negotiation failed before iteration")
+
+    monkeypatch.setattr(warmup, "compiled_probe", fail_before_iteration)
+    with pytest.raises(RuntimeError, match="before iteration"):
+        warmup.warm_up(mode="tiny")
+    assert closed == [True]
+
+
+@pytest.mark.parametrize("selector,official", [(" official ", True), ("Official", False)])
+def test_shared_selector_lifecycle_and_readiness_decisions(runtime_factory, monkeypatch, tmp_path,
+                                                          selector, official):
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
+    calls = []
+    monkeypatch.setattr(warmup, "warm_up", lambda **kwargs: calls.append("official-warmup"))
+    monkeypatch.setattr(manager, "_default_manager",
+                        SimpleNamespace(detach=lambda: calls.append("official-quit")))
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", SimpleNamespace(
+        warm_up=lambda **kwargs: calls.append("hbb-warmup"),
+        shutdown_workers=lambda: calls.append("hbb-quit")))
+    app_warmup._warm_beat("cpu")
+    asyncio.run(_beat_quit_hook(create_app(data_dir=tmp_path / "data"))())
+    prefix = "official" if official else "hbb"
+    assert calls == [f"{prefix}-warmup", f"{prefix}-quit"]
+    assert ("server.solver.beat_runtime.cli" in facade.provision_command()) == official
+    monkeypatch.setattr(facade, "_preparation_in_flight", False)
+    monkeypatch.setattr(facade, "_import", lambda name: None)
+    monkeypatch.setattr(readiness, "backend_readiness", lambda backend:
+                        readiness.BackendReadiness(True, "ready", "fixture proof"))
+    assert facade.cpu_runtime_readiness(None).ready == official

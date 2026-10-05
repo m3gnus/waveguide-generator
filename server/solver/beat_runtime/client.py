@@ -32,7 +32,18 @@ class HostConnectionClosed(HostError):
     """An endpoint closed during admission; its record may be retiring."""
 
 
-def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CONTROL_TIMEOUT) -> socket.socket:
+def _receive_frame(connection: socket.socket, *, cancelled: Callable[[], bool] | None = None,
+                   **options: Any) -> dict | None:
+    try:
+        return receive_frame(connection, cancelled=cancelled, **options)
+    except OSError as exc:
+        if isinstance(exc, ConnectionAbortedError) or (cancelled is not None and cancelled()):
+            raise HostError("BEAT host receive cancelled") from exc
+        raise
+
+
+def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CONTROL_TIMEOUT,
+                   cancelled: Callable[[], bool] | None = None) -> socket.socket:
     """Prove both peers' identity within one control deadline."""
     r.validate_record(record, record.key, directory)
     deadline = time.monotonic() + timeout
@@ -40,7 +51,7 @@ def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CO
     try:
         hello = r.hello_message(record)
         send_frame(connection, hello)
-        reply = receive_frame(connection, deadline=deadline)
+        reply = _receive_frame(connection, deadline=deadline, cancelled=cancelled)
         if reply is None:
             raise HostConnectionClosed("BEAT host closed during hello")
         r.validate_hello(record, reply, hello["nonce"])
@@ -49,7 +60,7 @@ def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CO
                    "key_id": record.identifier, "nonce": nonce,
                    "proof": r.auth_proof(record, nonce, "client_auth")}
         send_frame(connection, message)
-        accepted = receive_frame(connection, deadline=deadline)
+        accepted = _receive_frame(connection, deadline=deadline, cancelled=cancelled)
         if accepted is None:
             raise HostConnectionClosed("BEAT host closed during client admission")
         proof = accepted.get("proof")
@@ -78,9 +89,9 @@ class _RemoteStream:
             while True:
                 # Each heartbeat/progress frame renews liveness; solve duration
                 # has no fixed deadline. Allocation stays bounded by IPC policy.
-                frame = receive_frame(self.connection, max_bytes=MAX_FRAME_BYTES,
-                                      deadline=time.monotonic() + HEARTBEAT_TIMEOUT,
-                                      cancelled=lambda: self.closed)
+                frame = _receive_frame(self.connection, max_bytes=MAX_FRAME_BYTES,
+                                       deadline=time.monotonic() + HEARTBEAT_TIMEOUT,
+                                       cancelled=lambda: self.closed or self.client._closed.is_set())
                 if frame is None:
                     raise HostError("BEAT host disconnected before job completion")
                 kind = frame.get("type")
@@ -132,10 +143,12 @@ class _RemoteSubmitter:
         if len(json.dumps(message, separators=(",", ":"), allow_nan=False).encode("utf-8")) > CONTROL_FRAME_BYTES:
             raise HostError("BEAT submission exceeds the 1 MiB control limit; stage the request as a file")
         self.client.adopt()  # Maintain an authenticated lifetime lease.
-        connection = connect_client(self.client._record, self.client.directory)
+        connection = connect_client(self.client._record, self.client.directory,
+                                    cancelled=self.client._closed.is_set)
         try:
             send_frame(connection, message)
-            accepted = receive_frame(connection, deadline=time.monotonic() + CONTROL_TIMEOUT)
+            accepted = _receive_frame(connection, deadline=time.monotonic() + CONTROL_TIMEOUT,
+                                      cancelled=self.client._closed.is_set)
             if accepted is None or accepted.get("type") != "queued":
                 raise HostError(str(accepted.get("error", "BEAT submission refused"))
                                 if accepted else "BEAT host closed before admission")
@@ -209,7 +222,8 @@ class HostedWorker:
                                           idle_timeout=self.idle_timeout, **options)
                 try:
                     connection = connect_client(self._record, self.directory,
-                                                timeout=min(CONTROL_TIMEOUT, remaining_time(deadline)))
+                                                timeout=min(CONTROL_TIMEOUT, remaining_time(deadline)),
+                                                cancelled=self._closed.is_set)
                     break
                 except (HostConnectionClosed, ConnectionError) as exc:
                     # A hello can race a retiring host's final admission close.
@@ -244,10 +258,12 @@ class HostedWorker:
                 else:
                     send_frame(connection, {"op": operation})
                 while True:
-                    frame = receive_frame(connection, deadline=(time.monotonic() + HEARTBEAT_TIMEOUT
-                                                                 if streaming else deadline))
+                    frame = _receive_frame(connection, deadline=(time.monotonic() + HEARTBEAT_TIMEOUT
+                                                                  if streaming else deadline),
+                                           cancelled=lambda: (self._closed.is_set()
+                                                              or self._startup_cancelled.is_set()))
                     if frame is None:
-                        raise HostError("BEAT host closed before answering")
+                        raise HostConnectionClosed("BEAT host closed before answering")
                     kind = frame.get("type")
                     if kind == terminal:
                         return frame
@@ -271,9 +287,20 @@ class HostedWorker:
     def ensure_started(self, *, status_callback: Callable[[str], None] | None = None) -> None:
         self._startup_done.clear()
         try:
-            if self._startup_cancelled.is_set():
-                raise HostError("BEAT startup cancelled")
-            self._report(self._request("ensure_started", "ready", status_callback=status_callback, streaming=True))
+            for attempt in range(2):
+                if self._startup_cancelled.is_set() or self._closed.is_set():
+                    raise HostError("BEAT startup cancelled")
+                try:
+                    frame = self._request("ensure_started", "ready", status_callback=status_callback,
+                                          streaming=True)
+                    self._report(frame)
+                    return
+                except (HostConnectionClosed, ConnectionError) as exc:
+                    # A successor may queue behind cancelled cold startup before
+                    # its host's retirement backstop closes admission. Startup
+                    # can retry safely; numerical submissions never replay.
+                    if attempt:
+                        raise HostError("BEAT host startup admission did not reopen") from exc
         finally:
             self._startup_done.set()
 
@@ -299,9 +326,11 @@ class HostedWorker:
 
     def cancel_startup(self) -> None:
         """Retire only this connection's FIFO startup, with a bounded host backstop."""
-        self._startup_cancelled.set()
         sent = False
         with self._lifetime:
+            # The cancelled reader takes this lock to disconnect. Send the
+            # retirement request before it can close the startup connection.
+            self._startup_cancelled.set()
             if self._connection is not None:
                 with contextlib.suppress(OSError):
                     send_frame(self._connection, {"op": "cancel", "retire_startup": True})

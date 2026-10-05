@@ -1608,3 +1608,78 @@ downloads, frontend build, real user/HBB-directory writes or full WG suite ran.
 All requested PR 21 work is complete and uncommitted. Exact adapter checks and
 real installed/Julia/Windows Job Object qualification remain unavailable or
 outside this row's fake-worker gate; no engine PID API is assumed.
+
+
+- **Review round 1 fixes (PR 21)** — review slices 21a/21b/21c:
+  - **P1/A — fixed:** inspection rechecks failed connections under the record's
+    spawn lock. Disappeared records are skipped; dead or start-mismatched hosts
+    are pruned through `cleanup_host(prune_only=True, lock=...)`. Live hosts with
+    unknown/matching start identity and changed successor records remain refused.
+    Regression cases cover ENOENT/ECONNREFUSED for each interleaving, a detached fake
+    host's idle exit between record read and connect, and a killed fake host's
+    stale record. No recorded PID is signalled by inspection or cleanup.
+  - **P2/B — fixed:** every client receive in hello, authentication, control,
+    startup and submission admission polls cancellation, including before a
+    socket becomes the cached lifetime connection. Startup cancellation also
+    wakes its caller; the lifetime lock orders the retirement request before
+    the reader disconnects. A successor whose startup queues behind the retiring
+    host retries startup EOF once; numerical submissions never replay. The
+    existing recovery test retains its nine-second shared deadline, allowing
+    the cancelled caller to return before the host retirement backstop. Silent
+    socket regressions model closure failing to wake recv; slow fake startup proves Quit releases both tiny and worker
+    warm-up callers before `ensure_started` finishes, within two seconds.
+  - **P2/C — fixed:** all qualifier isolation, cleanup and report-path decisions
+    call `provider.official_selected(environment)`; the installed probe uses the
+    same selector. Lifecycle/readiness/bootstrap/qualifier regressions retain
+    the shared strip/warning semantics: `" official "` selects official BEAT;
+    `"Official"` is unknown, warns and retains HBB. The alias remains unchanged.
+  - **P3 record enumeration — fixed:** validate stems with `registry.record_path`
+    before reading JSON, so only canonical host records are inspected. Ready,
+    launch-spec and unrelated JSON files are ignored and retained.
+  - **P3 Quit documentation — fixed:** the application Quit hook and manager
+    detach docstrings state that idle or completed-warm-up hosts keep Julia warm
+    for relaunch until `DEFAULT_IDLE_TIMEOUT` (1800 s) by design. After active-
+    solve or aborted-warm-up Quit the engine retires, while the host Python
+    process remains until idle exit.
+  - **P3 tiny probe cleanup — fixed:** retain the events generator and close it
+    explicitly in a finally, including probe failure before any iteration.
+    The session still owns and closes its underlying lease/stream.
+  - **P3 cancellation exception — fixed:** cancelled client receives translate
+    `ConnectionAbortedError` (and socket errors during cancellation) to
+    `HostError`, including remote streams; no bare cancellation OSError escapes.
+    Session-local cancellation continues to use `SessionCancelled`.
+
+  Files per review slice:
+  - **PR 21a:** `server/solver/beat_runtime/warmup.py`;
+    `server/tests/beat_runtime/test_warmup.py`.
+  - **PR 21b:** `server/app.py`; `server/solver/beat_runtime/{client,manager}.py`;
+    `server/tests/beat_runtime/test_{client,manager_review,warmup}.py`.
+  - **PR 21c:** `server/solver/beat_runtime/inspection.py`;
+    `scripts/qualify_installed_cpu.py`; `server/tests/beat_runtime/test_inspection.py`;
+    `scripts/tests/test_{qualify_installed_cpu,bootstrap_official_beat}.py`.
+  This `CHANGES.md` records all three slices. No design deviations: all fixes
+  adapt WG to official JWSound/BEAT_Engine through public, optional engine APIs.
+  No pins, dependencies, production route switches, HBB writes or CUDA/ROCm
+  changes. Changes remain uncommitted as requested. Real Julia/installed/Windows
+  Job Object qualification is outside this fake-worker review-fix gate.
+
+
+PR 21 review-round validation (requested interpreter, unpiped; pytest invoked
+through the required targeted launcher; each check below two minutes):
+- `scripts/run_tests.py server/tests/beat_runtime server/tests/beat_adapter
+  server/tests/test_solver_beat.py -q -p no:cacheprovider`:
+  **1353 passed, 1 skipped in 99.77 s**.
+- `scripts/run_tests.py server/tests/beat_adapter server/tests/test_temp_session.py
+  server/tests/test_beat_cpu_runtime.py scripts/tests/test_qualify_installed_cpu.py
+  scripts/tests/test_bootstrap_official_beat.py -q -p no:cacheprovider`:
+  **654 passed, 1 skipped in 28.41 s**.
+- Requested runtime/adapter Ruff check and Ruff on every other changed Python
+  file passed; `git diff --check` passed.
+- Focused new-mechanism group: **37 passed in 3.78 s**; startup recovery/client/
+  warm-up group after the recovery fix: **34 passed in 16.44 s**. The final
+  common suite also covers the added bounded-startup-retry regression.
+
+All review items are fixed. No requested fixes remain unfinished. No Julia,
+downloads, real user/HBB-directory writes, frontend jobs, full WG suite, or
+`server/tests/test_startup_performance.py` test run occurred. Existing optional
+adapter coverage accounts for the skip in each overlapping test group.

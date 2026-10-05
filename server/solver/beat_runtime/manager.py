@@ -337,7 +337,12 @@ class WorkerManager:
         self._close(detach=False)
 
     def detach(self) -> None:
-        """Quit: retain idle hosts; cancel active work and terminate child mode."""
+        """Quit: close admission, cancel active work and terminate child mode.
+
+        Idle/completed-warm-up hosts keep Julia warm for relaunch until
+        DEFAULT_IDLE_TIMEOUT (1800 s). Active-solve/aborted-warm-up Quit retires
+        the engine; the host Python process remains until its idle exit.
+        """
         self._close(detach=True)
 
 

@@ -8,7 +8,7 @@ from typing import Any
 
 from . import paths, registry
 from .cleanup import cleanup_host
-from .client import connect_client
+from .client import HostConnectionClosed, connect_client
 from .ipc import receive_frame, send_frame
 
 
@@ -23,13 +23,25 @@ def inspect_hosts(directory: Path, *, stop: bool = False) -> dict[str, Any]:
         return answer
     registry.private_directory(effective)
     for path in sorted(effective.glob("*.json")):
-        if path.name.endswith(".key.json"):
+        try:
+            registry.record_path(path.stem, effective)
+        except ValueError:
             continue
         try:
             record = registry.read_record(path.stem, effective)
             if record is None:
                 continue
-            with connect_client(record, effective, timeout=2.0) as connection:
+            try:
+                connection = connect_client(record, effective, timeout=2.0)
+            except (OSError, HostConnectionClosed):
+                # Idle exit can win between read_record and connect. Recheck
+                # under spawn exclusion; cleanup refuses live/successor peers.
+                with registry.SpawnLock(registry.spawn_lock_path(record.identifier, effective),
+                                        timeout=2.0) as lock:
+                    if registry.read_record(record.identifier, effective) is not None:
+                        cleanup_host(record, record.key, effective, lock=lock, prune_only=True)
+                continue
+            with connection:
                 send_frame(connection, {"op": "adopt"})
                 report = receive_frame(connection, deadline=time.monotonic() + 2.0)
                 if (not isinstance(report, dict) or report.get("type") != "adopted"

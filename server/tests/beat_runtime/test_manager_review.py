@@ -460,7 +460,9 @@ def test_unresponsive_hosted_startup_cancel_bounds_successor_wait_by_respawning(
             started = time.monotonic()
             abandoned.request_cancel()
             a.join(9)
-            b.join(2)
+            # The cancelled caller can now return before the host's retirement
+            # backstop. Both callers still share the original recovery bound.
+            b.join(max(0, 8.5 - (time.monotonic() - started)))
             assert not a.is_alive() and not b.is_alive()
             assert time.monotonic() - started < 9
             assert replies and replies[-1]['type'] == 'completed', [str(error) for error in errors]
