@@ -291,11 +291,15 @@ def _copy_previous_snapshot(source: Path, rotated: Path, deadline: float) -> boo
         # copied nothing new (busy, locked, or restarted by a write, whatever
         # its status) abandons the copy. An undisturbed copy always moves
         # forward and is never cut off, however large the snapshot.
-        progressed = fewest_remaining[0] is None or remaining < fewest_remaining[0]
-        if progressed:
-            fewest_remaining[0] = remaining
-        # ``remaining`` is 0 until a first step succeeds, so "unfinished" is
-        # read from the status, not from it.
+        # Only a step that succeeded says anything about progress: SQLite
+        # reports ``remaining`` as 0 for a busy or locked step before the first
+        # success, and taking that as the baseline would make every later
+        # healthy step look like no progress.
+        progressed = False
+        if status in (sqlite3.SQLITE_OK, sqlite3.SQLITE_DONE):
+            progressed = fewest_remaining[0] is None or remaining < fewest_remaining[0]
+            if progressed:
+                fewest_remaining[0] = remaining
         if status != sqlite3.SQLITE_DONE and not progressed and time.monotonic() >= deadline:
             raise _SnapshotHeld
 

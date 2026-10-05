@@ -822,3 +822,92 @@ def test_continuous_writes_to_the_previous_snapshot_cannot_stall_the_copy(
     assert len(held) == 1 and _snapshot(held[0]) == live_rows
     assert not Path(str(snapshot) + ".1").exists()
     assert not list(db.parent.glob(".jobs-rollback-*"))
+
+
+def test_transient_initial_contention_does_not_abort_a_progressing_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A busy step before the first success must not become the progress baseline.
+
+    SQLite reports 0 pages remaining for a busy step that copied nothing. The
+    busy step lands before the deadline; steps that then succeed with a falling
+    positive count after it are progress, so the copy finishes and is not
+    abandoned as held.
+    """
+
+
+    source = tmp_path / "jobs.bak"
+    with closing(sqlite3.connect(source)) as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+        conn.executemany("INSERT INTO t VALUES (?)", [(n,) for n in range(50)])
+        conn.commit()
+
+    clock = [0.0]
+    monkeypatch.setattr(store_module.time, "monotonic", lambda: clock[0])
+    deadline = 100.0
+    script = [
+        (sqlite3.SQLITE_BUSY, 0, 4, 50.0),
+        (sqlite3.SQLITE_OK, 3, 4, 101.0),
+        (sqlite3.SQLITE_OK, 2, 4, 121.0),
+        (sqlite3.SQLITE_OK, 1, 4, 141.0),
+    ]
+    real_connect = sqlite3.connect
+
+    class _Scripted:
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        def backup(self, target, **kwargs):
+            for status, remaining, total, now in script:
+                clock[0] = now
+                kwargs["progress"](status, remaining, total)
+            return self._real.backup(target, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    def connect(database, *args, **kwargs):
+        conn = real_connect(database, *args, **kwargs)
+        return _Scripted(conn) if "mode=ro" in str(database) else conn
+
+    monkeypatch.setattr(store_module.sqlite3, "connect", connect)
+    rotated = tmp_path / "jobs.bak.1"
+    published = store_module._copy_previous_snapshot(source, rotated, deadline)
+
+    assert published is True
+    monkeypatch.undo()
+    with closing(sqlite3.connect(rotated)) as copy:
+        assert copy.execute("SELECT COUNT(*) FROM t").fetchone() == (50,)
+    assert not list(tmp_path.glob(".jobs-rollback-*"))
+
+
+def test_a_copy_that_stays_busy_past_the_deadline_is_abandoned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import time
+
+    source = tmp_path / "jobs.bak"
+    with closing(sqlite3.connect(source)) as conn:
+        conn.execute("CREATE TABLE t (v INTEGER)")
+        conn.commit()
+    real_connect = sqlite3.connect
+
+    class _Busy:
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
+
+        def backup(self, target, **kwargs):
+            kwargs["progress"](sqlite3.SQLITE_BUSY, 0, 4)
+            raise AssertionError("an abandoned copy must not continue")
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(
+        store_module.sqlite3, "connect",
+        lambda database, *a, **k: _Busy(real_connect(database, *a, **k)) if "mode=ro" in str(database)
+        else real_connect(database, *a, **k))
+    rotated = tmp_path / "jobs.bak.1"
+    assert store_module._copy_previous_snapshot(source, rotated, time.monotonic() - 1.0) is False
+    assert not rotated.exists()
+    assert not list(tmp_path.glob(".jobs-rollback-*"))
