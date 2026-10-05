@@ -946,6 +946,25 @@ def test_installer_points_every_shown_icon_at_the_staged_ico() -> None:
     assert "SetupIconFile={#PayloadDir}" + chr(92) + WINDOWS_ICON_NAME in script
 
 
+def test_the_shell_redraws_shortcut_icons_after_the_ico_is_committed() -> None:
+    """[Icons] runs before ssPostInstall, while the .ico is still staged.
+
+    The shortcuts are first drawn with a missing icon file, and Explorer keeps
+    that blank image. The launcher itself has no icon resource to point at
+    instead, so the shell's icon cache is flushed once the commit has moved
+    the .ico into place.
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+    post_install = script.split("if CurStep = ssPostInstall then", 1)[1]
+    commit = post_install.index("CommitProtectedReplace();")
+    notify = post_install.index("SHChangeNotify($08000000, 0, 0, 0);")
+    assert commit < notify < post_install.index("WizardIsTaskSelected(WgLinkTaskName)")
+    assert "external 'SHChangeNotify@shell32.dll stdcall setuponly'" in script
+
+
 def test_the_installer_gets_a_numeric_version_field_and_the_readable_one() -> None:
     """`VersionInfoVersion` is a binary field, and a pre-release is not valid in it.
 
