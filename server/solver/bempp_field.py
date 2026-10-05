@@ -10,7 +10,7 @@ from typing import Any
 import numpy as np
 
 from server.mesh.artifact import mesh_text_sha256
-from server.platform.temp_session import temporary_directory_root
+from server.platform.temp_session import spawned_directory_root
 
 from .field_plane_result import FieldPlaneEvaluation
 
@@ -38,7 +38,7 @@ def evaluate_bempp_field_payload(payload: Mapping[str, Any]) -> FieldPlaneEvalua
     key = (mesh_text_sha256(mesh_text), symmetry_plane)
     mesh = _BEMPP_MESH_CACHE.pop(key, None)
     if mesh is None:
-        with tempfile.TemporaryDirectory(dir=temporary_directory_root()) as directory:
+        with tempfile.TemporaryDirectory(dir=spawned_directory_root()) as directory:
             path = Path(directory) / "mesh.msh"
             path.write_text(mesh_text, encoding="utf-8")
             mesh = api.load_mesh(path, native_symmetry_plane=symmetry_plane)

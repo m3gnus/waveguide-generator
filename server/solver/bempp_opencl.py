@@ -9,6 +9,7 @@ rejections persist for the process.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from concurrent.futures import ProcessPoolExecutor
 from functools import lru_cache
 import importlib
 import json
@@ -220,6 +221,27 @@ def _keep_bempp_scratch_in_session() -> None:
     api.TMP_PATH = root
 
 
+def _initialize_frequency_worker(session_root: str | None, initializer: Any, initargs: tuple) -> None:
+    """Adopt the solve worker's session before a spawned sweep starts work."""
+    from server.platform.temp_session import adopt_parent_session
+
+    adopt_parent_session(session_root)
+    if initializer is not None:
+        initializer(*initargs)
+    _keep_bempp_scratch_in_session()
+
+
+def _frequency_pool(*args: Any, **kwargs: Any) -> ProcessPoolExecutor:
+    from server.platform.temp_session import spawned_directory_root
+
+    initializer = kwargs.pop("initializer", None)
+    initargs = kwargs.pop("initargs", ())
+    return ProcessPoolExecutor(
+        *args, initializer=_initialize_frequency_worker,
+        initargs=(spawned_directory_root(), initializer, initargs), **kwargs,
+    )
+
+
 def native_call(function: Any, *args: Any, execution_config: Any = None, **kwargs: Any) -> Any:
     """Lowest shared boundary for solves and potential/field evaluation."""
     backend = (getattr(execution_config, "assembly_backend", None)
@@ -228,6 +250,14 @@ def native_call(function: Any, *args: Any, execution_config: Any = None, **kwarg
               if execution_config is not None else kwargs.get("opencl_device"))
     guard_execution(backend, device)
     _keep_bempp_scratch_in_session()
+    # The pinned sweep creates its spawn pool without an initializer. Keep
+    # this integration in WG so the dependency need not know about sessions.
+    try:
+        from hornlab_bempp_bem import sweep
+    except (ImportError, OSError):
+        pass
+    else:
+        sweep.ProcessPoolExecutor = _frequency_pool
     return function(*args, **kwargs)
 
 

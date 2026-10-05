@@ -565,3 +565,49 @@ def test_the_bempp_worker_is_spawned_into_the_servers_session(monkeypatch, tmp_p
         assert seen == [str(session.path)] and temp_session.temporary_directory_root() is None
     finally:
         session.close(remove=True)
+
+
+@pytest.mark.parametrize("kind", ["imported", "field"])
+def test_bempp_mesh_staging_uses_the_adopted_session(monkeypatch, tmp_path, kind) -> None:
+    """A cancelled spawned worker leaves its staged mesh in the swept session."""
+    from types import SimpleNamespace
+
+    from server.platform import temp_session
+    from server.solver import bempp, bempp_field, bempp_opencl
+
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    session = TemporarySession.create(tmp_path)
+    temp_session.adopt_parent_session(str(session.path))
+    assert temp_session.temporary_directory_root() is None
+    seen = []
+
+    def stop_after_staging(path, *_args, **_kwargs):
+        seen.append(Path(path))
+        assert Path(path).is_file()
+        assert Path(path).is_relative_to(session.path)
+        raise RuntimeError("stop after staging")
+
+    try:
+        if kind == "imported":
+            from server.tests import test_imported_bempp as imported
+
+            imported._install(monkeypatch, imported._RecordingBempp())
+            monkeypatch.setattr(bempp, "bempp_solve_frequencies", stop_after_staging)
+            monkeypatch.setattr(bempp_opencl, "_keep_bempp_scratch_in_session", lambda: None)
+            with pytest.raises(RuntimeError, match="stop after staging"):
+                imported._solve(imported._request(), imported._record())
+        else:
+            monkeypatch.setitem(sys.modules, "hornlab_bempp_bem", SimpleNamespace(load_mesh=stop_after_staging))
+            monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": True})
+            monkeypatch.setattr(bempp_opencl, "execution_route", lambda: ("numba", None))
+            monkeypatch.setattr(bempp_field, "_BEMPP_MESH_CACHE", bempp_field.OrderedDict())
+            with pytest.raises(RuntimeError, match="stop after staging"):
+                bempp_field.evaluate_bempp_field_payload({
+                    "traces": ("msh", 1000., 18., None, [], [], "bempp", "revision"),
+                    "points": [],
+                })
+        assert len(seen) == 1 and not seen[0].exists()
+    finally:
+        session.close(remove=True)

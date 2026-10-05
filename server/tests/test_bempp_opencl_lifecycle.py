@@ -593,6 +593,79 @@ def _stub_bempp_api(monkeypatch, scratch):
     return api
 
 
+def test_frequency_pool_workers_relocate_import_time_scratch(monkeypatch, tmp_path):
+    from server.platform import temp_session
+
+    sweep = pytest.importorskip("hornlab_bempp_bem.sweep")
+    monkeypatch.setattr(sweep, "ProcessPoolExecutor", sweep.ProcessPoolExecutor)
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    session = temp_session.TemporarySession.create(tmp_path)
+    temp_session.adopt_parent_session(str(session.path))
+    api = _stub_bempp_api(monkeypatch, session.path)
+    made = {}
+
+    def executor(**kwargs):
+        made.update(kwargs)
+        return "pool"
+
+    monkeypatch.setattr(probe, "ProcessPoolExecutor", executor)
+    try:
+        def native_sweep(**_kwargs):
+            return sweep.ProcessPoolExecutor(max_workers=2, mp_context="spawn")
+
+        assert probe.native_call(native_sweep, assembly_backend="numba", opencl_device="cpu") == "pool"
+        assert made["max_workers"] == 2 and made["mp_context"] == "spawn"
+        assert made["initargs"][0] == str(session.path)
+        # A fresh spawn imports bempp and creates a new, empty system tmp dir.
+        scratch = tmp_path / "tmpbempp-pool"
+        scratch.mkdir()
+        api.TMP_PATH = str(scratch)
+        temp_session.adopt_parent_session(None)
+        assert temp_session.spawned_directory_root() is None
+        made["initializer"](*made["initargs"])
+        assert temp_session.temporary_directory_root() is None
+        assert api.TMP_PATH == str(session.path) and not scratch.exists()
+        assert session.path.is_dir()
+    finally:
+        session.close(remove=True)
+
+
+def _frequency_worker_scratch_root():
+    import bempp_cl.api as api
+    from server.platform import temp_session
+
+    return api.TMP_PATH, temp_session.spawned_directory_root(), temp_session.temporary_directory_root()
+
+
+def test_a_real_spawn_pool_adopts_the_solve_workers_session(monkeypatch):
+    import multiprocessing
+
+    api = pytest.importorskip("bempp_cl.api")
+    sweep = pytest.importorskip("hornlab_bempp_bem.sweep")
+    from server.platform import temp_session
+
+    monkeypatch.setattr(sweep, "ProcessPoolExecutor", sweep.ProcessPoolExecutor)
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    session = temp_session.TemporarySession.create()
+    temp_session.adopt_parent_session(str(session.path))
+    monkeypatch.setattr(api, "TMP_PATH", str(session.path))
+    try:
+        pool = probe.native_call(
+            lambda **_kwargs: sweep.ProcessPoolExecutor(
+                max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+            ),
+            assembly_backend="numba", opencl_device="cpu",
+        )
+        with pool:
+            result = pool.submit(_frequency_worker_scratch_root).result(timeout=30)
+        assert result == (str(session.path), str(session.path), None)
+    finally:
+        session.close(remove=True)
+
+
 def test_bempps_import_time_scratch_directory_moves_into_the_session(monkeypatch, tmp_path):
     """``import bempp_cl.api`` makes ``TMP_PATH = tempfile.mkdtemp()`` and never
     removes it: one empty ``tmp*`` per process in the system temporary directory
