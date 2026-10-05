@@ -105,10 +105,27 @@ def test_callback_error_releases_stream(terminal):
     owner.submit({}).close()
 
 
-def test_submit_status_callback_failure_releases_client():
-    owner = StreamOwnership(FakeWorker([FakeStream()]))
-    with pytest.raises(RuntimeError, match="callback broke"):
-        owner.submit({}, status_callback=lambda text: fail())
+def test_status_callback_failure_during_locked_startup_retires_after_submit_returns():
+    engine_lock = threading.Lock()
+    closed = []
+
+    def close():
+        with engine_lock:
+            closed.append(True)
+
+    raw = FakeStream(on_close=close)
+
+    class LockedWorker(FakeWorker):
+        def submit(self, request, **kwargs):
+            with engine_lock:
+                return super().submit(request, **kwargs)
+
+    owner = StreamOwnership(LockedWorker([raw, FakeStream()]))
+    starter, started = launch(lambda: owner.submit({}, status_callback=lambda text: fail()))
+    join(starter)
+    assert isinstance(started.get("error"), RuntimeError)
+    assert str(started["error"]) == "callback broke"
+    assert raw.closes == 1 and closed == [True]
     owner.submit({}).close()
 
 
@@ -155,7 +172,6 @@ def test_retirement_finishes_before_successor_is_admitted():
     assert entered.wait(GUARD)
     try:
         assert len(worker.calls) == 1 and not outcome
-        assert not owner.cancel(first.token)
     finally:
         finish.set()
     join(closer)
@@ -266,15 +282,175 @@ def test_cancel_wakes_blocked_reader_and_cannot_affect_successor():
     successor.close()
 
 
-def test_dropped_stream_closes_and_finalizer_does_not_wait_for_mutex():
+@pytest.mark.parametrize("held_mutex", ["wg", "engine"])
+def test_cyclic_finalizer_queues_retirement_while_collecting_thread_holds_mutex(held_mutex):
+    engine_lock = threading.Lock()
+    closed_by = []
+
+    def close():
+        with engine_lock:
+            closed_by.append(threading.get_ident())
+
+    raw = FakeStream(on_close=close)
+    owner = StreamOwnership(FakeWorker([raw, FakeStream()]))
+    mutex = owner._changed if held_mutex == "wg" else engine_lock
+
+    def collect():
+        stream = owner.submit({})
+        stream.cycle = stream
+        with mutex:
+            del stream
+            gc.collect()
+
+    collector, collected = launch(collect)
+    join(collector)
+    assert "error" not in collected
+    waiter, waiting = launch(lambda: owner.submit({}))
+    join(waiter)
+    assert "error" not in waiting and raw.closes == 1
+    assert closed_by and closed_by[0] != collector.ident
+    waiting["value"].close()
+
+
+def test_queued_finalizer_cannot_retire_successor():
+    first, second = FakeStream(), FakeStream()
+    owner = StreamOwnership(FakeWorker([first, second]))
+    stream = owner.submit({})
+    with owner._changed:
+        stream.__del__()
+        stream.__del__()
+    waiter, outcome = launch(lambda: owner.submit({}))
+    join(waiter)
+    successor = outcome["value"]
+    stream.close()
+    assert first.closes == 1 and second.closes == 0 and owner.holds(successor.token)
+    successor.close()
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+def test_asynchronous_status_callback_failure_keeps_stderr_reader_alive_and_retires(error_type):
+    engine_lock = threading.Lock()
+    closed_by, calls = [], []
+    failure = error_type("stderr callback broke")
+
+    def close():
+        with engine_lock:
+            closed_by.append(threading.get_ident())
+
+    raw = FakeStream(on_close=close)
+
+    class StderrWorker(FakeWorker):
+        def submit(self, request, *, status_callback=None, operation="solve"):
+            self.callback = status_callback
+            self.calls.append((request, operation))
+            return next(self.streams)
+
+        def stderr(self):
+            with engine_lock:
+                for message in ("first", "second", "third"):
+                    self.callback(message)
+            return "stderr drained"
+
+    def callback(message):
+        calls.append(message)
+        raise failure
+
+    worker = StderrWorker([raw, FakeStream()])
+    owner = StreamOwnership(worker)
+    stream = owner.submit({}, status_callback=callback)
+    waiter, waiting = launch(lambda: owner.submit({}))
+    assert owner.await_waiters(timeout=GUARD)
+    reader, read = launch(worker.stderr)
+    join(reader)
+    join(waiter)
+    assert read == {"value": "stderr drained"} and "error" not in waiting
+    assert stream.callback_error is failure and calls == ["first"]
+    assert raw.closes == 1 and closed_by[0] != reader.ident
+    with pytest.raises(error_type, match="stderr callback broke"):
+        next(stream)
+    assert owner.holds(waiting["value"].token)
+    waiting["value"].close()
+
+
+@pytest.mark.parametrize("action", ["close", "cancel", "shutdown"])
+def test_concurrent_close_cancel_shutdown_waits_for_retirement(monkeypatch, action):
+    entered, finish, waiting = threading.Event(), threading.Event(), threading.Event()
+
+    def close():
+        entered.set()
+        assert finish.wait(GUARD)
+
+    raw = FakeStream(on_close=close)
+    owner = StreamOwnership(FakeWorker([raw]))
+    stream = owner.submit({})
+    closer, closed = launch(stream.close)
+    assert entered.wait(GUARD)
+    original = owner._changed.wait_for
+
+    def observe_wait(predicate, timeout=None):
+        waiting.set()
+        return original(predicate, timeout)
+
+    monkeypatch.setattr(owner._changed, "wait_for", observe_wait)
+    concurrent, outcome = launch(getattr(owner if action == "shutdown" else stream, action))
+    try:
+        assert waiting.wait(GUARD) and not outcome
+    finally:
+        finish.set()
+    join(closer)
+    join(concurrent)
+    assert "error" not in closed and "error" not in outcome and raw.closes == 1
+
+
+def test_concurrent_retirement_wait_has_bounded_timeout():
+    entered, finish = threading.Event(), threading.Event()
+
+    def close():
+        entered.set()
+        assert finish.wait(GUARD)
+
+    raw = FakeStream(on_close=close)
+    owner = StreamOwnership(FakeWorker([raw]), retirement_timeout_s=0.01)
+    stream = owner.submit({})
+    closer, outcome = launch(stream.close)
+    assert entered.wait(GUARD)
+    try:
+        with pytest.raises(TimeoutError, match="retirement"):
+            owner.shutdown()
+    finally:
+        finish.set()
+    join(closer)
+    assert "error" not in outcome and raw.closes == 1
+    owner.shutdown()
+
+
+def test_reentrant_close_during_retirement_does_not_wait_on_itself():
     raw = FakeStream()
+    owner = StreamOwnership(FakeWorker([raw]))
+    stream = owner.submit({})
+    raw.on_close = stream.close
+    closer, outcome = launch(stream.close)
+    join(closer)
+    assert "error" not in outcome and raw.closes == 1
+
+
+@pytest.mark.parametrize("terminal", ["completed", "cancelled", "failed"])
+def test_cancel_racing_real_terminal_preserves_terminal_event(terminal):
+    entered, finish = threading.Event(), threading.Event()
+
+    def read():
+        entered.set()
+        assert finish.wait(GUARD)
+
+    raw = FakeStream([{"type": terminal}], on_read=read)
     owner = StreamOwnership(FakeWorker([raw, FakeStream()]))
     stream = owner.submit({})
-    del stream
-    gc.collect()
-    assert raw.closes == 1
-    later = owner.submit({})
-    with owner._changed:
-        later.__del__()
-    assert owner.holds(later.token)
-    later.close()
+    reader, outcome = launch(lambda: next(stream))
+    assert entered.wait(GUARD)
+    stream.cancel()
+    successor = owner.submit({})
+    finish.set()
+    join(reader)
+    assert outcome == {"value": {"type": terminal}}
+    assert owner.holds(successor.token) and raw.closes == 1
+    successor.close()

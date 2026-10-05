@@ -14,10 +14,12 @@ import pytest
 from server.solver.beat_runtime import probe
 
 
-def result(real=1.0, imag=-2.0, dtype="complex64"):
+def result(real=1.0, imag=-2.0, dtype="complex64", *, backend="cpu"):
     layout = "<ff" if dtype == "complex64" else "<dd"
     return {"type": "result", "result": {
         "schema_version": 2, "freq_hz": 1000.0, "excitation_port_ids": ["excitation:probe"],
+        "diagnostics": {"bem_backend": backend, "precision": "float32",
+                        "phasor_convention": "exp(-i omega t)"},
         "quantities": [{"id": "pressure", "quantity": "exterior_pressure", "unit": "Pa",
                         "axes": ["excitation", "observation"], "values": {
                             "encoding": "base64", "dtype": dtype, "shape": [1, 1],
@@ -28,6 +30,14 @@ def result(real=1.0, imag=-2.0, dtype="complex64"):
 
 
 COMPLETED = {"type": "completed", "solved_count": 1}
+WORKER_INFO = {
+    "type": "ready", "protocol": {"name": "beat-worker", "version": 1},
+    "engine": {"name": "BEAT Engine", "version": "0.3.0"},
+    "contracts": {"system_request": [1], "compiled_system": [1], "system_result": [2]},
+    "operations": ["solve"], "precisions": ["float32"], "solve_kinds": ["exterior_bem"],
+    "request_transports": ["file"], "phasor_conventions": ["exp(-i omega t)"],
+    "backends": {"cpu": {"available": True}, "metal": {"available": True}},
+}
 
 
 class FakeStream:
@@ -49,8 +59,9 @@ class FakeStream:
 
 
 class FakeWorker:
-    def __init__(self, events, **kwargs):
+    def __init__(self, events, *, worker_info=WORKER_INFO, **kwargs):
         self.stream = FakeStream(events, **kwargs)
+        self.worker_info = copy.deepcopy(worker_info)
 
     def submit(self, path):
         self.path = path
@@ -60,11 +71,12 @@ class FakeWorker:
 
 
 @pytest.mark.parametrize("backend,dtype,real,imag", [
-    ("cpu", "complex64", 1.0, -2.0), ("metal", "complex128", 0.0, 2.0),
+    ("cpu", "complex64", 1.0, -2.0), ("metal", "complex64", 0.0, 2.0),
     ("cpu", "complex64", 2.0, 0.0),
 ])
 def test_compiled_probe_stages_tiny_request_and_completion(tmp_path, backend, dtype, real, imag):
-    worker = FakeWorker([{"type": "status", "message": "solving"}, result(real, imag, dtype), COMPLETED])
+    worker = FakeWorker([{"type": "status", "message": "solving"},
+                         result(real, imag, dtype, backend=backend), COMPLETED])
     verdict = probe.compiled_probe(worker, directory=tmp_path, backend=backend)
     assert verdict.ready, verdict.reason
     assert verdict.completion == {"result_count": 1, "solved_count": 1, "finite_nonzero": True}
@@ -153,6 +165,102 @@ def test_worker_and_closure_errors_fail(tmp_path, kwargs):
     verdict = probe.compiled_probe(worker, directory=tmp_path)
     assert not verdict.ready and "broke" in verdict.reason and worker.stream.closed
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("field,value", [
+    ("bem_backend", "cpu"), ("precision", "float64"),
+    ("phasor_convention", "exp(+i omega t)"), ("precision", None),
+])
+def test_result_diagnostics_must_match_request(tmp_path, field, value):
+    event = result(backend="metal")
+    event["result"]["diagnostics"][field] = value
+    worker = FakeWorker([event, COMPLETED])
+    verdict = probe.compiled_probe(worker, directory=tmp_path, backend="metal")
+    assert not verdict.ready and field in verdict.reason and worker.stream.closed
+
+
+def test_fabricated_result_without_diagnostics_is_not_ready(tmp_path):
+    event = result()
+    del event["result"]["diagnostics"]
+    worker = FakeWorker([event, COMPLETED])
+    verdict = probe.compiled_probe(worker, directory=tmp_path)
+    assert not verdict.ready and "diagnostics" in verdict.reason and worker.stream.closed
+
+
+def test_float32_request_rejects_complex128_pressure(tmp_path):
+    worker = FakeWorker([result(dtype="complex128"), COMPLETED])
+    verdict = probe.compiled_probe(worker, directory=tmp_path)
+    assert not verdict.ready and "pressure array" in verdict.reason and worker.stream.closed
+
+
+@pytest.mark.parametrize("info", [None, {}, {"type": "status"}])
+def test_missing_worker_info_is_not_ready(tmp_path, info):
+    worker = FakeWorker([result(), COMPLETED], worker_info=info)
+    verdict = probe.compiled_probe(worker, directory=tmp_path)
+    assert not verdict.ready and "worker_info" in verdict.reason and worker.stream.closed
+
+
+@pytest.mark.parametrize("field,value", [("name", "wg-beat-host"), ("version", 2), ("version", True)])
+def test_worker_protocol_must_match_official_engine(tmp_path, field, value):
+    info = copy.deepcopy(WORKER_INFO)
+    info["protocol"][field] = value
+    worker = FakeWorker([result(), COMPLETED], worker_info=info)
+    verdict = probe.compiled_probe(worker, directory=tmp_path)
+    assert not verdict.ready and "protocol" in verdict.reason and worker.stream.closed
+
+
+@pytest.mark.parametrize("field,value", [
+    ("engine", None), ("engine", {"name": "HBB", "version": "0.3.0"}),
+    ("engine", {"name": "BEAT Engine", "version": ""}),
+    ("contracts", {}), ("contracts", {"system_request": [True]}), ("contracts", None),
+    ("operations", []), ("precisions", ["float64"]), ("solve_kinds", ["interior_fem"]),
+    ("request_transports", ["inline_json"]), ("phasor_conventions", ["exp(+i omega t)"]),
+    ("backends", {"cpu": {"available": False}}), ("backends", {"cpu": {"available": 1}}),
+    ("backends", {"cpu": {"available": True, "phasor_conventions": ["exp(+i omega t)"]}}),
+])
+def test_worker_capabilities_must_support_probe_request(tmp_path, field, value):
+    info = copy.deepcopy(WORKER_INFO)
+    info[field] = value
+    worker = FakeWorker([result(), COMPLETED], worker_info=info)
+    verdict = probe.compiled_probe(worker, directory=tmp_path)
+    assert not verdict.ready and worker.stream.closed
+
+
+@pytest.mark.parametrize("root_env", ["HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR"])
+@pytest.mark.parametrize("via_link", [False, True])
+def test_probe_staging_refuses_hbb_root_and_symlink(tmp_path, monkeypatch, root_env, via_link):
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    monkeypatch.setenv(root_env, str(protected))
+    directory = protected / "must-not-be-created"
+    if via_link:
+        directory = tmp_path / "alias"
+        directory.symlink_to(protected, target_is_directory=True)
+    worker = FakeWorker([result(), COMPLETED])
+    verdict = probe.compiled_probe(worker, directory=directory)
+    assert not verdict.ready and "overlaps" in verdict.reason
+    assert list(protected.iterdir()) == [] and not hasattr(worker, "path")
+
+
+def test_ready_verdict_requires_probe_proof():
+    with pytest.raises(ValueError, match="compiled_probe"):
+        probe.ProbeResult(ready=True, reason="fabricated")
+    assert not probe.ProbeResult(ready=False, reason="unavailable").ready
+
+
+def test_windows_handle_cleanup_errors_do_not_invalidate_probe(tmp_path, monkeypatch):
+    original = probe.tempfile.TemporaryDirectory._rmtree
+
+    def held_handle(name, ignore_errors=False, repeated=False):
+        if not ignore_errors:
+            raise PermissionError("Julia still holds the mesh")
+        original(name, ignore_errors=ignore_errors, repeated=repeated)
+
+    monkeypatch.setattr(probe.tempfile.TemporaryDirectory, "_rmtree", staticmethod(held_handle))
+    worker = FakeWorker([result(), COMPLETED])
+    verdict = probe.compiled_probe(worker, directory=tmp_path)
+    assert verdict.ready, verdict.reason
+    assert worker.stream.closed and list(tmp_path.iterdir()) == []
 
 
 def test_submit_failure_and_optional_import(tmp_path, monkeypatch):

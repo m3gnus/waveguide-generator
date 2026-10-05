@@ -259,6 +259,25 @@ provide the verdict; `fixture_identity` hashes the actual mesh bytes, and
 `completion` contains result_count, solved_count and finite_nonzero only on
 success. Store these with the current identity; this module writes no state.
 
+**Review round 1 fixes (PR 11):**
+- **P2/C — fixed:** call `paths.checked_root()` before staging; direct HBB
+  roots and symlink/junction aliases are refused. Regression tests cover both
+  HBB root overrides and symlinks, with no writes below the protected fixture.
+- **P2/D — fixed:** require the official `beat-worker` v1 ready announcement,
+  engine identity, system-v1/result-v2 and relevant solve/file/precision/phasor
+  capabilities, including selected-backend availability. Match result
+  diagnostics.bem_backend, precision and phasor_convention to the request;
+  float32 requires complex64 pressure. These are fields emitted by the
+  official exterior solver and ready contract; no WG engine extensions.
+  Regression tests reject missing diagnostics/worker_info, wrong backend,
+  precision, dtype, phasor, protocol and capabilities. The docstring states
+  that fakes can impersonate the engine; authenticity requires WG's launch.
+  A private construction sentinel prevents accidental ready verdicts outside
+  `compiled_probe`; it is not an authentication boundary.
+- **P3 cleanup/construction — fixed:** use TemporaryDirectory's
+  ignore_cleanup_errors=True for Windows handles; fake cleanup regression
+  preserves successful readiness. Direct ready=True construction is rejected.
+
 - **PR 17 — client stream ownership:** `server/solver/beat_runtime/ownership.py`;
   `server/tests/beat_runtime/test_ownership.py`; this `CHANGES.md`.
   StreamOwnership serializes host clients around public EngineWorker.submit
@@ -285,6 +304,28 @@ PR 17 review subdivisions: 17a ownership API and sequential lifecycle/callback
 tests; 17b retirement-order, shutdown, blocked-reader and finalizer tests. These
 are review slices of the same requested PR, keeping each below roughly 400 lines.
 
+**Review round 1 fixes (PR 17):**
+- **P1/A finalizer deadlock and P2 dropped retirement — fixed:** finalizers
+  only enqueue owner/token pairs in a reentrant SimpleQueue. A dedicated daemon
+  reaper starts lazily on first submit, closes through token-checked cancel
+  outside caller locks, and releases the slot even on closure failure. Cyclic
+  GC regressions collect while the collecting thread holds WG's mutex or a
+  fake engine mutex, then prove retirement and successor admission. Duplicate
+  queued tokens cannot close a successor.
+- **P1/B asynchronous status callback failure — fixed:** every status callback
+  passed to the engine catches BaseException, records the first failure on
+  the token and queues cancellation through the same retirement path. Later
+  callbacks are suppressed. OwnedStream.callback_error exposes the failure;
+  startup and subsequent reads surface it after closure. Tests cover
+  locked startup and a separate stderr thread after submit returns, including
+  KeyboardInterrupt, reader survival and subsequent client admission.
+- **P3 terminal race, ordering and concurrent closure — fixed:** preserve a
+  received terminal event when cancel races it; document no FIFO ordering.
+  close/cancel/shutdown wait for another thread's retirement, bounded by
+  retirement_timeout_s (default 5 seconds), raising TimeoutError on expiry;
+  reentrant closure never waits on itself. Handshake tests cover all three
+  waiting APIs, timeout, reentrancy and terminal races with a successor.
+
 PR 11/17 scope notes: official JWSound/BEAT_Engine supersedes the design's fork
 target. Standard-library decoding adapts WG to the official result-v2 wire
 format; it does not add a WG-specific engine requirement. A compiled-system
@@ -295,3 +336,10 @@ The exact requested pytest/ruff commands cannot complete in this worktree:
 server/solver/beat_adapter and server/tests/beat_adapter do not exist. Runtime
 and existing solver tests are validated separately. Changes remain uncommitted
 as explicitly requested.
+
+Review round 1 validation: focused PR 11/17 tests passed (105); the targeted
+runtime plus existing solver tests passed (436). Runtime/test ruff and
+`git diff --check` passed. The exact combined pytest/ruff commands still fail
+only because both beat_adapter directories are absent. No Julia, downloads,
+real user data writes or donor-checkout edits were performed; fixes remain
+uncommitted as requested.
