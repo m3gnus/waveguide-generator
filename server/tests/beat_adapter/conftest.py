@@ -79,3 +79,82 @@ def run_sweep(layout):
         arguments.update(kwargs)
         return map_sweep(stream, frequencies, **arguments)
     return run
+
+
+@pytest.fixture(scope="session")
+def official_contract():
+    """Load the checkout's schema validator without importing the engine package."""
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    roots = [Path("/Users/magnus/Code/hornlab-workspace/BEAT_Engine/src/beat_engine/beat_contract"),
+             Path("/private/tmp/beat-batch1-candidate/src/beat_engine/beat_contract")]
+    for root in roots:
+        schema_path = root / "system-v1.schema.json"
+        if not schema_path.is_file():
+            continue
+        schema = json.loads(schema_path.read_text())
+        if 2 not in schema["$defs"]["compiled_system"]["properties"]["contract_version"].get("enum", []):
+            continue  # Main can predate PR #18; use the read-only batch-1 candidate.
+        spec = importlib.util.spec_from_file_location("wg_test_official_contract", root / "__init__.py")
+        contract = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(contract)
+
+        def validate(request):
+            # JSON round-trip proves requests contain ordinary durable wire values.
+            wire_request = json.loads(json.dumps(request.wire, allow_nan=False))
+            contract.validate_solve_request(wire_request)
+            return request
+        return validate
+    pytest.skip("Official BEAT system-v1 JSON schema with PR #18 contract v2 is absent "
+                "from the BEAT checkout and /private/tmp/beat-batch1-candidate")
+
+
+@pytest.fixture
+def make_mesh():
+    def make(points, faces, tags, *, node_ids=None):
+        node_ids = node_ids or list(range(1, len(points) + 1))
+        nodes = [" ".join(map(str, [node, *point])) for node, point in zip(node_ids, points)]
+        elements = [" ".join(map(str, [index + 51, 2, 2, tag, tag,
+                                      *(node_ids[n] for n in face)]))
+                    for index, (face, tag) in enumerate(zip(faces, tags))]
+        return "\n".join(["$MeshFormat", "2.2 0 8", "$EndMeshFormat", "$Nodes", str(len(points)),
+                          *nodes, "$EndNodes", "$Elements", str(len(faces)), *elements,
+                          "$EndElements", ""])
+    return make
+
+
+@pytest.fixture
+def compiled_result():
+    def make(request, *, boundary_pressure=None, forces=None, frequency=None):
+        ports = request.wire["excitation_port_ids"]
+        options = request.wire["solver_options"]
+        precision = options["precision"]
+        count = len(ports)
+        if boundary_pressure is None:
+            boundary_pressure = np.tile(np.arange(len(request.mesh.points_m)) + 2 + 3j, (count, 1))
+        if forces is None:
+            forces = np.arange(count) + 5 - 2j
+        quantities = []
+        for output in request.wire["outputs"]:
+            kind = output["quantity"]
+            if kind == "exterior_pressure":
+                size = len(output["options"]["points_m"])
+                data = np.repeat((np.arange(count) + 1 + 2j)[:, None], size, axis=1)
+                unit, axes = "Pa", ["excitation", "observation"]
+            elif kind == "radiation_impedance":
+                data, unit, axes = forces, "N*s/m", ["radiator"]
+            elif kind == "bem_boundary_pressure":
+                data, unit, axes = boundary_pressure, "Pa", ["excitation", "bem_node"]
+            else:
+                data = np.tile(np.arange(len(request.mesh.faces)) + 11 + 2j, (count, 1))
+                unit, axes = "Pa/m", ["excitation", "bem_face"]
+            quantities.append({"id": output["id"], "quantity": kind, "unit": unit, "axes": axes,
+                               "target_id": None, "metadata": {}, "values": wire(data, precision)})
+        return {"schema_version": 2,
+                "freq_hz": frequency if frequency is not None else request.wire["frequencies_hz"][0],
+                "excitation_port_ids": ports.copy(), "quantities": quantities,
+                "diagnostics": {key: options[key] for key in
+                                ("phasor_convention", "symmetry", "precision", "bem_backend")}}
+    return make

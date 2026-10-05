@@ -7,12 +7,16 @@ import binascii
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 import math
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
+from .driver_loading import BoundaryLoading
 from .observations import ObservationLayout
+
+if TYPE_CHECKING:
+    from .request import CompiledRequest
 
 
 class ResultContractError(RuntimeError):
@@ -77,14 +81,15 @@ def decode_complex_values(values: Any, shape: tuple[int, ...]) -> np.ndarray:
 
 
 def result_outputs(
-    layout: ObservationLayout, *, surface_traces: bool = False,
+    layout: ObservationLayout, *, surface_traces: bool = False, driver_loading: bool = False,
 ) -> list[dict[str, Any]]:
     """Outputs in the order parse_frequency expects, without engine imports."""
     outputs = layout.exterior_outputs()
     quantities = [("impedance", "radiation_impedance")]
+    if surface_traces or driver_loading:
+        quantities.append(("surface:pressure", "bem_boundary_pressure"))
     if surface_traces:
-        quantities += [("surface:pressure", "bem_boundary_pressure"),
-                       ("surface:neumann", "bem_boundary_neumann")]
+        quantities.append(("surface:neumann", "bem_boundary_neumann"))
     return outputs + [
         {"id": name, "quantity": quantity, "target_ids": [], "options": {}}
         for name, quantity in quantities
@@ -96,11 +101,12 @@ class FrequencyResult:
     frequency_hz: float
     pressure_complex: np.ndarray
     impedance: complex
-    radiation_impedance: complex
+    radiation_impedance: complex | None
     sphere_pressure_complex: np.ndarray | None
     surface_pressure_complex: np.ndarray | None
     surface_neumann_complex: np.ndarray | None
     diagnostics: dict[str, Any]
+    generalized_impedances: dict[str, complex] | None = None
 
     @property
     def spl_db(self) -> np.ndarray:
@@ -114,7 +120,8 @@ class FrequencyResult:
                 "observation_pressure_complex": self.pressure_complex,
                 "observation_spl_db": self.spl_db, "impedance": self.impedance,
                 "timings": self.diagnostics.get("timings", {}),
-                "native_diagnostics": self.diagnostics}
+                "native_diagnostics": self.diagnostics,
+                "generalized_impedances": self.generalized_impedances}
 
 
 def parse_frequency(
@@ -122,14 +129,15 @@ def parse_frequency(
     source_area_m2: float, excitation_port_id: str, symmetry: str = "off",
     precision: str = "float32", backend: str = "cpu",
     trace_counts: tuple[int, int] | None = None, source_motion: str = "normal",
-    mean_pressure_velocity: complex | None = None,
+    mean_pressure_velocity: complex | None = None, boundary_loading: BoundaryLoading | None = None,
+    excitation_port_ids: tuple[str, ...] | None = None,
+    channel_port_ids: tuple[str, ...] | None = None,
 ) -> FrequencyResult:
-    """Map one unit-velocity excitation; retain engine node/face trace order.
+    """Map a unit-velocity basis or a WG channel's sum of independent ports.
 
-    W4 must derive historical mean_pressure_velocity from boundary P1 pressure,
-    source faces/tags and physical areas for axial/curved/signed drives. It must
-    use the compiled mesh's node/face order (or an explicit permutation), not
-    reinterpret generalized radiation_impedance as source-average pressure.
+    BoundaryLoading derives historical pressure loading before acceleration
+    scaling, without applying generalized-force motion projections. Pressure
+    traces can be requested solely for loading without retaining field traces.
     """
     scale = acceleration_scale(frequency_hz)
     if not math.isfinite(source_area_m2) or source_area_m2 <= 0:
@@ -149,14 +157,21 @@ def parse_frequency(
     if (type(echoed) not in {float, int} or not math.isfinite(echoed)
             or scalar(echoed) != wire_frequency):
         raise ResultContractError("Result frequency is out of order")
-    if result.get("excitation_port_ids") != [excitation_port_id]:
+    ports = excitation_port_ids or (excitation_port_id,)
+    channel_ports = channel_port_ids or (excitation_port_id,)
+    if (len(set(ports)) != len(ports) or not channel_ports
+            or len(set(channel_ports)) != len(channel_ports) or set(channel_ports) - set(ports)):
+        raise ValueError("Channel ports must be unique members of the compiled excitation list")
+    indices = [ports.index(port) for port in channel_ports]
+    if result.get("excitation_port_ids") != list(ports):
         raise ResultContractError("Result excitation identity or count changed")
     diagnostics = result.get("diagnostics")
     expected = {"phasor_convention": SOLVER_TIME_CONVENTION, "symmetry": symmetry,
                 "precision": precision, "bem_backend": backend}
     if not isinstance(diagnostics, dict) or any(diagnostics.get(k) != v for k, v in expected.items()):
         raise ResultContractError("Result phasor, symmetry, precision or backend changed")
-    outputs = result_outputs(layout, surface_traces=trace_counts is not None)
+    outputs = result_outputs(layout, surface_traces=trace_counts is not None,
+                             driver_loading=boundary_loading is not None)
     items = result.get("quantities")
     if (not isinstance(items, list) or any(not isinstance(item, dict) for item in items)
             or [item.get("id") for item in items] != [item["id"] for item in outputs]):
@@ -166,7 +181,7 @@ def parse_frequency(
     def quantity(name: str, kind: str, unit: str, axis: str, count: int) -> np.ndarray:
         item = by_id[name]
         axes = [axis] if axis == "radiator" else ["excitation", axis]
-        shape = (count,) if axis == "radiator" else (1, count)
+        shape = (count,) if axis == "radiator" else (len(ports), count)
         if (item.get("quantity"), item.get("unit"), item.get("axes"), item.get("target_id")) != (
                 kind, unit, axes, None):
             raise ResultContractError(f"{name} quantity, unit, axes or target changed")
@@ -174,7 +189,7 @@ def parse_frequency(
         array = decode_complex_values(values, shape)
         if values["dtype"] != ("complex64" if precision == "float32" else "complex128"):
             raise ResultContractError(f"{name} precision changed")
-        return array if axis == "radiator" else array[0]
+        return array if axis == "radiator" else np.sum(array[indices], axis=0)
 
     pressure = np.stack([
         quantity(f"pressure:{plane}", "exterior_pressure", "Pa", "observation", len(layout.angles_deg))
@@ -184,24 +199,59 @@ def parse_frequency(
     if "sphere" in layout.points_m:
         sphere = quantity("pressure:sphere", "exterior_pressure", "Pa", "observation",
                           len(layout.points_m["sphere"])) * scale
-    force = complex(quantity("impedance", "radiation_impedance", "N*s/m", "radiator", 1)[0])
+    forces = quantity("impedance", "radiation_impedance", "N*s/m", "radiator", len(ports))
+    generalized = dict(zip(ports, (complex(value) for value in forces)))
+    force = generalized[channel_ports[0]] if len(channel_ports) == 1 else None
+    surface_pressure = surface_neumann = None
+    if trace_counts is not None:
+        if len(trace_counts) != 2 or any(type(n) is not int or n <= 0 for n in trace_counts):
+            raise ValueError("Trace counts must be positive (node, face) integers")
+        if boundary_loading is not None and trace_counts != (
+                boundary_loading.node_count, boundary_loading.face_count):
+            raise ValueError("Trace counts differ from compiled loading topology")
+    if boundary_loading is not None or trace_counts is not None:
+        node_count = boundary_loading.node_count if boundary_loading is not None else trace_counts[0]
+        boundary_pressure = quantity("surface:pressure", "bem_boundary_pressure", "Pa",
+                                     "bem_node", node_count)
+        if boundary_loading is not None:
+            if mean_pressure_velocity is not None:
+                raise ValueError("Supply boundary loading or a precomputed mean, not both")
+            mean_pressure_velocity = boundary_loading.mean_pressure(boundary_pressure)
+        if trace_counts is not None:
+            surface_pressure = boundary_pressure * scale
+            surface_neumann = quantity("surface:neumann", "bem_boundary_neumann", "Pa/m",
+                                       "bem_face", trace_counts[1]) * scale
     if mean_pressure_velocity is None:
-        if source_motion != "normal":
+        if source_motion != "normal" or force is None:
             raise ResultContractError("W4 requires boundary-derived mean pressure for non-normal motion")
         mean_pressure_velocity = mean_pressure_from_force(
             force, source_area_m2=source_area_m2, symmetry=symmetry)
     elif not np.isfinite(mean_pressure_velocity):
         raise ResultContractError("Boundary-derived mean pressure must be finite")
-    surface_pressure = surface_neumann = None
-    if trace_counts is not None:
-        if len(trace_counts) != 2 or any(type(n) is not int or n <= 0 for n in trace_counts):
-            raise ValueError("Trace counts must be positive (node, face) integers")
-        surface_pressure = quantity("surface:pressure", "bem_boundary_pressure", "Pa",
-                                    "bem_node", trace_counts[0]) * scale
-        surface_neumann = quantity("surface:neumann", "bem_boundary_neumann", "Pa/m",
-                                   "bem_face", trace_counts[1]) * scale
     return FrequencyResult(frequency_hz, pressure, complex(mean_pressure_velocity * scale),
-                           force, sphere, surface_pressure, surface_neumann, diagnostics)
+                           force, sphere, surface_pressure, surface_neumann, diagnostics, generalized)
+
+
+def parse_compiled_frequency(result: Any, request: CompiledRequest, *, frequency_hz: float
+                             ) -> dict[str, FrequencyResult]:
+    """Synthesize WG channels while retaining each engine generalized impedance.
+
+    Official radiation_impedance contains each component's self loading only.
+    A multi-source channel has no scalar generalized force here: cross loading
+    cannot be inferred by summing those diagonal entries.
+    """
+    options = request.wire["solver_options"]
+    ports = tuple(request.wire["excitation_port_ids"])
+    counts = (len(request.mesh.points_m), len(request.mesh.faces)) if request.surface_traces else None
+    return {
+        channel: parse_frequency(
+            result, frequency_hz=frequency_hz, layout=request.layout,
+            source_area_m2=request.channel_loading[channel].area_m2,
+            excitation_port_id=members[0], excitation_port_ids=ports, channel_port_ids=members,
+            symmetry=options["symmetry"], precision=options["precision"], backend=options["bem_backend"],
+            trace_counts=counts, boundary_loading=request.channel_loading[channel])
+        for channel, members in request.channel_ports.items()
+    }
 
 
 @dataclass
@@ -220,6 +270,7 @@ class SweepResult:
     cancelled: bool
     requested_frequency_count: int
     solver_log: list[dict[str, Any]]
+    radiation_impedance: np.ndarray | None = None
 
     @property
     def is_partial(self) -> bool:
@@ -249,6 +300,7 @@ def map_sweep(
     layout: ObservationLayout, source_area_m2: float, excitation_port_id: str,
     symmetry: str = "off", precision: str = "float32", backend: str = "cpu",
     trace_counts: tuple[int, int] | None = None,
+    boundary_loading: BoundaryLoading | None = None, source_motion: str = "normal",
     progress_callback: Callable[[int, int, float], None] | None = None,
     on_frequency_result: Callable[[int, float, dict[str, Any]], bool | None] | None = None,
     request_cancel: Callable[[], None] | None = None,
@@ -302,7 +354,8 @@ def map_sweep(
                 row = parse_frequency(
                     event.get("result"), frequency_hz=float(frequencies[index]), layout=layout,
                     source_area_m2=source_area_m2, excitation_port_id=excitation_port_id,
-                    symmetry=symmetry, precision=precision, backend=backend, trace_counts=trace_counts)
+                    symmetry=symmetry, precision=precision, backend=backend, trace_counts=trace_counts,
+                    boundary_loading=boundary_loading, source_motion=source_motion)
                 rows.append(row)
                 logs.append(row.log_entry(layout))
                 if progress_callback:
@@ -333,7 +386,8 @@ def map_sweep(
             layout.sphere_theta_deg, layout.sphere_phi_deg,
             stack("surface_pressure_complex", (trace_counts[0],)) if trace_counts else None,
             stack("surface_neumann_complex", (trace_counts[1],)) if trace_counts else None,
-            terminal == "cancelled", len(frequencies), logs)
+            terminal == "cancelled", len(frequencies), logs,
+            np.asarray([row.radiation_impedance for row in rows], dtype=complex))
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close is not None:
