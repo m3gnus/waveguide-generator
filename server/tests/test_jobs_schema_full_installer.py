@@ -291,6 +291,10 @@ def test_a_held_previous_snapshot_never_stops_a_second_upgrade(
         return real_unlink(self, missing_ok=missing_ok)
 
     monkeypatch.setattr(Path, "unlink", unlink)
+    # Validation, copying and fsync share the deletion deadline. Real disk
+    # work can exhaust 50 ms before the first refusal on a Windows runner.
+    # This test controls the hold, so only retry sleeps should spend its budget.
+    monkeypatch.setattr(store_module, "time", _FakeClock())
     monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_SECONDS", 0.05)
     monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_INTERVAL", 0.01)
     store = JobStore(db)
@@ -771,26 +775,44 @@ def test_continuous_writes_to_the_previous_snapshot_cannot_stall_the_copy(
         conn.executemany("INSERT INTO ballast VALUES (?)", [(os.urandom(64 * 1024),) for _ in range(320)])
         conn.commit()
 
-    stop, writes = threading.Event(), []
-    real_validity = store_module._snapshot_validity
+    clock = _FakeClock()
+    writes, steps = [], []
+    real_connect = sqlite3.connect
+    snapshot_uri = snapshot.resolve().as_uri() + "?mode=ro"
 
-    def write_continuously() -> None:
-        with closing(sqlite3.connect(snapshot, timeout=5, check_same_thread=False)) as writer:
-            while not stop.is_set():
-                writer.execute("UPDATE simulation_jobs SET label = ? WHERE id = 'a'", (f"write {len(writes)}",))
-                writer.commit()
-                writes.append(1)
+    class _WritingSource:
+        def __init__(self, real: sqlite3.Connection) -> None:
+            self._real = real
 
-    writer_thread = threading.Thread(target=write_continuously, daemon=True)
+        def backup(self, target, **kwargs):
+            progress = kwargs.pop("progress")
+            # A free-running writer can leave a quiet interval long enough
+            # for backup to finish. On Windows its open handle then prevents
+            # deletion, leaving a valid .bak.1 as well as the held snapshot.
+            # Commit through a separate real connection between every step
+            # instead, so this test exercises restarted copies on every OS.
+            with closing(real_connect(snapshot, timeout=0)) as writer:
+                def write_between_steps(status, remaining, total):
+                    steps.append((status, remaining))
+                    assert len(steps) <= 4, "the copy must stop when restarts exhaust the budget"
+                    progress(status, remaining, total)
+                    assert status == sqlite3.SQLITE_OK, "the copy must restart before finishing"
+                    writer.execute("UPDATE simulation_jobs SET label = ? WHERE id = 'a'", (f"write {len(writes)}",))
+                    writer.commit()
+                    writes.append(1)
+                    clock.sleep(0.25)
 
-    def validity_then_writes(path, deadline):
-        valid = real_validity(path, deadline)
-        writer_thread.start()
-        while not writes:
-            time.sleep(0.001)
-        return valid
+                return self._real.backup(target, progress=write_between_steps, **kwargs)
 
-    monkeypatch.setattr(store_module, "_snapshot_validity", validity_then_writes)
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    def connect(database, *args, **kwargs):
+        conn = real_connect(database, *args, **kwargs)
+        return _WritingSource(conn) if str(database) == snapshot_uri else conn
+
+    monkeypatch.setattr(store_module.sqlite3, "connect", connect)
+    monkeypatch.setattr(store_module, "time", clock)
     monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_SECONDS", 0.5)
     monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_INTERVAL", 0.05)
     failures = []
@@ -807,16 +829,13 @@ def test_continuous_writes_to_the_previous_snapshot_cannot_stall_the_copy(
     worker = threading.Thread(target=start, daemon=True)
     worker.start()
     worker.join(timeout=20)
-    try:
-        assert not worker.is_alive(), "startup stalled while the snapshot was being written"
-        assert not failures, failures
-        assert time.monotonic() - began < 15
-    finally:
-        stop.set()
-        if writer_thread.is_alive():
-            writer_thread.join(timeout=10)
+    assert not worker.is_alive(), "startup stalled while the snapshot was being written"
+    assert not failures, failures
+    assert time.monotonic() - began < 15
 
     assert len(writes) > 1
+    assert steps[0][0] == steps[-1][0] == sqlite3.SQLITE_OK
+    assert steps[-1][1] >= steps[0][1] > 0, "commits must restart the real backup"
     assert _user_version(db) == 6
     held = list(db.parent.glob(snapshot.name + ".held-*"))
     assert len(held) == 1 and _snapshot(held[0]) == live_rows
