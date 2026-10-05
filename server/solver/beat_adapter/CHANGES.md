@@ -147,3 +147,34 @@ from the initial adapter is removed to preserve HBB narrow sweeps. The existing
 rotated `xz` half remains representable, while ambiguous legacy aliases refuse.
 No production adoption, engine-specific extensions, dependency changes or
 numerical solves are included. Work remains uncommitted as requested.
+
+## W8 / W9 qualification tooling (PLAN slice 8)
+
+- **W8 / capability and conformance PR:**
+  `server/solver/beat_adapter/capabilities.py`;
+  `scripts/beat_conformance/{__init__,__main__,analytic,cases,recorder}.py`;
+  `server/tests/beat_adapter/test_{capabilities,conformance}.py`.
+  Builder calls determine support and refusal reasons. HBB's three declared
+  cases retain failed-result/comparator evidence and analytic phase controls.
+- **W9 / anti-vacuity PR:** `scripts/beat_conformance/recorder.py`;
+  `server/tests/beat_adapter/test_conformance.py`. Required per-case frequency
+  solve floors, Julia/engine identity, per-result backend/precision/convention
+  and CPU/Metal device assertions; synthetic/static-only runs cannot qualify.
+- **Numerical agreement PR (PLAN §5 / W10 gate preparation):**
+  `scripts/beat_conformance/agreement.py`;
+  `server/tests/beat_adapter/test_agreement.py`. Resonances precede norms,
+  fixed named thresholds, reference 30 dB mask, nulls, normalized impedance,
+  comparable DI/power and immutable mesh/settings gates use only NumPy.
+- **Shared documentation:** `scripts/beat_conformance/README.md`, this file.
+  Existing W2/W3/W5 implementation files are unchanged; their request/result
+  contracts are exercised through the fake compiled-wire conformance tests.
+
+Deviations: official JWSound supersedes the design's fork target. The optional
+comparator is injected instead of launching HBB or hornlab-metal-bem automatically;
+its absence is an explicit limitation. HBB's 0.6 degree faceted-sphere band is
+retained. Numerical resonance prominence and dense step are declared per corpus;
+sampled extrema require bracketing and local refinement below 0.5%. Real runner,
+installed/device evidence, full migration corpus and performance measurements
+remain compute-broker qualification work. No production routing, pins,
+requirements, runtime directories, HBB files or blanket skip policies change.
+Changes remain uncommitted as requested.
