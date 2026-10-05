@@ -101,9 +101,12 @@ export function accuracyExplainer(fastEngine: string | null, accurateEngine: str
     : accurateEngine?.startsWith('beat-')
       ? `Runs through ${engineDisplayName(accurateEngine)}`
       : 'Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU';
+  const cost = fastEngine?.startsWith('beat-')
+    ? 'Fast already runs the same Burton–Miller solve here, so Accurate costs about the same as Fast'
+    : 'it can cost more than Fast, which uses a cheaper formulation or engine, by an amount that depends on your machine and mesh';
   const accurate = 'Accurate — Burton–Miller combined formulation: it combines the pressure equation with its '
     + 'normal-derivative equation, which removes the fictitious frequencies without adding damping. '
-    + `${runsOn}; usually slower than Fast, by an amount that depends on your machine and mesh, and the first solve waits while BEAT starts up.`;
+    + `${runsOn}; ${cost}, and the first solve waits while BEAT starts up.`;
   return [
     fast,
     accurate,
