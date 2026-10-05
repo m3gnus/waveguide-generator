@@ -59,7 +59,6 @@ from server.platform.process_tree import (
     kill_own_process_group,
     confine_to_windows_job,
     kill_process_group,
-    resolve_process_group,
 )
 
 from .base import CancelCallback, ResultCallback, StageCallback
@@ -74,6 +73,17 @@ _JOIN_SECONDS = 0.5
 #: process target keeps the spawn plumbing -- and the ``target=`` seam the
 #: tests use -- untouched, and makes "is this worker warm yet" observable.
 _WARMUP_JOB_ID = "__warmup__"
+
+#: The worker's first message, sent before it reads any command:
+#: ``(_GROUP_EVENT, None, group)``, where ``group`` is the POSIX process group it
+#: claimed (its pid) or ``None``. Sweep children only exist once a command has
+#: been read, so the announcement is always ahead of them in the pipe, and it
+#: stays readable there after the worker has died and been reaped. The parent
+#: therefore never resolves the group from outside: ``getpgid`` races the
+#: worker's ``setsid`` and fails once the worker is reaped, and a worker that
+#: claimed its group, started a sweep and died before the parent's first poll
+#: left that sweep running.
+_GROUP_EVENT = "group"
 
 #: Exit status the worker uses when it leaves because the parent went away.
 #: Nothing reads it -- the parent is gone -- but it keeps the reason legible in
@@ -330,13 +340,43 @@ def _poll_and_drain(
     return _poll_and_recv(connection)
 
 
+def _close_quietly(connection: Connection | None) -> None:
+    if connection is not None:
+        try:
+            connection.close()
+        except OSError:
+            pass
+
+
+def _read_group_announcement(connection: Connection) -> int | None:
+    """The group a dead worker announced that nobody had read yet, if any.
+
+    Only for a worker that can no longer write, and only while its announcement
+    is unread: it is then the first message in the pipe, so one receive settles
+    it. A worker that died before sending it never read a command, so it never
+    started a sweep child and there is no group to kill.
+    """
+
+    try:
+        if not connection.poll(0):
+            return None
+        event = connection.recv()
+    except Exception:  # noqa: BLE001 - a torn pipe means nothing was announced
+        return None
+    if isinstance(event, tuple) and len(event) == 3 and event[0] == _GROUP_EVENT:
+        group = event[2]
+        return group if isinstance(group, int) else None
+    return None
+
+
 def _worker_death_error(
     process: multiprocessing.process.BaseProcess | None, stderr: _WorkerStderr | None
 ) -> BemppWorkerError:
     """Describe a worker that stopped without a result. Blocks briefly; call off-loop.
 
-    Reaps the worker to read its exit status, so a caller must have remembered
-    its process group first (``BemppProcessHost._remember_process_group``).
+    Reaps the worker to read its exit status. That costs nothing on the way to
+    its POSIX process group: the worker announced the group over the pipe, and
+    ``_terminate_sync`` reads that announcement, not the reaped pid.
     """
 
     exitcode: int | None = None
@@ -486,10 +526,13 @@ def _bempp_worker_main(connection: Connection) -> None:
     # Claim a POSIX session before any sweep worker is forked, so Stop can kill
     # this process *and* its workers as one group. No-op on Windows, where the
     # parent's job object contains the tree instead.
-    adopt_process_group()
+    group = adopt_process_group()
     _exit_when_parent_does()
 
     try:
+        # Tell the parent which group to kill before reading any command, so
+        # the announcement precedes every sweep child (see _GROUP_EVENT).
+        connection.send((_GROUP_EVENT, None, group))
         while True:
             command = connection.recv()
             if command is None:
@@ -558,8 +601,10 @@ class BemppProcessHost:
         self._job: Any = None
         #: The worker's redirected stderr; None when it could not be set up.
         self._stderr: _WorkerStderr | None = None
-        #: The worker's POSIX process group, resolved while it was unreaped.
+        #: The POSIX process group the worker announced (``_GROUP_EVENT``).
         self._group: int | None = None
+        #: Whether that announcement has been read off the pipe yet.
+        self._group_announced = False
         self._warm_requested = False
         self._state_lock = threading.Lock()
 
@@ -615,33 +660,29 @@ class BemppProcessHost:
         process, self._process = self._process, None
         job, self._job = self._job, None
         stderr, self._stderr = self._stderr, None
-        remembered_group, self._group = self._group, None
+        group, self._group = self._group, None
+        announced, self._group_announced = self._group_announced, False
         self._warm_requested = False
-        if connection is not None:
-            try:
-                connection.close()
-            except OSError:
-                pass
         if process is None:
+            _close_quietly(connection)
             if job is not None:
                 job.terminate()
                 job.close()
             if stderr is not None:
                 stderr.discard()
             return
-        # Resolve the group while the child is still reapable: once it has been
-        # joined, ``getpgid`` can no longer find it and the workers would be
-        # unreachable. A worker that died mid-solve has already been reaped
-        # (to read its exit status), so its group was remembered before that.
-        group = remembered_group
-        if group is None and job is None and process.pid:
-            group = resolve_process_group(process.pid)
         if process.is_alive():
             process.terminate()
             process.join(_JOIN_SECONDS)
         if process.is_alive() and hasattr(process, "kill"):
             process.kill()
             process.join(_JOIN_SECONDS)
+        if job is None and not announced and connection is not None:
+            # The worker may have announced its group, started a sweep and died
+            # before anything here read the pipe. It cannot write any more, so
+            # what it sent is all there is.
+            group = _read_group_announcement(connection)
+        _close_quietly(connection)
         # The direct child is gone, but a parallel sweep's workers are not its
         # children by then -- they are siblings under the same job/group.
         # Reaching them is what keeps Stop honest once workers > 1.
@@ -654,27 +695,6 @@ class BemppProcessHost:
             process.join()
         if stderr is not None:
             stderr.discard()
-
-    def _remember_process_group(
-        self, process: multiprocessing.process.BaseProcess | None
-    ) -> None:
-        """Resolve the worker's POSIX process group now, while it is unreaped.
-
-        Anything that reaps the worker -- ``is_alive()`` on a dead one, or the
-        ``join()`` that reads a crashed worker's exit status -- makes
-        ``getpgid`` fail for it, and ``_terminate_sync`` would then skip the
-        group kill and leave a split sweep's workers running. Call before
-        either. Windows needs nothing: its job object holds the tree.
-        """
-
-        if (
-            self._group is None
-            and self._job is None
-            and process is not None
-            and process is self._process
-            and process.pid
-        ):
-            self._group = resolve_process_group(process.pid)
 
     def _prewarm_locked(self) -> None:
         """Start the worker and queue its warmup.  Caller holds ``_state_lock``.
@@ -801,14 +821,11 @@ class BemppProcessHost:
             try:
                 await asyncio.to_thread(connection.send, (job_id, payload))
             except (EOFError, BrokenPipeError, OSError) as exc:
-                self._remember_process_group(process)
                 raise await asyncio.to_thread(
                     _worker_death_error, process, stderr
                 ) from exc
             while True:
                 cancel_cb()
-                # Before ``is_alive()``, which reaps a dead worker.
-                self._remember_process_group(process)
                 if process is None or not process.is_alive():
                     raise await asyncio.to_thread(_worker_death_error, process, stderr)
                 try:
@@ -816,14 +833,15 @@ class BemppProcessHost:
                 except (EOFError, BrokenPipeError, OSError) as exc:
                     # A native crash closes the pipe without a word; the
                     # exception's own text is empty. Say what stopped and why.
-                    # The group first: reading the exit status reaps the worker.
-                    self._remember_process_group(process)
                     raise await asyncio.to_thread(
                         _worker_death_error, process, stderr
                     ) from exc
                 if event is None:
                     continue
                 kind, event_job_id, value = event
+                if kind == _GROUP_EVENT:
+                    self._group, self._group_announced = value, True
+                    continue
                 if kind == "warm":
                     # A prewarm acknowledgement from before this job was sent.
                     # It is diagnostic only; the solve is unaffected either way.

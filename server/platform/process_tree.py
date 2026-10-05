@@ -56,17 +56,23 @@ _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
 _adopted_session_pid: int | None = None
 
 
-def adopt_process_group() -> None:
+def adopt_process_group() -> int | None:
     """Claim a new POSIX session so this process and its children are one group.
 
     Call this first thing in the child. A no-op on Windows, where the job
     object created by the parent provides containment instead.
+
+    Returns the group this process now leads (its pid), or ``None`` when it
+    claimed none -- Windows, not a spawned child, or a ``setsid`` that failed.
+    The child reports it to its parent, which must not have to work it out from
+    the outside: ``getpgid`` on a child that has already died and been reaped
+    answers nothing, and that is exactly the child whose workers need killing.
     """
 
     global _adopted_session_pid
 
     if os.name != "posix":
-        return
+        return None
     if multiprocessing.parent_process() is None:
         # Not a spawned child, so not the process this containment is for.
         # ``_bempp_worker_main`` is driven in-process by the loop tests, and
@@ -77,10 +83,13 @@ def adopt_process_group() -> None:
         # test named, and invisible to any runner that leads its own session.
         # ``_exit_when_parent_does`` already declines on exactly this test,
         # two lines below the call to this function; it is the same question.
-        return
-    with contextlib.suppress(OSError):
+        return None
+    try:
         os.setsid()
-        _adopted_session_pid = os.getpid()
+    except OSError:
+        return None
+    _adopted_session_pid = os.getpid()
+    return _adopted_session_pid
 
 
 class WindowsJob:
