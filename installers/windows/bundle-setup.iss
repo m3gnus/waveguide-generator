@@ -80,6 +80,12 @@ PrivilegesRequiredOverridesAllowed=
 DefaultDirName={localappdata}\Programs\Waveguide Generator
 DefaultGroupName=Waveguide Generator
 UsePreviousAppDir=yes
+; Inno's default, auto, hides the directory page whenever a previous install
+; is registered, so an upgrade never asked where to go: a folder chosen once
+; (C:\wg, say) was reused by every later installer without a word. "no" hands
+; that decision to ShouldSkipPage in [Code], which keeps auto's rule except for
+; an interactive upgrade from a non-standard folder (see ChooseInstallDir).
+DisableDirPage=no
 ; A prior interactive selection must never become consent for an unattended
 ; upgrade. With Inno's default UsePreviousTasks=yes, /VERYSILENT could restore
 ; the old wglink task even when this invocation names no /TASKS option. The
@@ -261,6 +267,15 @@ var
   LastCopiedFile: String;
   LastCopyCompleted: Boolean;
   LastLogPercent: Integer;
+  { The folder the uninstall key names (WizardForm.PrevAppDir), or empty. }
+  PreviousInstallDir: String;
+  { True only for an interactive upgrade from a non-standard folder: the
+    directory page is shown, with the standard folder pre-selected. }
+  OfferStandardDir: Boolean;
+  PreviousDirNotice: TNewStaticText;
+  { Set after commit when the install landed somewhere other than the
+    previous folder and a copy is still there; shown on the finish page. }
+  PreviousCopyNotice: String;
 
 function DiagnosticArgument(const S: String): String;
 var
@@ -922,8 +937,180 @@ begin
     WgLog('OpenCL: could not open the help page; error ' + IntToStr(ErrorCode) + '.');
 end;
 
+{ ---- A previous install in a non-standard folder ----------------------------
+
+  UsePreviousAppDir installs into whatever folder the uninstall key names. A
+  user who once chose a folder of their own, C:\wg say, had every later
+  installer reuse it without ever seeing the directory page. Now the
+  interactive wizard shows that page for such a folder, with the standard one
+  pre-selected; the user can still browse anywhere, including back.
+
+  The rule: a previous folder is standard when it lies strictly inside the
+  per-user Programs folder (the parent of DefaultDirName) or a Program Files
+  root. Paths are compared after ExpandFileName, which folds . and .. segments
+  and forward slashes, so C:\Program Files\..\wg is not standard; and without
+  case, as Windows compares them. A root itself is not standard: an install
+  there has no folder of its own. Anything else -- a drive root, a folder
+  under the profile or Documents, a network path -- is non-standard.
+
+  Unattended runs never move: the in-app updater passes /VERYSILENT and a /DIR
+  naming the running install (launchers/full_installer.py), a silent run
+  without /DIR keeps the registered folder exactly as before, and an
+  interactive /DIR is honoured as Inno has always honoured it.
+
+  Nothing here deletes anything. A copy left at the previous folder is
+  reported to the user instead; see NotePreviousCopy. }
+
+function StandardInstallDir(): String;
+begin
+  { Must stay equal to DefaultDirName in the Setup section. }
+  Result := ExpandConstant('{localappdata}\Programs\Waveguide Generator');
+end;
+
+function ComparableDir(const Dir: String): String;
+begin
+  Result := '';
+  if Trim(Dir) = '' then
+    exit;
+  Result := AnsiLowerCase(RemoveBackslashUnlessRoot(ExpandFileName(Trim(Dir))));
+end;
+
+function SameDir(const A, B: String): Boolean;
+begin
+  Result := (ComparableDir(A) <> '') and (ComparableDir(A) = ComparableDir(B));
+end;
+
+{ True when Dir is a strict descendant of Root. The separator is appended to
+  Root before the prefix test, so C:\Program Files (x86)\x is not inside
+  C:\Program Files. }
+function DirIsInside(const Dir, Root: String): Boolean;
+var
+  Prefix, Candidate: String;
+begin
+  Result := False;
+  Candidate := ComparableDir(Dir);
+  Prefix := ComparableDir(Root);
+  if (Candidate = '') or (Prefix = '') then
+    exit;
+  Prefix := AddBackslash(Prefix);
+  Result := (Length(Candidate) > Length(Prefix)) and
+    (Copy(Candidate, 1, Length(Prefix)) = Prefix);
+end;
+
+function IsStandardInstallDir(const Dir: String): Boolean;
+begin
+  Result :=
+    DirIsInside(Dir, ExpandConstant('{localappdata}\Programs')) or
+    DirIsInside(Dir, ExpandConstant('{userpf}')) or
+    DirIsInside(Dir, ExpandConstant('{commonpf64}')) or
+    DirIsInside(Dir, ExpandConstant('{commonpf32}'));
+end;
+
+{ Advisory only, never a licence to delete: a copy is still there if either
+  the native entry or the app layer's manifest is. }
+function HoldsWaveguideGenerator(const Dir: String): Boolean;
+begin
+  Result := (Dir <> '') and
+    (FileExists(AddBackslash(Dir) + 'Waveguide Generator.exe') or
+     FileExists(AddBackslash(Dir) + 'app\APP-MANIFEST.json'));
+end;
+
+{ Called from InitializeWizard, before any page is shown. Only an interactive
+  run with no /DIR of its own and a non-standard previous folder changes
+  anything: the directory page then starts at the standard folder and says
+  why, and ShouldSkipPage lets it show. }
+procedure ChooseInstallDir();
+var
+  Notice: String;
+begin
+  PreviousInstallDir := WizardForm.PrevAppDir;
+  OfferStandardDir := False;
+  if PreviousInstallDir = '' then
+    exit;
+  if IsStandardInstallDir(PreviousInstallDir) then
+  begin
+    WgLog('Install folder: the registered folder ' + PreviousInstallDir + ' is standard; it stays the default.');
+    exit;
+  end;
+  if WizardSilent() or (ExpandConstant('{param:DIR|}') <> '') then
+  begin
+    WgLog('Install folder: the registered folder ' + PreviousInstallDir +
+      ' is not standard; left as the default because this run is silent or names /DIR.');
+    exit;
+  end;
+  OfferStandardDir := True;
+  WizardForm.DirEdit.Text := StandardInstallDir();
+  WgLog('Install folder: the registered folder ' + PreviousInstallDir +
+    ' is not standard; offering ' + StandardInstallDir() + ' on the directory page.');
+
+  PreviousDirNotice := TNewStaticText.Create(WizardForm);
+  PreviousDirNotice.Parent := WizardForm.SelectDirPage;
+  PreviousDirNotice.AutoSize := False;
+  PreviousDirNotice.WordWrap := True;
+  PreviousDirNotice.SetBounds(WizardForm.DirEdit.Left,
+    WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(16),
+    WizardForm.DirBrowseButton.Left + WizardForm.DirBrowseButton.Width - WizardForm.DirEdit.Left,
+    WizardForm.DiskSpaceLabel.Top - (WizardForm.DirEdit.Top + WizardForm.DirEdit.Height + ScaleY(16)) - ScaleY(8));
+  PreviousDirNotice.Anchors := [akLeft, akTop, akRight, akBottom];
+  { A path has no spaces to wrap at, so it gets a line of its own, shortened
+    with an ellipsis to the width it has rather than clipped. }
+  Notice := 'Waveguide Generator is currently installed in:' + #13#10 +
+    MinimizePathName(PreviousInstallDir, PreviousDirNotice.Font, PreviousDirNotice.Width) + #13#10#13#10 +
+    'That is not a standard location, so Setup suggests the folder above instead. ' +
+    'You can still choose any folder, including that one.';
+  if HoldsWaveguideGenerator(PreviousInstallDir) then
+    Notice := Notice + ' If you install somewhere else, Setup does not remove the old copy; ' +
+      'it says what to do with it when it finishes.';
+  PreviousDirNotice.Caption := Notice;
+end;
+
+{ DisableDirPage=no hands the directory page to this function. Skipping it
+  whenever a previous folder is registered is Inno's own auto rule, kept for
+  every run except the one ChooseInstallDir marked. Silent runs reach the
+  same decision they always did, so NextButtonClick is not newly called for
+  this page on a silent upgrade. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := (PageID = wpSelectDir) and (WizardForm.PrevAppDir <> '') and
+    not OfferStandardDir;
+end;
+
+{ After commit: when the install landed somewhere other than the previous
+  folder, the old tree is still there, about 600 MB. Nothing removes it, by
+  design. Running the old copy's own uninstaller from here would run an older
+  release's uninstall code, with its own dialogs and WGLink cleanup, inside
+  this setup; run afterwards, it removes this product's uninstall key and
+  Start menu shortcut, which the new install now shares (measured 2026-10-05
+  with Inno Setup 6.7.3). Deleting the tree from here could take files the
+  user keeps in a folder they chose themselves, and would strand a WGLink
+  add-in that still runs from it: install_wglink.py preserves a copy that
+  another root manages. So the user is told, in the log and on the finish
+  page, and decides. }
+procedure NotePreviousCopy();
+begin
+  PreviousCopyNotice := '';
+  if (PreviousInstallDir = '') or SameDir(PreviousInstallDir, ExpandConstant('{app}')) then
+    exit;
+  if not HoldsWaveguideGenerator(PreviousInstallDir) then
+  begin
+    WgLog('Install folder: moved from ' + PreviousInstallDir + '; no copy remains there.');
+    exit;
+  end;
+  WgLog('Install folder: moved from ' + PreviousInstallDir + ' to ' +
+    ExpandConstant('{app}') + '; the previous copy was left in place.');
+  PreviousCopyNotice :=
+    'The previous copy in ' + PreviousInstallDir + ' was left in place and still takes up space. ' +
+    'Once you have moved out anything of yours, delete that folder. ' +
+    'Do not run the uninstaller inside it: it would also remove this installation''s ' +
+    'Start menu shortcut and its entry in Installed apps.' + #13#10#13#10 +
+    'If you use WGLink in Fusion and it was installed from the old copy, it still runs from there. ' +
+    'After deleting the old folder, also delete the WGLink folder in Fusion''s AddIns folder, ' +
+    'then run this installer again with WGLink selected.';
+end;
+
 procedure InitializeWizard();
 begin
+  ChooseInstallDir();
   if not WizardSilent() then
   begin
     OpenClNotice := TNewMemo.Create(WizardForm);
@@ -1228,6 +1415,7 @@ begin
   begin
     WgLog('Install phase: payload copied; committing verified complete installation.');
     CommitProtectedReplace();
+    NotePreviousCopy();
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
       RecordWGLinkSetupChoice();
@@ -1304,6 +1492,9 @@ begin
   if WgLinkStatus <> '' then
     WizardForm.FinishedLabel.Caption :=
       'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;
+  if PreviousCopyNotice <> '' then
+    WizardForm.FinishedLabel.Caption :=
+      WizardForm.FinishedLabel.Caption + #13#10#13#10 + PreviousCopyNotice;
   { Hide the install advice only when an Intel CPU runtime is already
     registered. The help button still opens the full guidance. }
   if CpuOpenClRuntimeRegistered() then

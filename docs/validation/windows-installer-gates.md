@@ -148,6 +148,43 @@ selection is deliberately not reused.
 Selecting the task records CAD Link use in WG's data directory before attempting
 the add-in install, even if Fusion is absent or installation fails; gates 10 and 12 check that record and its preservation by an unticked upgrade.
 
+## The install folder on an upgrade
+
+Setup reuses the folder the uninstall key names (`UsePreviousAppDir`). Inno's
+default `DisableDirPage=auto` then hid the directory page, so a folder chosen once,
+such as `C:\wg`, was reused by every later installer without being shown.
+`DisableDirPage=no` and `ShouldSkipPage` now keep that rule except in one case: an
+**interactive** run with no `/DIR` whose registered folder is **not standard** shows
+the directory page with `%LOCALAPPDATA%\Programs\Waveguide Generator` pre-selected
+and a note saying why. The user can still browse anywhere, including back.
+
+- **Standard** means strictly inside `%LOCALAPPDATA%\Programs` (Inno's `{userpf}`)
+  or a Program Files root (`{commonpf64}`, `{commonpf32}`), compared after
+  `ExpandFileName` and without case. A drive root, a folder under the profile or
+  Documents, and a network path are not standard. An upgrade from a standard folder
+  looks exactly as before: the directory page stays hidden.
+- **Unattended runs never move an install.** The in-app updater passes `/VERYSILENT`
+  and `/DIR=<the running install>` (`launchers/full_installer.py`), and a silent run
+  without `/DIR` keeps the registered folder.
+- **Nothing is deleted.** After an install that landed somewhere else, the old tree
+  stays where it was. The finish page names it and says to delete it by hand, not
+  with its own uninstaller, which would also remove the new install's uninstall key
+  and Start menu shortcut, since both installs share them. A WGLink add-in installed
+  from the old copy keeps pointing there; `install_wglink.py` will not replace a copy
+  another root manages, so the note says to delete that add-in folder too and select
+  WGLink again.
+- The over-long-root check applies to the offered folder like any other: the
+  directory page runs it on **Next**, and `PrepareToInstall` remains the backstop.
+- Data folders do not depend on the install folder: `%APPDATA%\WaveguideGenerator`,
+  the `%LOCALAPPDATA%\WaveguideGenerator` cache, and Documents runs are unchanged.
+
+Measured 2026-10-05 with Inno Setup 6.7.3 on a copy of `bundle-setup.iss` with a
+throwaway AppId and private folders: a silent rerun without `/DIR` stayed in the
+non-standard folder; the interactive wizard offered the standard folder; installing
+elsewhere moved the uninstall key and shortcut and showed the note; and running the
+old folder's `unins000.exe` afterwards removed the new install's uninstall key and
+Start menu shortcut, which is why the note warns against it.
+
 ## Gate 7 needs a different machine, and a human
 
 Where `EnableLUA=0`, every process runs at High integrity and **any** SmartScreen or mark-of-the-web result from that box is untrustworthy — including a negative one. A false "SmartScreen is fine" is exactly the finding that ships a bad installer, so the script never runs this gate and says so rather than producing a green line; its line reports whether UAC is on and whether the session is elevated. It needs UAC on and an unelevated session, and it is the one gate no CI can answer either: what a first-time user actually sees.

@@ -73,8 +73,10 @@ def test_finish_notice_is_silent_safe_and_preserves_wglink_outcome(script: str) 
     assert "'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;" in finish
     # Guidance is outside the WGLink condition: even no outcome must get it.
     # Only a positive detection replaces the install advice; the default
-    # branch is the full generated guidance.
-    assert "WgLinkStatus;\n  { Hide the install advice" in finish
+    # branch is the full generated guidance. The note about a copy left at a
+    # previous install folder sits between them, outside both conditions.
+    assert "WgLinkStatus;\n  if PreviousCopyNotice <> '' then" in finish
+    assert "PreviousCopyNotice;\n  { Hide the install advice" in finish
     assert "if CpuOpenClRuntimeRegistered() then" in finish
     assert "OpenClGuidanceTitle + #13#10 + OpenClGuidanceText;" in finish
     assert finish.index("  else\n    OpenClNotice.Text") > finish.index("CpuOpenClRuntimeRegistered()")

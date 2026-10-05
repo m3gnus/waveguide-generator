@@ -85,7 +85,11 @@ info → Run anyway** — and then never again, because the installer writes its
 payload itself and nothing it writes carries the download mark. It installs to
 `%LOCALAPPDATA%\Programs` without elevation, which is what lets the in-app
 updater replace files in place later, and it refuses an over-long install folder
-up front instead of failing partway through. Setup also offers an explicit
+up front instead of failing partway through. An upgrade stays in the folder you
+used before when that folder is under `%LOCALAPPDATA%\Programs` or Program Files;
+for any other folder, such as `C:\wg`, setup suggests the standard one instead, and
+says on its last page how to remove the old copy, which it never deletes itself.
+Setup also offers an explicit
 **Install WGLink for Autodesk Fusion** task. It is preselected only when Fusion's
 AddIns folder already exists, installs entirely from the verified bundle without
 network access, and never replaces a developer or externally managed WGLink.
