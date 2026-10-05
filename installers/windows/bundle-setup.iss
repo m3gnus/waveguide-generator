@@ -1211,6 +1211,14 @@ begin
   WgLog('Install refused: native Running handles remained after 120 seconds.');
 end;
 
+// [Icons] runs before ssPostInstall, while WaveguideGenerator.ico is still
+// staged in .wg-install-new, so Explorer first draws the new shortcuts with a
+// missing icon and keeps that image. The launcher has no icon resource of its
+// own to point at instead. Once the commit has put the .ico in place, ask the
+// shell to drop its cached icons (SHCNE_ASSOCCHANGED, SHCNF_IDLIST).
+procedure SHChangeNotify(EventId: Integer; Flags: Cardinal; Item1, Item2: Cardinal);
+  external 'SHChangeNotify@shell32.dll stdcall setuponly';
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssInstall then
@@ -1228,6 +1236,7 @@ begin
   begin
     WgLog('Install phase: payload copied; committing verified complete installation.');
     CommitProtectedReplace();
+    SHChangeNotify($08000000, 0, 0, 0);
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
       RecordWGLinkSetupChoice();
