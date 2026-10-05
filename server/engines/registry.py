@@ -420,18 +420,22 @@ def _beat_row_updates(
 def _failed_detection(item: EngineInfo, exc: BaseException) -> EngineInfo:
     """A finished, unavailable row for a probe that raised instead of answering.
 
-    BEMPP gets the same structured answer a failed OpenCL check gives:
-    qualification done, no backend, and the transient ``probe_error`` code, so
-    the retry and attempt cap in ``bempp_opencl`` still apply.
+    Nothing the previous row declared is known any more, so every capability
+    field is reset to empty rather than kept from it. BEMPP gets the same
+    structured answer a failed OpenCL check gives: qualification done, no
+    backend, and the transient ``probe_error`` code, so the retry and attempt
+    cap in ``bempp_opencl`` still apply.
     """
 
     detail = str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__
-    reason = f"{item.name} detection failed: {detail}"
-    if item.name != "bempp":
-        return replace(item, available=False, reason=reason)
-    return replace(
-        item, available=False, qualification="done", reason=reason,
-        assembly_backend=None, assembly_device=None, opencl_unavailable_reason="probe_error",
+    bempp = item.name == "bempp"
+    return EngineInfo(
+        name=item.name, label=item.label, available=False,
+        reason=f"{item.name} detection failed: {detail}", version=None,
+        geometry_sources=(), di_sphere=False,
+        cancellation_granularity=item.cancellation_granularity,
+        qualification="done" if bempp else item.qualification,
+        opencl_unavailable_reason="probe_error" if bempp else None,
     )
 
 
