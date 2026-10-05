@@ -1212,12 +1212,40 @@ begin
 end;
 
 // [Icons] runs before ssPostInstall, while WaveguideGenerator.ico is still
-// staged in .wg-install-new, so Explorer first draws the new shortcuts with a
-// missing icon and keeps that image. The launcher has no icon resource of its
-// own to point at instead. Once the commit has put the .ico in place, ask the
-// shell to drop its cached icons (SHCNE_ASSOCCHANGED, SHCNF_IDLIST).
+// staged in .wg-install-new, so the shortcuts are first written and drawn with
+// an icon file that does not exist yet, and Explorer keeps that blank image.
+// The launcher has no icon resource of its own to point at instead. Once the
+// commit has put the .ico in place, the shortcuts are written again at the same
+// paths (the uninstaller still removes them from the [Icons] log), and the
+// shell is asked to drop its cached icons (SHCNE_ASSOCCHANGED, SHCNF_IDLIST).
 procedure SHChangeNotify(EventId: Integer; Flags: Cardinal; Item1, Item2: Cardinal);
   external 'SHChangeNotify@shell32.dll stdcall setuponly';
+
+procedure RewriteShortcut(const Link: String);
+var
+  Icon: String;
+begin
+  Icon := ExpandConstant('{app}\WaveguideGenerator.ico');
+  if not FileExists(Link) or not FileExists(Icon) then
+  begin
+    WgLog('Shortcut icon: not rewritten, link or icon missing: ' + Link);
+    exit;
+  end;
+  try
+    CreateShellLink(Link, '', ExpandConstant('{app}\Waveguide Generator.exe'), '', '', Icon, 0, SW_SHOWNORMAL);
+    WgLog('Shortcut icon: rewritten after commit: ' + Link);
+  except
+    WgLog('Shortcut icon: could not rewrite ' + Link + ': ' + GetExceptionMessage());
+  end;
+end;
+
+procedure RewriteShortcutIcons();
+begin
+  RewriteShortcut(ExpandConstant('{group}\Waveguide Generator.lnk'));
+  if WizardIsTaskSelected('desktopicon') then
+    RewriteShortcut(ExpandConstant('{autodesktop}\Waveguide Generator.lnk'));
+  SHChangeNotify($08000000, 0, 0, 0);
+end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
@@ -1236,7 +1264,7 @@ begin
   begin
     WgLog('Install phase: payload copied; committing verified complete installation.');
     CommitProtectedReplace();
-    SHChangeNotify($08000000, 0, 0, 0);
+    RewriteShortcutIcons();
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
       RecordWGLinkSetupChoice();
