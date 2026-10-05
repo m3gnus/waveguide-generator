@@ -236,3 +236,90 @@ def test_a_build_without_the_bridge_helper_still_snapshots_and_migrates(
     store.close()
     assert _user_version(db) == 6
     assert _snapshot(store.rollback_snapshot_path) == before_rows
+
+
+def _held(path: Path) -> PermissionError:
+    error = PermissionError(13, "The process cannot access the file because it is being used", str(path))
+    error.winerror = 32  # ERROR_SHARING_VIOLATION, as Windows raises it
+    return error
+
+
+def _restored_by_hand(db: Path, snapshot: Path) -> None:
+    """The manual recovery procedure: the snapshot copied back over the live DB."""
+
+    for suffix in ("-wal", "-shm"):
+        Path(str(db) + suffix).unlink(missing_ok=True)
+    shutil.copy2(snapshot, db)
+
+
+@pytest.mark.parametrize("held_for", ["transient", "whole-start"])
+def test_a_held_previous_snapshot_never_stops_a_second_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, held_for: str
+) -> None:
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    snapshot = store.rollback_snapshot_path
+    _restored_by_hand(db, snapshot)
+    # Work done in the older release after the manual restore.
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("UPDATE simulation_jobs SET label = 'after restore' WHERE id = 'a'")
+        conn.commit()
+    second_rows = _snapshot(db)
+    first_snapshot = snapshot.read_bytes()
+
+    real_replace = store_module.os.replace
+    refusals = []
+
+    def replace(source, destination):
+        if Path(source) == snapshot and (held_for == "whole-start" or not refusals):
+            refusals.append(source)
+            raise _held(snapshot)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(store_module.os, "replace", replace)
+    monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_SECONDS", 0.05)
+    monkeypatch.setattr(store_module, "_HELD_FILE_RETRY_INTERVAL", 0.01)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+
+    assert _user_version(db) == 6
+    held_copies = list(db.parent.glob(snapshot.name + ".held-*"))
+    if held_for == "transient":
+        # Retried like the bridge's renames: rotated, then published normally.
+        assert len(refusals) == 1 and not held_copies
+        assert Path(str(snapshot) + ".1").read_bytes() == first_snapshot
+        assert _snapshot(snapshot) == second_rows
+    else:
+        # Kept where it is; this upgrade's snapshot is written beside it.
+        assert len(refusals) > 1 and snapshot.read_bytes() == first_snapshot
+        assert not Path(str(snapshot) + ".1").exists()
+        assert len(held_copies) == 1 and _snapshot(held_copies[0]) == second_rows
+    assert not list(db.parent.glob(".jobs-rollback-*"))
+
+
+def test_a_held_orphan_from_an_earlier_snapshot_is_logged_and_left(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    orphan = db.parent / ".jobs-rollback-orphan"
+    orphan.write_bytes(b"left by a crashed snapshot")
+    real_unlink = Path.unlink
+
+    def unlink(self, missing_ok=False):
+        if self == orphan:
+            raise _held(self)
+        return real_unlink(self, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", unlink)
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    assert _user_version(db) == 6 and orphan.exists()
+    assert any(str(orphan) in record.getMessage() for record in caplog.records)

@@ -17,6 +17,7 @@ import re
 import sqlite3
 import threading
 import tempfile
+import time
 from typing import Any, Callable, Iterator, Mapping, Sequence
 
 from server.cadlink.operations import REASON_CODES as CAD_REASON_STATES, REJECTED as CAD_REJECTED
@@ -150,6 +151,39 @@ class SubmissionConflictError(RuntimeError):
 
 
 logger = logging.getLogger(__name__)
+
+#: Windows sharing/access errors a held handle (a scanner, or a manual
+#: recovery tool holding a snapshot open) raises for a rename or unlink.
+#: Retried for as long as the bridge's layer renames retry them.
+_HELD_FILE_WINERRORS = frozenset({5, 32, 33})
+_HELD_FILE_RETRY_SECONDS = 20.0
+_HELD_FILE_RETRY_INTERVAL = 0.25
+
+
+def _replace_unless_held(source: Path, destination: Path) -> bool:
+    """``os.replace``, waiting out a held Windows file; False if it stays held."""
+
+    deadline = time.monotonic() + _HELD_FILE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(source, destination)
+            return True
+        except OSError as exc:
+            if getattr(exc, "winerror", None) not in _HELD_FILE_WINERRORS:
+                raise
+            if time.monotonic() >= deadline:
+                logger.warning("Could not move %s to %s; it is held open: %s", source, destination, exc)
+                return False
+            time.sleep(_HELD_FILE_RETRY_INTERVAL)
+
+
+def _unlink_or_log(path: Path) -> None:
+    """Remove a leftover snapshot file; one held open stays for the next start."""
+
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not remove %s; leaving it for a later start: %s", path, exc)
 _SAFE_LOG_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 _SCHEMA_STATEMENTS = (
     """CREATE TABLE IF NOT EXISTS simulation_jobs (
@@ -429,7 +463,7 @@ class JobStore:
         """
 
         for orphan in self.db_path.parent.glob(".jobs-rollback-*"):
-            orphan.unlink(missing_ok=True)
+            _unlink_or_log(orphan)
         version = int(conn.execute("PRAGMA user_version").fetchone()[0])
         exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'simulation_jobs'").fetchone()
         if version >= 6 or exists is None:
@@ -449,18 +483,18 @@ class JobStore:
                 valid = False
             if not valid:
                 invalid = target.with_name(target.name + ".invalid-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
-                os.replace(target, invalid)
-                logger.warning("Moved invalid jobs rollback snapshot to %s", invalid)
-                for suffix in ("-wal", "-shm", "-journal"):
-                    sidecar = Path(str(target) + suffix)
-                    if sidecar.exists():
-                        os.replace(sidecar, Path(str(invalid) + suffix))
+                if _replace_unless_held(target, invalid):
+                    logger.warning("Moved invalid jobs rollback snapshot to %s", invalid)
+                    for suffix in ("-wal", "-shm", "-journal"):
+                        sidecar = Path(str(target) + suffix)
+                        if sidecar.exists():
+                            _replace_unless_held(sidecar, Path(str(invalid) + suffix))
         # Keep one quarantined recovery set, including only its own sidecars.
         invalid_sets = sorted(path for path in target.parent.glob(target.name + ".invalid-*")
                               if not path.name.endswith(("-wal", "-shm", "-journal")))
         for old in invalid_sets[:-1]:
             for suffix in ("", "-wal", "-shm", "-journal"):
-                Path(str(old) + suffix).unlink(missing_ok=True)
+                _unlink_or_log(Path(str(old) + suffix))
         fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=self.db_path.parent)
         os.close(fd)
         temporary = Path(name)
@@ -473,9 +507,21 @@ class JobStore:
                         raise RuntimeError("The jobs rollback snapshot failed its integrity check")
             with temporary.open("r+b") as stream:
                 os.fsync(stream.fileno())
-            if target.exists():
-                os.replace(target, Path(str(target) + ".1"))
-            os.replace(temporary, target)
+            published = target
+            rotated = not target.exists() or _replace_unless_held(target, Path(str(target) + ".1"))
+            if not rotated or not _replace_unless_held(temporary, target):
+                # The previous snapshot is held open, for example during the
+                # manual recovery procedure. Keep it where it is, publish this
+                # upgrade's snapshot beside it under its own name, and record
+                # no automatic restore: a held file must not stop startup.
+                published = target.with_name(
+                    target.name + ".held-" + datetime.now().strftime("%Y%m%d%H%M%S%f"))
+                os.replace(temporary, published)
+                logger.warning(
+                    "The jobs rollback snapshot %s is held open, so it was kept and this "
+                    "upgrade's snapshot was written to %s. Automatic jobs restore is off "
+                    "for this update; use the manual jobs recovery procedure with %s.",
+                    target, published, published)
             if os.name != "nt":
                 directory = os.open(self.db_path.parent, os.O_RDONLY)
                 try:
@@ -493,10 +539,11 @@ class JobStore:
                 if exc.name not in {"launchers", "launchers.apply_update"}:
                     raise
             else:
-                record_jobs_upgrade_snapshot(self.db_path.parent.parent, app_root().parent, target)
+                if published == target:
+                    record_jobs_upgrade_snapshot(self.db_path.parent.parent, app_root().parent, target)
         finally:
             for suffix in ("", "-wal", "-shm", "-journal"):
-                Path(str(temporary) + suffix).unlink(missing_ok=True)
+                _unlink_or_log(Path(str(temporary) + suffix))
 
     def _status_check_is_stale(self) -> bool:
         """True when an existing ``simulation_jobs`` predates the ``preparing`` status."""

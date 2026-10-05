@@ -187,7 +187,12 @@ release.** SQLite backup includes pre-upgrade WAL commits, so the snapshot is
 standalone and opens cleanly under both tags. Never restore while a runtime is
 open. Every upgrade from a live schema below 6 refreshes the snapshot and rotates
 the previous copy to `.bak.1` (keep one), preserving work from a restored older
-release. Starts already at schema 6 leave it alone. Invalid snapshots are moved
+release. If the previous snapshot is held open (Windows), the rotation retries
+for 20 seconds like the updater's renames; if it stays held, the previous
+snapshot is kept, this upgrade's snapshot is written to
+`simulations.db.pre-schema-6.bak.held-<timestamp>`, the path is logged, and
+automatic restore is off for that update. A held leftover temporary file is
+logged and left for a later start. Starts already at schema 6 leave it alone. Invalid snapshots are moved
 to `.invalid-<timestamp>` with the path logged; orphan temporary files and sidecars
 are swept. Backup runs under the upgrade's write lock, and a failed backup aborts
 the upgrade. A fresh data directory has no older database to restore.
