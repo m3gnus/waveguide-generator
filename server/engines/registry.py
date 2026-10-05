@@ -408,6 +408,40 @@ def _beat_row_updates(
     return updates
 
 
+def _failed_detection(item: EngineInfo, exc: BaseException) -> EngineInfo:
+    """A finished, unavailable row for a probe that raised instead of answering.
+
+    BEMPP gets the same structured answer a failed OpenCL check gives:
+    qualification done, no backend, and the transient ``probe_error`` code, so
+    the retry and attempt cap in ``bempp_opencl`` still apply.
+    """
+
+    detail = str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__
+    reason = f"{item.name} detection failed: {detail}"
+    if item.name != "bempp":
+        return replace(item, available=False, reason=reason)
+    return replace(
+        item, available=False, qualification="done", reason=reason,
+        assembly_backend=None, assembly_device=None, opencl_unavailable_reason="probe_error",
+    )
+
+
+def _record_bempp_failure(revision: int, exc: BaseException) -> int:
+    """Count a raised BEMPP status as one qualification attempt, once.
+
+    Unless the call already recorded one (the revision moved), nothing would
+    advance the retry interval or reach the attempt cap: a retry stays due,
+    and ``opencl_retry_pending`` keeps the interface on "checking". Returns
+    the revision to publish, so the attempt is not mistaken for news.
+    """
+
+    from server.solver.bempp_opencl import qualification_revision, record_failed_attempt
+
+    if qualification_revision() == revision:
+        record_failed_attempt(exc)
+    return qualification_revision()
+
+
 def _beat_engine_backend(name: str) -> str | None:
     """``beat_engine_backend`` without importing the optional stack eagerly."""
 
@@ -658,10 +692,22 @@ class EngineRegistry:
         )
 
     async def _publish_detection(self, names: Sequence[str]) -> None:
-        from server.solver.bempp_opencl import qualification_revision
+        from server.solver.bempp_opencl import ProbeCancelled, qualification_revision
 
         revision = qualification_revision()
-        detected = await self._qualification_thread(self._detector, names=names)
+        try:
+            detected = await self._qualification_thread(self._detector, names=names)
+        except ProbeCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a failed probe is an unavailable engine
+            # Left pending, every later wait would re-raise this as a 500.
+            log.warning("Engine detection for %s failed", ", ".join(names), exc_info=True)
+            detected = [
+                _failed_detection(item, exc)
+                for item in self._cache or () if item.name in names
+            ]
+            if "bempp" in names:
+                revision = _record_bempp_failure(revision, exc)
         async with self._lock:
             results = {item.name: item for item in detected}
             self._cache = tuple(results.get(item.name, item) for item in self._cache or ())
@@ -788,14 +834,29 @@ class EngineRegistry:
         )
 
     async def _refresh_bempp_timeout(self) -> None:
-        from server.solver.bempp_opencl import qualification_revision
+        from server.solver.bempp_opencl import ProbeCancelled, qualification_revision
 
         from server.solver import bempp
 
         # A retry shares the same submission wait as the initial check. No
         # registry lock is held while native qualification runs off-thread.
         revision = qualification_revision()
-        status = await self._qualification_thread(bempp.bempp_status)
+        try:
+            status = await self._qualification_thread(bempp.bempp_status)
+        except ProbeCancelled:
+            raise
+        except Exception as exc:  # noqa: BLE001 - a failed probe is an unavailable engine
+            # The row is already "pending". Left there, nothing reschedules it
+            # and every BEMPP wait re-raises this task's error as a 500.
+            log.warning("BEMPP capability refresh failed", exc_info=True)
+            revision = _record_bempp_failure(revision, exc)
+            async with self._lock:
+                self._cache = tuple(
+                    _failed_detection(item, exc) if item.name == "bempp" else item
+                    for item in self._cache or ()
+                )
+                self._opencl_revision = revision
+            return
         axes = _ground_plane_axes("bempp", status)
         async with self._lock:
             self._cache = tuple(

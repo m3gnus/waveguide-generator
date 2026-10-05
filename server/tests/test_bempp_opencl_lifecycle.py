@@ -834,3 +834,153 @@ def test_the_check_child_makes_its_temporary_directories_in_its_channel(monkeypa
     probe._child_main("inventory", None, channel / "result.json")
     assert seen == [str(channel)]
     assert json.loads((channel / "result.json").read_text(encoding="utf-8"))["ok"] is False
+
+
+def test_a_reader_that_never_stops_still_yields_the_verdict(monkeypatch, caplog):
+    """A pipe some other process still holds keeps a reader alive after the
+    kill. That used to raise from close() inside _run_probe's finally,
+    replacing the timeout verdict, so no attempt was recorded."""
+    monkeypatch.setattr(probe, 'SPAWN_IMPORT_SECONDS', 0.5)
+    release = threading.Event()
+    real_stderr_reader = probe._read_probe_stderr
+    def held_reader(stream, tail):
+        release.wait(30)
+        real_stderr_reader(stream, tail)
+    monkeypatch.setattr(probe, '_read_probe_stderr', held_reader)
+    children = child_for(monkeypatch, 'import time; time.sleep(30)')
+    try:
+        verdict = probe.qualified_opencl()
+        assert verdict['opencl_unavailable_reason'] == 'inventory_timeout', verdict
+        assert probe._timeout_attempts == 1
+        assert probe.retry_pending()
+        assert children[0].poll() is not None
+        assert not probe._active_probes
+        assert "output did not close" in caplog.text
+    finally:
+        release.set()
+
+
+# -- the Windows bundle's two-process chain ---------------------------------
+
+_GRANDCHILD = "import time; time.sleep(120)"
+# Stands in for the bundle's native stub: start the real interpreter as its
+# own child on *this* process's std handles, as launcher.c start() does, and
+# wait for it. Killing only this process leaves the grandchild on the pipes.
+_STUB = """
+import subprocess, sys
+grandchild = subprocess.Popen([sys.executable, '-c', {grandchild!r}], stdout=1, stderr=2)
+open(sys.argv[1], 'w').write(str(grandchild.pid))
+grandchild.wait()
+"""
+
+
+def _windows_alive(pid):
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    try:
+        code = wintypes.DWORD()
+        return bool(kernel32.GetExitCodeProcess(handle, ctypes.byref(code))) and code.value == 259
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def _windows_kill(pid):
+    import ctypes
+    from ctypes import wintypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.TerminateProcess.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel32.OpenProcess(0x0001, False, pid)  # PROCESS_TERMINATE
+    if handle:
+        kernel32.TerminateProcess(handle, 1)
+        kernel32.CloseHandle(handle)
+
+
+def _stub_chain(monkeypatch, tmp_path):
+    """Run each check as a real two-level tree; return the grandchild pid file.
+
+    The base interpreter, not a venv's python.exe: that one is a launcher
+    whose own kill-on-close job would kill the grandchild for us and make
+    the test pass without the code under test.
+    """
+    interpreter = getattr(sys, '_base_executable', None) or sys.executable
+    pid_file = tmp_path / 'grandchild.pid'
+    original = subprocess.Popen
+    children = []
+    def spawn(argv, **kwargs):
+        child = original([interpreter, '-c', _STUB.format(grandchild=_GRANDCHILD), str(pid_file)], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(probe.subprocess, 'Popen', spawn)
+    monkeypatch.setattr(probe, 'SPAWN_IMPORT_SECONDS', 1.5)
+    return pid_file, children
+
+
+def _grandchild(pid_file):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            return int(pid_file.read_text())
+        except (OSError, ValueError):
+            time.sleep(0.05)
+    raise AssertionError('the stub never started its grandchild')
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='the native stub chain is Windows-only')
+def test_without_the_job_the_grandchild_survives_the_kill(monkeypatch, tmp_path, caplog):
+    """The instrument check for the test below: a bare kill of the stub must
+    leave the grandchild running here, or a pass there would prove nothing.
+    It also exercises the stuck-reader path with a real orphaned pipe."""
+    from server.platform import process_tree
+    monkeypatch.setattr(process_tree, 'popen_in_windows_job',
+                        lambda command, *, subject, **kwargs: (subprocess.Popen(command, **kwargs), None))
+    pid_file, children = _stub_chain(monkeypatch, tmp_path)
+    grandchild = None
+    try:
+        verdict = probe._run_probe('smoke', None, 1.0)
+        grandchild = _grandchild(pid_file)
+        assert verdict['opencl_unavailable_reason'] == 'smoke_test_timeout', verdict
+        assert children[0].poll() is not None
+        assert _windows_alive(grandchild), 'the harness killed the grandchild itself'
+        assert "output did not close" in caplog.text
+    finally:
+        if grandchild is None and pid_file.exists():
+            grandchild = _grandchild(pid_file)
+        if grandchild is not None:
+            _windows_kill(grandchild)
+
+
+@pytest.mark.skipif(sys.platform != 'win32', reason='the native stub chain is Windows-only')
+def test_a_timed_out_check_kills_the_whole_windows_tree(monkeypatch, tmp_path, caplog):
+    pid_file, children = _stub_chain(monkeypatch, tmp_path)
+    grandchild = None
+    try:
+        started = time.monotonic()
+        verdict = probe._run_probe('smoke', None, 1.0)
+        grandchild = _grandchild(pid_file)
+        assert verdict['opencl_unavailable_reason'] == 'smoke_test_timeout', verdict
+        assert time.monotonic() - started < 10
+        assert children[0].poll() is not None
+        deadline = time.monotonic() + 2
+        while _windows_alive(grandchild) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _windows_alive(grandchild), f'grandchild {grandchild} outlived the check'
+        # The readers saw EOF, so the pipes were closed normally.
+        assert children[0].stdout.closed and children[0].stderr.closed
+        assert "output did not close" not in caplog.text
+        assert not probe._active_probes
+    finally:
+        if grandchild is None and pid_file.exists():
+            grandchild = _grandchild(pid_file)
+        if grandchild is not None:
+            _windows_kill(grandchild)

@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 from server.solver import bempp_opencl as probe
-from server.platform import temp_session
+from server.platform import process_tree, temp_session
 
 
 _RESULT_PREFIX = "TEST_RESULT "
@@ -205,6 +205,9 @@ def fake_children(monkeypatch, scripts):
         def kill(self):
             self.killed = True
     monkeypatch.setattr(probe.subprocess, "Popen", Child)
+    # A replayed child has no process to contain or resume.
+    monkeypatch.setattr(process_tree, "popen_in_windows_job",
+                        lambda command, *, subject, **kwargs: (Child(command, **kwargs), None))
     monkeypatch.setattr(probe.queue, "Queue", Events)
     # Do not patch threading globally: endpoint tests still use real workers.
     monkeypatch.setattr(probe, "threading", NS(Thread=Reader, Lock=__import__("threading").Lock))
@@ -685,3 +688,139 @@ def test_ready_requires_an_exact_complete_stdout_line(output, ready):
 def test_malformed_inventory_is_a_probe_error(monkeypatch, change):
     fake_children(monkeypatch, [child_script({"ok": True, "devices": [{**CPU, **change}]})])
     assert probe._run_probe("inventory", None, 1)["opencl_unavailable_reason"] == "probe_error"
+
+
+def test_an_internal_qualification_failure_is_recorded_as_an_attempt(monkeypatch):
+    """Anything escaping the check is a transient probe error with an attempt
+    behind it. Unrecorded, retry_pending() stayed true forever and the
+    registry kept BEMPP on "Checking OpenCL…" with every wait raising."""
+    clock = [0.0]
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    calls = []
+    def broken():
+        calls.append(clock[0])
+        raise RuntimeError("OpenCL probe reader did not stop")
+    monkeypatch.setattr(probe, "_qualified_opencl", broken)
+    for attempt in range(probe.MAX_TIMEOUT_ATTEMPTS):
+        verdict = probe.qualified_opencl()
+        assert verdict["opencl_unavailable_reason"] == "probe_error"
+        assert "RuntimeError: OpenCL probe reader did not stop" in verdict["reason"]
+        assert probe._timeout_attempts == attempt + 1
+        assert probe.retry_pending() is (attempt + 1 < probe.MAX_TIMEOUT_ATTEMPTS)
+        assert probe.qualified_opencl() == verdict  # within the interval: no new run
+        clock[0] += probe.RETRY_INTERVAL_SECONDS
+    assert len(calls) == probe.MAX_TIMEOUT_ATTEMPTS
+    assert probe.qualified_opencl()["opencl_unavailable_reason"] == "probe_error"
+    assert len(calls) == probe.MAX_TIMEOUT_ATTEMPTS
+
+
+def test_cancellation_is_still_not_an_attempt(monkeypatch):
+    def cancelled():
+        raise probe.ProbeCancelled("stopping")
+    monkeypatch.setattr(probe, "_qualified_opencl", cancelled)
+    with pytest.raises(probe.ProbeCancelled):
+        probe.qualified_opencl()
+    assert probe._timeout_attempts == 0
+    assert not probe.retry_pending()
+
+
+def _timed_out_bempp_row():
+    from server.engines.registry import EngineInfo
+
+    return EngineInfo("bempp", True, "OpenCL smoke compute timed out", None, qualification="done",
+                      assembly_backend="numba", opencl_unavailable_reason="smoke_test_timeout")
+
+
+def test_a_refresh_that_raises_ends_done_and_unavailable(monkeypatch):
+    """The 0.3.4 wedge: a retry whose check raised left BEMPP pending, and
+    every BEMPP plan or solve re-raised it as an HTTP 500."""
+    import asyncio
+    from server.engines.registry import EngineRegistry
+    from server.solver import bempp
+
+    clock = [0.0]
+    monkeypatch.setattr(probe, "time", NS(monotonic=lambda: clock[0]))
+    monkeypatch.setattr(probe, "_run_probe", lambda *a: {
+        "ok": False, "opencl_unavailable_reason": "smoke_test_timeout", "reason": "slow"})
+    assert not probe.qualified_opencl()["ok"]  # the first attempt timed out
+    clock[0] += probe.RETRY_INTERVAL_SECONDS  # its retry is due
+    statuses = []
+    def raising_status():
+        statuses.append(clock[0])
+        raise RuntimeError("OpenCL probe reader did not stop")
+    monkeypatch.setattr(bempp, "bempp_status", raising_status)
+    registry = EngineRegistry(detector=lambda: [_timed_out_bempp_row()], cpu_refresh=False)
+    async def exercise():
+        try:
+            await registry.capabilities()
+            capabilities = await registry.wait_for_bempp()  # must not raise
+            row = next(item for item in capabilities if item.name == "bempp")
+            assert row.qualification == "done"
+            assert not row.available
+            assert row.opencl_unavailable_reason == "probe_error"
+            assert "OpenCL probe reader did not stop" in row.reason
+            # The failure is an attempt: the next retry waits for its interval.
+            assert probe._timeout_attempts == 2
+            assert not probe.retry_due()
+            for _ in range(20):
+                assert await registry.get_engine("bempp") is None
+                assert "OpenCL probe reader did not stop" in await registry.unavailable_reason("bempp")
+                await asyncio.sleep(0)
+            assert len(statuses) == 1, statuses
+            # The last allowed retry fails the same way, and the cap ends it.
+            clock[0] += probe.RETRY_INTERVAL_SECONDS
+            row = next(item for item in await registry.wait_for_bempp() if item.name == "bempp")
+            assert (row.qualification, row.available) == ("done", False)
+            assert len(statuses) == 2
+            assert not probe.retry_pending()
+            clock[0] += 100
+            for _ in range(5):
+                await registry.wait_for_bempp()
+            assert len(statuses) == 2
+        finally:
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
+
+
+def test_a_bempp_detection_that_raises_is_published_as_unavailable(monkeypatch):
+    import asyncio
+    from server.engines import registry as reg
+
+    def detector(*, names=None, environ=None):
+        if "bempp" in names:
+            raise RuntimeError("OpenCL probe reader did not stop")
+        return [reg.EngineInfo(name, False, "absent here", None) for name in names]
+    monkeypatch.setattr(reg, "detect_engines", detector)
+    registry = reg.EngineRegistry(detector=detector, cpu_refresh=False)
+    async def exercise():
+        try:
+            await registry.capabilities()
+            capabilities = await registry.wait_for_bempp()
+            row = next(item for item in capabilities if item.name == "bempp")
+            assert (row.qualification, row.available, row.opencl_unavailable_reason) == (
+                "done", False, "probe_error")
+            assert row.reason == "bempp detection failed: OpenCL probe reader did not stop"
+            assert await registry.get_engine("bempp") is None
+            assert all(item.qualification != "pending" for item in await registry.capabilities())
+        finally:
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
+
+
+def test_a_refresh_stopped_by_shutdown_still_propagates(monkeypatch):
+    import asyncio
+    from server.engines.registry import EngineRegistry
+    from server.solver import bempp
+
+    def cancelled():
+        raise probe.ProbeCancelled("stopping")
+    monkeypatch.setattr(bempp, "bempp_status", cancelled)
+    registry = EngineRegistry(detector=lambda: [_timed_out_bempp_row()], cpu_refresh=False)
+    async def exercise():
+        try:
+            await registry.capabilities()
+            with pytest.raises(probe.ProbeCancelled):
+                await registry._refresh_bempp_timeout()
+        finally:
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
