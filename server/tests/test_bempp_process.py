@@ -824,7 +824,88 @@ def test_a_worker_dead_before_announcing_has_no_group_to_kill(monkeypatch) -> No
         monkeypatch, [], dead_at_start=True
     )
 
-    assert killed == [None]
+    assert killed == []
+
+
+def test_a_worker_that_never_announces_is_not_read_as_having_no_group(
+    monkeypatch,
+) -> None:
+    """A non-group first message is no announcement, and kills nothing."""
+
+    _message, _process, parent, killed = _host_over_a_dying_worker(
+        monkeypatch,
+        [("warm", _WARMUP_JOB_ID, {"warmed": True})],
+        dead_at_start=True,
+    )
+
+    assert killed == []
+    assert parent.received == [("warm", _WARMUP_JOB_ID, {"warmed": True})]
+
+
+def test_an_announcement_read_by_a_cancelled_await_is_not_lost(monkeypatch) -> None:
+    """Cancel the job while the pipe thread is mid-read of the announcement.
+
+    The cancelled ``await asyncio.to_thread(...)`` discards the thread's result
+    while the thread keeps running. If the announcement were recorded by the
+    awaiting caller it would be dropped, teardown would read the next message
+    instead, and the sweep's group would never be killed.
+    """
+
+    reading = threading.Event()
+    released = threading.Event()
+    slot: list = [None]
+    parents: list = []
+
+    class Process(_DyingProcess):
+        def terminate(self) -> None:
+            # The worker dies, which is what lets the in-flight read finish.
+            self.dead = True
+            released.set()
+
+    class Connection(_BufferedConnection):
+        def recv(self):
+            if self.received:
+                return super().recv()
+            # Consume the announcement, then stall before handing it back:
+            # the thread has read it, its awaiting caller has not seen it.
+            event = super().recv()
+            reading.set()
+            assert released.wait(10.0)
+            return event
+
+    class Context:
+        def Pipe(self, duplex=True):
+            parent = Connection(
+                slot,
+                [
+                    (bempp_process._GROUP_EVENT, None, 424242),
+                    ("warm", _WARMUP_JOB_ID, {"warmed": True}),
+                ],
+            )
+            parents.append(parent)
+            return parent, _BufferedConnection(slot, [])
+
+        def Process(self, **kwargs):
+            slot[0] = Process(**kwargs)
+            return slot[0]
+
+    killed: list = []
+    monkeypatch.setattr(bempp_process, "confine_to_windows_job", lambda _pid: None)
+    monkeypatch.setattr(bempp_process, "kill_process_group", killed.append)
+
+    async def exercise() -> None:
+        host = BemppProcessHost(process_context=Context())
+        monkeypatch.setattr(host, "prewarm", lambda: None)
+        task = asyncio.create_task(_run_once(host))
+        assert await asyncio.to_thread(reading.wait, 10.0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(exercise())
+
+    assert killed == [424242], "the announcement the cancelled await read was kept"
+    assert parents[0].received[0] == (bempp_process._GROUP_EVENT, None, 424242)
 
 
 def test_a_windows_job_is_used_and_the_pipe_is_not_read_for_a_group(

@@ -85,6 +85,11 @@ _WARMUP_JOB_ID = "__warmup__"
 #: left that sweep running.
 _GROUP_EVENT = "group"
 
+#: How long teardown waits for an in-flight pipe read to finish before it
+#: decides which group the dead worker announced. The worker is dead by then,
+#: so the read ends with its message or with EOF; this only bounds a surprise.
+_PIPE_LOCK_SECONDS = 5.0
+
 #: Exit status the worker uses when it leaves because the parent went away.
 #: Nothing reads it -- the parent is gone -- but it keeps the reason legible in
 #: a process monitor rather than looking like a clean exit or a crash.
@@ -348,25 +353,13 @@ def _close_quietly(connection: Connection | None) -> None:
             pass
 
 
-def _read_group_announcement(connection: Connection) -> int | None:
-    """The group a dead worker announced that nobody had read yet, if any.
+def _group_in(event: Any) -> tuple[bool, int | None]:
+    """``(True, group)`` for a group announcement, ``(False, None)`` otherwise."""
 
-    Only for a worker that can no longer write, and only while its announcement
-    is unread: it is then the first message in the pipe, so one receive settles
-    it. A worker that died before sending it never read a command, so it never
-    started a sweep child and there is no group to kill.
-    """
-
-    try:
-        if not connection.poll(0):
-            return None
-        event = connection.recv()
-    except Exception:  # noqa: BLE001 - a torn pipe means nothing was announced
-        return None
     if isinstance(event, tuple) and len(event) == 3 and event[0] == _GROUP_EVENT:
         group = event[2]
-        return group if isinstance(group, int) else None
-    return None
+        return True, group if isinstance(group, int) else None
+    return False, None
 
 
 def _worker_death_error(
@@ -376,7 +369,7 @@ def _worker_death_error(
 
     Reaps the worker to read its exit status. That costs nothing on the way to
     its POSIX process group: the worker announced the group over the pipe, and
-    ``_terminate_sync`` reads that announcement, not the reaped pid.
+    ``_terminate_sync`` uses that announcement, not the reaped pid.
     """
 
     exitcode: int | None = None
@@ -601,10 +594,13 @@ class BemppProcessHost:
         self._job: Any = None
         #: The worker's redirected stderr; None when it could not be set up.
         self._stderr: _WorkerStderr | None = None
-        #: The POSIX process group the worker announced (``_GROUP_EVENT``).
-        self._group: int | None = None
-        #: Whether that announcement has been read off the pipe yet.
-        self._group_announced = False
+        #: ``(connection, group)`` once the worker on that pipe announced its
+        #: POSIX process group (``_GROUP_EVENT``). Recorded by the thread that
+        #: read it, so a cancelled await cannot lose it.
+        self._announcement: tuple[Connection, int | None] | None = None
+        #: Held across every receive and the record that follows it, so
+        #: teardown never sees a message read but its announcement unrecorded.
+        self._pipe_lock = threading.Lock()
         self._warm_requested = False
         self._state_lock = threading.Lock()
 
@@ -660,8 +656,6 @@ class BemppProcessHost:
         process, self._process = self._process, None
         job, self._job = self._job, None
         stderr, self._stderr = self._stderr, None
-        group, self._group = self._group, None
-        announced, self._group_announced = self._group_announced, False
         self._warm_requested = False
         if process is None:
             _close_quietly(connection)
@@ -677,11 +671,12 @@ class BemppProcessHost:
         if process.is_alive() and hasattr(process, "kill"):
             process.kill()
             process.join(_JOIN_SECONDS)
-        if job is None and not announced and connection is not None:
-            # The worker may have announced its group, started a sweep and died
-            # before anything here read the pipe. It cannot write any more, so
-            # what it sent is all there is.
-            group = _read_group_announcement(connection)
+        group = (
+            self._announced_group(connection)
+            if job is None and connection is not None
+            else None
+        )
+        self._announcement = None
         _close_quietly(connection)
         # The direct child is gone, but a parallel sweep's workers are not its
         # children by then -- they are siblings under the same job/group.
@@ -689,12 +684,66 @@ class BemppProcessHost:
         if job is not None:
             job.terminate()
             job.close()
-        else:
+        elif group is not None:
             kill_process_group(group)
         if not process.is_alive():
             process.join()
         if stderr is not None:
             stderr.discard()
+
+    def _record_if_announcement(self, connection: Connection, event: Any) -> bool:
+        """Record a group announcement read off ``connection``. Caller holds the pipe lock."""
+
+        announced, group = _group_in(event)
+        if announced:
+            self._announcement = (connection, group)
+        return announced
+
+    def _receive(
+        self, connection: Connection, stderr: _WorkerStderr | None
+    ) -> tuple[Any, ...] | None:
+        """The next event for the solve loop; runs on a worker thread.
+
+        A group announcement is recorded here, in the thread that read it, and
+        never handed back: an ``await`` cancelled while this thread was reading
+        discards its result, and with it any assignment a caller would make.
+        """
+
+        with self._pipe_lock:
+            event = _poll_and_drain(connection, stderr)
+            if event is not None and self._record_if_announcement(connection, event):
+                return None
+            return event
+
+    def _announced_group(self, connection: Connection) -> int | None:
+        """The group the (now dead) worker on ``connection`` announced, if any.
+
+        Waits out a receive still in flight, then trusts only an announcement:
+        if none was recorded, everything consumed so far went through
+        ``_receive`` and was not one, so the first unread message is the
+        worker's first message. Only that message is read, and only a group
+        announcement names a group. A worker that died before sending it never
+        read a command, so it never started a sweep child.
+        """
+
+        locked = self._pipe_lock.acquire(timeout=_PIPE_LOCK_SECONDS)
+        try:
+            announcement = self._announcement
+            if announcement is not None and announcement[0] is connection:
+                return announcement[1]
+            if not locked:
+                return None
+            try:
+                if not connection.poll(0):
+                    return None
+                event = connection.recv()
+            except Exception:  # noqa: BLE001 - a torn pipe means nothing was announced
+                return None
+            announced, group = _group_in(event)
+            return group if announced else None
+        finally:
+            if locked:
+                self._pipe_lock.release()
 
     def _prewarm_locked(self) -> None:
         """Start the worker and queue its warmup.  Caller holds ``_state_lock``.
@@ -829,7 +878,7 @@ class BemppProcessHost:
                 if process is None or not process.is_alive():
                     raise await asyncio.to_thread(_worker_death_error, process, stderr)
                 try:
-                    event = await asyncio.to_thread(_poll_and_drain, connection, stderr)
+                    event = await asyncio.to_thread(self._receive, connection, stderr)
                 except (EOFError, BrokenPipeError, OSError) as exc:
                     # A native crash closes the pipe without a word; the
                     # exception's own text is empty. Say what stopped and why.
@@ -839,9 +888,6 @@ class BemppProcessHost:
                 if event is None:
                     continue
                 kind, event_job_id, value = event
-                if kind == _GROUP_EVENT:
-                    self._group, self._group_announced = value, True
-                    continue
                 if kind == "warm":
                     # A prewarm acknowledgement from before this job was sent.
                     # It is diagnostic only; the solve is unaffected either way.
