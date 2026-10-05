@@ -50,6 +50,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import signal
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -120,6 +121,9 @@ def windows_job_start(
     The caller must not pass ``CREATE_SUSPENDED`` itself: the child is
     resumed once it is confined.
 
+    The block must contain only that start: if it raises, the job made for
+    it is terminated and closed.
+
     ``assign(pid, process_handle)`` runs while the child is suspended. It
     returns the job (anything with ``close()``) or ``None``; with
     ``required=True``, ``None`` or an exception stops the child. A failed
@@ -136,6 +140,14 @@ def windows_job_start(
     _local.armed = _Armed(assign, required, subject, result)
     try:
         yield result
+    except BaseException:
+        # The block is only the start, so a start that raised after the child
+        # was handed over (an interrupt landing in Popen, say) left it with
+        # nobody: end its tree rather than leave it running in a job no one
+        # will ever close.
+        job, result.job = result.job, None
+        _close_job(job)
+        raise
     finally:
         _local.armed = previous
 
@@ -151,17 +163,12 @@ def start_in_windows_job(
     returns ``None``, and for a test double that starts nothing real.
     """
 
-    started = JobStart()
-    try:
-        with windows_job_start(
-            lambda pid, _handle: confine(pid), required=False, subject=subject
-        ) as started:
-            process.start()
-    except BaseException:
-        # A start that failed after CreateProcess (its arguments would not
-        # pickle, say) leaves a child that never got its work: end it.
-        _close_job(started.job)
-        raise
+    # A start that fails after CreateProcess (its arguments would not pickle,
+    # say) leaves a child that never got its work; windows_job_start ends it.
+    with windows_job_start(
+        lambda pid, _handle: confine(pid), required=False, subject=subject
+    ) as started:
+        process.start()
     if started.fired:
         return started.job
     return confine(process.pid) if process.pid else None
@@ -198,14 +205,7 @@ def _intercept(real: Callable[..., Any]) -> Callable[..., Any]:
         # One shot: nothing else this thread starts inside the block, and no
         # call this one makes, is captured.
         _local.armed = None
-        try:
-            return _start_contained(real, args, armed)
-        except BaseException:
-            if not armed.result.fired:
-                # Nothing was started (CreateProcess itself failed), so a retry
-                # by the caller is still the start this block is about.
-                _local.armed = armed
-            raise
+        return _start_contained(real, args, armed)
 
     create_process._wg_job_start = True  # type: ignore[attr-defined]
     create_process.__wrapped__ = real  # type: ignore[attr-defined]
@@ -213,80 +213,161 @@ def _intercept(real: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _start_contained(real: Callable[..., Any], args: tuple[Any, ...], armed: _Armed) -> Any:
+    """Create the child suspended, confine it, resume it, hand it over.
+
+    The child is owned here, and stopped on any exception, from the moment
+    ``CreateProcess`` returns until the single statement that hands it to the
+    caller. A Ctrl+C arriving meanwhile is held (:func:`_sigint_held`): it
+    cannot land between two statements, and once the child is ready it is
+    raised here, while the child is still ours to stop.
+    """
+
     flags = int(args[_CREATION_FLAGS_INDEX])
     suspended = list(args)
     suspended[_CREATION_FLAGS_INDEX] = flags | CREATE_SUSPENDED
-    process_handle, thread_handle, pid, tid = real(*suspended)
+    child = _Owned()
+    with _sigint_held() as interrupt:
+        try:
+            child.handles = real(*suspended)
+            _confine_and_resume(real, args, armed, child)
+            interrupt.raise_if_held()
+            return child.hand_over(armed.result)
+        except BaseException:
+            if child.handles is None:
+                # Nothing was started (CreateProcess itself failed), so a
+                # retry by the caller is still the start this block is about.
+                _local.armed = armed
+            # Refused, interrupted, or failed: a child we still own never
+            # reaches the caller, so stop it. A suspended one never ran.
+            child.discard()
+            raise
+
+
+def _confine_and_resume(
+    real: Callable[..., Any], args: tuple[Any, ...], armed: _Armed, child: _Owned
+) -> None:
+    """Make ``child`` ready to hand over, or raise with it still owned."""
+
+    process_handle, thread_handle, pid, _tid = child.handles
     armed.result.fired = True
     armed.result.pid = int(pid)
-    child = _Suspended(process_handle, thread_handle)
+    job = None
     try:
-        job = None
-        try:
-            job = armed.assign(int(pid), int(process_handle))
-        except Exception as exc:  # noqa: BLE001 - the policy below decides
-            if armed.required:
-                raise ContainedStartError(
-                    f"could not confine {armed.subject} in a Windows job: {exc}"
-                ) from exc
-            logger.warning(
-                "Could not confine %s in a Windows job object (%s); starting it "
-                "without one, so processes it starts may outlive it.",
-                armed.subject,
-                exc,
-            )
-        child.job = job
-        if job is None and armed.required:
-            raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
-        if _resume(thread_handle):
-            child.released = True
-            armed.result.job = job
-            return process_handle, thread_handle, pid, tid
+        job = armed.assign(int(pid), int(process_handle))
+    except Exception as exc:  # noqa: BLE001 - the policy below decides
         if armed.required:
-            raise ContainedStartError(f"could not resume {armed.subject} after confining it")
-    except BaseException:
-        # Refused, or interrupted (a KeyboardInterrupt inside assign, say): a
-        # child left suspended would hold its pipes and handles for good. It
-        # never ran, so stopping it loses nothing.
-        child.discard()
-        raise
+            raise ContainedStartError(
+                f"could not confine {armed.subject} in a Windows job: {exc}"
+            ) from exc
+        logger.warning(
+            "Could not confine %s in a Windows job object (%s); starting it "
+            "without one, so processes it starts may outlive it.",
+            armed.subject,
+            exc,
+        )
+    child.job = job
+    if job is None and armed.required:
+        raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
+    if _resume(thread_handle):
+        return
+    if armed.required:
+        raise ContainedStartError(f"could not resume {armed.subject} after confining it")
 
     # Best effort, and the child could not be resumed. It never ran, so it
-    # started nothing: stop it, then start it the plain way.
+    # started nothing: stop it, then start it the plain way and confine it
+    # afterwards, as before this module existed.
     child.discard()
     logger.warning(
         "Could not resume %s after starting it suspended; starting it again "
         "and confining it afterwards, so processes it starts first may outlive it.",
         armed.subject,
     )
-    process_handle, thread_handle, pid, tid = real(*args)
+    child.reset()
+    child.handles = real(*args)
+    process_handle, _thread, pid, _tid = child.handles
     armed.result.pid = int(pid)
     try:
-        armed.result.job = armed.assign(int(pid), int(process_handle))
+        child.job = armed.assign(int(pid), int(process_handle))
     except Exception:  # noqa: BLE001 - best effort, as before this module
-        armed.result.job = None
-    return process_handle, thread_handle, pid, tid
+        child.job = None
 
 
-class _Suspended:
-    """A child created suspended that is still ours to stop, exactly once.
+class _Owned:
+    """A child this module still owns: stopped on discard, exactly once.
 
-    Its handles are closed here and never reach the caller, so they must be
-    closed only once: a second close could hit a reused handle value.
+    Until :meth:`hand_over` its handles never reach the caller, so this is
+    the only place that may close them, and only once: a second close could
+    hit a reused handle value.
     """
 
-    def __init__(self, process_handle: Any, thread_handle: Any) -> None:
-        self.process_handle = process_handle
-        self.thread_handle = thread_handle
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.handles: tuple[Any, Any, Any, Any] | None = None
         self.job: Any = None
         self.released = False
 
+    def hand_over(self, result: JobStart) -> tuple[Any, Any, Any, Any]:
+        # One line, so no line event and no statement boundary splits it:
+        # from here the caller owns the handles and the job.
+        self.released = True; result.job = self.job; return self.handles  # type: ignore[return-value]  # noqa: E702
+
     def discard(self) -> None:
-        if self.released:
+        if self.released or self.handles is None:
             return
         self.released = True
         _close_job(self.job)
-        _discard(self.process_handle, self.thread_handle)
+        _discard(self.handles[0], self.handles[1])
+
+
+class _HeldInterrupt:
+    def __init__(self, deliver_as_exception: bool) -> None:
+        self.held = False
+        self._deliver_as_exception = deliver_as_exception
+
+    def hold(self, _signum: int, _frame: Any) -> None:
+        self.held = True
+
+    def raise_if_held(self) -> None:
+        """Raise a held default Ctrl+C now, while the caller can still clean up."""
+
+        if self.held and self._deliver_as_exception:
+            self.held = False
+            raise KeyboardInterrupt
+
+
+@contextlib.contextmanager
+def _sigint_held() -> Iterator[_HeldInterrupt]:
+    """Hold Ctrl+C for the span of a contained start.
+
+    ``KeyboardInterrupt`` is raised asynchronously, between any two bytecodes
+    of the main thread, including right after ``CreateProcess`` returns and
+    before its result is stored. No ``try`` can own a child across that gap,
+    so the signal is recorded instead. Python's default handler is honoured
+    by :meth:`_HeldInterrupt.raise_if_held` before the child is handed over;
+    any other handler gets the signal again on the way out. Other threads
+    never receive it, and a handler not installed from Python is left alone.
+    """
+
+    if threading.current_thread() is not threading.main_thread():
+        yield _HeldInterrupt(False)
+        return
+    try:
+        previous = signal.getsignal(signal.SIGINT)
+        if previous is None:
+            raise ValueError("SIGINT handler was not installed from Python")
+        interrupt = _HeldInterrupt(previous is signal.default_int_handler)
+        signal.signal(signal.SIGINT, interrupt.hold)
+    except (ValueError, OSError, RuntimeError):
+        yield _HeldInterrupt(False)
+        return
+    try:
+        yield interrupt
+    finally:
+        signal.signal(signal.SIGINT, previous)
+        if interrupt.held:
+            signal.raise_signal(signal.SIGINT)
 
 
 def _kernel32() -> Any:

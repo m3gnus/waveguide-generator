@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import io
 import multiprocessing
 import multiprocessing.spawn
 import os
@@ -775,7 +776,10 @@ def test_the_cad_drain_does_not_wait_forever_on_a_pipe_held_elsewhere() -> None:
     from server.cadlink.isolation import _BoundedDrain
 
     read_fd, writer = _pipe_with_an_outside_writer()
-    stream = open(read_fd, "rb", buffering=0)
+    # Buffered exactly as Popen's stdout is (bufsize=-1): an unbuffered stream
+    # would hide a read that holds partial output in the reader's buffer.
+    stream = open(read_fd, "rb", buffering=-1)
+    assert isinstance(stream, io.BufferedReader)
     try:
         os.write(writer, b"partial output\n")
         drain = _BoundedDrain(stream)
@@ -836,3 +840,160 @@ def test_the_mesher_kill_returns_when_its_reader_never_sees_eof(caplog) -> None:
         held.close()
         channel.reader.join(10.0)
     assert not channel.reader.is_alive()
+
+
+# -- ownership from CreateProcess to the handoff --------------------------------
+
+
+def _contained_start_codes() -> set[Any]:
+    """The frames that own a child between CreateProcess and the handoff."""
+
+    from server.platform import job_start
+
+    codes = {job_start._start_contained.__code__}
+    function = getattr(job_start, "_confine_and_resume", None)
+    if function is not None:
+        codes.add(function.__code__)
+    owned = getattr(job_start, "_Owned", None)
+    if owned is not None:
+        codes.add(owned.hand_over.__code__)
+    return codes
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
+    monkeypatch, required: bool
+) -> None:
+    """KeyboardInterrupt injected at each line in turn, from CreateProcess to
+    the handoff: every child is either handed over or stopped."""
+
+    import _winapi
+
+    from server.platform import job_start
+    from server.platform.process_tree import confine_to_windows_job
+
+    underlying = getattr(_winapi.CreateProcess, "__wrapped__", _winapi.CreateProcess)
+    created: list[int] = []
+
+    def recording(*args: Any) -> Any:
+        result = underlying(*args)
+        created.append(int(result[2]))
+        return result
+
+    monkeypatch.setattr(_winapi, "CreateProcess", job_start._intercept(recording))
+    codes = _contained_start_codes()
+    command = [BASE_PYTHON, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"]
+    interrupted = 0
+    for target in range(1, 200):
+        created.clear()
+        lines = 0
+
+        where: list[str] = []
+
+        def local(frame: Any, event: str, _arg: Any) -> Any:
+            nonlocal lines
+            if event == "line":
+                lines += 1
+                if lines == target:
+                    where.append(f"{frame.f_code.co_name}:{frame.f_lineno}")
+                    raise KeyboardInterrupt
+            return local
+
+        def tracer(frame: Any, _event: str, _arg: Any) -> Any:
+            return local if frame.f_code in codes else None
+
+        previous = sys.gettrace()
+        process = None
+        try:
+            with job_start.windows_job_start(
+                lambda pid, _handle: confine_to_windows_job(pid, subject="the test child"),
+                required=required,
+                subject="the test child",
+            ) as started:
+                sys.settrace(tracer)
+                try:
+                    process = subprocess.Popen(command)
+                finally:
+                    sys.settrace(previous)
+        except KeyboardInterrupt:
+            interrupted += 1
+            if created:
+                assert _wait_dead(created[0]), (
+                    f"interrupted at {where}: the child is still running or suspended"
+                )
+            assert started.job is None, "a job was published for a child never handed over"
+            continue
+        # Every line passed without an interrupt: the child was handed over intact.
+        assert process is not None and started.job is not None
+        assert _in_job(process.pid, started.job)
+        started.job.terminate()
+        started.job.close()
+        process.wait(timeout=WAIT_SECONDS)
+        break
+    else:
+        raise AssertionError("the contained start never completed")
+    assert interrupted >= 5, "the injection never reached the contained start"
+
+
+def test_a_held_ctrl_c_stops_the_child_and_still_interrupts() -> None:
+    import signal
+
+    from server.platform.job_start import windows_job_start
+
+    assert threading.current_thread() is threading.main_thread()
+    previous = signal.getsignal(signal.SIGINT)
+    seen: list[int] = []
+
+    def assign_then_interrupted(pid: int, _handle: int) -> None:
+        seen.append(pid)
+        signal.raise_signal(signal.SIGINT)
+
+    signal.signal(signal.SIGINT, signal.default_int_handler)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with windows_job_start(
+                assign_then_interrupted, required=False, subject="the test child"
+            ):
+                subprocess.Popen(
+                    [BASE_PYTHON, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"]
+                )
+        assert seen and _wait_dead(seen[0])
+        assert signal.getsignal(signal.SIGINT) is signal.default_int_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_a_ctrl_c_with_its_own_handler_is_delivered_after_the_handoff() -> None:
+    import signal
+
+    from server.platform.job_start import windows_job_start
+    from server.platform.process_tree import confine_to_windows_job
+
+    previous = signal.getsignal(signal.SIGINT)
+    delivered: list[int] = []
+
+    def assign_then_signalled(pid: int, _handle: int) -> Any:
+        signal.raise_signal(signal.SIGINT)
+        assert delivered == [], "the signal reached its handler mid-start"
+        return confine_to_windows_job(pid, subject="the test child")
+
+    def handler(signum: int, _frame: Any) -> None:
+        delivered.append(signum)
+
+    signal.signal(signal.SIGINT, handler)
+    try:
+        with windows_job_start(
+            assign_then_signalled, required=True, subject="the test child"
+        ) as started:
+            process = subprocess.Popen(
+                [BASE_PYTHON, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"]
+            )
+        time.sleep(0.1)
+        assert delivered == [signal.SIGINT]
+        assert signal.getsignal(signal.SIGINT) is handler
+        assert _in_job(process.pid, started.job)
+        started.job.terminate()
+        started.job.close()
+        process.wait(timeout=WAIT_SECONDS)
+    finally:
+        signal.signal(signal.SIGINT, previous)

@@ -379,10 +379,15 @@ class _BoundedDrain:
         self._thread.start()
 
     def _run(self) -> None:
+        # read1 returns whatever one read of the pipe brings. A buffered
+        # read(n) keeps reading until it has n bytes, holding what it already
+        # got in the reader's own buffer, so a cancelled read would take that
+        # tail -- the diagnostic -- with it.
+        read = getattr(self._stream, "read1", None) or self._stream.read
         try:
             with contextlib.suppress(Exception):
                 while True:
-                    chunk = self._stream.read(8192)
+                    chunk = read(8192)
                     if not chunk:
                         return
                     with self._lock:
