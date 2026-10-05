@@ -777,9 +777,12 @@ def test_uninstall_removes_only_the_copy_managed_by_this_wg_root(short_tmp_path:
     assert status == "removed"
     assert not target.exists()
     assert (root / "integrations" / "wglink" / "runtime").is_dir()
-    # The operation lock goes with the last of WGLink's entries: the 0.3.4
-    # Windows uninstall left a lone .WGLink-install.lock in Fusion's AddIns.
-    assert list(addins.iterdir()) == []
+    # The operation lock goes with the last of WGLink's entries on Windows (the
+    # 0.3.4 uninstall left a lone .WGLink-install.lock in Fusion's AddIns); POSIX
+    # keeps it so a waiter never wins an unlinked file.
+    assert [entry.name for entry in addins.iterdir()] == (
+        [] if sys.platform == "win32" else [installer.TRANSACTION_LOCK]
+    )
 
 
 def test_uninstall_keeps_the_lock_while_anything_of_wglinks_remains(short_tmp_path: Path):
@@ -796,7 +799,7 @@ def test_uninstall_keeps_the_lock_while_anything_of_wglinks_remains(short_tmp_pa
     assert (addins / installer.TRANSACTION_LOCK).is_file()
 
 
-def test_uninstall_removes_a_lock_an_earlier_install_left_on_its_own(short_tmp_path: Path):
+def test_uninstall_removes_a_lock_an_earlier_install_left_on_its_own_only_on_windows(short_tmp_path: Path):
     installer = _load_installer()
     addins = short_tmp_path / "AddIns"
     addins.mkdir()
@@ -805,7 +808,8 @@ def test_uninstall_removes_a_lock_an_earlier_install_left_on_its_own(short_tmp_p
 
     installer.uninstall(root=short_tmp_path, platform="macos", addins_dir=addins)
 
-    assert sorted(entry.name for entry in addins.iterdir()) == ["OtherAddIn"]
+    expected = ["OtherAddIn"] if sys.platform == "win32" else [installer.TRANSACTION_LOCK, "OtherAddIn"]
+    assert sorted(entry.name for entry in addins.iterdir()) == sorted(expected)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows refuses to delete an open file")
@@ -849,11 +853,34 @@ def test_uninstall_leaves_the_lock_to_a_process_that_has_it_open(short_tmp_path:
         child.wait(timeout=10)
 
 
+def test_posix_uninstall_never_unlinks_the_lock_it_holds(short_tmp_path: Path, monkeypatch):
+    """A process whose code does not re-check the path could win the unlinked
+    inode while another caller creates a new file: POSIX keeps the lock file."""
+
+    if sys.platform == "win32":
+        pytest.skip("Windows deletes the lock after closing it")
+    installer = _load_installer()
+    addins = short_tmp_path / "AddIns"
+    addins.mkdir()
+    unlinked: list[Path] = []
+    unlink = Path.unlink
+    monkeypatch.setattr(
+        Path, "unlink", lambda self, *a, **k: unlinked.append(self) or unlink(self, *a, **k)
+    )
+
+    with installer._operation_lock(addins, discard_when_unused=True):
+        pass
+
+    assert installer.TRANSACTION_LOCK not in [path.name for path in unlinked]
+    assert (addins / installer.TRANSACTION_LOCK).is_file()
+
+
 def test_a_lock_won_on_a_removed_file_is_given_up_for_the_one_the_path_names(
     short_tmp_path: Path, monkeypatch
 ):
-    """POSIX lets an uninstall unlink the lock while a waiter has it open; the
-    waiter then wins a file nobody else can see, and must open the path again."""
+    """A lock file removed while a waiter has it open (an older uninstall, or
+    anything else) leaves the waiter a file nobody else can see: it must open
+    the path again."""
 
     installer = _load_installer()
     addins = short_tmp_path / "AddIns"
