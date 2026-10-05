@@ -31,6 +31,7 @@ from server.exports.sizing import (
 )
 from server.exports.sizing import _point_grid
 from server.mesh.builder import _solver_mesher_config, _triangles_and_tags
+from server.mesh.child import run_mesh_build
 from server.mesh.gmsh_worker import _preserve_native_windows_path, run_on_gmsh_worker
 from server.platform.temp_session import temporary_directory_root
 from server.preview.translate import design_to_mesher_config
@@ -1011,7 +1012,8 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
 async def build_stl(design: DesignConfig, model_name: str = "MWG Horn") -> StlResult:
     """Build the horn surface at print resolution, sized by the export itself."""
 
-    canonical = await run_on_gmsh_worker(
+    # Same mesher call, same crash risk as the solve mesh: killable child.
+    canonical = await run_mesh_build(
         _build_stl_mesh_sync,
         design.model_dump(mode="json"),
     )

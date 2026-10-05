@@ -391,6 +391,7 @@ def _build(design, mode):
         clear_solver_mesh_cache()
 
 
+@pytest.mark.usefixtures("in_process_mesher")
 def test_warn_mode_reports_without_failing(monkeypatch, tmp_path) -> None:
     design = _crossing_mesh_design(monkeypatch, tmp_path)
     result = _build(design, "warn")
@@ -402,12 +403,14 @@ def test_warn_mode_reports_without_failing(monkeypatch, tmp_path) -> None:
     )
 
 
+@pytest.mark.usefixtures("in_process_mesher")
 def test_strict_mode_fails(monkeypatch, tmp_path) -> None:
     design = _crossing_mesh_design(monkeypatch, tmp_path)
     with pytest.raises(RuntimeError, match="self-intersecting"):
         _build(design, "strict")
 
 
+@pytest.mark.usefixtures("in_process_mesher")
 def test_off_mode_suppresses_the_warning(monkeypatch, tmp_path) -> None:
     design = _crossing_mesh_design(monkeypatch, tmp_path)
     result = _build(design, "off")

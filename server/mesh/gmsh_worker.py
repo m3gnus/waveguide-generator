@@ -308,6 +308,12 @@ async def prewarm_gmsh_worker() -> None:
     """
 
     await gmsh_warmup.start()
+    # The mesher child imports gmsh/OCC/scipy in its own process, so the first
+    # solve mesh does not pay that. Never awaited: the spawn is not on the
+    # startup path.
+    from server.mesh.child import prewarm_mesher_child
+
+    prewarm_mesher_child()
 
 
 async def shutdown_gmsh_worker() -> None:
@@ -323,6 +329,12 @@ async def shutdown_gmsh_worker() -> None:
     """
 
     global _executor, _shutting_down, _abandoned_call
+
+    # The child holds no state worth draining, and killing it is what ends a
+    # build that cannot be asked to stop.
+    from server.mesh.child import close_mesher_child
+
+    await asyncio.to_thread(close_mesher_child)
 
     # Drain first. The warmup owns a queued executor future, and tearing the
     # executor down underneath it would abandon a task that is about to touch a

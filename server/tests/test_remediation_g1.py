@@ -389,7 +389,7 @@ def test_mesh_validation_policy_changes_runtime_outcome(monkeypatch) -> None:
             "stats": {"warnings": list(result["stats"]["warnings"])},
         }
 
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", fake_worker)
 
     async def scenario() -> None:
         warned = await mesh_builder.build_solver_mesh(

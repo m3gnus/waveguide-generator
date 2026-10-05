@@ -151,6 +151,7 @@ def test_7173_triangle_mesh_continues_with_advisory_warning() -> None:
     ) == []
 
 
+@pytest.mark.usefixtures("in_process_mesher")
 def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
     monkeypatch, tmp_path
 ) -> None:
@@ -243,6 +244,7 @@ def test_build_solver_mesh_continues_past_user_budget_and_preserves_warning(
     assert "solve will continue" in warning
 
 
+@pytest.mark.usefixtures("in_process_mesher")
 @pytest.mark.parametrize("changed_mesher_message", [False, True])
 def test_real_triangle_budget_refusal_preserves_message_and_reason_code(
     monkeypatch, tmp_path: Path, changed_mesher_message: bool
@@ -1054,7 +1056,7 @@ def test_solver_mesh_cache_reuses_artifact_and_supports_force_rebuild(
             "metadata": {"build": calls},
         }
 
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", fake_worker)
     clear_solver_mesh_cache()
 
     async def scenario() -> None:
@@ -1119,7 +1121,7 @@ def test_solver_mesh_cache_key_ignores_solve_sampling_but_tracks_geometry(
             "metadata": {},
         }
 
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", fake_worker)
     baseline = _tiny_design().model_dump(mode="json")
     sampling_only = _tiny_design().model_dump(mode="json")
     sampling_only["simulation"]["f1"] = 600

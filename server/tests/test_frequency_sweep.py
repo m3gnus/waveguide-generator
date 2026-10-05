@@ -144,7 +144,7 @@ def test_quadrant_compatibility_fallback_warning_is_request_local(monkeypatch) -
             "metadata": {},
         }
 
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", fake_worker)
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", fake_worker)
     valid = DesignConfig.model_validate(
         {"formula": "OSSE", "mesh": {"quadrants": 1}}
     )

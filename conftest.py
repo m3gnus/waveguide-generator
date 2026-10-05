@@ -70,6 +70,9 @@ os.environ["WG2_WGLINK_REFRESH"] = "0"
 # Nor may it collect the solve commands a real Fusion delivered: the backend's
 # consumer loop is off here; tests drive one delivery pass at a time instead.
 os.environ["WG2_CAD_DELIVERY"] = "0"
+# Server startup spawns the mesher child in the background (server/mesh/child.py).
+# Every TestClient lifespan would pay that spawn; the child starts on first use.
+os.environ["WG2_MESH_CHILD_PREWARM"] = "0"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -80,6 +83,19 @@ def pytest_configure(config: pytest.Config) -> None:
         raise pytest.UsageError("Use a bounded worker count: -n 0 through -n 6; never -n auto.")
     if workers and config.getoption("dist", default="no") != "loadgroup":
         raise pytest.UsageError("Parallel tests require --dist=loadgroup to honour serial groups.")
+
+
+
+@pytest.fixture()
+def in_process_mesher(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Build meshes on the gmsh worker thread instead of in the mesher child.
+
+    For a test that substitutes the mesher or the mesh policy in this process
+    (``sys.modules`` fakes, a patched constant): a spawned child cannot see
+    either. Tests of real builds leave the child on, as the application runs.
+    """
+
+    monkeypatch.setenv("WG2_MESH_IN_PROCESS", "1")
 
 
 @pytest.hookimpl(tryfirst=True)

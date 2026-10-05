@@ -38,7 +38,7 @@ from server.contracts.geometry import (
 )
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
-from .gmsh_worker import run_on_gmsh_worker
+from .child import run_mesh_build
 from .integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,
@@ -894,9 +894,10 @@ def _infinite_baffle_geometry_refusal(
 
 def _build_sync(
     design_dump: dict[str, Any],
-    cancel_cb: CancelCallback | None,
+    cancel_cb: CancelCallback | None = None,
 ) -> dict[str, Any]:
-    """Build and inspect one artifact; called only by the gmsh worker."""
+    """Build and inspect one artifact; runs in the mesher child (or, with
+    ``WG2_MESH_IN_PROCESS=1``, on the gmsh worker thread)."""
 
     try:
         from hornlab_mesher import TriangleBudgetExceeded
@@ -1213,10 +1214,13 @@ async def build_solver_mesh(
     result = None if force_rebuild else _solver_mesh_cache.get(cache_key)
     cache_hit = result is not None
     if result is None:
-        result = await run_on_gmsh_worker(
+        # In a killable child: a mesher abort or hang on this geometry must not
+        # take the server down (server/mesh/child.py). The child cannot see
+        # ``cancel_cb``; the parent polls it and kills the child instead.
+        result = await run_mesh_build(
             _build_sync,
             validated.model_dump(mode="json"),
-            cancel_cb,
+            cancel_cb=cancel_cb,
         )
         _solver_mesh_cache.put(cache_key, result)
     _check_cancel(cancel_cb)

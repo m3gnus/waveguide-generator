@@ -51,7 +51,7 @@ def _stub_worker(calls: list[int]):
 
 def test_response_shape_cut_planes_and_cache_key_stability(monkeypatch) -> None:
     calls: list[int] = []
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", _stub_worker(calls))
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", _stub_worker(calls))
     clear_solver_mesh_cache()
 
     async def scenario() -> None:
@@ -98,7 +98,7 @@ def test_response_shape_cut_planes_and_cache_key_stability(monkeypatch) -> None:
 
 def test_requested_domain_follows_the_solve_symmetry_mode(monkeypatch) -> None:
     calls: list[int] = []
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", _stub_worker(calls))
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", _stub_worker(calls))
     clear_solver_mesh_cache()
 
     async def scenario() -> None:
@@ -135,14 +135,14 @@ def test_requested_domain_follows_the_solve_symmetry_mode(monkeypatch) -> None:
 
 
 def test_disconnect_flag_abandons_the_build_as_499(monkeypatch) -> None:
-    async def worker(fn, design_dump, cancel_cb, *args: Any, **kwargs: Any):
+    async def worker(fn, design_dump, *args: Any, cancel_cb, **kwargs: Any):
         # Yield so the disconnect watcher task gets its first poll in, the way
         # a real build yields by running on the worker thread.
         await asyncio.sleep(0.01)
         cancel_cb()
         raise AssertionError("cancel checkpoint should have raised")
 
-    monkeypatch.setattr(mesh_builder, "run_on_gmsh_worker", worker)
+    monkeypatch.setattr(mesh_builder, "run_mesh_build", worker)
     clear_solver_mesh_cache()
 
     async def scenario() -> None:
