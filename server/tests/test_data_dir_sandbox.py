@@ -98,6 +98,9 @@ def test_a_nested_run_writes_nothing_under_the_home_it_is_given(tmp_path: Path) 
             "-q",
             "-p",
             "no:cacheprovider",
+            # The child's tmp_path lives under ours, so the outer --basetemp
+            # governs both runs and the child never touches pytest-of-<user>.
+            f"--basetemp={tmp_path / 'inner-basetemp'}",
         ],
         cwd=REPO_ROOT,
         env=environment,

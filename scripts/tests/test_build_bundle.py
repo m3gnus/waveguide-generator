@@ -84,6 +84,7 @@ from scripts.build_bundle import (
 from server.platform.instance import PORT_ENV
 from server.platform.paths import DATA_DIR_ENV, app_root
 from shared.runtime_id import compute_runtime_id, runtime_id_from_files
+from server.tests._symlinks import requires_symlinks
 
 
 def _version_resource(version: tuple[int, int, int, int], resource_va: int) -> bytes:
@@ -521,6 +522,7 @@ def test_release_builder_refuses_a_dirty_worktree(tmp_path: Path) -> None:
         BundleBuilder(repo).require_clean_worktree()
 
 
+@requires_symlinks
 def test_prune_runtime_removes_the_contract_list_and_nested_test_caches(
     tmp_path: Path,
 ) -> None:
@@ -765,6 +767,7 @@ def test_layer_zip_is_sorted_and_omits_appledouble_files(tmp_path: Path) -> None
         assert {item.date_time for item in handle.infolist()} == {(1980, 1, 1, 0, 0, 0)}
 
 
+@requires_symlinks
 def test_layer_zip_materializes_internal_file_symlinks_as_regular_files(
     tmp_path: Path,
 ) -> None:
@@ -2089,6 +2092,7 @@ def test_the_manifest_names_a_source_commit_only_when_it_is_given_one(
     assert build["treeSha256"] == release["treeSha256"]
 
 
+@requires_symlinks
 def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> None:
     """The instruction has to be where the wall is.
 
@@ -2159,6 +2163,7 @@ def test_the_disk_image_carries_first_launch_instructions(tmp_path: Path) -> Non
     assert (staging / bundle.name).is_dir()
 
 
+@requires_symlinks
 def test_the_disk_image_carries_an_executable_installer_script(tmp_path: Path) -> None:
     """A second way in, equivalent to approving the app itself.
 
@@ -2636,6 +2641,7 @@ def test_the_linux_tarball_is_reproducible(tmp_path: Path) -> None:
     assert first.read_bytes() == second.read_bytes()
 
 
+@requires_symlinks
 def test_a_tarball_symlink_out_of_the_bundle_fails_the_build(tmp_path: Path) -> None:
     """The same refusal the .zip makes, so neither archive can carry a link out."""
 

@@ -38,6 +38,7 @@ from launchers import update_lock
 from launchers.apply_update import begin_update_transaction, plan_layer_swap
 from scripts import build_bundle
 from server.platform.paths import resolve_data_dir
+from server.tests._symlinks import requires_symlinks
 
 
 REPOSITORY_ROOT = Path(bundle_recovery.__file__).resolve().parents[1]
@@ -1776,6 +1777,7 @@ def test_the_in_app_startup_recovery_still_decides_when_nobody_owns_the_update(
         pass
 
 
+@requires_symlinks
 def test_one_installation_spelled_three_ways_is_one_claim(tmp_path: Path) -> None:
     """A relative path, a symlink and an absolute path are one installation.
 
@@ -1801,6 +1803,7 @@ def test_one_installation_spelled_three_ways_is_one_claim(tmp_path: Path) -> Non
     assert len(keys) == 1, f"three spellings of one installation gave {keys}"
 
 
+@requires_symlinks
 def test_an_alias_spelling_cannot_take_a_second_claim_on_one_installation(
     tmp_path: Path,
 ) -> None:

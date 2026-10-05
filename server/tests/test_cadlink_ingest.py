@@ -65,6 +65,7 @@ from server.jobs.store import JobStore
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.solver import metal
 from test_cadlink_wgreturn import _manifest as wgreturn_manifest, write_bundle
+from server.tests._symlinks import requires_symlinks
 
 
 def _fingerprint(volume: float = 1.0):
@@ -1038,6 +1039,7 @@ def test_return_listing_allows_an_omitted_source_resolution_suggestion(
     assert result["items"][0]["sources"][0]["suggestedResolutionMm"] is None
 
 
+@requires_symlinks
 def test_return_listing_rejects_escaping_symlinks_and_plain_files_and_explains_bad_sizes(
     tmp_path: Path,
 ) -> None:

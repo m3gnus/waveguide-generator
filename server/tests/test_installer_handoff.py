@@ -18,6 +18,7 @@ from launchers.statusapp.updater import UpdateHandoffError
 from server.updates.installer_client import VerifiedInstaller
 from server.updates.installer_service import InstallerUpdateService
 from server.updates.restart import RestartApproval
+from server.tests._symlinks import requires_symlinks
 
 
 def installed(tmp_path):
@@ -255,7 +256,10 @@ def test_status_close_and_release_do_not_wait_for_facade_rehash(tmp_path, action
     assert not path.exists()
 
 
-@pytest.mark.parametrize("mutation", ["root", "asset-link", "digest", "size", "control", "platform"])
+@pytest.mark.parametrize(
+    "mutation",
+    ["root", pytest.param("asset-link", marks=requires_symlinks), "digest", "size", "control", "platform"],
+)
 def test_reader_rejects_untrusted_destinations_and_proofs(tmp_path, mutation):
     service, _, path, ready, app, data = facade(tmp_path)
     service._publish(ready)
@@ -446,6 +450,7 @@ def test_linux_archive_graph_resolution_is_bounded_before_extraction(tmp_path, m
     assert list(destination.iterdir()) == []
 
 
+@requires_symlinks
 def test_real_linux_archive_builder_runtime_link_layout_is_accepted(tmp_path):
     from scripts.build_bundle import deterministic_tar_gz
     source = tmp_path / "waveguide-generator"

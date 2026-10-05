@@ -26,6 +26,7 @@ from server.cadlink.store import CadLinkStore
 from server.cadlink.wgreturn import read_wgreturn, source_physical_name, validate_manifest
 from server.mesh.gmsh_worker import _run_in_gmsh_session
 from server.tests.tools.oracle_geometry import geometry_result
+from server.tests._symlinks import requires_symlinks
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -120,6 +121,7 @@ def _from_package(folder: Path, filename: str):
             assert "wglink_protocol" not in sys.modules
 
 
+@requires_symlinks
 def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
     provenance = json.loads((CORPUS / "PROVENANCE.json").read_text())
     assert provenance["wg_commit"] == "9d38fcea792da31effdd2bfab4fa93bdd639ebe2"
@@ -149,6 +151,7 @@ def test_endpoint_oracle_bytes_and_messages(tmp_path: Path):
         assert _verdict(lambda: read_wgreturn(disk_folder)) == expected["read_wgreturn"], name
 
 
+@requires_symlinks
 def test_oracle_rule_mutation_exits_nonzero(tmp_path: Path):
     """A rule removed in a fresh process must make the committed oracle red."""
 
@@ -175,6 +178,9 @@ def test_oracle_rule_mutation_exits_nonzero(tmp_path: Path):
             "oracle_mutant",
             "-p",
             "no:cacheprovider",
+            # The child's tmp_path lives under ours, so the outer --basetemp
+            # governs both runs and the child never touches pytest-of-<user>.
+            f"--basetemp={tmp_path / 'inner-basetemp'}",
         ],
         cwd=ROOT,
         env={

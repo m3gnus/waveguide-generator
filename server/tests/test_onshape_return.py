@@ -582,7 +582,7 @@ def test_the_real_return_smoke_test_crosses_two_fresh_process_boundaries(
     assert record["sources"][0]["id"] == "source-hf"
 
 
-def test_occ_qualification_then_sewing_does_not_pollute_onshape_returns() -> None:
+def test_occ_qualification_then_sewing_does_not_pollute_onshape_returns(tmp_path: Path) -> None:
     """Replay the shortest failing worker order in a fresh native process.
 
     The qualification used to leave Gmsh initialized. The bare-sewing test
@@ -605,6 +605,9 @@ def test_occ_qualification_then_sewing_does_not_pollute_onshape_returns() -> Non
             "-p", "no:cacheprovider",
             "-q",
             "--tb=short",
+            # The child's tmp_path lives under ours, so the outer --basetemp
+            # governs both runs and the child never touches pytest-of-<user>.
+            f"--basetemp={tmp_path / 'inner-basetemp'}",
         ],
         cwd=root,
         stdin=subprocess.DEVNULL,

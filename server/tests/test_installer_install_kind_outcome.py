@@ -9,6 +9,7 @@ import pytest
 from shared import release_assets as assets
 from server.updates.install_kind import BUNDLE_ID, current_platform, probe_install
 from server.updates.installer_outcome import read_outcome
+from server.tests._symlinks import requires_symlinks
 
 
 def bundle(root, platform=assets.LINUX_PLATFORM):
@@ -65,6 +66,7 @@ def test_linux_exact_basename_and_manifest_identity(tmp_path):
     assert probe(other, assets.LINUX_PLATFORM)["updateSupported"] is False
 
 
+@requires_symlinks
 def test_source_unknown_architecture_and_linked_bundle_are_notify_only(tmp_path):
     app = bundle(tmp_path / "waveguide-generator")
     assert probe_install(app, "0.3.3", assets.LINUX_PLATFORM, environ={})["kind"] == "source"

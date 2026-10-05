@@ -26,6 +26,7 @@ from server.cadlink.store import CadLinkStore
 from server.app import create_app
 from server.platform import private_paths
 from server.platform.private_paths import ensure_private_directory
+from server.tests._symlinks import requires_symlinks
 
 
 EXPECTED_MAX_REQUEST_BYTES = 64 * 1024
@@ -107,6 +108,7 @@ def test_an_oversize_request_is_refused_logged_and_removed(
     assert "Refused the CAD Link request file" in caplog.text
 
 
+@requires_symlinks
 def test_a_regular_file_swapped_to_a_symlink_is_refused_without_reading_target(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

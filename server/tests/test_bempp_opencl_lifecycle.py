@@ -12,6 +12,7 @@ import pytest
 
 from server.engines import registry as reg
 from server.solver import bempp_opencl as probe
+from server.tests._symlinks import requires_symlinks
 
 
 @pytest.fixture(autouse=True)
@@ -508,6 +509,7 @@ def test_a_spawned_worker_puts_its_probe_directory_in_the_servers_session(monkey
     assert temp_session.spawned_directory_root() is None
 
 
+@requires_symlinks
 def test_only_a_real_session_is_adopted(monkeypatch, tmp_path):
     """A wg2-run-* symlink to an unrelated directory, a directory without its
     owner lock, or one outside the temporary directory is never adopted: the

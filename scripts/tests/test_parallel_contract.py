@@ -59,9 +59,11 @@ def test_group(number):
         environment.pop(name, None)
     environment["PYTHONPATH"] = str(REPO_ROOT)
     environment["TEST_ISOLATION_EVIDENCE"] = str(evidence)
+    # The children's tmp_path lives under ours, so the outer --basetemp governs
+    # every run and none touches the user-wide pytest-of-<user> root.
     completed = subprocess.run(
         [sys.executable, "-m", "pytest", str(suite), "-n2", "--dist=loadgroup",
-         "-q", "-p", "no:cacheprovider"],
+         "-q", "-p", "no:cacheprovider", f"--basetemp={tmp_path / 'inner-basetemp'}"],
         cwd=suite, env=environment, capture_output=True, text=True, timeout=60,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr

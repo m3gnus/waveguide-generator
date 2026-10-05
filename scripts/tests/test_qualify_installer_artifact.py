@@ -17,6 +17,7 @@ import pytest
 from scripts import qualify_installer_artifact as gate
 from server.tests.test_updates_signing import PUBLIC_HEX, SEED, _sign
 from server.updates import manifest
+from server.tests._symlinks import requires_symlinks
 
 
 def test_verifier(data, sig, tag):
@@ -187,6 +188,7 @@ def test_data_and_external_ownership_controls_must_be_unchanged(case, name):
         gate.verify(**args)
 
 
+@requires_symlinks
 def test_developer_control_records_literal_external_symlink_without_following(tmp_path):
     control = tmp_path / "control"
     control.mkdir()
@@ -200,6 +202,7 @@ def test_developer_control_records_literal_external_symlink_without_following(tm
 
 
 @pytest.mark.parametrize("kind", ("escape", "root", "parent"))
+@requires_symlinks
 def test_payload_symlink_escape_and_nominated_symlink_roots_fail(case, tmp_path, kind):
     args = case()
     if kind == "escape":
@@ -214,6 +217,7 @@ def test_payload_symlink_escape_and_nominated_symlink_roots_fail(case, tmp_path,
         gate.verify(**args)
 
 
+@requires_symlinks
 def test_symlink_targets_participate_in_exact_comparison(case):
     args = case("macos-arm64")
     for root in (args["candidate"], args["installed"]):
@@ -626,6 +630,7 @@ def test_windows_streamed_archive_retains_strict_descriptor_change_time(case, wi
     assert calls == 2
 
 
+@requires_symlinks
 def test_windows_symlink_substitution_to_original_object_before_read_is_refused(tmp_path, windows_stat_model, monkeypatch):
     path = tmp_path / "input.exe"
     path.write_bytes(b"owned bytes")

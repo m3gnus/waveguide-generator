@@ -19,6 +19,7 @@ from server.cadlink.wgreturn import (
     source_physical_name,
     validate_manifest,
 )
+from server.tests._symlinks import requires_symlinks
 
 
 def _manifest(step: bytes) -> dict:
@@ -544,6 +545,7 @@ def test_subtree_return_disables_root_document_stale_comparisons(tmp_path: Path)
     )
 
 
+@requires_symlinks
 def test_reader_rejects_symlink_missing_size_and_absolute_members(tmp_path: Path) -> None:
     symlink_bundle = write_bundle(tmp_path / "symlink")
     (symlink_bundle / "linked.bin").symlink_to(symlink_bundle / "assembly.step")

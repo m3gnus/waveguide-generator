@@ -20,6 +20,7 @@ from starlette.datastructures import FormData, UploadFile
 from server import app as app_module
 from server.platform import paths
 from server.workspace import api as workspace_api
+from server.tests._symlinks import requires_symlinks
 
 
 def endpoint(state: workspace_api.WorkspaceState):
@@ -753,6 +754,7 @@ def test_write_export_rejects_absolute_paths(tmp_path: Path, path: str) -> None:
     assert list(workspace.iterdir()) == []
 
 
+@requires_symlinks
 def test_write_export_rejects_symlink_escape(tmp_path: Path) -> None:
     state, workspace = selected_state(tmp_path)
     outside = tmp_path / "outside"

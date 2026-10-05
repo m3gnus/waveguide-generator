@@ -31,6 +31,7 @@ from server.platform.acl_repair import (
     repair_path,
     sweep,
 )
+from server.tests._symlinks import requires_symlinks
 
 WINDOWS_ONLY = pytest.mark.skipif(
     os.name != "nt", reason="Security descriptors are a Windows concept"
@@ -148,6 +149,7 @@ class TestMatcher:
 class TestReparseBoundary:
     """Links are rejected before descriptor reads, repairs, or traversal."""
 
+    @requires_symlinks
     def test_repair_path_rejects_a_file_link_before_reading_its_descriptor(
         self, tmp_path: Path
     ) -> None:
@@ -191,6 +193,7 @@ class TestReparseBoundary:
 
         assert target.read_text(encoding="utf-8") == "unchanged"
 
+    @requires_symlinks
     def test_repair_path_rejects_an_ordinary_leaf_below_a_directory_link(
         self, tmp_path: Path
     ) -> None:
@@ -223,6 +226,7 @@ class TestReparseBoundary:
 
         assert child.read_text(encoding="utf-8") == "unchanged"
 
+    @requires_symlinks
     def test_sweep_excludes_file_and_directory_links_before_repair_or_walk(
         self, tmp_path: Path
     ) -> None:
@@ -261,6 +265,7 @@ class TestReparseBoundary:
         assert outside_file.read_text(encoding="utf-8") == "unchanged"
         assert outside_child.read_text(encoding="utf-8") == "unchanged"
 
+    @requires_symlinks
     def test_a_link_used_as_the_chosen_root_is_never_repaired_or_walked(
         self, tmp_path: Path
     ) -> None:
@@ -285,6 +290,7 @@ class TestReparseBoundary:
         assert counts.skipped == 1
         assert child.read_text(encoding="utf-8") == "unchanged"
 
+    @requires_symlinks
     def test_an_ordinary_root_below_a_link_is_never_repaired_or_walked(
         self, tmp_path: Path
     ) -> None:
@@ -475,6 +481,7 @@ class TestBootSweep:
         for record in (None, {}, "done", {"version": acl_migration.SWEEP_VERSION}):
             assert not acl_migration._already_finished(record, elevated_now=False)
 
+    @requires_symlinks
     def test_a_reparse_point_cannot_be_used_as_a_migration_root(
         self, tmp_path: Path
     ) -> None:
@@ -503,6 +510,7 @@ class TestBootSweep:
 
         assert swept == [data_root]
 
+    @requires_symlinks
     def test_a_redirected_data_root_is_rejected_before_marker_access(
         self, tmp_path: Path
     ) -> None:
@@ -526,6 +534,7 @@ class TestBootSweep:
         ):
             assert acl_migration.repair_legacy_acls(redirected) == {}
 
+    @requires_symlinks
     def test_a_marker_symlink_cannot_redirect_migration_state_writes(
         self, tmp_path: Path
     ) -> None:
