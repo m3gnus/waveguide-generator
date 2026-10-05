@@ -606,7 +606,7 @@ export interface paths {
         };
         /**
          * List Cad Operations
-         * @description CAD operations, the unfinished ones by default: the authoritative state.
+         * @description Unfinished operations, deriving solve state from their authoritative jobs.
          */
         get: operations["list_cad_operations_api_cadlink_operations_get"];
         put?: never;
@@ -696,12 +696,7 @@ export interface paths {
         put?: never;
         /**
          * Post Prepare Cad Operation
-         * @description Prepare a solve operation from its retained snapshot, and submit it when asked.
-         *
-         *     A preparation already running for the operation is taken over: its next
-         *     write is refused, and this one's result stands. While an update restart is
-         *     approved nothing starts: 409 ``update_restart_pending``, with the envelope
-         *     every latched route uses, and the operation stays as it is.
+         * @description Compatibility Solve: create the first intent, or continue its refused job.
          */
         post: operations["post_prepare_cad_operation_api_cadlink_operations__operation_id__prepare_post"];
         delete?: never;
