@@ -236,3 +236,62 @@ Review round 2 (Sonnet), fixed directly:
   closed for elevated users. WG runs its BEAT host unelevated.
 - Spawn-flow requirement (for PR 18): hold the slot's spawn lock until the host
   listens, or the orphan-socket sweep may remove a bound-but-not-listening socket.
+- **PR 11 — compiled readiness probe:** `server/solver/beat_runtime/probe.py`;
+  `server/solver/beat_runtime/fixtures/probe.msh`;
+  `server/tests/beat_runtime/test_probe.py`; this `CHANGES.md`.
+  Stage a system-v1 request and tiny closed tetrahedron (four outward faces,
+  tag 2, 8 cm coordinate extent) derived from the official CPU bundle warm-up fixture.
+  Ask the injected EngineWorker for one 1 kHz exterior normal-velocity solve
+  and one pressure observation. File submission uses the public API without
+  requiring inline-transport support. Require exactly one matching result-v2
+  pressure quantity, a valid 1x1 little-endian complex base64 array, finite
+  nonzero pressure and one completed terminal with integer solved_count=1.
+  Malformed/nonfinite/zero results, count errors, cancellation, worker/startup
+  errors and closure failures return a failed verdict with a reason. Close
+  and remove staged files on all paths. No engine/HBB imports or user roots.
+
+Future provisioning/warm-up callers use `compiled_probe(worker, directory=...,
+backend="cpu"|"metal")`, supplying an EngineWorker configured with the selected
+official system solver, project, environment and resolved integer threads.
+The directory must already exist and be caller-owned staging. `build_request`
+is pure; `PROBE_CONTRACT` is `system-v1/result-v2`. `ProbeResult.ready/reason`
+provide the verdict; `fixture_identity` hashes the actual mesh bytes, and
+`completion` contains result_count, solved_count and finite_nonzero only on
+success. Store these with the current identity; this module writes no state.
+
+- **PR 17 — client stream ownership:** `server/solver/beat_runtime/ownership.py`;
+  `server/tests/beat_runtime/test_ownership.py`; this `CHANGES.md`.
+  StreamOwnership serializes host clients around public EngineWorker.submit
+  and its closeable iterator. Opaque WG tokens guard close/cancel and every
+  release; engine-private submission tokens and process internals are unused.
+  Close before first read, terminal release without an extra read, iterator/
+  status/event callback errors, failed closure and dropped streams all unwind
+  ownership. Closing retains the WG slot until public stream closure finishes;
+  late reads, closes, callbacks and cancels cannot release or retire a successor.
+  Shutdown closes admission and wakes every queued client before retiring
+  active work, even if closure fails. Event handshakes test ordering without
+  sleeps; tests use fakes only.
+
+Future hosts create one `StreamOwnership(worker)` and route every client submit
+through it. `submit` forwards request/operation/status_callback and optionally
+invokes event_callback as events are consumed. Its OwnedStream is an iterator
+with token, close and cancel; `cancel(token)` refuses stale identities. Shutdown
+ends admission permanently and closes active work. A submit in engine startup
+is marked cancelled and its returned stream is closed before handoff; queued
+clients wake immediately. Engine startup timeout and idle-worker termination
+remain manager policy. No cancellation path calls worker.terminate().
+
+PR 17 review subdivisions: 17a ownership API and sequential lifecycle/callback
+tests; 17b retirement-order, shutdown, blocked-reader and finalizer tests. These
+are review slices of the same requested PR, keeping each below roughly 400 lines.
+
+PR 11/17 scope notes: official JWSound/BEAT_Engine supersedes the design's fork
+target. Standard-library decoding adapts WG to the official result-v2 wire
+format; it does not add a WG-specific engine requirement. A compiled-system
+solve does not attest cached bundle loading. The real CPU probe and slice-2
+bundle gate remain unrun because this task forbids Julia; no fake is counted as
+numerical or bundle qualification. No caller, pins or requirements change.
+The exact requested pytest/ruff commands cannot complete in this worktree:
+server/solver/beat_adapter and server/tests/beat_adapter do not exist. Runtime
+and existing solver tests are validated separately. Changes remain uncommitted
+as explicitly requested.
