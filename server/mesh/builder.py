@@ -39,6 +39,7 @@ from server.contracts.geometry import (
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .child import run_mesh_build
+from .identity import mesher_identity
 from .integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,
@@ -807,6 +808,7 @@ def _solver_mesh_cache_key(design: DesignConfig) -> str:
             ),
             "gmsh": _distribution_version("gmsh"),
         },
+        "mesher_identity": mesher_identity(),
         "mesher_config": _solver_mesher_config(design),
     }
     canonical = json.dumps(

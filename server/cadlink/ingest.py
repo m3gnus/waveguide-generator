@@ -31,6 +31,7 @@ from server.mesh.imported import (
     verify_artifact_reduced_orientation,
 )
 from server.mesh.artifact import mesh_text_sha256
+from server.mesh.identity import mesher_identity
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes
@@ -816,6 +817,7 @@ def _cache_key(
             manifest["sources"], skipped_source_ids=skipped_source_ids
         ),
         "mesher_version": _package_version("hornlab-waveguide-mesher"),
+        "mesher_identity": mesher_identity(),
         "gmsh_version": _package_version("gmsh"),
         **_semantics_key_entry(),
     }
@@ -843,6 +845,7 @@ def _cache_lookup_key(
                 "skipped_source_ids": sorted(skipped_source_ids),
                 "options": options,
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
+                "mesher_identity": mesher_identity(),
                 "gmsh_version": _package_version("gmsh"),
                 **_semantics_key_entry(),
             }
@@ -874,6 +877,7 @@ def _viewport_cache_lookup_key(
                     manifest["sources"], skipped_source_ids=skipped_source_ids
                 ),
                 "mesher_version": _package_version("hornlab-waveguide-mesher"),
+                "mesher_identity": mesher_identity(),
                 "gmsh_version": _package_version("gmsh"),
             }
         )
