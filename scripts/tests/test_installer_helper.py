@@ -117,6 +117,8 @@ def set_bridge_app_prefix(app, started, *, platform):
     (shared / "__init__.py").write_text("")
     shutil.copyfile(ROOT / "shared/release_assets.py", shared / "release_assets.py")
     shutil.copyfile(ROOT / "launchers/full_installer.py", launchers / "full_installer.py")
+    # full_installer imports it for the plain-path helpers.
+    shutil.copyfile(ROOT / "launchers/update_lock.py", launchers / "update_lock.py")
     desktop = (ROOT / "launchers/desktop.py").read_text()
     prefix = desktop[:desktop.index("from launchers.statusapp.__main__ import (")]
     (launchers / "desktop.py").write_text(prefix + f"\nPath({str(started)!r}).touch()\n")
