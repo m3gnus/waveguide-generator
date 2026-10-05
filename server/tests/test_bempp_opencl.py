@@ -824,3 +824,51 @@ def test_a_refresh_stopped_by_shutdown_still_propagates(monkeypatch):
         finally:
             await registry.shutdown_prewarm()
     asyncio.run(exercise())
+
+
+def test_recording_a_failed_refresh_never_blocks_the_event_loop(monkeypatch):
+    """The attempt lock is held through a whole running check, minutes at
+    worst; taking it on the event loop would freeze every request."""
+    import asyncio
+    import threading
+    from server.engines.registry import EngineRegistry
+    from server.solver import bempp
+
+    def raising_status():
+        raise RuntimeError("OpenCL probe reader did not stop")
+    monkeypatch.setattr(bempp, "bempp_status", raising_status)
+    registry = EngineRegistry(detector=lambda: [_timed_out_bempp_row()], cpu_refresh=False)
+    held, release = threading.Event(), threading.Event()
+    def hold():
+        with probe._selection_lock:
+            held.set()
+            release.wait(5)
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert held.wait(2)
+    async def exercise():
+        ticks = 0
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                ticks += 1
+                await asyncio.sleep(0.01)
+        beat = asyncio.create_task(heartbeat())
+        try:
+            await registry.capabilities()
+            refresh = asyncio.create_task(registry._refresh_bempp_timeout())
+            await asyncio.sleep(0.3)
+            assert not refresh.done()
+            assert ticks > 5, "the event loop waited on the attempt lock"
+            release.set()
+            await asyncio.wait_for(refresh, 5)
+            row = next(item for item in registry._cache if item.name == "bempp")
+            assert (row.qualification, row.available, row.opencl_unavailable_reason) == (
+                "done", False, "probe_error")
+            assert probe._timeout_attempts == 1
+        finally:
+            release.set()
+            beat.cancel()
+            await registry.shutdown_prewarm()
+    asyncio.run(exercise())
+    holder.join(2)
