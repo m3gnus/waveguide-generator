@@ -982,6 +982,25 @@ def test_shortcuts_are_rewritten_once_the_ico_is_committed() -> None:
     assert "external 'SHChangeNotify@shell32.dll stdcall setuponly'" in script
 
 
+def test_the_icon_flush_declares_its_32_bit_setup_assumption() -> None:
+    """SHChangeNotify takes two pointers, declared as Cardinal.
+
+    That is only right in a 32-bit Setup, which is what Inno Setup 6.7 builds
+    and what every other external here already assumes (HANDLEs as Integer).
+    Changing the declaration, or the assumption, must be a deliberate edit.
+    """
+
+    script = (
+        Path(__file__).resolve().parents[2] / "installers" / "windows" / "bundle-setup.iss"
+    ).read_text(encoding="utf-8")
+    declaration = (
+        "procedure SHChangeNotify(EventId: Integer; Flags: Cardinal; Item1, Item2: Cardinal);"
+    )
+    before = script.split(declaration, 1)[0].rsplit(chr(10) * 2, 1)[1]
+    assert "ABI: this assumes a 32-bit Setup" in before
+    assert "needs pointer-sized types" in before
+
+
 def test_the_installer_gets_a_numeric_version_field_and_the_readable_one() -> None:
     """`VersionInfoVersion` is a binary field, and a pre-release is not valid in it.
 
