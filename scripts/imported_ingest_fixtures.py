@@ -327,18 +327,24 @@ def ingest(
     prep_options: dict[str, Any] = {"symmetry_mode": symmetry_mode}
     if surface_deviation_mm is not None:
         prep_options["surface_deviation_mm"] = float(surface_deviation_mm)
-    record = _run_in_gmsh_session(
-        ingest_bundle,
-        bundle,
-        sizes,
-        [],
-        store,
-        data_dir,
-        prep_options=prep_options,
-        # The user opened the design this linked return belongs to; on a fresh
-        # install that design is not in the registry, which freshness reports.
-        expected_design_id=DESIGN_ID,
-    )
+    try:
+        record = _run_in_gmsh_session(
+            ingest_bundle,
+            bundle,
+            sizes,
+            [],
+            store,
+            data_dir,
+            prep_options=prep_options,
+            # The user opened the design this linked return belongs to; on a fresh
+            # install that design is not in the registry, which freshness reports.
+            expected_design_id=DESIGN_ID,
+        )
+    except BaseException:
+        # A refused or failed ingest hands the caller nothing to close; an open
+        # database would keep its directory from being deleted on Windows.
+        store.close()
+        raise
     return Ingested(record=record, store=store, data_dir=data_dir, sizes=sizes)
 
 

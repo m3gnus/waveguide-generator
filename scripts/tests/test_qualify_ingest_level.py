@@ -513,3 +513,28 @@ def test_the_job_steps_close_the_job_store_they_open(
         assert closed == [data / "jobs.db"], step
         closed.clear()
         shutil.rmtree(data)  # WinError 32 here while a connection is open
+
+
+def test_a_refused_ingest_closes_the_store_it_opened(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The caller gets no ``Ingested`` from a refusal, so ``fixtures.ingest``
+    itself must close the CAD Link store it opened for it."""
+
+    from server.cadlink import store as store_module
+    from server.mesh import gmsh_worker
+
+    opened: list[_Store] = []
+
+    def make_store(_path: Path) -> _Store:
+        opened.append(_Store())
+        return opened[-1]
+
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise ValueError("refused")
+
+    monkeypatch.setattr(store_module, "CadLinkStore", make_store)
+    monkeypatch.setattr(gmsh_worker, "_run_in_gmsh_session", refuse)
+    with pytest.raises(ValueError, match="refused"):
+        fixtures.ingest(tmp_path / "bundle", tmp_path / "data", sizes={})
+    assert len(opened) == 1 and opened[0].closed
