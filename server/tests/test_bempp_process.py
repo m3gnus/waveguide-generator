@@ -680,3 +680,168 @@ def test_the_worker_respawns_after_a_native_crash() -> None:
 )
 def test_exit_statuses_are_described_plainly(exitcode, windows, expected) -> None:
     assert bempp_process._describe_exit(exitcode, windows=windows).startswith(expected)
+
+
+# -- a crashed worker's sweep children must still be reached --------------------
+#
+# Reading a dead worker's exit status reaps it, and a reaped pid no longer
+# resolves to its POSIX process group. The group has to be known before that,
+# or ``_terminate_sync`` skips the group kill and a split sweep's workers keep
+# running after the job failed.
+
+
+class _DyingProcess:
+    """A worker whose pipe closes mid-solve; reaping it hides its group."""
+
+    def __init__(self, **_kwargs) -> None:
+        self.pid = 424242
+        self.exitcode = None
+        self.dead = False
+        self.reaped = False
+
+    def start(self) -> None:
+        return None
+
+    def is_alive(self) -> bool:
+        if self.dead:
+            self.reaped = True
+            self.exitcode = 3
+        return not self.dead
+
+    def join(self, _timeout=None) -> None:
+        if self.dead:
+            self.reaped = True
+            self.exitcode = 3
+
+    def terminate(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        return None
+
+
+class _ClosingConnection:
+    def __init__(self, process_slot: list) -> None:
+        self._process_slot = process_slot
+
+    def send(self, _value) -> None:
+        return None
+
+    def poll(self, _timeout=None) -> bool:
+        return True
+
+    def recv(self):
+        self._process_slot[0].dead = True
+        raise EOFError
+
+    def close(self) -> None:
+        return None
+
+
+def test_a_crashed_workers_group_is_resolved_before_it_is_reaped(monkeypatch) -> None:
+    slot: list = [None]
+
+    class Context:
+        def Pipe(self, duplex=True):
+            return _ClosingConnection(slot), _ClosingConnection(slot)
+
+        def Process(self, **kwargs):
+            slot[0] = _DyingProcess(**kwargs)
+            return slot[0]
+
+    resolved: list[tuple[int, bool]] = []
+    killed: list[int | None] = []
+
+    def resolve(pid: int) -> int | None:
+        process = slot[0]
+        resolved.append((pid, process.reaped))
+        return None if process.reaped else pid
+
+    monkeypatch.setattr(bempp_process, "confine_to_windows_job", lambda _pid: None)
+    monkeypatch.setattr(bempp_process, "resolve_process_group", resolve)
+    monkeypatch.setattr(bempp_process, "kill_process_group", killed.append)
+
+    async def exercise() -> str:
+        host = BemppProcessHost(process_context=Context())
+        monkeypatch.setattr(host, "prewarm", lambda: None)
+        with pytest.raises(bempp_process.BemppWorkerError) as raised:
+            await _run_once(host)
+        return str(raised.value)
+
+    message = asyncio.run(exercise())
+
+    assert "exit code 3" in message, "the exit status was still read"
+    assert slot[0].reaped
+    assert resolved and resolved[0] == (424242, False), "resolved while reapable"
+    assert killed == [424242], "the sweep's group was killed, not skipped"
+
+
+def _worker_with_a_sweep_child_that_crashes(connection) -> None:
+    import subprocess
+    import sys
+
+    from server.platform.process_tree import adopt_process_group
+
+    adopt_process_group()  # what the real worker does first
+    while True:
+        command = connection.recv()
+        job_id, _payload = command
+        if job_id == _WARMUP_JOB_ID:
+            connection.send(("warm", job_id, {"warmed": True}))
+            continue
+        break
+    sweep = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    connection.send(("stage", job_id, ("frequency_solve", 0.1, str(sweep.pid))))
+    os._exit(3)
+
+
+def _process_is_gone(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        return False
+    try:
+        with open(f"/proc/{pid}/stat", encoding="ascii") as handle:
+            return handle.read().rsplit(")", 1)[1].split()[0] == "Z"
+    except OSError:
+        pass
+    import subprocess
+
+    state = subprocess.run(
+        ["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    return not state or state.startswith("Z")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups; Windows uses a job object")
+def test_a_crashed_workers_sweep_children_do_not_outlive_the_job() -> None:
+    async def exercise() -> int:
+        host = BemppProcessHost(target=_worker_with_a_sweep_child_that_crashes)
+        stages: list[tuple[str, float, str]] = []
+        try:
+            with pytest.raises(bempp_process.BemppWorkerError, match="exit code 3"):
+                await host.run(
+                    "mesh",
+                    _context(),
+                    mesh_metadata={},
+                    mesh_stats={},
+                    cancel_cb=lambda: None,
+                    stage_cb=lambda *event: stages.append(event),
+                    result_cb=None,
+                )
+        finally:
+            host.close()
+        assert stages, "the worker never reported its sweep child"
+        return int(stages[0][2])
+
+    sweep_pid = asyncio.run(exercise())
+    deadline = time.monotonic() + 10.0
+    while not _process_is_gone(sweep_pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    try:
+        assert _process_is_gone(sweep_pid), "the sweep child outlived the failed job"
+    finally:
+        if not _process_is_gone(sweep_pid):  # pragma: no cover - cleanup on failure
+            os.kill(sweep_pid, 9)
