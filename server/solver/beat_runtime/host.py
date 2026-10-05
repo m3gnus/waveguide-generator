@@ -106,9 +106,20 @@ class _HostSubmitter:
 
     def submit(self, request_path: Any, **kwargs: Any) -> _HostStream:
         job = self.host._queue[0]  # The FIFO head remains held through stream retirement.
+        self.host._ensure_engine(status_callback=kwargs.get("status_callback"))
         try:
             return _HostStream(self.host, self.host._engine.submit(request_path, **kwargs), job)
-        except (FileNotFoundError, PermissionError, IsADirectoryError, UnicodeError, json.JSONDecodeError) as exc:
+        except (FileNotFoundError, PermissionError) as exc:
+            # Public submit can fail in Popen before it opens the request.
+            # Identify executable errors by filename or current executable state.
+            executable = Path(self.host.key["julia_executable"])
+            if (getattr(exc, "filename", None) == str(executable)
+                    or (not isinstance(request_path, Path)
+                        and (not executable.is_file() or not os.access(executable, os.X_OK)))):
+                self.host._fail_stop()
+                raise RuntimeError(f"BEAT Julia executable failed ({executable}): {exc}") from exc
+            raise ValueError(f"Invalid BEAT request file: {exc}") from exc
+        except (IsADirectoryError, UnicodeError, json.JSONDecodeError) as exc:
             raise ValueError(f"Invalid BEAT request file: {exc}") from exc
         except BaseException:
             self.host._fail_stop()
@@ -122,6 +133,7 @@ class _Job:
         self.client_cancelled = False
         self.done = threading.Event()
         self.stream: OwnedStream | None = None
+        self.running = False
         self._output = threading.Lock()
 
     def send(self, message: dict) -> None:
@@ -232,7 +244,7 @@ class WorkerHost:
             julia_threads=self.key["julia_threads"],
             julia_project=Path(self.key["julia_project"]) if self.key["julia_project"] else None,
             julia_sysimage=Path(self.key["julia_sysimage"]) if self.key["julia_sysimage"] else None,
-            environment=self.key["environment"],
+            environment={**os.environ, **self.key["environment"]},
         )
 
     def _log(self, message: str) -> None:
@@ -265,6 +277,22 @@ class WorkerHost:
         with self._jobs:
             self._jobs.notify_all()
 
+    def _ensure_engine(self, **kwargs: Any) -> None:
+        try:
+            self._engine.ensure_started(**kwargs)
+        except (FileNotFoundError, PermissionError) as exc:
+            message = f"BEAT Julia executable failed ({self.key['julia_executable']}): {exc}"
+            self._log(message)
+            try:
+                self._queue[0].send({"type": "failed", "error": message})
+            finally:
+                self._fail_stop()
+            raise RuntimeError(message) from exc
+        except BaseException:
+            if not self._queue[0].cancelled.is_set():
+                self._fail_stop()
+            raise
+
     def _run_job(self, job: _Job) -> None:
         reply: dict | None = None
         try:
@@ -273,6 +301,7 @@ class WorkerHost:
                                     or self._queue[0] is job)
                 if self._stopping.is_set() or job.cancelled.is_set():
                     return
+                job.running = True
 
             def status(message: str) -> None:
                 if not job.done.is_set() and not job.cancelled.is_set():
@@ -282,7 +311,10 @@ class WorkerHost:
                         job.cancelled.set()
 
             if job.message["op"] == "ensure_started":
-                self._engine.ensure_started(status_callback=status)
+                self._ensure_engine(status_callback=status)
+                if job.cancelled.is_set():
+                    bounded_call(self._engine.terminate)
+                    return
                 reply = {"type": "ready", **self._engine_report()}
                 return
             request = job.message["request"]
@@ -299,6 +331,14 @@ class WorkerHost:
                 if job.cancelled.is_set():
                     break
                 if event.get("type") in {"completed", "cancelled", "failed"}:
+                    if event.get("type") == "failed":
+                        # Keep the FIFO slot through retirement, including for
+                        # callers that use HostedWorker without a WG manager.
+                        try:
+                            bounded_call(self._engine.terminate)
+                        except BaseException:
+                            self._fail_stop()
+                            raise
                     reply = {"type": "event", "event": event}
                     terminal = True
                     break
@@ -328,11 +368,22 @@ class WorkerHost:
                     self._jobs.notify_all()
                 job.finish(reply)
 
-    def _cancel_job(self, job: _Job, *, client_cancelled: bool = False) -> None:
+    def _cancel_job(self, job: _Job, *, client_cancelled: bool = False,
+                    retire_startup: bool = False) -> None:
         job.client_cancelled |= client_cancelled
         job.cancelled.set()
         with self._jobs:
             self._jobs.notify_all()
+        if job.stream is None and retire_startup and job.running:
+            deadline = time.monotonic() + RETIREMENT_TIMEOUT
+            try:
+                bounded_call(self._engine.terminate)
+                if not job.done.wait(max(0, deadline - time.monotonic())):
+                    raise TimeoutError("BEAT cancelled startup did not retire")
+            except BaseException as exc:
+                self._log(f"startup retirement failed: {exc}")
+                self._fail_stop()
+            return
         if job.stream is None:
             # Cold startup has no stream to retire yet. The runner retains its
             # FIFO slot and closes the stream immediately when submit returns.
@@ -369,7 +420,8 @@ class WorkerHost:
                         return
                     control = receive_frame(connection, deadline=time.monotonic() + CONTROL_TIMEOUT)
                     if control is None or control.get("op") == "cancel":
-                        self._cancel_job(job, client_cancelled=control is not None)
+                        self._cancel_job(job, client_cancelled=control is not None,
+                                         retire_startup=bool(control and control.get("retire_startup")))
                         if control is not None:
                             send({"type": "cancelled"})
                         return

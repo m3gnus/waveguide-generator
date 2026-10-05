@@ -191,6 +191,27 @@ _COMPLEX_FIELDS = (
 )
 
 
+def _cancelled_batches(batches: list[Any]) -> Any:
+    """Keep every acquired row, including batches completed before cancellation."""
+    current = copy(batches[-1])
+    frequencies = np.concatenate([np.asarray(batch.frequencies_hz) for batch in batches])
+    order = np.argsort(frequencies, kind="stable")
+    current.frequencies_hz = frequencies[order]
+    for name in _COMPLEX_FIELDS:
+        if getattr(current, name, None) is not None:
+            values = np.concatenate([np.asarray(getattr(batch, name)) for batch in batches])
+            setattr(current, name, values[order])
+    if isinstance(getattr(current, "surface_pressure_avg", None), dict):
+        current.surface_pressure_avg = {
+            tag: np.concatenate([batch.surface_pressure_avg[tag] for batch in batches])[order]
+            for tag in current.surface_pressure_avg
+        }
+    with np.errstate(divide="ignore"):
+        spl = 20 * np.log10(np.abs(current.pressure_complex) / 20e-6)
+    _set_frequency_shaped_field(current, "directivity_db", spl)
+    return current
+
+
 def native_acquisition_frequencies(context) -> np.ndarray:
     """Requested rows plus geometric coverage queries; also the progress budget."""
     requested = canonical_frequencies(context)
@@ -222,11 +243,17 @@ def solve_native_adaptively(
     layout = []
     logs = []
     timings = {}
+    batches = []
     while planner is None or len(planner.pending):
         if cancel:
             cancel()
         ids = SweepPlanner(f, delays_s=0).pending if planner is None else planner.pending
         result = solve_batch(f[ids].tolist())
+        batches.append(result)
+        if getattr(result, "cancelled", False):
+            # Shortened batches carry real rows, including earlier acquisitions.
+            # Do not fit or call cancel again before packaging partial results.
+            return _cancelled_batches(batches)
         if not np.array_equal(np.asarray(result.frequencies_hz), f[ids]):
             raise ValueError("adaptive batch returned a different frequency grid")
         if template is None:

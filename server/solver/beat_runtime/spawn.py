@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 from typing import Any
+from collections.abc import Mapping
 
 from server.platform.paths import app_root
 
@@ -32,11 +33,12 @@ def detached_options(*, windows: bool | None = None) -> dict[str, Any]:
     return {"start_new_session": True}
 
 
-def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: float) -> subprocess.Popen:
+def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: float,
+            environment: Mapping[str, str] | None = None) -> subprocess.Popen:
     if not sys.executable:
         raise RuntimeError("Cannot launch BEAT host: sys.executable is empty")
     identifier = r.key_id(key)
-    environment = {name: value for name, value in os.environ.items()
+    environment = {name: value for name, value in (os.environ if environment is None else environment).items()
                    if not name.upper().startswith("WG2_BEAT_TEST_")}
     root = app_root(environ=environment)
     # Packaged Windows Python can ignore cwd through its isolated ._pth file.
@@ -76,7 +78,7 @@ def _bootstrap_record(
 
 def start_host(
     key: dict[str, Any], directory: Path | None = None, *, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
-    timeout: float = 10.0,
+    timeout: float = 10.0, environment: Mapping[str, str] | None = None,
 ) -> r.HostRecord:
     """Return an authenticated lifecycle record; numerical adoption is PR 19.
 
@@ -119,7 +121,8 @@ def start_host(
         if ready.exists():
             read_private_json(ready)  # Refuse linked/nonprivate bootstrap residue.
             r.unlink_record(ready)
-        process = _launch(key, directory, idle_timeout, remaining_time(deadline))
+        launch_options = {} if environment is None else {"environment": environment}
+        process = _launch(key, directory, idle_timeout, remaining_time(deadline), **launch_options)
         published: r.HostRecord | None = None
         owned_interpreter: r.HostRecord | None = None
         launcher_start = r.process_start_identity(process.pid)

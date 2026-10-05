@@ -338,3 +338,28 @@ def test_sparse_requests_add_native_density_queries_and_keep_requested_output(f)
     assert np.max(np.diff(np.log2(sorted(batches)))) <= MAX_SOLVED_GAP_OCTAVES + 1e-12
     assert result.adaptive_sampling["native_solved_count"] == len(batches)
     assert result.adaptive_sampling["solved_count"] == result.frequency_status.count("solved")
+
+
+def test_cancelled_short_batch_keeps_rows_from_previous_acquisitions():
+    from types import SimpleNamespace
+
+    from server.solver.adaptive_sweep import solve_native_adaptively
+
+    context = SimpleNamespace(frequencies_hz=None, frequency_range=(500., 600.),
+                              num_frequencies=48, frequency_spacing='log')
+    acquired = []
+
+    def batch(frequencies):
+        cancelled = bool(acquired)
+        f = np.asarray(frequencies[:1] if cancelled else frequencies)
+        acquired.extend(f.tolist())
+        return SimpleNamespace(
+            frequencies_hz=f, pressure_complex=np.ones((len(f), 1, 1), complex),
+            impedance=f.astype(complex), cancelled=cancelled,
+        )
+
+    result = solve_native_adaptively(context, batch, distance_m=2, sound_speed=343)
+    assert result.cancelled
+    assert result.frequencies_hz.tolist() == sorted(acquired)
+    assert result.impedance.tolist() == [complex(f) for f in sorted(acquired)]
+    assert len(result.pressure_complex) == len(result.directivity_db) == len(acquired)

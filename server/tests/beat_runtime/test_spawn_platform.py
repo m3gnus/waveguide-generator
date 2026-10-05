@@ -62,7 +62,9 @@ def test_packaged_app_root_imports_without_checkout_on_pythonpath(launch, tmp_pa
     record = spawn.start_host(key, directory)
     assert events(key)[0]["cwd"] == str(app)
     assert record.key == key
-    assert events(key)[0]["kwargs"]["environment"] == key["environment"]
+    launched = events(key)[0]["kwargs"]["environment"]
+    assert {name: launched[name] for name in key["environment"]} == key["environment"]
+    assert "PATH" in launched  # The host inherits unkeyed launch settings too.
 
 
 

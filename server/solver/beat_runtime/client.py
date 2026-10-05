@@ -28,6 +28,10 @@ class HostError(RuntimeError):
     """The authenticated host failed or ended an incomplete exchange."""
 
 
+class HostConnectionClosed(HostError):
+    """An endpoint closed during admission; its record may be retiring."""
+
+
 def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CONTROL_TIMEOUT) -> socket.socket:
     """Prove both peers' identity within one control deadline."""
     r.validate_record(record, record.key, directory)
@@ -37,6 +41,8 @@ def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CO
         hello = r.hello_message(record)
         send_frame(connection, hello)
         reply = receive_frame(connection, deadline=deadline)
+        if reply is None:
+            raise HostConnectionClosed("BEAT host closed during hello")
         r.validate_hello(record, reply, hello["nonce"])
         nonce = reply["client_nonce"]
         message = {**r.host_key({}), "op": "authenticate", "key": record.key,
@@ -44,7 +50,9 @@ def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CO
                    "proof": r.auth_proof(record, nonce, "client_auth")}
         send_frame(connection, message)
         accepted = receive_frame(connection, deadline=deadline)
-        proof = accepted.get("proof") if accepted else None
+        if accepted is None:
+            raise HostConnectionClosed("BEAT host closed during client admission")
+        proof = accepted.get("proof")
         if (not accepted or accepted.get("type") != "authenticated" or accepted.get("nonce") != nonce
                 or not isinstance(proof, str)
                 or not hmac.compare_digest(proof.encode(), r.auth_proof(record, nonce, "client_auth_ok").encode())):
@@ -104,7 +112,7 @@ class _RemoteStream:
                 # This connection carries exactly one submission. Its cancel
                 # can never target a later stream or another client's work.
                 with contextlib.suppress(OSError):
-                    send_frame(self.connection, {"op": "cancel"})
+                    send_frame(self.connection, {"op": "cancel", "retire_startup": True})
         finally:
             with contextlib.suppress(OSError):
                 self.connection.shutdown(socket.SHUT_RDWR)
@@ -144,11 +152,13 @@ class HostedWorker:
     """
 
     def __init__(self, key: dict[str, Any], *, directory: Path | None = None,
-                 timeout: float = 10.0, idle_timeout: float = DEFAULT_IDLE_TIMEOUT) -> None:
+                 timeout: float = 10.0, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
+                 environment: Mapping[str, str] | None = None) -> None:
         key = validate_key(key)
         if not all(math.isfinite(value) and value > 0 for value in (timeout, idle_timeout)):
             raise ValueError("Host timeouts must be positive and finite")
         self.key = copy.deepcopy(key)
+        self.environment = dict(environment) if environment is not None else None
         self.directory = paths.checked_root(paths.worker_dir() if directory is None else directory).absolute()
         self.timeout, self.idle_timeout = timeout, idle_timeout
         self.host_pid: int | None = None
@@ -161,6 +171,9 @@ class HostedWorker:
         self._control = threading.Lock()
         self._lifetime = threading.Lock()
         self._closed = threading.Event()
+        self._startup_cancelled = threading.Event()
+        self._startup_done = threading.Event()
+        self._startup_done.set()
         self._ownership = StreamOwnership(_RemoteSubmitter(self))
 
     @property
@@ -186,8 +199,24 @@ class HostedWorker:
         if self._closed.is_set():
             raise HostError("BEAT client admission is closed")
         if self._connection is None:
-            self._record = start_host(self.key, self.directory, timeout=self.timeout, idle_timeout=self.idle_timeout)
-            connection = connect_client(self._record, self.directory)
+            options = {} if self.environment is None else {"environment": self.environment}
+            deadline = time.monotonic() + self.timeout
+            while True:
+                if self._closed.is_set():
+                    raise HostError("BEAT client admission is closed")
+                self._record = start_host(self.key, self.directory, timeout=remaining_time(deadline),
+                                          idle_timeout=self.idle_timeout, **options)
+                try:
+                    connection = connect_client(self._record, self.directory,
+                                                timeout=min(CONTROL_TIMEOUT, remaining_time(deadline)))
+                    break
+                except (HostConnectionClosed, ConnectionError) as exc:
+                    # A hello can race a retiring host's final admission close.
+                    # Recheck under spawn exclusion; never prune a live peer or
+                    # retry a wrong proof, and share the original start budget.
+                    if time.monotonic() >= deadline:
+                        raise HostError("BEAT host admission did not reopen") from exc
+                    self._closed.wait(min(0.02, max(0, deadline - time.monotonic())))
             with self._lifetime:
                 if self._closed.is_set():
                     connection.close()
@@ -206,7 +235,13 @@ class HostedWorker:
             connection = self._connect()
             deadline = time.monotonic() + timeout
             try:
-                send_frame(connection, {"op": operation})
+                if operation == "ensure_started":
+                    with self._lifetime:
+                        if self._startup_cancelled.is_set():
+                            raise HostError("BEAT startup cancelled")
+                        send_frame(connection, {"op": operation})
+                else:
+                    send_frame(connection, {"op": operation})
                 while True:
                     frame = receive_frame(connection, deadline=(time.monotonic() + HEARTBEAT_TIMEOUT
                                                                  if streaming else deadline))
@@ -233,7 +268,13 @@ class HostedWorker:
         return frame
 
     def ensure_started(self, *, status_callback: Callable[[str], None] | None = None) -> None:
-        self._report(self._request("ensure_started", "ready", status_callback=status_callback, streaming=True))
+        self._startup_done.clear()
+        try:
+            if self._startup_cancelled.is_set():
+                raise HostError("BEAT startup cancelled")
+            self._report(self._request("ensure_started", "ready", status_callback=status_callback, streaming=True))
+        finally:
+            self._startup_done.set()
 
     def submit(self, request_path: Path | Mapping, *, operation: str = "solve",
                status_callback: Callable[[str], None] | None = None) -> OwnedStream:
@@ -254,6 +295,19 @@ class HostedWorker:
             with contextlib.suppress(OSError):
                 connection.shutdown(socket.SHUT_RDWR)
             connection.close()
+
+    def cancel_startup(self) -> None:
+        """Retire only this connection's FIFO startup, with a bounded host backstop."""
+        self._startup_cancelled.set()
+        sent = False
+        with self._lifetime:
+            if self._connection is not None:
+                with contextlib.suppress(OSError):
+                    send_frame(self._connection, {"op": "cancel", "retire_startup": True})
+                    sent = True
+        if sent and not self._startup_done.wait(RETIREMENT_TIMEOUT + CONTROL_TIMEOUT):
+            self._disconnect()
+            raise HostError("BEAT startup cancellation did not finish")
 
     def detach(self) -> None:
         """End this client's admission and streams, preserving the host lease window."""

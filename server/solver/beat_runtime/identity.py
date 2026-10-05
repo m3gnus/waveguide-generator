@@ -1,10 +1,14 @@
 """Content identities for adoption/readiness, distinct from path-specific keys.
 
 Names are relative to logical roots, so byte-identical relocation is stable.
-There is no process-lifetime cache: an in-place edit must revoke identity.
+Optional stat-keyed byte caching avoids re-reading unchanged files; trees are
+always enumerated again so edits and additions revoke identity.
 Missing or unreadable required inputs raise instead of hashing a sentinel.
 """
 
+from __future__ import annotations
+
+from functools import lru_cache
 import hashlib
 import os
 from pathlib import Path
@@ -41,20 +45,39 @@ def _files(root: Path) -> list[Path]:
     return sorted(files)
 
 
-def _fingerprint(files: dict[str, Path]) -> str:
+def _file_digest(path: Path) -> bytes:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.digest()
+
+
+@lru_cache(maxsize=4096)
+def _cached_digest(path: Path, mtime_ns: int, size: int) -> bytes:
+    return _file_digest(path)
+
+
+def file_digest(path: Path, *, cache: bool = False) -> bytes:
+    """Cache bytes by resolved path, modification time and size when requested."""
+    try:
+        path = path.resolve()
+        if cache:
+            stat = path.stat()
+            return _cached_digest(path, stat.st_mtime_ns, stat.st_size)
+        return _file_digest(path)
+    except OSError as exc:
+        raise IdentityUnavailable(f"Cannot read identity input: {path}") from exc
+
+
+def _fingerprint(files: dict[str, Path], *, cache: bool = False) -> str:
     digest = hashlib.sha256()
     for name, path in sorted(files.items()):
-        content = hashlib.sha256()
-        try:
-            with path.open("rb") as stream:
-                while chunk := stream.read(1024 * 1024):
-                    content.update(chunk)
-        except OSError as exc:
-            raise IdentityUnavailable(f"Cannot read identity input: {path}") from exc
+        content = file_digest(path, cache=cache)
         label = name.encode("utf-8")
         digest.update(len(label).to_bytes(4, "big"))
         digest.update(label)
-        digest.update(content.digest())
+        digest.update(content)
     return digest.hexdigest()
 
 
@@ -65,6 +88,7 @@ def _tree(root: Path, namespace: str) -> dict[str, Path]:
 def engine_fingerprint(
     assets: EngineAssets | None = None, *, backend: str = "cpu",
     julia_project: Path | None = None, julia_sysimage: Path | None = None,
+    cache: bool = False,
 ) -> str:
     """Hash beat-engine Python/contracts, Julia and every bundled project/manifest.
 
@@ -88,11 +112,11 @@ def engine_fingerprint(
             files[f"selected-project/{project.name}"] = project
     if julia_sysimage is not None:
         files["selected-sysimage"] = Path(julia_sysimage)
-    return _fingerprint(files)
+    return _fingerprint(files, cache=cache)
 
 
 def runtime_fingerprint(
-    runtime_root: Path | None = None, *, compiled_request_policy: Path | None = None,
+    runtime_root: Path | None = None, *, compiled_request_policy: Path | None = None, cache: bool = False,
 ) -> str:
     """Hash WG runtime separately, including any selected compiled policy."""
     root = Path(__file__).resolve().parent if runtime_root is None else Path(runtime_root)
@@ -100,4 +124,4 @@ def runtime_fingerprint(
     files["wg-runtime/__init__.py"] = root / "__init__.py"
     if compiled_request_policy is not None:
         files["compiled-request-policy"] = Path(compiled_request_policy)
-    return _fingerprint(files)
+    return _fingerprint(files, cache=cache)
