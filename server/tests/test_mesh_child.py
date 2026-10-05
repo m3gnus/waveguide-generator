@@ -80,11 +80,31 @@ def shared_child(monkeypatch):
 
 
 def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
+    """Liveness without signalling. On Windows ``os.kill(pid, 0)`` is
+    ``TerminateProcess(pid, 0)``: it kills a live process, and it succeeds on
+    an exited one whose process object is still referenced."""
+
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return False
+        return True
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+    if not handle:
         return False
-    return True
+    try:
+        code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+            return False
+        return code.value == 259  # STILL_ACTIVE
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def test_a_build_runs_in_another_process_and_the_child_is_reused(host) -> None:
@@ -290,10 +310,15 @@ _ICW_CASE = {
     reason="opt in with WG2_RUN_MESHER_CRASH_REPRO=1 (about 90 s to the gmsh abort)",
 )
 def test_icw_adversarial_3_no_longer_kills_the_backend(shared_child) -> None:
-    """The real ICW design with UI-allowed values: gmsh aborts (134/139) or hangs."""
+    """The real ICW design with UI-allowed values: gmsh aborts (134/139) or hangs.
+
+    On Windows gmsh refuses this design with an ordinary mesher error
+    ("Adjacent nullptrs found") instead of aborting; that is also a survivable
+    outcome, so the test asserts survival either way.
+    """
 
     pytest.importorskip("gmsh")
-    pytest.importorskip("hornlab_mesher")
+    mesher = pytest.importorskip("hornlab_mesher")
     clear_solver_mesh_cache()
     design = DesignConfig.model_validate(_ICW_CASE)
 
@@ -302,6 +327,8 @@ def test_icw_adversarial_3_no_longer_kills_the_backend(shared_child) -> None:
             await mesh_builder.build_solver_mesh(design, {"mesh_validation_mode": "warn"})
         except MesherCrashError as exc:
             assert str(exc) == CRASH_MESSAGE
+        except mesher.MesherError:
+            pass
         # Reaching here at all means this process survived the mesher.
         assert (await run_mesh_build(ok_build, "alive"))["value"] == "alive"
 
