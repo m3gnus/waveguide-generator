@@ -534,7 +534,7 @@ def assert_inline_setup_allowlist(source: str) -> None:
         '$install = Join-Path $root "app"', '$installLog = Join-Path $root "inno-install.log"',
         '$addins = Join-Path $root "fusion-addins"',
         '$env:WG2_DATA_DIR = Join-Path $root "data"; New-Item -ItemType Directory -Path $addins, $env:WG2_DATA_DIR | Out-Null',
-        '$process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "/DIR=$install", "/LOG=$installLog", "/WGLINKADDINSDIR=$addins")',
+        '$process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", "`"/DIR=$install`"", "`"/LOG=$installLog`"", "`"/WGLINKADDINSDIR=$addins`"")',
     ):
         assert_fragment(tokens, fragment)
     for variable in ('$root', '$install', '$installLog', '$addins', '$setup', '$process'):
@@ -552,7 +552,23 @@ def assert_inline_setup_allowlist(source: str) -> None:
     assert compact(launch) == compact(powershell_tokens(
         'Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @('
         '"/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS", '
-        '"/DIR=$install", "/LOG=$installLog", "/WGLINKADDINSDIR=$addins")'))
+        '"`"/DIR=$install`"", "`"/LOG=$installLog`"", "`"/WGLINKADDINSDIR=$addins`"")'))
+
+
+@pytest.mark.parametrize('argument', ['/DIR=$install', '/LOG=$installLog', '/WGLINKADDINSDIR=$addins'])
+def test_inline_setup_requires_literal_quotes_for_paths(argument: str) -> None:
+    # Start-Process joins ArgumentList into a command line; PowerShell string
+    # delimiters alone do not protect paths containing spaces.
+    workflow = yaml.safe_load((ROOT / '.github/workflows/rc-build.yml').read_text())
+    step = next(step for job in workflow['jobs'].values() for step in job.get('steps', [])
+                if step.get('name') == INLINE_SETUP)
+    assert step['shell'] == 'pwsh'
+    source = step['run']
+    assert_inline_setup_allowlist(source)
+    changed = source.replace(f'"`"{argument}`""', f'"{argument}"', 1)
+    assert changed != source
+    with pytest.raises(AssertionError):
+        assert_inline_setup_allowlist(changed)
 
 
 UNSAFE_LINES = [

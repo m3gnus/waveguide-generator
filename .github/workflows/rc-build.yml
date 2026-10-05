@@ -441,7 +441,7 @@ jobs:
           New-Item -ItemType Directory -Path $addins, $env:WG2_DATA_DIR | Out-Null
           $process = Start-Process -FilePath $setup -Wait -PassThru -ArgumentList @(
             "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/NOICONS",
-            "/DIR=$install", "/LOG=$installLog", "/WGLINKADDINSDIR=$addins"
+            "`"/DIR=$install`"", "`"/LOG=$installLog`"", "`"/WGLINKADDINSDIR=$addins`""
           )
           if ($process.ExitCode -ne 0) {
             throw "The unattended installer exited $($process.ExitCode); see $installLog"
