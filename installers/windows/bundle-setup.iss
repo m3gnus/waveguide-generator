@@ -819,6 +819,46 @@ begin
   end;
 end;
 
+{ True when a registered Khronos ICD is Intel's CPU OpenCL runtime and its DLL
+  exists. This is a cheap hint, not a compute test (setup cannot run one): the
+  application still qualifies the device with a real smoke test at start-up and
+  says so when it fails. Only Intel's CPU runtime counts, because that is what
+  the application's guidance recommends and PoCL on Windows is rejected by the
+  application. Anything unreadable or unrecognised returns False, so the full
+  guidance is shown whenever there is doubt. }
+function CpuOpenClRuntimeRegistered(): Boolean;
+var
+  Names: TArrayOfString;
+  Roots: array[0..1] of Integer;
+  Root, I: Integer;
+  Disabled: Cardinal;
+  Dll: String;
+begin
+  Result := False;
+  Roots[0] := HKEY_LOCAL_MACHINE;
+  Roots[1] := HKEY_CURRENT_USER;
+  for Root := 0 to 1 do
+  begin
+    if not RegGetValueNames(Roots[Root], 'SOFTWARE\Khronos\OpenCL\Vendors', Names) then
+      Continue;
+    for I := 0 to GetArrayLength(Names) - 1 do
+    begin
+      Dll := Names[I];
+      { A DWORD value of 0 enables the ICD; any other value disables it. }
+      if not RegQueryDWordValue(Roots[Root], 'SOFTWARE\Khronos\OpenCL\Vendors',
+        Dll, Disabled) or (Disabled <> 0) then
+        Continue;
+      if (CompareText(ExtractFileName(Dll), 'intelocl64.dll') = 0) and FileExists(Dll) then
+      begin
+        WgLog('OpenCL: Intel CPU runtime registered at ' + Dll + '.');
+        Result := True;
+        exit;
+      end;
+    end;
+  end;
+  WgLog('OpenCL: no registered Intel CPU runtime found.');
+end;
+
 procedure OpenClHelpClick(Sender: TObject);
 var
   ErrorCode: Integer;
@@ -1176,8 +1216,15 @@ begin
   if WgLinkStatus <> '' then
     WizardForm.FinishedLabel.Caption :=
       'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;
-  OpenClNotice.Text := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
-    OpenClGuidanceTitle + #13#10 + OpenClGuidanceText;
+  { Hide the install advice only when an Intel CPU runtime is already
+    registered. The help button still opens the full guidance. }
+  if CpuOpenClRuntimeRegistered() then
+    OpenClNotice.Text := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      OpenClGuidanceTitle + #13#10 +
+      'An Intel CPU OpenCL runtime is already installed on this computer. WG checks it with a test calculation the first time it starts, and says so if it does not work.'
+  else
+    OpenClNotice.Text := WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      OpenClGuidanceTitle + #13#10 + OpenClGuidanceText;
   { The complete runtime step and warning can exceed the finish page height.
     Keep them scrollable, with room below for the single launch checkbox and
     help button. All coordinates use the wizard's DPI scale. }
