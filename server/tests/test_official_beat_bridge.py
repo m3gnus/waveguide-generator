@@ -15,10 +15,34 @@ import pytest
 from server.contracts.conventions import PHASE_TIME_CONVENTION
 from server.solver import official_beat as bridge
 from server.solver.context import SolverContext
+from server.platform import temp_session
+from server.solver.beat_runtime import manager, registry
 from server.solver.result_mapping import _gmsh22_observation_frame
 
 
 MESH = Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh"
+
+
+@pytest.fixture(autouse=True)
+def runtime_boundary(monkeypatch, tmp_path):
+    monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
+    monkeypatch.setattr(manager, "resolve_key", lambda backend, **options: registry.host_key({
+        "backend": backend, "julia_executable": "/fixture/julia",
+        "julia_identity": "fixture", "solver_script": "/fixture/solver.jl",
+        "julia_project": "/fixture/project", "julia_sysimage": None,
+        "julia_threads": 2, "engine_fingerprint": "fixture", "runtime_fingerprint": "fixture",
+        "environment": {"JULIA_NUM_THREADS": "2"},
+    }))
+    runtimes = []
+
+    def child(factory):
+        runtime = manager.WorkerManager(mode="child", engine_factory=factory)
+        runtimes.append(runtime)
+        return runtime
+
+    yield child
+    for runtime in runtimes:
+        runtime.shutdown()
 
 
 def _context(**overrides) -> SolverContext:
@@ -178,7 +202,7 @@ def test_run_refuses_unsupported_mode_before_mesh_or_artifact(monkeypatch, mode)
         ))
 
 
-def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch) -> None:
+def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch, runtime_boundary) -> None:
     msh = MESH.read_text()
     calls = []
     paths = []
@@ -208,7 +232,7 @@ def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch) -> No
         def ensure_started(self):
             calls.append("ready")
 
-        def submit(self, request_path):
+        def submit(self, request_path, **kwargs):
             calls.append("submit")
             paths.append(request_path)
             request = __import__("json").loads(request_path.read_text())
@@ -244,7 +268,7 @@ def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch) -> No
     monkeypatch.setattr(bridge.importlib, "import_module", fake_import)
     provisional = []
     final = bridge.solve_official_beat_from_msh_text(
-        msh, _context(), worker_factory=Worker,
+        msh, _context(), worker_manager=runtime_boundary(Worker),
         result_callback=lambda index, response: provisional.append((index, response)),
     )
     assert calls.index("negotiate") < calls.index("submit")
@@ -266,10 +290,11 @@ def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch) -> No
         provisional[0][1]["spl_on_axis"]["phase_degrees"][0]
     )
     assert all(not path.exists() for path in paths)
-    assert calls[-2:] == ["close", "terminate"]
+    assert calls[-1] == "close"
+    assert "terminate" not in calls
 
 
-def test_worker_failed_event_is_error_and_cleans_files(monkeypatch) -> None:
+def test_worker_failed_event_is_error_and_cleans_files(monkeypatch, runtime_boundary) -> None:
     msh = MESH.read_text()
     observed_paths = []
     calls = []
@@ -279,7 +304,10 @@ def test_worker_failed_event_is_error_and_cleans_files(monkeypatch) -> None:
             self.closed = False
 
         def __iter__(self):
-            yield {"type": "failed", "error": "assembly failed"}
+            return self
+
+        def __next__(self):
+            return {"type": "failed", "error": "assembly failed"}
 
         def close(self):
             self.closed = True
@@ -294,7 +322,7 @@ def test_worker_failed_event_is_error_and_cleans_files(monkeypatch) -> None:
         def ensure_started(self):
             pass
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             observed_paths.append(path)
             return self.stream
 
@@ -303,12 +331,12 @@ def test_worker_failed_event_is_error_and_cleans_files(monkeypatch) -> None:
 
     _fake_package(monkeypatch)
     with pytest.raises(bridge.OfficialBeatProtocolError, match="assembly failed"):
-        bridge.solve_official_beat_from_msh_text(msh, _context(), worker_factory=Worker)
+        bridge.solve_official_beat_from_msh_text(msh, _context(), worker_manager=runtime_boundary(Worker))
     assert calls == ["close", "terminate"]
     assert observed_paths and not observed_paths[0].exists()
 
 
-def test_stream_close_failure_still_terminates_worker(monkeypatch) -> None:
+def test_stream_close_failure_still_terminates_worker(monkeypatch, runtime_boundary) -> None:
     _fake_package(monkeypatch)
     calls = []
     paths = []
@@ -318,7 +346,7 @@ def test_stream_close_failure_still_terminates_worker(monkeypatch) -> None:
             return self
 
         def __next__(self):
-            raise StopIteration
+            return {"type": "completed", "solved_count": 0}
 
         def close(self):
             calls.append("close")
@@ -333,7 +361,7 @@ def test_stream_close_failure_still_terminates_worker(monkeypatch) -> None:
         def ensure_started(self):
             pass
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             paths.append(path)
             return Stream()
 
@@ -342,7 +370,7 @@ def test_stream_close_failure_still_terminates_worker(monkeypatch) -> None:
 
     with pytest.raises(OSError, match="close failed"):
         bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_factory=Worker,
+            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
         )
     assert calls == ["close", "terminate"]
     assert paths and not paths[0].exists()
@@ -363,7 +391,7 @@ def _fake_package(monkeypatch, negotiate=None):
     monkeypatch.setattr(bridge.importlib, "import_module", fake_import)
 
 
-def test_incompatible_worker_never_receives_submit(monkeypatch) -> None:
+def test_incompatible_worker_never_receives_submit(monkeypatch, runtime_boundary) -> None:
     submitted = []
 
     class Worker:
@@ -375,7 +403,7 @@ def test_incompatible_worker_never_receives_submit(monkeypatch) -> None:
         def ensure_started(self):
             pass
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             submitted.append(path)
 
         def terminate(self):
@@ -386,11 +414,11 @@ def test_incompatible_worker_never_receives_submit(monkeypatch) -> None:
 
     _fake_package(monkeypatch, refuse)
     with pytest.raises(RuntimeError, match="compiled_system version 1"):
-        bridge.solve_official_beat_from_msh_text(MESH.read_text(), _context(), worker_factory=Worker)
+        bridge.solve_official_beat_from_msh_text(MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker))
     assert submitted == []
 
 
-def test_one_frequency_completion_rejects_boolean_count(monkeypatch) -> None:
+def test_one_frequency_completion_rejects_boolean_count(monkeypatch, runtime_boundary) -> None:
     _fake_package(monkeypatch)
     context = _context(frequency_range=(500.0, 500.0), num_frequencies=1,
                        frequencies_hz=(500.0,))
@@ -418,7 +446,7 @@ def test_one_frequency_completion_rejects_boolean_count(monkeypatch) -> None:
         def ensure_started(self):
             pass
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             paths.append(path)
             return Stream()
 
@@ -427,12 +455,12 @@ def test_one_frequency_completion_rejects_boolean_count(monkeypatch) -> None:
 
     with pytest.raises(bridge.OfficialBeatProtocolError, match="completion count"):
         bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), context, worker_factory=Worker,
+            MESH.read_text(), context, worker_manager=runtime_boundary(Worker),
         )
     assert paths and not paths[0].exists()
 
 
-def test_cancel_interrupts_blocked_startup_before_submit(monkeypatch) -> None:
+def test_cancel_interrupts_blocked_startup_before_submit(monkeypatch, runtime_boundary) -> None:
     cancel = threading.Event()
     terminated = threading.Event()
     submitted = []
@@ -447,7 +475,7 @@ def test_cancel_interrupts_blocked_startup_before_submit(monkeypatch) -> None:
             cancel.set()
             assert terminated.wait(timeout=2)
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             submitted.append(path)
 
         def terminate(self):
@@ -460,13 +488,13 @@ def test_cancel_interrupts_blocked_startup_before_submit(monkeypatch) -> None:
     _fake_package(monkeypatch)
     with pytest.raises(RuntimeError, match="job cancelled"):
         bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_factory=Worker,
+            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
             cancellation_callback=cancel_cb,
         )
     assert submitted == [] and terminated.is_set()
 
 
-def test_cancel_interrupts_blocked_result_read_and_discards_worker(monkeypatch) -> None:
+def test_cancel_interrupts_blocked_result_read_and_discards_worker(monkeypatch, runtime_boundary) -> None:
     cancel = threading.Event()
     terminated = threading.Event()
     paths = []
@@ -492,7 +520,7 @@ def test_cancel_interrupts_blocked_result_read_and_discards_worker(monkeypatch) 
         def ensure_started(self):
             pass
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             paths.append(path)
             return Stream()
 
@@ -506,7 +534,7 @@ def test_cancel_interrupts_blocked_result_read_and_discards_worker(monkeypatch) 
     _fake_package(monkeypatch)
     with pytest.raises(RuntimeError, match="job cancelled"):
         bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_factory=Worker,
+            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
             cancellation_callback=cancel_cb,
         )
     assert terminated.is_set() and paths and not paths[0].exists()
@@ -529,7 +557,7 @@ def test_installed_official_contract_accepts_compiled_request_if_present(tmp_pat
     contract.validate_solve_request(request)
 
 
-def test_adaptive_official_batches_keep_requested_grid_and_close_every_worker(monkeypatch):
+def test_adaptive_official_batches_reuse_one_worker_and_close_every_stream(monkeypatch, runtime_boundary):
     import json
     _fake_package(monkeypatch)
     context = _context(num_frequencies=48, frequency_range=(500., 600.),
@@ -544,11 +572,15 @@ def test_adaptive_official_batches_keep_requested_grid_and_close_every_worker(mo
         def __init__(self, frequencies):
             self.frequencies = frequencies
             self.closed = False
+            self.events = iter([{'type': 'result', 'result': _result(f, planes, angles)}
+                                for f in frequencies] +
+                               [{'type': 'completed', 'solved_count': len(frequencies)}])
 
         def __iter__(self):
-            for f in self.frequencies:
-                yield {'type': 'result', 'result': _result(f, planes, angles)}
-            yield {'type': 'completed', 'solved_count': len(self.frequencies)}
+            return self
+
+        def __next__(self):
+            return next(self.events)
 
         def close(self):
             self.closed = True
@@ -563,7 +595,7 @@ def test_adaptive_official_batches_keep_requested_grid_and_close_every_worker(mo
         def ensure_started(self):
             pass
 
-        def submit(self, path):
+        def submit(self, path, **kwargs):
             paths.append(path)
             self.stream = Stream(json.loads(path.read_text())['frequencies_hz'])
             return self.stream
@@ -573,12 +605,69 @@ def test_adaptive_official_batches_keep_requested_grid_and_close_every_worker(mo
 
     snapshots = []
     result = bridge.solve_official_beat_from_msh_text(
-        MESH.read_text(), context, worker_factory=Worker,
+        MESH.read_text(), context, worker_manager=runtime_boundary(Worker),
         result_callback=lambda revision, payload: snapshots.append((revision, payload)))
-    assert len(workers) >= 3
-    assert all(worker.terminated and worker.stream.closed for worker in workers)
+    assert len(workers) == 1
+    assert len(paths) >= 3
+    assert not workers[0].terminated and workers[0].stream.closed
     assert all(not path.exists() for path in paths)
     assert result['frequencies'] == np.geomspace(500, 600, 48).tolist()
     assert result['frequency_status'][0] == result['frequency_status'][-1] == 'solved'
     assert [revision for revision, _ in snapshots] == list(range(len(snapshots)))
     assert all(len(payload['frequencies']) == 48 for _, payload in snapshots)
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_managed_bridge_reuses_worker_and_retains_cancelled_results(
+    monkeypatch, runtime_boundary, cancelled,
+):
+    import json
+
+    _fake_package(monkeypatch)
+    workers = []
+    streams = []
+
+    class Stream:
+        def __init__(self, request):
+            _, planes, angles, _ = bridge.build_compiled_request(
+                Path(request["compiled_system"]["meshes"][0]["file"]),
+                Path(request["cancel_path"]), _context(), MESH.read_text(),
+                backend="cpu", precision="float32")
+            frequencies = request["frequencies_hz"][:1] if cancelled else request["frequencies_hz"]
+            self.events = iter([
+                {"type": "result", "result": _result(f, planes, angles)} for f in frequencies
+            ] + [{"type": "cancelled" if cancelled else "completed", "solved_count": len(frequencies)}])
+            self.closed = False
+            streams.append(self)
+
+        def __next__(self):
+            return next(self.events)
+
+        def close(self):
+            self.closed = True
+
+    class Worker:
+        worker_info = {"ready": True}
+
+        def __init__(self, **kwargs):
+            self.terminated = False
+            workers.append(self)
+
+        def ensure_started(self):
+            pass
+
+        def submit(self, path, **kwargs):
+            return Stream(json.loads(path.read_text()))
+
+        def terminate(self):
+            self.terminated = True
+
+    runtime = runtime_boundary(Worker)
+    for _ in range(2):
+        result = bridge.solve_official_beat_from_msh_text(
+            MESH.read_text(), _context(), worker_manager=runtime,
+        )
+        assert result["metadata"]["cancelled"] is cancelled
+        assert result["frequencies"] == ([500.0] if cancelled else [500.0, 1000.0, 2000.0])
+    assert len(workers) == 1 and not workers[0].terminated
+    assert len(streams) == 2 and all(stream.closed for stream in streams)

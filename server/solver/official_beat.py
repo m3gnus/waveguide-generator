@@ -11,13 +11,10 @@ import asyncio
 import base64
 import binascii
 import importlib
-import json
 import math
 import os
 from pathlib import Path
 import shutil
-import tempfile
-import threading
 import time
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -27,7 +24,6 @@ import numpy as np
 from server.contracts.conventions import PHASE_TIME_CONVENTION, SOLVER_TIME_CONVENTION
 from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.mesh.builder import build_solver_mesh
-from server.platform.temp_session import temporary_directory_root
 
 from .base import (
     ArtifactCallback,
@@ -38,6 +34,8 @@ from .base import (
     StageCallback,
 )
 from .context import SolverContext
+from .beat_runtime.manager import WorkerManager, get_manager
+from .beat_runtime.session import SolveSession
 from .adaptive_sweep import enabled as adaptive_enabled, solve_native_adaptively
 from .frequency_sweep import live_execution_frequencies
 from .quadrants import FULL_DOMAIN_QUADRANTS
@@ -298,21 +296,18 @@ def resolve_julia_executable(explicit: str | None = None) -> str | None:
 def solve_official_beat_from_msh_text(
     msh_text: str, context: SolverContext, *, backend: str = "cpu", precision: str = "float32",
     stage_callback: StageCallback | None = None, cancellation_callback: CancelCallback | None = None,
-    result_callback: ResultCallback | None = None, worker_factory: Any | None = None,
+    result_callback: ResultCallback | None = None, worker_manager: WorkerManager | None = None,
     julia_executable: str | None = None, mesh_scale_to_m: float = 1.0,
     _native_only: bool = False,
 ) -> dict[str, Any]:
-    """Run one installed official worker, closing the stream before file cleanup."""
+    """Run a managed solve, closing its stream before session file cleanup."""
 
     if context.source_motion != "normal" or context.quadrants != FULL_DOMAIN_QUADRANTS or context.sim_type != 2 or context.ground_plane:
         raise OfficialBeatUnavailable("Official BEAT bridge accepts only full-domain free-air normal motion")
     if cancellation_callback:
         cancellation_callback()
-    beat = importlib.import_module("beat_engine")
     contract = importlib.import_module("beat_engine.beat_contract.worker")
-    julia = resolve_julia_executable(julia_executable)
-    if not julia and worker_factory is None:
-        raise OfficialBeatUnavailable("Julia executable is unavailable")
+    manager = worker_manager or get_manager()
     if adaptive_enabled(context):
         from dataclasses import replace
         started = time.time()
@@ -340,7 +335,7 @@ def solve_official_beat_from_msh_text(
             return solve_official_beat_from_msh_text(
                 msh_text, subset, backend=backend, precision=precision,
                 stage_callback=stage_callback, cancellation_callback=cancellation_callback,
-                worker_factory=worker_factory, julia_executable=julia_executable,
+                worker_manager=manager, julia_executable=julia_executable,
                 mesh_scale_to_m=mesh_scale_to_m, _native_only=True)
 
         def publish(native):
@@ -358,18 +353,10 @@ def solve_official_beat_from_msh_text(
             "Official BEAT compiled bridge has not yet translated spherical pressure sampling")
         return response
     started = time.time()
-    worker = None
-    stream = None
-    monitor_stop = threading.Event()
-    monitor_error: list[BaseException] = []
-    watcher: threading.Thread | None = None
-    with tempfile.TemporaryDirectory(
-        prefix="hornlab-official-beat-", dir=temporary_directory_root()
-    ) as directory:
-        job_dir = Path(directory)
+    with SolveSession(cancellation_callback=cancellation_callback) as session:
+        job_dir = session.directory
         mesh_path = job_dir / "surface.msh"
-        cancel_path = job_dir / "cancel.marker"
-        request_path = job_dir / "request.json"
+        cancel_path = session.cancel_path
         mesh_path.write_text(msh_text, encoding="utf-8")
         compiled, planes, angles, source_area = build_compiled_request(
             mesh_path, cancel_path, context, msh_text, backend=backend, precision=precision,
@@ -388,128 +375,72 @@ def solve_official_beat_from_msh_text(
             frame_override=frame,
         )
         contract.validate_solve_request(compiled)
-        request_path.write_text(json.dumps(compiled), encoding="utf-8")
-        paths = beat.engine_paths(backend)
-        worker = (worker_factory or beat.EngineWorker)(
-            julia_executable=julia or "julia", solver_script=paths.system_solver,
-            julia_threads=max(1, min(os.cpu_count() or 1, 8)), julia_project=paths.project,
-            environment=os.environ.copy(), backend_label=f"BEAT {backend}",
-        )
+        worker = manager.get_worker(backend, julia_executable=julia_executable)
         frequencies = np.asarray(compiled["frequencies_hz"], dtype=float)
         pressure_rows: list[np.ndarray] = []
         impedance_rows: list[complex] = []
-        try:
-            def watch_cancel() -> None:
-                if cancellation_callback is None:
-                    return
-                while not monitor_stop.wait(0.05):
-                    try:
-                        cancellation_callback()
-                    except BaseException as exc:  # callback raises on cancellation
-                        if monitor_stop.is_set():
-                            return
-                        monitor_error.append(exc)
-                        try:
-                            cancel_path.touch()
-                        except OSError:
-                            pass  # process termination must still wake a blocked read
-                        try:
-                            if stream is not None:
-                                stream.close()
-                        except Exception:
-                            pass  # termination is the final cancellation backstop
-                        finally:
-                            worker.terminate()
-                        return
-
-            watcher = threading.Thread(target=watch_cancel, daemon=True)
-            watcher.start()
-            if stage_callback:
-                stage_callback("setup", 0.0, f"Starting official BEAT {backend} worker")
-            worker.ensure_started()
-            if monitor_error:
-                raise monitor_error[0]
-            ready = worker.worker_info
-            contract.negotiate_submission(ready, compiled, "solve")
-            if cancellation_callback:
-                cancellation_callback()
-            if monitor_error:
-                raise monitor_error[0]
-            stream = worker.submit(request_path)
-            terminal = None
-            for event in stream:
-                if monitor_error:
-                    raise monitor_error[0]
-                if not isinstance(event, dict):
-                    raise OfficialBeatProtocolError("Worker event is not an object")
-                kind = event.get("type")
-                if kind == "result":
-                    index = len(pressure_rows)
-                    if index >= len(frequencies):
-                        raise OfficialBeatProtocolError("Worker returned surplus frequencies")
-                    row, impedance = parse_result(
-                        event.get("result"), frequency_hz=float(frequencies[index]),
-                        planes=planes, angles=angles, source_area_m2=source_area,
-                        backend=backend, precision=precision,
+        if stage_callback:
+            stage_callback("setup", 0.0, f"Starting official BEAT {backend} worker")
+        session.submit(worker, compiled, negotiate=contract.negotiate_submission)
+        terminal = None
+        for event in session.events():
+            if not isinstance(event, dict):
+                raise OfficialBeatProtocolError("Worker event is not an object")
+            kind = event.get("type")
+            if kind == "result":
+                index = len(pressure_rows)
+                if index >= len(frequencies):
+                    raise OfficialBeatProtocolError("Worker returned surplus frequencies")
+                row, impedance = parse_result(
+                    event.get("result"), frequency_hz=float(frequencies[index]),
+                    planes=planes, angles=angles, source_area_m2=source_area,
+                    backend=backend, precision=precision,
+                )
+                pressure_rows.append(row)
+                impedance_rows.append(impedance)
+                if result_callback:
+                    provisional = build_provisional_frequency_response(
+                        index=index, frequency_hz=float(frequencies[index]),
+                        entry={"observation_angles_deg": angles.tolist(), "observation_planes": planes,
+                               "observation_pressure_complex": row,
+                               "observation_spl_db": _native_result(
+                                   frequencies[index:index + 1], angles, planes,
+                                   row[None], np.asarray([impedance])
+                               ).directivity_db[0], "impedance": impedance},
+                        config=config,
+                        context=context, backend="beat", sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
                     )
-                    pressure_rows.append(row)
-                    impedance_rows.append(impedance)
-                    if result_callback:
-                        provisional = build_provisional_frequency_response(
-                            index=index, frequency_hz=float(frequencies[index]),
-                            entry={"observation_angles_deg": angles.tolist(), "observation_planes": planes,
-                                   "observation_pressure_complex": row,
-                                   "observation_spl_db": _native_result(
-                                       frequencies[index:index + 1], angles, planes,
-                                       row[None], np.asarray([impedance])
-                                   ).directivity_db[0], "impedance": impedance},
-                            config=config,
-                            context=context, backend="beat", sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
-                        )
-                        result_callback(index, provisional)
-                    if stage_callback:
-                        stage_callback("frequency_solve", len(pressure_rows) / len(frequencies),
-                                       f"Solved frequency {len(pressure_rows)}/{len(frequencies)}")
-                elif kind == "failed":
-                    raise OfficialBeatProtocolError(f"Official BEAT solve failed: {event.get('error', event)}")
-                elif kind == "cancelled":
-                    raise OfficialBeatUnavailable("Official BEAT solve was cancelled")
-                elif kind == "completed":
-                    terminal = event
-                    break
-                elif kind not in {"status", "progress"}:
-                    raise OfficialBeatProtocolError(f"Unknown worker event {kind!r}")
-            if monitor_error:
-                raise monitor_error[0]
-            if (terminal is None or type(terminal.get("solved_count")) is not int
-                    or terminal["solved_count"] != len(frequencies)
-                    or len(pressure_rows) != len(frequencies)):
-                raise OfficialBeatProtocolError("Worker completion count does not match requested frequencies")
-        finally:
-            monitor_stop.set()
-            try:
-                if stream is not None:
-                    stream.close()
-            finally:
-                try:
-                    if worker is not None:
-                        worker.terminate()
-                finally:
-                    if watcher is not None:
-                        watcher.join(timeout=5.0)
-                        if watcher.is_alive():
-                            raise RuntimeError("Official BEAT cancellation monitor did not stop")
+                    result_callback(index, provisional)
+                if stage_callback:
+                    stage_callback("frequency_solve", len(pressure_rows) / len(frequencies),
+                                   f"Solved frequency {len(pressure_rows)}/{len(frequencies)}")
+            elif kind == "failed":
+                raise OfficialBeatProtocolError(f"Official BEAT solve failed: {event.get('error', event)}")
+            elif kind in {"completed", "cancelled"}:
+                terminal = event
+                break
+            elif kind not in {"status", "progress"}:
+                raise OfficialBeatProtocolError(f"Unknown worker event {kind!r}")
+        cancelled = terminal is not None and terminal.get("type") == "cancelled"
+        if not cancelled and (terminal is None or type(terminal.get("solved_count")) is not int
+                or terminal["solved_count"] != len(frequencies)
+                or len(pressure_rows) != len(frequencies)):
+            raise OfficialBeatProtocolError("Worker completion count does not match requested frequencies")
+        if cancelled and not pressure_rows:
+            raise OfficialBeatUnavailable("Official BEAT solve was cancelled before any results")
+        frequencies = frequencies[:len(pressure_rows)]
         pressure = np.stack(pressure_rows)
         impedance = np.asarray(impedance_rows, dtype=np.complex128)
         order = np.argsort(frequencies, kind="stable")
         native = _native_result(frequencies[order], angles, planes, pressure[order], impedance[order])
+        native.cancelled = cancelled
         if _native_only:
             return native
         response = build_solver_response(
             result=native, config=config, context=context, start_time=started,
             metadata={"solver_backend": "beat", "solver_mode": "full_3d", "engine": "official-beat-engine",
                       "phase_time_convention": PHASE_TIME_CONVENTION, "phasor_convention": PHASOR,
-                      "beat_backend": backend,
+                      "beat_backend": backend, "cancelled": cancelled,
                       "performance": {"total_time_seconds": time.time() - started}},
             sound_speed_m_per_s=SOUND_SPEED_M_PER_S,
         )

@@ -760,3 +760,93 @@ suite ran. Native Windows/installed-engine qualification was not run; tests
 use fake engines, temporary directories and only recorded test-owned processes.
 No requested fix remains unfinished; the missing adapter directories prevent
 completion of the exact combined checks. Changes remain uncommitted.
+- **PR 20a — manager identity/cache:** `server/solver/beat_runtime/manager.py`
+  (`resolve_key`, `WorkerManager`, default manager);
+  identity/cache/lifecycle tests in `server/tests/beat_runtime/test_manager.py`;
+  this `CHANGES.md`.
+  Resolve CPU/Metal assets and executable through WG discovery; hash executable,
+  selected solver bytes, engine/project/sysimage and WG runtime/compiled-adapter
+  policy. Resolve AUTO once through `threads.py`, and put that integer into both
+  the key and `JULIA_NUM_THREADS`. Snapshot the effective environment, retaining
+  caller Julia/BLAB choices and defaulting the depot into `paths.runtime_dir()`.
+  Cache by the existing provider/protocol-scoped registry key. Host mode is the
+  default; child mode and its injectable public engine factory are explicit.
+- **PR 20b — manager admission/retirement:** `manager.py` (`ManagedWorker`,
+  `WorkerLease`); host adoption/Quit tests in `test_manager.py` and ownership,
+  startup, abandonment, failure and waiter tests in
+  `server/tests/beat_runtime/test_session.py`; this `CHANGES.md`.
+  Retain a local lease across startup, contract negotiation, public submission
+  and cleanup, with `StreamOwnership` protecting the closeable event stream.
+  Stale close/cancel never retires a successor. Child cancellation uses bounded
+  public termination before releasing ownership, including a startup that
+  returns after cancellation. Hosted cancellation closes only the owned stream
+  or disconnects this client's startup lease; it never signals registry PIDs.
+  Shutdown closes every cached client's admission before releasing any, and
+  continues through teardown errors. Quit detaches idle hosts and terminates
+  child mode; active abandoned streams are retired. Failed retirement condemns
+  a client instead of allowing its next session to reuse it.
+- **PR 20c — solve sessions:** `server/solver/beat_runtime/session.py`;
+  staging/cancellation/backstop/partial-result tests in `test_session.py`;
+  this `CHANGES.md`.
+  Context-managed staging uses `dir=temporary_directory_root()`, under the
+  process's swept WG session. Serialize before taking a worker lease. Own the
+  request/cancel paths, a 50 ms cancellation monitor and stream cleanup. Write
+  a cooperative marker first, then cancel the owned lease after a configurable
+  250 ms grace period. Marker failure cannot disable the backstop. Preserve
+  already emitted results and synthesize a cancelled terminal when the backstop
+  interrupts a read. Startup/empty-result cancellation retains the callback's
+  original exception. Closure stops/joins the monitor, releases the lease and
+  removes staging even when another cleanup step fails.
+- **PR 20d — managed prototype:** `server/solver/official_beat.py`;
+  `server/tests/test_official_beat_bridge.py`; this `CHANGES.md`.
+  The unregistered, opt-in prototype uses the manager and SolveSession instead
+  of constructing/terminating an EngineWorker for each solve. Repeated solves
+  and adaptive batches share one manager/client/key/thread policy; streams and
+  request files still close after every batch. Negotiation precedes submission.
+  Cancelled responses retain completed frequency rows and cancellation metadata.
+  Tests inject an explicitly selected child WorkerManager, replacing the old
+  one-worker factory seam, and isolate all staging in tmp_path.
+
+Future callers use `get_manager().get_worker(backend, julia_executable=...,
+julia_threads="auto"|positive_integer, julia_project=..., julia_sysimage=...,
+solver_script=..., environment=...)`. These return a `ManagedWorker`; all solve
+admission goes through `SolveSession.submit(client, payload, negotiate=...)`,
+inside `with SolveSession(cancellation_callback=...) as session`. Stage mesh
+files beneath `session.directory`; use `session.cancel_path` in compiled
+requests and consume `session.events()`. `request_cancel()` permits orderly
+partial-result cancellation. A terminal completes the stream; the enclosing
+session releases the outer lease. Always close the context, even before the
+first read. `WorkerManager.shutdown()` ends admission and releases all clients;
+`detach()` implements Quit. Warm-up can use the same manager and session API;
+app/warm-up hook wiring remains design PR 21.
+
+Deviations and limits: official JWSound/BEAT_Engine replaces the design's fork;
+only public EngineWorker methods and worker_info are used. No PID continuity
+claim is added: the official public API still lacks an engine PID. The host's
+existing worker_instance proves owned EngineWorker continuity in fake tests.
+The key conservatively includes the complete effective environment, rather
+than only Julia/BLAB variables, so inherited library configuration cannot differ
+between key and launch; unrelated environment changes can reduce adoption reuse.
+The selected solver's bytes and prototype compiled-policy bytes are also keyed.
+Four review slices keep identity, ownership, sessions and adapter integration
+separately reviewable. They are subdivisions of design PR 20, not production
+routing, dependency/pin or launcher changes. Explicit child mode never becomes
+an automatic fallback after a host authentication refusal. Host registry roots
+stay outside swept staging. No Julia, downloads, CUDA/ROCm, HBB directory writes,
+legacy state mirror or unauthenticated stale-PID signalling is introduced.
+Changes remain uncommitted as requested.
+
+PR 20 validation: **624 passed in 53.76 s** with the requested Python and
+`scripts/run_tests.py server/tests/beat_runtime server/tests/test_solver_beat.py
+-q -p no:cacheprovider`, including 16 new manager/session tests. The requested
+additional command, `-m pytest -q -p no:cacheprovider
+server/tests/test_temp_session.py server/tests/test_official_beat*.py`, passed
+**69 tests with 1 skipped in 2.84 s**; the skip is the existing optional installed
+beat-engine contract check, because that package is absent. Runtime/test and
+prototype source/test Ruff passed, as did `git diff --check`. Both exact combined
+checks were attempted: pytest runs no tests because `server/tests/beat_adapter`
+is absent; Ruff reports absent `server/solver/beat_adapter` and
+`server/tests/beat_adapter`. No requested PR 20 implementation remains unfinished.
+Real Julia/installed and Windows Job Object qualification, and app/warm-up hook
+integration, remain the later design gates; fake host subprocesses were used
+only in the fast host-mode tests. All changes remain uncommitted as requested.
