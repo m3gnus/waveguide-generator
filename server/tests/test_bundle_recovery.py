@@ -831,8 +831,18 @@ def test_the_claim_is_exclusive_and_is_released_when_its_holder_dies(
         holder.kill()
         holder.wait(timeout=30)
     # The holder was killed, not asked to release. The claim is free anyway.
-    with update_lock.claim_update(resources):
-        pass
+    # Windows drops a dead process's byte-range locks asynchronously, shortly
+    # after the process object reports its exit, so allow a bounded wait. The
+    # claim must still become free; only the instant of release is not fixed.
+    deadline = time.monotonic() + 10.0
+    while True:
+        try:
+            with update_lock.claim_update(resources):
+                break
+        except update_lock.UpdateInProgress:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 def test_one_installation_has_one_claim_whatever_data_directory_is_named(
