@@ -16,7 +16,7 @@ HOST_PROTOCOL = "wg-beat-host"
 HOST_PROTOCOL_VERSION = 1
 RUNTIME_DIR_ENV = "WG2_BEAT_RUNTIME_DIR"
 WORKER_DIR_ENV = "WG2_BEAT_WORKER_DIR"
-# HBB's overrides. Its default roots never coincide with ours; an override can.
+# HBB's root overrides. Without them HBB uses the defaults in _hbb_roots.
 HBB_ROOT_ENVS = ("HORNLAB_BEAT_RUNTIME_DIR", "HORNLAB_BEAT_WORKER_DIR")
 
 
@@ -24,15 +24,46 @@ class RootConflict(ValueError):
     """A WG root would share a directory tree with HBB's state or registry."""
 
 
-def _isolated(root: Path, env: Mapping[str, str]) -> Path:
+def _hbb_roots(
+    env: Mapping[str, str], system: str, home: Path, temp_dir: Path | None, uid: int | None
+) -> dict[str, Path]:
+    """HBB's effective runtime and worker roots (hornlab_beat_bem provision/worker_registry)."""
+    roots = {}
+    runtime = env.get(HBB_ROOT_ENVS[0], "").strip()
+    if runtime:
+        roots[HBB_ROOT_ENVS[0]] = Path(runtime)
+    elif system == "darwin":
+        roots["HBB runtime root"] = home / "Library" / "Application Support" / "hornlab-beat" / "runtime"
+    else:
+        roots["HBB runtime root"] = _data_base(system, env, home) / "hornlab-beat" / "runtime"
+    workers = env.get(HBB_ROOT_ENVS[1], "").strip()
+    if workers:
+        roots[HBB_ROOT_ENVS[1]] = Path(workers)
+    elif system == "win32":
+        roots["HBB worker root"] = _data_base(system, env, home) / "HornLab" / "BEAT" / "workers"
+    else:
+        xdg = env.get("XDG_RUNTIME_DIR", "").strip()
+        if xdg:
+            roots["HBB worker root"] = Path(xdg) / "hornlab-beat"
+        user_id = os.getuid() if uid is None else uid
+        tmp = temp_dir or Path(tempfile.gettempdir())
+        roots["HBB temporary worker root"] = tmp / f"hornlab-beat-{user_id}"
+    return roots
+
+
+def _isolated(
+    root: Path,
+    env: Mapping[str, str],
+    system: str,
+    home: Path,
+    temp_dir: Path | None = None,
+    uid: int | None = None,
+) -> Path:
     resolved = root.expanduser().resolve()
-    for name in HBB_ROOT_ENVS:
-        value = env.get(name, "").strip()
-        if not value:
-            continue
-        legacy = Path(value).expanduser().resolve()
+    for name, legacy_root in _hbb_roots(env, system, home, temp_dir, uid).items():
+        legacy = legacy_root.expanduser().resolve()
         if resolved == legacy or legacy in resolved.parents or resolved in legacy.parents:
-            raise RootConflict(f"{root} overlaps HBB's {name} ({legacy}); choose separate directories")
+            raise RootConflict(f"{root} overlaps {name} ({legacy}); choose separate directories")
     return root
 
 
@@ -50,16 +81,14 @@ def runtime_dir(
 ) -> Path:
     """Root of portable Julia, depot, downloads and provisioning records."""
     env = os.environ if environ is None else environ
+    system = system or sys.platform
+    home = home or Path.home()
     base = env.get(RUNTIME_DIR_ENV)
     if base:
-        return _isolated(Path(base).expanduser() / PROVIDER_ID, env)
-    return _isolated(
-        _data_base(system or sys.platform, env, home or Path.home())
-        / "WaveguideGenerator"
-        / "beat-runtime"
-        / PROVIDER_ID,
-        env,
-    )
+        root = Path(base).expanduser() / PROVIDER_ID
+    else:
+        root = _data_base(system, env, home) / "WaveguideGenerator" / "beat-runtime" / PROVIDER_ID
+    return _isolated(root, env, system, home)
 
 
 def worker_dir(
@@ -68,7 +97,10 @@ def worker_dir(
 ) -> Path:
     """Root of detached host records, locks and endpoints; outside sessions."""
     env = os.environ if environ is None else environ
-    return _isolated(_worker_dir(env, system or sys.platform, home, temp_dir, uid), env)
+    system = system or sys.platform
+    home = home or Path.home()
+    root = _worker_dir(env, system, home, temp_dir, uid)
+    return _isolated(root, env, system, home, temp_dir, uid)
 
 
 def _worker_dir(
