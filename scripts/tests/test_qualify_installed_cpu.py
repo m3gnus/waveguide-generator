@@ -467,7 +467,8 @@ def test_a_failure_writes_a_report_and_exits_non_zero(tmp_path: Path) -> None:
     assert "--payload" in written["error"]
 
 
-def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("system", ("Windows", "Linux", "Darwin"))
+def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str) -> None:
     """Nothing this gate runs may write into the machine it ran on.
 
     The cache redirections are the launchers' own, and on macOS they are not
@@ -478,6 +479,7 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     app = _app_layer(tmp_path)
     work = tmp_path / "work"
 
+    monkeypatch.setattr(gate.platform, "system", lambda: system)
     monkeypatch.setenv("WG2_FUSION_ADDINS_DIR", str(tmp_path / "external-addins"))
     environment = gate.isolated_environment(app, work)
 
@@ -494,6 +496,35 @@ def test_the_isolated_environment_leaves_the_users_directories_alone(tmp_path: P
     # go to the user's default registry and the directory reported as isolated
     # is one nothing ever wrote to.
     assert "HORNLAB_BEAT_WORKER_REGISTRY" not in environment
+    from server.platform.paths import documents_root
+
+    for name in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA"):
+        assert Path(environment[name]).is_relative_to(work)
+    documents = documents_root(system=system, environ=environment, home=environment["HOME"])
+    assert documents.is_relative_to(work)
+    assert documents.parent.is_dir()
+
+
+@pytest.mark.parametrize("system", ("Windows", "Linux"))
+def test_an_already_isolated_startup_workspace_needs_no_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str
+) -> None:
+    work = tmp_path / "work"
+    startup = work / "data" / "workspace"
+    requests = []
+
+    def http(_base, route, *args):
+        requests.append((route, args))
+        assert route == "/api/workspace/path"
+        return {"path": str(startup)}
+
+    monkeypatch.setattr(gate.platform, "system", lambda: system)
+    monkeypatch.setattr(gate, "http", http)
+    report = gate.workspace_isolation("unused", work)
+    assert report["startup_was_isolated"] is True
+    assert report["established_through_the_api"] is False
+    assert report["documents_override"] == ("USERPROFILE" if system == "Windows" else "XDG_DOCUMENTS_DIR")
+    assert len(requests) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1419,15 +1450,7 @@ def test_a_failure_still_cleans_up_and_keeps_what_it_had_established(
 def test_the_workspace_is_moved_into_the_run_before_anything_solves(
     tmp_path: Path, _quick_timeouts: None
 ) -> None:
-    """`--data-dir` is not workspace isolation, and on Windows nothing else is.
-
-    `launch/serve.py` resolves the workspace through `documents_root()`, which
-    honours `XDG_DOCUMENTS_DIR` on POSIX and has no supported override on
-    Windows. So the workspace is selected through the same API the application's
-    own settings use, before the first solve -- a run that wrote a result into
-    somebody's Documents and only then checked would already have done the thing
-    the check exists to prevent.
-    """
+    """An older payload's external default is moved before the first solve."""
 
     payload = _stub_payload(tmp_path)
     output = tmp_path / "out"

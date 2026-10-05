@@ -50,6 +50,7 @@ from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a pack
     QualificationError,
     http,
     isolated_environment,
+    isolated_user_directories,
     resolve_payload,
     wait_for,
 )
@@ -454,6 +455,7 @@ def run_gate(
 
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
+    environment = dict(environment, **isolated_user_directories(work))
     grace = launcher_grace(app)
     report["launcher_grace_seconds"] = grace
     report["memory_ceiling"] = memory_ceiling(interpreter, app, environment)

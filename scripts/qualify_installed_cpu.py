@@ -309,6 +309,26 @@ def resolve_payload(payload: Path) -> tuple[Path, Path, Path]:
     return resources, app, interpreter
 
 
+def isolated_user_directories(work: Path) -> dict[str, str]:
+    """Redirect home and Documents before any packaged interpreter starts."""
+
+    profile = work / "profile"
+    documents = profile / "Documents" if platform.system() == "Windows" else work / "documents"
+    roaming = profile / "AppData" / "Roaming"
+    local = profile / "AppData" / "Local"
+    for directory in (documents, roaming, local):
+        directory.mkdir(parents=True, exist_ok=True)
+    redirected = {
+        "USERPROFILE": str(profile),
+        "HOME": str(profile),
+        "APPDATA": str(roaming),
+        "LOCALAPPDATA": str(local),
+    }
+    if platform.system() != "Windows":
+        redirected["XDG_DOCUMENTS_DIR"] = str(documents)
+    return redirected
+
+
 def isolated_environment(app: Path, work: Path) -> dict[str, str]:
     """The environment the packaged launchers build, pointed at this run's tree.
 
@@ -323,18 +343,16 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
     than the user's, which is stricter than the launcher and leaves the machine
     as it was found. That includes Julia's depot, which nothing else sets: see
     ``JULIA_DEPOT_PATH`` below for what it buys and what it changes.
-    ``XDG_DOCUMENTS_DIR`` moves the default workspace off POSIX hosts; Windows
-    has no supported equivalent, so there the workspace default is recorded
-    rather than silently accepted, and no export is written by this gate.
+    ``USERPROFILE`` moves Documents on Windows; ``XDG_DOCUMENTS_DIR`` and
+    ``HOME`` do so elsewhere. Set these before startup: older payloads may
+    create or repair ACLs on their Documents workspace despite ``--data-dir``.
     """
 
     caches = work / "caches"
-    documents = work / "documents"
     for directory in (
         caches / "pycache",
         caches / "numba",
         caches / "matplotlib",
-        documents,
         work / "julia-depot",
         work / "fusion-addins",
     ):
@@ -371,8 +389,7 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         # containment check below exists because that failure is silent.
         HORNLAB_BEAT_WORKER_DIR=str(work / "beat-registry"),
     )
-    if platform.system() != "Windows":
-        environment["XDG_DOCUMENTS_DIR"] = str(documents)
+    environment.update(isolated_user_directories(work))
     return environment
 
 
@@ -747,22 +764,13 @@ def _inside(candidate: object, parent: Path) -> bool:
 def workspace_isolation(base: str, work: Path) -> dict[str, Any]:
     """Put this run's workspace inside its own tree, before anything solves.
 
-    ``--data-dir`` is not this. ``launch/serve.py`` resolves the workspace
-    through ``documents_root()``, which on POSIX honours ``XDG_DOCUMENTS_DIR``
-    -- set in the environment above -- and on Windows has no supported
-    override at all. So on Windows the startup default really is the user's
-    Documents, and the workspace is moved into this run's tree through the same
-    API the application's own settings use, before the first solve. Asserting
-    that ``WG2_DATA_DIR`` alone isolates the workspace would be false there.
-
-    Called before solving on purpose: a run that wrote its first result into
-    somebody's Documents and only then checked would already have done the
-    thing this exists to prevent.
+    Current payloads isolate through ``--data-dir``; older ones use the private
+    Documents configured before startup. Keep the API fallback for a payload
+    that selects another default, and report whether startup was isolated.
     """
 
-    documents = (work / "documents").resolve()
     before = http(base, "/api/workspace/path")
-    started_inside = _inside(before.get("path"), documents)
+    started_inside = _inside(before.get("path"), work)
     established = False
     if not started_inside:
         target = work / "workspace"
@@ -782,8 +790,7 @@ def workspace_isolation(base: str, work: Path) -> dict[str, Any]:
         "documents_override": (
             "XDG_DOCUMENTS_DIR"
             if platform.system() != "Windows"
-            else "unavailable on Windows; the workspace was selected through the API and "
-            "the startup default above was the user's Documents"
+            else "USERPROFILE"
         ),
     }
 

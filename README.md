@@ -328,6 +328,12 @@ folder can be selected once in **Settings → Workspace**; the path displayed
 there is authoritative. Internal databases, logs, and process locks remain
 under the platform application-data directory; result exports do not.
 
+With `--data-dir` or a non-empty `WG2_DATA_DIR`, the implicit output folder is
+`<data dir>/workspace` instead. A workspace already saved in that data directory
+still takes priority, including one outside it. Existing Documents runs are not
+moved; select their folder in **Settings → Workspace** to see them, or remove the
+override to use the normal default and checkout-output adoption.
+
 The Fusion WGLink exchange folder is configured separately under **Settings →
 CAD Link**. Changing the output folder never moves or disconnects Fusion's
 `.wglink` and `.wgreturn` exchange.

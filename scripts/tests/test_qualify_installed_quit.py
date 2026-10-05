@@ -103,6 +103,7 @@ def test_the_gate_passes_against_this_checkout(tmp_path: Path, monkeypatch: pyte
     environment = {
         name: value for name, value in os.environ.items() if not name.startswith("WG2_")
     }
+    environment["WG2_WGLINK_REFRESH"] = "0"
     report: dict[str, object] = {}
 
     launches = []
@@ -117,6 +118,13 @@ def test_the_gate_passes_against_this_checkout(tmp_path: Path, monkeypatch: pyte
             assert data.is_dir() and addins.is_dir()
             assert data.is_relative_to(tmp_path / "work")
             assert addins.is_relative_to(tmp_path / "work")
+            from server.platform.paths import documents_root
+
+            for name in ("USERPROFILE", "HOME", "APPDATA", "LOCALAPPDATA"):
+                assert Path(child_environment[name]).is_relative_to(tmp_path / "work")
+            assert documents_root(
+                environ=child_environment, home=child_environment["HOME"]
+            ).is_relative_to(tmp_path / "work")
             launches.append(data)
         return original_popen(command, **kwargs)
 
