@@ -2298,6 +2298,7 @@ export function ResultsPanel() {
     [displayable, jobs],
   );
   const openingSelection = useRef(true);
+  const resultsSeenFor = useRef<string | null>(null);
   useEffect(() => {
     // A solve the user started outranks a pinned comparison: the run submitted
     // for it takes the primary slot as soon as its results exist, and only
@@ -2331,6 +2332,11 @@ export function ResultsPanel() {
     // been chosen by hand -- a run belonging to the model family the workspace
     // has just left.
     const held = selection.primary ? jobs.find((job) => job.id === selection.primary) ?? null : null;
+    // Retention that lands while a run is on screen releases it as it always
+    // did; only a run picked after its results were gone is held.
+    // The ref only ever names the run now held: moving to another run forgets it.
+    if (held?.has_results) resultsSeenFor.current = held.id;
+    else if (resultsSeenFor.current !== (held?.id ?? null)) resultsSeenFor.current = null;
     if (
       held
       && (
@@ -2339,12 +2345,15 @@ export function ResultsPanel() {
         // A run picked by hand whose results were cleaned up stays selected:
         // the dock says so, and releasing it would put the latest run back
         // under the card the user just clicked.
-        || (!selection.following && Boolean(held.results_discarded_at))
+        || (!selection.following && Boolean(held.results_discarded_at) && resultsSeenFor.current !== held.id)
       )
       && (!selection.following || (coherenceContext.mode === 'cad'
         ? runDisplayVerdict(held, coherenceContext) === 'current'
         : runMatchesContext(held, coherenceContext) !== 'other-model'))
     ) return;
+    // Released: forget that its results were seen, so a later hand-pick of the
+    // same cleaned-up run is held rather than released again.
+    if (held && !held.has_results && resultsSeenFor.current === held.id) resultsSeenFor.current = null;
     // Opening the app is the one time an out-of-context run is better than an
     // empty dock. A restored CAD project selects its return but does not
     // prepare it, so there is no ingestion yet and every imported run reads as
@@ -2541,7 +2550,7 @@ export function ResultsPanel() {
   }, [dismissedNewRun, latest, primaryJob, selection.primary]);
   const selectedJob = useMemo(() => jobs.find((job) => job.id === display?.primaryId) ?? null, [display?.primaryId, jobs]);
   const cadResultMatchesViewport = coherenceContext.mode !== 'cad'
-    || Boolean(selectedJob && runDisplayVerdict(selectedJob, coherenceContext) === 'current');
+    || Boolean((selectedJob ?? cleanedUpRun) && runDisplayVerdict((selectedJob ?? cleanedUpRun)!, coherenceContext) === 'current');
   useEffect(() => {
     useObservationStore.getState().adopt(cadResultMatchesViewport ? shownRaw : undefined, cadResultMatchesViewport ? shownLabel : null);
   }, [cadResultMatchesViewport, shownLabel, shownRaw]);

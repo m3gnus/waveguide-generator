@@ -140,6 +140,8 @@ export function selectJob(job: JobItem): void {
   // A finished run whose results were cleaned up is still the selected run: the
   // dock says so instead of leaving the previous run's charts under its card.
   if (job.has_results || job.status === 'complete') compareSelection.setPrimary(job.id);
+  // Nothing readable to show for a cleaned-up run: select it, and stop there.
+  if (job.status === 'complete' && !job.has_results && !canLoadDesign(job)) return;
   // Undoable: browsing runs must not be able to discard the working design.
   if (job.config_summary.geometry_type !== 'imported' && !canLoadDesign(job)) return;
   void showJobModel(job);
@@ -249,7 +251,8 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   // A run in flight or one that failed still has to show its progress or its
   // diagnostic; only finished runs collapse down to their name.
   const expanded = selected || running || failed || cancelled || editing;
-  const selectable = !running && (job.has_results || canLoadDesign(job));
+  const cleanedUp = job.status === 'complete' && !job.has_results;
+  const selectable = !running && (job.has_results || cleanedUp || canLoadDesign(job));
   const statusWord = running ? 'Running' : failed ? 'Failed' : cancelled ? 'Cancelled' : 'Completed';
   // Only the mode, never the design revision: this card is one of a rail full
   // of them, and a marker that moved with every keystroke would repaint the
@@ -271,7 +274,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     {logOpen && <LogDialog jobId={job.id} onClose={() => setLogOpen(false)}/>}
     <header>
       {selectable
-        ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}>{heading}</button>
+        ? <button className={`job-select${editing ? ' editing' : ''}`} aria-label={`Select ${displayName}`} aria-pressed={selected} title={selected ? 'Showing this run' : job.has_results ? 'Show this run in the viewport and charts' : cleanedUp ? 'Select this run (its results were cleaned up)' : 'Show this run design in the viewport'} onClick={() => selectJob(job)}>{heading}</button>
         : <span className={`job-select${editing ? ' editing' : ''}`} title={job.error_message ?? job.status}>{heading}</span>}
       {editing ? <input
         className="job-title-input"

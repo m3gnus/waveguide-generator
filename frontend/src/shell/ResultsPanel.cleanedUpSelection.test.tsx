@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { compareSelection, provisionalResults, resultsCache } from '../api/results';
 import { serializeDesign, designForFamily, resetDesignStore, useDesignStore, type DesignDocument } from '../stores/design';
-import { resetCadReturnStore } from '../stores/cadReturn';
+import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetDocumentStore } from '../stores/document';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { preferencesStore } from '../prefs/preferences';
@@ -198,5 +198,92 @@ describe('selecting a run whose results were cleaned up', () => {
     await act(async () => { clickCard('run-3'); await flush(); });
     expect(shownPrimary()).toBe('run-3');
     expect(host.querySelector('.results-panel')?.textContent).not.toMatch(/cleaned up/);
+  });
+
+  it('releases a pinned run whose results are cleaned while it is on screen, so a newer run takes over', async () => {
+    const jobs = await mount();
+    await act(async () => { clickCard('run-2'); await flush(); });
+    expect(shownPrimary()).toBe('run-2');
+
+    // Retention lands on the run being viewed.
+    const cleaned = jobs.map((j) => j.id === 'run-2' ? { ...j, has_results: false, results_discarded_at: '2026-10-05T00:00:00Z' } : j);
+    await act(async () => { socketUpdate(cleaned); await flush(); });
+    // Released, as before: nothing is pinned any more.
+    expect(compareSelection.getSnapshot()).toMatchObject({ following: true });
+    expect(compareSelection.getSnapshot().primary).not.toBe('run-2');
+
+    // A newer run of the model now on screen completes and is shown.
+    const newer = job('run-4', 4, useDesignStore.getState().design);
+    await act(async () => { socketUpdate([newer, ...cleaned]); await flush(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'run-4', following: true });
+    expect(shownPrimary()).toBe('run-4');
+  });
+
+  it('holds a cleaned run the user picks again after retention released it with no newer run to take over', async () => {
+    const designA = designForFamily('OSSE'); designA.L = 111;
+    useDesignStore.setState({ design: designA });
+    const solo = job('solo', 1, designA);
+    publishJobs([solo]);
+    compareSelection.followLatest(null);
+    await act(async () => { root.render(<><ResultsPanel/><JobsPanel/></>); await flush(); });
+    await act(async () => { clickCard('solo'); await flush(); });
+    expect(shownPrimary()).toBe('solo');
+
+    const cleaned = { ...solo, has_results: false, results_discarded_at: '2026-10-05T00:00:00Z' };
+    await act(async () => { socketUpdate([cleaned]); await flush(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ following: true });
+
+    await act(async () => { clickCard('solo'); await flush(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'solo', following: false });
+    expect(host.querySelector('.results-panel')?.textContent).toMatch(/Run #1's results were cleaned up/);
+  });
+
+  it('holds a run picked after retention cleaned it off screen, even though it was shown earlier', async () => {
+    const jobs = await mount();
+    await act(async () => { clickCard('run-2'); await flush(); });
+    expect(shownPrimary()).toBe('run-2');
+    await act(async () => { clickCard('run-1'); await flush(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'run-1', following: false });
+
+    const cleaned = jobs.map((j) => j.id === 'run-2' ? { ...j, has_results: false, results_discarded_at: '2026-10-05T00:00:00Z' } : j);
+    await act(async () => { socketUpdate(cleaned); await flush(); });
+    await act(async () => { clickCard('run-2'); await flush(); });
+    expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'run-2', following: false });
+    expect(host.querySelector('.results-panel')?.textContent).toMatch(/Run #2's results were cleaned up/);
+  });
+
+  it('shows the cleanup message in CAD mode when the cleaned run matches the loaded model', async () => {
+    const cad = job('cad', 5, null, { has_results: false, results_discarded_at: '2026-09-01T00:00:00Z', config_summary: { geometry_type: 'imported' }, cad_source: {
+      ingest_id: 'wgi_cad', design_id: 'wgd_cad', lineage_id: 'wgl_cad', archive_stem: 'cad', manifest_sha256: 'sha256:cad', document_name: 'cad document', return_state_hash: null,
+    } as JobItem['cad_source'] });
+    publishJobs([cad]);
+    useCadReturnStore.setState({ ingestRecord: { ingest_id: 'wgi_cad' } as never });
+    importedMeshStore.setCad({ source: 'cad', ingestId: 'wgi_cad' } as never);
+    workspaceModeStore.setMode('cad');
+    compareSelection.setPrimary('cad');
+    await act(async () => { root.render(<ResultsPanel/>); await flush(); });
+    const text = host.querySelector('.results-panel')?.textContent ?? '';
+    expect(text).toMatch(/Run #5's results were cleaned up/);
+    expect(text).not.toMatch(/Not solved yet/);
+  });
+
+  it('selects cleaned runs whose design cannot be read, without loading anything', async () => {
+    const designA = designForFamily('OSSE'); designA.L = 111;
+    useDesignStore.setState({ design: designA });
+    const legacy = job('legacy', 2, null, { has_results: false, results_discarded_at: '2026-09-01T00:00:00Z' });
+    const imported = job('imported', 1, null, { has_results: false, results_discarded_at: '2026-09-01T00:00:00Z', config_summary: { geometry_type: 'imported' } });
+    publishJobs([job('run-3', 3, designA), legacy, imported]);
+    compareSelection.followLatest(null);
+    await act(async () => { root.render(<><ResultsPanel/><JobsPanel/></>); await flush(); });
+
+    for (const [label, run] of [['legacy', 2], ['imported', 1]] as const) {
+      await act(async () => { clickCard(label); await flush(); });
+      expect(compareSelection.getSnapshot()).toMatchObject({ primary: label, following: false });
+      expect(selectedCard()).toContain(label);
+      expect(host.querySelector('.results-panel')?.textContent).toMatch(new RegExp(`Run #${run}'s results were cleaned up`));
+      expect(useDesignStore.getState().design.L).toBe(111);
+    }
+    await act(async () => { clickCard('legacy'); await flush(); });
+    expect(host.querySelector('.job-card.selected')?.textContent).toMatch(/cannot be reopened or rerun/);
   });
 });
