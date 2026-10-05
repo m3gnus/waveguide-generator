@@ -167,9 +167,20 @@ and a note saying why. The user can still browse anywhere, including back.
   and `/DIR=<the running install>` (`launchers/full_installer.py`), and a silent run
   without `/DIR` keeps the registered folder.
 - **Nothing is deleted.** After an install that landed somewhere else, the old tree
-  stays where it was. The finish page names it and says to delete it by hand, not
-  with its own uninstaller, which would also remove the new install's uninstall key
-  and Start menu shortcut, since both installs share them. A WGLink add-in installed
+  stays where it was. The finish page names it and says to remove it by hand once
+  the app is closed, not with its own uninstaller, which would also remove the new
+  install's uninstall key and Start menu shortcut, since both installs share them.
+  It never says to delete the folder itself: when the folder is a drive root or
+  holds anything besides Waveguide Generator's own entries (the root names
+  `[UninstallDelete]` lists, plus `unins###.exe`/`.dat`), it lists exactly the
+  entries to delete; otherwise it says "the Waveguide Generator files in" it. It
+  also says that an old desktop shortcut (unless this run ticked the desktop task)
+  and any taskbar or Start pin still open the old copy. There is no note when the
+  new folder and the previous one are the same or nested either way, compared as
+  spelled and as `GetFinalPathNameByHandleW` resolves them (8.3 names, SUBST and
+  mapped drives; setup cannot open a junction an unelevated user made, error 448).
+  A Program Files constant that expanded to a bare drive root would not make the
+  whole drive standard. A WGLink add-in installed
   from the old copy keeps pointing there; `install_wglink.py` will not replace a copy
   another root manages, so the note says to delete that add-in folder too and select
   WGLink again.
