@@ -628,7 +628,7 @@ def _probe_devices() -> dict[str, Any]:
             "reason": "No CPU OpenCL device is present. A GPU OpenCL device does not "
                       "substitute: BEMPP is the engine for CPU-only computers and "
                       "does not work well on GPU OpenCL drivers. GPU engines are "
-                      "separate (BEAT · CUDA on NVIDIA, Metal on Apple Silicon).",
+                      "separate (BEAT · CUDA on NVIDIA and BEAT · ROCm on AMD, both not yet qualified; Metal on Apple Silicon).",
         }
     failures = []
     diagnostics = []

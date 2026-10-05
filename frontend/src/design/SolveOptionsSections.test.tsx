@@ -555,7 +555,7 @@ describe('solve and directivity control help', () => {
       expect(accurateText).toContain('normal-derivative equation');
       expect(accurateText).toContain('without adding damping');
       expect(accurateText).toContain(accurate);
-      expect(accurateText).toContain('several times slower');
+      expect(accurateText).toContain('usually slower than Fast');
       expect(accurateText).toContain('first solve waits while BEAT starts up');
       expect(when).toBe('When to pick Accurate: sheltered chambers or cavities driven near their resonance.');
       expect(measured).toContain('both modes placed resonances at the same frequencies');
