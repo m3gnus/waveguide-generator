@@ -72,8 +72,12 @@ def test_finish_notice_is_silent_safe_and_preserves_wglink_outcome(script: str) 
     assert "if WgLinkStatus <> '' then" in finish
     assert "'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;" in finish
     # Guidance is outside the WGLink condition: even no outcome must get it.
-    assert "WgLinkStatus;\n  OpenClNotice.Text := WizardForm.FinishedLabel.Caption +" in finish
+    # Only a positive detection replaces the install advice; the default
+    # branch is the full generated guidance.
+    assert "WgLinkStatus;\n  { Hide the install advice" in finish
+    assert "if CpuOpenClRuntimeRegistered() then" in finish
     assert "OpenClGuidanceTitle + #13#10 + OpenClGuidanceText;" in finish
+    assert finish.index("  else\n    OpenClNotice.Text") > finish.index("CpuOpenClRuntimeRegistered()")
     assert "WizardForm.FinishedLabel.Visible := False;" in finish
     assert "WizardForm.RunList.Height := ScaleY(28);" in finish
     assert "WizardForm.RunList.Top := OpenClHelpButton.Top - WizardForm.RunList.Height - ScaleY(8);" in finish
@@ -94,3 +98,13 @@ def test_help_opens_only_on_click_and_never_blocks_installation(script: str) -> 
     # No extra [Run] action: silent installs and Finish never launch help.
     run = script.split("\n[Run]\n", 1)[1].split("\n[UninstallDelete]", 1)[0]
     assert "opencl" not in run.lower()
+
+
+def test_runtime_detection_is_conservative(script: str) -> None:
+    detect = body(script, "function CpuOpenClRuntimeRegistered(): Boolean;")
+    # Only an enabled, existing Intel CPU runtime ICD hides the advice.
+    assert "Khronos" in detect and "OpenCL" in detect and "Vendors" in detect
+    assert "'intelocl64.dll'" in detect and "FileExists(Dll)" in detect
+    assert "(Disabled <> 0)" in detect
+    # The default is "not found", so any doubt shows the full guidance.
+    assert detect.split("begin\n", 1)[1].startswith("  Result := False;")

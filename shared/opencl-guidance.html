@@ -16,7 +16,7 @@
   <p>On computers without a supported graphics-card solver, WG&#x27;s BEMPP solver runs on the CPU. Installing a CPU OpenCL runtime makes it much faster. It still works without one, more slowly.</p>
   <p>On a computer with an NVIDIA graphics card, choose WG&#x27;s BEAT solver with CUDA instead of BEMPP. BEMPP is for computers without a supported graphics card.</p>
   <ul>
-    <li><a href="https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html">Intel CPU OpenCL runtime</a><p>Intel&#x27;s CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. If no OpenCL device works, WG falls back to its slower numba engine.</p></li>
+    <li><a href="https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html">Intel CPU OpenCL runtime</a><p>Intel&#x27;s CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. Installing it needs administrator rights, which WG itself does not. If no OpenCL device works, WG falls back to its slower numba engine.</p></li>
   </ul>
   <p>PoCL on Windows shows up as an OpenCL device but computes nothing, so installing it does not help.</p>
 </body>

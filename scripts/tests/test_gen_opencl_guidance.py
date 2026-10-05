@@ -161,7 +161,7 @@ def test_versioned_contract_and_cpu_runtime_content() -> None:
         "vendor": "intel",
         "label": "Intel CPU OpenCL runtime",
         "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html",
-        "note": "Intel's CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. If no OpenCL device works, WG falls back to its slower numba engine.",
+        "note": "Intel's CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. Installing it needs administrator rights, which WG itself does not. If no OpenCL device works, WG falls back to its slower numba engine.",
     }
     for platform in guidance["platforms"].values():
         assert set(platform) == {"summary", "steps"}
@@ -504,7 +504,9 @@ APPROVED_GUIDANCE = {'version': 1,
                                       'url': 'https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html',
                                       'note': "Intel's CPU runtime officially supports Intel "
                                               'processors; it has also worked on AMD processors in '
-                                              'our testing. If no OpenCL device works, WG falls '
+                                              'our testing. Installing it needs administrator '
+                                              'rights, which WG itself does not. If no OpenCL '
+                                              'device works, WG falls '
                                               'back to its slower numba engine.'}]},
                'linux': {'summary': "On computers without a supported graphics-card solver, WG's "
                                     'BEMPP solver runs on the CPU. Installing a CPU OpenCL runtime '

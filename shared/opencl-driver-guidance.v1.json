@@ -37,7 +37,7 @@
           "vendor": "intel",
           "label": "Intel CPU OpenCL runtime",
           "url": "https://www.intel.com/content/www/us/en/developer/articles/technical/intel-cpu-runtime-for-opencl-applications-with-sycl-support.html",
-          "note": "Intel's CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. If no OpenCL device works, WG falls back to its slower numba engine."
+          "note": "Intel's CPU runtime officially supports Intel processors; it has also worked on AMD processors in our testing. Installing it needs administrator rights, which WG itself does not. If no OpenCL device works, WG falls back to its slower numba engine."
         }
       ]
     },
