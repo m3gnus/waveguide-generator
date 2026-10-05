@@ -6,8 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from server.integration import installed
-from server.mesh import builder, identity
+from server.integration import installed, mesher_identity as identity
+from server.mesh import builder
 from server.preview import core
 from test_mesh_builder import _tiny_design
 from test_preview_ws_protocol import _small_geometry

@@ -31,7 +31,7 @@ from server.mesh.imported import (
     verify_artifact_reduced_orientation,
 )
 from server.mesh.artifact import mesh_text_sha256
-from server.mesh.identity import mesher_identity
+from server.integration.mesher_identity import mesher_identity
 from server.platform.paths import data_paths
 from server.platform.staging import publish_staging_directory
 from server.solver.imported import imported_domain_planes

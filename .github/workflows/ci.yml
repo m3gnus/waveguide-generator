@@ -377,6 +377,7 @@ jobs:
           python - <<'PY'
           import json
           import pyopencl as cl
+          from server.platform.temp_session import TemporarySession
           from server.solver.bempp_opencl import qualified_opencl
 
           for platform in cl.get_platforms():
@@ -384,10 +385,15 @@ jobs:
                                 "devices": [{"name": device.name, "driver": device.driver_version,
                                              "version": device.version, "type": int(device.type)}
                                             for device in platform.get_devices()]}, sort_keys=True))
-          verdict = qualified_opencl()
-          print(json.dumps(verdict, sort_keys=True))
-          if not verdict.get("ok") or verdict.get("device", {}).get("type") != "cpu":
-              raise SystemExit("The pinned CPU OpenCL runtime failed WG's real compute qualification")
+          session = TemporarySession.create()
+          session.activate()
+          try:
+              verdict = qualified_opencl()
+              print(json.dumps(verdict, sort_keys=True))
+              if not verdict.get("ok") or verdict.get("device", {}).get("type") != "cpu":
+                  raise SystemExit("The pinned CPU OpenCL runtime failed WG's real compute qualification")
+          finally:
+              session.close(remove=True)
           PY
       - name: ${{ matrix.label }} tests
         # -v, not -q: Linux has been dying mid-run with exit 141 (SIGPIPE) and

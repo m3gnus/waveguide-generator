@@ -129,6 +129,20 @@ def test_a_build_runs_in_another_process_and_the_child_is_reused(host) -> None:
     asyncio.run(scenario())
 
 
+def test_an_export_function_loads_on_submission_to_a_cold_child(host) -> None:
+    from server.exports.core import binary_stl
+
+    # The child does not preload exports: unpickling the submitted callable
+    # must import its module and return its artifact normally.
+    result = asyncio.run(host.run(
+        binary_stl, [0, 0, 0, 0.001, 0, 0, 0, 0.001, 0], [0, 1, 2], [1], "cold child",
+    ))
+    assert result == binary_stl(
+        [0, 0, 0, 0.001, 0, 0, 0, 0.001, 0], [0, 1, 2], [1], "cold child",
+    )
+    assert len(result) == 84 + 50
+
+
 @pytest.mark.parametrize(
     "crash",
     [

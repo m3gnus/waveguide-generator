@@ -143,7 +143,6 @@ def _warm_this_process() -> None:
     import meshio  # noqa: F401 - parsing a build's artifact needs it
 
     import server.mesh.builder  # noqa: F401
-    import server.exports.core  # noqa: F401
 
 
 def _error_payload(request_id: int, exc: BaseException) -> tuple[Any, ...]:

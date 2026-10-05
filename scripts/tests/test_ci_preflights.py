@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -268,6 +269,45 @@ def test_ci_compiles_the_windows_installer_script_on_every_run() -> None:
     assert "stub-setup.exe" in stub
     # Compile only: the produced setup is never started.
     assert "Start-Process" not in stub and "Invoke-Item" not in stub
+
+
+@pytest.mark.parametrize("outcome", ["cpu", "gpu", "unavailable", "exception"])
+def test_ci_opencl_qualification_owns_and_cleans_a_session(monkeypatch, tmp_path, outcome):
+    from server.platform import temp_session
+    from server.solver import bempp_opencl
+
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    step = next(step for step in workflow["jobs"]["server"]["steps"]
+                if step.get("name") == "Install the pinned CPU OpenCL runtime for the CAD pipeline")
+    program = step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    monkeypatch.setitem(sys.modules, "pyopencl", SimpleNamespace(get_platforms=lambda: []))
+    monkeypatch.setattr(temp_session.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    sessions = []
+
+    def qualify():
+        # Exercise the probe's required-directory contract at the actual CI call.
+        root = Path(temp_session.spawned_directory_root(required=True))
+        assert (root / temp_session.OWNER_LOCK_NAME).is_file()
+        sessions.append(root)
+        if outcome == "exception":
+            raise RuntimeError("qualification failed")
+        return {"ok": outcome != "unavailable", "device": {"type": outcome}}
+
+    monkeypatch.setattr(bempp_opencl, "qualified_opencl", qualify)
+    if outcome == "cpu":
+        exec(compile(program, ".github/workflows/ci.yml", "exec"), {})
+    elif outcome == "exception":
+        with pytest.raises(RuntimeError, match="qualification failed"):
+            exec(compile(program, ".github/workflows/ci.yml", "exec"), {})
+    else:
+        with pytest.raises(SystemExit, match="failed WG's real compute qualification"):
+            exec(compile(program, ".github/workflows/ci.yml", "exec"), {})
+    assert len(sessions) == 1
+    assert not sessions[0].exists()
+    assert temp_session.temporary_directory_root() is None
+    assert not list(tmp_path.iterdir())
 
 
 def test_inno_compile_stub_supplies_every_required_payload_source() -> None:

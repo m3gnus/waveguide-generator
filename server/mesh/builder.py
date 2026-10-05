@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from server.design.schema import DesignConfig, Expr
+from server.integration.mesher_identity import mesher_identity
 from server.platform.memory import PhysicalMemory, physical_memory
 from server.platform.temp_session import spawned_directory_root
 from server.preview.translate import design_to_mesher_config
@@ -39,7 +40,6 @@ from server.contracts.geometry import (
 
 from .cache import SolverMeshArtifactCache, SolverMeshCacheInfo
 from .child import run_mesh_build
-from .identity import mesher_identity
 from .integrity import (
     mesh_element_quality_report,
     mesh_integrity_report,

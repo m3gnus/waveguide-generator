@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from server.design.migrate import apply_migrations
 from server.design.schema import DesignConfig
-from server.mesh.identity import mesher_identity
+from server.integration.mesher_identity import mesher_identity
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES, FrameError, encode
 from server.preview.translate import design_to_mesher_config
 
