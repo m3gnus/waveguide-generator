@@ -333,7 +333,11 @@ def _poll_and_drain(
 def _worker_death_error(
     process: multiprocessing.process.BaseProcess | None, stderr: _WorkerStderr | None
 ) -> BemppWorkerError:
-    """Describe a worker that stopped without a result. Blocks briefly; call off-loop."""
+    """Describe a worker that stopped without a result. Blocks briefly; call off-loop.
+
+    Reaps the worker to read its exit status, so a caller must have remembered
+    its process group first (``BemppProcessHost._remember_process_group``).
+    """
 
     exitcode: int | None = None
     if process is not None:
@@ -554,6 +558,8 @@ class BemppProcessHost:
         self._job: Any = None
         #: The worker's redirected stderr; None when it could not be set up.
         self._stderr: _WorkerStderr | None = None
+        #: The worker's POSIX process group, resolved while it was unreaped.
+        self._group: int | None = None
         self._warm_requested = False
         self._state_lock = threading.Lock()
 
@@ -609,6 +615,7 @@ class BemppProcessHost:
         process, self._process = self._process, None
         job, self._job = self._job, None
         stderr, self._stderr = self._stderr, None
+        remembered_group, self._group = self._group, None
         self._warm_requested = False
         if connection is not None:
             try:
@@ -624,8 +631,11 @@ class BemppProcessHost:
             return
         # Resolve the group while the child is still reapable: once it has been
         # joined, ``getpgid`` can no longer find it and the workers would be
-        # unreachable.
-        group = resolve_process_group(process.pid) if job is None and process.pid else None
+        # unreachable. A worker that died mid-solve has already been reaped
+        # (to read its exit status), so its group was remembered before that.
+        group = remembered_group
+        if group is None and job is None and process.pid:
+            group = resolve_process_group(process.pid)
         if process.is_alive():
             process.terminate()
             process.join(_JOIN_SECONDS)
@@ -644,6 +654,27 @@ class BemppProcessHost:
             process.join()
         if stderr is not None:
             stderr.discard()
+
+    def _remember_process_group(
+        self, process: multiprocessing.process.BaseProcess | None
+    ) -> None:
+        """Resolve the worker's POSIX process group now, while it is unreaped.
+
+        Anything that reaps the worker -- ``is_alive()`` on a dead one, or the
+        ``join()`` that reads a crashed worker's exit status -- makes
+        ``getpgid`` fail for it, and ``_terminate_sync`` would then skip the
+        group kill and leave a split sweep's workers running. Call before
+        either. Windows needs nothing: its job object holds the tree.
+        """
+
+        if (
+            self._group is None
+            and self._job is None
+            and process is not None
+            and process is self._process
+            and process.pid
+        ):
+            self._group = resolve_process_group(process.pid)
 
     def _prewarm_locked(self) -> None:
         """Start the worker and queue its warmup.  Caller holds ``_state_lock``.
@@ -770,11 +801,14 @@ class BemppProcessHost:
             try:
                 await asyncio.to_thread(connection.send, (job_id, payload))
             except (EOFError, BrokenPipeError, OSError) as exc:
+                self._remember_process_group(process)
                 raise await asyncio.to_thread(
                     _worker_death_error, process, stderr
                 ) from exc
             while True:
                 cancel_cb()
+                # Before ``is_alive()``, which reaps a dead worker.
+                self._remember_process_group(process)
                 if process is None or not process.is_alive():
                     raise await asyncio.to_thread(_worker_death_error, process, stderr)
                 try:
@@ -782,6 +816,8 @@ class BemppProcessHost:
                 except (EOFError, BrokenPipeError, OSError) as exc:
                     # A native crash closes the pipe without a word; the
                     # exception's own text is empty. Say what stopped and why.
+                    # The group first: reading the exit status reaps the worker.
+                    self._remember_process_group(process)
                     raise await asyncio.to_thread(
                         _worker_death_error, process, stderr
                     ) from exc
