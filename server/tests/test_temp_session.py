@@ -352,6 +352,33 @@ def test_beats_worker_registry_stays_where_the_next_launch_looks(
     assert not during.is_relative_to(session.path)
 
 
+def test_official_registry_and_worker_roots_survive_session_sweep(tmp_path, monkeypatch):
+    from server.solver.beat_runtime import paths, registry
+    from server.solver.beat_runtime.ipc import Endpoint
+
+    monkeypatch.setenv(paths.WORKER_DIR_ENV, str(tmp_path / "workers"))
+    monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "runtime"))
+    before = paths.worker_dir()
+    session = TemporarySession.create(tmp_path)
+    session.activate()
+    try:
+        assert paths.worker_dir() == before
+        assert not before.is_relative_to(session.path)
+        assert not paths.runtime_dir().is_relative_to(session.path)
+        key = registry.host_key({"backend": "cpu"})
+        record = registry.HostRecord(key, os.getpid(), registry.new_token(), Endpoint("tcp", port=12345))
+        record_path = registry.write_record(record)
+        contents = record_path.read_bytes()
+        (session.path / "abandoned-request.json").write_text("{}")
+    finally:
+        session.close(remove=False)
+    removed = sweep_stale_temporary_directories(tmp_path, now=time.time() + 120)
+    assert session.path in removed
+    assert not session.path.exists()
+    assert record_path.read_bytes() == contents
+    assert registry.read_record(record.identifier) == record
+
+
 def test_a_creator_waits_out_a_sweep_testing_its_new_lock(tmp_path: Path) -> None:
     """Two starts at once: one's sweep may hold the other's fresh lock for an instant."""
 

@@ -19,3 +19,8 @@ def official_selected(environ: Mapping[str, str] | None = None) -> bool:
         _warned_values.add(value)
         log.warning("Unknown %s=%r; using the default HBB provider", PROVIDER_ENV, value)
     return value == "official"
+
+
+# One selector for every hook: lifecycle callers (warm-up, Quit, qualifier)
+# use this name, readiness and provisioning use official_selected.
+official_provider_enabled = official_selected

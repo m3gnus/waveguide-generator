@@ -659,6 +659,10 @@ def create_app(
         running until the host's idle timeout. Import and cleanup run on a
         daemon thread: an executor thread would still be joined at Python
         exit even if an async timeout had already expired.
+
+        The explicit official provider instead closes its process-default
+        manager for good: idle hosts detach, active sessions retire their
+        engine, and child mode terminates. Host idle exit has its own timeout.
         """
 
         log = logging.getLogger("wg.solver.warmup")
@@ -687,9 +691,18 @@ def create_app(
 
         def stop_workers() -> None:
             try:
-                from hornlab_beat_bem import shutdown_workers
+                from .solver.beat_runtime.provider import official_provider_enabled
 
-                shutdown_workers()
+                if official_provider_enabled():
+                    from .solver.beat_runtime.manager import get_manager
+
+                    # Final Quit closes admission for good. Ordinary session
+                    # cleanup and completed warm-up must never detach the manager.
+                    get_manager().detach()
+                else:
+                    from hornlab_beat_bem import shutdown_workers
+
+                    shutdown_workers()
             except Exception:
                 log.warning("BEAT worker shutdown failed; continuing exit", exc_info=True)
             finally:

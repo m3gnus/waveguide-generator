@@ -4,6 +4,8 @@ import json
 import os
 import socket
 import struct
+import threading
+import time
 
 import pytest
 
@@ -45,6 +47,58 @@ def test_send_and_receive_unicode_frames():
     with sender, receiver:
         ipc.send_frame(sender, {"message": "λ"})
         assert ipc.receive_frame(receiver) == {"message": "λ"}
+
+
+@pytest.mark.parametrize("prefix", [b"", b"\x00", frame(b'{"a":1}')[:6]])
+def test_cancellation_interrupts_silent_and_partial_frames(prefix):
+    sender, receiver = socket.socketpair()
+    cancel, reading = threading.Event(), threading.Event()
+    errors = []
+
+    def cancelled():
+        reading.set()
+        return cancel.is_set()
+
+    def receive():
+        try:
+            ipc.receive_frame(receiver, deadline=time.monotonic() + 10, cancelled=cancelled)
+        except ConnectionAbortedError as exc:
+            errors.append(exc)
+
+    with sender, receiver:
+        sender.sendall(prefix)
+        thread = threading.Thread(target=receive, daemon=True)
+        thread.start()
+        try:
+            assert reading.wait(1)
+            started = time.monotonic()
+            cancel.set()
+            thread.join(0.5)
+            assert not thread.is_alive() and len(errors) == 1
+            assert time.monotonic() - started < 0.5
+        finally:
+            cancel.set()
+            thread.join(1)
+
+
+def test_poll_timeout_preserves_partial_frame_and_original_deadline():
+    class Peer(FragmentedPeer):
+        timeouts = 0
+
+        def settimeout(self, seconds):
+            assert 0 < seconds <= 0.05
+
+        def recv(self, count):
+            self.timeouts += 1
+            if self.timeouts in {2, 7}:
+                raise TimeoutError
+            return super().recv(count)
+
+    assert ipc.receive_frame(Peer(frame(b'{"a":1}')), deadline=time.monotonic() + 1,
+                             cancelled=lambda: False) == {"a": 1}
+    sender, receiver = socket.socketpair()
+    with sender, receiver, pytest.raises(TimeoutError, match="deadline"):
+        ipc.receive_frame(receiver, deadline=time.monotonic() + 0.05, cancelled=lambda: False)
 
 
 def test_send_rejects_nonobject_nonfinite_and_oversize(monkeypatch):

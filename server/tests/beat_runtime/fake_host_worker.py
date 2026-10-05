@@ -67,12 +67,19 @@ class EngineWorker:
                           "engine": {"name": "BEAT Engine", "version": "fixture"},
                           "operations": ["solve", "bem_field"],
                           "request_transports": ["file", "inline_json"]}
+            if self.environment.get("TEST_COMPILED"):
+                from server.tests.beat_runtime.test_probe import WORKER_INFO
+                self._info = copy.deepcopy(WORKER_INFO)
             self.log("started")
 
     def submit(self, request, **kwargs):
         request = json.loads(request.read_text()) if isinstance(request, Path) else request
+        if "compiled_system" in request:
+            request = dict(request, name="compiled probe")
+            if self.environment.get("TEST_PROBE_GATE"):
+                request["release_path"] = self.environment["TEST_PROBE_GATE"]
         self.ensure_started(**kwargs)
-        self.log("submitted", name=request["name"], operation=kwargs["operation"], request=request)
+        self.log("submitted", name=request["name"], operation=kwargs.get("operation", "solve"), request=request)
         self._stream = _Stream(self, request)
         return self._stream
 
@@ -89,6 +96,9 @@ class _Stream:
             raise StopIteration
         if self.first:
             self.first = False
+            if "compiled_system" in self.request:
+                from server.tests.beat_runtime.test_probe import result
+                return result(backend=self.request["solver_options"]["bem_backend"])
             return {"type": "result", "name": self.request["name"],
                     "payload": "x" * self.request.get("payload_size", 0)}
         gate = self.request.get("release_path")
@@ -113,6 +123,9 @@ class _Stream:
             raise LookupError("fixture unexpected retirement failure")
         if not self.terminal and self.request.get("close_hang"):
             threading.Event().wait()
+        if not self.terminal and "compiled_system" in self.request:
+            # Model the official closeable stream retiring abandoned Julia.
+            self.worker.terminate()
         self.closed.set()
 
 

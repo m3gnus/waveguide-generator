@@ -79,7 +79,8 @@ class _RemoteStream:
                 # Each heartbeat/progress frame renews liveness; solve duration
                 # has no fixed deadline. Allocation stays bounded by IPC policy.
                 frame = receive_frame(self.connection, max_bytes=MAX_FRAME_BYTES,
-                                      deadline=time.monotonic() + HEARTBEAT_TIMEOUT)
+                                      deadline=time.monotonic() + HEARTBEAT_TIMEOUT,
+                                      cancelled=lambda: self.closed)
                 if frame is None:
                     raise HostError("BEAT host disconnected before job completion")
                 kind = frame.get("type")

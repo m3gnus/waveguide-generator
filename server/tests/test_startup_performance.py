@@ -284,6 +284,83 @@ def _beat_quit_hook(application: Any) -> Any:
     )
 
 
+@pytest.mark.parametrize("provider", [None, "hbb", "Official", "official"])
+def test_beat_lifecycle_provider_is_explicit_and_default_off(monkeypatch, tmp_path, provider):
+    import server.app as app_module
+    from server.solver import warmup
+    from server.solver.beat_runtime import manager, warmup as official_warmup
+
+    static = tmp_path / "static"
+    static.mkdir()
+    monkeypatch.setattr(app_module, "FRONTEND_DIST", static)
+
+    if provider is None:
+        monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("WG2_BEAT_PROVIDER", provider)
+    called = []
+    package = types.ModuleType("hornlab_beat_bem")
+    package.warm_up = lambda **kwargs: called.append(("hbb warm", kwargs))
+    package.shutdown_workers = lambda: called.append("hbb quit")
+    monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
+    monkeypatch.setattr(official_warmup, "warm_up", lambda **kwargs: called.append(("official warm", kwargs)))
+    monkeypatch.setattr(manager, "get_manager", lambda: types.SimpleNamespace(detach=lambda: called.append("official quit")))
+    warmup._warm_beat("metal")
+    application = create_app(data_dir=tmp_path)
+
+    async def prewarm():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            called.append("prewarm cancelled")
+
+    async def quit_app():
+        application.state.beat_prewarm_task = asyncio.create_task(prewarm())
+        await asyncio.sleep(0)
+        await _beat_quit_hook(application)()
+        assert application.state.beat_prewarm_task.cancelled()
+
+    asyncio.run(quit_app())
+    if provider == "official":
+        assert called == [("official warm", {"beat_backend": "metal", "mode": "tiny"}),
+                          "prewarm cancelled", "official quit"]
+    else:
+        from server.solver.beat_threads import beat_julia_threads
+        assert called == [("hbb warm", {"beat_backend": "metal", "mode": "tiny",
+                                     "julia_threads": beat_julia_threads("metal")}),
+                          "prewarm cancelled", "hbb quit"]
+
+
+def test_official_quit_bounds_a_stuck_detach(monkeypatch, tmp_path, caplog):
+    import server.app as app_module
+    from server.solver.beat_runtime import manager
+
+    static = tmp_path / "static"
+    static.mkdir()
+    monkeypatch.setattr(app_module, "FRONTEND_DIST", static)
+
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    monkeypatch.setattr(app_module, "_BEAT_SHUTDOWN_TIMEOUT_SECONDS", 0.05)
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def detach():
+        entered.set()
+        release.wait(2)
+        finished.set()
+
+    monkeypatch.setattr(manager, "get_manager", lambda: types.SimpleNamespace(detach=detach))
+    application = create_app(data_dir=tmp_path)
+    started = time.monotonic()
+    try:
+        asyncio.run(_beat_quit_hook(application)())
+        assert entered.is_set()
+        assert time.monotonic() - started < 0.5
+        assert "BEAT worker shutdown timed out" in caplog.text
+    finally:
+        release.set()
+        assert finished.wait(2)
+
+
 def test_quitting_stops_the_beat_worker_after_cancelling_prewarm(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

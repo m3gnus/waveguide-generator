@@ -1520,3 +1520,91 @@ proof during Metal setup. Official status is diagnostic until later solve
 adapter slices; cross-process invalidation uses existing file stamps rather
 than a watcher/thread or new dependency. All requested fixes are implemented;
 missing beat_adapter directories prevent only the exact combined checks.
+- **PR 21a — selected-provider warm-up:**
+  `server/solver/beat_runtime/{provider,warmup}.py`;
+  `server/solver/warmup.py`; warm-up/reuse/mode tests in
+  `server/tests/beat_runtime/test_warmup.py` and selector tests in
+  `server/tests/test_startup_performance.py`; compiled-engine support in
+  `server/tests/beat_runtime/fake_host_worker.py`; this `CHANGES.md`.
+  Only exact `WG2_BEAT_PROVIDER=official` enables the new hooks. Missing,
+  legacy and differently cased values preserve the existing HBB tiny warm-up
+  arguments and shutdown call. Official `off/worker/tiny` uses the process
+  default manager (or an explicit injected manager), with identical backend,
+  default key options and resolved integer thread policy to the prototype solve.
+  Tiny warm-up adapts the existing compiled numerical probe to SolveSession;
+  staged paths, negotiation metadata, cancellation and stream cleanup stay WG
+  owned. No readiness module or engine-specific application behavior is needed.
+  CPU/Metal fake-host tests prove warm-up and a following managed submission
+  retain the same host, worker instance and one engine-start event.
+- **PR 21b — final Quit and interruptible detach:** `server/app.py`;
+  `server/solver/beat_runtime/{client,ipc}.py`; Quit/timeout tests in
+  `server/tests/{test_startup_performance,beat_runtime/test_warmup}.py`;
+  cancellation framing tests in `server/tests/beat_runtime/test_ipc.py`;
+  the same compiled fake engine support; this `CHANGES.md`.
+  Cancel/await the prewarm task within the existing five-second deadline,
+  then run final manager.detach on the existing daemon cleanup thread. Idle
+  hosted workers retain their independent host idle timeout; active sessions
+  retire their engine, and child mode terminates. Admission stays closed after
+  Quit, including cached clients. Completed warm-up and ordinary solve-session
+  cleanup never close the manager. WG's normal new lifetime is a fresh server
+  process; explicit in-process callers must construct a fresh WorkerManager,
+  as in PR 20. The process default is never silently reopened.
+  Integration tests exposed a closed socket's reader still waiting for the
+  ten-second heartbeat deadline. An optional cancellation callback now polls
+  streamed receives at 50 ms, preserving partial frame bytes and the original
+  deadline. Ordinary control reads retain their existing behavior. Tests cover
+  silent/partial headers and bodies, timeout continuation, the overall deadline,
+  Quit during tiny warm-up/solve in both modes, idle host exit, and bounded
+  app detachment even when a teardown function never returns.
+- **PR 21c — session sweep and installed registry inspection:**
+  `server/solver/beat_runtime/inspection.py`; `scripts/qualify_installed_cpu.py`;
+  `server/tests/beat_runtime/test_inspection.py`; `server/tests/test_temp_session.py`;
+  `scripts/tests/test_qualify_installed_cpu.py`; this `CHANGES.md`.
+  The qualifier isolates WG runtime/worker override bases only under the same
+  exact official selector. Its packaged-interpreter probe imports the installed
+  app root, derives the provider child from paths.PROVIDER_ID, and refuses to
+  inspect any registry other than paths.worker_dir(). Existing records undergo
+  HMAC hello/client admission and host-PID confirmation via adopt without engine
+  startup. Stop uses authenticated cleanup_host, never PID signalling, with
+  changed/foreign/unverifiable records retained and reported as qualification
+  failures. Tests prove another session's directory stays untouched, bad tokens
+  and providers cannot stop a live host, missing roots are not created, and
+  official records survive a swept WG session. No temp-session production code
+  needed changing: paths already keeps runtime/worker roots outside sessions.
+
+PR 21 subdivisions are review slices of the requested design row. The target
+is official JWSound/BEAT_Engine; no pin, requirement, numerical implementation,
+production solve route, readiness integration or CUDA/ROCm behavior changes.
+Reusing compiled_probe avoids another miniature request/result implementation.
+The client/IPC correction is the only extra mechanism change: required to make
+concurrent Quit release the actual reader within the shutdown budget. Host idle
+exit remains separate from the official engine's numerical-cache reclamation.
+
+PR 21 validation (requested Python, unpiped, each below two minutes):
+- `scripts/run_tests.py server/tests/beat_runtime server/tests/test_solver_beat.py
+  -q -p no:cacheprovider`: **905 passed in 95.23 s**.
+- `scripts/run_tests.py server/tests/test_temp_session.py
+  server/tests/test_official_beat_bridge.py server/tests/test_startup_performance.py
+  server/tests/beat_runtime/test_warmup.py -q -p no:cacheprovider`:
+  **161 passed, 1 skipped in 10.54 s**. The existing optional installed-contract
+  test skips because beat_engine is absent. New app-hook tests use tmp_path
+  static roots. Existing app tests temporarily read the already-built frontend
+  from the main WG checkout; the worktree symlink was removed after checks.
+- `scripts/run_tests.py scripts/tests/test_qualify_installed_cpu.py
+  scripts/tests/test_qualify_installed_quit.py -m 'not slow' -q -p no:cacheprovider`:
+  **224 passed, 1 deselected in 19.35 s**. Excluded
+  `test_the_gate_passes_against_this_checkout`: its real-app parked-mesher
+  Quit/relaunch run needs built app assets and is outside this fake/light gate.
+  No other scripts/tests ran.
+- Ruff passed on runtime sources/tests and every other changed Python file;
+  `git diff --check` passed. The exact requested combined pytest and Ruff
+  commands were attempted but the beat_adapter source/test directories are
+  absent in this branch, so the available runtime/solver targets ran instead.
+
+These slices add 27 fake/temporary-directory regression cases. The reader
+correction also passed a repeated Quit stress group: 90 passed in 14.61 s
+before removing the temporary repeated parameters and diagnostics. No Julia,
+downloads, frontend build, real user/HBB-directory writes or full WG suite ran.
+All requested PR 21 work is complete and uncommitted. Exact adapter checks and
+real installed/Julia/Windows Job Object qualification remain unavailable or
+outside this row's fake-worker gate; no engine PID API is assumed.
