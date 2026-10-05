@@ -2082,6 +2082,57 @@ def stage_recovery_helper(
 
 JOBS_RESTORE_MAX_AGE_S = 60 * 60
 
+#: Diagnostic only: every start rewrites it, including the upgrade itself, so
+#: comparing it would veto every restore. Restoring the older row is harmless.
+JOBS_RESTORE_IGNORED_TABLES = frozenset({"wg_install_provenance"})
+
+
+def _jobs_table_columns(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    tables = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+    ).fetchall()
+    return {
+        name: [str(column[1]) for column in conn.execute(f'PRAGMA table_info("{name}")')]
+        for (name,) in tables
+        if name not in JOBS_RESTORE_IGNORED_TABLES
+    }
+
+
+def _jobs_row_digests(conn: sqlite3.Connection, table: str, columns: Sequence[str]) -> list[bytes]:
+    """The table's rows as a sorted multiset of digests: bounded memory, any order."""
+
+    selected = ", ".join(f'"{column}"' for column in columns)
+    return sorted(
+        hashlib.sha256(repr(tuple(row)).encode("utf-8")).digest()
+        for row in conn.execute(f'SELECT {selected} FROM "{table}"')
+    )
+
+
+def jobs_changed_since_snapshot(snapshot: sqlite3.Connection, live: sqlite3.Connection) -> str | None:
+    """Why the live jobs DB holds anything the snapshot does not, or None.
+
+    Fails safe: every table the snapshot has must hold exactly the same rows
+    (all columns, so deletions, writes that leave ``updated_at`` alone and
+    events all count); a column the upgrade added must still be empty, and a
+    table it added must have no rows. Startup recovery writes therefore veto
+    too, which only sends the user to the manual procedure.
+    """
+
+    before, after = _jobs_table_columns(snapshot), _jobs_table_columns(live)
+    for table, columns in before.items():
+        if table not in after:
+            return f"table {table} is missing"
+        added = [column for column in after[table] if column not in columns]
+        if any(live.execute(f'SELECT 1 FROM "{table}" WHERE "{column}" IS NOT NULL LIMIT 1').fetchone()
+               for column in added):
+            return f"table {table} has values in columns the upgrade added"
+        if _jobs_row_digests(snapshot, table, columns) != _jobs_row_digests(live, table, columns):
+            return f"rows of {table} were added, changed or deleted"
+    for table in after.keys() - before.keys():
+        if live.execute(f'SELECT 1 FROM "{table}" LIMIT 1').fetchone():
+            return f"table {table} has rows"
+    return None
+
 
 def jobs_snapshot_identity(path: Path, *, metadata_only: bool = False,
                            expected: Mapping[str, Any] | None = None) -> dict[str, Any] | None:
@@ -2144,6 +2195,7 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
         return
     owned = journal.get("jobsUpgradeSnapshot")
     if not isinstance(owned, dict) or owned.get("transaction") not in {journal.get("transaction"), journal.get("supersedes")}:
+        _emit_log(log, "No jobs rollback snapshot was recorded for this update, so the jobs database is left as it is.")
         return
     db = Path(data_dir) / "db" / "simulations.db"
     snapshot = db.with_name(db.name + ".pre-schema-6.bak")
@@ -2157,19 +2209,17 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
         if not -60 <= age <= JOBS_RESTORE_MAX_AGE_S:
             _emit_log(log, "Jobs snapshot is outside the one-hour restore window; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
             return
-        # Work since the upgrade is any job row the snapshot does not hold
-        # verbatim: a new id, or a changed created_at/updated_at. Comparing the
-        # stored strings with the snapshot's own rows needs no clock or time
-        # zone, so a naive local time is never misread as a future one.
-        with closing(sqlite3.connect(snapshot.resolve().as_uri() + "?mode=ro", uri=True)) as before:
-            snapshot_rows = set(before.execute("SELECT id, created_at, updated_at FROM simulation_jobs"))
+        # Any difference from the snapshot's own content is work since the
+        # upgrade (or a startup-recovery write): compared row for row, with
+        # no clock or time zone involved.
         with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
             if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
                 return  # No upgrade to undo; never used to decide an in-progress replay.
-            for row in conn.execute("SELECT id, created_at, updated_at FROM simulation_jobs"):
-                if row not in snapshot_rows:
-                    _emit_log(log, "Jobs DB contains rows added or changed since the snapshot (newer than it); use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
-                    return
+            with closing(sqlite3.connect(snapshot.resolve().as_uri() + "?mode=ro", uri=True)) as before:
+                changed = jobs_changed_since_snapshot(before, conn)
+        if changed is not None:
+            _emit_log(log, f"Jobs DB changed since the snapshot (newer work: {changed}); use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+            return
         # Schema 6 may itself still be only in the WAL after an unclean exit.
         # Moving that WAL away from a schema-5 main would let the old store
         # open it silently. Leave the original complete set intact instead.

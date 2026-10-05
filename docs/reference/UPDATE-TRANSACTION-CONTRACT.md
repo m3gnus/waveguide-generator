@@ -827,12 +827,21 @@ These are recorded, not designed.
      code layers and before relaunching the old build. It never restores jobs when
      no layer rollback occurs. An explicit rollback, including the desktop window
      fallback, that supersedes that update inherits this ownership.
-   - Ownership is bounded: the snapshot must be at most **one hour** old, and every
-     live job row must appear in the snapshot with the same `id`, `created_at` and
-     `updated_at`. A new or changed row prevents restore. The stored strings are
-     compared, never parsed, so the result does not depend on the time zone or on
-     how a naive timestamp is read. The jobs store's timestamp format is unchanged.
-     A backwards clock step of up to 60 seconds is tolerated by the age bound.
+   - Ownership is bounded: the snapshot must be at most **one hour** old, and the
+     live database must hold exactly the snapshot's content. Every table in the
+     snapshot is compared row for row on all of its columns (a multiset of row
+     digests), so an added, changed or deleted job, a write that leaves
+     `updated_at` alone (task metadata, discarded results or meshes), and any
+     change to results, artifacts, identities, `job_submissions` or `job_events`
+     prevents restore. A column or table the upgrade added must still be empty.
+     Only `wg_install_provenance` is ignored: every start rewrites it, the upgrade
+     included, and the older row is harmless to restore. Nothing is parsed, so the
+     result does not depend on the time zone. A backwards clock step of up to 60
+     seconds is tolerated by the age bound. **This fails safe:** a job that the new
+     build's startup recovery touched (for example one interrupted by the update
+     restart) also prevents the automatic restore, which then leaves the user the
+     manual procedure below, never a silent loss of newer work. A rollback with no
+     recorded snapshot logs that it leaves the jobs database as it is.
      Otherwise automatic jobs restore is skipped and the reason is logged. This prevents
      an old installed journal from replacing later work.
    - Before moving any live DB file, flush the staged standalone snapshot and

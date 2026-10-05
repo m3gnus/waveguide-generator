@@ -2462,6 +2462,54 @@ def test_jobs_restore_ownership_is_bounded_by_age_and_new_rows(tmp_path, monkeyp
     assert "jobsRestore" not in read_journal(data_dir, resources)
 
 
+# Writes since the upgrade that leave every created_at/updated_at alone.
+_UNTIMED_CHANGES = {
+    "deleted-job": ["PRAGMA foreign_keys = ON", "DELETE FROM simulation_jobs WHERE id = 'd'"],
+    "metadata-only": ["UPDATE simulation_jobs SET task_metadata_json = "
+                      "json_set(task_metadata_json, '$.results_discarded_at', 'x') WHERE id = 'a'"],
+    "label-only": ["UPDATE simulation_jobs SET label = 'renamed' WHERE id = 'b'"],
+    "event": ["INSERT INTO job_events (created_at, job_id, event_type, payload_json) "
+              "VALUES ('2000-01-01T00:00:00', 'a', 'deleted', '{}')"],
+    "submission": ["DELETE FROM job_submissions"],
+    "result-deleted": ["DELETE FROM simulation_results WHERE job_id = 'a'"],
+}
+
+
+@pytest.mark.parametrize("change", sorted(_UNTIMED_CHANGES))
+def test_jobs_restore_vetoes_any_change_the_snapshot_does_not_hold(tmp_path, monkeypatch, change):
+    import sqlite3
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    with closing(sqlite3.connect(db)) as conn:
+        for statement in _UNTIMED_CHANGES[change]:
+            conn.execute(statement)
+        conn.commit()
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert "jobsRestore" not in read_journal(data_dir, resources)
+    assert "changed since the snapshot" in " ".join(logs) and "manual" in " ".join(logs)
+    with closing(sqlite3.connect(db)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+
+
+def test_jobs_restore_ignores_only_the_install_provenance_row(tmp_path, monkeypatch):
+    """Every start rewrites provenance, the upgrade included; it never vetoes."""
+    import sqlite3
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
+    with closing(sqlite3.connect(db)) as conn:
+        conn.execute("UPDATE wg_install_provenance SET opened_at = 'later', build = 'other'")
+        conn.commit()
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources)
+    assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored"
+
+
+def test_a_rollback_without_a_recorded_snapshot_says_why_jobs_are_left(tmp_path):
+    resources, data_dir, staged_app, staged_runtime = _installation(tmp_path)
+    _begin(resources, data_dir, staged_app, staged_runtime)
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert "No jobs rollback snapshot was recorded" in " ".join(logs)
+
+
 @pytest.mark.parametrize("crash_suffix", ["", "-wal", "-shm", "installed"])
 def test_jobs_restore_replays_each_rename_by_identity_and_fsyncs_recovery_set(tmp_path, monkeypatch, crash_suffix):
     resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
@@ -2832,8 +2880,9 @@ def test_jobs_restore_keeps_original_set_when_schema_upgrade_is_only_in_wal(tmp_
                     "import sqlite3,os,sys; c=sqlite3.connect(sys.argv[1]); "
                     "c.execute('PRAGMA journal_mode=WAL'); c.execute('PRAGMA wal_autocheckpoint=0'); "
                     "c.execute('PRAGMA user_version=6'); "
-                    "c.execute(\"UPDATE simulation_jobs SET label='wal-only-upgrade' WHERE id='a'\"); "
                     "c.commit(); os._exit(0)", str(db)], check=True, stdin=subprocess.DEVNULL)
+    # Rows equal the snapshot's, so only the WAL check can stop the restore
+    # (a changed row would already be vetoed by the content comparison).
     assert int.from_bytes(db.read_bytes()[60:64], "big") == 5
     logs = []
     apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
@@ -2842,7 +2891,6 @@ def test_jobs_restore_keeps_original_set_when_schema_upgrade_is_only_in_wal(tmp_
     assert db.exists()
     with closing(sqlite3.connect(db)) as conn:
         assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
-        assert conn.execute("SELECT label FROM simulation_jobs WHERE id='a'").fetchone()[0] == "wal-only-upgrade"
 
 
 @pytest.mark.parametrize("operation", ["open", "fsync"])
