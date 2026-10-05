@@ -2366,7 +2366,8 @@ def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_pa
             store.close()
             if snapshot_kind == "changed":
                 info = snapshot.stat()
-                os.utime(snapshot, ns=(info.st_atime_ns, info.st_mtime_ns + 1))
+                # NTFS keeps mtimes in 100 ns units; 1 ms survives every filesystem.
+                os.utime(snapshot, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000))
         return len(calls)
     result = apply_update_module.apply_update(
         bundle=resources, data_dir=data_dir, staged_app=staged_app, staged_runtime=staged_runtime,

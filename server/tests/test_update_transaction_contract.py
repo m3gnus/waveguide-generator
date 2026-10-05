@@ -441,6 +441,10 @@ def test_a_marker_that_cannot_be_removed_keeps_its_journal(
     ) == transaction
 
 
+# POSIX only: Windows cannot open a directory to flush it, and sync_directory
+# re-raises that EACCES (it is not an unsupported-flush errno), so forcing
+# DIRECTORY_SYNC_SUPPORTED there tests a configuration that never ships.
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX directory flushing")
 def test_marker_publication_refuses_a_posix_directory_sync_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
