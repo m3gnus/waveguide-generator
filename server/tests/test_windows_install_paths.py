@@ -19,6 +19,33 @@ from server.tests.test_installer_install_kind_outcome import bundle, probe
 from shared.release_assets import WINDOWS_PLATFORM, windows_setup_name
 
 
+def startup_hook_ordinary_path():
+    # Importing the embedded hook would execute native admission. Compile only
+    # its string helper to ensure the pre-import copy stays in agreement.
+    hook = Path(__file__).resolve().parents[2] / "launchers/windows/startup_hook.py"
+    function = next(node for node in ast.parse(hook.read_text()).body
+                    if isinstance(node, ast.FunctionDef) and node.name == "_ordinary_path")
+    scope = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), "<startup hook helper>", "exec"), scope)
+    return scope["_ordinary_path"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    (r"\\?\c:\x", r"c:\x"),
+    (r"\\?\unc\s\sh\x", r"\\s\sh\x"),
+    (r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\x", r"\\?\Volume{12345678-1234-1234-1234-123456789abc}\x"),
+    ("\\\\?\\", "\\\\?\\"),
+    (r"\\?\C:", r"\\?\C:"),
+    (r"\\?\GLOBALROOT\Device\HarddiskVolume1\x", r"\\?\GLOBALROOT\Device\HarddiskVolume1\x"),
+    ("\\\\?\\UNC\\", "\\\\?\\UNC\\"),
+    (r"\\?\UNC\server", r"\\?\UNC\server"),
+])
+def test_windows_ordinary_path_strips_only_drive_and_unc_forms(monkeypatch, value, expected):
+    monkeypatch.setattr(update_lock, "os", SimpleNamespace(name="nt"))
+    assert update_lock.ordinary_path(value) == expected
+    assert startup_hook_ordinary_path()(value) == expected
+
+
 @pytest.mark.parametrize("plain,extended", [
     (r"C:\Program Files\Waveguide Generator", r"\\?\C:\Program Files\Waveguide Generator"),
     (r"\\server\share\Waveguide Generator", r"\\?\UNC\server\share\Waveguide Generator"),
@@ -31,14 +58,7 @@ def test_windows_path_strings_and_keys_agree_everywhere(monkeypatch, plain, exte
     monkeypatch.setattr(apply_update, "os", windows_os)
     assert update_lock.ordinary_path(extended) == plain
     assert update_lock.ordinary_path(plain) == plain
-    # Importing the embedded hook would execute native admission. Compile only
-    # its string helper to ensure the pre-import copy stays in agreement.
-    hook = Path(__file__).resolve().parents[2] / "launchers/windows/startup_hook.py"
-    function = next(node for node in ast.parse(hook.read_text()).body
-                    if isinstance(node, ast.FunctionDef) and node.name == "_ordinary_path")
-    scope = {}
-    exec(compile(ast.Module(body=[function], type_ignores=[]), "<startup hook helper>", "exec"), scope)
-    assert scope["_ordinary_path"](extended) == plain
+    assert startup_hook_ordinary_path()(extended) == plain
     assert apply_update.installation_key(Path(extended)) == apply_update.installation_key(Path(plain))
     assert update_lock.installation_key(extended) == update_lock.installation_key(plain)
     assert apply_update.journal_describes({"resources": plain}, Path(extended))
@@ -51,8 +71,11 @@ def test_released_plain_windows_key_is_unchanged(monkeypatch):
     # taking the first 16 SHA-256 hex digits. This synthetic path is fixed.
     monkeypatch.setattr(update_lock, "os", SimpleNamespace(name="nt", path=ntpath, fspath=os.fspath))
     monkeypatch.setattr(apply_update, "os", SimpleNamespace(name="nt", path=ntpath, fspath=os.fspath))
-    for root in (r"C:\Program Files\Waveguide Generator", r"\\?\C:\Program Files\Waveguide Generator"):
-        assert apply_update.installation_key(Path(root)) == "bcdda84f6c67b81f"
+    plain = r"C:\Program Files\Waveguide Generator"
+    expected = hashlib.sha256(ntpath.normcase(ntpath.normpath(plain)).encode("utf-8", "surrogatepass")).hexdigest()[:16]
+    assert expected == "bcdda84f6c67b81f"
+    for root in (plain, "\\\\?\\" + plain):
+        assert apply_update.installation_key(Path(root)) == expected
 
 
 @pytest.mark.parametrize("value", ["/opt/waveguide-generator", r"\\?\C:\literal", r"\\?\UNC\literal"])

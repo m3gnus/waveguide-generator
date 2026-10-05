@@ -23,11 +23,14 @@ An earlier request cannot be overwritten or revoked by a failed new writer.
 The private launcher request has `schemaVersion: 2`, `kind: full_installer`,
 `tag`, `version`, `fromVersion`, `platform`, `installer`, `installRoot`, `size`,
 `sha256`, `approval`, `readyAtEpoch` and `expiresAtEpoch`. Consumption validates bounded regular
-JSON through a nonblocking descriptor with no symlink following and before/after object checks, canonical paths, the launcher's own exact install root and the expected
+JSON through a nonblocking descriptor with no symlink following and before/after object checks, resolved paths, the launcher's own exact install root and the expected
 asset under the application's download directory. Expired approvals are discarded. Delayed new requests never
 fall through to the legacy reader. Consumption does not clear the server's
 restart approval. The frozen request retains its approval expiry. The launcher checks it after hashing and extraction and immediately before starting a helper. The launcher checks the installer checksum before starting
 any helper through a regular-file descriptor with identity checks, and the POSIX helper checks it again after waiting.
+On Windows, a `\\?\`-prefixed and a plain spelling of a drive or UNC path
+identify one installation. The request may carry either spelling; setup receives
+the plain form.
 
 The launcher stops its owned backend before launching the installer helper.
 The existing stop protocol marks jobs `interrupted_by_update_restart`, finishes
@@ -176,8 +179,10 @@ opened; the previous executable cannot start from an absent pathname.
 
 ## Windows installation
 
-The signed setup executable is the external helper. It receives `/DIR=<exact
-registered root>`, `/WAITPID`, `/OUTCOME`, `/WGLOG`, `/RELAUNCH`, `/VERYSILENT`,
+The signed setup executable is the external helper. It receives `/DIR=<plain
+registered root>`, using the plain drive or UNC spelling even when the request
+carries the equivalent `\\?\`-prefixed spelling, plus `/WAITPID`, `/OUTCOME`,
+`/WGLOG`, `/RELAUNCH`, `/VERYSILENT`,
 `/SUPPRESSMSGBOXES` and `/NORESTART`. Setup owns `WaveguideGeneratorSetup` before
 waiting for the old launcher and before any layer rename. Its recovery record
 names the exact root and displaced paths, and is flushed before the first
