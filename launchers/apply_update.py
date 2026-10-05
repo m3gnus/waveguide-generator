@@ -2103,13 +2103,23 @@ def jobs_snapshot_identity(path: Path, *, metadata_only: bool = False,
 
 
 def record_jobs_upgrade_snapshot(data_dir: Path, resources: Path, snapshot: Path) -> None:
-    """New-build startup records its snapshot in this installation's update."""
+    """New-build startup records its snapshot in this installation's update.
+
+    Only the layer transaction that installed the running build may own the
+    snapshot. A full-installer update writes no layer journal; a journal that
+    survives from an earlier layer update names another ``to`` build and is
+    left alone, so no later layer rollback can restore a snapshot it did not
+    create. A journal from a helper that names no build is not compared.
+    """
     journal = read_journal(data_dir, resources)
     expected = Path(data_dir) / "db" / "simulations.db.pre-schema-6.bak"
     if (journal is None or journal.get("operation") != "update"
             or journal.get("state") not in {"swapped", "launchers-refreshed", "installed"}
             or not journal_describes(journal, resources)
             or snapshot.resolve() != expected.resolve()):
+        return
+    installed = _journal_build(journal, "to")
+    if installed is not None and installed != read_build_identity(Path(resources) / "app"):
         return
     metadata = jobs_snapshot_identity(snapshot, metadata_only=True)
     before = journal.get("jobsSnapshotBefore")

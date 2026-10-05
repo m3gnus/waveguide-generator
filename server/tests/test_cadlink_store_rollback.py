@@ -8,7 +8,7 @@ failing. The operation store (schema 12) only adds a table, so the file keeps
 the format v0.3.2 reads (docs/reference/UPDATE-TRANSACTION-CONTRACT.md §6).
 
 The rollback test runs each release a user can roll back to
-(``CADLINK_ROLLBACK_TAGS``: v0.3.2 and the published v0.3.3-rc.1) from its own
+(``CADLINK_ROLLBACK_TAGS``: v0.3.2, the published v0.3.3-rc.1 and v0.3.4) from its own
 tag, against a registry in which this build filled every table it added, and
 checks every row and column of them after the rollback and after rolling
 forward again.
@@ -157,6 +157,10 @@ def _released_server(tag: str, destination: Path) -> Path:
                 tag,
                 "server",
                 "shared",
+                # v0.3.4's update client imports both at module level; every
+                # tag in _release_tags.py ships them in its app layer.
+                "launchers",
+                "scripts/fetch_spa.py",
             ],
             capture_output=True,
             check=False,

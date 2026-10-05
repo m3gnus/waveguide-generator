@@ -2335,8 +2335,10 @@ def test_a_record_nobody_can_read_never_calls_an_unsealed_bundle_usable(
     assert "/usr/bin/codesign" in [command[0] for command in commands]
 
 
-@pytest.mark.parametrize("snapshot_kind", ["created", "preexisting", "changed"])
+@pytest.mark.parametrize("snapshot_kind", ["created", "preexisting", "changed", "never-started"])
 def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_path, monkeypatch, snapshot_kind):
+    # "never-started": the new build failed before its store opened, so the
+    # bridge rollback has nothing of the jobs database to undo.
     import sqlite3
     from contextlib import closing
     from server.jobs.store import JobStore
@@ -2358,7 +2360,7 @@ def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_pa
     calls = []
     def relaunch(*args, **kwargs):
         calls.append(1)
-        if len(calls) == 1:
+        if len(calls) == 1 and snapshot_kind != "never-started":
             store = JobStore(db)
             store.initialize()
             store.close()
@@ -2385,6 +2387,11 @@ def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_pa
         driver = tmp_path / "old-driver.py"
         driver.write_text(_RELEASED_JOB_STORE_DRIVER)
         assert _run_released(tree, driver, str(db))["ids"] == ["a", "b", "c", "d"]
+    elif snapshot_kind == "never-started":
+        assert version == 5 and _snapshot(db) == before
+        assert not snapshot.exists()
+        journal = read_journal(data_dir, resources)
+        assert journal is None or not {"jobsUpgradeSnapshot", "jobsRestore"} & set(journal)
     else:
         assert version == 6
 

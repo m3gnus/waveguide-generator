@@ -157,8 +157,8 @@ itself, and it runs no BEAT solve. Before a stable release, on each platform:
 ## Returning to a release before CAD intent jobs
 
 S4-F1 raises the jobs schema from 5 to 6 and snapshots every existing jobs
-file before the upgrade. v0.3.2 and v0.3.3-rc.1 refuse schema 6 with the
-install-provenance message; they never try to serialize or number its preparing,
+file before the upgrade. v0.3.2, v0.3.3-rc.1 and v0.3.4 refuse schema 6 with the
+install-provenance message and write nothing; they never try to serialize or number its preparing,
 refused or cancelled intents. Settling preparations does not make schema 6
 readable by those releases.
 
@@ -167,6 +167,17 @@ transaction before relaunching the older build. Its journal records the snapshot
 transaction id, mtime and identity; only an unchanged match is restored. The
 upgraded file and sidecars are preserved as `simulations.db.schema-6.failed`.
 An earlier or modified snapshot is never automatically restored.
+
+The full-installer path (0.3.4 and later) has no automatic jobs restore and
+needs none before the new app starts: the installer and its recovery entry
+never touch `db/`, and the new app first opens the database only after the
+install has committed. A failed or rolled-back install therefore leaves the
+jobs database exactly as the previous app left it. Once the new app has
+migrated, no automatic rollback exists on this path; an older release returns
+only by reinstalling it, and it then refuses schema 6 as above until the manual
+procedure below restores the snapshot. A layer-update journal that survives from
+an earlier transaction never adopts this snapshot: only the journal whose `to`
+build is the running build may own it.
 
 For a later manual rollback, stop every WG installation using the data directory. Preserve
 `db/simulations.db` and any `-wal`/`-shm` sidecars together. Restore the adjacent

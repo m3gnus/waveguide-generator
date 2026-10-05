@@ -40,6 +40,15 @@ for a retry; active workers and pending restarts refuse it. Channel changes are
 also refused during a pending restart. `/api/updates/diagnostics` returns a
 32 KiB tail of the bounded installer log with the home folder scrubbed.
 
+## Application data
+
+The installer, helper and recovery entry change only the installation and the
+`update-install` folder; they never open or move the jobs database in `db/`.
+The new app first opens it after the install commits, so a failure before that
+leaves the previous app's database unchanged. A schema upgrade by the new app
+is protected by its own snapshot and by older releases refusing a newer schema
+(`SHUTDOWN-AND-RECOVERY.md`, "Returning to a release before CAD intent jobs").
+
 ## POSIX installation
 
 POSIX native and independent recovery output share a standalone native logger.

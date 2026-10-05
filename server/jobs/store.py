@@ -484,8 +484,16 @@ class JobStore:
                     os.close(directory)
             # The installed helper records only a snapshot made by this build
             # during its own update, before any schema write can commit.
-            from launchers.apply_update import record_jobs_upgrade_snapshot
-            record_jobs_upgrade_snapshot(self.db_path.parent.parent, app_root().parent, target)
+            # The full-installer path has no layer journal to record in, and
+            # a build without the bridge helper (after B+2) keeps the
+            # snapshot for the manual procedure only.
+            try:
+                from launchers.apply_update import record_jobs_upgrade_snapshot
+            except ModuleNotFoundError as exc:
+                if exc.name not in {"launchers", "launchers.apply_update"}:
+                    raise
+            else:
+                record_jobs_upgrade_snapshot(self.db_path.parent.parent, app_root().parent, target)
         finally:
             for suffix in ("", "-wal", "-shm", "-journal"):
                 Path(str(temporary) + suffix).unlink(missing_ok=True)

@@ -801,7 +801,7 @@ These are recorded, not designed.
      above 12 (`HIGHEST_READABLE_FORMAT`, the highest value this build opens) and
      needs a restorable snapshot. A later Return to Stable never silently
      restores an old snapshot over newer work.
-   - **Jobs schema 6:** v0.3.2 and v0.3.3-rc.1 refuse the upgraded
+   - **Jobs schema 6:** v0.3.2, v0.3.3-rc.1 and v0.3.4 refuse the upgraded
      `db/simulations.db`. Before any upgrade write, with `BEGIN IMMEDIATE`
      excluding other writers, the new build backs up the authoritative live
      schema below 6 through a separate reader. The standalone snapshot uses
@@ -816,7 +816,13 @@ These are recorded, not designed.
      those cheap fields match the recorded identity.
    - The new build records `jobsUpgradeSnapshot` in this installation's update
      journal before committing schema 6: the creating transaction id and the
-     snapshot's mtime, size, file identity and digest. Automatic rollback restores
+     snapshot's mtime, size, file identity and digest, but only when the
+     journal's `to` build (when it names one) is the running app layer's build:
+     a journal outliving an earlier transaction, for example after a full
+     installer replaced the root, is left unchanged. A build without this
+     helper (after B+2) keeps the snapshot for manual recovery only. The full
+     installer writes no journal and never touches `db/`
+     (`SHUTDOWN-AND-RECOVERY.md`). Automatic rollback restores
      only that transaction's unchanged snapshot, after successfully restoring the
      code layers and before relaunching the old build. It never restores jobs when
      no layer rollback occurs. An explicit rollback, including the desktop window
@@ -871,7 +877,10 @@ These are recorded, not designed.
      if no recent matching transaction owns its snapshot.
    - Tests: `test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot`
      runs the extracted v0.3.2 store after automatic restore and covers preexisting
-     and modified snapshots. The restore/write/re-upgrade regression verifies
+     and modified snapshots and a new build that never started.
+     `test_jobs_schema_full_installer.py` covers the full-installer path: a real
+     POSIX helper rollback before the new app starts, and the extracted v0.3.4
+     store refusing a migrated database, then reading the restored snapshot. The restore/write/re-upgrade regression verifies
      that a second rollback preserves work added by the older release.
 2. **When the gate starts in the one-step flow:** at the Install click, or when the
    request is written (§4.1).
