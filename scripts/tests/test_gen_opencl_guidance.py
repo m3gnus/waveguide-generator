@@ -146,7 +146,7 @@ def test_versioned_contract_and_cpu_runtime_content() -> None:
     assert set(guidance) == {"version", "title", "labels", "warnings", "notices", "reasons", "platforms", "gpu_alternatives"}
     assert guidance["gpu_alternatives"] == [{
         "id": "nvidia_beat_cuda", "platforms": ["windows", "linux"],
-        "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. BEMPP is for computers without a supported graphics card.",
+        "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. On an AMD card, choose BEAT with ROCm. Neither GPU backend has been qualified on real hardware yet. BEMPP is for computers without a supported graphics card.",
     }]
     assert guidance["title"] == "CPU OpenCL runtime"
     assert guidance["labels"] == {"heading": guidance["title"], "ariaLabel": guidance["title"]}
@@ -479,8 +479,9 @@ APPROVED_GUIDANCE = {'version': 1,
  'gpu_alternatives': [{'id': 'nvidia_beat_cuda',
                        'platforms': ['windows', 'linux'],
                        'text': "On a computer with an NVIDIA graphics card, choose WG's BEAT "
-                               'solver with CUDA instead of BEMPP. BEMPP is for computers without '
-                               'a supported graphics card.'}],
+                               'solver with CUDA instead of BEMPP. On an AMD card, choose BEAT with ROCm. '
+                               'Neither GPU backend has been qualified on real hardware yet. '
+                               'BEMPP is for computers without a supported graphics card.'}],
  'warnings': [{'id': 'pocl_windows',
                'platforms': ['windows'],
                'text': 'PoCL on Windows shows up as an OpenCL device but computes nothing, so '

@@ -163,13 +163,15 @@ renaming a Fusion body does not create separate left/right channels.
    one source can contain several disconnected diaphragm patches.
 3. Keep **Motion → Normal** for driver-model solves. It moves each face along
    its own normal. **Axial (pistonic)** describes a rigid piston along its source
-   axis, but the currently pinned Metal and BEMPP packages refuse CAD axial
-   motion. WG reports that refusal before running; it does not silently use
-   Normal. An axial channel cannot carry a Thiele/Small driver model either.
-   BEAT can use CAD axial motion only when each resolved source axis lies along
-   the radiation axis, in either direction. Tilted axes are refused. A source
-   with no usable outward axis, or motion incompatible with a mirror plane,
-   is also refused; send the whole model when the mirror is the problem.
+   axis. Metal and BEMPP solve it along each source's own axis with the module
+   versions WG ships; an older installed Metal or BEMPP package that lacks
+   per-source axes refuses it. WG reports any refusal before running; it does
+   not silently use Normal. An axial channel cannot carry a Thiele/Small driver
+   model either. BEAT can use CAD axial motion only when each resolved source
+   axis lies along the radiation axis, in either direction. Tilted axes are
+   refused. A source with no usable outward axis, or motion incompatible with
+   a mirror plane, is also refused on every engine; send the whole model when
+   the mirror is the problem.
 4. Choose a driver from the library or enter its data by hand. Choose the correct
    impedance variant and check the datasheet values. A started driver needs
    **Sd, Bl, Re**, one of **Mmd/Mms**, and one of **Cms/Vas/Fs**. If you enter
@@ -286,10 +288,10 @@ the model you happen to display in the viewport.
 
    | Solver | CAD use today |
    |---|---|
-   | **Metal** | Apple GPU; Normal CAD sources and passive cardioid. CAD axial is refused with the current package. |
-   | **BEMPP** | Imported CAD requires OpenCL assembly and no free rim away from mirror planes. CAD axial is refused with the current package. |
+   | **Metal** | Apple GPU; Normal and axial CAD sources, and passive cardioid. An older installed package without per-source axes refuses CAD axial. |
+   | **BEMPP** | Imported CAD requires OpenCL assembly and no free rim away from mirror planes. CAD axial is solved along each source's axis; an older installed package without per-source axes refuses it. |
    | **BEAT · CPU** | Requires its provisioned Julia runtime. Can solve imported CAD; passive cardioid is refused. |
-   | **BEAT · Metal / CUDA / ROCm** | Requires the matching available GPU/runtime. Choose Accurate for CUDA/ROCm CAD solves; explicit BEAT · Metal also accepts CAD in Fast. Passive cardioid is refused. |
+   | **BEAT · Metal / CUDA / ROCm** | Requires the matching available GPU/runtime. CUDA and ROCm are not qualified on real hardware yet. Choose Accurate for CUDA/ROCm CAD solves; explicit BEAT · Metal also accepts CAD in Fast. Passive cardioid is refused. |
 
    AUTO in Fast skips BEAT GPU engines for CAD. Read the solver row's reason
    when it is unavailable: the actual returned domain, source motion and runtime
@@ -376,7 +378,7 @@ examples show x = 0; the same checks apply at y = 0.
 | “no source meets x = 0, so nothing shows it is the speaker's symmetry plane rather than an open side” | Send the whole model or correct the cut and source geometry. Do not invent a source just to pass the check. |
 | “its mirror image would stand in for the other side's own source” | Send the whole model for independently identified sides. Rename only if the name wrongly identifies a shared source as one side's driver. |
 | “Return the whole model from CAD to solve it whole.” | Turn **Force full domain** off for a valid CAD-cut model, or send the complete speaker. |
-| “Installed hornlab-metal-bem does not support per-source axial axes.” / “Installed hornlab-bempp-bem does not support per-source axial axes.” | These packages cannot solve that CAD axial drive. Choose Normal only if it represents the intended motion, or use an available compatible BEAT route without a driver model. |
+| “Installed hornlab-metal-bem does not support per-source axial axes.” / “Installed hornlab-bempp-bem does not support per-source axial axes.” | The installed Metal or BEMPP package is older than the version WG ships and cannot solve that CAD axial drive. Update the module, choose Normal only if it represents the intended motion, or use an available compatible BEAT route without a driver model. |
 | “BEAT drives axial sources along its z axis” | That source's axis is tilted relative to the radiation axis. Use Normal only if appropriate; BEAT cannot represent that tilted axial drive. |
 | “Complete the driver, or clear it to solve that channel unit-driven.” | Supply the listed missing T/S values, or clear the driver. |
 | “BEMPP does not solve the passive cardioid; it is solved on Metal only. Select Metal for this return.” | Choose Metal. A CPU/GPU backend change cannot preserve this feature on BEMPP or BEAT. |

@@ -9,7 +9,7 @@
     {
       "id": "nvidia_beat_cuda",
       "platforms": ["windows", "linux"],
-      "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. BEMPP is for computers without a supported graphics card."
+      "text": "On a computer with an NVIDIA graphics card, choose WG's BEAT solver with CUDA instead of BEMPP. On an AMD card, choose BEAT with ROCm. Neither GPU backend has been qualified on real hardware yet. BEMPP is for computers without a supported graphics card."
     }
   ],
   "warnings": [

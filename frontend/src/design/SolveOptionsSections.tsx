@@ -103,7 +103,7 @@ export function accuracyExplainer(fastEngine: string | null, accurateEngine: str
       : 'Runs through BEAT — a GPU backend when one is ready, otherwise BEAT CPU';
   const accurate = 'Accurate — Burton–Miller combined formulation: it combines the pressure equation with its '
     + 'normal-derivative equation, which removes the fictitious frequencies without adding damping. '
-    + `${runsOn}; typically several times slower than Fast, and the first solve waits while BEAT starts up.`;
+    + `${runsOn}; usually slower than Fast, by an amount that depends on your machine and mesh, and the first solve waits while BEAT starts up.`;
   return [
     fast,
     accurate,
