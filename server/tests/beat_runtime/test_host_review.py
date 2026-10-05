@@ -12,8 +12,12 @@ from server.tests.beat_runtime.fake_host_worker import EngineWorker, events, wai
 from server.tests.beat_runtime.test_host import authenticated
 
 
-@pytest.mark.parametrize('field', ['solver_script', 'julia_executable', 'julia_project', 'julia_sysimage'])
-@pytest.mark.parametrize('value', ['relative/path', ''])
+@pytest.mark.parametrize(('field', 'value'), [
+    (field, value)
+    for field in ['solver_script', 'julia_executable', 'julia_project', 'julia_sysimage']
+    for value in ['relative/path', '']
+    if value or field in {'solver_script', 'julia_executable'}
+])
 def test_absolute_launch_paths_required(launch, field, value):
     key, directory, children = launch
     key[field] = value
@@ -74,7 +78,7 @@ def test_pending_peers_cannot_reserve_authenticated_capacity(launch):
         with record.endpoint.connect(1) as peer:
             ipc.send_frame(peer, r.hello_message(record))
             assert ipc.receive_frame(peer)['type'] == 'hello_ok'
-            assert ipc.receive_frame(peer, deadline=time.monotonic() + 1)['type'] == 'hello_refused'
+            assert ipc.receive_frame(peer, deadline=time.monotonic() + 2)['type'] == 'hello_refused'
     finally:
         for peer in pending:
             peer.close()

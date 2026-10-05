@@ -103,9 +103,12 @@ def test_closing_live_host_refusal_retries_within_start_deadline(launch, monkeyp
     refusals, cleanups = [], []
 
     def connecting(record, *args, **kwargs):
-        if record == old and not refusals:
-            refusals.append(record)
-            children[0].terminate()  # This test's owned Popen, never a record PID.
+        if record == old:
+            if not refusals:
+                refusals.append(record)
+                children[0].terminate()  # This test's owned Popen, never a record PID.
+            # Model an endpoint already refusing admission until the process
+            # exits. SIGTERM delivery alone can race a successful live probe.
             if refusal == 'authentication_eof':
                 raise r.RecordRefused('Host closed before authentication')
             raise ConnectionError(errno.ECONNREFUSED, 'fixture closing listener')
@@ -113,6 +116,7 @@ def test_closing_live_host_refusal_retries_within_start_deadline(launch, monkeyp
 
     def cleaning(*args, **kwargs):
         assert kwargs['lock'].held
+        assert kwargs['prune_only'] is True
         cleanups.append(args[0])
         return cleanup_original(*args, **kwargs)
 

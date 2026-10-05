@@ -54,7 +54,7 @@ def _require_lock(lock: SpawnLock, identifier: str, directory: Path | None) -> N
 
 def cleanup_host(
     record: HostRecord, expected_key: dict[str, Any], directory: Path | None = None,
-    *, timeout: float = 2.0, lock: SpawnLock | None = None,
+    *, timeout: float = 2.0, lock: SpawnLock | None = None, prune_only: bool = False,
 ) -> bool:
     """Prune a dead matching record or shut down an authenticated live host.
 
@@ -62,24 +62,28 @@ def cleanup_host(
     acquires it and raises LockBusy on contention timeout. One deadline bounds
     authentication, shutdown and exit. Unverified live/foreign/successor records
     remain. Dead/reused PIDs permit pruning only after refused/missing endpoints.
+    prune_only never requests shutdown, even when a fresh connection authenticates.
     """
     validate_record(record, expected_key, directory)
     deadline = time.monotonic() + timeout
     if lock is not None:
         _require_lock(lock, record.identifier, directory)
-        return _cleanup_locked(record, expected_key, directory, deadline)
+        return _cleanup_locked(record, expected_key, directory, deadline, prune_only)
     with SpawnLock(spawn_lock_path(record.identifier, directory), timeout=timeout):
-        return _cleanup_locked(record, expected_key, directory, deadline)
+        return _cleanup_locked(record, expected_key, directory, deadline, prune_only)
 
 
 def _cleanup_locked(
     record: HostRecord, expected_key: dict[str, Any], directory: Path | None, deadline: float,
+    prune_only: bool = False,
 ) -> bool:
     current = read_record(record.identifier, directory)
     if current is None:
         return False
     if current.as_dict() != record.as_dict():
         raise RecordRefused("Host record changed while waiting for spawn exclusion")
+    if prune_only and _same_process(record):
+        raise RecordRefused("Unverified live host retained")
     try:
         connection = connect_authenticated(record, expected_key, directory, deadline=deadline)
     except ConnectionError as exc:
@@ -95,6 +99,8 @@ def _cleanup_locked(
         connection = None
     if connection is not None:
         with connection:
+            if prune_only:
+                raise RecordRefused("Authenticatable host retained")
             try:
                 message = hello_message(record, operation="shutdown")
                 connection.settimeout(remaining_time(deadline))

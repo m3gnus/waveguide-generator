@@ -649,3 +649,114 @@ real user/HBB data directories or donor-checkout writes were used. Native
 Windows kernel/Job Object qualification remains unrun; Windows branches use
 fakes, with the distinct launcher/host process path also exercised on POSIX.
 All changes remain uncommitted as requested.
+
+**Review round 1 fixes (PR 19) and PR 18 fix regression:**
+
+Files follow the existing review slices; this round fixes the host/client runtime
+without switching production callers:
+- **18c spawn/recovery:** `server/solver/beat_runtime/{spawn,cleanup}.py`;
+  probe/pruning/deadline regressions in
+  `server/tests/beat_runtime/test_submission_review.py`; pruning-mode assertion
+  in `test_spawn_review.py`; this `CHANGES.md`.
+- **19a/19d submission/retirement:** `server/solver/beat_runtime/host.py`;
+  startup, request-input, cancel, reader and authentication regressions in
+  `test_submission_review.py`; `fake_host_worker.py`'s post-start status and
+  unexpected close error fixtures; this `CHANGES.md`.
+- **19b/19c client/adoption:** `server/solver/beat_runtime/client.py`;
+  delayed retirement, inline-size and replacement-report regressions in
+  `test_submission_review.py`; this `CHANGES.md`.
+- **18d/19 test boundary:** `server/tests/beat_runtime/conftest.py` and
+  `test_host_review.py` (native fixture paths, revised optional-path expectations
+  and authentication-expiry allowance); this `CHANGES.md`.
+
+- **P2/A — fixed:** start_host uses cleanup_host(prune_only=True), including
+  failed bootstrap cleanup. Recovery never sends authenticated shutdown.
+  Cleanup's existing dead-PID/start-mismatch and refused-endpoint policy still
+  controls pruning; authenticatable, live and uncertain hosts remain. Retry
+  transient failures with increasing probe deadlines inside the original start
+  deadline, including bare remaining_time TimeoutError. Regressions prove a
+  slow healthy host continues another client's solve without shutdown, dead and
+  reused hosts are pruned, even an authenticatable host with a gone-PID hint is
+  retained, connection resets/connect timeouts retry, and a deadline race does
+  not leak a bare TimeoutError. The closing-host test now models an endpoint
+  refusing admission until exit; SIGTERM delivery can race successful
+  authentication and is not proof that the listener already stopped.
+- **P2/B — fixed:** cancellation without a stream marks the job cancelled and
+  returns immediately. The FIFO runner retains ownership through startup and
+  closes a returned stream before admitting the next job. Disconnected status
+  callbacks cannot abort shared startup. Regressions hold fake startup beyond
+  five seconds for both submit and ensure_started, with both disconnect and
+  explicit cancel; the queued successor completes on the same host PID.
+- **P2/C — fixed:** validate file readability, JSON and object shape at admission.
+  Missing/unreadable/changed-file JSON failures from public submit also fail only
+  that job, with a clear request-file error. Engine/stream retirement failures
+  still stop admission. Regressions cover missing, unreadable, malformed and
+  nonobject files plus file-read failures racing admission, followed by a
+  successful submission on the same host PID. WG preserves file transport and
+  delegates engine contract/operation negotiation to official EngineWorker.
+- **P2/D — fixed:** client terminate waits RETIREMENT_TIMEOUT + CONTROL_TIMEOUT
+  (seven seconds), matching the host's five-second retirement plus reply margin.
+  A three-second successful fake termination keeps the lease and host PID.
+- **P2/E — fixed:** fixture launch paths derive from tmp_path and are native
+  absolute paths on every platform. A regression checks all four paths.
+- **P3 client cancel — fixed:** unexpected close exceptions during explicit
+  cancellation are logged and followed by bounded public engine.terminate while
+  the FIFO ownership slot is still held. Successful retirement serves the next
+  client on the same host; genuine termination failure still stops admission.
+  The regression raises LookupError during close and verifies termination
+  precedes the queued successor. Disconnect retirement-failure tests stay intact.
+- **P3 stream writes — fixed:** stream admission explicitly sets a bounded
+  ten-second send timeout. A socket with a small send buffer and a reader stalled
+  beyond the control deadline still receives its complete result and terminal.
+- **P3 authentication deadline — fixed:** hello retains the 0.5-second pre-auth
+  window; authenticate gets a fresh one-second deadline after the hello reply.
+  A regression spends most of the hello budget and delays proof past that
+  original deadline, then authenticates successfully. Pending capacity remains
+  bounded separately from authenticated clients.
+- **P3 oversized inline request — fixed:** serialize/check the complete submit
+  envelope against the 1 MiB control ceiling before adoption/connection, raising
+  HostError with file-staging guidance. A regression proves no host is contacted.
+- **P3 explicit Quit — fixed (documentation):** HostedWorker.shutdown() is the
+  explicit-quit path: detach local admission and streams, then shut down the
+  authenticated shared host. HostedWorker.detach() releases only this client;
+  terminate() requests idle engine retirement and declines queued/active work.
+- **P3 retirement overlap — fixed (documentation):** unpublication precedes
+  engine retirement so a replacement host can become available while the old
+  engine is still terminating. Brief engine overlap is possible during normal
+  retirement. Host exit bounds the wait for public retirement methods; it does
+  not prove an unresponsive old Julia child has died.
+- **P3 replacement report — fixed:** compare prior host_pid in _connect and
+  prior worker_instance/host_pid in _report. Expose sticky engine_replaced on
+  HostedWorker and in adopt()'s returned report; first adoption is False and a
+  later respawn is True. Clear stale negotiation metadata on host PID change.
+  Regressions cover real fake-host respawn and a changed worker_instance report.
+  This reports lost host-owned worker continuity, not a measured Julia PID.
+- **P3 empty optional paths — fixed:** validate_key returns a normalized copy;
+  empty julia_project/julia_sysimage strings become None before hashing,
+  publication, adoption and engine construction. Regressions prove each field
+  reaches the engine as None and shares the explicit-null host key.
+
+Design deviations: official JWSound/BEAT_Engine remains the target. The key
+validator now returns a normalized specification; runtime constructors/spawn use
+that copy without mutating caller input. prune_only is an additive cleanup mode;
+explicit shutdown's authenticated policy is unchanged. Engine PID continuity,
+native Windows Job Objects/ACLs and real Julia/installed qualification remain
+later gates. No engine-private fields or WG-specific engine behavior are assumed.
+No Julia, downloads, real user/HBB directories, pins, requirements or existing
+production callers are changed. Changes remain uncommitted as requested.
+
+Review-round validation: **634 passed in 77.06 s** using the requested Python
+with `scripts/run_tests.py server/tests/beat_runtime
+server/tests/test_solver_beat.py -q -p no:cacheprovider`. This includes 28 new
+mechanism regressions; two old empty-optional-path refusal cases are replaced
+by normalization/reuse regressions. The focused spawn-review run passed
+**10 tests in 2.61 s** after making its closing-endpoint fixture deterministic.
+Ruff on runtime sources/tests and `git diff --check` passed. Both exact requested
+combined commands were attempted: pytest ran no tests because
+`server/tests/beat_adapter` is absent; Ruff reports the absent
+`server/solver/beat_adapter` and `server/tests/beat_adapter` directories.
+All test/check runs stayed under two minutes. No Julia, downloads or full WG
+suite ran. Native Windows/installed-engine qualification was not run; tests
+use fake engines, temporary directories and only recorded test-owned processes.
+No requested fix remains unfinished; the missing adapter directories prevent
+completion of the exact combined checks. Changes remain uncommitted.

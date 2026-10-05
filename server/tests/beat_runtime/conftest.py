@@ -12,9 +12,10 @@ def launch(tmp_path, monkeypatch):
     monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
     monkeypatch.setenv("WG2_BEAT_WORKER_DIR", str(tmp_path / "workers"))
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
-    key = r.host_key({"backend": "cpu", "julia_executable": "/fixture/julia",
-                      "julia_identity": "binary-content", "solver_script": "/fixture/solver.jl",
-                      "julia_project": "/fixture/project", "julia_sysimage": "/fixture/sysimage",
+    fixture = tmp_path / "fixture"
+    key = r.host_key({"backend": "cpu", "julia_executable": str(fixture / "julia"),
+                      "julia_identity": "binary-content", "solver_script": str(fixture / "solver.jl"),
+                      "julia_project": str(fixture / "project"), "julia_sysimage": str(fixture / "sysimage"),
                       "julia_threads": 2, "engine_fingerprint": "engine-content",
                       "runtime_fingerprint": "runtime-content",
                       "environment": {"TEST_EVENTS": str(tmp_path / "events"), "JULIA_NUM_THREADS": "2"}})

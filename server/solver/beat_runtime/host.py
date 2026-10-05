@@ -30,6 +30,8 @@ CONTROL_TIMEOUT = 2.0
 HEARTBEAT_INTERVAL = 0.5
 RETIREMENT_TIMEOUT = 5.0
 PREAUTH_TIMEOUT = 0.5
+AUTH_TIMEOUT = 1.0
+STREAM_SEND_TIMEOUT = 10.0
 MAX_CLIENTS = 32
 MAX_PENDING = 8
 ACCEPT_ERROR_BUDGET = 5
@@ -85,6 +87,14 @@ class _HostStream:
             bounded_call(self.events.close)
         except BaseException as exc:
             self.host._log(f"stream retirement failed: {exc}")
+            if self.job.client_cancelled:
+                # Keep the FIFO slot through normal engine retirement. A close
+                # error during explicit cancellation need not stop the host.
+                try:
+                    bounded_call(self.host._engine.terminate)
+                    return
+                except BaseException as retirement:
+                    self.host._log(f"engine retirement failed: {retirement}")
             # Fail admission before ownership releases its slot on closure error.
             self.host._fail_stop()
             raise
@@ -98,6 +108,8 @@ class _HostSubmitter:
         job = self.host._queue[0]  # The FIFO head remains held through stream retirement.
         try:
             return _HostStream(self.host, self.host._engine.submit(request_path, **kwargs), job)
+        except (FileNotFoundError, PermissionError, IsADirectoryError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f"Invalid BEAT request file: {exc}") from exc
         except BaseException:
             self.host._fail_stop()
             raise
@@ -107,6 +119,7 @@ class _Job:
     def __init__(self, message: dict, send: Callable[[dict], None], sequence: int) -> None:
         self.message, self._send, self.sequence = message, send, sequence
         self.cancelled = threading.Event()
+        self.client_cancelled = False
         self.done = threading.Event()
         self.stream: OwnedStream | None = None
         self._output = threading.Lock()
@@ -138,10 +151,11 @@ def ready_path(identifier: str, directory: Path) -> Path:
     return r.record_path(identifier, directory).with_suffix(".ready.json")
 
 
-def validate_key(key: dict[str, Any]) -> None:
+def validate_key(key: dict[str, Any]) -> dict[str, Any]:
     """Require a namespaced, fully resolved launch specification."""
     if not isinstance(key, dict):
         raise r.RecordRefused("Launch specification must be an object")
+    key = dict(key)
     if any(key.get(name) != value for name, value in r.host_key({}).items()):
         raise r.RecordRefused("Foreign provider or host protocol")
     if type(key.get("protocol_version")) is not int:
@@ -155,6 +169,8 @@ def validate_key(key: dict[str, Any]) -> None:
     for name in ("julia_project", "julia_sysimage"):
         if name not in key or (key[name] is not None and not isinstance(key[name], str)):
             raise r.RecordRefused(f"Invalid launch path: {name}")
+        if key[name] == "":
+            key[name] = None
     for name in ("solver_script", "julia_executable", "julia_project", "julia_sysimage"):
         if key[name] is not None and not Path(key[name]).is_absolute():
             raise r.RecordRefused(f"Launch path must be absolute: {name}")
@@ -163,6 +179,17 @@ def validate_key(key: dict[str, Any]) -> None:
         not isinstance(k, str) or not isinstance(v, str) for k, v in environment.items()
     ):
         raise r.RecordRefused("Missing effective Julia environment")
+    return key
+
+
+def validate_request_file(request: str) -> None:
+    """Reject ordinary input failures before queueing or starting the engine."""
+    try:
+        value = json.loads(Path(request).read_text(encoding="utf-8"))
+        if not isinstance(value, dict):
+            raise ValueError("request must be a JSON object")
+    except (OSError, ValueError, UnicodeError) as exc:
+        raise ValueError(f"Invalid BEAT request file {request}: {exc}") from exc
 
 
 class WorkerHost:
@@ -175,7 +202,7 @@ class WorkerHost:
         self, key: dict[str, Any], directory: Path, *, idle_timeout: float = DEFAULT_IDLE_TIMEOUT,
         engine_factory: Callable[..., Any] | None = None,
     ) -> None:
-        validate_key(key)
+        key = validate_key(key)
         if not math.isfinite(idle_timeout) or idle_timeout <= 0:
             raise ValueError("Host idle timeout must be positive and finite")
         self.key, self.directory, self.idle_timeout = key, r.private_directory(directory), idle_timeout
@@ -253,7 +280,6 @@ class WorkerHost:
                         job.send({"type": "status", "message": str(message)})
                     except OSError:
                         job.cancelled.set()
-                        raise
 
             if job.message["op"] == "ensure_started":
                 self._engine.ensure_started(status_callback=status)
@@ -285,7 +311,8 @@ class WorkerHost:
             self._log(f"submission failed: {exc}")
             reply = {"type": "failed", "error": str(exc)}
         except BaseException as exc:
-            self._fail_stop()
+            if not job.cancelled.is_set():
+                self._fail_stop()
             self._log(f"submission failed: {exc}")
             reply = {"type": "failed", "error": str(exc)}
         finally:
@@ -301,10 +328,15 @@ class WorkerHost:
                     self._jobs.notify_all()
                 job.finish(reply)
 
-    def _cancel_job(self, job: _Job) -> None:
+    def _cancel_job(self, job: _Job, *, client_cancelled: bool = False) -> None:
+        job.client_cancelled |= client_cancelled
         job.cancelled.set()
         with self._jobs:
             self._jobs.notify_all()
+        if job.stream is None:
+            # Cold startup has no stream to retire yet. The runner retains its
+            # FIFO slot and closes the stream immediately when submit returns.
+            return
         try:
             if job.stream is not None:
                 job.stream.cancel()  # Token-checked public stream retirement.
@@ -316,6 +348,7 @@ class WorkerHost:
 
     def _serve_job(self, connection: socket.socket, message: dict,
                    send: Callable[[dict], None]) -> None:
+        connection.settimeout(STREAM_SEND_TIMEOUT)
         with self._jobs:
             if self._stopping.is_set():
                 raise RuntimeError("BEAT host admission is closed")
@@ -336,7 +369,7 @@ class WorkerHost:
                         return
                     control = receive_frame(connection, deadline=time.monotonic() + CONTROL_TIMEOUT)
                     if control is None or control.get("op") == "cancel":
-                        self._cancel_job(job)
+                        self._cancel_job(job, client_cancelled=control is not None)
                         if control is not None:
                             send({"type": "cancelled"})
                         return
@@ -417,11 +450,13 @@ class WorkerHost:
             reply = r.auth_reply(self.record, message)
             challenge = r.new_token()
             send({**reply, "client_nonce": challenge, "idle_timeout_s": self.idle_timeout})
+            deadline = time.monotonic() + AUTH_TIMEOUT
             while not self._stopping.is_set():
                 if admitted:
                     if not select.select([connection], [], [], 0.1)[0]:
                         continue
                     deadline = time.monotonic() + CONTROL_TIMEOUT
+                    connection.settimeout(CONTROL_TIMEOUT)
                 message = receive_frame(connection, deadline=deadline)
                 if message is None:
                     return
@@ -465,6 +500,12 @@ class WorkerHost:
                     ):
                         send({"type": "failed", "error": "Invalid BEAT submission request"})
                         continue
+                    if operation == "submit" and isinstance(request, str):
+                        try:
+                            validate_request_file(request)
+                        except ValueError as exc:
+                            send({"type": "failed", "error": str(exc)})
+                            continue
                     self._serve_job(connection, message, send)
                 elif operation == "retire":
                     with self._jobs:

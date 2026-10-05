@@ -50,6 +50,8 @@ class EngineWorker:
         gate = self.environment.get("TEST_START_GATE")
         if gate:
             wait_until(lambda: Path(gate).exists(), timeout=20)
+            if callback:
+                callback("fixture startup finished")
         if self._info is None:
             self._info = {"type": "ready", "protocol": {"name": "beat-worker", "version": 1},
                           "engine": {"name": "BEAT Engine", "version": "fixture"},
@@ -97,6 +99,8 @@ class _Stream:
         self.worker.log("closed", name=self.request["name"], terminal=self.terminal)
         if not self.terminal and self.request.get("close_error"):
             raise RuntimeError("fixture retirement failed")
+        if not self.terminal and self.request.get("close_unexpected_error"):
+            raise LookupError("fixture unexpected retirement failure")
         if not self.terminal and self.request.get("close_hang"):
             threading.Event().wait()
         self.closed.set()

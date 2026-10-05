@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import errno
 import math
 import os
 from pathlib import Path
@@ -84,7 +83,7 @@ def start_host(
     Never replace foreign records or signal their PIDs. The parent owns spawn
     exclusion through recheck, launch, private readiness and canonical publication.
     """
-    validate_key(key)
+    key = validate_key(key)
     if not all(math.isfinite(v) and v > 0 for v in (timeout, idle_timeout)):
         raise ValueError("Host timeouts must be positive and finite")
     directory = r.private_directory(paths.worker_dir() if directory is None else directory)
@@ -92,28 +91,28 @@ def start_host(
     deadline = time.monotonic() + timeout
     with r.SpawnLock(r.spawn_lock_path(identifier, directory), timeout=remaining_time(deadline)) as lock:
         last_refusal: r.RecordRefused | None = None
+        probe_timeout = RECOVERY_INTERVAL
         while (current := r.read_record(identifier, directory)) is not None:
             if time.monotonic() >= deadline:
                 raise last_refusal or r.RecordRefused("Unverified live host retained; start deadline exceeded")
             try:
                 with connect_authenticated(current, key, directory,
-                                           timeout=min(RECOVERY_INTERVAL, remaining_time(deadline))):
+                                           timeout=min(probe_timeout, remaining_time(deadline))):
                     return current
-            except (ConnectionError, r.RecordRefused) as exc:
-                if isinstance(exc, ConnectionError) and exc.errno not in {errno.ENOENT, errno.ECONNREFUSED}:
-                    raise r.RecordRefused("Unverified host retained") from exc
-                # Cleanup alone decides when a dead/reused host can be pruned.
-                # A closing host can still be alive; give it time to exit.
+            except (ConnectionError, r.RecordRefused, TimeoutError) as exc:
+                # Recovery must never shut down another client's healthy host.
+                # Uncertain/slow live hosts get increasingly long probes.
                 if time.monotonic() >= deadline:
                     raise r.RecordRefused("Unverified live host retained; start deadline exceeded") from exc
                 try:
                     cleanup_host(current, key, directory, lock=lock,
-                                 timeout=min(RECOVERY_INTERVAL, remaining_time(deadline)))
-                except r.RecordRefused as refused:
-                    last_refusal = refused
+                                 timeout=min(RECOVERY_INTERVAL, remaining_time(deadline)), prune_only=True)
+                except (r.RecordRefused, TimeoutError) as refused:
+                    last_refusal = r.RecordRefused(str(refused))
                     if time.monotonic() >= deadline:
-                        raise refused from exc
+                        raise last_refusal from exc
                     time.sleep(min(0.02, max(0, deadline - time.monotonic())))
+                probe_timeout *= 2
         sweep_orphan_socket(identifier, directory, lock=lock, timeout=remaining_time(deadline))
         r.write_launch_spec(key, directory)
         ready = ready_path(identifier, directory)
@@ -158,7 +157,7 @@ def start_host(
             with contextlib.suppress(Exception):
                 current = r.read_record(identifier, directory)
                 if current is not None and current == published:
-                    cleanup_host(current, key, directory, lock=lock, timeout=2.0)
+                    cleanup_host(current, key, directory, lock=lock, timeout=2.0, prune_only=True)
                 elif current is None:
                     sweep_orphan_socket(identifier, directory, lock=lock)
             raise

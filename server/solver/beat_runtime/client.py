@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping
 import contextlib
 import copy
 import hmac
+import json
 import math
 from pathlib import Path
 import socket
@@ -15,8 +16,8 @@ from typing import Any
 
 from . import paths, registry as r
 from .cleanup import cleanup_host
-from .host import CONTROL_TIMEOUT, DEFAULT_IDLE_TIMEOUT, validate_key
-from .ipc import MAX_FRAME_BYTES, receive_frame, remaining_time, send_frame
+from .host import CONTROL_TIMEOUT, DEFAULT_IDLE_TIMEOUT, RETIREMENT_TIMEOUT, validate_key
+from .ipc import CONTROL_FRAME_BYTES, MAX_FRAME_BYTES, receive_frame, remaining_time, send_frame
 from .ownership import OwnedStream, StreamOwnership
 from .spawn import start_host
 
@@ -117,11 +118,14 @@ class _RemoteSubmitter:
     def submit(self, request_path: Path | Mapping, *,
                status_callback: Callable[[str], None] | None = None,
                operation: str = "solve") -> _RemoteStream:
+        request = dict(request_path) if isinstance(request_path, Mapping) else str(Path(request_path).absolute())
+        message = {"op": "submit", "request": request, "operation": operation}
+        if len(json.dumps(message, separators=(",", ":"), allow_nan=False).encode("utf-8")) > CONTROL_FRAME_BYTES:
+            raise HostError("BEAT submission exceeds the 1 MiB control limit; stage the request as a file")
         self.client.adopt()  # Maintain an authenticated lifetime lease.
         connection = connect_client(self.client._record, self.client.directory)
         try:
-            request = dict(request_path) if isinstance(request_path, Mapping) else str(Path(request_path).absolute())
-            send_frame(connection, {"op": "submit", "request": request, "operation": operation})
+            send_frame(connection, message)
             accepted = receive_frame(connection, deadline=time.monotonic() + CONTROL_TIMEOUT)
             if accepted is None or accepted.get("type") != "queued":
                 raise HostError(str(accepted.get("error", "BEAT submission refused"))
@@ -141,7 +145,7 @@ class HostedWorker:
 
     def __init__(self, key: dict[str, Any], *, directory: Path | None = None,
                  timeout: float = 10.0, idle_timeout: float = DEFAULT_IDLE_TIMEOUT) -> None:
-        validate_key(key)
+        key = validate_key(key)
         if not all(math.isfinite(value) and value > 0 for value in (timeout, idle_timeout)):
             raise ValueError("Host timeouts must be positive and finite")
         self.key = copy.deepcopy(key)
@@ -150,6 +154,7 @@ class HostedWorker:
         self.host_pid: int | None = None
         self.engine_pid: int | None = None
         self.worker_instance: str | None = None
+        self.engine_replaced = False
         self._worker_info: dict | None = None
         self._record: r.HostRecord | None = None
         self._connection: socket.socket | None = None
@@ -170,6 +175,9 @@ class HostedWorker:
         info = frame.get("worker_info")
         if info is not None and not isinstance(info, dict):
             raise HostError("Invalid worker negotiation metadata")
+        if ((self.host_pid is not None and self.host_pid != frame["host_pid"])
+                or (self.worker_instance is not None and self.worker_instance != frame["worker_instance"])):
+            self.engine_replaced = True
         self.host_pid = frame["host_pid"]
         self.worker_instance = frame["worker_instance"]
         self._worker_info = copy.deepcopy(info)
@@ -185,14 +193,18 @@ class HostedWorker:
                     connection.close()
                     raise HostError("BEAT client detached during connection")
                 self._connection = connection
+                if self.host_pid is not None and self.host_pid != self._record.pid:
+                    self.engine_replaced = True
+                    self._worker_info = None
                 self.host_pid = self._record.pid
         return self._connection
 
     def _request(self, operation: str, terminal: str, *,
-                 status_callback: Callable[[str], None] | None = None, streaming: bool = False) -> dict:
+                 status_callback: Callable[[str], None] | None = None, streaming: bool = False,
+                 timeout: float = CONTROL_TIMEOUT) -> dict:
         with self._control:
             connection = self._connect()
-            deadline = time.monotonic() + CONTROL_TIMEOUT
+            deadline = time.monotonic() + timeout
             try:
                 send_frame(connection, {"op": operation})
                 while True:
@@ -217,6 +229,7 @@ class HostedWorker:
     def adopt(self) -> dict:
         frame = self._request("adopt", "adopted")
         self._report(frame)
+        frame["engine_replaced"] = self.engine_replaced
         return frame
 
     def ensure_started(self, *, status_callback: Callable[[str], None] | None = None) -> None:
@@ -231,7 +244,8 @@ class HostedWorker:
 
     def terminate(self) -> bool:
         """Request idle retirement; another client's queued/active work declines it."""
-        return bool(self._request("retire", "retired").get("engine_retired"))
+        return bool(self._request("retire", "retired", timeout=RETIREMENT_TIMEOUT + CONTROL_TIMEOUT)
+                    .get("engine_retired"))
 
     def _disconnect(self) -> None:
         with self._lifetime:
@@ -251,6 +265,7 @@ class HostedWorker:
             self._disconnect()
 
     def shutdown(self) -> None:
+        """Explicit Quit: detach this client and shut down its authenticated host."""
         self.detach()
         if self._record is not None:
             cleanup_host(self._record, self.key, self.directory, timeout=self.timeout)
