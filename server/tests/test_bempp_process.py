@@ -969,7 +969,10 @@ def _worker_with_a_sweep_child_that_crashes(connection) -> None:
             continue
         break
     sweep = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
-    connection.send(("stage", job_id, ("frequency_solve", 0.1, str(sweep.pid))))
+    # The pid goes through a file: the parent may notice the death before it
+    # reads any message the worker sent just before exiting.
+    with open(os.environ["WG_TEST_SWEEP_PID_FILE"], "w", encoding="ascii") as handle:
+        handle.write(str(sweep.pid))
     os._exit(3)
 
 
@@ -994,7 +997,12 @@ def _process_is_gone(pid: int) -> bool:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups; Windows uses a job object")
-def test_a_crashed_workers_sweep_children_do_not_outlive_the_job() -> None:
+def test_a_crashed_workers_sweep_children_do_not_outlive_the_job(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pid_file = tmp_path / "sweep.pid"
+    monkeypatch.setenv("WG_TEST_SWEEP_PID_FILE", str(pid_file))
+
     async def exercise() -> int:
         host = BemppProcessHost(target=_worker_with_a_sweep_child_that_crashes)
         stages: list[tuple[str, float, str]] = []
@@ -1011,8 +1019,7 @@ def test_a_crashed_workers_sweep_children_do_not_outlive_the_job() -> None:
                 )
         finally:
             host.close()
-        assert stages, "the worker never reported its sweep child"
-        return int(stages[0][2])
+        return int(pid_file.read_text(encoding="ascii"))
 
     sweep_pid = asyncio.run(exercise())
     deadline = time.monotonic() + 10.0
