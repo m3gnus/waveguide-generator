@@ -82,6 +82,15 @@ export function splSubtitle(result: ResultData | undefined, angles?: { plane: st
   return `${position} · ${angles.plane.slice(0, 1).toUpperCase()} ${angles.angles.map((angle) => `${Number(angle.toFixed(3))}°`).join(' / ')}`;
 }
 
+function cleanedUpMessage(job: JobItem): string {
+  const name = job.run_number === null ? runDisplayName(job, 'short') : `Run #${job.run_number}`;
+  const when = job.results_discarded_at ? new Date(job.results_discarded_at) : null;
+  const date = when && !Number.isNaN(when.getTime())
+    ? ` on ${when.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`
+    : '';
+  return `${name}'s results were cleaned up${date}. Solve it again to see them.`;
+}
+
 function labelFor(id: string, jobs: ReturnType<typeof jobsSocket.getSnapshot>['jobs']): string {
   const job = jobs.find((item) => item.id === id);
   return job ? runDisplayName(job) : `osse-${id.slice(0, 6)}`;
@@ -2324,7 +2333,14 @@ export function ResultsPanel() {
     const held = selection.primary ? jobs.find((job) => job.id === selection.primary) ?? null : null;
     if (
       held
-      && (held.has_results || Boolean(provisional.entries[held.id]))
+      && (
+        held.has_results
+        || Boolean(provisional.entries[held.id])
+        // A run picked by hand whose results were cleaned up stays selected:
+        // the dock says so, and releasing it would put the latest run back
+        // under the card the user just clicked.
+        || (!selection.following && Boolean(held.results_discarded_at))
+      )
       && (!selection.following || (coherenceContext.mode === 'cad'
         ? runDisplayVerdict(held, coherenceContext) === 'current'
         : runMatchesContext(held, coherenceContext) !== 'other-model'))
@@ -2372,6 +2388,13 @@ export function ResultsPanel() {
     const requestedIds = selectionKey ? selectionKey.split('\u0000') : [];
     if (!requestedIds.length || !selection.primary) { setDisplay(null); setFetchError(null); return; }
     setFetchError(null);
+    // Results that were cleaned up are gone from disk: asking for them is a
+    // 404. Clear the outgoing charts and let the dock say why instead.
+    const primaryRun = jobs.find((item) => item.id === selection.primary);
+    if (primaryRun && primaryRun.status === 'complete' && !primaryRun.has_results && !provisional.entries[primaryRun.id]) {
+      setDisplay(null);
+      return;
+    }
     void Promise.all(requestedIds.map(async (id) => {
       const job = jobs.find((item) => item.id === id);
       const provisionalEntry = job?.status !== 'complete' ? provisional.entries[id] : undefined;
@@ -2498,6 +2521,11 @@ export function ResultsPanel() {
   const available = useMemo(() => jobs.filter((job) => job.status === 'complete' && job.has_results && !ids.includes(job.id)), [ids, jobs]);
   const primaryJob = useMemo(() => jobs.find((job) => job.id === selection.primary) ?? null, [jobs, selection.primary]);
   const primaryVerdict = primaryJob ? runDisplayVerdict(primaryJob, coherenceContext) : 'current';
+  // The selected run finished but its results were cleaned up: nothing to
+  // fetch or draw, and the dock says so rather than showing another run.
+  const cleanedUpRun = primaryJob && primaryJob.status === 'complete' && !primaryJob.has_results && !provisional.entries[primaryJob.id]
+    ? primaryJob
+    : null;
   // The menu belongs to one run under one verdict; solving, restoring or
   // switching runs answers it, so it must not stay open over its own answer.
   useEffect(() => { setCoherenceOpen(false); }, [primaryVerdict, selection.primary]);
@@ -2845,13 +2873,16 @@ export function ResultsPanel() {
         loading, which is how a dock with no selection looked like a hang. */}
     {coherenceContext.mode === 'cad' && !cadResultMatchesViewport
       ? <div className="empty-state" role="status"><b>Not solved yet</b><span>The model in the viewport has no selected solved result.</span><button type="button" className="solve-button" onClick={solveCurrentDesign}>Solve</button></div>
-      : charts ?? <div className="empty-state" role="status">
+      : charts ?? (cleanedUpRun ? <div className="empty-state" role="status">
+        <b>Results cleaned up</b>
+        <span>{cleanedUpMessage(cleanedUpRun)}</span>
+      </div> : <div className="empty-state" role="status">
       <b>{error ? 'Results unavailable' : selection.primary ? 'Loading results' : 'No run selected'}</b>
       <span>{error
         ? 'Retry above, or select another run in the Jobs rail.'
         : selection.primary
           ? 'Fetching the selected run…'
           : jobs.length ? 'Choose a run in the Jobs rail.' : 'Solve a design to see its results here.'}</span>
-    </div>}
+    </div>)}
   </div>;
 }

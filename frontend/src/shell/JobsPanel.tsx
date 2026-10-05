@@ -135,7 +135,9 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
  * imported run selected from parametric mode brings CAD Link back.
  */
 export function selectJob(job: JobItem): void {
-  if (job.has_results) compareSelection.setPrimary(job.id);
+  // A finished run whose results were cleaned up is still the selected run: the
+  // dock says so instead of leaving the previous run's charts under its card.
+  if (job.has_results || job.status === 'complete') compareSelection.setPrimary(job.id);
   // Undoable: browsing runs must not be able to discard the working design.
   if (job.config_summary.geometry_type !== 'imported' && !canLoadDesign(job)) return;
   void showJobModel(job);
