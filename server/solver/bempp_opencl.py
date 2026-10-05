@@ -357,16 +357,26 @@ class _ProbeHandle:
                     reader.join(timeout=1.0)
                 stuck = [reader for reader in self.readers if reader.is_alive()]
                 if stuck:
-                    # A process the child started still holds the pipes. That
-                    # is no verdict on the device, and raising here replaced
-                    # the caller's verdict and wedged the registry on
-                    # "Checking OpenCL…". The readers are daemons and end with
-                    # the pipe; a stream they are blocked on is not closed.
+                    # A process the child started still holds the pipes (no job
+                    # could be made). That is no verdict on the device, and
+                    # raising here replaced the caller's verdict and wedged the
+                    # registry on "Checking OpenCL…". Cancel the blocked reads
+                    # so the readers end and the pipes can be closed; bounded,
+                    # it never waits on the other process.
+                    from server.platform.process_tree import cancel_blocked_reads
+
+                    stuck = cancel_blocked_reads(stuck)
                     logging.getLogger(__name__).warning(
-                        "The OpenCL check's output did not close after its process "
+                        "The OpenCL check's output was still held after its process "
                         "was stopped (pid %s); a process it started may still be "
-                        "running.", self.child.pid,
+                        "running. %s", self.child.pid,
+                        "Its output did not close." if stuck else "Its reads were cancelled.",
                     )
+                if stuck:
+                    # A read that could not be cancelled: closing its stream
+                    # would block on the reader's buffer lock, so the daemon
+                    # reader keeps it until the pipe ends.
+                    pass
                 else:
                     self.child.stdout.close()
                     self.child.stderr.close()
@@ -446,14 +456,19 @@ def _read_probe_output(stream: Any, events: Any) -> None:
             if complete and not partial and line.rstrip("\r\n") == _READY_MARKER:
                 events.put((_READY_MARKER, time.monotonic()))
             partial = not complete
+    except (OSError, ValueError):
+        pass  # a cancelled read (cancel_blocked_reads) or a closed stream: EOF
     finally:
         events.put((None, time.monotonic()))
 
 
 def _read_probe_stderr(stream: Any, tail: list[str]) -> None:
     """Continuously drain stderr on Windows/POSIX; retain at most 4 KB."""
-    while chunk := stream.read(1024):
-        tail[0] = (tail[0] + chunk)[-4096:]
+    try:
+        while chunk := stream.read(1024):
+            tail[0] = (tail[0] + chunk)[-4096:]
+    except (OSError, ValueError):
+        pass  # a cancelled read (cancel_blocked_reads) or a closed stream: EOF
 
 
 def _validate_probe_result(result: Any, mode: str) -> None:

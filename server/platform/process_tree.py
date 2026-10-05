@@ -277,6 +277,56 @@ def _resume_with_retries(pid: int) -> bool:
     return False
 
 
+def cancel_blocked_reads(
+    threads: list[Any], *, attempts: int = 10, wait_seconds: float = 0.05
+) -> list[Any]:
+    """End reader threads blocked on a pipe another process still holds.
+
+    On Windows a synchronous ``ReadFile`` on an anonymous pipe returns only at
+    EOF, and EOF needs every writer gone, including a grandchild that inherited
+    the handle. ``CancelSynchronousIo`` makes the blocked read fail instead, so
+    a reader that treats ``OSError`` as EOF ends and its stream can be closed.
+    Retried briefly, because a reader may be between reads when cancelled.
+    Bounded by ``attempts * wait_seconds``; never waits on the other process.
+    Returns the threads still alive (all of them, elsewhere).
+    """
+
+    alive = [thread for thread in threads if thread.is_alive()]
+    if os.name != "nt" or not alive:
+        return alive
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenThread.restype = wintypes.HANDLE
+        kernel32.CancelSynchronousIo.argtypes = [wintypes.HANDLE]
+        kernel32.CancelSynchronousIo.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+    except Exception as exc:  # pragma: no cover - Windows-only failure paths
+        logger.warning("Could not cancel blocked reads (%s)", exc)
+        return alive
+    for _ in range(attempts):
+        for thread in alive:
+            native = getattr(thread, "native_id", None)
+            if native is None or not thread.is_alive():
+                continue
+            handle = kernel32.OpenThread(0x0001, False, native)  # THREAD_TERMINATE
+            if handle:
+                try:
+                    kernel32.CancelSynchronousIo(handle)
+                finally:
+                    kernel32.CloseHandle(handle)
+        for thread in alive:
+            thread.join(wait_seconds)
+        alive = [thread for thread in alive if thread.is_alive()]
+        if not alive:
+            break
+    return alive
+
+
 def _resume_windows_process(pid: int) -> bool:
     """Resume the threads of a process created with ``CREATE_SUSPENDED``.
 
@@ -446,6 +496,7 @@ def kill_own_process_group() -> bool:
 __all__ = [
     "WindowsJob",
     "adopt_process_group",
+    "cancel_blocked_reads",
     "confine_to_windows_job",
     "kill_own_process_group",
     "kill_process_group",
