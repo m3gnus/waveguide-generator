@@ -14,10 +14,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--case", action="append", choices=[case.name for case in all_cases()])
-    parser.add_argument("--solve", help="Importable module:function returning SolveEvidence")
+    parser.add_argument("--solve", help="Importable module:function returning EngineRun (real) or SolveEvidence (synthetic)")
     parser.add_argument("--evidence-mode", choices=("synthetic", "real"), default="synthetic")
+    parser.add_argument("--backend", choices=("cpu", "metal"), default="cpu")
     args = parser.parse_args(argv)
-    cases = [case for case in all_cases() if args.case is None or case.name in args.case]
+    cases = [case for case in all_cases()
+             if (args.case is None and (case.backend == "cpu" or args.backend == "metal"))
+             or (args.case is not None and case.name in args.case)]
     solve = None
     if args.solve:
         module, separator, function = args.solve.partition(":")
@@ -27,9 +30,11 @@ def main(argv: list[str] | None = None) -> int:
         # failed per-case records rather than an unrecorded preflight failure.
         def solve(request):
             return getattr(importlib.import_module(module), function)(request)
-    summary = run_cases(cases, output_dir=args.output_dir, solve=solve, evidence_mode=args.evidence_mode)
+    summary = run_cases(cases, output_dir=args.output_dir, solve=solve, evidence_mode=args.evidence_mode, backend=args.backend)
     print(f"{len(summary['records'])} cases; {summary['real_solved_count']} real frequency solves; "
           f"qualified={summary['passed']}")
+    if summary["missing_required_cases"]:
+        print("Missing required cases: " + ", ".join(summary["missing_required_cases"]))
     return 0 if summary["passed"] else 1
 
 

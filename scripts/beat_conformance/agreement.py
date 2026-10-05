@@ -8,8 +8,11 @@ import json
 from typing import Any
 
 import numpy as np
+from scipy.signal import find_peaks
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
+
+from .recorder import record_sha256
 
 REFERENCE_COMPLEX_RELATIVE_L2 = 1e-5
 REFERENCE_MASKED_SPL_DB = 0.001
@@ -22,7 +25,7 @@ DI_POWER_DB = 0.02
 REFERENCE_MASK_DB = 30.
 RESONANCE_MAX_STEPS = 1.
 RESONANCE_LOCAL_STEP_FRACTION = 0.005
-FROZEN_SETTINGS = ("tags", "normals", "axes", "observation_points", "quadrature", "precision",
+FROZEN_SETTINGS = ("tags", "normals", "axes", "observation_points", "quadrature", "backend", "precision",
                    "time_convention", "threads", "density_kg_per_m3", "sound_speed_m_per_s")
 
 
@@ -36,6 +39,8 @@ class ResultSet:
     power_w: np.ndarray
     settings: dict[str, Any]
     revision: str = ""
+    recorder_record: dict[str, Any] | None = None
+    recorder_sha256: str = ""
 
 
 def _canonical(settings: dict[str, Any]) -> str:
@@ -56,39 +61,26 @@ def _columns(value: np.ndarray, count: int, name: str) -> np.ndarray:
 
 
 def _extrema(levels: np.ndarray, prominence_db: float) -> dict[str, list[int]]:
-    """Interior extrema, including flat tops; prominence uses adjacent basins.
-
-    The declared prominence distinguishes physical features from noise. End
-    points are not classified: a scan must bracket each physical resonance.
-    """
-    slopes = np.diff(levels)
-    changing = np.flatnonzero(slopes)
-    peaks, dips = [], []
-    for left, right in zip(changing[:-1], changing[1:]):
-        if slopes[left] * slopes[right] < 0:
-            index = int((left + 1 + right) // 2)
-            (peaks if slopes[left] > 0 else dips).append(index)
-    extrema = sorted([0, *peaks, *dips, len(levels) - 1])
-    result = {"peaks": [], "dips": []}
-    for name, indices in (("peaks", peaks), ("dips", dips)):
-        sign = 1 if name == "peaks" else -1
-        for index in indices:
-            position = extrema.index(index)
-            left, right = extrema[position - 1], extrema[position + 1]
-            prominence = min(sign * (levels[index] - levels[left]), sign * (levels[index] - levels[right]))
-            if prominence >= prominence_db:
-                result[name].append(index)
-    return result
+    """Topographic prominence crosses smaller ripples; dips use inverted levels."""
+    return {kind: find_peaks(sign * levels, prominence=prominence_db)[0].tolist()
+            for kind, sign in (("peaks", 1), ("dips", -1))}
 
 
 def resonance_gate(frequencies: np.ndarray, reference: np.ndarray, candidate: np.ndarray, *,
-                   frequency_step_hz: float, prominence_db: float) -> dict[str, Any]:
-    failures, columns = [], []
+                   frequency_step_hz: float, prominence_db: float,
+                   expected_columns: tuple[int, ...] = ()) -> dict[str, Any]:
+    failures, columns, unstructured = [], [], []
+    if any(type(column) is not int or not 0 <= column < reference.shape[1] for column in expected_columns):
+        raise ValueError("Expected resonance column is outside the result shape")
     for column in range(reference.shape[1]):
         # No mask at this gate: a dip below the SPL mask still matters.
         levels = [20 * np.log10(np.maximum(np.abs(value[:, column]), np.finfo(float).tiny))
                   for value in (reference, candidate)]
         ref, got = (_extrema(value, prominence_db) for value in levels)
+        if not any(ref.values()):
+            unstructured.append(column)
+            if column in expected_columns:
+                failures.append(f"column {column}: reference has no expected resonances")
         entry = {"column": column, "reference": {}, "candidate": {}, "shifts_hz": {}}
         for kind in ("peaks", "dips"):
             a, b = ref[kind], got[kind]
@@ -109,7 +101,8 @@ def resonance_gate(frequencies: np.ndarray, reference: np.ndarray, candidate: np
                     break
         columns.append(entry)
     return {"passed": not failures, "failures": failures, "columns": columns,
-            "frequency_step_hz": frequency_step_hz, "prominence_db": prominence_db}
+            "frequency_step_hz": frequency_step_hz, "prominence_db": prominence_db,
+            "reference_columns_without_extrema": unstructured}
 
 
 def _masked_complex(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -136,7 +129,8 @@ def _masked_complex(reference: np.ndarray, candidate: np.ndarray) -> dict[str, A
 
 
 def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_step_hz: float,
-                    resonance_prominence_db: float, forced_lu_reference: bool = False) -> dict[str, Any]:
+                    resonance_prominence_db: float,
+                    expected_resonance_columns: dict[str, tuple[int, ...]] | None = None) -> dict[str, Any]:
     """Return a strict-JSON verdict; missing quantities/identity cannot pass.
 
     Inputs carry identical original mesh bytes and frozen settings. Impedance
@@ -148,6 +142,28 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
     report: dict[str, Any] = {"passed": False, "failures": [], "limitations": [], "metrics": {},
                              "reference_revision": reference.revision, "candidate_revision": candidate.revision}
     try:
+        if (not reference.revision.strip() or not candidate.revision.strip()
+                or reference.revision.strip() == candidate.revision.strip()):
+            raise ValueError("Reference/candidate revisions must be nonempty and different")
+        forced_lu_reference = False
+        if reference.recorder_record is not None or candidate.recorder_record is not None:
+            for result in (reference, candidate):
+                record = result.recorder_record
+                if record is None or not result.recorder_sha256:
+                    raise ValueError("Both results require recorder record/hash bindings")
+                digest = record_sha256(record)
+                if digest != result.recorder_sha256:
+                    raise ValueError("Recorder record hash differs")
+                if record.get("mesh_sha256") != hashlib.sha256(result.mesh_bytes).hexdigest():
+                    raise ValueError("Recorder mesh hash differs from ResultSet mesh")
+                if record.get("runtime", {}).get("engine_revision") != result.revision:
+                    raise ValueError("Recorder revision differs from ResultSet revision")
+            rows = reference.recorder_record.get("result", {}).get("solver_log", [])
+            forced_lu_reference = bool(rows) and all(
+                row.get("native_diagnostics", {}).get("linear_solver")
+                in {"cpu_dense_lu", "metal_assembly_cpu_dense_lu"} for row in rows)
+        report["evidence_binding"] = "recorded" if reference.recorder_record is not None else "attested"
+        report["forced_lu_reference"] = forced_lu_reference
         if (not np.isfinite(frequency_step_hz) or frequency_step_hz <= 0
                 or not np.isfinite(resonance_prominence_db) or resonance_prominence_db < 0):
             raise ValueError("Declare positive frequency step and non-negative physical prominence")
@@ -186,9 +202,12 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
             for value in arrays["impedance_per_acceleration"])
         for name in ("pressure_complex", "normalized_impedance"):
             gate = resonance_gate(frequencies, *arrays[name], frequency_step_hz=frequency_step_hz,
-                                  prominence_db=resonance_prominence_db)
+                                  prominence_db=resonance_prominence_db,
+                                  expected_columns=(expected_resonance_columns or {}).get(name, ()))
             report.setdefault("resonances", {})[name] = gate
             report["failures"].extend(f"{name}: {failure}" for failure in gate["failures"])
+        if expected_resonance_columns and set(expected_resonance_columns) - {"pressure_complex", "normalized_impedance"}:
+            raise ValueError("Unknown expected resonance quantity")
         report["limitations"].append("Resonances use interior sampled extrema and predeclared prominence; endpoints must bracket features")
         if report["failures"]:
             report["limitations"].append("Error norms not scored because the resonance gate failed")

@@ -2,7 +2,7 @@
 
 All paths below are relative to the WG repository root. The target is official
 `JWSound/BEAT_Engine` (`beat-engine`, import `beat_engine`), superseding the
-design's fork references. Changes are additive and intentionally uncommitted.
+design's fork references. Changes are additive.
 
 - **W2 / observation PR:** `server/solver/beat_adapter/observations.py`;
   `server/tests/beat_adapter/test_observations.py`;
@@ -146,7 +146,7 @@ Design deviations: official JWSound remains the target. Float32 alias refusal
 from the initial adapter is removed to preserve HBB narrow sweeps. The existing
 rotated `xz` half remains representable, while ambiguous legacy aliases refuse.
 No production adoption, engine-specific extensions, dependency changes or
-numerical solves are included. Work remains uncommitted as requested.
+numerical solves are included. Production callers remain unchanged.
 
 ## W8 / W9 qualification tooling (PLAN slice 8)
 
@@ -173,8 +173,72 @@ Deviations: official JWSound supersedes the design's fork target. The optional
 comparator is injected instead of launching HBB or hornlab-metal-bem automatically;
 its absence is an explicit limitation. HBB's 0.6 degree faceted-sphere band is
 retained. Numerical resonance prominence and dense step are declared per corpus;
-sampled extrema require bracketing and local refinement below 0.5%. Real runner,
+sampled extrema require bracketing and local refinement below 0.5%. Real hardware,
 installed/device evidence, full migration corpus and performance measurements
 remain compute-broker qualification work. No production routing, pins,
 requirements, runtime directories, HBB files or blanket skip policies change.
-Changes remain uncommitted as requested.
+This tooling section describes commit `2e1e57b5`.
+
+
+## Review round 1 fixes — qualification tooling (`2e1e57b5`)
+
+- **P1/A — fixed:** SciPy (already in WG runtime requirements) supplies true
+  topographic prominence for peaks and inverted dips. Failing controls rerun
+  the old adjacent-extremum algorithm: removed and four-step-shifted rippled
+  resonances pass there, then fail the new gate. Empty-extremum columns are
+  reported; declared expected resonance columns fail on monotone references.
+- **P1/B — fixed:** CLI selection cannot shrink the fixed CPU required set;
+  Metal runs additionally require the Metal case. Missing cases are named,
+  `qualified=False`, and selected successful records remain available.
+  Required names also retain their canonical declarations/request hashes.
+- **P2/C — fixed:** directivity must be zero at the reference angle. A +3 dB
+  offset still passes the old spread criterion but fails the restored assertion.
+- **P2/D — fixed:** `EngineRun` supplies launch selection only. Recorder-owned
+  subprocess checks run the actual Julia binary and record version/content
+  identity; an independent Metal integer kernel must dispatch and return the
+  expected values. Loaded engine metadata/revision and content identity are
+  independently inspected. The recorder owns the public worker and counts its
+  checked terminal events, never result-array length or `real_solves` claims.
+  Qualification requires observed backend/precision/device/solve-count fields.
+  **Still attested:** precomputed `SolveEvidence` fields (cannot qualify),
+  worker temperature, and installed `engine_revision` from VCS metadata
+  (its correspondence to upstream bytes is unverified); no upstream tree is downloaded. Source revision requires a clean
+  tracked engine tree. Installed classification is independently inspected.
+- **P2/E — fixed:** add and require `metal_exterior_float32` for a declared
+  Metal run, with the same exterior acceptance and a two-frequency solve floor.
+- **P2/F — fixed:** nonempty distinct revisions; frozen backend/precision;
+  optional paired record/hash/mesh/revision bindings. Forced-LU budgets derive
+  from reference-record native `linear_solver` evidence, matching official
+  BEAT's diagnostics. Unbound comparisons remain explicitly attested.
+- **P3 static refusals — fixed:** an explicit expected refusal set must equal
+  the observed set; newly accepted or newly refused scenarios fail the case.
+- **P3 feature names — fixed:** declared feature names validate before probing;
+  misspellings raise instead of becoming API-absence refusals.
+- **P3 sphere shape — fixed:** exactly `(1, 2, 5)` pressure samples required;
+  a single analytic sample can no longer pass the sphere case.
+- **P3 provenance — fixed:** record override names plus SHA-256 value hashes;
+  no environment value, interpreter path or prefix is copied verbatim.
+
+Files per PR / manifest row for this fix round:
+
+- **W8 capability/conformance:** `server/solver/beat_adapter/capabilities.py`;
+  `scripts/beat_conformance/{cases,analytic}.py`;
+  `server/tests/beat_adapter/test_{capabilities,conformance}.py`.
+- **W9 qualification:** `scripts/beat_conformance/{__main__,recorder,verification}.py`,
+  `scripts/beat_conformance/assert_metal_device.jl`;
+  `server/tests/beat_adapter/test_{conformance,verification}.py`.
+- **W10 agreement preparation:** `scripts/beat_conformance/agreement.py`;
+  `server/tests/beat_adapter/test_agreement.py`; record hashing shared with W9.
+- **Shared W2/W3/W5 documentation:** this file and
+  `scripts/beat_conformance/README.md`. W2 requests, W3 directivity/analytic
+  results and W5 terminal handling are exercised by the conformance controls;
+  their implementation files are unchanged.
+
+Design deviations: the real runner now returns launch settings rather than
+self-attested solve evidence, so the recorder can independently observe the
+engine. SciPy replaces a NumPy prominence implementation because WG already
+requires it. The official JWSound target, additive scope and fixed numerical
+budgets remain unchanged. Real CPU/Metal/installed/performance runs are deferred
+compute-broker evidence, not claimed by fake tests. This fix round is left
+uncommitted at the user's explicit request; previous rounds' stale commit-state
+wording is removed.

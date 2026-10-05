@@ -5,6 +5,8 @@ from __future__ import annotations
 import builtins
 import json
 
+import pytest
+
 from server.solver.beat_adapter import capabilities
 
 
@@ -48,3 +50,23 @@ def test_outcomes_and_reasons_come_from_builder_not_a_parallel_list(monkeypatch)
     scenarios = capabilities.capability_report()["scenarios"]
     assert scenarios["symmetry.xy"]["supported"]
     assert scenarios["quadrature.cpu.3"]["reason"] == "new builder reason"
+
+
+def test_feature_name_validation_distinguishes_typo_from_refusal():
+    assert not capabilities.probe_feature("near_correction")["supported"]
+    # Previous catch-all mechanism treated a misspelling as a valid refusal.
+    old = capabilities._outcome(lambda: capabilities.probe_request(near_corection=True))
+    assert not old["supported"] and old["exception"] == "TypeError"
+    with pytest.raises(ValueError, match="Unknown declared feature"):
+        capabilities.probe_feature("near_corection")
+
+
+def test_feature_probe_exercises_keyword_dispatch_instead_of_assuming_absence(monkeypatch):
+    original = capabilities.request.build_request
+    def supported(*args, **kwargs):
+        kwargs.pop("near_correction", None)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(capabilities.request, "build_request", supported)
+    report = capabilities.capability_report()
+    assert report["scenarios"]["feature.near_correction"]["supported"]
+    assert not report["passed"]  # The declared refusal changed through keyword dispatch.

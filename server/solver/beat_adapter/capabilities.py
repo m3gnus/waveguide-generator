@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import inspect
 from typing import Any
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
@@ -59,12 +60,44 @@ def _outcome(call: Callable[[], request.CompiledRequest]) -> dict[str, Any]:
             "contract_version": built.wire["compiled_system"]["contract_version"]}
 
 
+# Known engine features whose representation this adapter must explicitly probe.
+DECLARED_FEATURES = frozenset({
+    "boundary_admittance", "coupled_fem_bem_lem", "near_correction",
+    "regular_quadrature_mode", "drive_amplitude", "frequency_dependent_drive",
+    "post_solve_field_replay", "acoustic_power",
+})
+EXPECTED_REFUSALS = frozenset({
+    "route.beat-metal.float64", "route.official-beat-metal.float64", "route.beat.None",
+    "symmetry.xy", "symmetry.x", "symmetry.y",
+    *(f"ground.{axis}+reduction" for axis in "xyz"),
+    *(f"frequencies.{name}" for name in ("empty", "duplicate", "nonpositive", "nonfinite", "boolean")),
+    *(f"quadrature.{backend}.{order}" for backend in ("cpu", "metal") for order in (3, 6, 8)),
+    "source.axial.[0, 0, 0]", "source.normal.[0, 0, 1]", "source.radial.None",
+    *(f"feature.{name}" for name in DECLARED_FEATURES),
+    *(f"singular.float32.{order}" for order in (0, 5, 12, 13)),
+    "singular.float64.0", "singular.float64.13", "imported.missing_tags",
+    "parametric.infinite_baffle", "imported.infinite_baffle",
+})
+
+
+def probe_feature(name: str) -> dict[str, Any]:
+    """Unknown spellings are probe errors, never successful refusals."""
+    if name not in DECLARED_FEATURES:
+        raise ValueError(f"Unknown declared feature: {name}")
+    parameters = inspect.signature(request.build_request).parameters
+    if name not in parameters and not any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()):
+        return {"supported": False, "reason": f"Adapter has no representation for {name}",
+                "exception": "NotImplementedError"}
+    return _outcome(lambda: probe_request(**{name: True}))
+
+
 def capability_report() -> dict[str, Any]:
     """Exercise declared scenarios; refusal reasons come from the real builders.
 
     Acceptance means representable by this additive adapter, not registered
     production routing or availability on this host. Scenarios are intentionally
-    explicit; there is no independent table of supported/refused outcomes.
+    explicit; the observed refusal set must equal the declared acceptance set.
     """
     probes: dict[str, Callable[[], request.CompiledRequest]] = {}
     for engine in ("beat-cpu", "beat-metal", "official-beat-cpu", "official-beat-metal"):
@@ -94,12 +127,6 @@ def capability_report() -> dict[str, Any]:
                          ("axial", [0, 0, 0]), ("normal", [0, 0, 1]), ("radial", None)):
         probes[f"source.{motion}.{axis}"] = lambda motion=motion, axis=axis: probe_request(
             sources=[request.SourceBasis("source", 2, motion, axis, "source")])
-    # API absence is exercised too: no unsupported engine feature can silently
-    # become a reported capability through a stale hand-written reason.
-    for feature in ("boundary_admittance", "coupled_fem_bem_lem", "near_correction",
-                    "regular_quadrature_mode", "drive_amplitude", "frequency_dependent_drive",
-                    "post_solve_field_replay", "acoustic_power"):
-        probes[f"feature.{feature}"] = lambda feature=feature: probe_request(**{feature: True})
     for planes in (("horizontal", "vertical", "diagonal"), ("diagonal",)):
         probes[f"observation.{'+'.join(planes)}"] = lambda planes=planes: probe_request(
             layout=build_observations(planes=planes, inclination_deg=27., sphere_grid=(37, 72)))
@@ -120,7 +147,15 @@ def capability_report() -> dict[str, Any]:
     probes["parametric.infinite_baffle"] = lambda: request.build_parametric_request(PROBE_MESH, baffle)
     probes["imported.infinite_baffle"] = lambda: request.build_imported_request(PROBE_MESH, baffle, {}, [])
     scenarios = {name: _outcome(call) for name, call in probes.items()}
-    return {"schema_version": 1, "provider": PROVIDER_ID,
+    scenarios.update({f"feature.{name}": probe_feature(name) for name in sorted(DECLARED_FEATURES)})
+    refused = {name for name, outcome in scenarios.items() if not outcome["supported"]}
+    failures = []
+    if refused != EXPECTED_REFUSALS:
+        failures.append(f"Refusal set differs: missing {sorted(EXPECTED_REFUSALS - refused)}, "
+                        f"extra {sorted(refused - EXPECTED_REFUSALS)}")
+    return {"passed": not failures, "failures": failures,
+            "expected_refusals": sorted(EXPECTED_REFUSALS),
+            "schema_version": 1, "provider": PROVIDER_ID,
             "engine": "JWSound/BEAT_Engine", "distribution": "beat-engine",
             "time_convention": SOLVER_TIME_CONVENTION,
             "scope": "request construction; not runtime readiness or production adoption",

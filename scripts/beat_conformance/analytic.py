@@ -78,6 +78,9 @@ def level_phase_error(measured: np.ndarray, reference: complex | np.ndarray) -> 
 
 
 def score_sphere(measured: np.ndarray) -> dict:
+    measured = np.asarray(measured)
+    if measured.shape != (1, 2, 5):
+        raise ValueError("Sphere pressure requires shape (1, 2, 5), ten observation samples")
     reference = sphere_reference_pressure()
     correct = level_phase_error(measured, reference)
     controls = {"conjugated": level_phase_error(np.conjugate(measured), reference),
