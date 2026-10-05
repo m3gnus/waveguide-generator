@@ -73,6 +73,7 @@ def host():
 
 @pytest.fixture()
 def shared_child(monkeypatch):
+    # Deliberate: these tests want the real child, whatever the environment says.
     monkeypatch.delenv("WG2_TEST_MESH_IN_PROCESS", raising=False)
     close_mesher_child()
     yield
@@ -496,5 +497,66 @@ def test_cancelling_before_the_build_is_sent_leaves_the_warm_child_alone(host) -
             await host.run(ok_build, cancel_cb=cancel_now)
         assert _alive(pid)
         assert (await host.run(ok_build))["pid"] == pid
+
+    asyncio.run(scenario())
+
+
+def test_the_reader_is_gone_before_its_descriptor_is_released(host) -> None:
+    """The fd-reuse race: a reader still alive when its fd closes can read the next pipe."""
+
+    async def scenario() -> None:
+        await host.run(ok_build)
+        channel = host._channel
+        assert channel is not None
+        seen: list[bool] = []
+        real_close = channel.connection.close
+
+        def close_spy() -> None:
+            seen.append(channel.reader.is_alive())
+            real_close()
+
+        channel.connection.close = close_spy  # type: ignore[method-assign]
+        host._discard(channel, respawn=False)
+        assert not channel.reader.is_alive()
+        # Closed exactly once, by the reader itself, and not from kill().
+        assert seen == [True] and channel.connection.closed
+
+    asyncio.run(scenario())
+
+
+def test_repeated_cancel_and_respawn_never_crosses_replies(host) -> None:
+    class Cancelled(Exception):
+        pass
+
+    async def scenario() -> None:
+        for round_number in range(12):
+            began = time.monotonic()
+
+            def cancel_cb(began=began) -> None:
+                if time.monotonic() - began > 0.05 * (round_number % 3):
+                    raise Cancelled()
+
+            with pytest.raises(Cancelled):
+                await host.run(hang_build, cancel_cb=cancel_cb)
+            got = await asyncio.wait_for(host.run(ok_build, round_number), 60)
+            assert got["value"] == round_number
+
+    asyncio.run(scenario())
+
+
+def test_a_cancelled_task_does_not_respawn_a_child(host) -> None:
+    """What a Quit does: cancel the build's task, then close. No child in between."""
+
+    async def scenario() -> None:
+        task = asyncio.create_task(host.run(hang_build))
+        await asyncio.sleep(1.5)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        deadline = time.monotonic() + 5
+        while host._channel is not None and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(1.0)
+        assert host._channel is None
 
     asyncio.run(scenario())

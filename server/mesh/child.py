@@ -64,6 +64,7 @@ _POLL_SECONDS = 0.1
 _JOIN_SECONDS = 2.0
 _PARENT_GONE_EXIT_CODE = 3
 _WARM_ID = 0
+_READER_JOIN_SECONDS = 5.0
 
 CRASH_MESSAGE = (
     "The mesher crashed on this geometry. A known cause is morph shrinkage with a "
@@ -206,21 +207,33 @@ class _Channel:
         self.job = job
         self.events: queue.Queue[tuple[Any, ...]] = queue.Queue()
         self.warm_pending = False
-        threading.Thread(target=self._read, name="wg2-mesh-reader", daemon=True).start()
+        self.reader = threading.Thread(target=self._read, name="wg2-mesh-reader", daemon=True)
+        self.reader.start()
 
     def _read(self) -> None:
-        while True:
+        # This thread owns the parent end of the pipe for its whole life and is
+        # the only one to close it, so the descriptor cannot be released (and
+        # reused by the next child's pipe) while a read on it is possible.
+        try:
+            while True:
+                try:
+                    event = self.connection.recv()
+                except (EOFError, OSError):
+                    self.events.put(("eof",))
+                    return
+                except Exception as exc:  # noqa: BLE001 - a result the parent cannot unpickle
+                    self.events.put(("badframe", exc))
+                    continue
+                self.events.put(event)
+        finally:
             try:
-                event = self.connection.recv()
-            except (EOFError, OSError):
-                self.events.put(("eof",))
-                return
-            except Exception as exc:  # noqa: BLE001 - a result the parent cannot unpickle
-                self.events.put(("badframe", exc))
-                continue
-            self.events.put(event)
+                self.connection.close()
+            except OSError:
+                pass
 
     def kill(self) -> None:
+        """Kill the child, then wait for the reader to see EOF and close its end."""
+
         process = self.process
         try:
             if process.is_alive():
@@ -228,13 +241,13 @@ class _Channel:
             process.join(_JOIN_SECONDS)
         except (OSError, ValueError):
             pass
-        try:
-            self.connection.close()
-        except OSError:
-            pass
         if self.job is not None:
             self.job.terminate()
             self.job.close()
+        # The child is dead, so the pipe reports EOF and the reader leaves on
+        # its own. Never close the descriptor from here: the reader may still
+        # be about to read it.
+        self.reader.join(_READER_JOIN_SECONDS)
 
 
 class MesherChildHost:
@@ -277,14 +290,18 @@ class MesherChildHost:
         self._channel = _Channel(process, parent, job)
         return self._channel
 
-    def _discard(self, channel: _Channel) -> None:
-        """Kill ``channel`` (if it is still the current one) and warm a new child."""
+    def _discard(self, channel: _Channel, *, respawn: bool = True) -> None:
+        """Kill ``channel`` (if it is still the current one) and warm a new child.
+
+        ``respawn=False`` for a build abandoned because its awaiting task was
+        cancelled, which is what a Quit does before it closes the host.
+        """
 
         with self._state:
             if self._channel is channel:
                 self._channel = None
             channel.kill()
-            if not self._closed:
+            if respawn and not self._closed:
                 self.prewarm()
 
     def prewarm(self) -> None:
@@ -332,7 +349,7 @@ class MesherChildHost:
                     cancel_cb()
             except BaseException:
                 if channel is not None:
-                    self._discard(channel)
+                    self._discard(channel, respawn=not abort.is_set())
                 raise
 
         while not self._serial.acquire(timeout=_POLL_SECONDS):
