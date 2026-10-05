@@ -591,8 +591,8 @@ def test_a_probe_refuses_missing_sessions_without_falling_back_to_system_temp(mo
         elif loss == "before_creation":
             original_root = temp_session.spawned_directory_root
 
-            def resolved_then_deleted():
-                root = original_root()
+            def resolved_then_deleted(**kwargs):
+                root = original_root(**kwargs)
                 assert root == str(session.path)
                 session.close(remove=True)
                 return root

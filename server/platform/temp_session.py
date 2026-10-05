@@ -120,17 +120,23 @@ def parent_session_lost() -> bool:
     return _active_root is None and _parent_root is not None and not Path(_parent_root).is_dir()
 
 
-def spawned_directory_root() -> str | None:
+def spawned_directory_root(*, required: bool = False) -> str | None:
     """Like :func:`temporary_directory_root`, but also right in a process the
     server spawned: there the parent's session directory, while it exists.
 
-    Only for directories a child makes and removes itself.
+    Only for directories a child makes and removes itself. With ``required``,
+    refuse a missing session instead of returning ``None`` (system temp).
     """
 
     if _active_root is not None:
         return _active_root
     if _parent_root is not None and Path(_parent_root).is_dir():
         return _parent_root
+    if required:
+        raise RuntimeError(
+            "Operation requires a temporary session; "
+            "refusing to use the bare system temporary directory"
+        )
     return None
 
 
