@@ -227,6 +227,21 @@ const
   SYNCHRONIZE = $00100000;
   WAIT_OBJECT_0 = 0;
   WaitForProcessLimitMs = 120000;
+  { The /WAITPID waits run on the wizard's UI thread. One blocking wait of up
+    to 120 s left the window unpainted and marked "Not Responding"; waiting in
+    slices this long and pumping messages between them keeps it live. }
+  WaitSliceMs = 100;
+  PM_REMOVE = 1;
+  WM_QUIT = $0012;
+
+type
+  { Opaque buffer for a Windows MSG. Only Message and WParam are read, which
+    matches the 32-bit layout Setup runs with; the spare fields keep the
+    buffer larger than MSG on any layout. }
+  TWinMsg = record
+    Wnd, Message, WParam, LParam, Time, X, Y: Integer;
+    Spare1, Spare2, Spare3, Spare4, Spare5, Spare6, Spare7, Spare8, Spare9: Integer;
+  end;
 
 var
   OpenClHelpButton: TNewButton;
@@ -441,6 +456,41 @@ function WaitForSingleObject(Handle: Integer; Milliseconds: Integer): Integer;
 
 function CloseHandle(Handle: Integer): Integer;
   external 'CloseHandle@kernel32.dll stdcall setuponly';
+
+{ Pascal Script exposes no Application.ProcessMessages, so the pump is the
+  three user32 calls VCL's own loop makes. }
+function PeekMessageW(var Msg: TWinMsg; Wnd, FilterMin, FilterMax, Remove: Integer): Integer;
+  external 'PeekMessageW@user32.dll stdcall setuponly';
+function TranslateMessage(var Msg: TWinMsg): Integer;
+  external 'TranslateMessage@user32.dll stdcall setuponly';
+function DispatchMessageW(var Msg: TWinMsg): Integer;
+  external 'DispatchMessageW@user32.dll stdcall setuponly';
+procedure PostQuitMessage(ExitCode: Integer);
+  external 'PostQuitMessage@user32.dll stdcall setuponly';
+{ Milliseconds since boot as a DWORD. Pascal Script Integer subtraction wraps
+  without an overflow check (measured with Inno Setup 6.7), so Now - Start is
+  the true elapsed time across the 49.7-day rollover. }
+function GetTickCount(): Integer;
+  external 'GetTickCount@kernel32.dll stdcall setuponly';
+
+{ Dispatches every message queued for this thread's windows, so the wizard
+  repaints and answers Windows while a /WAITPID wait is in progress. A
+  WM_QUIT is put back for VCL's own loop rather than swallowed here. }
+procedure PumpMessages();
+var
+  Msg: TWinMsg;
+begin
+  while PeekMessageW(Msg, 0, 0, 0, PM_REMOVE) <> 0 do
+  begin
+    if Msg.Message = WM_QUIT then
+    begin
+      PostQuitMessage(Msg.WParam);
+      exit;
+    end;
+    TranslateMessage(Msg);
+    DispatchMessageW(Msg);
+  end;
+end;
 
 function OpenMutexW(DesiredAccess, InheritHandle: Integer; Name: String): Integer;
   external 'OpenMutexW@kernel32.dll stdcall setuponly';
@@ -939,10 +989,13 @@ end;
 
 { False when the process named by /WAITPID is still running after the cap. A
   process that cannot be opened is treated as gone: it already exited, or it
-  never existed. }
+  never existed. The cap is measured on the tick clock, not by counting
+  slices: a 100 ms kernel wait lasts about 109 ms at the default timer
+  resolution, so a slice count stretched the 120 s cap to about 131 s. }
 function WaitForApplicationExit(): Boolean;
 var
-  Pid, Handle: Integer;
+  Pid, Handle, Slice, Start, Elapsed: Integer;
+  Exited: Boolean;
 begin
   Result := True;
   Pid := StrToIntDef(ExpandConstant('{param:WAITPID|0}'), 0);
@@ -957,7 +1010,23 @@ begin
   try
     WgLog('/WAITPID: waiting up to ' + IntToStr(WaitForProcessLimitMs div 1000) +
         ' s for process ' + IntToStr(Pid) + '.');
-    if WaitForSingleObject(Handle, WaitForProcessLimitMs) = WAIT_OBJECT_0 then
+    Exited := False;
+    Start := GetTickCount();
+    Elapsed := 0;
+    while not Exited and (Elapsed < WaitForProcessLimitMs) do
+    begin
+      Slice := WaitForProcessLimitMs - Elapsed;
+      if Slice > WaitSliceMs then
+        Slice := WaitSliceMs;
+      if WaitForSingleObject(Handle, Slice) = WAIT_OBJECT_0 then
+        Exited := True
+      else
+      begin
+        PumpMessages();
+        Elapsed := GetTickCount() - Start;
+      end;
+    end;
+    if Exited then
       WgLog('/WAITPID: process ' + IntToStr(Pid) + ' exited.')
     else
     begin
@@ -1078,7 +1147,8 @@ begin
       WgLog('Install refused: native application or worker is still running.');
       exit;
     end;
-    Sleep(100);
+    Sleep(WaitSliceMs);
+    PumpMessages();
   end;
   WgLog('Install refused: native Running handles remained after 120 seconds.');
 end;

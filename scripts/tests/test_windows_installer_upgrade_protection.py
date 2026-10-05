@@ -180,7 +180,7 @@ def test_wait_for_process_has_a_cap_and_fails_setup(code: str) -> None:
     assert "{param:WAITPID|0}" in code
     wait = _body(code, "function WaitForApplicationExit(): Boolean;")
     assert "OpenProcess(SYNCHRONIZE, 0, Pid)" in wait
-    assert "WaitForSingleObject(Handle, WaitForProcessLimitMs) = WAIT_OBJECT_0" in wait
+    assert "WaitForSingleObject(Handle, Slice) = WAIT_OBJECT_0" in wait
     assert "CloseHandle(Handle)" in wait
     init = _body(code, "function InitializeSetup(): Boolean;")
     assert "WaitForApplicationExit" not in _strip_comments_and_strings(init)
@@ -207,6 +207,40 @@ def test_wait_for_process_has_a_cap_and_fails_setup(code: str) -> None:
     assert _strip_comments_and_strings(code).count("ProtectionStarted := True;") == 1
     assert "ProtectionStarted := True;" in _body(code, "procedure BeginProtectedReplace();")
     assert len(re.findall(r"\bWaitForApplicationExit\(\)", _strip_comments_and_strings(code))) == 2
+
+
+def test_waitpid_waits_pump_the_wizard_message_queue(code: str) -> None:
+    """Both /WAITPID waits run on the wizard's UI thread.
+
+    One blocking wait of up to 120 s left the interactive wizard unpainted and
+    marked "Not Responding". Each wait is now short slices with a message pump
+    between them. The process cap is measured on the tick clock: counting
+    100 ms slices stretched it to about 131 s, since each lasts about 109 ms.
+    """
+
+    plain_code = _strip_comments_and_strings(code)
+    assert "WaitSliceMs = 100;" in code
+    pump = _strip_comments_and_strings(_body(code, "procedure PumpMessages();"))
+    assert "PeekMessageW(Msg, 0, 0, 0, PM_REMOVE)" in pump
+    assert "TranslateMessage(Msg);" in pump and "DispatchMessageW(Msg);" in pump
+    assert "PostQuitMessage(Msg.WParam);" in pump
+    for name in ("PeekMessageW", "TranslateMessage", "DispatchMessageW", "PostQuitMessage"):
+        assert f"external '{name}@user32.dll stdcall setuponly'" in code
+
+    wait = _strip_comments_and_strings(_body(code, "function WaitForApplicationExit(): Boolean;"))
+    assert "while not Exited and (Elapsed < WaitForProcessLimitMs) do" in wait
+    assert "Slice := WaitForProcessLimitMs - Elapsed;" in wait
+    assert "Elapsed := GetTickCount() - Start;" in wait
+    assert "external 'GetTickCount@kernel32.dll stdcall setuponly'" in code
+    assert "PumpMessages();" in wait
+    # No single wait may block for the whole cap again.
+    assert not re.search(r"WaitForSingleObject\(\w+, WaitForProcessLimitMs\)", plain_code)
+
+    running = _strip_comments_and_strings(_body(code, "function WaitForRunningApplicationExit(): Boolean;"))
+    assert re.search(r"Sleep\(WaitSliceMs\);\s+PumpMessages\(\);", running)
+    assert "for Attempt := 0 to 1200 do" in running
+    # The pump is defined before either wait uses it.
+    assert code.index("procedure PumpMessages();") < code.index("function WaitForApplicationExit(): Boolean;")
 
 
 def test_prepare_to_install_keeps_head_behaviour_and_no_silent_message(code: str) -> None:
