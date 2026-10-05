@@ -22,3 +22,36 @@ Directory symlinks in fingerprint trees are refused rather than silently omitted
 Host keys/start integration and private directory creation belong to later PRs;
 the thread snapshot boundary is exercised with fakes here. No CUDA/ROCm changes
 or device qualification are included.
+
+- **PR 5 — state:** `server/solver/beat_runtime/state.py`;
+  `server/tests/beat_runtime/test_state.py`; this `CHANGES.md`.
+  Store `julia.json` and independent `state-{cpu,metal}.json` under
+  `paths.runtime_dir()`. Stamp provider/schema/UTC update time; reject corrupt,
+  foreign, incomplete and backend-mismatched records. Backend records retain
+  status/step/error, resolved project, engine/runtime/executable identities,
+  Julia version, effective depot/environment, optional sysimage identity,
+  probe contract/fixture identity and completion evidence. Unknown identities
+  are explicit nulls until provisioning resolves them. Unique private sibling
+  temporaries, fsync and atomic replacement preserve the previous record on
+  failure; backend failures never erase another backend's success or Julia's
+  executable record. No legacy single-slot mirror or HBB writes.
+- **PR 6 — locks:** `server/solver/beat_runtime/locks.py`;
+  `server/tests/beat_runtime/test_locks.py`; this `CHANGES.md`.
+  Serialize shared-Julia provisioning with POSIX flock or Windows msvcrt
+  nonblocking byte-zero locking. Keep `provision.lock` permanently; close
+  releases the kernel lock after exceptions or owner death. Poll only genuine
+  contention, announce waiting once, and propagate unsupported-lock errors.
+  `provision.holder.json` is atomic, best-effort diagnostics, never PID authority.
+  Tests cover separate processes, owner death, same-process exclusion,
+  persistent inode, descriptor cleanup and the Windows path with fakes,
+  including contention during initial byte creation.
+
+PR 5/6 scope notes: target the official JWSound/BEAT_Engine package; neither
+module imports beat_engine or changes an existing caller. CPU/Metal only, as
+requested; readiness identity matching and completion-proof validation belong
+to PRs 11/13. The full HBB status-callback guard (reported-once warning and
+idempotent wrapping) belongs to PR 10 provisioning orchestration, not state
+storage. Lock wait callbacks are best-effort already. PR 10 must also translate
+lock acquisition errors into backend failure records, preserving the original
+error if that diagnostic write fails. Actual Windows kernel locking remains
+a Windows qualification gate; the msvcrt path is exercised with fakes here.
