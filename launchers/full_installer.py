@@ -23,6 +23,7 @@ import tempfile
 import time
 
 from shared.release_assets import LINUX_PLATFORM, MACOS_PLATFORM, WINDOWS_PLATFORM, VERSION_RE, UPDATES_TAG_SUFFIX, is_build_stamp, installer_name, windows_setup_name
+from launchers.update_lock import ordinary_path, resolved_path
 
 MAX_REQUEST = 16 * 1024
 MAX_ARCHIVE_MEMBERS = 250000
@@ -48,11 +49,11 @@ class FullInstallerRequest:
 
 
 def _plain_path(path: Path) -> bool:
-    return path.is_absolute() and path == path.resolve() and not path.is_symlink()
+    return path.is_absolute() and Path(ordinary_path(str(path))) == resolved_path(path) and not path.is_symlink()
 
 
 def _root(repo_root: Path, platform: str) -> Path:
-    app = repo_root.absolute()
+    app = Path(ordinary_path(str(repo_root.absolute())))
     if not _plain_path(app) or app.name != "app":
         raise ValueError("the launcher is outside an installed app layer")
     if platform == MACOS_PLATFORM:
@@ -200,9 +201,9 @@ def consume_full_installer_request(path: Path, *, repo_root: Path, data_dir: Pat
         if not isinstance(previous, str) or len(previous) > 100:
             raise ValueError("invalid previous version")
         platform = value["platform"]
-        asset = Path(value["installer"])
-        root = Path(value["installRoot"])
-        data = Path(data_dir).resolve()
+        asset = Path(ordinary_path(str(Path(value["installer"]))))
+        root = Path(ordinary_path(str(Path(value["installRoot"]))))
+        data = resolved_path(data_dir)
         expected = windows_setup_name(version) if platform == WINDOWS_PLATFORM else installer_name(platform, version)
         if not expected or asset.name != expected or not _plain_path(asset):
             raise ValueError("invalid installer asset path")
@@ -401,12 +402,13 @@ def launch_full_installer(repo_root: Path, request: FullInstallerRequest, parent
     """Start an independent helper; raising leaves the launcher able to restart."""
     from launchers.statusapp.updater import UpdateHandoffError
     try:
-        if request.install_root != _root(repo_root, request.platform):
+        install_root = Path(ordinary_path(str(request.install_root)))
+        if install_root != _root(repo_root, request.platform):
             raise ValueError("the exact installation destination changed")
         _unexpired(request)
         _verify(request)
         _unexpired(request)
-        data = Path(data_dir).resolve()
+        data = resolved_path(data_dir)
         work = data / "update-install"
         if not _plain_path(work) or not work.is_dir():
             raise ValueError("the helper directory is not a regular directory")
@@ -427,7 +429,7 @@ def launch_full_installer(repo_root: Path, request: FullInstallerRequest, parent
             # Inno itself is the external helper. Its SetupMutex is acquired
             # before WAITPID/renames; no Python from the bundle is launched.
             command = [str(request.installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
-                f"/DIR={request.install_root}", f"/WAITPID={parent_pid}", f"/OUTCOME={outcome}", f"/WGLOG={log}", "/RELAUNCH"]
+                f"/DIR={install_root}", f"/WAITPID={parent_pid}", f"/OUTCOME={outcome}", f"/WGLOG={log}", "/RELAUNCH"]
             _unexpired(request)
             subprocess.Popen(command, cwd=work, env=env, stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

@@ -13,6 +13,7 @@ import stat
 from typing import Callable, Mapping
 
 from shared import release_assets
+from launchers.update_lock import ordinary_path, resolved_path
 
 BUNDLE_ID = "is.hornlab.waveguide-generator-v2"
 UNINSTALL_KEY = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{D8F99D24-D991-4FB0-91FE-E86D79128D2B}_is1"
@@ -68,8 +69,8 @@ def probe_install(
 
     if env.get("WG2_BUNDLE") != "1":
         return verdict("source", None, "Download the release installer to update this source installation.")
-    app = repo_root.absolute()
-    if app.name != "app" or app.is_symlink() or app != app.resolve():
+    app = Path(ordinary_path(str(repo_root.absolute())))
+    if app.name != "app" or app.is_symlink() or app != resolved_path(app):
         return verdict("unsupported", None, "This bundle uses an unsupported application path.")
     try:
         installed = _json(app / "APP-MANIFEST.json")
@@ -100,7 +101,7 @@ def probe_install(
         if platform_name == release_assets.WINDOWS_PLATFORM:
             target = app.parent
             registered = registry_reader()
-            if not registered or ntpath.normcase(str(Path(registered).resolve())) != ntpath.normcase(str(target.resolve())):
+            if not registered or ntpath.normcase(str(resolved_path(registered))) != ntpath.normcase(str(resolved_path(target))):
                 return verdict("portable", target, "This portable or unregistered copy needs a manual installer download.")
             return verdict("windows", target)
         if platform_name == release_assets.LINUX_PLATFORM:
