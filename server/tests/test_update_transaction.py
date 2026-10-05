@@ -2399,7 +2399,7 @@ def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_pa
 
 # Jobs restore regression cases use a stopped installation and actual SQLite
 # migrations; no real installation or data directory is touched.
-def _jobs_rollback_installation(tmp_path, monkeypatch):
+def _jobs_rollback_installation(tmp_path, monkeypatch, before_upgrade=None):
     from server.jobs.store import JobStore
     from server.jobs import store as job_store_module
     from test_job_status_preparing import _old_shaped_database, _fill_old_database
@@ -2407,6 +2407,8 @@ def _jobs_rollback_installation(tmp_path, monkeypatch):
     db = data_dir / "db" / "simulations.db"
     _old_shaped_database(db)
     _fill_old_database(db)
+    if before_upgrade is not None:
+        before_upgrade(db)
     begin_update_transaction(data_dir=data_dir, bundle=resources, resources=resources,
                              layers=[(resources / "app", staged_app), (resources / "runtime", staged_runtime)],
                              platform_name="linux")
@@ -2762,7 +2764,7 @@ def test_jobs_restore_checks_both_naive_time_interpretations_in_non_utc_process(
 
 @pytest.mark.parametrize("column", ["created_at", "updated_at"])
 @pytest.mark.parametrize("value", ["not-a-time", ""])
-def test_jobs_restore_skips_unparseable_row_times(tmp_path, monkeypatch, column, value):
+def test_jobs_restore_refuses_a_row_changed_to_any_value(tmp_path, monkeypatch, column, value):
     import sqlite3
     resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch)
     with sqlite3.connect(db) as conn:
@@ -2770,8 +2772,34 @@ def test_jobs_restore_skips_unparseable_row_times(tmp_path, monkeypatch, column,
     logs = []
     apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
     assert "jobsRestore" not in read_journal(data_dir, resources)
-    assert "unparseable timestamp" in " ".join(logs)
+    assert "changed since the snapshot" in " ".join(logs)
     assert "manual" in " ".join(logs)
+
+
+@pytest.mark.parametrize("offset_hours", [2, 14, -12])
+def test_jobs_restore_is_not_vetoed_by_recent_naive_local_times_in_any_time_zone(tmp_path, monkeypatch, offset_hours):
+    """A job touched minutes before the update, written as naive local time.
+
+    East of UTC that string, read as UTC, lies after the snapshot's mtime; the
+    old clock comparison vetoed restore for it. Unchanged rows never veto now.
+    """
+    import sqlite3
+    from datetime import datetime, timedelta, timezone
+
+    local = (datetime.now(timezone.utc) + timedelta(hours=offset_hours) - timedelta(minutes=5))
+    stamp = local.replace(tzinfo=None).isoformat()
+
+    def touched_before_update(db):
+        with sqlite3.connect(db) as conn:
+            conn.execute("UPDATE simulation_jobs SET created_at=?, updated_at=? WHERE id='a'", (stamp, stamp))
+
+    resources, data_dir, db = _jobs_rollback_installation(tmp_path, monkeypatch, touched_before_update)
+    logs = []
+    apply_update_module.restore_jobs_upgrade_snapshot(data_dir, resources, log=logs.append)
+    assert read_journal(data_dir, resources)["jobsRestore"]["state"] == "restored", logs
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert conn.execute("SELECT updated_at FROM simulation_jobs WHERE id='a'").fetchone()[0] == stamp
 
 
 def test_jobs_restore_file_flush_propagates_failures_and_allows_logged_fallback(tmp_path, monkeypatch):

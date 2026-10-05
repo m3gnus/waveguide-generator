@@ -2157,22 +2157,18 @@ def restore_jobs_upgrade_snapshot(data_dir: Path, resources: Path, *, log: LogCa
         if not -60 <= age <= JOBS_RESTORE_MAX_AGE_S:
             _emit_log(log, "Jobs snapshot is outside the one-hour restore window; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
             return
+        # Work since the upgrade is any job row the snapshot does not hold
+        # verbatim: a new id, or a changed created_at/updated_at. Comparing the
+        # stored strings with the snapshot's own rows needs no clock or time
+        # zone, so a naive local time is never misread as a future one.
+        with closing(sqlite3.connect(snapshot.resolve().as_uri() + "?mode=ro", uri=True)) as before:
+            snapshot_rows = set(before.execute("SELECT id, created_at, updated_at FROM simulation_jobs"))
         with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True)) as conn:
             if conn.execute("PRAGMA user_version").fetchone()[0] < 6:
                 return  # No upgrade to undo; never used to decide an in-progress replay.
-            for created_at, updated_at in conn.execute("SELECT created_at, updated_at FROM simulation_jobs"):
-                # The store writes naive local times. Legacy UTC times are
-                # indistinguishable, so either interpretation can veto restore.
-                try:
-                    times = [datetime.fromisoformat(value) for value in (created_at, updated_at)]
-                    timestamps = [value.timestamp() for value in times]
-                    timestamps.extend(value.replace(tzinfo=timezone.utc).timestamp()
-                                      for value in times if value.tzinfo is None)
-                except (TypeError, ValueError, OverflowError, OSError):
-                    _emit_log(log, "Jobs DB contains an unparseable timestamp; skipping automatic restore. Use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
-                    return
-                if max(timestamps) > expected["mtimeNs"] / 1_000_000_000:
-                    _emit_log(log, "Jobs DB contains rows newer than the snapshot; use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
+            for row in conn.execute("SELECT id, created_at, updated_at FROM simulation_jobs"):
+                if row not in snapshot_rows:
+                    _emit_log(log, "Jobs DB contains rows added or changed since the snapshot (newer than it); use the manual jobs recovery procedure in UPDATE-TRANSACTION-CONTRACT.md §6.")
                     return
         # Schema 6 may itself still be only in the WAL after an unclean exit.
         # Moving that WAL away from a schema-5 main would let the old store

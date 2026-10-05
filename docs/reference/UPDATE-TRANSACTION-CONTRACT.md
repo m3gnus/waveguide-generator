@@ -827,12 +827,12 @@ These are recorded, not designed.
      code layers and before relaunching the old build. It never restores jobs when
      no layer rollback occurs. An explicit rollback, including the desktop window
      fallback, that supersedes that update inherits this ownership.
-   - Ownership is bounded: the snapshot must be at most **one hour** old, and no
-     job row may have a `created_at` or `updated_at` newer than the snapshot's mtime
-     (aware timestamps use their offset; naive timestamps are checked as both
-     local time and UTC, with either interpretation able to prevent restore).
-     An unparseable timestamp also prevents automatic restore. The jobs store's
-     timestamp format is unchanged. A backwards clock step of up to 60 seconds is tolerated.
+   - Ownership is bounded: the snapshot must be at most **one hour** old, and every
+     live job row must appear in the snapshot with the same `id`, `created_at` and
+     `updated_at`. A new or changed row prevents restore. The stored strings are
+     compared, never parsed, so the result does not depend on the time zone or on
+     how a naive timestamp is read. The jobs store's timestamp format is unchanged.
+     A backwards clock step of up to 60 seconds is tolerated by the age bound.
      Otherwise automatic jobs restore is skipped and the reason is logged. This prevents
      an old installed journal from replacing later work.
    - Before moving any live DB file, flush the staged standalone snapshot and
