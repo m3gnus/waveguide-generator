@@ -193,7 +193,8 @@ read-only (WAL content included) into one standalone file, which is flushed and
 renamed to `.bak.1` in a single step; only then is the old main file removed,
 and its sidecars after it. A crash therefore leaves the complete old set, or a
 complete `.bak.1`; never a main file without its WAL. Sidecars found without a
-main file are moved aside to `.orphan-<timestamp>-*` and never paired with a
+main file are moved aside to `.orphan-<timestamp>-*` (only the newest such set
+is kept, as for `.invalid-*`) and never paired with a
 new snapshot (SQLite applies a WAL to whatever main file sits beside it). A
 standalone snapshot that already holds exactly the live data, left by an
 earlier attempt at the same upgrade, is replaced in place so it never pushes

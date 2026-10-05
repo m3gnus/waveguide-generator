@@ -680,6 +680,14 @@ class JobStore:
         for old in invalid_sets[:-1]:
             for suffix in ("", "-wal", "-shm", "-journal"):
                 _unlink_or_log(Path(str(old) + suffix))
+        # Orphaned sidecar sets have no main file: one set per timestamp.
+        # Keep the newest, the same rule as invalid sets.
+        orphan_sets = sorted({path.name.rsplit("-", 1)[0]
+                              for path in target.parent.glob(target.name + ".orphan-*")
+                              if path.name.endswith(_SNAPSHOT_SIDECARS)})
+        for old in orphan_sets[:-1]:
+            for suffix in _SNAPSHOT_SIDECARS:
+                _unlink_or_log(target.parent / (old + suffix))
         fd, name = tempfile.mkstemp(prefix=".jobs-rollback-", dir=self.db_path.parent)
         os.close(fd)
         temporary = Path(name)

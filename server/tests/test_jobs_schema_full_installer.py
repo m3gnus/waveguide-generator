@@ -728,3 +728,20 @@ def test_a_holder_taken_after_validation_cannot_stall_the_copy(
     assert snapshot.read_bytes() == first_bytes and _snapshot(snapshot) == first_rows
     assert not Path(str(snapshot) + ".1").exists()
     assert not list(db.parent.glob(".jobs-rollback-*"))
+
+
+def test_only_the_newest_orphaned_sidecar_set_is_kept(tmp_path: Path) -> None:
+    db = tmp_path / "data" / "db" / "simulations.db"
+    _old_shaped_database(db)
+    _fill_old_database(db)
+    snapshot = db.with_name(db.name + ".pre-schema-6.bak")
+    for stamp in ("20260101000000000000", "20260102000000000000"):
+        for suffix in ("-wal", "-shm"):
+            Path(f"{snapshot}.orphan-{stamp}{suffix}").write_bytes(b"older crash")
+    Path(str(snapshot) + "-wal").write_bytes(b"this crash")
+    store = JobStore(db)
+    store.initialize()
+    store.close()
+    remaining = sorted(path.name for path in db.parent.glob(snapshot.name + ".orphan-*"))
+    assert len(remaining) == 1 and remaining[0].endswith("-wal")
+    assert (db.parent / remaining[0]).read_bytes() == b"this crash"
