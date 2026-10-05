@@ -437,3 +437,114 @@ platform gates; Windows flags/start linkage are fake-tested, and a real POSIX
 wrapper process tests the distinct launcher/host PID and cwd behavior. No Julia,
 downloads, real user data or HBB directories were used. All changes remain
 uncommitted, as requested; no pins, requirements or existing callers changed.
+
+- **PR 19a — host submission protocol/FIFO:** `server/solver/beat_runtime/host.py`
+  (`_Job`, submission runner/connection reader and authenticated dispatch);
+  FIFO, queued withdrawal and heartbeat cases in
+  `server/tests/beat_runtime/test_host_submissions.py`;
+  `server/tests/beat_runtime/{fake_host_worker,test_host}.py`; this `CHANGES.md`.
+  Replace HostSubmissionNotImplemented with authenticated file/inline submission,
+  operation forwarding, startup, metadata adoption and idle retirement. Receipt
+  order defines monotonically increasing queued sequence numbers; startup and
+  submissions share the FIFO. Keep the FIFO head until ownership retirement has
+  finished. Independent connection readers notice disconnect/cancel while the
+  engine reader blocks. Serialize status, heartbeat, metadata and event writes;
+  suppress late status/heartbeat frames after terminal delivery. A next control
+  request arriving immediately after a terminal reply cannot cancel completed
+  work or corrupt the next exchange.
+- **PR 19b — client authentication/control/adoption:**
+  `server/solver/beat_runtime/client.py` (connect_client, HostedWorker control,
+  lifetime lease, metadata and detach/shutdown);
+  admission-proof/control cases in `server/tests/beat_runtime/test_client.py`;
+  second-process adoption case in `test_host_submissions.py`; this `CHANGES.md`.
+  Reuse start_host and the registry's nonce/HMAC exchange, including verification
+  of the fresh client_auth_ok proof. Keep an authenticated lease until detach;
+  control requests share one lock, while each submission has its own connection.
+  Detach ends local admission and interrupts concurrent control reads. Shutdown
+  uses authenticated cleanup, never recorded-PID signalling. Expose a copied
+  worker_info, host_pid and host-owned worker_instance for future manager/session
+  callers; lazy optional engine construction remains solely inside the host.
+- **PR 19c — client streams/callback integration:** `client.py` (remote stream
+  and submitter); `server/solver/beat_runtime/ownership.py` (callback failure
+  arising inside a read); stream/cancellation cases in `test_client.py`;
+  two regressions in `server/tests/beat_runtime/test_ownership.py`; this `CHANGES.md`.
+  Public submit returns the existing token-checked OwnedStream and acknowledges
+  host queue admission before returning. Preserve Path/Mapping and operation
+  inputs, streamed engine events, status callbacks and negotiated metadata.
+  Close/cancel before the first read, blocked reads, callback failures and stale
+  closes all use the connection's submission and ownership.py's normal path.
+  A callback error arriving while next() consumes a remote status frame remains
+  the reported error even when cancellation closes the socket or an event arrives.
+  Completed streams do not cancel or retire a successor.
+- **PR 19d — bounded retirement/recovery:** `host.py` (checked public stream,
+  bounded retirement, cancellation and teardown); disconnect, retirement error/
+  hang, internal reader failure and active shutdown cases in
+  `test_host_submissions.py`; cancellation/failure behavior in
+  `fake_host_worker.py`; this `CHANGES.md`.
+  Public stream closure runs through StreamOwnership and is bounded to five
+  seconds. A closure error/timeout closes host admission before ownership can
+  release its slot, wakes queued jobs and exits through normal record/socket
+  cleanup. Engine termination at host teardown is also bounded; an unresponsive
+  public method cannot hang process exit. Normal cancellation may make official
+  EngineWorker's blocked reader raise; that expected error does not stop the host.
+  Unexpected submit/read errors conservatively stop the host because the public
+  API cannot distinguish an internal retirement failure from another engine
+  error. Queued clients never run on an engine whose retirement failed.
+
+PR 19 review subdivisions cover sections of shared files, as in PR 18; they are
+review slices of this one requested work item. No existing caller changes.
+
+Future PR 20 callers use `client.HostedWorker(key, directory=None, timeout=10,
+idle_timeout=1800)`, with the complete resolved key required by start_host.
+`adopt()` returns host_pid, worker_instance, worker_info and engine_pid=None.
+`ensure_started(status_callback=...)` explicitly starts the public worker;
+`submit(Path|Mapping, operation="solve"|"bem_field", status_callback=...)`
+returns OwnedStream (token, close, cancel, callback_error). Engine negotiation
+and operation validation remain official EngineWorker policy. Large requests
+can be staged as files: host command/inline envelopes retain IPC's 1 MiB control
+ceiling; result event envelopes opt into the 512 MiB numerical ceiling.
+`ping()` is bounded control; `terminate()` requests idle retirement and returns
+False while any host job is queued/active. `detach()` permanently closes this
+client's admission/streams and releases its lease; construct a new client for
+later adoption. `shutdown()` additionally shuts down the authenticated host.
+
+Wire details: admission uses the existing PR 18 handshake. Submit sends
+`{op: submit, request: absolute-path-or-object, operation: ...}` and first gets
+`{type: queued, sequence: ...}`. The host streams status, heartbeat, worker_info
+reports and `{type: event, event: <unchanged engine event>}` envelopes. Engine
+completed/cancelled/failed events are terminal; host failures use type=failed.
+A connection-specific `{op: cancel}` or EOF retires only that connection's job
+through OwnedStream.cancel/close. Cancellation acknowledgements follow retirement.
+Control frames have total deadlines, including partial frames after admission.
+Queued/startup/solve streams send 0.5-second heartbeats; clients renew a 10-second
+liveness deadline per received frame, with no total startup/solve deadline.
+Socket writes remain bounded so a client that stops consuming cannot hang the
+host. WG does not read/write request cancel markers here; engine stream closure
+provides retirement, and staged cancellation-monitor policy belongs to PR 20.
+
+Deviations and limits: official JWSound/BEAT_Engine supersedes the design's fork.
+Official worker.py exposes a copied ready announcement via worker_info, with
+engine name/version, protocol, contracts and capabilities, but no PID or unique
+Julia-process identity. The host reports its own stable random worker_instance
+and that metadata; neither proves the unchanged child Julia PID. The fake-worker
+second-process test proves same host PID, same owned EngineWorker identity and
+one startup only, not real Julia PID continuity. No `_process` or private engine
+submission attributes are read. Candidate generic upstream PR: **read-only
+EngineWorker.pid**, returning the live child PID or None. Real Julia/installed
+adoption qualification remains owed once that API exists. Unexpected public
+submit/read errors stop the host conservatively, rather than silently reusing
+an engine whose internal retirement may have failed. Host retirement failures
+are contained, but an unresponsive child cannot be proven dead through this
+public API; no unauthenticated PID signalling is added. Explicit startup/next
+submission handles re-start; automatic background warm-up is deferred to PR 21.
+Four review slices replace the design's estimated single small PR.
+
+PR 19 validation: **578 passed in 50.87 s** using the requested Python with
+`scripts/run_tests.py server/tests/beat_runtime server/tests/test_solver_beat.py
+-q -p no:cacheprovider`, including 27 new PR 19 cases (14 client, 11 host
+submission/recovery/adoption, 2 ownership callback integration). Runtime/test
+Ruff and `git diff --check` passed. Both exact requested combined checks were
+attempted: pytest collected no tests because `server/tests/beat_adapter` is
+absent; Ruff reports the two absent beat_adapter directories. No Julia,
+downloads, full WG suite, real user/HBB data writes, dependency/pin changes or
+reference-checkout edits occurred. Changes remain uncommitted as requested.

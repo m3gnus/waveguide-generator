@@ -77,16 +77,19 @@ def test_client_challenge_refuses_reflection_and_replay(launch):
             assert ipc.receive_frame(connection)["type"] == "hello_refused"
 
 
-def test_authenticated_lifetime_submission_stub_and_shutdown(launch):
+def test_authenticated_lifetime_invalid_submission_and_shutdown(launch):
     key, directory, children = launch
     record = spawn.start_host(key, directory, idle_timeout=0.2)
     with authenticated(record) as connection:
         time.sleep(0.35)
         ipc.send_frame(connection, {"op": "ping"})
         assert ipc.receive_frame(connection)["host_pid"] == record.pid
-        for operation in ("submit", "adopt", "ensure_started", "retire"):
-            ipc.send_frame(connection, {"op": operation})
-            assert ipc.receive_frame(connection)["error_code"] == host.PR19_REQUIRED
+        ipc.send_frame(connection, {"op": "submit"})
+        assert ipc.receive_frame(connection)["type"] == "failed"
+        ipc.send_frame(connection, {"op": "adopt"})
+        report = ipc.receive_frame(connection)
+        assert report["host_pid"] == record.pid
+        assert report["worker_info"] is None
         request = r.hello_message(record, operation="shutdown")
         ipc.send_frame(connection, request)
         r.validate_hello(record, ipc.receive_frame(connection), request["nonce"], operation="shutdown")

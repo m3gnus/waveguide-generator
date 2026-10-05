@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from collections.abc import Callable
 import contextlib
 import hmac
 import importlib
@@ -11,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import socket
+import select
 import signal
 import threading
 import time
@@ -21,11 +24,94 @@ from server.platform.paths import app_root
 from . import paths, registry as r
 from .cleanup import sweep_orphan_socket
 from .ipc import endpoint_for, receive_frame, send_frame
+from .ownership import OwnedStream, StreamOwnership
 
 DEFAULT_IDLE_TIMEOUT = 1800.0
 CONTROL_TIMEOUT = 2.0
-PR19_REQUIRED = "HostSubmissionNotImplemented"
+HEARTBEAT_INTERVAL = 0.5
+RETIREMENT_TIMEOUT = 5.0
 TEST_WORKER_ENV = "WG2_BEAT_TEST_WORKER"
+
+
+def bounded_call(action: Callable[[], Any]) -> Any:
+    """Bound retirement even if a public engine method fails to return."""
+    done = threading.Event()
+    result: list[Any] = []
+    errors: list[BaseException] = []
+
+    def run() -> None:
+        try:
+            result.append(action())
+        except BaseException as exc:
+            errors.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    if not done.wait(RETIREMENT_TIMEOUT):
+        raise TimeoutError("BEAT engine retirement did not finish")
+    if errors:
+        raise errors[0]
+    return result[0]
+
+
+class _HostStream:
+    def __init__(self, host: WorkerHost, events: Any, job: _Job) -> None:
+        self.host, self.events, self.job = host, events, job
+
+    def __next__(self) -> dict:
+        try:
+            return next(self.events)
+        except StopIteration:
+            raise
+        except BaseException:
+            # The engine may have failed while internally retiring its stream.
+            # Its public API cannot distinguish that from other read failures.
+            if not self.job.cancelled.is_set():
+                self.host._fail_stop()
+            raise
+
+    def close(self) -> None:
+        try:
+            bounded_call(self.events.close)
+        except BaseException:
+            # Fail admission before ownership releases its slot on closure error.
+            self.host._fail_stop()
+            raise
+
+
+class _HostSubmitter:
+    def __init__(self, host: WorkerHost) -> None:
+        self.host = host
+
+    def submit(self, request_path: Any, **kwargs: Any) -> _HostStream:
+        job = self.host._queue[0]  # The FIFO head remains held through stream retirement.
+        try:
+            return _HostStream(self.host, self.host._engine.submit(request_path, **kwargs), job)
+        except BaseException:
+            self.host._fail_stop()
+            raise
+
+
+class _Job:
+    def __init__(self, message: dict, send: Callable[[dict], None], sequence: int) -> None:
+        self.message, self._send, self.sequence = message, send, sequence
+        self.cancelled = threading.Event()
+        self.done = threading.Event()
+        self.stream: OwnedStream | None = None
+        self._output = threading.Lock()
+
+    def send(self, message: dict) -> None:
+        with self._output:
+            if not self.done.is_set():
+                self._send(message)
+
+    def finish(self, reply: dict | None) -> None:
+        with self._output:
+            self.done.set()
+            if reply is not None and not self.cancelled.is_set():
+                with contextlib.suppress(OSError, ValueError):
+                    self._send(reply)
 
 
 def read_private_json(path: Path) -> dict[str, Any]:
@@ -84,6 +170,11 @@ class WorkerHost:
         self._clients = 0
         self._last_activity = time.monotonic()
         self._stopping = threading.Event()
+        self._jobs = threading.Condition()
+        self._queue: deque[_Job] = deque()
+        self._sequence = 0
+        self._worker_instance = r.new_token()
+        self._ownership: StreamOwnership | None = None
 
     def _build_engine(self) -> Any:
         # Only tests set this hook; no BEAT import occurs in the application parent.
@@ -113,8 +204,133 @@ class WorkerHost:
             self._socket_identity = info.st_dev, info.st_ino
         self.record = r.HostRecord(self.key, os.getpid(), r.new_token(), endpoint)
         r.validate_record(self.record, self.key, self.directory)
-        self._engine = self._build_engine()  # Constructor only; PR 19 starts Julia.
+        self._engine = self._build_engine()
+        self._ownership = StreamOwnership(_HostSubmitter(self))
         return self.record
+
+    def _engine_report(self) -> dict[str, Any]:
+        # The official ready announcement has no PID or per-Julia-process nonce.
+        # This identifies the host-owned Python worker, not its private child.
+        return {"host_pid": self.record.pid, "engine_pid": None,
+                "worker_instance": self._worker_instance,
+                "worker_info": self._engine.worker_info}
+
+    def _fail_stop(self) -> None:
+        self._stopping.set()
+        with self._jobs:
+            self._jobs.notify_all()
+
+    def _run_job(self, job: _Job) -> None:
+        reply: dict | None = None
+        try:
+            with self._jobs:
+                self._jobs.wait_for(lambda: self._stopping.is_set() or job.cancelled.is_set()
+                                    or self._queue[0] is job)
+                if self._stopping.is_set() or job.cancelled.is_set():
+                    return
+
+            def status(message: str) -> None:
+                if not job.done.is_set() and not job.cancelled.is_set():
+                    try:
+                        job.send({"type": "status", "message": str(message)})
+                    except OSError:
+                        job.cancelled.set()
+                        raise
+
+            if job.message["op"] == "ensure_started":
+                self._engine.ensure_started(status_callback=status)
+                reply = {"type": "ready", **self._engine_report()}
+                return
+            request = job.message["request"]
+            stream = self._ownership.submit(Path(request) if isinstance(request, str) else request,
+                                            operation=job.message.get("operation", "solve"),
+                                            status_callback=status)
+            job.stream = stream
+            if job.cancelled.is_set():
+                stream.close()
+                return
+            job.send({"type": "worker_info", **self._engine_report()})
+            terminal = False
+            for event in stream:
+                if job.cancelled.is_set():
+                    break
+                if event.get("type") in {"completed", "cancelled", "failed"}:
+                    reply = {"type": "event", "event": event}
+                    terminal = True
+                    break
+                job.send({"type": "event", "event": event})
+            if not terminal and not job.cancelled.is_set():
+                raise RuntimeError("BEAT engine stream ended without a terminal event")
+        except (OSError, ValueError, RuntimeError) as exc:
+            # Transport failure can recover through stream closure. Other
+            # engine errors are reported; failed closure itself stops admission.
+            reply = {"type": "failed", "error": str(exc)}
+        except BaseException as exc:
+            self._fail_stop()
+            reply = {"type": "failed", "error": str(exc)}
+        finally:
+            try:
+                if job.stream is not None:
+                    job.stream.close()
+            except BaseException:
+                self._fail_stop()
+            finally:
+                with self._jobs:
+                    self._queue.remove(job)
+                    self._jobs.notify_all()
+                job.finish(reply)
+
+    def _cancel_job(self, job: _Job) -> None:
+        job.cancelled.set()
+        with self._jobs:
+            self._jobs.notify_all()
+        try:
+            if job.stream is not None:
+                job.stream.cancel()  # Token-checked public stream retirement.
+            if not job.done.wait(RETIREMENT_TIMEOUT):
+                raise TimeoutError("BEAT submission did not retire")
+        except BaseException:
+            self._fail_stop()
+
+    def _serve_job(self, connection: socket.socket, message: dict,
+                   send: Callable[[dict], None]) -> None:
+        with self._jobs:
+            if self._stopping.is_set():
+                raise RuntimeError("BEAT host admission is closed")
+            self._sequence += 1
+            job = _Job(message, send, self._sequence)
+            self._queue.append(job)
+        started = False
+        try:
+            send({"type": "queued", "sequence": job.sequence})
+            threading.Thread(target=self._run_job, args=(job,), daemon=True).start()
+            started = True
+            heartbeat = time.monotonic()
+            while not job.done.is_set() and not self._stopping.is_set():
+                if select.select([connection], [], [], 0.05)[0]:
+                    # The client may already have received the terminal reply
+                    # and sent its next control request while select waited.
+                    if job.done.is_set():
+                        return
+                    control = receive_frame(connection, deadline=time.monotonic() + CONTROL_TIMEOUT)
+                    if control is None or control.get("op") == "cancel":
+                        self._cancel_job(job)
+                        if control is not None:
+                            send({"type": "cancelled"})
+                        return
+                    raise ValueError("Only cancellation is allowed during a submission")
+                if time.monotonic() - heartbeat >= HEARTBEAT_INTERVAL:
+                    job.send({"type": "heartbeat"})
+                    heartbeat = time.monotonic()
+        finally:
+            if not started:
+                with self._jobs:
+                    self._queue.remove(job)
+                    self._jobs.notify_all()
+                job.done.set()
+            elif not job.done.is_set():
+                # Includes socket/write failures and partial cancellation frames.
+                self._cancel_job(job)
 
     def serve(self) -> None:
         assert self._server is not None
@@ -146,21 +362,31 @@ class WorkerHost:
     def _serve_connection(self, connection: socket.socket) -> None:
         admitted = False
         deadline = time.monotonic() + CONTROL_TIMEOUT
+        sending = threading.Lock()
+
+        def send(message: dict) -> None:
+            with sending:
+                send_frame(connection, message)
+
         try:
             message = receive_frame(connection, deadline=deadline)
             if message is None or message.get("op") != "hello":
                 raise r.RecordRefused("hello must come first")
             reply = r.auth_reply(self.record, message)
             challenge = r.new_token()
-            send_frame(connection, {**reply, "client_nonce": challenge, "idle_timeout_s": self.idle_timeout})
+            send({**reply, "client_nonce": challenge, "idle_timeout_s": self.idle_timeout})
             while not self._stopping.is_set():
-                message = receive_frame(connection, deadline=None if admitted else deadline)
+                if admitted:
+                    if not select.select([connection], [], [], 0.1)[0]:
+                        continue
+                    deadline = time.monotonic() + CONTROL_TIMEOUT
+                message = receive_frame(connection, deadline=deadline)
                 if message is None:
                     return
                 operation = message.get("op")
                 if operation == "shutdown":
-                    send_frame(connection, r.auth_reply(self.record, message))
-                    self._stopping.set()
+                    send(r.auth_reply(self.record, message))
+                    self._fail_stop()
                     return
                 if not admitted:
                     if (operation != "authenticate" or message.get("nonce") != challenge
@@ -177,19 +403,41 @@ class WorkerHost:
                             return
                         self._clients += 1
                         admitted = True
-                    connection.settimeout(None)
-                    send_frame(connection, {"type": "authenticated", "nonce": challenge,
-                                            "proof": r.auth_proof(self.record, challenge, "client_auth_ok")})
+                    connection.settimeout(CONTROL_TIMEOUT)
+                    send({"type": "authenticated", "nonce": challenge,
+                          "proof": r.auth_proof(self.record, challenge, "client_auth_ok")})
                     continue
                 if operation == "ping":
-                    send_frame(connection, {"type": "pong", "host_pid": self.record.pid})
+                    send({"type": "pong", "host_pid": self.record.pid})
+                elif operation == "adopt":
+                    send({"type": "adopted", **self._engine_report()})
+                elif operation in {"submit", "ensure_started"}:
+                    request = message.get("request")
+                    if operation == "submit" and (
+                        not isinstance(request, (str, dict)) or not request
+                        or (isinstance(request, str) and not Path(request).is_absolute())
+                        or not isinstance(message.get("operation", "solve"), str)
+                    ):
+                        send({"type": "failed", "error": "Invalid BEAT submission request"})
+                        continue
+                    self._serve_job(connection, message, send)
+                elif operation == "retire":
+                    with self._jobs:
+                        idle = not self._queue and not self._stopping.is_set()
+                        if idle:
+                            try:
+                                bounded_call(self._engine.terminate)
+                            except BaseException:
+                                self._stopping.set()
+                                self._jobs.notify_all()
+                                raise RuntimeError("BEAT engine retirement failed") from None
+                    send({"type": "retired", "engine_retired": idle})
                 else:
-                    # PR 19 supplies serialized submission and engine continuity adoption.
-                    send_frame(connection, {"type": "failed", "error_code": PR19_REQUIRED,
-                                            "error": "Host submission/adoption requires PR 19"})
-        except (OSError, ValueError) as exc:
-            with contextlib.suppress(OSError):
-                send_frame(connection, {"type": "hello_refused", "reason": str(exc)})
+                    send({"type": "failed", "error": f"Unknown host operation: {operation}"})
+        except (OSError, ValueError, RuntimeError) as exc:
+            with contextlib.suppress(OSError, ValueError):
+                send({"type": "failed" if admitted else "hello_refused",
+                      "reason": str(exc), "error": str(exc)})
         finally:
             with self._state:
                 self._connections.discard(connection)
@@ -200,7 +448,7 @@ class WorkerHost:
 
     def close(self) -> None:
         """Retire our engine and remove only our own record/socket under exclusion."""
-        self._stopping.set()
+        self._fail_stop()
         if self._server is not None:
             self._server.close()
         with self._state:
@@ -209,8 +457,12 @@ class WorkerHost:
                     connection.shutdown(socket.SHUT_RDWR)
         try:
             engine, self._engine = self._engine, None
+            if self._ownership is not None:
+                with contextlib.suppress(BaseException):
+                    bounded_call(self._ownership.shutdown)
             if engine is not None:
-                engine.terminate()
+                with contextlib.suppress(BaseException):
+                    bounded_call(engine.terminate)
         finally:
             self._remove_own_record()
 

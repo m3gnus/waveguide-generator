@@ -454,3 +454,28 @@ def test_cancel_racing_real_terminal_preserves_terminal_event(terminal):
     assert outcome == {"value": {"type": terminal}}
     assert owner.holds(successor.token) and raw.closes == 1
     successor.close()
+
+
+@pytest.mark.parametrize("read_error", [False, True])
+def test_status_failure_inside_read_preserves_callback_error(read_error):
+    class Worker:
+        callback = None
+
+        def submit(self, request, *, status_callback, operation):
+            self.callback = status_callback
+            return raw
+
+    worker = Worker()
+
+    def read():
+        worker.callback("status while consuming the stream")
+        if read_error:
+            raise OSError("socket closed by callback cancellation")
+
+    raw = FakeStream([{"type": "result"}], on_read=read)
+    owner = StreamOwnership(worker)
+    stream = owner.submit({}, status_callback=lambda message: fail())
+    with pytest.raises(RuntimeError, match="callback broke"):
+        next(stream)
+    assert raw.closes == 1
+    assert not owner.holds(stream.token)
