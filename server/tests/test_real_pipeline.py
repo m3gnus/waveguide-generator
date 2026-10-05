@@ -47,7 +47,7 @@ on a capable qualification host, so both paths run (docs/DEVELOPMENT.md).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 import importlib.metadata
 import importlib.util
 import json
@@ -64,6 +64,7 @@ import pytest
 
 from server.app import create_app
 from server.cadlink import api as cadlink_api
+from server.platform import temp_session
 
 from test_jobs_api import _request
 
@@ -101,6 +102,27 @@ REQUIRE_IMPORTED_ENV = "WG_REQUIRE_IMPORTED_PIPELINE"
 
 
 # -- helpers ------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def real_pipeline_session(monkeypatch: pytest.MonkeyPatch) -> Iterator[temp_session.TemporarySession]:
+    """Own a session before app construction, as launch/serve.py does."""
+
+    from server.solver import bempp_opencl as probe
+
+    monkeypatch.setattr(temp_session, "_active_root", None)
+    monkeypatch.setattr(temp_session, "_parent_root", None)
+    # Spawned solve workers only adopt sessions directly in the system temp
+    # directory, so a session under tmp_path would not match production.
+    session = temp_session.TemporarySession.create()
+    session.activate()
+    try:
+        # Earlier app tests may have exhausted retries without a session.
+        probe.clear_cache()
+        yield session
+    finally:
+        probe.clear_cache()
+        session.close(remove=True)
 
 
 def _pins() -> dict[str, str]:
@@ -610,6 +632,39 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
 
 
 # -- the diagnosis these tests print ----------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["inventory", "smoke"])
+def test_real_pipeline_probe_uses_the_test_session(monkeypatch, mode) -> None:
+    """Exercise the real probe channel without requiring native OpenCL."""
+
+    from server.solver import bempp_opencl as probe
+
+    # Rely on the autouse setup, just like the real app tests above.
+    session_path = Path(temp_session.spawned_directory_root(required=True))
+    result = {"ok": True, "devices": []} if mode == "inventory" else {"ok": True, "smoke": {}}
+    script = (
+        "import sys; from pathlib import Path; "
+        "from server.platform.temp_session import adopt_parent_session, spawned_directory_root; "
+        "adopt_parent_session(sys.argv[2]); "
+        "assert spawned_directory_root(required=True) == sys.argv[2]; "
+        f"print({probe._READY_MARKER!r}, flush=True); "
+        f"Path(sys.argv[1]).write_text({json.dumps(result)!r})"
+    )
+    original_spawn = probe.subprocess.Popen
+    channels = []
+
+    def spawn(argv, **kwargs):
+        channel = Path(argv[-1]).parent
+        assert channel.parent == session_path and channel.is_dir()
+        channels.append(channel)
+        return original_spawn([sys.executable, "-c", script, argv[-1], str(session_path)], **kwargs)
+
+    monkeypatch.setattr(probe.subprocess, "Popen", spawn)
+    verdict = probe._run_probe(mode, None, 5.0)
+    assert verdict["ok"] is True, verdict
+    assert all(verdict[key] == value for key, value in result.items()), verdict
+    assert len(channels) == 1 and not channels[0].exists()
 
 
 def test_an_opencl_failure_names_its_cause(monkeypatch) -> None:
