@@ -191,6 +191,16 @@ def is_beat_engine(engine: str) -> bool:
 logger = logging.getLogger(__name__)
 
 
+def _load_readiness_api() -> Any | None:
+    from .beat_runtime.provider import official_selected
+
+    if official_selected():
+        from .beat_runtime import readiness
+
+        return readiness
+    return _load_api()
+
+
 def _load_api() -> Any | None:
     global _beat
     if _beat is not None:
@@ -270,6 +280,12 @@ def beat_status() -> dict[str, Any]:
     successful probes are cached here, following ``bempp_status``.
     """
 
+    from .beat_runtime.provider import official_selected
+
+    if official_selected():
+        from .beat_runtime.readiness import beat_engine_status
+
+        return beat_engine_status()
     with _status_probe_lock:
         try:
             status = _cached_successful_beat_status()
@@ -381,6 +397,13 @@ def reprobe_package_backend_statuses() -> dict[str, Any] | None:
     finishes first and its answer is discarded rather than read.
     """
 
+    from .beat_runtime.provider import official_selected
+
+    if official_selected():
+        from .beat_runtime import readiness
+
+        readiness.probe_cache_clear(notify=False)
+        return readiness.beat_backend_statuses()
     with _status_probe_lock:
         try:
             from hornlab_beat_bem import runtime as beat_runtime
@@ -419,6 +442,19 @@ def beat_backend_statuses() -> dict[str, dict[str, Any]]:
     whether the pinned package can provision one at all.
     """
 
+    from .beat_runtime.provider import official_selected
+
+    if official_selected():
+        from .beat_cpu_runtime import cpu_runtime_readiness, gpu_preparation_reason
+        from .beat_runtime.readiness import beat_backend_statuses as statuses
+
+        result = statuses()
+        cpu = cpu_runtime_readiness(None)
+        result[BEAT_CPU_BACKEND].update(available=cpu.ready, reason=cpu.reason, state=cpu.state)
+        reason = gpu_preparation_reason("metal")
+        if reason is not None:
+            result["metal"].update(available=False, reason=reason, state="provisioning")
+        return result
     package = _load_api()
     if package is None:
         reason = "hornlab-beat-bem is not importable (optional BEAT engine not installed)."
@@ -506,6 +542,9 @@ def _clear_status_caches() -> None:
 
     _cached_successful_beat_status.cache_clear()
     _cached_available_package_statuses.cache_clear()
+    from .beat_runtime import readiness
+
+    readiness.probe_cache_clear(notify=False)
 
 
 beat_status.cache_clear = _clear_status_caches  # type: ignore[attr-defined]

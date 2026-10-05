@@ -31,6 +31,7 @@ if str(_IMPORT_ROOT) not in sys.path:
     sys.path.insert(0, str(_IMPORT_ROOT))
 
 from server.platform.paths import app_root  # noqa: E402
+from server.solver.beat_runtime.provider import official_selected  # noqa: E402
 
 
 REPO_ROOT = app_root()
@@ -643,6 +644,12 @@ def _provision_beat_runtime(python: Path) -> None:
     greyed-out row.
     """
 
+    if official_selected():
+        if _run([str(python), "-c", "import beat_engine"], quiet=True).returncode != 0:
+            return
+        _provision_gpu_runtime(python)
+        _provision_beat_cpu_runtime(python)
+        return
     if _run(
         [str(python), "-c", "import hornlab_beat_bem.provision"], quiet=True
     ).returncode != 0:
@@ -667,7 +674,8 @@ def _provision_gpu_runtime(python: Path) -> None:
         return
     # The provisioner announces its own download sizes once it decides to run;
     # without a supported GPU it exits silently, so CPU-only launches stay quiet.
-    _run([str(python), "-m", "hornlab_beat_bem.provision", "--if-gpu"])
+    module = "server.solver.beat_runtime.cli" if official_selected() else "hornlab_beat_bem.provision"
+    _run([str(python), "-m", module, "--if-gpu"])
 
 
 def _beat_provision_facts(python: Path) -> dict[str, object] | None:
@@ -733,6 +741,10 @@ def _provision_beat_cpu_runtime(python: Path) -> None:
     if os.environ.get("WG2_SKIP_BEAT_CPU_PROVISION", "").strip() == "1":
         return
     if platform.system() not in BEAT_CPU_PROVISION_SYSTEMS:
+        return
+    if official_selected():
+        if _run([str(python), "-m", "server.solver.beat_runtime.cli", "--backend", "cpu"]).returncode != 0:
+            print("WARNING: the WG-owned BEAT CPU runtime could not be provisioned (see above).")
         return
     facts = _beat_provision_facts(python)
     if facts is None:

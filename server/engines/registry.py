@@ -399,6 +399,11 @@ def _beat_row_updates(
     """
 
     from server.solver import beat, beat_cpu_runtime
+    from server.solver.beat_runtime.provider import official_selected
+
+    if official_selected():
+        return {beat.beat_engine_name(backend): (entry["available"], entry["reason"])
+                for backend, entry in beat.beat_backend_statuses().items()}
 
     updates = {"beat-cpu": cpu_backend_status(package)}
     if beat_cpu_runtime.cpu_preparation_in_flight():
@@ -977,7 +982,10 @@ class EngineRegistry:
 
     async def _refresh_cpu_backend(self) -> None:
         from server.solver.beat import (
-            _cpu_backend_status, _load_api, _package_retains_surface_traces, beat_engine_backend,
+            _cpu_backend_status,
+            _load_readiness_api as _load_api,
+            _package_retains_surface_traces,
+            beat_engine_backend,
         )
 
         while not self._listener_removed:

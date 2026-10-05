@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from . import assets, discovery, identity, installer, julia_steps, locks, paths, state, threads
+from .probe import PROBE_CONTRACT
 
 
 def _completion_valid(completion: Mapping[str, Any], *, backend: str = "cpu") -> bool:
@@ -31,6 +32,18 @@ def _ready(previous: dict[str, Any] | None, expected: dict[str, Any]) -> bool:
             "probe_contract", "probe_fixture_identity",
         ))
         and _completion_valid(previous["completion"], backend=previous["backend"])
+        and (expected.get("probe_contract") != PROBE_CONTRACT
+             or compiled_completion_valid(previous["completion"], previous["backend"]))
+    )
+
+
+def compiled_completion_valid(completion: Mapping[str, Any], backend: str) -> bool:
+    """Require PR 11's numerical evidence when reusing the built-in probe."""
+    return (
+        completion.get("finite_nonzero") is True
+        and type(completion.get("result_count")) is int and completion["result_count"] == 1
+        and type(completion.get("solved_count")) is int and completion["solved_count"] == 1
+        and completion.get("bem_backend") == backend
     )
 
 

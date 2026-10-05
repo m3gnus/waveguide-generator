@@ -1092,3 +1092,112 @@ suite ran. Native Windows/installed-engine qualification was not run; tests
 use fake engines, temporary directories and only recorded test-owned processes.
 No requested fix remains unfinished; the missing adapter directories prevent
 completion of the exact combined checks. Changes remain uncommitted.
+
+- **PR 13a — readiness identity/verdicts:**
+  `server/solver/beat_runtime/readiness.py` (identity and status APIs);
+  `server/tests/beat_runtime/test_readiness.py` (identity/evidence/backend cases);
+  this `CHANGES.md`.
+  CPU and Metal verdicts match the current project, engine/runtime bytes,
+  executable/version, resolved depot and effective JULIA_*/BLAB_* environment,
+  resolved integer threads and compiled probe contract/fixture. Missing,
+  corrupt, foreign, failed, interrupted and stale records have independent
+  reasons. Hardware eligibility and the engine's static catalog never prove
+  usability. CUDA/ROCm always report `not supported in this build`; a failed
+  Metal setup leaves CPU state and readiness intact. Default managed Julia
+  upgrades invalidate readiness, while explicit/configured older selections
+  remain valid. Unsupported/custom sysimage evidence cannot match the default
+  launch's null sysimage fields.
+- **PR 13b — compiled CPU probe/reuse handoff:**
+  `server/solver/beat_runtime/readiness.py` (provisioning entry points);
+  `server/solver/beat_runtime/provision.py`;
+  `server/tests/beat_runtime/test_readiness.py` (CPU wiring/reproof/notification cases);
+  this `CHANGES.md`.
+  Wire PR 11's default CPU probe through lazy public EngineWorker construction,
+  passing the same resolved threads/project/environment as setup. Retire only
+  that owned worker. Retain numerical result/terminal evidence in the PR 10
+  completion envelope. Built-in CPU/Metal reuse now requires that complete
+  evidence; an incomplete old built-in record is re-proved without force.
+  Custom CPU probes use a custom: contract namespace, so they cannot supply
+  default runtime readiness. The low-level shared provisioner remains injectable.
+- **PR 13c — default-off facade and live registry integration:**
+  `server/solver/beat_runtime/provider.py`, readiness.py's listener APIs;
+  `server/solver/{beat_cpu_runtime,beat}.py`; `server/engines/registry.py`;
+  `server/tests/beat_runtime/test_readiness_facade.py`; this `CHANGES.md`.
+  `WG2_BEAT_PROVIDER=official` selects WG-owned readiness/preparation; unset,
+  hbb or any other value retains the existing HBB paths. CPU then Metal setup
+  uses the existing daemon/progress lifecycle, skip flags and once-per-build
+  failure gate. CPU/Metal progress and terminal changes refresh EngineRegistry,
+  even when HBB is absent. Registry listener removal also removes the new
+  provider subscription. Guard listener exceptions and call outside locks.
+  Presentation wrappers bypass HBB success caches under the selector. Solve
+  imports and production routes remain HBB; this selector prepares a provider
+  for later adapter/qualification slices, and does not switch numerical solves.
+
+Future callers use readiness.backend_readiness(backend, directory=None,
+**launch_options) -> BackendReadiness(ready, state, reason), backend_status,
+beat_backend_statuses and beat_engine_status. launch_options include environ,
+julia_executable, julia_project, julia_threads and depot. provision_cpu and
+provision_metal return backend records and publish completion invalidation.
+probe_cache_clear(notify=True) publishes manual invalidation; notify=False
+avoids recursive refresh from presentation wrappers. Queries are deliberately
+uncached and re-read records/hash current bytes, including external-process
+state changes when queried. No Julia startup is needed for a readiness query.
+Only in-process provisioning/invalidation publishes listener events; cross-process
+notification delivery is not introduced here. Runtime capabilities beyond the
+compiled readiness proof remain negotiated by later adapters; status version
+is unknown and surface_traces is conservatively false.
+
+- **PR 14 — CLI and optional bootstrap path:**
+  `server/solver/beat_runtime/cli.py`; `scripts/bootstrap.py`;
+  `server/tests/beat_runtime/test_cli.py`;
+  `scripts/tests/test_bootstrap_official_beat.py`; this `CHANGES.md`.
+  `python -m server.solver.beat_runtime.cli [provision|status|clear-cache]`
+  supports the existing --backend cpu/auto/metal, --if-gpu,
+  --if-nvidia-gpu, --force and --dir invocation shapes, plus explicit --retry,
+  --julia, --project, --threads and --depot. Auto is Metal-only and never
+  provisions CPU implicitly. GPU-less/unsupported gates exit 0 quietly;
+  successful/skipped provisioning exits 0, failed/absent engine exits 1,
+  invalid flags exit 2. CPU plus a GPU gate is refused. Status emits JSON and
+  exits 0 even when unavailable; clear-cache publishes in-process invalidation,
+  neither deleting proof records nor engine numerical caches. Absent engine
+  provisioning does not create state or attempt an installation. Bootstrap
+  selects this command only under the same explicit provider selector; its
+  existing REPO_ROOT subprocess cwd makes the app module importable, tested
+  from an unrelated caller cwd with a deliberately absent engine. Existing
+  distribution validation and installed qualifier HBB invocations remain intact.
+
+PR 13/14 deviations: official JWSound/BEAT_Engine supersedes the design's fork.
+PR 13 uses three review slices to stay near the proposed review-size limit.
+An uncached readiness query replaces a persistent success cache, so file/record
+changes cannot retain stale evidence; explicit invalidation still notifies the
+registry. Default CPU probe wiring completes the earlier injectable PR 10/11
+handoff here. The small registry change is needed to refresh without requiring
+an HBB package object. Bootstrap keeps its existing Windows/Linux CPU policy;
+the application's alternative background facade prepares CPU on macOS too.
+No cached-bundle/startup claim is inferred from a compiled solve. No engine
+private API, WG-specific engine behavior, new dependency, pin/requirements
+change, CUDA/ROCm implementation, legacy mirror or unauthenticated PID signal
+is introduced. All source/reference checkouts and HBB/user data remain untouched;
+changes remain uncommitted as requested.
+
+PR 13/14 validation: available runtime plus existing solver tests passed
+**921 tests in 95.87 s** with the requested Python and scripts/run_tests.py.
+The final focused readiness/facade/CLI/bootstrap run passed **80 tests in
+2.10 s** (53 PR 13 cases, 27 PR 14 cases), including the additional Metal
+inventory-error isolation regression. The unchanged CPU/runtime/startup and
+scripts/tests/test_bootstrap*.py command passed **157 tests in 5.73 s**.
+The startup command initially had 137 passes and 20 failures because this
+worktree lacks frontend/dist. Its successful reruns used a temporary symlink
+to the existing main WG checkout's built frontend, read only, then removed it;
+no frontend build or qualification is claimed. Available runtime/test and
+changed-facade/bootstrap Ruff checks and git diff --check passed.
+
+Both exact common checks were attempted: combined pytest ran no tests because
+server/tests/beat_adapter is absent; combined Ruff reports only the absent
+server/solver/beat_adapter and server/tests/beat_adapter directories. These
+missing later-slice paths prevent completing the exact common commands. All
+runs were unpiped and below two minutes. No Julia, real download, full WG suite,
+real GPU solve, user/HBB data writes or reference-checkout mutation occurred.
+Real engine/bundle/installed-device qualification remains intentionally unrun
+under the task constraints. No requested implementation remains unfinished;
+changes and this handoff remain uncommitted as explicitly requested.
