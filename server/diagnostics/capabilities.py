@@ -74,10 +74,10 @@ async def capabilities_payload(engine_registry: _Registry) -> dict[str, Any]:
         "hostPlatform": platform.system().lower(),
         "opencl_qualification_max_seconds": qualification_max_seconds(),
         "engines": engines,
-        "officialBeatRuntime": getattr(engine_registry, "official_runtime_statuses", None),
         "cpuPreparationInFlight": bool(
             getattr(engine_registry, "cpu_preparation_in_flight", lambda: False)()
         ),
+        **_official_beat_runtime(engine_registry),
         "engineSelection": {
             "default": "auto",
             "resolvedDefault": resolved,
@@ -109,3 +109,12 @@ async def capabilities_or_none(
 
 
 __all__ = ["PROBE_TIMEOUT_SECONDS", "capabilities_or_none", "capabilities_payload"]
+
+
+def _official_beat_runtime(engine_registry) -> dict:
+    """The opt-in official BEAT runtime's readiness, only when it is selected."""
+    from server.solver.beat_runtime.provider import official_selected
+
+    if not official_selected():
+        return {}
+    return {"officialBeatRuntime": getattr(engine_registry, "official_runtime_statuses", None)}

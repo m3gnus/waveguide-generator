@@ -907,7 +907,10 @@ class EngineRegistry:
         if self._cache is None:
             return tuple(EngineInfo(name, False, "Engine detection is in progress.", None)
                          for name in full3d_engine_order() if name != "dryrun")
-        self._check_official_state()
+        try:
+            self._check_official_state()
+        except Exception:  # noqa: BLE001 - a bad runtime root must not break engine selection
+            log.warning("Could not check the official BEAT runtime state", exc_info=True)
         self._schedule_cpu_refresh()
         # The first snapshot already contains the attempt that just finished.
         # Do not turn its timeout into another pending snapshot immediately.
@@ -985,7 +988,7 @@ class EngineRegistry:
         for name in ("state-cpu.json", "state-metal.json", "julia.json"):
             try:
                 info = (root / name).stat()
-                stamp.append((info.st_mtime_ns, info.st_size))
+                stamp.append((info.st_ino, info.st_mtime_ns, info.st_size))
             except OSError:
                 stamp.append(None)
         current = (str(root), *stamp)

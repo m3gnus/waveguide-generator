@@ -1294,3 +1294,12 @@ proof during Metal setup. Official status is diagnostic until later solve
 adapter slices; cross-process invalidation uses existing file stamps rather
 than a watcher/thread or new dependency. All requested fixes are implemented;
 missing beat_adapter directories prevent only the exact combined checks.
+
+PRs 13-14 review round 2, fixed directly:
+- P2: the registry's cross-process state check is guarded; a bad runtime root
+  logs a warning instead of failing every engine selection.
+- Default path restored to db4d26e6 behaviour: capabilities carry
+  officialBeatRuntime only when the provider is selected; provision_command
+  keeps the old text and quoting; HBB status lines still record the step and
+  notify. Only the official path suppresses per-line notifications.
+- The state-file stamp includes st_ino, since records are replaced atomically.
