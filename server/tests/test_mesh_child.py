@@ -17,9 +17,12 @@ from server.mesh import builder as mesh_builder
 from server.mesh.api import solver_mesh_response
 from server.mesh.builder import clear_solver_mesh_cache
 from server.mesh.child import (
+    CRASH_MESSAGE,
     MesherChildError,
     MesherChildHost,
     MesherCrashError,
+    build_timeout_seconds,
+    child_enabled,
     close_mesher_child,
     run_mesh_build,
 )
@@ -70,7 +73,7 @@ def host():
 
 @pytest.fixture()
 def shared_child(monkeypatch):
-    monkeypatch.delenv("WG2_MESH_IN_PROCESS", raising=False)
+    monkeypatch.delenv("WG2_TEST_MESH_IN_PROCESS", raising=False)
     close_mesher_child()
     yield
     close_mesher_child()
@@ -111,8 +114,8 @@ def test_a_crashing_child_is_a_named_error_and_the_next_build_works(host, crash)
         with pytest.raises(MesherCrashError) as caught:
             await host.run(crash)
         text = str(caught.value)
-        assert "mesher crashed or timed out" in text
-        assert 'surface fit "approximate"' in text
+        assert text == CRASH_MESSAGE
+        assert "shrinkage" in text and "surface fit" not in text
         # The server (this process) is alive and the host serves again.
         assert (await host.run(ok_build, "after"))["value"] == "after"
 
@@ -120,12 +123,15 @@ def test_a_crashing_child_is_a_named_error_and_the_next_build_works(host, crash)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX signals")
-def test_the_crash_message_names_the_signal(host) -> None:
+def test_the_signal_is_logged_not_shown(host, caplog) -> None:
     async def scenario() -> None:
-        with pytest.raises(MesherCrashError, match="SIGABRT"):
+        with pytest.raises(MesherCrashError) as caught:
             await host.run(abort_build)
+        assert "SIGABRT" not in str(caught.value)
 
-    asyncio.run(scenario())
+    with caplog.at_level("ERROR", logger="wg.mesh"):
+        asyncio.run(scenario())
+    assert "SIGABRT" in caplog.text
 
 
 def test_a_hang_is_stopped_at_the_deadline(host) -> None:
@@ -202,8 +208,16 @@ def test_close_kills_the_child(host) -> None:
     assert not _alive(pid)
 
 
+def test_in_process_switch_is_ignored_in_a_bundled_app(monkeypatch) -> None:
+    monkeypatch.setenv("WG2_TEST_MESH_IN_PROCESS", "1")
+    monkeypatch.setenv("WG2_BUNDLE", "1")
+    assert child_enabled()
+    monkeypatch.delenv("WG2_BUNDLE")
+    assert not child_enabled()
+
+
 def test_in_process_switch_runs_on_the_gmsh_worker(monkeypatch) -> None:
-    monkeypatch.setenv("WG2_MESH_IN_PROCESS", "1")
+    monkeypatch.setenv("WG2_TEST_MESH_IN_PROCESS", "1")
 
     async def scenario() -> None:
         from server.mesh.gmsh_worker import shutdown_gmsh_worker
@@ -229,7 +243,7 @@ def test_a_crashing_solve_mesh_is_a_422_that_names_the_fix(monkeypatch, shared_c
         with pytest.raises(HTTPException) as refusal:
             await solver_mesh_response(design, "auto")
         assert refusal.value.status_code == 422
-        assert 'surface fit "approximate"' in str(refusal.value.detail)
+        assert refusal.value.detail == CRASH_MESSAGE
         # The same event loop and process still serve a build afterwards.
         assert (await run_mesh_build(ok_build, "again"))["value"] == "again"
 
@@ -287,7 +301,7 @@ def test_icw_adversarial_3_no_longer_kills_the_backend(shared_child) -> None:
         try:
             await mesh_builder.build_solver_mesh(design, {"mesh_validation_mode": "warn"})
         except MesherCrashError as exc:
-            assert 'surface fit "approximate"' in str(exc)
+            assert str(exc) == CRASH_MESSAGE
         # Reaching here at all means this process survived the mesher.
         assert (await run_mesh_build(ok_build, "alive"))["value"] == "alive"
 
@@ -295,3 +309,165 @@ def test_icw_adversarial_3_no_longer_kills_the_backend(shared_child) -> None:
         asyncio.run(scenario())
     finally:
         clear_solver_mesh_cache()
+
+
+# ---- review round 1 regressions, each driven through a real spawned child ----
+
+
+def root_build(*_args: Any) -> str | None:
+    from server.platform.temp_session import spawned_directory_root
+
+    return spawned_directory_root()
+
+
+def partial_frame_target(connection, _session_root) -> None:
+    """A real child that promises a 1 MB frame, sends 10 bytes, and stalls."""
+
+    import struct
+
+    connection.recv()  # the build request
+    os.write(connection.fileno(), struct.pack("!i", 1_000_000) + b"x" * 10)
+    time.sleep(120)
+
+
+def failing_warmup_target(connection, session_root) -> None:
+    """The real child loop with a warmup that raises."""
+
+    import server.mesh.child as child_module
+
+    def broken() -> None:
+        raise RuntimeError("warmup failed")
+
+    child_module._warm_this_process = broken
+    child_module._child_main(connection, session_root)
+
+
+def test_close_does_not_wait_for_a_running_build(host) -> None:
+    async def scenario() -> None:
+        task = asyncio.create_task(host.run(hang_build))
+        await asyncio.sleep(1.5)  # the build is in the child
+        began = time.monotonic()
+        await asyncio.to_thread(host.close)
+        assert time.monotonic() - began < 3
+        with pytest.raises(RuntimeError, match="shutting down"):
+            await asyncio.wait_for(task, 5)
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_returns_promptly_during_a_viewport_build(shared_child) -> None:
+    from server.mesh.gmsh_worker import shutdown_gmsh_worker
+
+    async def scenario() -> None:
+        task = asyncio.create_task(run_mesh_build(hang_build))
+        await asyncio.sleep(1.5)
+        began = time.monotonic()
+        await shutdown_gmsh_worker()
+        assert time.monotonic() - began < 5
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(task, 5)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="raw POSIX pipe write")
+@pytest.mark.parametrize("how", ["deadline", "cancel", "close"])
+def test_a_stalled_partial_result_cannot_outlast_the_deadline_cancel_or_close(how) -> None:
+    host = MesherChildHost(target=partial_frame_target)
+
+    class Cancelled(Exception):
+        pass
+
+    async def scenario() -> None:
+        began = time.monotonic()
+        if how == "deadline":
+            with pytest.raises(MesherCrashError, match="did not finish"):
+                await host.run(ok_build, timeout=1.0)
+        elif how == "cancel":
+            def cancel_cb() -> None:
+                if time.monotonic() - began > 1.0:
+                    raise Cancelled()
+
+            with pytest.raises(Cancelled):
+                await host.run(ok_build, cancel_cb=cancel_cb)
+        else:
+            task = asyncio.create_task(host.run(ok_build))
+            await asyncio.sleep(1.0)
+            host.close()
+            with pytest.raises(RuntimeError):
+                await asyncio.wait_for(task, 5)
+        assert time.monotonic() - began < 15
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        host.close()
+
+
+def test_a_failed_warmup_does_not_answer_the_next_build() -> None:
+    host = MesherChildHost(target=failing_warmup_target)
+
+    async def scenario() -> None:
+        host.prewarm()
+        first = await host.run(ok_build, "design-A")
+        second = await host.run(ok_build, "design-B")
+        assert (first["value"], second["value"]) == ("design-A", "design-B")
+        assert host._channel is not None and not host._channel.warm_pending
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        host.close()
+
+
+def test_a_stale_reply_is_dropped(host) -> None:
+    async def scenario() -> None:
+        await host.run(ok_build, "warm up the child")
+        channel = host._channel
+        assert channel is not None
+        channel.events.put(("done", 999_999, {"value": "someone else's mesh"}))
+        assert (await host.run(ok_build, "mine"))["value"] == "mine"
+
+    asyncio.run(scenario())
+
+
+def test_the_child_uses_the_servers_session_directory(host) -> None:
+    from server.platform.temp_session import TemporarySession
+
+    session = TemporarySession.create()
+    session.activate()
+    try:
+
+        async def scenario() -> None:
+            assert await host.run(root_build) == str(session.path)
+
+        asyncio.run(scenario())
+    finally:
+        host.close()
+        session.close(remove=True)
+
+
+def test_there_is_no_default_deadline(monkeypatch) -> None:
+    monkeypatch.delenv("WG2_MESH_BUILD_TIMEOUT_S", raising=False)
+    assert build_timeout_seconds() is None
+    monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", "90")
+    assert build_timeout_seconds() == 90.0
+    monkeypatch.setenv("WG2_MESH_BUILD_TIMEOUT_S", "nonsense")
+    assert build_timeout_seconds() is None
+
+
+def test_cancelling_before_the_build_is_sent_leaves_the_warm_child_alone(host) -> None:
+    class Cancelled(Exception):
+        pass
+
+    def cancel_now() -> None:
+        raise Cancelled()
+
+    async def scenario() -> None:
+        pid = (await host.run(ok_build))["pid"]
+        with pytest.raises(Cancelled):
+            await host.run(ok_build, cancel_cb=cancel_now)
+        assert _alive(pid)
+        assert (await host.run(ok_build))["pid"] == pid
+
+    asyncio.run(scenario())

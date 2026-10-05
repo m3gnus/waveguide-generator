@@ -95,7 +95,7 @@ def in_process_mesher(monkeypatch: pytest.MonkeyPatch) -> None:
     either. Tests of real builds leave the child on, as the application runs.
     """
 
-    monkeypatch.setenv("WG2_MESH_IN_PROCESS", "1")
+    monkeypatch.setenv("WG2_TEST_MESH_IN_PROCESS", "1")
 
 
 @pytest.hookimpl(tryfirst=True)

@@ -26,7 +26,7 @@ import numpy as np
 
 from server.design.schema import DesignConfig, Expr
 from server.platform.memory import PhysicalMemory, physical_memory
-from server.platform.temp_session import temporary_directory_root
+from server.platform.temp_session import spawned_directory_root
 from server.preview.translate import design_to_mesher_config
 
 from server.contracts.geometry import (
@@ -897,7 +897,7 @@ def _build_sync(
     cancel_cb: CancelCallback | None = None,
 ) -> dict[str, Any]:
     """Build and inspect one artifact; runs in the mesher child (or, with
-    ``WG2_MESH_IN_PROCESS=1``, on the gmsh worker thread)."""
+    ``WG2_TEST_MESH_IN_PROCESS=1`` in tests, on the gmsh worker thread)."""
 
     try:
         from hornlab_mesher import TriangleBudgetExceeded
@@ -919,7 +919,7 @@ def _build_sync(
     # Inside the process's session (server/platform/temp_session.py): a stop
     # during this build ends without cleanup, and the next start sweeps it.
     with tempfile.TemporaryDirectory(
-        prefix="wg2-solver-mesh-", dir=temporary_directory_root()
+        prefix="wg2-solver-mesh-", dir=spawned_directory_root()
     ) as temp_dir:
         mesh_path = Path(temp_dir) / "waveguide.msh"
         # The user budget is advice. _mesh_policy replaced it in this private

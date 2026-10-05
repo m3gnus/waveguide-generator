@@ -268,7 +268,7 @@ def _child_environment(
     if marker is not None:
         environment["WG2_TEST_GMSH_BLOCK_FILE"] = str(marker)
     if in_process_mesher:
-        environment["WG2_MESH_IN_PROCESS"] = "1"
+        environment["WG2_TEST_MESH_IN_PROCESS"] = "1"
     if preview_marker is not None:
         environment["WG2_TEST_PREVIEW_BLOCK_FILE"] = str(preview_marker)
     return environment

@@ -7,24 +7,33 @@ worker *thread* takes the whole server with it, and no pre-check can tell the
 failing shapes apart from the working ones, so the build runs in a spawned
 child instead:
 
-* a crash (any signal or a nonzero exit) or a wall-clock timeout kills only the
-  child and surfaces as :class:`MesherCrashError`, a named, user-facing error;
-  the server stays up. Nothing is retried automatically (Magnus, 2026-10-05).
-* one child stays warm across builds, so the 1-2 s ``gmsh``/OCC/scipy import
-  is paid at boot (in the background) and again only after a death.
-* cancelling a build kills the child, the only bounded way to stop OCC.
+* a crash (any signal or a nonzero exit) kills only the child and surfaces as
+  :class:`MesherCrashError`, a named, user-facing error; the server stays up.
+  Nothing is retried automatically (Magnus, 2026-10-05).
+* there is no default wall-clock limit: mesh density is the user's choice and a
+  fine mesh may legitimately take minutes. A hang is ended by the user's cancel,
+  which kills the child. ``WG2_MESH_BUILD_TIMEOUT_S`` sets a limit for
+  qualification runs.
+* one child stays warm across builds, so the 1-2 s import of gmsh, OCC and
+  scipy is paid at boot (in the background) and again only after a death. gmsh
+  itself is initialised and finalised around every build, as it always was.
+* cancelling a build that is running in the child kills the child, the only
+  bounded way to stop OCC. Cancelling before the build is sent leaves it alone.
+
+The parent never blocks on the pipe: a reader thread owns ``recv`` and hands
+whole frames over a queue, so the deadline, a cancel and shutdown always win,
+even against a child that stalls halfway through a result. Every request and
+reply carries an id, and a reply that is not for the build in hand is dropped.
 
 It follows the BEMPP worker's process model (``server/solver/bempp_process.py``):
 the ``spawn`` context on every platform, a module-level target, a Windows job
 object so the child dies with the server, and a parent-sentinel watchdog. The
 packaged app is a relocatable interpreter rather than a frozen executable
-(``docs/plans/STANDALONE-APP.md``), so there is no ``freeze_support`` concern:
-``spawn`` re-runs ``python -m server`` under its ``__main__`` guard, as it does
-for the BEMPP worker.
+(``docs/plans/STANDALONE-APP.md``), so there is no ``freeze_support`` concern.
 
-``WG2_MESH_IN_PROCESS=1`` runs builds on the in-process gmsh worker thread, the
-pre-child behaviour. It exists for debugging and for tests that substitute the
-mesher in ``sys.modules``, which a spawned child cannot see.
+``WG2_TEST_MESH_IN_PROCESS=1`` runs builds on the in-process gmsh worker thread.
+It is for tests that substitute the mesher in ``sys.modules`` (a spawned child
+cannot see that) and is ignored in a bundled app (``WG2_BUNDLE=1``).
 """
 
 from __future__ import annotations
@@ -36,6 +45,7 @@ import multiprocessing
 from multiprocessing.connection import Connection
 import os
 import pickle
+import queue
 import signal
 import threading
 import time
@@ -47,23 +57,18 @@ from server.platform.process_tree import confine_to_windows_job
 
 log = logging.getLogger("wg.mesh")
 
-IN_PROCESS_ENV = "WG2_MESH_IN_PROCESS"
+IN_PROCESS_ENV = "WG2_TEST_MESH_IN_PROCESS"
 TIMEOUT_ENV = "WG2_MESH_BUILD_TIMEOUT_S"
-#: Above any legitimate build seen so far (a fine solve mesh is tens of seconds)
-#: and well below the >240 s hangs the interpolating fit produces.
-DEFAULT_TIMEOUT_SECONDS = 300.0
 
 _POLL_SECONDS = 0.1
 _JOIN_SECONDS = 2.0
 _PARENT_GONE_EXIT_CODE = 3
+_WARM_ID = 0
 
-#: The one remedy Magnus chose: say what happened and suggest the approximating
-#: fit. There is no UI control for the surface fit today, so the setting is
-#: named by the mesher's own value.
-SURFACE_FIT_HINT = (
-    "This is a known fault of the mesher's interpolating surface fit on some "
-    'shapes. Try the approximating fit instead (surface fit "approximate"). '
-    "The server is still running and nothing was retried."
+CRASH_MESSAGE = (
+    "The mesher crashed on this geometry. A known cause is morph shrinkage with a "
+    "fixed part of 0.8 or more: turn off shrinkage or lower the fixed part. "
+    "Otherwise try a different morph target."
 )
 
 
@@ -76,16 +81,20 @@ class MesherChildError(RuntimeError):
 
 
 def child_enabled() -> bool:
+    if os.environ.get("WG2_BUNDLE") == "1":
+        return True
     return os.environ.get(IN_PROCESS_ENV, "").strip() != "1"
 
 
-def build_timeout_seconds() -> float:
+def build_timeout_seconds() -> float | None:
+    """The qualification limit from the environment; ``None`` (no limit) otherwise."""
+
     raw = os.environ.get(TIMEOUT_ENV, "").strip()
     try:
-        value = float(raw) if raw else DEFAULT_TIMEOUT_SECONDS
+        value = float(raw) if raw else 0.0
     except ValueError:
-        return DEFAULT_TIMEOUT_SECONDS
-    return value if value > 0 else DEFAULT_TIMEOUT_SECONDS
+        return None
+    return value if value > 0 else None
 
 
 def _describe_exit(exitcode: int | None) -> str:
@@ -120,28 +129,26 @@ def _exit_when_parent_does() -> None:
 
 
 def _warm_this_process() -> None:
-    """Pay the import and session-open cost here, in the process that reuses it."""
+    """Pay the import cost here, in the process that will reuse it."""
 
-    from server.mesh.gmsh_worker import _no_gmsh_work, _run_in_gmsh_session
     from server.mesh.prewarm import import_mesher_modules
 
     import_mesher_modules()
+    import gmsh  # noqa: F401
     import meshio  # noqa: F401 - parsing a build's artifact needs it
 
     import server.mesh.builder  # noqa: F401
     import server.exports.core  # noqa: F401
 
-    _run_in_gmsh_session(_no_gmsh_work)
 
-
-def _error_payload(exc: BaseException) -> tuple[Any, ...]:
+def _error_payload(request_id: int, exc: BaseException) -> tuple[Any, ...]:
     blob: bytes | None
     try:
         blob = pickle.dumps(exc)
         pickle.loads(blob)  # an exception with a custom __init__ can pickle but not load
     except Exception:  # noqa: BLE001
         blob = None
-    return ("error", blob, type(exc).__name__, str(exc), traceback.format_exc())
+    return ("error", request_id, blob, type(exc).__name__, str(exc), traceback.format_exc())
 
 
 def _child_main(connection: Connection, session_root: str | None) -> None:
@@ -158,26 +165,29 @@ def _child_main(connection: Connection, session_root: str | None) -> None:
             except (EOFError, OSError):
                 return
             except Exception as exc:  # noqa: BLE001 - unreadable command, keep serving
-                connection.send(_error_payload(exc))
+                connection.send(_error_payload(-1, exc))
                 continue
             if command is None:
                 return
-            kind = command[0]
+            kind, request_id = command[0], command[1]
             try:
                 if kind == "warm":
-                    _warm_this_process()
-                    connection.send(("warm",))
+                    try:
+                        _warm_this_process()
+                    except Exception:  # noqa: BLE001 - the build reports it where it matters
+                        log.info("mesher child warmup failed", exc_info=True)
+                    connection.send(("warm", request_id))
                     continue
                 from server.mesh.gmsh_worker import _run_in_gmsh_session
 
-                _, fn, args = command
+                _, _, fn, args = command
                 result = _run_in_gmsh_session(fn, *args)
-                connection.send(("done", result))
+                connection.send(("done", request_id, result))
             except (EOFError, BrokenPipeError):
                 return
             except BaseException as exc:  # noqa: BLE001 - report, never die on a Python error
                 try:
-                    connection.send(_error_payload(exc))
+                    connection.send(_error_payload(request_id, exc))
                 except (EOFError, BrokenPipeError, OSError):
                     return
     finally:
@@ -187,8 +197,48 @@ def _child_main(connection: Connection, session_root: str | None) -> None:
 # --------------------------------------------------------------- the parent
 
 
+class _Channel:
+    """One child process and the thread that reads whole frames from it."""
+
+    def __init__(self, process: Any, connection: Connection, job: Any) -> None:
+        self.process = process
+        self.connection = connection
+        self.job = job
+        self.events: queue.Queue[tuple[Any, ...]] = queue.Queue()
+        self.warm_pending = False
+        threading.Thread(target=self._read, name="wg2-mesh-reader", daemon=True).start()
+
+    def _read(self) -> None:
+        while True:
+            try:
+                event = self.connection.recv()
+            except (EOFError, OSError):
+                self.events.put(("eof",))
+                return
+            except Exception as exc:  # noqa: BLE001 - a result the parent cannot unpickle
+                self.events.put(("badframe", exc))
+                continue
+            self.events.put(event)
+
+    def kill(self) -> None:
+        process = self.process
+        try:
+            if process.is_alive():
+                process.kill()
+            process.join(_JOIN_SECONDS)
+        except (OSError, ValueError):
+            pass
+        try:
+            self.connection.close()
+        except OSError:
+            pass
+        if self.job is not None:
+            self.job.terminate()
+            self.job.close()
+
+
 class MesherChildHost:
-    """Own one reusable mesher child; run builds on it with a wall-clock limit."""
+    """Own one reusable mesher child; run builds on it, killing it when asked."""
 
     def __init__(
         self,
@@ -198,19 +248,20 @@ class MesherChildHost:
     ) -> None:
         self._context = process_context or multiprocessing.get_context("spawn")
         self._target = target
-        self._connection: Connection | None = None
-        self._process: multiprocessing.Process | None = None
-        self._job: Any = None
-        self._warm_pending = False
+        self._channel: _Channel | None = None
         self._closed = False
-        self._lock = threading.RLock()  # one build at a time, as on the gmsh thread
+        self._state = threading.RLock()  # short: the process fields, never a build
+        self._serial = threading.Lock()  # one build at a time, as on the gmsh thread
+        self._ids = iter(range(1, 1 << 62))
 
-    # process management -------------------------------------------------
-    def _start_locked(self) -> Connection:
-        process, connection = self._process, self._connection
-        if process is not None and process.is_alive() and connection is not None:
-            return connection
-        self._kill_locked()
+    # process management (caller holds _state) --------------------------------
+    def _ensure_locked(self) -> _Channel:
+        channel = self._channel
+        if channel is not None and channel.process.is_alive():
+            return channel
+        if channel is not None:
+            channel.kill()
+            self._channel = None
         from server.platform.temp_session import temporary_directory_root
 
         parent, child = self._context.Pipe(duplex=True)
@@ -222,62 +273,43 @@ class MesherChildHost:
         )
         process.start()
         child.close()
-        self._job = confine_to_windows_job(process.pid) if process.pid else None
-        self._connection, self._process = parent, process
-        return parent
+        job = confine_to_windows_job(process.pid) if process.pid else None
+        self._channel = _Channel(process, parent, job)
+        return self._channel
 
-    def _kill_locked(self) -> None:
-        connection, self._connection = self._connection, None
-        process, self._process = self._process, None
-        job, self._job = self._job, None
-        self._warm_pending = False
-        if connection is not None:
-            try:
-                connection.close()
-            except OSError:
-                pass
-        if process is not None:
-            if process.is_alive():
-                process.kill()
-            process.join(_JOIN_SECONDS)
-        if job is not None:
-            job.terminate()
-            job.close()
+    def _discard(self, channel: _Channel) -> None:
+        """Kill ``channel`` (if it is still the current one) and warm a new child."""
+
+        with self._state:
+            if self._channel is channel:
+                self._channel = None
+            channel.kill()
+            if not self._closed:
+                self.prewarm()
 
     def prewarm(self) -> None:
         """Start the child and queue its import warmup without waiting for it."""
 
-        with self._lock:
-            if self._closed or self._warm_pending:
+        with self._state:
+            if self._closed:
                 return
             try:
-                connection = self._start_locked()
-                connection.send(("warm",))
+                channel = self._ensure_locked()
+                if channel.warm_pending:
+                    return
+                channel.connection.send(("warm", _WARM_ID))
+                channel.warm_pending = True
             except (BrokenPipeError, EOFError, OSError):
                 return
-            self._warm_pending = True
 
     def close(self) -> None:
-        with self._lock:
-            self._closed = True
-        # Do not wait for a running build's thread to give the lock back: the
-        # kill is what ends it.
-        connection, process = self._connection, self._process
-        try:
-            if connection is not None:
-                connection.close()
-        except OSError:
-            pass
-        if process is not None and process.is_alive():
-            process.kill()
-            process.join(_JOIN_SECONDS)
-        with self._lock:
-            self._kill_locked()
+        """Kill the child now. Never waits for a running build: the kill ends it."""
 
-    def _kill_and_respawn(self) -> None:
-        self._kill_locked()
-        if not self._closed:
-            self.prewarm()
+        with self._state:
+            self._closed = True
+            channel, self._channel = self._channel, None
+        if channel is not None:
+            channel.kill()
 
     # one build ------------------------------------------------------------
     def _run_blocking(
@@ -285,96 +317,80 @@ class MesherChildHost:
         fn: Callable[..., Any],
         args: tuple[Any, ...],
         cancel_cb: Callable[[], None] | None,
-        timeout: float,
+        timeout: float | None,
         abort: threading.Event,
     ) -> Any:
-        while not self._lock.acquire(timeout=_POLL_SECONDS):
-            self._poll_cancel(cancel_cb, abort, locked=False)
+        def checkpoint(channel: _Channel | None) -> None:
+            """Raise if the caller cancelled; kill the child only if a build is in it."""
+
+            try:
+                if abort.is_set():
+                    raise asyncio.CancelledError()
+                if self._closed:
+                    raise RuntimeError("mesher child is shutting down; build abandoned")
+                if cancel_cb is not None:
+                    cancel_cb()
+            except BaseException:
+                if channel is not None:
+                    self._discard(channel)
+                raise
+
+        while not self._serial.acquire(timeout=_POLL_SECONDS):
+            checkpoint(None)
         try:
-            if self._closed:
-                raise RuntimeError("mesher child is shutting down; submission rejected")
-            self._poll_cancel(cancel_cb, abort, locked=True)
-            connection = self._start_locked()
-            # A warmup still in flight is answered first; consume its reply.
-            self._send(connection, ("run", fn, args))
-            deadline = time.monotonic() + timeout  # the clock starts at the send
-            while True:
-                if time.monotonic() > deadline:
-                    self._kill_and_respawn()
-                    raise MesherCrashError(
-                        self._message(f"it did not finish within {timeout:g} s and was stopped")
-                    )
-                self._poll_cancel(cancel_cb, abort, locked=True)
+            checkpoint(None)
+            request_id = next(self._ids)
+            with self._state:
+                if self._closed:
+                    raise RuntimeError("mesher child is shutting down; submission rejected")
+                channel = self._ensure_locked()
                 try:
-                    ready = connection.poll(_POLL_SECONDS)
-                    event = connection.recv() if ready else None
-                except (EOFError, OSError, ConnectionError):
-                    if self._closed:
-                        raise RuntimeError("mesher child is shutting down") from None
-                    raise self._crashed_locked() from None
-                if event is None:
-                    process = self._process
-                    if process is not None and not process.is_alive() and not connection.poll():
-                        raise self._crashed_locked()
+                    channel.connection.send(("run", request_id, fn, args))
+                except (BrokenPipeError, EOFError, OSError):
+                    pass  # the reader reports the death as "eof" below
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while True:
+                if deadline is not None and time.monotonic() > deadline:
+                    self._discard(channel)
+                    raise MesherCrashError(
+                        f"The mesher did not finish within {timeout:g} s and was stopped."
+                    )
+                checkpoint(channel)
+                try:
+                    event = channel.events.get(timeout=_POLL_SECONDS)
+                except queue.Empty:
                     continue
                 kind = event[0]
                 if kind == "warm":
-                    self._warm_pending = False
+                    channel.warm_pending = False
+                    continue
+                if kind == "eof":
+                    if self._closed:
+                        raise RuntimeError("mesher child is shutting down; build abandoned")
+                    raise self._crashed(channel)
+                if kind == "badframe":
+                    self._discard(channel)
+                    raise MesherChildError(f"The mesher child sent an unreadable result: {event[1]}")
+                if event[1] != request_id:
+                    log.warning("dropped a mesher child reply for request %s", event[1])
                     continue
                 if kind == "done":
-                    return event[1]
+                    return event[2]
                 if kind == "error":
-                    _, blob, name, message, tb = event
+                    _, _, blob, name, message, tb = event
                     log.debug("mesher child raised %s:\n%s", name, tb)
                     if blob is not None:
                         raise pickle.loads(blob)
                     raise MesherChildError(f"{name}: {message}")
         finally:
-            self._lock.release()
+            self._serial.release()
 
-    @staticmethod
-    def _send(connection: Connection, message: tuple[Any, ...]) -> None:
-        try:
-            connection.send(message)
-        except (BrokenPipeError, EOFError, ConnectionError):
-            # The warm child died between spawn and send: the next poll sees it.
-            return
-
-    def _poll_cancel(
-        self,
-        cancel_cb: Callable[[], None] | None,
-        abort: threading.Event,
-        *,
-        locked: bool,
-    ) -> None:
-        try:
-            if abort.is_set():
-                raise asyncio.CancelledError()
-            if self._closed:
-                raise RuntimeError("mesher child is shutting down")
-            if cancel_cb is not None:
-                cancel_cb()
-        except BaseException:
-            if locked:
-                self._kill_and_respawn()
-            raise
-
-    def _crashed_locked(self) -> MesherCrashError:
-        process = self._process
-        exitcode: int | None = None
-        if process is not None:
-            process.join(_JOIN_SECONDS)
-            exitcode = process.exitcode
-        reason = _describe_exit(exitcode)
-        self._kill_and_respawn()
-        return MesherCrashError(self._message(f"the mesher process died ({reason})"))
-
-    @staticmethod
-    def _message(cause: str) -> str:
-        return (
-            f"The mesher crashed or timed out on this geometry: {cause}. "
-            f"{SURFACE_FIT_HINT}"
-        )
+    def _crashed(self, channel: _Channel) -> MesherCrashError:
+        process = channel.process
+        process.join(_JOIN_SECONDS)
+        log.error("mesher child died: %s", _describe_exit(process.exitcode))
+        self._discard(channel)
+        return MesherCrashError(CRASH_MESSAGE)
 
     async def run(
         self,
@@ -395,7 +411,7 @@ class MesherChildHost:
             return await asyncio.shield(task)
         except asyncio.CancelledError:
             # The awaiting task went away (client gone, shutdown): end the child
-            # so its thread unwinds instead of waiting out the timeout.
+            # so its thread unwinds instead of waiting for a result nobody wants.
             abort.set()
             raise
 
@@ -455,7 +471,7 @@ __all__ = [
     "MesherChildError",
     "MesherCrashError",
     "MesherChildHost",
-    "SURFACE_FIT_HINT",
+    "CRASH_MESSAGE",
     "close_mesher_child",
     "get_mesher_child",
     "prewarm_mesher_child",
