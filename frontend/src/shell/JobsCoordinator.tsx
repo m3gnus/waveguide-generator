@@ -33,6 +33,7 @@ import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { inFlightWords, onScreenRequestInFlight, onScreenRequestToContinue } from './cadOnScreenSettings';
 import { solveAttention, useOperationAttention } from './solveAttention';
+import { solvedCadModels } from './cadlink/solvedModel';
 
 /**
  * A line of text rendered beside the Solve button, not inside its `title`.
@@ -274,6 +275,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     acceptSubmittedLabel(identity.designName);
     compareSelection.awaitRun(operation.jobId);
     solveAttention.bindRun(operation.jobId, operation.operationId);
+    solvedCadModels.claim(operation.jobId, {
+      manifestSha256: operation.snapshot?.manifestSha256 ?? null,
+      sourceIngestId: ingestId,
+    });
     void jobsSocket.refresh().catch((reason: unknown) => {
       setActionError(reason instanceof Error ? reason.message : String(reason));
     });
@@ -320,6 +325,10 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       claimedOperations.current.add(operation.operationId);
       compareSelection.awaitRun(operation.jobId);
       solveAttention.bindRun(operation.jobId, operation.operationId);
+      solvedCadModels.claim(operation.jobId, {
+        manifestSha256: operation.snapshot?.manifestSha256 ?? null,
+        sourceIngestId: null,
+      });
       void jobsSocket.refresh().catch(() => undefined);
     }
   }, [cadOperations]);

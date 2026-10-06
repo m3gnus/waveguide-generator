@@ -48,6 +48,7 @@ import {
   type RefreshOptions,
 } from './cadlink/arrivals';
 import { useCadSend } from './cadlink/send';
+import { solvedCadModels } from './cadlink/solvedModel';
 import {
   refreshChannelDriverBases,
   restoreCadJobModel,
@@ -970,6 +971,20 @@ export function CadLinkCoordinator() {
   }, [onshape]);
 
   const reportViewportNotice = useCallback((message: string | null) => setViewportNotice(message), []);
+
+  // The run the user's CAD solve claims brings the model it prepared on screen
+  // (cadlink/solvedModel). Subscribed rather than rendered: every progress
+  // message would otherwise re-render this coordinator.
+  useEffect(() => {
+    const settle = () => solvedCadModels.settle(jobsSocket.getSnapshot().jobs, {
+      showIngestedMesh: showIngestedMeshInViewport,
+      reportViewportNotice,
+    });
+    settle();
+    const stopJobs = jobsSocket.subscribe(settle);
+    const stopClaims = solvedCadModels.subscribe(settle);
+    return () => { stopJobs(); stopClaims(); };
+  }, [reportViewportNotice]);
 
   /** Ingest the selected return and hand back the verified record.
    *

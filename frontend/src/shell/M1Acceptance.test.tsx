@@ -34,6 +34,7 @@ import { showJobModel } from '../jobs/showJobModel';
 import { ResultsPanel } from './ResultsPanel';
 import { SolveActions } from './TopBar';
 import { resetSolveAttentionForTests, solveAttention } from './solveAttention';
+import { resetSolvedCadModelsForTests, solvedCadModels } from './cadlink/solvedModel';
 import {
   bindWorkspaceNavigation,
   navigationGeneration,
@@ -225,6 +226,7 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     resetCadOperationsStore();
     resetSolveOptionsStore();
     resetSolveAttentionForTests();
+    resetSolvedCadModelsForTests();
     resetWorkspaceNavigationForTests();
     sessionStorage.clear();
     importedMeshStore.clear();
@@ -349,6 +351,57 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
     await jobs([cadJob('job-1', 'wgi_first'), cadJob('earlier', 'wgi_first')]);
     expect(compareSelection.getSnapshot().primary).toBe('job-1');
     expect(activations).toContain('results');
+  });
+
+  it('shows a solve that prepared the model again, along another axis, as the model on screen', async () => {
+    // The M1a fixture: the return was ingested along +z on arrival, and Solve
+    // confirmed the automatic -y, so the backend prepared it again. The run
+    // names that preparation, never the ingestion that was on screen.
+    const prepared = {
+      ingest_id: 'wgi_prepared_minus_y',
+      manifest_sha256: `sha256:${'1'.repeat(64)}`,
+      artifact_sha256: `sha256:${'2'.repeat(64)}`,
+      report_sha256: `sha256:${'4'.repeat(64)}`,
+      solve_model_sha256: 'sha256:f66928-minus-y',
+      mesh_sizes: { rigid_size_mm: 8, transition_mm: 12, source_size_mm: { 'source-hf': 4 } },
+      skipped_source_ids: [], sources: [],
+      findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
+    } as unknown as CadReturnIngestRecord;
+    useCadReturnStore.setState((state) => ({
+      ingestRecord: { ...state.ingestRecord!, solve_model_sha256: 'sha256:39d46c-plus-z' },
+    }));
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
+      String(input).endsWith(`/api/cadlink/ingest/${prepared.ingest_id}`)
+        ? new Response(JSON.stringify(prepared), { status: 200, headers: { 'Content-Type': 'application/json' } })
+        : resultResponse()
+    )));
+    // What CadLinkCoordinator does with a claimed run: its viewport load, stood in for.
+    const settle = () => solvedCadModels.settle(jobsSocket.getSnapshot().jobs, {
+      showIngestedMesh: async (record, name, _notice, _fetcher, generation) => {
+        importedMeshStore.setCad({ name, source: 'cad', ingestId: record.ingest_id } as ImportedMeshScene, generation, true);
+      },
+    });
+    const stops = [jobsSocket.subscribe(settle), solvedCadModels.subscribe(settle)];
+    try {
+      const operationId = await pressSolve();
+      await deliver(operation(operationId, 'accepted', { jobId: 'job-1', stage: 'submitted', updatedAt: '2026-09-21T10:00:05Z' }));
+      const solved = (status?: JobItem['status']) => {
+        const job = cadJob('job-1', prepared.ingest_id, status);
+        job.cad_source!.solve_model_sha256 = prepared.solve_model_sha256;
+        return job;
+      };
+      await jobs([solved('running')]);
+      await act(async () => { await flush(8); });
+      await jobs([solved()]);
+
+      expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(prepared.ingest_id);
+      expect(importedMeshStore.getSnapshot().cad?.ingestId).toBe(prepared.ingest_id);
+      expect(compareSelection.getSnapshot()).toMatchObject({ primary: 'job-1', following: true });
+      expect(host.textContent).not.toContain('Different CAD return');
+      expect(host.textContent).not.toContain('Not solved yet');
+    } finally {
+      stops.forEach((stop) => stop());
+    }
   });
 
   it('selects and reveals the result of a solve Fusion sent, which WG watched finish', async () => {

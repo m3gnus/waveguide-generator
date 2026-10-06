@@ -200,6 +200,9 @@ interface CadReturnState {
   projectLineageId: string | null;
   beginIngestIntent: () => number;
   isCurrentIngestIntent: (generation: number) => boolean;
+  /** The intent now current, without advancing it: a reader that must not
+   * cancel an ingest in flight checks it is still current before acting. */
+  currentIngestIntent: () => number;
   selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
@@ -967,6 +970,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   ingestStaleReason: null,
   beginIngestIntent: supersedeIngestIntent,
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
+  currentIngestIntent: () => ingestIntentGeneration,
   selectBundle: (selectedBundle, projectLineageId) => {
     supersedeIngestIntent();
     const project = resolvedProjectLineage(get(), projectLineageId);
