@@ -380,8 +380,71 @@ def test_geometric_selection_ignores_host_log_roundoff(direction):
     np.testing.assert_array_equal(_largest_gaps(gaps), np.arange(4))
     for grid in [f, shifted]:
         # An exact geometric midpoint between neighboring grid points.
-        target = (np.log(grid[20]) + np.log(grid[21])) / 2
+        target = (np.log2(grid[20]) + np.log2(grid[21])) / 2
         assert _nearest_log_point(grid, np.array([20, 21]), target) == 20
+        assert _nearest_log_point(grid, np.array([21, 20]), target) == 20
+
+
+def test_gap_ties_use_the_group_maximum_and_preserve_larger_differences():
+    from server.solver.adaptive_sweep import _largest_gaps
+
+    # Nearby neighbors must not chain into a tie wider than the anchor guard.
+    np.testing.assert_array_equal(_largest_gaps([1., 1. + .75e-12, 1. + 1.5e-12]), [1, 2, 0])
+    np.testing.assert_array_equal(_largest_gaps([1., 1. + 1e-10, 1.]), [1, 0, 2])
+
+
+@pytest.mark.parametrize("seed", [0, 17, 91])
+@pytest.mark.parametrize("bounds", [(20, 20000), (100, 1000), (100, 10000), (200, 2000), (100, 101)])
+def test_geometric_gap_order_and_samples_ignore_random_log2_ulps(monkeypatch, seed, bounds):
+    from server.solver import adaptive_sweep as sweep
+
+    log2 = np.log2
+    rng = np.random.default_rng(seed)
+
+    def noisy_log2(values):
+        result = log2(values)
+        steps = rng.integers(-2, 3, size=np.shape(result))
+        for step in range(2):
+            result = np.where(
+                abs(steps) > step,
+                np.nextafter(result, np.where(steps < 0, -np.inf, np.inf)),
+                result,
+            )
+        return result
+
+    class UnavailableModel:
+        def __init__(self, *args, **kwargs):
+            # Isolate acquisition ordering from numerical fitting; the normal
+            # fallback still exercises coverage, midpoints and disagreement ties.
+            raise ValueError("no fit for this ordering regression")
+
+    monkeypatch.setattr(sweep, "SweepModel", UnavailableModel)
+
+    def sampled_batches(f):
+        planner = sweep.SweepPlanner(f, delays_s=0)
+        batches = []
+        for _ in range(3):
+            ids = planner.pending.copy()
+            batches.append(ids)
+            if not len(ids):
+                break
+            planner.add(ids, np.ones((len(ids), 1), complex))
+        return batches
+
+    # Includes the reported 36/76/151/165/211/327-point boundary failures,
+    # plus every intervening grid size rather than one lucky geometric step.
+    for n in range(8, 401):
+        f = np.geomspace(*bounds, n)
+        expected_order = sweep._largest_gaps(np.diff(log2(f)))
+        np.testing.assert_array_equal(expected_order, np.arange(n - 1))
+        expected_batches = sampled_batches(f)
+        with monkeypatch.context() as patch:
+            patch.setattr(sweep.np, "log2", noisy_log2)
+            np.testing.assert_array_equal(sweep._largest_gaps(np.diff(np.log2(f))), expected_order)
+            actual_batches = sampled_batches(f)
+        assert len(actual_batches) == len(expected_batches)
+        for actual, expected in zip(actual_batches, expected_batches, strict=True):
+            np.testing.assert_array_equal(actual, expected, err_msg=f"{bounds=}, {n=}, {seed=}")
 
 
 @pytest.mark.parametrize("direction", [-1, 1])

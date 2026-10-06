@@ -41,7 +41,9 @@ Only the two adaptive entries were re-frozen; both non-adaptive entries,
 including their artifact hashes, are unchanged. Neither the sample-fit tolerance
 change in `60fb3474` nor `30ada125` was applied.
 
-The replay used a detached worktree at the pre-switch production commit
+To reproduce the committed CI fixes (including follow-up commits), resolve the
+tip of `fix/beat-runtime-ci-windows-linux` to a commit before making the patch.
+The replay uses a detached worktree at the pre-switch production commit
 `0a1b901df0727885d74e25f95410208adf465d4a`, with **only** the current
 `server/solver/adaptive_sweep.py` tie-break diff applied to production code.
 The shared test helper `server/tests/beat_adapter/hbb_snapshot.py` was copied
@@ -51,9 +53,11 @@ that commit and the fixed clock/context/requests of the selector-off test:
 ```sh
 # From the CI fix worktree; PY is the supplied macOS test interpreter.
 FIX_ROOT="$PWD"
+BASE_COMMIT=0a1b901df0727885d74e25f95410208adf465d4a
+FIX_COMMIT=$(git rev-parse 'fix/beat-runtime-ci-windows-linux^{commit}')
 REPLAY=/tmp/wg-beat-pre-switch-ci
-git worktree add --detach "$REPLAY" 0a1b901d
-git diff -- server/solver/adaptive_sweep.py > /tmp/wg-beat-ci-ties.patch
+git worktree add --detach "$REPLAY" "$BASE_COMMIT"
+git diff "$BASE_COMMIT" "$FIX_COMMIT" -- server/solver/adaptive_sweep.py > /tmp/wg-beat-ci-ties.patch
 git -C "$REPLAY" apply /tmp/wg-beat-ci-ties.patch
 mkdir -p "$REPLAY/server/tests/beat_adapter"
 cp server/tests/beat_adapter/hbb_snapshot.py "$REPLAY/server/tests/beat_adapter/"

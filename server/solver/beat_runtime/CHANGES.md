@@ -1696,10 +1696,19 @@ PRs 13-14 review round 2, fixed directly:
 ## Hosted Windows/Linux CI follow-up (2026-10-06)
 
 - Windows registry privacy accepts the token user, LocalSystem and
-  TrustedInstaller as owners; an Administrators owner additionally requires
+  TrustedInstaller as owners because only machine-controlling principals can
+  assign LocalSystem/SYSTEM or TrustedInstaller ownership. Only an
+  Administrators owner requires
   enabled membership in the effective token (UAC deny-only membership is
   insufficient). DACL allow ACEs remain restricted to the user and those local
   privileged principals, including read access because records hold secrets.
+  Records are not private against other elevated administrators, who are
+  inside the local administrator trust boundary. Records created by an
+  elevated run are Administrators-owned and a later non-elevated run of the
+  same user refuses them with `Unsafe Windows registry path: Registry
+  Administrators owner requires enabled token membership`. There is no
+  automatic ownership repair; this elevation-to-non-elevation lockout is
+  refused by design.
   Null/unsupported ACLs, foreign owners and untrusted readers/writers remain
   refused. New roots retain protected, inheritable user-only DACLs. Unlike
   HBB's directory selection plus POSIX-only chmod, WG still checks Windows

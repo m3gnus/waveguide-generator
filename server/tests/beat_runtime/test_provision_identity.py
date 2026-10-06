@@ -131,7 +131,7 @@ def test_short_windows_version_directory_does_not_trigger_upgrade(cpu_provisioni
     current.chmod(0o755)
     # Real managed installs carry the ownership marker; Windows recovery checks
     # the short version directory before reusing its executable.
-    spec = installer.julia_download("Windows", "x86_64")
+    spec = installer.julia_download()
     (tree / ".wg-julia.json").write_text(json.dumps({
         "provider": installer.PROVIDER_ID, "version": installer.JULIA_VERSION, "platform": spec.platform,
     }))

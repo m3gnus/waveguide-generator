@@ -18,19 +18,21 @@ from .frequency_sweep import _set_frequency_shaped_field, canonical_frequencies
 # A geometric coverage floor, independent of fit agreement. Kept here so the
 # acquisition grid, planner and published metadata use the same bound.
 MAX_SOLVED_GAP_OCTAVES = 1 / 6
+_ORDER_TOLERANCE = 1e-12
 
 
 def _nearest_log_point(frequencies, candidates, target):
-    distances = abs(np.log(frequencies[candidates]) - target)
+    distances = abs(np.log2(frequencies[candidates]) - target)
     # Geometric midpoints can be equidistant to rounding precision. Prefer the
     # lower frequency instead of letting the host's log implementation decide.
-    return int(candidates[np.flatnonzero(distances <= distances.min() + 1e-12)[0]])
+    return int(np.min(candidates[distances <= distances.min() + _ORDER_TOLERANCE]))
 
 
 def _largest_gaps(gaps):
     # Equal log gaps on a geometric grid differ by a few ulps across hosts.
-    # Match the coverage guard's precision, with lower-frequency gaps first.
-    return np.argsort(-np.round(gaps, 12), kind="stable")
+    # Anchor each tie group at its maximum: decimal rounding can split an
+    # ulp-scale tie across a rounding boundary. Lower-frequency gaps go first.
+    return _largest_scores(gaps)
 
 
 def _largest_disagreements(estimate):
@@ -38,11 +40,15 @@ def _largest_disagreements(estimate):
     # Scores within 1e-12 dB of a group's maximum prefer the lower index.
     # Use a distance guard as for midpoints: decimal rounding alone can split
     # an ulp-scale tie across a rounding boundary. Convergence is unrounded.
-    order = np.argsort(-estimate, kind="stable")
-    scores = np.asarray(estimate)[order]
+    return _largest_scores(estimate)
+
+
+def _largest_scores(values):
+    order = np.argsort(-np.asarray(values), kind="stable")
+    scores = np.asarray(values)[order]
     start = 0
     for stop in range(1, len(order) + 1):
-        if stop == len(order) or scores[start] - scores[stop] > 1e-12:
+        if stop == len(order) or scores[start] - scores[stop] > _ORDER_TOLERANCE:
             order[start:stop] = np.sort(order[start:stop])
             start = stop
     return order
@@ -90,7 +96,7 @@ class SweepPlanner:
         seeds = {0, len(f) - 1}
         for target in targets[1:-1]:
             available = np.asarray([i for i in range(1, len(f) - 1) if i not in seeds])
-            seeds.add(_nearest_log_point(f, available, np.log(target)))
+            seeds.add(_nearest_log_point(f, available, np.log2(target)))
         self.pending = np.asarray(sorted(seeds), dtype=int)
         self.observed: dict[int, np.ndarray] = {}
         self.delays_s = delays_s
@@ -164,22 +170,24 @@ class SweepPlanner:
         selected = []
         # Coverage is based on log-frequency distances, including explicit and
         # linear grids. It never queries a frequency outside the acquisition grid.
-        gaps = np.diff(np.log(f[ids]))
+        gaps = gaps_octaves
         # Fill every oversized refinable gap before tolerance-driven queries.
         # Include pending queries when splitting so a batch can fill one large
         # gap several times, without wasting queries on smaller gaps.
         coverage_ids = list(ids)
         while len(selected) < min(self.batch_size, len(remaining)):
             coverage_ids.sort()
-            oversized = _largest_gaps(np.diff(np.log2(f[coverage_ids])))
+            coverage_gaps = np.diff(np.log2(f[coverage_ids]))
+            oversized = _largest_gaps(coverage_gaps)
             candidate = None
             for gap in oversized:
                 left, right = coverage_ids[gap : gap + 2]
-                if np.log2(f[right] / f[left]) <= MAX_SOLVED_GAP_OCTAVES + 1e-12:
-                    break
+                if coverage_gaps[gap] <= MAX_SOLVED_GAP_OCTAVES + 1e-12:
+                    # A tie group can straddle the coverage threshold.
+                    continue
                 candidates = np.arange(left + 1, right)
                 if len(candidates):
-                    target = (np.log(f[left]) + np.log(f[right])) / 2
+                    target = (np.log2(f[left]) + np.log2(f[right])) / 2
                     candidate = _nearest_log_point(f, candidates, target)
                     break
             if candidate is None:
@@ -189,7 +197,7 @@ class SweepPlanner:
         for gap in _largest_gaps(gaps):
             candidates = np.arange(ids[gap] + 1, ids[gap + 1])
             if len(candidates) and not selected:
-                target = (np.log(f[ids[gap]]) + np.log(f[ids[gap + 1]])) / 2
+                target = (np.log2(f[ids[gap]]) + np.log2(f[ids[gap + 1]])) / 2
                 selected.append(_nearest_log_point(f, candidates, target))
                 break
         for i in _largest_disagreements(estimate):
