@@ -399,7 +399,7 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         directory.mkdir(parents=True, exist_ok=True)
 
     environment = os.environ.copy()
-    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP"):
+    for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "WG2_BEAT_JULIA"):
         environment.pop(name, None)
     environment.update(
         WG2_BUNDLE="1",
@@ -537,7 +537,18 @@ def check_official_runtime(
         raise QualificationError(f"no matching official compiled CPU runtime proof: {answer!r}")
     if not _inside(answer.get("runtime_dir"), Path(environment["WG2_BEAT_RUNTIME_DIR"])):
         raise QualificationError("official runtime inspection reported an unisolated directory")
-    return {"beat_engine_revision": revision, **answer}
+    # As on the default route, discovery may reuse a Julia already on the host
+    # PATH; that proves the official engine but not a clean machine's managed
+    # Julia, so record which one the compiled proof used.
+    julia = str(record.get("julia_executable") or "")
+    managed = bool(julia) and _inside(julia, Path(environment["WG2_BEAT_RUNTIME_DIR"]))
+    return {"beat_engine_revision": revision, **answer,
+            "julia_executable": julia,
+            "julia_origin": "managed-in-this-run" if managed else "host",
+            "claim": ("the official runtime was provisioned with WG-managed Julia inside this run's "
+                      "runtime directory" if managed else
+                      "the official runtime reused a Julia already on the host; it proves the "
+                      "official engine, not a clean machine's managed Julia download")}
 
 
 # ---------------------------------------------------------------------------

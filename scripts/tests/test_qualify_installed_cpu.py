@@ -3181,6 +3181,31 @@ def test_official_runtime_inspection_records_only_matching_installed_proof(tmp_p
     assert (tmp_path / "official-runtime-inspection.log").exists()
 
 
+@pytest.mark.parametrize("managed", [True, False])
+def test_official_runtime_inspection_records_which_julia_proved_it(tmp_path, monkeypatch, managed):
+    environment = {"WG2_BEAT_PROVIDER": "official", "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime")}
+    julia = (tmp_path / "runtime" / "wg-beat-engine" / "julia" / "bin" / "julia" if managed
+             else tmp_path / "host" / "bin" / "julia")
+    answer = {"ready": True, "probe_contract_expected": "compiled-proof", "runtime_dir": str(tmp_path / "runtime" / "wg-beat-engine"),
+              "record": {"provider": "wg-beat-engine", "status": "ready", "backend": "cpu",
+                         "probe_contract": "compiled-proof", "engine_fingerprint": "a" * 64,
+                         "runtime_fingerprint": "b" * 64, "julia_executable": str(julia)}}
+    monkeypatch.setattr(gate.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(
+        command, 0, stdout=json.dumps(answer), stderr=""))
+    report = gate.check_official_runtime(Path("installed-python"), tmp_path / "app", environment, tmp_path, OFFICIAL_REVISION)
+    assert report["julia_executable"] == str(julia)
+    assert report["julia_origin"] == ("managed-in-this-run" if managed else "host")
+    assert ("clean machine" in report["claim"]) is (not managed)
+
+
+def test_isolated_environment_drops_a_host_official_julia_override(tmp_path, monkeypatch):
+    monkeypatch.setenv("WG2_BEAT_JULIA", "/host/julia")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    app = tmp_path / "app"
+    app.mkdir()
+    assert "WG2_BEAT_JULIA" not in gate.isolated_environment(app, tmp_path / "work")
+
+
 def test_official_runtime_probe_cannot_pass_an_empty_runtime(tmp_path, monkeypatch):
     monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     app = Path(__file__).resolve().parents[2]
@@ -3241,6 +3266,8 @@ def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_pa
     assert report["provider"] == "official"
     assert report["qualified"] == (damage is None)
     assert code == (1 if damage else 0)
+    if damage == "missing-pin":
+        assert "official qualification requires the beat-engine revision from --pins-json" in report["error"]
     if damage in (None, "hbb"):
         assert inspected == [OFFICIAL_REVISION]
         assert report["official_runtime"]["beat_engine_revision"] == OFFICIAL_REVISION

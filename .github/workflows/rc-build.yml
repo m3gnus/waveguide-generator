@@ -262,7 +262,7 @@ jobs:
         # Qualify both routes until the provider switch; slice 10 removes HBB.
         # Reuse the installed payload, with a fresh official runtime and depot.
         # Planning estimate: +10-25 min for Julia download, bundle instantiate/
-        # precompile and solves (unmeasured); macOS may also prepare Metal.
+        # precompile and solves (unmeasured). The official gate checks BEAT CPU only.
         # No explicit job timeout-minutes; revisit the default after RC timings.
         if: ${{ !cancelled() }}
         env:
