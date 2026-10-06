@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+import hashlib
 from importlib import import_module, metadata
+from importlib.util import find_spec
 import json
 import os
 from pathlib import Path
 import tempfile
+import sys
 from typing import Any
 
 import numpy as np
@@ -17,6 +20,7 @@ from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from server.solver.beat_adapter import request, results
 from server.solver.beat_adapter.capabilities import FRAME
 from server.solver.beat_adapter.observations import build_observations
+from server.solver.beat_adapter.mesh import read_surface
 from server.solver.beat_runtime.discovery import JULIA_ENV_VAR
 from server.solver.beat_runtime.manager import WorkerManager
 from server.solver.beat_runtime.paths import checked_root
@@ -26,6 +30,33 @@ from server.solver.directivity_index import calculate_di_from_spherical_grid
 
 from .agreement import ResultSet
 from .recorder import EngineRun, write_record
+from .settings import observed_settings
+
+
+def output_directory(directory: Path, *, engine_source: Path | None = None) -> Path:
+    """Refuse runtime, source-checkout and installed-distribution trees before writes."""
+    directory = checked_root(directory).expanduser().resolve()
+    roots = [engine_source] if engine_source else []
+    for module, distribution in (("hornlab_beat_bem", "hornlab-beat-bem"), ("beat_engine", "beat-engine")):
+        loaded = sys.modules.get(module)
+        try:
+            origin = getattr(loaded, "__file__", None) if loaded else getattr(find_spec(module), "origin", None)
+            if origin:
+                roots.append(Path(origin).resolve().parent)
+            dist = metadata.distribution(distribution)
+            roots.append(Path(dist.locate_file("")))
+        except (ImportError, ValueError, metadata.PackageNotFoundError):
+            pass
+    # Recognize source checkouts even when their packages are not imported/installed.
+    for parent in (directory, *directory.parents):
+        if any((parent / relative).is_file() for relative in (
+                "hornlab_beat_bem/__init__.py", "src/beat_engine/__init__.py")):
+            roots.append(parent)
+    for root in roots:
+        root = Path(root).expanduser().resolve()
+        if directory == root or root in directory.parents or directory in root.parents:
+            raise ValueError(f"Output directory overlaps engine source/package directory: {root}")
+    return directory
 
 
 @dataclass(frozen=True)
@@ -48,6 +79,7 @@ class FrozenExterior:
         """Freeze metre geometry and the HBB-representable observation frame."""
         if type(self.threads) is not int or self.threads < 1:
             raise ValueError("Qualification requires an explicit positive thread count")
+        validate_frequency_axis(self.frequencies_hz)
         if not self.angle_range[0] <= 0 <= self.angle_range[1] or self.sphere_grid is None:
             raise ValueError("HBB comparison requires on-axis cuts and a complete sphere")
         if self.symmetry not in {"full", "yz", "yz+xz"}:
@@ -64,11 +96,15 @@ class FrozenExterior:
 
     def settings(self) -> dict[str, Any]:
         compiled = self.compiled()
-        mesh = compiled.mesh
+        mesh = read_surface(self.mesh_bytes.decode())
         triangles = np.asarray(mesh.points_m[mesh.faces], dtype=float)
         normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
         normals /= np.linalg.norm(normals, axis=1, keepdims=True)
+        areas = np.linalg.norm(np.cross(triangles[:, 1] - triangles[:, 0],
+                                       triangles[:, 2] - triangles[:, 0]), axis=1) / 2
         return {"tags": mesh.tags, "normals": normals, "axes": FRAME,
+                "mesh": {"node_count": len(mesh.points_m), "triangle_count": len(mesh.faces),
+                         "tag_areas_m2": {int(tag): float(areas[mesh.tags == tag].sum()) for tag in np.unique(mesh.tags)}},
                 "observation_points": {k: v.tolist() for k, v in compiled.layout.points_m.items()},
                 "quadrature": {k: v for k, v in compiled.wire["solver_options"].items()
                                if "quadrature" in k or "wavelength" in k or k == "singular_order"},
@@ -78,7 +114,14 @@ class FrozenExterior:
                 "source_tag": self.source_tag, "source_motion": "normal"}
 
 
-def official_runner(julia_executable: str, *, threads: int = 1,
+def validate_frequency_axis(frequencies: tuple[float, ...]) -> None:
+    axis = np.asarray(frequencies, dtype=np.float64)
+    if (not np.isfinite(axis).all() or np.any(axis <= 0)
+            or not np.array_equal(axis, axis.astype(np.float32).astype(np.float64))):
+        raise ValueError("Agreement frequencies must be exactly representable in Float32")
+
+
+def official_runner(julia_executable: str, *, threads: int,
                     engine_source: Path | None = None) -> Callable[[request.CompiledRequest], EngineRun]:
     """Return launch selection; recorder observes and owns the managed child solve."""
     def solve(compiled: request.CompiledRequest) -> EngineRun:
@@ -135,7 +178,8 @@ def managed_solve(compiled: request.CompiledRequest, selection: EngineRun,
         manager.shutdown()
 
 
-def result_set(inputs: FrozenExterior, native: Any, *, revision: str) -> ResultSet:
+def result_set(inputs: FrozenExterior, native: Any, *, revision: str,
+               recorder_record: dict | None = None, official: bool = False) -> ResultSet:
     """Score the same full-sphere quadrature for DI and far-field power estimates."""
     compiled = inputs.compiled()
     if (native.cancelled or native.is_partial
@@ -157,14 +201,21 @@ def result_set(inputs: FrozenExterior, native: Any, *, revision: str) -> ResultS
     weights = (np.cos(edges[:-1]) - np.cos(edges[1:])) / 2
     mean_square = np.sum(np.mean(np.abs(grid)**2, axis=2) * weights, axis=1)
     power = 4 * np.pi * inputs.distance_m**2 * mean_square / (2 * inputs.density * inputs.sound_speed)
+    settings = inputs.settings()
+    evidence = None
+    if recorder_record is not None:
+        settings, evidence = observed_settings(settings, native, official=official,
+                                               native_symmetry=compiled.wire["solver_options"]["symmetry"])
     return ResultSet(inputs.mesh_bytes, np.asarray(native.frequencies_hz), np.asarray(native.pressure_complex),
-                     np.asarray(native.impedance), di, power, inputs.settings(), revision)
+                     np.asarray(native.impedance), di, power, settings, revision,
+                     recorder_record, recorder_record["record_sha256"] if recorder_record else "", evidence)
 
 
 def hbb_runner(inputs: FrozenExterior, *, julia_executable: str,
                expected_revision: str, directory: Path) -> ResultSet:
     """Use HBB's public API in one-shot mode; never adopt or signal a registry PID."""
-    directory = checked_root(directory)
+    inputs.compiled()  # Refuse quantized frequencies before imports or launch.
+    directory = output_directory(directory)
     import hornlab_beat_bem as hbb
 
     distribution = metadata.distribution("hornlab-beat-bem")
@@ -191,21 +242,33 @@ def hbb_runner(inputs: FrozenExterior, *, julia_executable: str,
     directory.mkdir(parents=True, exist_ok=True)
     record = {"evidence_mode": "real", "engine_distribution": "hornlab-beat-bem",
               "engine_revision": revision, "revision_source": "installed_vcs_metadata_attested",
-              "status": "failed", "requested_frequencies_hz": inputs.frequencies_hz,
-              "settings": inputs.settings(), "real_solved_count": 0,
-              "count_source": "HBB public API terminal validation; not WG-observed transport"}
+              "engine_status": "failed", "requested_frequencies_hz": inputs.frequencies_hz,
+              "declared_settings": inputs.settings(), "real_solved_count": 0,
+              "case": {"backend": "cpu", "precision": inputs.precision},
+              "runtime": {"engine_revision": revision},
+              "mesh_sha256": hashlib.sha256(json.dumps(compiled.mesh.packed(), sort_keys=True).encode()).hexdigest(),
+              "count_source": "HBB public API-validated rows; not terminal events or WG-observed transport"}
     try:
         with tempfile.TemporaryDirectory(prefix="hbb-reference-", dir=directory) as temporary:
             mesh_path = Path(temporary) / "surface.msh"
             mesh_path.write_bytes(inputs.mesh_bytes)
             native = hbb.solve_frequencies(mesh_path, inputs.frequencies_hz, config)
-        result = result_set(inputs, native, revision=revision)
-        record.update(status="passed", real_solved_count=len(native.frequencies_hz),
+        result_set(inputs, native, revision=revision)  # Validate decoded axes before recording success.
+        record.update(engine_status="passed", real_solved_count=len(native.frequencies_hz),
                       solver_log=getattr(native, "solver_log", []),
                       pressure_complex=native.pressure_complex, impedance=native.impedance,
                       sphere_pressure_complex=native.sphere_pressure_complex)
+        record["result"] = {"solver_log": getattr(native, "solver_log", [])}
+        # Validate observed settings before declaring an engine-pass record.
+        _, record["setting_evidence"] = observed_settings(inputs.settings(), native, official=False,
+                                                          native_symmetry=compiled.wire["solver_options"]["symmetry"])
+        if getattr(native, "mesh_info", None) is not None:
+            record["hbb_mesh_info"] = asdict(native.mesh_info)
+        write_record(directory / "hbb-run.json", record)
+        result = result_set(inputs, native, revision=revision, recorder_record=record)
         return result
     except Exception as exc:
+        record["engine_status"] = "failed"
         record["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:

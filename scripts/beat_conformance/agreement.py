@@ -41,6 +41,7 @@ class ResultSet:
     revision: str = ""
     recorder_record: dict[str, Any] | None = None
     recorder_sha256: str = ""
+    setting_evidence: dict[str, Any] | None = None
 
 
 def _canonical(settings: dict[str, Any]) -> str:
@@ -154,7 +155,8 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
                 digest = record_sha256(record)
                 if digest != result.recorder_sha256:
                     raise ValueError("Recorder record hash differs")
-                if record.get("evidence_mode") != "real" or record.get("status") != "passed":
+                if (record.get("evidence_mode") != "real"
+                        or record.get("engine_status", record.get("status")) != "passed"):
                     raise ValueError("Recorder records must be passed real-solve records")
                 case = record.get("case", {})
                 for name in ("backend", "precision"):
@@ -167,9 +169,9 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
             if len(meshes) != 1 or None in meshes:
                 raise ValueError("Recorder mesh hashes differ or are missing")
             rows = reference.recorder_record.get("result", {}).get("solver_log", [])
-            forced_lu_reference = bool(rows) and all(
-                row.get("native_diagnostics", {}).get("linear_solver")
-                in {"cpu_dense_lu", "metal_assembly_cpu_dense_lu"} for row in rows)
+            forced_lu_reference = bool(rows) and all(_actual_lu(row.get("native_diagnostics", {})) for row in rows)
+            report["reference_record_sha256"] = reference.recorder_sha256
+            report["candidate_record_sha256"] = candidate.recorder_sha256
         report["evidence_binding"] = "recorded" if reference.recorder_record is not None else "attested"
         report["forced_lu_reference"] = forced_lu_reference
         if (not np.isfinite(frequency_step_hz) or frequency_step_hz <= 0
@@ -178,9 +180,28 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
         if not reference.mesh_bytes or reference.mesh_bytes != candidate.mesh_bytes:
             raise ValueError("Original mesh bytes differ or are empty")
         report["mesh_sha256"] = hashlib.sha256(reference.mesh_bytes).hexdigest()
-        missing = set(FROZEN_SETTINGS) - reference.settings.keys()
-        if missing or _canonical(reference.settings) != _canonical(candidate.settings):
-            raise ValueError(f"Frozen settings differ or are incomplete (missing {sorted(missing)})")
+        if reference.setting_evidence is not None or candidate.setting_evidence is not None:
+            if reference.setting_evidence is None or candidate.setting_evidence is None:
+                raise ValueError("Both engines require observed/declared setting evidence")
+            a, b = reference.settings, candidate.settings
+            missing = set()
+            for key in FROZEN_SETTINGS:
+                if not any(name == key or name.startswith(key + ".") for name in a):
+                    missing.add(key)
+            shared = a.keys() & b.keys()
+            if missing or set(a) != set(b) or any(
+                    not settings_equal(key, a[key], b[key]) for key in shared):
+                raise ValueError(f"Frozen settings differ or are incomplete (missing {sorted(missing)})")
+            report["settings_observed_equal"] = sorted(key for key in shared if all(
+                result.setting_evidence.get(key, {}).get("status") == "observed" for result in (reference, candidate)))
+            report["settings_declared"] = sorted(shared - set(report["settings_observed_equal"]))
+            report["limitations"].append("Settings with declared evidence are not verified equality: "
+                                          + ", ".join(report["settings_declared"]))
+        else:
+            missing = set(FROZEN_SETTINGS) - reference.settings.keys()
+            if missing or _canonical(reference.settings) != _canonical(candidate.settings):
+                raise ValueError(f"Frozen settings differ or are incomplete (missing {sorted(missing)})")
+            report["limitations"].append("Settings are declared; no observed equality is verified")
         if reference.settings["time_convention"] != SOLVER_TIME_CONVENTION:
             raise ValueError("Expected negative-time phasor convention")
         frequencies = np.asarray(reference.frequencies_hz, dtype=float)
@@ -258,3 +279,15 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
     except (ValueError, TypeError, KeyError) as exc:
         report["failures"].append(str(exc))
     return report
+
+
+def settings_equal(key: str, a: Any, b: Any) -> bool:
+    if key == "mesh.tag_areas_m2":
+        return set(a) == set(b) and all(np.isclose(a[tag], b[tag], rtol=1e-12, atol=0) for tag in a)
+    return _canonical({key: a}) == _canonical({key: b})
+
+
+def _actual_lu(diagnostic: dict) -> bool:
+    if "dense_solve_method" in diagnostic:
+        return diagnostic["dense_solve_method"] == "lu"
+    return diagnostic.get("linear_solver") in {"cpu_dense_lu", "metal_assembly_cpu_dense_lu"}

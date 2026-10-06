@@ -29,7 +29,15 @@ def native(inputs):
                            impedance=np.ones(3, dtype=complex),
                            sphere_pressure_complex=np.ones((3, 12), dtype=complex),
                            observation_angles_deg=compiled.layout.angles_deg,
-                           observation_planes=list(compiled.layout.planes), cancelled=False, is_partial=False)
+                           observation_planes=list(compiled.layout.planes), cancelled=False, is_partial=False,
+                           solver_log=[{"native_diagnostics": {
+                               "backend": "cpu", "bem_backend": "cpu", "precision": inputs.precision,
+                               "phasor_convention": "exp(-i omega t)",
+                               "symmetry": compiled.wire["solver_options"]["symmetry"],
+                               "blas_threads": 1, "regular_quadrature_mode": "wavelength",
+                               "regular_quadrature_order": 2, "dense_solve_method": "lu",
+                               "engine_provenance": {"runtime": {"julia_threads": inputs.threads}}}}
+                                       for _ in inputs.frequencies_hz])
 
 
 @pytest.mark.parametrize("precision", ["float32", "float64"])
@@ -65,12 +73,13 @@ def fake_hbb(inputs, monkeypatch, tmp_path):
         def read_text(self, name):
             return json.dumps({"vcs_info": {"commit_id": state["revision"]}, "dir_info": {"editable": state["editable"]}})
         def locate_file(self, name):
-            return tmp_path / name
+            return tmp_path / "installed" / name
     def solve(path, frequencies, config):
         state["calls"].append((Path(path).read_bytes(), frequencies, config))
         assert config.persistent_worker is False
-        return native(inputs)
-    package = SimpleNamespace(__file__=tmp_path / "hornlab_beat_bem/__init__.py",
+        return native(replace(inputs, precision="float64" if config.solve_precision == "double" else "float32",
+                              symmetry=config.native_symmetry_plane or "full"))
+    package = SimpleNamespace(__file__=tmp_path / "installed/hornlab_beat_bem/__init__.py",
                               ObservationConfig=lambda **kw: SimpleNamespace(**kw),
                               SolveConfig=lambda **kw: SimpleNamespace(**kw), solve_frequencies=solve)
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", package)
@@ -79,7 +88,7 @@ def fake_hbb(inputs, monkeypatch, tmp_path):
 
 
 def test_hbb_receives_same_bytes_order_precision_quadrature_and_threads(inputs, fake_hbb, tmp_path):
-    result = runners.hbb_runner(inputs, julia_executable="fake-julia", expected_revision="a" * 40, directory=tmp_path)
+    result = runners.hbb_runner(inputs, julia_executable="fake-julia", expected_revision="a" * 40, directory=tmp_path / "output")
     mesh, frequencies, config = fake_hbb["calls"][0]
     assert mesh == result.mesh_bytes == inputs.mesh_bytes
     assert frequencies == inputs.frequencies_hz
@@ -94,7 +103,7 @@ def test_hbb_receives_same_bytes_order_precision_quadrature_and_threads(inputs, 
 def test_wrong_or_editable_hbb_pin_never_solves(inputs, fake_hbb, tmp_path, field, value):
     fake_hbb[field] = value
     with pytest.raises(ValueError, match="current WG pin"):
-        runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40, directory=tmp_path)
+        runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40, directory=tmp_path / "output")
     assert not fake_hbb["calls"]
 
 
@@ -195,13 +204,13 @@ def test_shared_metre_artifact_preserves_connectivity_tags_and_ids(inputs):
 @pytest.mark.parametrize("precision,symmetry", [("float32", "yz"), ("float64", "yz+xz")])
 def test_hbb_reduced_precision_selection_is_explicit(inputs, fake_hbb, tmp_path, precision, symmetry):
     selected = replace(inputs, precision=precision, symmetry=symmetry)
-    runners.hbb_runner(selected, julia_executable="fake", expected_revision="a" * 40, directory=tmp_path)
+    runners.hbb_runner(selected, julia_executable="fake", expected_revision="a" * 40, directory=tmp_path / "output")
     config = fake_hbb["calls"][0][2]
     assert config.solve_precision == {"float32": "single", "float64": "double"}[precision]
     assert config.native_symmetry_plane == symmetry
-    record = json.loads((tmp_path / "hbb-run.json").read_text())
-    assert record["status"] == "passed" and record["real_solved_count"] == 3
-    assert "not WG-observed transport" in record["count_source"]
+    record = json.loads((tmp_path / "output/hbb-run.json").read_text())
+    assert record["engine_status"] == "passed" and record["real_solved_count"] == 3
+    assert "API-validated rows" in record["count_source"] and "not terminal events" in record["count_source"]
 
 
 def test_hbb_transport_failure_retains_failed_real_record(inputs, fake_hbb, monkeypatch, tmp_path):
@@ -209,9 +218,9 @@ def test_hbb_transport_failure_retains_failed_real_record(inputs, fake_hbb, monk
         raise RuntimeError("HBB fake failed before results")
     monkeypatch.setattr(sys.modules["hornlab_beat_bem"], "solve_frequencies", fail)
     with pytest.raises(RuntimeError, match="fake failed"):
-        runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40, directory=tmp_path)
-    record = json.loads((tmp_path / "hbb-run.json").read_text())
-    assert record["status"] == "failed" and record["real_solved_count"] == 0
+        runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40, directory=tmp_path / "output")
+    record = json.loads((tmp_path / "output/hbb-run.json").read_text())
+    assert record["engine_status"] == "failed" and record["real_solved_count"] == 0
     assert not list(tmp_path.glob("hbb-reference-*"))
 
 
@@ -230,7 +239,7 @@ def test_recorder_managed_path_observes_terminals_without_direct_worker(inputs, 
         return native(inputs)
     monkeypatch.setattr(runners, "managed_solve", managed)
     record = {}
-    evidence = recorder._observed_solve(inputs.compiled(), runners.official_runner("fake")(inputs.compiled()), record)
+    evidence = recorder._observed_solve(inputs.compiled(), runners.official_runner("fake", threads=inputs.threads)(inputs.compiled()), record)
     assert record["observations"]["solve_count"] == {"status": "observed", "value": 3}
     assert record["runtime_mode"] == "child"
     assert evidence.runtime.engine_revision == "a" * 40
@@ -258,7 +267,7 @@ def test_pressure_acceptance_has_no_failure_text_on_passing_evidence(inputs):
     assert accept_pressure(result)["passed"] is False
 
 
-def test_cli_marks_comparison_only_after_hbb_and_binds_actual_verdict(inputs, monkeypatch, tmp_path):
+def test_engine_record_status_after_failed_agreement_and_cli_never_uses_comparator(inputs, monkeypatch, tmp_path):
     from dataclasses import asdict
     from scripts.beat_conformance import run_agreement
     from server.solver.beat_adapter.results import SweepResult
@@ -273,15 +282,20 @@ def test_cli_marks_comparison_only_after_hbb_and_binds_actual_verdict(inputs, mo
     mapped.sphere_pressure_complex = np.ones((3, 19 * 24), dtype=complex)
     sweep = SweepResult(mapped.frequencies_hz, mapped.pressure_complex, np.zeros((3, 2, 19)), mapped.impedance,
                         mapped.observation_angles_deg, mapped.observation_planes, mapped.sphere_pressure_complex,
-                        None, None, None, None, False, 3, [])
+                        None, None, None, None, False, 3, mapped.solver_log)
     def record_case(case, **kwargs):
         assert "comparator" not in kwargs and not state["hbb"]
-        return {"runtime": {"engine_revision": "b" * 40}, "result": asdict(sweep), "comparison": {"ran": False}}
+        return {"status": "passed", "qualified": True,
+                "case": {"backend": "cpu", "precision": "float64"},
+                "mesh_sha256": "fake-packed-mesh", "evidence_mode": "real",
+                "runtime": {"engine_revision": "b" * 40}, "result": asdict(sweep), "comparison": {"ran": False}}
     def reference(selected, **kwargs):
         state["hbb"] = True
         return runners.result_set(selected, mapped, revision="a" * 40)
     def compare(*args, **kwargs):
         assert state["hbb"]
+        assert args[1].recorder_record["engine_status"] == "passed"
+        assert args[1].recorder_sha256 == recorder.record_sha256(args[1].recorder_record)
         return {"passed": False, "resonances": {}, "failures": ["declared test failure"], "limitations": []}
     monkeypatch.setattr(run_agreement, "run_case", record_case)
     monkeypatch.setattr(run_agreement, "hbb_runner", reference)
@@ -289,6 +303,8 @@ def test_cli_marks_comparison_only_after_hbb_and_binds_actual_verdict(inputs, mo
     assert run_agreement.main() == 1
     record = json.loads((output / "full-float64/full-float64.json").read_text())
     agreement = json.loads((output / "full-float64/agreement.json").read_text())
+    assert record["status"] == "failed" and record["qualified"] is False
+    assert record["engine_status"] == "passed" and record["engine_qualified"] is True
     assert record["comparison"] == {"ran": True, "passed": False, "record": "agreement.json",
                                     "record_sha256": agreement["record_sha256"]}
 
@@ -301,3 +317,91 @@ def test_conformance_cli_callback_is_lazy_and_requires_explicit_job_selection(in
     monkeypatch.setenv("JULIA_NUM_THREADS", "2")
     monkeypatch.setenv("WG_BEAT_ENGINE_SRC", str(tmp_path))
     assert runners.solve(inputs.compiled()) == recorder.EngineRun("fake-julia", 2, runtime_mode="child", engine_source=tmp_path)
+
+
+@pytest.mark.parametrize("axis", [(500., 500.000001, 500.1), (500., 502., 504.)])
+def test_hbb_frequency_quantization_refuses_before_either_launch(inputs, fake_hbb, tmp_path, monkeypatch, axis):
+    selected = replace(inputs, frequencies_hz=axis)
+    if axis[1] == 502.:
+        assert selected.compiled().wire["frequencies_hz"] == list(axis)
+        return
+    with pytest.raises(ValueError, match="representable in Float32"):
+        selected.compiled()
+    with pytest.raises(ValueError, match="representable in Float32"):
+        runners.hbb_runner(selected, julia_executable="fake", expected_revision="a" * 40,
+                           directory=tmp_path / "output")
+    assert not fake_hbb["calls"] and not (tmp_path / "output").exists()
+    from scripts.beat_conformance import run_agreement
+    monkeypatch.setattr(sys, "argv", ["agreement", "--mesh", "unused", "--frequencies", "500,500.000001,500.1",
+                                    "--frequency-step", "1", "--prominence-db", "1", "--precision", "float64",
+                                    "--julia", "fake", "--output-dir", str(tmp_path / "output")])
+    monkeypatch.setattr(run_agreement, "run_case", lambda *a, **kw: pytest.fail("Engine launched"))
+    with pytest.raises(ValueError, match="representable in Float32"):
+        run_agreement.main()
+
+
+@pytest.mark.parametrize("field,value", [("backend", "metal"), ("regular_quadrature_order", 4),
+                                        ("phasor_convention", "exp(+i omega t)")])
+def test_vacuous_settings_equality_uses_native_diagnostics(inputs, fake_hbb, tmp_path, monkeypatch, field, value):
+    result = native(inputs)
+    for row in result.solver_log:
+        row["native_diagnostics"].pop("bem_backend")
+        row["native_diagnostics"][field] = value
+    monkeypatch.setattr(sys.modules["hornlab_beat_bem"], "solve_frequencies", lambda *args: result)
+    if field == "regular_quadrature_order":
+        observed = runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40,
+                                      directory=tmp_path / "output")
+        assert observed.settings["quadrature.regular_quadrature_order"] == [4, 4, 4]
+    else:
+        with pytest.raises(ValueError, match="Observed"):
+            runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40,
+                               directory=tmp_path / "output")
+
+
+def test_vacuous_settings_equality_marks_missing_hbb_fields_declared(inputs, fake_hbb, tmp_path, monkeypatch):
+    from dataclasses import make_dataclass
+    result = native(inputs)
+    for row in result.solver_log:
+        for key in ("precision", "phasor_convention", "engine_provenance"):
+            row["native_diagnostics"].pop(key)
+    mesh = inputs.settings()["mesh"]
+    MeshInfo = make_dataclass("MeshInfo", ["n_vertices", "n_triangles", "physical_tag_areas_m2"])
+    result.mesh_info = MeshInfo(mesh["node_count"], mesh["triangle_count"], mesh["tag_areas_m2"])
+    monkeypatch.setattr(sys.modules["hornlab_beat_bem"], "solve_frequencies", lambda *args: result)
+    observed = runners.hbb_runner(inputs, julia_executable="fake", expected_revision="a" * 40,
+                                  directory=tmp_path / "output")
+    for name in ("precision", "time_convention", "threads", "normals", "observation_points.sphere"):
+        assert observed.setting_evidence[name]["status"] == "declared"
+    assert observed.setting_evidence["mesh.node_count"]["status"] == "observed"
+    assert observed.setting_evidence["hbb_mesh_info_sha256"]["value"]
+    assert observed.recorder_sha256 == recorder.record_sha256(observed.recorder_record)
+
+
+@pytest.mark.parametrize("layout", ["hornlab_beat_bem/__init__.py", "src/beat_engine/__init__.py"])
+def test_output_isolation_refuses_source_checkout_and_symlink(tmp_path, layout):
+    root = tmp_path / "checkout"
+    source = root / layout
+    source.parent.mkdir(parents=True)
+    source.write_text("# fake engine")
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    for directory in (root, root / "evidence", alias / "evidence"):
+        with pytest.raises(ValueError, match="source/package"):
+            runners.output_directory(directory)
+    assert not (root / "evidence").exists()
+
+
+def test_output_isolation_refuses_installed_package_and_dist_root(fake_hbb, tmp_path):
+    for directory in (tmp_path / "installed", tmp_path / "installed/hornlab_beat_bem/evidence"):
+        with pytest.raises(ValueError, match="source/package"):
+            runners.output_directory(directory)
+
+
+def test_thread_count_launch_selection_is_frozen_and_pin_path_ignores_cwd(inputs, monkeypatch, tmp_path):
+    from scripts.beat_conformance.run_agreement import hbb_pin
+    pin = hbb_pin()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "pins.json").write_text('{}')
+    assert hbb_pin() == pin
+    selected = replace(inputs, threads=3)
+    assert runners.official_runner("fake", threads=selected.threads)(selected.compiled()).julia_threads == 3

@@ -41,7 +41,8 @@ checked Metal kernel cannot pass. Installed/source classification is inspected
 from distribution metadata or a clean tracked source tree, never a runner flag.
 A wheel with no VCS metadata can supply `EngineRun.engine_source`, a local
 clean tracked engine checkout. The recorder compares the complete installed
-package file inventory and bytes to that tree before observing its revision.
+package inventory and bytes to immutable Git blobs at a captured commit, then
+confirms HEAD is unchanged before recording that revision.
 This does not assume any WG-specific behaviour in BEAT. Otherwise, installed
 VCS metadata is independently read; its `engine_revision` evidence
 field is **attested** because byte correspondence to upstream is unverified; an independent engine content fingerprint is retained.
@@ -62,9 +63,10 @@ pytest skip policy is changed.
 
 For PLAN §5 same-mesh evidence, construct `agreement.ResultSet` for the **current
 WG HBB pin** and official exact revision, using identical original mesh bytes and
-frozen tags/normals, axes, observation points, frequencies, quadrature, backend,
-precision,
-convention, medium and threading. Pass WG mean pressure per acceleration as
+declared tags/normals, axes, observation points, frequencies, quadrature, backend,
+precision, convention, medium and threading. The real agreement runner separately
+extracts per-engine observed settings and labels unavailable settings declared.
+Declared equality does not verify engine usage. Pass WG mean pressure per acceleration as
 `impedance_per_acceleration`, DI in dB, and comparable acoustic power in watts.
 `compare_results` normalizes impedance's velocity basis by `rho*c`. Declare the
 dense `frequency_step_hz` and physical `resonance_prominence_db` before either run.
@@ -73,8 +75,8 @@ Revisions must be nonempty and different. Optional `recorder_record` /
 `recorder_sha256` bindings must be supplied on both results and agree with the
 record's revision and mesh hash (the recorder hashes canonical packed mesh bytes).
 The binding hash uses `recorder.record_sha256`, excluding its own hash field.
-Forced-LU limits derive from the reference record's `native_diagnostics.linear_solver`
-(`cpu_dense_lu` or `metal_assembly_cpu_dense_lu`), never a caller boolean. Without
+Forced-LU limits derive from the reference record's actual `dense_solve_method`;
+`linear_solver` is used only when the actual-method field is absent. Without
 bindings, the report labels evidence attested and uses production limits.
 Cross-backend comparisons refuse under the frozen settings gate.
 
@@ -118,15 +120,18 @@ The first runner scope is CPU, one normal source, the canonical origin/+z/+x/+y
 frame, full/yz/yz+xz domains, polar cuts and a full theta-major sphere. Other
 source/frame layouts need a separate runner with exact frozen HBB equivalence.
 `run_agreement.metre_mesh` creates a single shared metre artifact before either
-solve, preserving triangle/node IDs, ordering, winding and tags. Both engines
-receive identical frequency order, precision, medium, q4/s4 and CPU wavelength
-policy (p90, q1 threshold 0, q2 threshold 2). Inputs and raw samples persist in
+solve, preserving triangle/node IDs, ordering, winding and tags. Both engines are supplied the same declared frequency order, precision, medium,
+q4/s4 and CPU wavelength policy (p90, q1 threshold 0, q2 threshold 2).
+The frequency axis must be exactly representable in Float32, including for
+Float64 solves, because HBB casts frequencies to Float32 before solving. Inputs and raw samples persist in
 strict JSON via `recorder.write_record`. DI uses WG's spherical integration;
 power is the common solid-angle-weighted far-field estimate at the declared
 radius, not a surface flux or a production power claim. HBB's installed revision
-is checked against `pins.json` but remains a VCS-metadata attestation; unbound
-agreement uses the existing production limits, never the stricter forced-LU
-limits. Official real records still require independent probes and terminals.
+is checked against repo-root `pins.json` but remains a VCS-metadata attestation.
+Both ResultSets bind their engine-only record/hash, case, mesh and runtime
+revision; actual HBB LU diagnostics select the stricter reference limits.
+Official real records still require independent probes and terminals. HBB solve
+count is API-validated rows, not terminal events.
 
 Submit `python -m scripts.beat_conformance.run_agreement --help`'s command through
 the compute broker with `--lane compute --priority 3 --requester "Beat engine
@@ -143,3 +148,33 @@ Set `WG2_BEAT_JULIA` to the selected executable, `JULIA_NUM_THREADS` to the
 explicit count (default 1), and `WG_BEAT_ENGINE_SRC` to the clean source-witness
 repository root for an installed wheel without VCS metadata. This callback only
 selects the managed child launch; run the real-mode CLI inside a broker job.
+
+
+## Agreement runner review fixes
+
+The runner compares diagnostic-observed backend, BLAS threads, symmetry and
+per-frequency quadrature selections. Official also reports precision, phasor
+convention and Julia threads through native diagnostics/provenance. HBB exposes
+mesh counts and physical-tag areas through its own `SolveResult.mesh_info`; their
+hash covers those parsed facts, not unavailable node/connectivity arrays. HBB
+precision, Julia threads, phasor convention, normals, frame/Cartesian points,
+medium and singular order remain declared when its API does not report them.
+Returned polar-angle/plane axes are checked and recorded. `settings_observed_equal`
+names only fields observed by both engines; `settings_declared` lists all others.
+
+The final case record's `status` and `qualified` reflect agreement. Separate
+engine-only records use `engine_status` and `engine_qualified`, so a failed
+comparison never leaves an overall pass marker. `run_agreement` never supplies
+`run_case(comparator=...)`; the optional callback remains for existing synthetic
+conformance tests. Bound snapshots retain their hashes when the final case
+record receives the agreement verdict/hash.
+
+Output roots refuse both engines' source/package/distribution trees, including
+symlink aliases, as well as HBB runtime/worker roots. Optional packages remain
+lazy; no engine-specific extension is required.
+
+`python -m scripts.beat_conformance.wire_quantization --official <official-run.json>
+--hbb <hbb-run.json> --output <diagnostic.json>` reproduces HBB's Float32 pressure
+rounding and shortest decimal wire representation after undoing acceleration
+scaling. This diagnostic never changes gate inputs or tolerances. Float64
+comparison against HBB is capped near 6e-8 by HBB's Float32 wire output.

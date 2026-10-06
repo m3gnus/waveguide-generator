@@ -274,8 +274,9 @@ Official JWSound remains the target. Qualification uses child mode to bound
 ownership to the broker job and avoid HBB adoption/signalling. HBB's public
 one-shot API preserves its own project/runtime and does no provisioning.
 Installed wheel source byte matching handles missing wheel VCS metadata.
-HBB revision binding remains explicitly attested; no stricter forced-LU or
-startup/performance claim is made. Fixed agreement tolerances are unchanged.
+HBB revision correspondence remains metadata attested; the reviewed runner
+now binds both records and uses observed LU for stricter reference budgets.
+No startup/performance claim is made. Fixed agreement tolerances are unchanged.
 No existing caller, pin, requirement, engine code or HBB directory changes.
 
 Brokered CPU evidence: coarse full/quarter scans retain failed sampling gates;
@@ -284,3 +285,64 @@ HBB Float32 wire serialization exactly explains Float64 pressure residuals and
 a flat peak's one-sample location shift. Full dense and narrow chamber/duct runs
 remain unqualified. Combined checks: 1262 passed, 1 optional schema skip;
 focused checks: 91 passed; Ruff and diff whitespace checks passed. Uncommitted.
+
+
+## Agreement runner fix round (`7dce8bba`)
+
+- **P1/A — fixed:** per-engine diagnostic observations replace shared settings
+  equality. Missing HBB precision/Julia threads/phasor, normals/connectivity,
+  Cartesian points, medium and singular order remain explicitly declared.
+  HBB's returned parsed mesh counts/tag areas are checked and hashed; the hash
+  is of exposed MeshInfo facts, not a connectivity hash. Returned polar axes
+  are observed. Declarations are never listed as verified equality.
+- **P2/B — fixed:** reject any non-Float32-representable frequency axis before
+  launching either engine; the adapter's general narrow-sweep API is unchanged.
+- **P2/C — fixed:** overall case status/qualification follows agreement;
+  immutable engine snapshots use engine_status/engine_qualified. CLI regression
+  pins that run_case's optional comparator is never used by run_agreement.
+- **P2/D — fixed:** both ResultSets carry engine record/hash bindings; compare
+  checks mesh/case/runtime identity and uses HBB's actual dense_solve_method
+  for LU budgets, ahead of any conflicting linear_solver label.
+- **P2/E — fixed:** reject both source checkouts, installed package/dist roots
+  and resolved aliases before writes, reusing runtime paths.checked_root.
+- **P2/F — fixed:** capture SHA first, enumerate immutable ls-tree paths, read
+  cat-file blobs at that SHA, then refuse a changed HEAD.
+- **P2/G — fixed:** wire_quantization.py is a reproducible diagnostic with a
+  synthetic regression; transformed samples never enter agreement gates.
+  HBB Float32 wire output caps a Float64 comparison near 6e-8.
+- **P3 threads/pins/count wording — fixed:** launch from frozen input threads,
+  record launch/native threads, resolve pins from the repo root, and describe
+  HBB counts as API-validated rows, not terminal events.
+
+Files per PR / manifest row for this fix round:
+
+- **W2 / input and observation evidence:**
+  `scripts/beat_conformance/{runners,run_agreement,settings}.py`;
+  `server/tests/beat_adapter/test_runners.py`.
+- **W3 / agreement and diagnostic results:**
+  `scripts/beat_conformance/{agreement,wire_quantization}.py`;
+  `server/tests/beat_adapter/test_{agreement,wire_quantization}.py`.
+- **W5 / recorder and revision binding:**
+  `scripts/beat_conformance/{recorder,verification}.py`;
+  `server/tests/beat_adapter/test_{runners,verification}.py`.
+- **Shared W2/W3/W5 documentation:** this file and
+  `scripts/beat_conformance/README.md`; workspace results report remains outside
+  the repository. Existing adapter/runtime implementation files are unchanged.
+
+Design deviations: reported API gaps remain declarations instead of requiring
+WG-specific BEAT behaviour. MeshInfo area sums allow 1e-12 relative arithmetic
+rounding between independent Python readers; counts, mesh bytes, tags, normals
+and numerical agreement thresholds are unchanged. Diagnostic-only wire
+simulation explains the precision ceiling without feeding gate inputs. Official
+JWSound remains the target. Changes remain additive and uncommitted as requested.
+
+
+Fix-round validation: 1279 passed / 1 optional compiled-v2 schema skip;
+focused runner/verification/agreement/wire/conformance tests 151 passed; Ruff
+and whitespace checks passed. Broker job `261006-022851-compute-e01e` reran the
+unchanged 376-frequency quarter case under the tested code: Float64 and Float32
+PASS with paired record bindings and stricter actual-LU budgets, exit 0 in
+9.17 minutes. Source fingerprints and all 14 case JSON hashes were verified.
+The external report retains exact commands, environment, verdicts and hashes.
+All requested review fixes and the refined rerun are complete; source remains
+uncommitted as explicitly requested.

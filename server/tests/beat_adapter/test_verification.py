@@ -148,10 +148,12 @@ def test_wheel_without_vcs_metadata_requires_complete_clean_source_byte_match(tm
     def run(command):
         if "status" in command:
             return " M src/beat_engine/__init__.py" if defect == "dirty" else ""
-        if "ls-files" in command:
+        if "ls-tree" in command:
+            assert "c" * 40 in command
             return "\n".join(names)
         return "c" * 40
     monkeypatch.setattr(verification, "_run", run)
+    monkeypatch.setattr(verification, "_blob", lambda source, revision, name: b"frozen package bytes")
     if defect:
         with pytest.raises(ValueError, match="differ|uncommitted"):
             verification._installed_source_revision(package, source)
@@ -160,3 +162,39 @@ def test_wheel_without_vcs_metadata_requires_complete_clean_source_byte_match(tm
         (package / "__pycache__").mkdir()
         (package / "__pycache__/ignored.pyc").write_bytes(b"cache")
         assert verification._installed_source_revision(package, source) == "c" * 40
+
+
+def test_revision_verification_race_uses_captured_immutable_blobs(tmp_path, monkeypatch):
+    package = tmp_path / "installed"
+    source = tmp_path / "source"
+    source.mkdir()
+    package.mkdir()
+    (package / "__init__.py").write_bytes(b"old bytes")
+    heads = iter(["a" * 40, "b" * 40])
+    calls = []
+    def run(command):
+        calls.append(command)
+        if "rev-parse" in command:
+            return next(heads)
+        if "ls-tree" in command:
+            assert "a" * 40 in command
+            return "src/beat_engine/__init__.py"
+        return ""
+    def blob(root, revision, name):
+        assert root == source and revision == "a" * 40
+        assert name == "src/beat_engine/__init__.py"
+        return b"old bytes"
+    monkeypatch.setattr(verification, "_run", run)
+    monkeypatch.setattr(verification, "_blob", blob)
+    with pytest.raises(ValueError, match="HEAD changed"):
+        verification._installed_source_revision(package, source)
+    assert "rev-parse" in calls[0]
+
+
+def test_revision_verification_blob_read_is_binary_and_bounded(tmp_path, monkeypatch):
+    def run(command, **kwargs):
+        assert command == ["git", "-C", str(tmp_path), "cat-file", "blob", "a" * 40 + ":src/beat_engine/__init__.py"]
+        assert kwargs == {"capture_output": True, "check": True, "timeout": 60}
+        return SimpleNamespace(stdout=b"exact bytes\x00\n")
+    monkeypatch.setattr(verification.subprocess, "run", run)
+    assert verification._blob(tmp_path, "a" * 40, "src/beat_engine/__init__.py") == b"exact bytes\x00\n"

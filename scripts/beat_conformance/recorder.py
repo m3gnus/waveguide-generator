@@ -91,8 +91,14 @@ def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict
         result = _direct_solve(request, selection, facts, terminal_events, record)
     count = terminal_events[-1]["solved_count"] if terminal_events[-1]["type"] == "completed" else 0
     record["observations"]["solve_count"] = {"status": "observed", "value": count}
-    record["observations"]["backend"] = {"status": "observed", "value": backend}
-    record["observations"]["precision"] = {"status": "observed", "value": precision}
+    for name, field in (("backend", "bem_backend"), ("precision", "precision")):
+        samples = [row.get("native_diagnostics", {}).get(field) for row in result.solver_log]
+        if not samples or samples[0] is None or any(value != samples[0] for value in samples):
+            raise ValueError(f"Missing or inconsistent native {name} observations")
+        record["observations"][name] = {"status": "observed", "value": samples[0],
+                                       "source": "solver_log.native_diagnostics"}
+    record["observations"]["launch_threads"] = {
+        "status": "observed", "value": resolve_julia_threads(backend, selection.julia_threads)}
     runtime = RuntimeEvidence(backend, precision, facts["julia_executable"], facts["julia_version"],
                               facts["engine_path"], facts["engine_revision"],
                               device_class=facts["device_class"], device_name=facts["device_name"],

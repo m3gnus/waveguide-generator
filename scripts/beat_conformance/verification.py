@@ -22,9 +22,10 @@ def _installed_source_revision(package_path: Path, source: Path) -> str:
     """Compare every tracked package file and refuse extra installed payloads."""
     source = source.resolve(strict=True)
     prefix = "src/beat_engine/"
+    revision = _run(["git", "-C", str(source), "rev-parse", "HEAD"])
     if _run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"]):
         raise ValueError("Engine source tree has uncommitted changes")
-    names = _run(["git", "-C", str(source), "ls-files", prefix]).splitlines()
+    names = _run(["git", "-C", str(source), "ls-tree", "-r", "--name-only", revision, "--", prefix]).splitlines()
     if prefix + "__init__.py" not in names:
         raise ValueError("Source tree does not track the engine package")
     expected = {name.removeprefix(prefix) for name in names}
@@ -33,9 +34,17 @@ def _installed_source_revision(package_path: Path, source: Path) -> str:
     if installed != expected:
         raise ValueError("Installed/source engine file inventories differ")
     for name in names:
-        if (source / name).read_bytes() != (package_path / name.removeprefix(prefix)).read_bytes():
+        content = _blob(source, revision, name)
+        if content != (package_path / name.removeprefix(prefix)).read_bytes():
             raise ValueError(f"Installed/source engine bytes differ: {name}")
-    return _run(["git", "-C", str(source), "rev-parse", "HEAD"])
+    if _run(["git", "-C", str(source), "rev-parse", "HEAD"]) != revision:
+        raise ValueError("Engine source HEAD changed during revision verification")
+    return revision
+
+
+def _blob(source: Path, revision: str, name: str) -> bytes:
+    return subprocess.run(["git", "-C", str(source), "cat-file", "blob", f"{revision}:{name}"],
+                          capture_output=True, check=True, timeout=60).stdout
 
 
 def verify_runtime(julia_executable: str, backend: str, *, engine_source: Path | None = None) -> dict[str, Any]:

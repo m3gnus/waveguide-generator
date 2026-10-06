@@ -315,3 +315,51 @@ def test_required_backend_setting_blocks_unidentified_cross_backend_results(refe
         assert compare(a, b)["passed"]  # Previous gate allowed unidentified backends.
     report = compare(a, b)
     assert not report["passed"] and "backend" in " ".join(report["failures"])
+
+
+def test_recorder_to_agreement_binding_uses_hbb_actual_dense_solve_method(reference):
+    from scripts.beat_conformance.recorder import record_sha256
+    ref = bind_record(reference, "gmres")
+    ref.recorder_record["result"]["solver_log"] = [{"native_diagnostics": {"dense_solve_method": "lu"}}]
+    ref = replace(ref, recorder_sha256=record_sha256(ref.recorder_record))
+    candidate = bind_record(replace(reference, revision="official-exact-sha"), "lu")
+    report = compare(ref, candidate)
+    assert report["passed"] and report["evidence_binding"] == "recorded" and report["forced_lu_reference"]
+    assert report["thresholds"]["pressure"]["relative_l2"] == REFERENCE_COMPLEX_RELATIVE_L2
+
+
+def test_vacuous_settings_equality_declared_values_are_never_verified(reference):
+    from scripts.beat_conformance.settings import flatten
+    values = flatten(reference.settings)
+    evidence = {key: {"status": "declared", "value": value} for key, value in values.items()}
+    a = replace(reference, settings=values, setting_evidence=evidence)
+    b = replace(a, revision="official-exact-sha")
+    report = compare(a, b)
+    assert report["passed"] and report["settings_observed_equal"] == []
+    assert "precision" in report["settings_declared"]
+    assert any("not verified equality" in text for text in report["limitations"])
+    changed = replace(b, settings={**values, "precision": "float32"})
+    assert not compare(a, changed)["passed"]
+
+
+def test_vacuous_settings_equality_detects_different_actual_quadrature_orders(reference):
+    from scripts.beat_conformance.settings import flatten
+    values = flatten(reference.settings)
+    name = "quadrature.regular_quadrature_order"
+    a = replace(reference, settings={**values, name: [2] * len(reference.frequencies_hz)},
+                setting_evidence={name: {"status": "observed"}})
+    b = replace(a, revision="official-exact-sha", settings={**a.settings, name: [4] * len(reference.frequencies_hz)})
+    report = compare(a, b)
+    assert not report["passed"] and "Frozen settings" in " ".join(report["failures"])
+
+
+def test_recorder_to_agreement_binding_actual_method_overrides_linear_solver_label(reference):
+    from scripts.beat_conformance.recorder import record_sha256
+    ref = bind_record(reference, "lu")
+    ref.recorder_record["result"]["solver_log"][0]["native_diagnostics"]["dense_solve_method"] = "gmres"
+    ref = replace(ref, recorder_sha256=record_sha256(ref.recorder_record))
+    candidate = bind_record(replace(reference, revision="official-exact-sha"), "lu")
+    report = compare(ref, candidate)
+    assert report["passed"] and not report["forced_lu_reference"]
+    assert report["reference_record_sha256"] == ref.recorder_sha256
+    assert report["candidate_record_sha256"] == candidate.recorder_sha256
