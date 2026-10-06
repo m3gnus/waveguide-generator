@@ -5,13 +5,14 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
-import json
 import math
 from pathlib import Path
 import sys
 from typing import Any, Callable
 
 from server.jobs.models import SolveRequest
+
+from .json_io import write_json
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -194,6 +195,5 @@ def freeze_case(case: CorpusCase, directory: Path, *, backend: str = "cpu",
 
 def save_frozen(frozen: FrozenCase, directory: Path) -> None:
     (directory / "surface.msh").write_bytes(frozen.mesh_bytes)
-    (directory / "frozen.json").write_text(json.dumps({"case": frozen.case.name, "request": frozen.request,
-        "record": frozen.record, "mesh_stats": frozen.mesh_stats, "mesh_sha256": frozen.sha256},
-        sort_keys=True, allow_nan=False), encoding="utf-8")
+    write_json(directory / "frozen.json", {"case": frozen.case.name, "request": frozen.request,
+        "record": frozen.record, "mesh_stats": frozen.mesh_stats, "mesh_sha256": frozen.sha256})

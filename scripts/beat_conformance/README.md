@@ -222,6 +222,37 @@ paths; official uses an owned `WorkerManager(mode="child")`, inheriting
 thread setting is explicitly 1. CPU accepts float32/float64; Metal accepts
 float32. Prepare the runtimes separately before running this tool.
 
+Official readiness is checked before meshing or launching either engine. Keep
+the runtime root and Julia environment identical between provisioning, status
+and the corpus. `WG2_BEAT_RUNTIME_DIR` is a **base**: the runtime appends
+`wg-beat-engine`. CLI `--dir` is the **exact** directory. For example:
+
+```sh
+export WG2_BEAT_RUNTIME_DIR=/private/tmp/wg-beat-corpus/runtime
+export WG2_BEAT_WORKER_DIR=/private/tmp/wg-beat-corpus/workers
+export WG2_BEAT_JULIA="$JULIA"
+export JULIA_DEPOT_PATH=/private/tmp/wg-beat-corpus/depot
+export JULIA_PKG_OFFLINE=true
+python -m server.solver.beat_runtime.cli provision --backend cpu --julia "$JULIA"
+python -m server.solver.beat_runtime.cli status --backend cpu
+```
+
+Omitting `--dir` uses the same provider directory as production readiness. If
+using `--dir`, supply `$WG2_BEAT_RUNTIME_DIR/wg-beat-engine`. A custom depot chain
+must be the same for all three commands: omit `--depot` to inherit
+`JULIA_DEPOT_PATH`, or repeat that complete chain. Provisioning with `--depot`
+set to only the first entry proves a different identity from a later status or
+solve inheriting the full chain. Default CLI threads (`auto`) match the
+production readiness query; the corpus's solve children separately use one
+thread. Readiness still requires matching source, executable and environment
+identities and compiled completion evidence.
+
+A provisioned explicit external Julia is rediscovered without repeating
+`--julia` in status. External `version=null` is intentional: discovery and the
+installer do not run a version probe; readiness uses the executable hash and
+compiled proof. An installer-only explicit choice remains one-off until a
+backend has been provisioned with it.
+
 Run one case from the WG root, in the environment containing the current
 non-editable HBB pin and the official engine distribution (including the
 m3gnus fork while it is the installed candidate):
@@ -336,16 +367,29 @@ native power remains raw and is labelled unavailable when absent. Missing
 required pressure, loading, sphere or requested traces cannot pass. No rounded
 SPL/balloon output is converted into fabricated complex samples.
 
+All corpus artifacts, including frozen records and CLI verdict output, use the
+same strict serializer. Native dataclasses are traversed without deep-copying
+execution callbacks. Callable fields (including HBB's
+`native.<channel>.config.progress_callback`) are omitted with a reason in the
+containing object's `__omitted_fields__`; callable sequence entries retain an
+explicit `__unavailable__` marker to preserve positions. Values are never
+silently stringified. Paths become path strings, NumPy scalars become native
+scalars, arrays retain dtype/shape, and nonfinite numbers become unavailable
+nulls (decoded as NaN in numeric arrays/complex components). Unknown object
+types fail with their evidence path and become child error records.
+
 Imported HBB's native MeshInfo describes its production tag merge (rigid 1,
 active source 2). Counts and those raw facts remain recorded; original CAD tag
 areas remain declared rather than falsely presented as observed equality.
 
-The only production changes are optional internal seams in `beat.py` and
+The production-route capture seams are optional internal overrides in `beat.py` and
 `beat_imported.py`: capture native fields before display packaging discards
 precision, pass explicit HBB execution controls, and give imported calls the
 same selector/precision/Julia/manager overrides already supported parametrically.
 Defaults preserve existing production callers and HBB golden responses. These
 seams avoid replacing production functions with lower-level runner solves.
+The runtime discovery production fix is recorded separately in
+`server/solver/beat_runtime/CHANGES.md`.
 
 `verdict.json` is written only at the end. A killed or incomplete invocation
 cannot leave a successful verdict. `passed` scores this sampled production

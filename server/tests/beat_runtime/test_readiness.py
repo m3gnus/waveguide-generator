@@ -233,3 +233,20 @@ def test_gpu_detection_error_does_not_hide_cpu(proved_cpu, monkeypatch):
     assert statuses["cpu"]["available"]
     assert statuses["metal"]["state"] == "detection-failed"
     assert "inventory failed" in statuses["metal"]["reason"]
+
+
+def test_explicit_provisioned_choice_is_rediscovered_and_changed_binary_revokes(proved_cpu, monkeypatch):
+    from server.solver.beat_runtime import discovery
+
+    root, _, julia, saved, query, _, _ = proved_cpu
+    assert state.read_julia(root)["selection"] == "explicit"
+    query = dict(query)
+    query.pop("julia_executable")
+    monkeypatch.setattr(discovery.shutil, "which", lambda *a, **k: None)
+    assert discovery.discover_julia(root=root, environ=query["environ"]) == str(julia)
+    assert readiness.backend_readiness("cpu", root, **query).ready
+    saved["probe_fixture_identity"] = "stale"
+    state.write_state(saved, root)
+    assert readiness.backend_readiness("cpu", root, **query).state == "stale"
+    julia.write_bytes(b"changed Julia")
+    assert readiness.backend_readiness("cpu", root, **query).state == "no-julia"

@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import base64
-from dataclasses import asdict, is_dataclass, make_dataclass
+from dataclasses import is_dataclass, make_dataclass
 from importlib import metadata
 import json
 import math
@@ -32,6 +31,7 @@ from .agreement import (
     ResultSet, _extrema, _masked_complex, compare_results,
 )
 from .corpus import CASES, ROOT, CorpusCase, FrozenCase, freeze_case, save_frozen
+from .json_io import dumps, json_value, read_json, snapshot, write_json
 from .run_agreement import hbb_pin
 from .runners import output_directory, validate_frequency_axis
 from .recorder import record_sha256
@@ -42,47 +42,6 @@ THREAD_ENV = ("JULIA_NUM_THREADS", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
 ARRAY_FIELDS = ("pressure_complex", "impedance", "sphere_pressure_complex",
                 "surface_pressure_complex", "surface_neumann_complex",
                 "radiated_power_surface_w", "radiated_power_sphere_w", "electrical_impedance_ohm")
-
-
-def json_value(value: Any) -> Any:
-    """Lossless complex/byte arrays; unavailable nonfinite scalars remain null."""
-    if is_dataclass(value):
-        return json_value(asdict(value))
-    if isinstance(value, np.ndarray):
-        return {"__array__": value.dtype.str, "shape": list(value.shape), "data": json_value(value.tolist())}
-    if isinstance(value, (complex, np.complexfloating)):
-        return {"__complex__": [json_value(float(value.real)), json_value(float(value.imag))]}
-    if isinstance(value, bytes):
-        return {"__bytes__": base64.b64encode(value).decode("ascii")}
-    if isinstance(value, dict):
-        return {str(k): json_value(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [json_value(v) for v in value]
-    if isinstance(value, np.generic):
-        return json_value(value.item())
-    if isinstance(value, float) and not math.isfinite(value):
-        return None
-    if isinstance(value, Path):
-        return str(value)
-    return value
-
-
-def _decode(value: dict) -> Any:
-    if "__complex__" in value:
-        return complex(*(float("nan") if v is None else v for v in value["__complex__"]))
-    if "__array__" in value:
-        return np.asarray(value["data"], dtype=value["__array__"]).reshape(value["shape"])
-    if "__bytes__" in value:
-        return base64.b64decode(value["__bytes__"])
-    return value
-
-
-def write_json(path: Path, value: Any) -> None:
-    path.write_text(json.dumps(json_value(value), sort_keys=True, allow_nan=False, indent=2) + "\n", encoding="utf-8")
-
-
-def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"), object_hook=_decode)
 
 
 def empty_output(path: Path) -> Path:
@@ -193,8 +152,7 @@ def production_run(frozen: FrozenCase, frequencies: tuple[float, ...], *, offici
 
     def capture(channel: str, native: Any) -> None:
         # Copy immediately: imported driver scaling and later packaging may mutate arrays.
-        from copy import deepcopy
-        natives[channel] = deepcopy(asdict(native) if is_dataclass(native) else vars(native))
+        natives[channel] = snapshot(native if is_dataclass(native) else vars(native))
 
     kwargs = {"backend": backend, "_official": official, "_precision": precision,
               "_julia_executable": julia, "_worker_manager": manager, "_native_result_callback": capture,
@@ -237,6 +195,8 @@ def engine_child(input_path: Path, output_path: Path, *, official: bool, backend
         result = production_run(frozen, tuple(values["frequencies_hz"]), official=official,
                                 backend=backend, precision=precision, julia=julia)
         result["identity"] = identity
+        # Serialization belongs to the child error boundary too.
+        result = snapshot(result)
     except Exception as exc:
         from server.solver.beat import BeatUnavailable
         result = {"identity": identity, "error": f"{type(exc).__name__}: {exc}",
@@ -245,9 +205,27 @@ def engine_child(input_path: Path, output_path: Path, *, official: bool, backend
     return 0 if "error" not in result else 1
 
 
+def require_official_ready(backend: str, julia: str) -> None:
+    """Use the production readiness identity, without launching an engine."""
+    from server.solver.beat_runtime import paths, readiness
+
+    env = dict(os.environ, WG2_BEAT_JULIA=julia)
+    root = paths.runtime_dir(environ=env)
+    verdict = readiness.backend_readiness(backend, root, environ=env)
+    if not verdict.ready:
+        raise ValueError(
+            f"Official BEAT {backend} readiness is {verdict.state}: {verdict.reason} "
+            f"Effective runtime directory: {root}. Provision this directory with the same "
+            "Julia/depot/environment as the corpus; WG2_BEAT_RUNTIME_DIR is a base "
+            "(wg-beat-engine is appended), while CLI --dir is exact. "
+            "See scripts/beat_conformance/README.md. No corpus solve started."
+        )
+
+
 def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory: Path, *,
                   backend: str, precision: str, julia: str) -> tuple[dict, dict]:
     """Sequential subprocesses; official child manager cannot adopt a warm host."""
+    require_official_ready(backend, julia)
     directory.mkdir(parents=True)
     save_frozen(frozen, directory)
     write_json(directory / "job.json", {"case": frozen.case.name, "frequencies_hz": frequencies})
@@ -480,6 +458,8 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
         return verdict
     if phase == "refine" and coarse_dir is None:
         raise ValueError("--phase refine requires --coarse-dir containing frozen coarse evidence")
+    if pair_runner is isolated_pair:
+        require_official_ready(backend, julia)
     if phase == "refine":
         frozen = load_frozen(coarse_dir, case)
         inputs = read_json(coarse_dir / "inputs.json")
@@ -492,7 +472,7 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
     settings = settings_for(frozen, backend, precision)
     if phase == "refine" and json_value(inputs["settings"]) != json_value(settings):
         raise ValueError("Refinement frozen settings differ from coarse evidence")
-    write_json(directory / "inputs.json", {"case": asdict(case), "settings": settings,
+    write_json(directory / "inputs.json", {"case": case, "settings": settings,
                "backend": backend, "precision": precision, "mesh_sha256": frozen.sha256,
                "frequencies_hz": case.coarse_hz, "frequency_step_hz": max(np.diff(case.coarse_hz)),
                "environment_thread_policy": {k: "1" for k in THREAD_ENV}})
@@ -601,7 +581,7 @@ def main() -> int:
                            refine_part=args.refine_part, refine_dirs=tuple(args.refine_dir))
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         parser.exit(2, f"{type(exc).__name__}: {exc}\n")
-    print(json.dumps(verdict, default=str))
+    print(dumps(verdict))
     return 0 if verdict["passed"] else 1
 
 

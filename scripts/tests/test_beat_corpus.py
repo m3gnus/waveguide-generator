@@ -266,6 +266,7 @@ def test_corpus_fast_production_meshing_is_deterministic(case, tmp_path):
 
 
 def test_corpus_isolation_launches_sequential_children_and_preserves_runtime_env(frozen, tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "require_official_ready", lambda *args: None)
     calls = []
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "official-runtime"))
     monkeypatch.setenv("WG2_BEAT_WORKER_DIR", str(tmp_path / "official-workers"))

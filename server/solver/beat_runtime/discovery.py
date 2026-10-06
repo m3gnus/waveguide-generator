@@ -91,7 +91,17 @@ def discover_julia(
             return None if paths.hbb_executable(path, environ=env) else str(path)
     directory = runtime_dir(environ=env) if root is None else root
     record = read_julia_record(directory)
-    recorded = None if record and record.get("selection") == "explicit" else recorded_julia(directory, environ=env)
+    # Installer-only explicit choices remain one-off. Once provisioning has
+    # proved a backend with that executable, it is the runtime's saved choice.
+    # Readiness still validates the entire launch identity and compiled proof.
+    provisioned = record and any(
+        backend["status"] == "ready"
+        and backend["julia_executable"] == record["executable"]
+        and backend["julia_identity"] == record["identity"]
+        for backend in state.read_backend_states(directory).values()
+    )
+    recorded = (None if record and record.get("selection") == "explicit" and not provisioned
+                else recorded_julia(directory, environ=env))
     if recorded is not None:
         return recorded
     candidate = shutil.which("julia", path=env.get("PATH", os.defpath))

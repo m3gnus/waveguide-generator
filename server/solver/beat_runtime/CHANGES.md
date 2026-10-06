@@ -3,6 +3,20 @@
 All paths are relative to the WG repository root. Changes are additive; no
 production caller adopts beat-engine, no pins change, and HBB state is untouched.
 
+- **Production fix — provisioned explicit external Julia rediscovery (2026-10-06):**
+  `discovery.py`; `server/tests/beat_runtime/test_{cli,readiness}.py`.
+  Discovery used to discard every saved `selection="explicit"` executable,
+  including the external Julia just used to prove a ready backend. Subsequent
+  status without `--julia` reported `no-julia`. Rediscover the verified saved
+  executable when a ready backend record names that same path and content hash;
+  retain installer-only one-off selection behavior. Full readiness still
+  checks the current launch identity and compiled proof, and changed binaries
+  revoke discovery. External `version=null` is intentional (no version probe),
+  not the failure. CLI regression covers explicit external provisioning then
+  status/readiness without `--julia`, with fake Julia setup and worker results.
+  The broker's separate single-depot/ambient-depot-chain mismatch still fails
+  as `stale`; `--dir` remains exact while the environment override is a base.
+
 - **PR 2 — paths/assets:** `server/solver/beat_runtime/{__init__,paths,assets}.py`;
   `server/tests/beat_runtime/test_{paths,assets}.py`; this `CHANGES.md`.
   WG overrides select bases with `wg-beat-engine` appended. Asset discovery is
