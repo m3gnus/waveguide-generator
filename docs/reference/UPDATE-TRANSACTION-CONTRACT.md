@@ -744,6 +744,8 @@ The evidence each mode has for these:
     and the running interpreter/helper must not use the retained backups or staging.
     The live layers are also walked for internal links or junctions into any
     retained material; the first hit or filesystem error refuses reclamation.
+    An absent layer root has no dependencies to inspect. A dangling link or
+    junction is a present entry, so failure to resolve it still refuses reclamation.
     Settlement holds the same installation process claim as the updater and
     rollback helpers through validation, closure and all cleanup. The journal
     identity and state and the installation marker are read again before removal;

@@ -21,6 +21,7 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
+import shutil
 import stat
 import subprocess
 import sys
@@ -3041,6 +3042,80 @@ def test_the_internal_retention_walk_refuses_on_filesystem_errors(
     assert apply_update_module.superseding_installed_build(installation.resources, journal or {}) is None
 
 
+def test_an_absent_runtime_root_does_not_block_ordinary_healthy_start_settlement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, transaction = _valid_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    # A healthy app using an interpreter outside the bundle has no runtime
+    # tree to inspect. Absence alone is not a dependency on rollback material.
+    shutil.rmtree(installation.resources / "runtime")
+    before = read_journal(installation.data_dir, installation.resources)
+    assert not apply_update_module.running_build_uses_retained_material(installation.resources, before)
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+    assert settlement.settle(ready=True, evidence="healthy app", report=lambda _m: None)
+    assert settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) is None
+    assert apply_update_module.read_transaction_open_marker(installation.resources) is None
+    assert not (installation.resources / "runtime.previous").exists()
+    assert not (installation.data_dir / "updates" / "9.9.9").exists()
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record["transaction"] == transaction
+    assert record["outcome"] == "installed"
+    assert record["rollbackMaterial"] == "reclaimed"
+
+
+@pytest.mark.parametrize("problem", [
+    "dangling-link",
+    pytest.param("dangling-junction", marks=pytest.mark.skipif(os.name != "nt", reason="native Windows junction")),
+    "unreadable-root", "vanished-root",
+])
+def test_unverified_live_layer_roots_keep_the_ordinary_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    installation, _transaction = _valid_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    runtime = installation.resources / "runtime"
+    if problem in {"dangling-link", "dangling-junction"}:
+        shutil.rmtree(runtime)
+        missing = installation.resources / "missing"
+        if problem == "dangling-junction":
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(runtime), str(missing)],
+                check=True, capture_output=True,
+            )
+        else:
+            runtime.symlink_to(missing, target_is_directory=True)
+    elif problem == "unreadable-root":
+        original_lstat = Path.lstat
+
+        def unreadable(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if path == runtime:
+                raise PermissionError("unverified runtime root")
+            return original_lstat(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "lstat", unreadable)
+    else:
+        original_resolve = apply_update_module.resolved_path
+
+        def vanished(path: Any, *, strict: bool = False) -> Path:
+            if Path(path) == runtime and strict:
+                raise FileNotFoundError("runtime vanished after lstat")
+            return original_resolve(path, strict=strict)
+
+        monkeypatch.setattr(apply_update_module, "resolved_path", vanished)
+    before = read_journal(installation.data_dir, installation.resources)
+    marker = apply_update_module.read_transaction_open_marker(installation.resources)
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+    assert not settlement.settle(ready=True, evidence="healthy app", report=lambda _m: None)
+    assert not settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) == before
+    assert apply_update_module.read_transaction_open_marker(installation.resources) == marker
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir()
+    assert _completion_record(installation.data_dir, installation.resources) is None
+
+
 def test_the_internal_retention_walk_stops_at_the_first_retained_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -4991,10 +5066,12 @@ def _join_settlement_retry(settlement: healthy_start.HealthyStartSettlement) -> 
 
 
 @pytest.mark.parametrize("mode", ["desktop", "browser", "no-gui"])
+@pytest.mark.parametrize("replacement", [False, True], ids=["ordinary-update", "full-installer"])
 def test_healthy_start_retries_after_the_relaunch_helper_releases_its_claim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, replacement: bool
 ) -> None:
-    installation, transaction = _replacement_bridge_target(tmp_path)
+    setup = _replacement_bridge_target if replacement else _valid_bridge_target
+    installation, transaction = setup(tmp_path)
     monkeypatch.setattr(healthy_start.sys, "platform", "win32")
     monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04, 0.08))
     paths = tuple(installation[:3])
@@ -5034,6 +5111,7 @@ def test_healthy_start_retries_after_the_relaunch_helper_releases_its_claim(
     assert not (installation.resources / "runtime.previous").exists()
     record = _completion_record(installation.data_dir, installation.resources) or {}
     assert record["transaction"] == transaction
+    assert record["outcome"] == ("superseded" if replacement else "installed")
     assert record["rollbackMaterial"] == "reclaimed"
 
 

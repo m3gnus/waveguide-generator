@@ -1062,6 +1062,7 @@ def running_build_uses_retained_material(
     when both roots are ordinary directories. Stop at the first dependency or
     filesystem error. Follow directory aliases with a bounded, cycle-safe walk:
     an external directory can itself contain a link back into retained material.
+    Absent layer roots have no dependencies; present but unverified entries do.
     """
 
     try:
@@ -1085,7 +1086,18 @@ def running_build_uses_retained_material(
 
         if any(uses_retained(live) for live in live_paths):
             return True
-        pending = [root / name for name in BUNDLE_LAYERS]
+        pending = []
+        for name in BUNDLE_LAYERS:
+            layer = root / name
+            try:
+                layer.lstat()
+            except FileNotFoundError:
+                # An absent layer has no dependencies to reclaim. Inspect the
+                # entry itself: a dangling symlink/junction is still present
+                # and must fail the strict resolution below. Errors within a
+                # present layer remain uncertainty, including a vanished tree.
+                continue
+            pending.append(layer)
         visited: set[Path] = set()
         scanned_entries = 0
         while pending:
