@@ -58,6 +58,7 @@ from server.platform.temp_session import (  # noqa: E402
 )
 from server.platform.signal_rearm import (  # noqa: E402
     register_signal_rearm,
+    restore_sigpipe_ignore,
     unregister_signal_rearm,
 )
 from server.protocol.frame import DEFAULT_MAX_FRAME_BYTES  # noqa: E402
@@ -601,6 +602,12 @@ def _capture_shutdown_signals(
                 backstop.begin(f"{signal.Signals(signum).name} received")
 
     def install() -> None:
+        # Gmsh warmup runs after the one-shot application startup restore.
+        # Native initialize/finalize can reset SIGPIPE behind Python's cache;
+        # reapply the ignore at every boundary along with our stop handlers.
+        # Otherwise a dead worker's IPC pipe (or a disconnected HTTP client)
+        # terminates the server before BrokenPipeError can be handled.
+        restore_sigpipe_ignore()
         for signum in _shutdown_signals():
             signal.signal(signum, request_shutdown)
 
