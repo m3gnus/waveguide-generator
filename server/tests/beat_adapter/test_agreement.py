@@ -392,3 +392,50 @@ def test_agreement_missing_blas_or_backend_observations_cannot_compare_equal(ref
 def test_metal_agreement_without_any_observation_evidence_fails_closed(reference):
     a = replace(reference, settings={**reference.settings, "backend": "metal"})
     assert not compare(a, a)["passed"]
+
+
+@pytest.mark.parametrize("context", [False, True])
+@pytest.mark.parametrize("missing_side", [0, 1, "both"])
+def test_agreement_electrical_presence_is_a_structural_error(reference, context, missing_side):
+    electrical = np.ones(len(reference.frequencies_hz), complex)
+    pair = [replace(reference, electrical_impedance_ohm=electrical),
+            replace(reference, revision="official-exact-sha", electrical_impedance_ohm=electrical)]
+    damaged = [replace(r, electrical_impedance_ohm=None) if missing_side == "both" or index == missing_side else r
+               for index, r in enumerate(pair)]
+    with pytest.raises(ValueError, match="electrical_impedance_ohm"):
+        compare(*(pair if context else damaged),
+                resonance_context=tuple(damaged) if context else None,
+                expected_resonance_columns={"electrical_impedance_ohm": (0,)})
+
+
+@pytest.mark.parametrize("context", [False, True])
+def test_agreement_one_sided_optional_electrical_raises(reference, context):
+    other = replace(reference, electrical_impedance_ohm=np.ones(len(reference.frequencies_hz)))
+    with pytest.raises(ValueError, match="electrical_impedance_ohm"):
+        compare(reference, reference, resonance_context=(reference, other)) if context else compare(reference, other)
+
+
+@pytest.mark.parametrize("field", ["pressure_complex", "impedance_per_acceleration", "di_db", "power_w", "electrical_impedance_ohm"])
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_agreement_context_arrays_must_be_finite(reference, field, bad):
+    if field == "electrical_impedance_ohm":
+        reference = replace(reference, electrical_impedance_ohm=np.ones(len(reference.frequencies_hz), complex))
+    value = np.array(getattr(reference, field), copy=True)
+    value.flat[-1] = bad
+    damaged = replace(reference, **{field: value})
+    with pytest.raises(ValueError, match="finite"):
+        compare(reference, reference, resonance_context=(reference, damaged))
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_agreement_electrical_arrays_must_be_finite(reference, bad):
+    value = np.ones(len(reference.frequencies_hz), complex)
+    value[0] = bad
+    with pytest.raises(ValueError, match="finite"):
+        compare(replace(reference, electrical_impedance_ohm=value), replace(reference, electrical_impedance_ohm=value))
+
+
+def test_agreement_window_axis_must_be_on_context_axis(reference):
+    shifted = replace(reference, frequencies_hz=reference.frequencies_hz + .125)
+    with pytest.raises(ValueError, match="Window axis.*context axis"):
+        compare(shifted, shifted, resonance_context=(reference, reference))

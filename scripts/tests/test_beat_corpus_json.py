@@ -99,7 +99,7 @@ def test_corpus_engine_child_serializes_native_and_response(tmp_path, monkeypatc
     production = runner.production_run
     monkeypatch.setattr(runner, "production_run", lambda *a, **k: production(*a, **k, routes=(route, route)))
     name = "beat-engine" if official else "hornlab-beat-bem"
-    identity = {"distributions": {name: {"revision": "pin", "direct_url": {}}}, "hbb_pin": "pin", "wg_commit": {"returncode": 0, "stdout": "wg-test"},
+    identity = {"distributions": {name: {"revision": "a" * 40, "direct_url": {"vcs_info": {"commit_id": "a" * 40}}}}, "hbb_pin": "a" * 40, "wg_commit": {"returncode": 0, "stdout": "wg-test"},
                 "wg_worktree": {"returncode": 0, "stdout": ""}}
     monkeypatch.setattr(runner, "capture_identity", lambda _: identity)
     monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
@@ -187,7 +187,7 @@ def test_corpus_child_records_serialization_failure(tmp_path, monkeypatch, offic
     runner.write_json(job, {"case": case.name, "frequencies_hz": [500., 750., 1000.]})
     name = "beat-engine" if official else "hornlab-beat-bem"
     monkeypatch.setattr(runner, "capture_identity", lambda _: {
-        "distributions": {name: {"revision": "pin", "direct_url": {}}}, "hbb_pin": "pin", "wg_commit": {"returncode": 0, "stdout": "wg-test"},
+        "distributions": {name: {"revision": "a" * 40, "direct_url": {"vcs_info": {"commit_id": "a" * 40}}}}, "hbb_pin": "a" * 40, "wg_commit": {"returncode": 0, "stdout": "wg-test"},
                 "wg_worktree": {"returncode": 0, "stdout": ""}})
     monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
     monkeypatch.setattr(runner, "production_run", lambda *a, **k: {"response": {"opaque": object()}})
@@ -250,3 +250,20 @@ def test_corpus_json_preserves_all_nonfinite_signs_in_scalars_arrays_and_complex
     np.testing.assert_array_equal(decoded["scalars"], values)
     np.testing.assert_array_equal(decoded["array"], values)
     assert decoded["complex"].real == -np.inf and decoded["complex"].imag == np.inf
+
+
+@pytest.mark.parametrize("direct", [{"dir_info": {"editable": True}, "vcs_info": {"commit_id": "a" * 40}},
+                                   {"dir_info": {}}, {}])
+def test_corpus_official_child_refuses_unpinned_distribution_before_production(tmp_path, monkeypatch, direct):
+    case = corpus.CASES["osse-quarter"]
+    frozen = corpus.FrozenCase(case, case.request().model_dump(mode="json"), b"mesh", None, {})
+    corpus.save_frozen(frozen, tmp_path)
+    job, output = tmp_path / "job.json", tmp_path / "official.json"
+    runner.write_json(job, {"case": case.name, "frequencies_hz": [500., 750., 1000.]})
+    monkeypatch.setattr(runner, "capture_identity", lambda _: {
+        "wg_commit": {"returncode": 0, "stdout": "wg-test"}, "wg_worktree": {"returncode": 0, "stdout": ""},
+        "distributions": {"beat-engine": {"revision": "a" * 40, "direct_url": direct}}})
+    monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
+    monkeypatch.setattr(runner, "production_run", lambda *a, **k: pytest.fail("production started"))
+    assert runner.engine_child(job, output, official=True, backend="cpu", precision="float32", julia="forbidden") == 1
+    assert "non-editable with an exact VCS commit" in runner.read_json(output)["error"]

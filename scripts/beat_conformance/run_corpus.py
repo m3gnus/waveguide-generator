@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 from dataclasses import is_dataclass, make_dataclass
 from importlib import metadata
+import hashlib
 import json
 import math
+import re
 import os
 from pathlib import Path
 import signal
@@ -21,7 +23,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.signal import find_peaks
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
-from server.jobs.models import SolveOptions, SolveRequest
+from server.jobs.models import MAX_EXPLICIT_FREQUENCIES, SolveRequest
 from server.solver.beat_adapter.request import build_imported_request, build_parametric_request
 from server.solver.beat_adapter.mesh import read_surface
 from server.solver.context import SolverContext
@@ -41,29 +43,54 @@ from .settings import observed_settings
 
 THREAD_ENV = ("JULIA_NUM_THREADS", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
               "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS")
-# Read the request schema's existing bound, rather than duplicating it.
-FREQUENCY_LIMIT = next(item.le for item in SolveOptions.model_fields["num_frequencies"].metadata
-                       if getattr(item, "le", None) is not None)
-ISOLATED_ENV = ("JULIA_DEPOT_PATH", "JULIA_LOAD_PATH", "JULIA_PROJECT", "WG2_BEAT_RUNTIME_DIR",
-                "WG2_BEAT_WORKER_DIR", "WG2_BEAT_JULIA", "HORNLAB_BEAT_JULIA", "WG2_BEAT_PROVIDER")
+FREQUENCY_LIMIT = MAX_EXPLICIT_FREQUENCIES
+ENV_PREFIXES = ("JULIA_", "WG2_BEAT_", "HORNLAB_BEAT_", "BLAB_", "OPENBLAS_", "OMP_", "MKL_")
+# Shell/process bookkeeping and per-process temporary locations are not identity.
+VOLATILE_ENV_KEYS = frozenset({"_", "PWD", "OLDPWD", "SHLVL", "TMPDIR", "TMP", "TEMP"})
 
 
 def relevant_environment(env: dict) -> dict:
-    return {key: env.get(key) for key in sorted(set(ISOLATED_ENV) | set(THREAD_ENV)
-                                              | {k for k in env if k.startswith("BLAB_")})}
+    return {key: env[key] for key in sorted(env)
+            if key.startswith(ENV_PREFIXES) or key in THREAD_ENV}
+
+
+def environment_sha256(env: dict) -> str:
+    stable = {key: value for key, value in env.items() if key not in VOLATILE_ENV_KEYS}
+    return hashlib.sha256(dumps(stable).encode()).hexdigest()
+
+
+def external_path(path: Path, option: str) -> Path:
+    resolved = path.expanduser().resolve()
+    if resolved.is_relative_to(ROOT.resolve()):
+        raise ValueError(f"{option} must be outside the WG repository root ({ROOT}); use an external path")
+    return resolved
+
+
+def depot_entries(chain: str, option: str) -> tuple[Path, ...]:
+    if not chain or any(not entry for entry in chain.split(os.pathsep)):
+        raise ValueError(f"{option} requires an explicit nonempty depot chain")
+    return tuple(external_path(Path(entry), option) for entry in chain.split(os.pathsep))
 
 
 def child_environment(*, official: bool, julia: str, hbb_depot: str) -> dict:
-    if not hbb_depot or any(not part for part in hbb_depot.split(os.pathsep)):
-        raise ValueError("--hbb-depot requires an explicit nonempty depot chain")
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith("BLAB_") and (official or k not in ISOLATED_ENV)}
-    env.update({k: "1" for k in THREAD_ENV})
+    from server.solver.beat_runtime import paths
+
+    hbb_entries = depot_entries(hbb_depot, "--hbb-depot")
+    official_env = {k: v for k, v in os.environ.items() if not k.startswith("BLAB_")}
+    official_env.update(WG2_BEAT_PROVIDER="official", WG2_BEAT_JULIA=julia)
+    official_env.pop("HORNLAB_BEAT_JULIA", None)
+    official_depot = official_env.get("JULIA_DEPOT_PATH") or str(paths.runtime_dir(environ=official_env) / "depot")
+    official_entries = depot_entries(official_depot, "official JULIA_DEPOT_PATH")
+    if set(hbb_entries) & set(official_entries):
+        raise ValueError("--hbb-depot and official JULIA_DEPOT_PATH share an entry; use distinct chains, including read-only entries")
     if official:
-        env.update(WG2_BEAT_PROVIDER="official", WG2_BEAT_JULIA=julia)
-        env.pop("HORNLAB_BEAT_JULIA", None)
+        env = official_env
+        env["JULIA_DEPOT_PATH"] = os.pathsep.join(map(str, official_entries))
     else:
-        env.update(JULIA_DEPOT_PATH=hbb_depot, HORNLAB_BEAT_JULIA=julia)
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("JULIA_", "WG2_BEAT_", "BLAB_"))}
+        env.update(JULIA_DEPOT_PATH=os.pathsep.join(map(str, hbb_entries)), HORNLAB_BEAT_JULIA=julia)
+    env.update({k: "1" for k in THREAD_ENV})
     return env
 
 
@@ -121,6 +148,16 @@ def distribution_identity(name: str) -> dict[str, Any]:
             "source_worktree": command_evidence(["git", "-C", str(source), "status", "--porcelain"]) if source else None}
 
 
+def require_distribution_identity(dist: dict, name: str, *, pin: str | None = None) -> None:
+    direct = dist.get("direct_url", {})
+    commit = direct.get("vcs_info", {}).get("commit_id", "")
+    if (direct.get("dir_info", {}).get("editable") or not re.fullmatch(r"[0-9a-fA-F]{40}", commit)
+            or dist.get("revision") != commit):
+        raise ValueError(f"{name} must be non-editable with an exact VCS commit in direct_url; editable/dir-only installs refused")
+    if pin is not None and commit != pin:
+        raise ValueError("HBB must be the non-editable current WG pin")
+
+
 def capture_identity(julia: str) -> dict[str, Any]:
     """Capture in the engine child, including load and installed identities."""
     return {**wg_identity(),
@@ -129,6 +166,7 @@ def capture_identity(julia: str) -> dict[str, Any]:
             "julia_version": command_evidence([julia, "--startup-file=no", "--version"]),
             "thread_env": {name: os.environ.get(name) for name in THREAD_ENV},
             "runtime_env": relevant_environment(os.environ),
+            "environment_sha256": environment_sha256(os.environ),
             "load": command_evidence(["sysctl", "-n", "vm.loadavg"]),
             "battery": command_evidence(["pmset", "-g", "batt"]), "pid": os.getpid()}
 
@@ -233,10 +271,7 @@ def engine_child(input_path: Path, output_path: Path, *, official: bool, backend
         identity = capture_identity(julia)
         require_clean_wg(identity)
         dist = identity["distributions"][name]
-        if not dist.get("revision"):
-            raise ValueError(f"{name} has no exact revision in direct_url/source metadata")
-        if not official and (dist["revision"] != identity["hbb_pin"] or dist["direct_url"].get("dir_info", {}).get("editable")):
-            raise ValueError("HBB must be the non-editable current WG pin")
+        require_distribution_identity(dist, name, pin=None if official else identity["hbb_pin"])
         result = production_run(frozen, tuple(values["frequencies_hz"]), official=official,
                                 backend=backend, precision=precision, julia=julia)
         result["identity"] = identity
@@ -246,7 +281,8 @@ def engine_child(input_path: Path, output_path: Path, *, official: bool, backend
         if not identity:
             identity = {"wg_commit": command_evidence(["git", "rev-parse", "HEAD"]),
                         "wg_worktree": command_evidence(["git", "status", "--porcelain"]),
-                        "runtime_env": relevant_environment(os.environ)}
+                        "runtime_env": relevant_environment(os.environ),
+                        "environment_sha256": environment_sha256(os.environ)}
         from server.solver.beat import BeatUnavailable
         result = {"identity": identity, "error": f"{type(exc).__name__}: {exc}",
                   "refusal": str(exc) if isinstance(exc, BeatUnavailable) else None}
@@ -275,9 +311,9 @@ def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory:
                   backend: str, precision: str, julia: str, hbb_depot: str,
                   timeout_seconds: float | None = None) -> tuple[dict, dict]:
     """Sequential subprocesses; official child manager cannot adopt a warm host."""
+    environments = [child_environment(official=value, julia=julia, hbb_depot=hbb_depot) for value in (False, True)]
     wg_identity()
     require_official_ready(backend, julia)
-    environments = [child_environment(official=value, julia=julia, hbb_depot=hbb_depot) for value in (False, True)]
     directory.mkdir(parents=True)
     save_frozen(frozen, directory)
     write_json(directory / "job.json", {"case": frozen.case.name, "frequencies_hz": frequencies})
@@ -308,6 +344,7 @@ def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory:
         elapsed = time.monotonic() - started
         run = read_json(target)
         run["environment"] = relevant_environment(env)
+        run["environment_sha256"] = environment_sha256(env)
         run["timing"] = engine_timing(run, wall_seconds=elapsed, frequency_count=len(frequencies))
         write_json(target, run)
         runs.append(run)
@@ -450,6 +487,12 @@ def detect_features(results: dict[str, ResultSet], case: CorpusCase, *, engine: 
     return features
 
 
+class RefineBudgetTooSmall(ValueError):
+    def __init__(self, plan: dict):
+        super().__init__("Part wall budget cannot fit three frequencies plus startup and two-row overlap")
+        self.plan = plan
+
+
 def refine_windows(reference: dict[str, ResultSet], case: CorpusCase, *,
                    timing: dict[str, dict], max_part_minutes: float = 8.,
                    candidate: dict[str, ResultSet] | None = None) -> dict[str, Any]:
@@ -477,6 +520,10 @@ def refine_windows(reference: dict[str, ResultSet], case: CorpusCase, *,
     for window in merged:
         lowest = min(feat["frequency_hz"] for feat in window["features"])
         step = 2. ** math.floor(math.log2(lowest * 0.0025))
+        if case.require_narrow:
+            # Resolve even a grid-aligned Q=300 mode in the 270–285 Hz band
+            # with multiple samples above -3 dB, rather than a single spike.
+            step = min(step, .25)
         start, end = window["start_hz"], window["end_hz"]
         axis = np.arange(math.ceil(start / step), math.floor(end / step) + 1) * step
         # Include the exact coarse neighbours even for off-grid bounds, never
@@ -485,25 +532,27 @@ def refine_windows(reference: dict[str, ResultSet], case: CorpusCase, *,
         axis = np.unique(np.r_[axis, bounds])
         validate_frequency_axis(tuple(axis))
         window.update(frequencies_hz=axis.tolist(), step_hz=step)
-    if merged and limit < 3:
-        raise ValueError("Part wall budget cannot fit three frequencies plus startup and two-row overlap")
     # Split acquisition only; score complete windows after gathering parts.
     axis = sorted({f for w in merged for f in w["frequencies_hz"]})
     parts = []
     offset = 0
-    while offset < len(axis):
+    while limit >= 3 and offset < len(axis):
         frequencies = axis[offset:offset + limit]
         parts.append({"part": len(parts) + 1, "frequencies_hz": frequencies,
                       "estimated_minutes": (len(frequencies) * cost + startup) / 60})
         if offset + limit >= len(axis):
             break
         offset += limit - 2
-    return {"prominence_db": case.prominence_db, "windows": merged, "parts": parts,
+    plan = {"prominence_db": case.prominence_db, "windows": merged, "parts": parts,
             "count": len(axis), "acquired_frequency_count": sum(len(p["frequencies_hz"]) for p in parts),
             "part_count": len(parts), "per_part_limit": limit, "max_part_minutes": max_part_minutes,
             "estimated_minutes": sum(p["estimated_minutes"] for p in parts),
             "timing": timing, "pair_seconds_per_frequency": cost, "startup_seconds_per_part": startup,
-            "startup_policy": "reserve one full coarse pair wall time in addition to amortized wall/frequency"}
+            "startup_policy": "reserve one full coarse pair wall time in addition to amortized wall/frequency",
+            "required_minimum_part_minutes": (startup + 3 * cost) / 60}
+    if merged and limit < 3:
+        raise RefineBudgetTooSmall(plan)
+    return plan
 
 
 def resolve_features(reference: ResultSet, features: list[dict], prominence_db: float) -> dict:
@@ -589,6 +638,10 @@ def merge_runs(runs: list[dict]) -> dict:
     from copy import deepcopy
     for run in runs:
         require_clean_wg(run.get("identity", {}))
+        validate_frequency_axis(tuple(run["frequencies_hz"]))
+        for member in run["native"].values():
+            if not np.array_equal(member["frequencies_hz"], run["frequencies_hz"]):
+                raise ValueError("Native axis differs from actual acquisition frequencies")
     for run in runs[1:]:
         if run.get("mesh_sha256") != runs[0].get("mesh_sha256"):
             raise ValueError("Refine run mesh differs from dense evidence")
@@ -608,7 +661,28 @@ def merge_runs(runs: list[dict]) -> dict:
                 if f in logs and solver_settings(logs[f]) != solver_settings(row):
                     raise ValueError(f"Inconsistent overlapping solver_log settings at {f} Hz")
                 logs[f] = row
-        rows = {float(f): (m, i) for m in members for i, f in enumerate(m["frequencies_hz"])}
+        rows = {}
+        for member in members:
+            member_logs = solver_rows(member)
+            for index, frequency in enumerate(member["frequencies_hz"]):
+                f = float(frequency)
+                if f in rows:
+                    previous, previous_index = rows[f]
+                    precision = member_logs[f].get("native_diagnostics", {}).get("precision")
+                    tolerance = 1e-6 if precision in {"float32", "single"} else 1e-12
+                    for field in ARRAY_FIELDS:
+                        a, b = previous.get(field), member.get(field)
+                        if (a is None) != (b is None):
+                            raise ValueError(f"Inconsistent overlapping {field} presence at {f} Hz")
+                        if a is None:
+                            continue
+                        a, b = np.asarray(a)[previous_index], np.asarray(b)[index]
+                        scale = np.maximum(np.abs(a), np.abs(b))
+                        if (np.shape(a) != np.shape(b) or not np.isfinite(a).all() or not np.isfinite(b).all()
+                                or np.any(np.abs(a - b) > tolerance * scale)):
+                            raise ValueError(f"Inconsistent overlapping numeric {field} at {f} Hz (relative tolerance {tolerance})")
+                else:
+                    rows[f] = (member, index)
         axis = sorted(rows)
         target = merged["native"][channel]
         target["frequencies_hz"] = np.asarray(axis)
@@ -624,17 +698,34 @@ def merge_runs(runs: list[dict]) -> dict:
     return merged
 
 
+def validate_part_runs(plan: dict, part_number: int, reference: dict, candidate: dict) -> set[float]:
+    if type(part_number) is not int or not 1 <= part_number <= len(plan["parts"]):
+        raise ValueError("Refine evidence part is outside the acquisition plan")
+    planned = plan["parts"][part_number - 1]["frequencies_hz"]
+    for run in (reference, candidate):
+        if not np.array_equal(run["frequencies_hz"], planned):
+            raise ValueError("Refine part actual frequencies differ from its planned frequencies")
+        for member in run["native"].values():
+            if not np.array_equal(member["frequencies_hz"], planned):
+                raise ValueError("Refine part native frequencies differ from its planned frequencies")
+    return set(reference["frequencies_hz"]) & set(candidate["frequencies_hz"])
+
+
 def narrowness_sentinel(results: dict[str, ResultSet], prominence_db: float,
-                        refined_frequencies: set[float]) -> dict:
+                        refined_frequencies: set[float], *,
+                        band_hz: tuple[float, float] = (270., 285.),
+                        columns: tuple[tuple[str, tuple[int, ...]], ...] = (("pressure_complex", (0,)),
+                            ("impedance_per_acceleration", (0,)))) -> dict:
     features = []
     for channel, result in results.items():
         f = result.frequencies_hz
-        for quantity, data in quantity_columns(result).items():
-            for column in range(data.shape[1]):
+        for quantity, declared_columns in columns:
+            data = quantity_columns(result)[quantity]
+            for column in declared_columns:
                 levels = 20 * np.log10(np.maximum(np.abs(data[:, column]), np.finfo(float).tiny))
                 for index in _extrema(levels, prominence_db)["peaks"]:
                     # A dense-only sample cannot establish the refined Q claim.
-                    if f[index] not in refined_frequencies:
+                    if f[index] not in refined_frequencies or not band_hz[0] <= f[index] <= band_hz[1]:
                         continue
                     threshold = levels[index] - 3.
                     left, right = index, index
@@ -644,8 +735,10 @@ def narrowness_sentinel(results: dict[str, ResultSet], prominence_db: float,
                         right += 1
                     if levels[left] > threshold or levels[right] > threshold:
                         continue  # endpoints do not establish a width
-                    if any(point not in refined_frequencies for point in f[left:right + 1]):
-                        continue  # the width itself, not just its peak, requires refinement
+                    support = sum(point in refined_frequencies and level > threshold
+                                  for point, level in zip(f[left:right + 1], levels[left:right + 1]))
+                    if support < 2:
+                        continue  # single-sample spikes cannot establish a resolved peak
                     lo = np.interp(threshold, levels[left:left + 2], f[left:left + 2])
                     hi = np.interp(threshold, levels[right - 1:right + 1][::-1], f[right - 1:right + 1][::-1])
                     width = float(hi - lo)
@@ -655,8 +748,8 @@ def narrowness_sentinel(results: dict[str, ResultSet], prominence_db: float,
                                          "crossings_hz": [float(lo), float(hi)], "q": float(f[index] / width)})
     passed = any(feature["q"] >= 10 for feature in features)
     return {"passed": passed, "status": "observed" if passed else "resonance_not_narrow",
-            "minimum_q": 10, "features": features,
-            "method": "refined peak and refined shoulders, linear absolute -3 dB crossings"}
+            "minimum_q": 10, "band_hz": band_hz, "columns": columns, "features": features,
+            "method": "refined peak and at least two refined samples above -3 dB; merged-axis linear dB crossings"}
 
 
 def cut_sentinel(results: dict[str, ResultSet], planes: list[str]) -> dict:
@@ -710,7 +803,8 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
         reports[channel] = compare_results(reference[channel], candidate[channel], frequency_step_hz=frequency_step,
                     resonance_prominence_db=frozen.case.prominence_db,
                     expected_resonance_columns=(expected_by_channel or {}).get(channel,
-                        {"pressure_complex": frozen.case.expected_pressure_columns} if expected else None),
+                        {"pressure_complex": frozen.case.expected_pressure_columns,
+                         "electrical_impedance_ohm": frozen.case.expected_electrical_columns} if expected else None),
                     resonance_context=tuple(context[channel] for context in contexts) if feature_context else None)
         if expected_features:
             reports[channel]["feature_resolution"] = resolution
@@ -752,15 +846,14 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
         if not (frozen.case.expect_no_features and frozen.case.no_features_reason):
             status = "no_features_observed"
     if feature_context is None and frozen.case.require_narrow:
-        sentinels["narrowness"] = narrowness_sentinel(reference, frozen.case.prominence_db, refined_frequencies or set())
+        sentinels["narrowness"] = narrowness_sentinel(reference, frozen.case.prominence_db, refined_frequencies or set(),
+            band_hz=frozen.case.narrow_band_hz, columns=frozen.case.narrow_columns)
         if not sentinels["narrowness"]["passed"]:
             status = "resonance_not_narrow"
     if feature_context is None and frozen.case.require_cut_sensitivity:
         sentinels["cut_sensitivity"] = cut_sentinel(reference, settings["observation_planes"])
         if not sentinels["cut_sensitivity"]["passed"]:
             status = "cut_not_discriminating"
-    if not reference_features and not (frozen.case.expect_no_features and frozen.case.no_features_reason):
-        status = "no_features_observed"
     return {"status": status, "frequency_step": frequency_step, "sentinels": sentinels,
             "reference_feature_count": len(reference_features),
             "identities": {"hbb": reference_run["identity"], "official": candidate_run["identity"]},
@@ -779,6 +872,16 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
              freezer: Callable = freeze_case, max_part_minutes: float = 8., hbb_depot: str | None = None) -> dict:
     if not math.isfinite(max_part_minutes) or max_part_minutes <= 0:
         raise ValueError("--max-part-minutes must be positive and finite")
+    directory = external_path(directory, "--output-dir")
+    if coarse_dir is not None:
+        coarse_dir = external_path(coarse_dir, "--coarse-dir")
+    refine_dirs = tuple(external_path(path, "--refine-dir") for path in refine_dirs)
+    if hbb_depot is not None:
+        depot_entries(hbb_depot, "--hbb-depot")
+    if phase == "refine" and coarse_dir is None and not case.unsupported:
+        raise ValueError("--phase refine requires --coarse-dir containing frozen coarse evidence")
+    if pair_runner is isolated_pair and not case.unsupported:
+        child_environment(official=False, julia=julia, hbb_depot=hbb_depot)
     directory = empty_output(directory)
     if backend == "metal" and precision != "float32":
         raise ValueError("Metal production agreement requires float32")
@@ -786,11 +889,8 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
         verdict = {"passed": False, "status": "unsupported", "refusal": case.unsupported}
         write_json(directory / "verdict.json", verdict)
         return verdict
-    if phase == "refine" and coarse_dir is None:
-        raise ValueError("--phase refine requires --coarse-dir containing frozen coarse evidence")
     if pair_runner is isolated_pair:
         wg_identity()
-        child_environment(official=False, julia=julia, hbb_depot=hbb_depot)
         require_official_ready(backend, julia)
     if phase == "refine":
         frozen = load_frozen(coarse_dir, case)
@@ -825,20 +925,33 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
         write_json(directory / "coarse-score.json", coarse_score)
         reference, _ = map_results(reference_run, frozen, settings, official=False)
         candidate, _ = map_results(candidate_run, frozen, settings, official=True)
-        plan = refine_windows(reference, case, candidate=candidate, timing={"hbb": engine_timing(reference_run),
-                              "official": engine_timing(candidate_run)}, max_part_minutes=max_part_minutes)
+        try:
+            plan = refine_windows(reference, case, candidate=candidate, timing={"hbb": engine_timing(reference_run),
+                                  "official": engine_timing(candidate_run)}, max_part_minutes=max_part_minutes)
+        except RefineBudgetTooSmall as exc:
+            write_json(directory / "refine-plan.json", exc.plan)
+            verdict = {"passed": False, "status": "refine_budget_too_small", "coarse": coarse_score,
+                       "plan": exc.plan, "required_minutes": exc.plan["required_minimum_part_minutes"],
+                       "case": case.name, "phase": phase, "qualified": False,
+                       "identities": {"hbb": reference_run["identity"], "official": candidate_run["identity"]}}
+            write_json(directory / "verdict.json", verdict)
+            return verdict
         write_json(directory / "refine-plan.json", plan)
         verdict = {"passed": False, "status": "coarse_complete", "coarse": coarse_score,
                    "required_refine_parts": len(plan["parts"]), "completed_refine_parts": []}
         if phase != "coarse" and coarse_score["status"] != "no_features_observed":
             refs, candidates = [reference_run], [candidate_run]
             completed = set()
+            refined_axis = set()
             for source in refine_dirs:
                 prior = read_json(source / "part.json")
                 if prior["mesh_sha256"] != frozen.sha256 or prior["plan"] != plan or prior["backend"] != backend or prior["precision"] != precision:
                     raise ValueError("Refine evidence mesh/plan/backend/precision differs")
-                refs.append(read_json(source / "refine" / "hbb.json"))
-                candidates.append(read_json(source / "refine" / "official.json"))
+                a = read_json(source / "refine" / "hbb.json")
+                b = read_json(source / "refine" / "official.json")
+                refined_axis.update(validate_part_runs(plan, prior["part"], a, b))
+                refs.append(a)
+                candidates.append(b)
                 completed.add(prior["part"])
             if plan["parts"]:
                 if not 1 <= refine_part <= len(plan["parts"]):
@@ -849,6 +962,7 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                                   timeout_seconds=max_part_minutes * 60, hbb_depot=hbb_depot)
                 if any("error" in r for r in (a, b)):
                     raise ValueError(f"Refine engine failure: {[r.get('error') for r in (a, b)]}")
+                refined_axis.update(validate_part_runs(plan, refine_part, a, b))
                 write_json(directory / "part.json", {"part": refine_part, "plan": plan,
                            "mesh_sha256": frozen.sha256, "backend": backend, "precision": precision,
                            "timing": {"hbb": engine_timing(a), "official": engine_timing(b)},
@@ -857,7 +971,6 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                 candidates.append(b)
                 completed.add(refine_part)
             final_ref, final_got = merge_runs(refs), merge_runs(candidates)
-            refined_axis = {f for index in completed for f in plan["parts"][index - 1]["frequencies_hz"]}
             report = score_pair(final_ref, final_got, frozen, settings,
                                 frequency_step=case.dense_step_hz, expected=True, refined_frequencies=refined_axis)
             local_reports = []

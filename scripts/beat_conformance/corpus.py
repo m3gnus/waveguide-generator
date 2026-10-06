@@ -42,6 +42,10 @@ class CorpusCase:
     expect_no_features: bool = False
     no_features_reason: str | None = None
     require_narrow: bool = False
+    narrow_band_hz: tuple[float, float] = (270., 285.)
+    narrow_columns: tuple[tuple[str, tuple[int, ...]], ...] = (
+        ("pressure_complex", (0,)), ("impedance_per_acceleration", (0,)))
+    expected_electrical_columns: tuple[int, ...] = ()
     require_cut_sensitivity: bool = False
     prominence_db: float = 1.
     max_vertices: int = 650
@@ -112,7 +116,9 @@ CASES = {case.name: case for case in (
     CorpusCase("narrow-resonance", "300 mm driven-end tube with 3 mm radius and small OSSE aperture; measured Q gate",
                "server/design/schema.py:DesignCommon.throat_ext_length", geometry="duct", quadrants=1,
                coarse_hz=tuple(float(f) for f in range(200, 401, 1)),
-               require_narrow=True, coarse_minutes=(2, 6), refine_minutes=(4, 10)),
+               # L_eff = 0.300 + 0.010 + 0.61 * (0.003 + 0.010*tan(2 deg)) m.
+               # c/(4*L_eff) = 274.8 Hz; bracket termination uncertainty.
+               require_narrow=True, narrow_band_hz=(270., 285.), coarse_minutes=(2, 6), refine_minutes=(4, 10)),
     CorpusCase("imported-two-sources", "Two independently driven CAD discs; channel order and source identity",
                "server/tests/test_cadlink_domain_automatic.py:_box/_bundle", geometry="imported-box",
                coarse_hz=tuple(float(f) for f in range(500, 2501, 10)),
@@ -124,7 +130,7 @@ CASES = {case.name: case for case in (
     CorpusCase("driver-loading", "Normal single-source CAD drive; P1 pressure loading and electrical driver coupling",
                "server/tests/test_cadlink_domain_automatic.py:_box/_bundle; server/tests/test_driver_lem.py:_spec",
                geometry="imported-box", coarse_hz=tuple(float(f) for f in range(20, 301, 2)),
-               coarse_minutes=(2, 5)),
+               coarse_minutes=(2, 5), expected_electrical_columns=(0,)),
     CorpusCase("non-45-cut", "30 degree diagonal cut, horizontal and vertical controls",
                "server/tests/test_cadlink_domain_automatic.py:_box/_bundle", geometry="imported-box",
                inclination_deg=30., require_cut_sensitivity=True,

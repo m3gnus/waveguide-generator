@@ -227,8 +227,26 @@ an explicit depot chain, with a fresh writable entry first. HBB does not inherit
 `WG2_BEAT_RUNTIME_DIR`, `WG2_BEAT_WORKER_DIR`, or `WG2_BEAT_JULIA`.
 Its depot comes exclusively from this flag, and its Julia executable from
 `--julia`. Official receives its own provisioned environment. Neither child
-receives ambient `BLAB_*` overrides. Both effective environments, restricted to
-runtime/depot/project/thread keys, are retained in raw evidence and identities.
+receives ambient `BLAB_*` overrides. The two effective depot chains must have
+**no shared entries**, including read-only caches; use distinct chains. Resolved
+paths (including symlink targets and the official default depot) are checked.
+Both children record sorted allow-listed dumps of every `JULIA_*`, `WG2_BEAT_*`,
+`HORNLAB_BEAT_*`, `BLAB_*`, `OPENBLAS_*`, `OMP_*`, and `MKL_*` variable, plus
+`VECLIB_MAXIMUM_THREADS` and `BLIS_NUM_THREADS`. In particular,
+`HORNLAB_BEAT_RUNTIME_DIR`, `HORNLAB_BEAT_WORKER_DIR`, and
+`HORNLAB_BEAT_FORCE_CPU` are retained for HBB, recorded, and compared across
+parts. Each child also records a SHA-256 of its full environment, excluding only
+`_`, `PWD`, `OLDPWD`, `SHLVL`, `TMPDIR`, `TMP`, and `TEMP` (shell/process
+bookkeeping and temporary locations). Non-allow-listed values are hashed, not
+dumped. Merging compares the allow-listed dump, rather than the full hash.
+
+Both engine distributions must be non-editable VCS installs with an exact
+40-character commit in `direct_url.json`; editable and directory-only installs
+refuse. HBB must additionally match the current WG pin.
+`--output-dir`, `--coarse-dir`, every `--refine-dir`, and every `--hbb-depot`
+entry must resolve outside the WG repository root, before any output is created.
+This keeps acquisition evidence and depot writes from dirtying the required
+clean tree.
 
 Official readiness is checked before meshing or either engine launch. The
 runtime root and complete Julia depot chain must match provisioning, status,
@@ -260,13 +278,13 @@ exact-revision official distribution, run:
 python -m scripts.beat_conformance.run_corpus \
   --case osse-quarter --backend cpu --precision float64 \
   --julia "$JULIA" --hbb-depot /private/tmp/wg-beat-corpus/hbb-depot \
-  --output-dir evidence/osse-quarter-dense --phase coarse
+  --output-dir /private/tmp/wg-beat-corpus/evidence/osse-quarter-dense --phase coarse
 
 python -m scripts.beat_conformance.run_corpus \
   --case osse-quarter --backend cpu --precision float64 \
   --julia "$JULIA" --hbb-depot /private/tmp/wg-beat-corpus/hbb-depot \
-  --output-dir evidence/osse-quarter-part-1 --phase refine \
-  --coarse-dir evidence/osse-quarter-dense --refine-part 1
+  --output-dir /private/tmp/wg-beat-corpus/evidence/osse-quarter-part-1 --phase refine \
+  --coarse-dir /private/tmp/wg-beat-corpus/evidence/osse-quarter-dense --refine-part 1
 ```
 
 The legacy names `coarse_hz`, `--phase coarse`, `coarse/`, `coarse-score.json`,
@@ -287,6 +305,8 @@ in **both engines on the dense sweep**. `refine-plan.json` uses their union.
 Each feature at `f[k]` contributes exactly `[f[k-1], f[k+1]]`. Only windows with
 intersecting interiors merge; touching endpoints alone do not merge windows.
 Each window's dyadic step is at most 0.25% of its own lowest feature frequency.
+The narrow case additionally caps the dyadic step at 0.25 Hz so even a
+grid-aligned Q=300 mode has multiple samples above -3 dB.
 The grid and exact dense neighbours remain Float32-wire representable and never
 extend outside the window. No reference features means
 `status="no_features_observed", passed=false`, unless the case predeclares
@@ -296,14 +316,19 @@ Refinement uses measured paired wall cost `c = hbb_wall/N + official_wall/N`.
 For each fresh part it additionally reserves the full measured dense pair wall
 `S` as conservative startup/serialization allowance (the amortized rate already
 includes startup). Its limit is
-`min(SolveOptions.num_frequencies.schema_max, floor((60*budget-S)/c))`;
+`min(MAX_EXPLICIT_FREQUENCIES, floor((60*budget-S)/c))`;
 the request schema currently allows 401 rows. The default budget is **8 minutes
 per paired part**, not a total refinement budget. A budget unable to fit three
-rows and startup refuses. Parts overlap by two rows. The recorded plan includes
+rows and startup writes `status="refine_budget_too_small"`, the window plan,
+and required minimum part minutes to `verdict.json`. Parts overlap by two rows. The recorded plan includes
 unique/acquired counts, per-part counts, total estimated minutes, and both timing
 records. Native logs are indexed by `frequency_hz`; overlapping rows must agree
-on backend, precision and numerical settings. Kernel timings and result samples
-are not settings. Array samples are joined verbatim without interpolation.
+on backend, precision and numerical settings, and every duplicate numeric row
+must agree within relative complex difference 1e-12 for float64 or 1e-6 for
+float32. Kernel timings are not settings. Array samples are joined verbatim
+without interpolation; a conflicting duplicate refuses rather than replacing
+an earlier sample. Refined coverage uses each engine's actual acquired axis,
+which must exactly match the frequencies planned for its recorded part.
 
 Each child timeout for the dense acquisition is the case's declared
 `coarse_minutes[1] * 60` seconds. Each refinement child timeout is
@@ -325,12 +350,20 @@ reference-defined 30 dB mask; nulls remain separately reported.
 The narrow case uses the existing 300 mm straight throat extension with a 3 mm
 radius, a 10 mm OSSE termination at 2 degrees, and a driven closed end. The
 small open aperture reduces radiation loss, unlike the old broad flare. The
-quarter-wave estimate is `343/(4*0.310) = 276.6 Hz`; `ka ~= 0.015` there.
+quarter-wave estimate includes the unflanged open-end correction `0.61*r`:
+`r ~= 0.003 + 0.010*tan(2 deg) = 0.00335 m`,
+`L_eff ~= 0.300 + 0.010 + 0.61*r = 0.31204 m`, and
+`f ~= 343/(4*L_eff) = 274.8 Hz`; `ka ~= 0.017` there.
+The declared `narrow_band_hz = [270, 285]` brackets termination uncertainty.
+Only on-axis pressure (flattened column 0, horizontal plane at 0 degrees) and
+normalized impedance (column 0) peaks inside this band count.
 Scoring requires a refined reference peak with measured absolute -3 dB
 crossings and `Q=f_peak/(f_right-f_left) >= 10`. A missing, unbracketed,
 dense-only or broad peak fails `resonance_not_narrow`. The peak must be acquired
-in refinement, and all samples spanning its measured -3 dB crossings must also
-come from refinement. Dense-only shoulders cannot establish the Q claim.
+in refinement, with at least two refined samples above its -3 dB level;
+single-sample spikes fail. Crossings use the merged dense+refined axis with
+linear interpolation in dB between adjacent samples. Dense-resolved crossings
+overestimate width, so Q errs low, conservatively.
 No theoretical Q is substituted for that measurement. Actual reference Q
 remains unverified in this review because numerical solves were prohibited.
 
@@ -338,6 +371,8 @@ remains unverified in this review because numerical solves were prohibited.
 0 degree horizontal and 90 degree vertical cuts. The reference diagonal must
 differ by **more than 0.5 dB from each control** somewhere within their common
 30 dB mask, otherwise scoring fails `cut_not_discriminating`.
+This sentinel proves asymmetry, not the exact 30 degree angle. The main
+comparison covers the angle through identical declared observation layouts.
 The two-disc fixture has unequal radii (10 and 12 mm) and unequal x/y offsets
 (-28,-12) and (19,17) mm. A channel swap is no longer a mirror-image ambiguity:
 source area/impedance and the vertical plane can discriminate it as well.
@@ -346,7 +381,9 @@ Its 20–300 Hz band brackets the unloaded driver resonance (~73 Hz) and its air
 load. Electrical impedance is read from `channels[id].impedance` only when
 `metadata.impedance_quantity == "electrical_input_impedance"`; production has
 already moved it out of `metadata.driver`. It participates in feature discovery,
-resonance matching, and the 0.01 dB / 0.1 degree norm budget.
+resonance matching, and the 0.01 dB / 0.1 degree norm budget. `driver-loading`
+declares `expected_resonance_columns["electrical_impedance_ohm"] = (0,)`:
+a featureless electrical reference fails even if pressure has structure.
 
 All cases request horizontal/vertical/diagonal cuts and a 9×16 full sphere at
 2 m. Only `sphere-traces` requests retained traces. Original WG fixtures and
@@ -438,7 +475,8 @@ the lowest interior dense frequency**, a conservative step/count example.
 Its count `M` includes both dense neighbours; `R=(M*c+60*D)/60` reserves a
 whole dense pair, as the code does with actual measured timings. Actual total
 refinement depends on the union of observed features and is recorded in
-`refine-plan.json`; it cannot be known without the prohibited solves. Each
+`refine-plan.json`. The **D+R table is a lower bound** based on one illustrative
+window, not a complete case budget. Each
 paired acquisition part remains capped at eight estimated minutes.
 
 | Case | Dense band / step Hz | N | c s/f | S s | Dense D min | Example M | Refine R min | D+R min |
@@ -446,7 +484,7 @@ paired acquisition part remains capped at eight estimated minutes.
 | osse-full | 500–3500 / 25 | 121 | 1.1474 | 14.915 | 2.56 | 51 | 3.54 | 6.10 |
 | osse-quarter | 500–3500 / 10 | 301 | 0.8604 | 11.185 | 4.50 | 21 | 4.80 | 9.31 |
 | rosse-half | 500–2500 / 10 | 201 | 1.7515 | 15.764 | 6.13 | 21 | 6.74 | 12.87 |
-| narrow-resonance | 200–400 / 1 | 201 | 1.1744 | 12.449 | 4.14 | 5 | 4.24 | 8.38 |
+| narrow-resonance | 200–400 / 1 | 201 | 1.1744 | 12.449 | 4.14 | 9 | 4.32 | 8.46 |
 | imported-two-sources | 500–2500 / 10 | 201 | 1.6497 | 14.813 | 5.77 | 21 | 6.35 | 12.12 |
 | imported-tilted-rear | 500–2500 / 10 | 201 | 1.5596 | 14.036 | 5.46 | 21 | 6.00 | 11.46 |
 | driver-loading | 20–300 / 2 | 141 | 1.0398 | 13.518 | 2.67 | 129 | 4.90 | 7.57 |
@@ -461,3 +499,73 @@ full runtime and official-bridge coverage passed **1202 tests**. `ruff check
 scripts server` and `git diff --check` passed. No Julia, numerical solve, or
 broker was run. The changed geometries were meshed in temporary directories
 and removed after inspection.
+
+
+## Corpus review round 2
+
+Both reviews found no false-pass mechanism. All ten requests are fixed; none
+is objected to. This round ran no Julia, numerical solves, or broker commands,
+and leaves changes uncommitted as requested.
+
+1. **Q sentinel — fixed**, because the declared 270–285 Hz quarter-wave mode
+   and columns now bound eligible peaks; the peak and at least two samples
+   above -3 dB must be refined, while merged-axis dB interpolation permits
+   conservative dense-resolved crossings. Real `refine_windows` regression
+   acquisitions cover aligned and off-grid Lorentzian Q=10, 30, 100, 300,
+   with the narrow case capped at 0.25 Hz to resolve Q=300. Regressions also
+   reject single-sample spikes, out-of-band peaks, and undeclared quantities/columns.
+2. **Repository paths — fixed**, because output, coarse, refine, and all HBB
+   depot entries resolve outside the repository before acquisition. Tests
+   include symlink aliases; examples now use external evidence directories.
+3. **Driver structure — fixed**, because electrical column 0 must have a
+   reference resonance; pressure structure cannot substitute for it.
+4. **Isolation/identity — fixed**, because any shared depot entry refuses,
+   including official defaults and read-only aliases. Every requested runtime
+   environment prefix is dumped in sorted order and compared across parts;
+   the full environment hash and its exact volatile exclusions are documented
+   above. HBB runtime/worker/force-CPU controls remain effective and recorded.
+5. **Official distribution — fixed**, because non-editable exact VCS metadata
+   is required; editable, directory-only, missing, and abbreviated commits refuse.
+6. **Comparator inputs — fixed**, because one-sided or expected-but-missing
+   electrical data raises, electrical/context arrays must be finite, and
+   window samples must lie on the common increasing context axis.
+7. **401 cap — fixed**, because `server.jobs.models.MAX_EXPLICIT_FREQUENCIES`
+   supplies the explicit-list validator and corpus planner; the already-equal
+   `num_frequencies` bounds share it with unchanged production semantics.
+8. **Small budget — fixed**, because successful dense acquisition followed by
+   an unusable part budget writes `refine_budget_too_small` in `verdict.json`,
+   with the complete window plan and required minimum part minutes.
+9. **Merge integrity — fixed**, because refined coverage comes from actual
+   HBB/official part axes checked exactly against the numbered plan. Duplicate
+   engine rows must agree elementwise within relative complex difference
+   1e-12 (float64) or 1e-6 (float32), using the larger magnitude as denominator;
+   zero pairs must match exactly. Conflicting values/presence refuse. The
+   duplicated `no_features_observed` block was removed.
+10. **Budget/cut documentation — fixed**, because the D+R table is explicitly
+    a lower bound, measured plans are listed below, and the cut sentinel's
+    asymmetry claim is distinguished from the layout's exact angle declaration.
+
+Existing dense-phase evidence under
+`/private/tmp/wg-beat-corpus-261006/corpus/*-coarse/refine-plan.json` reports:
+
+| Case | Planned refine frequencies | Parts |
+| --- | --- | --- |
+| osse-full | 105 | 1 |
+| osse-quarter | 76 | 1 |
+| rosse-half | 346 | 1 |
+| narrow-resonance | 5 | 1 |
+| imported-two-sources | 112 | 1 |
+| imported-tilted-rear | 104 | 1 |
+| driver-loading | 33 | 1 |
+
+These are measured dense-phase plan sizes (5–346 frequencies, all one part),
+not new solve results or proof of completed refinement. The supplied evidence
+has no `non-45-cut` or `sphere-traces` dense plan. Catalogue/identity changes in
+this review require fresh evidence for subsequent acquisition.
+
+Validation: the requested filtered suite, invoked through `scripts/run_tests.py`,
+passed **283 tests** (3119 deselected). Since `server/tests/test_jobs_models.py`
+is absent, the existing explicit-frequency validator coverage in
+`server/tests/test_jobs_luna.py` passed **11 tests** (41 deselected). The full
+comparator/runner tests passed **187 tests**. `ruff check scripts server` and
+`git diff --check` passed. These test counts describe separate, overlapping runs.

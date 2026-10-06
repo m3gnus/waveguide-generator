@@ -398,9 +398,13 @@ def test_corpus_merge_uses_real_rows_without_interpolation(frozen):
     settings = runner.settings_for(frozen, "cpu", "float32")
     a = evidence(frozen, (500., 1000.), settings, official=False)
     b = evidence(frozen, (750., 1000.), settings, official=False, gain=2.)
+    for field in runner.ARRAY_FIELDS:
+        if b["native"]["source"].get(field) is not None:
+            b["native"]["source"][field][1] = a["native"]["source"][field][1]
     merged = runner.merge_runs([a, b])
     assert merged["frequencies_hz"] == [500., 750., 1000.]
-    assert merged["native"]["source"]["pressure_complex"][2, 0, 0] == b["native"]["source"]["pressure_complex"][1, 0, 0]
+    assert merged["native"]["source"]["pressure_complex"][1, 0, 0] == b["native"]["source"]["pressure_complex"][0, 0, 0]
+    assert merged["native"]["source"]["pressure_complex"][2, 0, 0] == a["native"]["source"]["pressure_complex"][1, 0, 0]
 
 
 @pytest.mark.parametrize("case", corpus.CASES.values(), ids=lambda c: c.name)
@@ -445,6 +449,9 @@ def test_corpus_isolation_launches_sequential_children_with_separate_environment
     monkeypatch.setenv("JULIA_LOAD_PATH", "/official/load")
     monkeypatch.setenv("JULIA_PROJECT", "/official/project")
     monkeypatch.setenv("BLAB_TEST_OVERRIDE", "unsafe")
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", "/hbb/runtime")
+    monkeypatch.setenv("HORNLAB_BEAT_WORKER_DIR", "/hbb/workers")
+    monkeypatch.setenv("HORNLAB_BEAT_FORCE_CPU", "1")
     clock = iter((0., 8., 8., 13.))
     monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
     calls = []
@@ -471,6 +478,12 @@ def test_corpus_isolation_launches_sequential_children_with_separate_environment
         assert options["start_new_session"]
         env = options["env"]
         assert "BLAB_TEST_OVERRIDE" not in env
+        assert env["HORNLAB_BEAT_RUNTIME_DIR"] == "/hbb/runtime"
+        assert env["HORNLAB_BEAT_WORKER_DIR"] == "/hbb/workers"
+        assert env["HORNLAB_BEAT_FORCE_CPU"] == "1"
+        run = candidate if i else reference
+        assert run["environment"] == runner.relevant_environment(env)
+        assert run["environment_sha256"] == runner.environment_sha256(env)
         if i:
             assert env["WG2_BEAT_RUNTIME_DIR"] == str(tmp_path / "official-runtime")
             assert env["WG2_BEAT_WORKER_DIR"] == str(tmp_path / "official-workers")
@@ -947,3 +960,196 @@ def test_corpus_refine_refuses_legacy_coarse_declaration(frozen, tmp_path):
         runner.run_case(frozen.case, tmp_path / "new", phase="refine", coarse_dir=old,
                         backend="cpu", precision="float32", julia="fake",
                         pair_runner=lambda *a, **k: pytest.fail("engine started"))
+
+
+@pytest.mark.parametrize("q", [10, 30, 100, 300])
+@pytest.mark.parametrize("center", [280., 280.125])
+@pytest.mark.parametrize("quantity", ["pressure_complex", "impedance_per_acceleration"])
+def test_corpus_q_real_refine_windows_resolve_lorentzians(q, center, quantity):
+    case = corpus.CASES["narrow-resonance"]
+    def response(axis):
+        levels = -10 * np.log10(1 + (2 * q * (axis - center) / center)**2)
+        result = planning_reference(axis, levels if quantity == "pressure_complex" else np.zeros(len(axis)))
+        if quantity == "impedance_per_acceleration":
+            result = replace(result, impedance_per_acceleration=10**(levels / 20) / axis)
+        return result
+    dense = np.asarray(case.coarse_hz)
+    plan = runner.refine_windows({"source": response(dense)}, case, timing=planning_timing())
+    refined = {f for part in plan["parts"] for f in part["frequencies_hz"]}
+    axis = np.asarray(sorted(set(dense) | refined))
+    sentinel = runner.narrowness_sentinel({"source": response(axis)}, 1., refined,
+                                          band_hz=case.narrow_band_hz, columns=case.narrow_columns)
+    assert sentinel["passed"], sentinel
+    assert {f["quantity"] for f in sentinel["features"]} == {quantity}
+    if q <= 100:
+        # Wider shoulders lie outside the real neighbour refinement window.
+        feature = sentinel["features"][0]
+        assert feature["crossings_hz"][0] < min(refined)
+        assert feature["crossings_hz"][1] > max(refined)
+
+
+@pytest.mark.parametrize("mode", ["single_sample", "outside_band", "wrong_column", "electrical_only"])
+def test_corpus_q_requires_supported_declared_mode(mode):
+    case = corpus.CASES["narrow-resonance"]
+    dense = np.asarray(case.coarse_hz)
+    center = 330.25 if mode == "outside_band" else 280.
+    def response(axis):
+        levels = -10 * np.log10(1 + (60 * (axis - center) / center)**2)
+        if mode == "single_sample":
+            levels = np.where(axis == center, 30., 0.)
+        result = planning_reference(axis, levels)
+        if mode == "wrong_column":
+            result = replace(result, pressure_complex=np.column_stack((np.ones(len(axis)), result.pressure_complex)))
+        elif mode == "electrical_only":
+            result = replace(result, pressure_complex=np.ones(len(axis)), electrical_impedance_ohm=result.pressure_complex)
+        return result
+    plan = runner.refine_windows({"source": response(dense)}, case, timing=planning_timing())
+    refined = {f for part in plan["parts"] for f in part["frequencies_hz"]}
+    axis = np.asarray(sorted(set(dense) | refined))
+    assert not runner.narrowness_sentinel({"source": response(axis)}, 1., refined)["passed"]
+
+
+@pytest.mark.parametrize("option", ["output", "coarse", "refine", "depot"])
+def test_corpus_paths_inside_repository_refuse_up_front(monkeypatch, tmp_path, option):
+    root = tmp_path / "repo"
+    root.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(root, target_is_directory=True)
+    monkeypatch.setattr(runner, "ROOT", root)
+    kwargs = {"coarse_dir": alias / "old"} if option == "coarse" else (
+        {"refine_dirs": (alias / "part",)} if option == "refine" else (
+            {"hbb_depot": str(tmp_path / "hbb") + ":" + str(alias / "depot")} if option == "depot" else {}))
+    output = alias / "out" if option == "output" else tmp_path / "external"
+    with pytest.raises(ValueError, match="outside the WG repository root"):
+        runner.run_case(corpus.CASES["osse-full"], output, backend="cpu", precision="float32", julia="forbidden",
+                        freezer=lambda *a, **k: pytest.fail("meshing started"), **kwargs)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("default_depot", [False, True])
+def test_corpus_depot_chains_refuse_shared_entries_even_read_only(monkeypatch, tmp_path, default_depot):
+    from server.solver.beat_runtime import paths
+    shared = tmp_path / "runtime" / "wg-beat-engine" / "depot"
+    shared.mkdir(parents=True)
+    alias = tmp_path / "alias"
+    alias.symlink_to(shared, target_is_directory=True)
+    monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
+    if default_depot:
+        monkeypatch.delenv("JULIA_DEPOT_PATH", raising=False)
+        assert paths.runtime_dir() / "depot" == shared
+    else:
+        monkeypatch.setenv("JULIA_DEPOT_PATH", str(tmp_path / "official") + ":" + str(shared))
+    for official in (False, True):
+        with pytest.raises(ValueError, match="distinct chains.*read-only"):
+            runner.child_environment(official=official, julia="forbidden", hbb_depot=str(tmp_path / "hbb") + ":" + str(alias))
+
+
+@pytest.mark.parametrize("key", ["JULIA_CPU_TARGET", "WG2_BEAT_OTHER", "HORNLAB_BEAT_RUNTIME_DIR",
+                                 "HORNLAB_BEAT_WORKER_DIR", "HORNLAB_BEAT_FORCE_CPU", "BLAB_TEST",
+                                 "OPENBLAS_CORETYPE", "OMP_PROC_BIND", "MKL_DYNAMIC"])
+def test_corpus_environment_allowlist_records_and_merge_compares_every_prefix(frozen, key):
+    env = {"PATH": "/bin", key: "one"}
+    dump = runner.relevant_environment(env)
+    assert dump == {key: "one"}
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    a, b = [evidence(frozen, (500., 510., 520.), settings, official=False) for _ in range(2)]
+    a["environment"] = dump
+    b["environment"] = runner.relevant_environment(dict(env, **{key: "two"}))
+    with pytest.raises(ValueError, match="environment"):
+        runner.merge_runs([a, b])
+
+
+def test_corpus_full_environment_hash_is_sorted_and_excludes_only_documented_volatile_keys():
+    env = {"PATH": "/bin", "SECRET_SETTING": "value", "HORNLAB_BEAT_FORCE_CPU": "1"}
+    digest = runner.environment_sha256(env)
+    assert len(digest) == 64
+    assert runner.environment_sha256(dict(reversed(list(env.items())))) == digest
+    for key in runner.VOLATILE_ENV_KEYS:
+        assert runner.environment_sha256(dict(env, **{key: "volatile"})) == digest
+    assert runner.environment_sha256(dict(env, SECRET_SETTING="changed")) != digest
+
+
+@pytest.mark.parametrize("direct", [{"dir_info": {"editable": True}, "vcs_info": {"commit_id": "a" * 40}},
+                                   {"dir_info": {}}, {}, {"vcs_info": {"commit_id": "abc"}}])
+def test_corpus_official_identity_refuses_editable_or_non_vcs_distribution(direct):
+    with pytest.raises(ValueError, match="non-editable.*exact VCS commit"):
+        runner.require_distribution_identity({"revision": "a" * 40, "direct_url": direct}, "beat-engine")
+
+
+def test_corpus_official_identity_accepts_exact_noneditable_vcs_distribution():
+    runner.require_distribution_identity({"revision": "a" * 40, "direct_url": {"vcs_info": {"commit_id": "a" * 40}}}, "beat-engine")
+
+
+def test_corpus_driver_declares_electrical_structure_even_with_pressure_features(frozen):
+    assert corpus.CASES["driver-loading"].expected_electrical_columns == (0,)
+    case = replace(frozen.case, expected_electrical_columns=(0,))
+    frozen = replace(frozen, case=case)
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    runs = [evidence(frozen, case.coarse_hz, settings, official=value) for value in (False, True)]
+    for run in runs:
+        run["native"]["source"]["pressure_complex"][5] *= 3
+        run["native"]["source"]["electrical_impedance_ohm"] = np.ones(len(case.coarse_hz), complex)
+    report = runner.score_pair(*runs, frozen, settings, expected=True, frequency_step=case.dense_step_hz)
+    assert not report["passed"]
+    assert "reference has no expected resonances" in str(report["channels"]["source"]["failures"])
+
+
+def test_corpus_small_budget_after_dense_writes_verdict_and_plan(frozen, tmp_path):
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    calls = []
+    def pair(frozen, frequencies, directory, **kwargs):
+        calls.append(directory)
+        runs = [evidence(frozen, frequencies, settings, official=value) for value in (False, True)]
+        for run in runs:
+            run["native"]["source"]["pressure_complex"][5] *= 3
+        return tuple(runs)
+    output = tmp_path / "run"
+    verdict = runner.run_case(frozen.case, output, backend="cpu", precision="float32", julia="forbidden",
+                              max_part_minutes=.01, freezer=lambda *a, **k: frozen, pair_runner=pair)
+    assert verdict["status"] == "refine_budget_too_small" and not verdict["passed"]
+    assert runner.read_json(output / "verdict.json") == verdict
+    assert runner.read_json(output / "refine-plan.json") == verdict["plan"]
+    assert verdict["plan"]["windows"] and verdict["required_minutes"] > .01
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("precision,tolerance", [("float32", 1e-6), ("float64", 1e-12)])
+@pytest.mark.parametrize("field", runner.ARRAY_FIELDS)
+def test_corpus_merge_checks_overlapping_numeric_rows(frozen, precision, tolerance, field):
+    settings = runner.settings_for(frozen, "cpu", precision)
+    a = evidence(frozen, (500., 510., 520.), settings, official=False)
+    b = evidence(frozen, (510., 520., 530.), settings, official=False)
+    for run in (a, b):
+        run["native"]["source"][field] = np.ones((3, 2), complex)
+    b["native"]["source"][field][0, 1] += .5j * tolerance
+    runner.merge_runs([a, b])
+    b["native"]["source"][field][0, 1] += 2j * tolerance
+    with pytest.raises(ValueError, match="overlapping numeric"):
+        runner.merge_runs([a, b])
+
+
+@pytest.mark.parametrize("wrong", ["part", "hbb_axis", "official_axis", "native_axis"])
+def test_corpus_refine_part_uses_actual_planned_axes(frozen, wrong):
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    a, b = [evidence(frozen, (500., 510., 520.), settings, official=value) for value in (False, True)]
+    plan = {"parts": [{"frequencies_hz": [500., 510., 520.]}, {"frequencies_hz": [510., 520., 530.]}]}
+    assert runner.validate_part_runs(plan, 1, a, b) == {500., 510., 520.}
+    if wrong == "hbb_axis":
+        a["frequencies_hz"] = [500., 520.]
+    elif wrong == "official_axis":
+        b["frequencies_hz"] = [500., 520., 530.]
+    elif wrong == "native_axis":
+        b["native"]["source"]["frequencies_hz"] = [500., 520., 530.]
+    with pytest.raises(ValueError, match="planned frequencies"):
+        runner.validate_part_runs(plan, 2 if wrong == "part" else 1, a, b)
+
+
+def test_corpus_explicit_frequency_limit_is_shared_with_validator():
+    from server.jobs.models import MAX_EXPLICIT_FREQUENCIES, SolveOptions
+    assert runner.FREQUENCY_LIMIT == MAX_EXPLICIT_FREQUENCIES == 401
+    assert len(SolveOptions(frequencies_hz=list(range(1, MAX_EXPLICIT_FREQUENCIES + 1))).frequencies_hz) == 401
+    with pytest.raises(ValueError, match="at most 401"):
+        SolveOptions(frequencies_hz=list(range(1, MAX_EXPLICIT_FREQUENCIES + 2)))
+    assert SolveOptions(num_frequencies=401).num_frequencies == 401
+    with pytest.raises(ValueError):
+        SolveOptions(num_frequencies=402)

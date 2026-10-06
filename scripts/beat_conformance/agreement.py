@@ -146,6 +146,33 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
     are fixed here; the scan step and physical prominence are declared by the
     corpus owner before running either engine.
     """
+    # Structural input errors are caller errors, not numerical disagreement.
+    pairs = [("result", (reference, candidate))]
+    if resonance_context is not None:
+        pairs.append(("context", resonance_context))
+    expected_electrical = bool((expected_resonance_columns or {}).get("electrical_impedance_ohm"))
+    for label, pair in pairs:
+        present = [r.electrical_impedance_ohm is not None for r in pair]
+        if present[0] != present[1] or (expected_electrical and not all(present)):
+            raise ValueError(f"Both {label} sides require electrical_impedance_ohm when present or expected")
+        for result in pair:
+            if result.electrical_impedance_ohm is not None:
+                _columns(result.electrical_impedance_ohm, len(result.frequencies_hz), "electrical_impedance_ohm")
+        if all(present) and np.shape(pair[0].electrical_impedance_ohm) != np.shape(pair[1].electrical_impedance_ohm):
+            raise ValueError(f"{label} electrical_impedance_ohm shapes differ")
+    if resonance_context is not None:
+        context_axis = np.asarray(resonance_context[0].frequencies_hz, dtype=float)
+        if (context_axis.ndim != 1 or len(context_axis) < 3 or not np.isfinite(context_axis).all()
+                or np.any(context_axis <= 0) or np.any(np.diff(context_axis) <= 0)
+                or not np.array_equal(context_axis, resonance_context[1].frequencies_hz)):
+            raise ValueError("Resonance context axes must be identical, finite and increasing")
+        for result in (reference, candidate):
+            if not np.isin(result.frequencies_hz, context_axis).all():
+                raise ValueError("Window axis must lie on the resonance context axis")
+        for name in ("pressure_complex", "impedance_per_acceleration", "di_db", "power_w"):
+            a, b = (_columns(getattr(r, name), len(context_axis), f"context {name}") for r in resonance_context)
+            if a.shape != b.shape:
+                raise ValueError(f"Context {name} shapes differ")
     report: dict[str, Any] = {"passed": False, "failures": [], "limitations": [], "metrics": {},
                              "reference_revision": reference.revision, "candidate_revision": candidate.revision,
                              "frequency_step": frequency_step_hz}
@@ -261,12 +288,12 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
                 raise ValueError("Resonance context axes differ")
             bounds = (float(frequencies[0]), float(frequencies[-1]))
             gate_arrays = {
-                "pressure_complex": tuple(np.asarray(r.pressure_complex).reshape(len(gate_frequencies), -1)
+                "pressure_complex": tuple(_columns(r.pressure_complex, len(gate_frequencies), "context pressure_complex")
                                           for r in resonance_context),
-                "normalized_impedance": tuple(np.asarray(r.impedance_per_acceleration).reshape(len(gate_frequencies), -1)
+                "normalized_impedance": tuple(_columns(r.impedance_per_acceleration, len(gate_frequencies), "context impedance_per_acceleration")
                     * (-1j * 2 * np.pi * gate_frequencies[:, None]) / rho_c for r in resonance_context)}
             if all(r.electrical_impedance_ohm is not None for r in resonance_context):
-                gate_arrays["electrical_impedance_ohm"] = tuple(np.asarray(r.electrical_impedance_ohm).reshape(len(gate_frequencies), -1)
+                gate_arrays["electrical_impedance_ohm"] = tuple(_columns(r.electrical_impedance_ohm, len(gate_frequencies), "context electrical_impedance_ohm")
                                                                for r in resonance_context)
         quantities = {"pressure_complex", "normalized_impedance", "electrical_impedance_ohm"}
         for name in sorted(quantities & gate_arrays.keys()):

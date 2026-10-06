@@ -14,6 +14,9 @@ from server.design.defaults import default_sweep_start_hz
 from server.design.schema import DesignConfig
 
 
+MAX_EXPLICIT_FREQUENCIES = 401
+
+
 class PolarConfig(JobModel):
     """Directivity observation contract shared by every solve engine."""
 
@@ -163,7 +166,7 @@ class SolveOptions(JobModel):
     solver_mode: Literal["auto", "full_3d", "circsym"] = "full_3d"
     symmetry: str = "auto"
     frequency_range: list[float] | None = None
-    num_frequencies: int | None = Field(default=None, ge=1, le=401)
+    num_frequencies: int | None = Field(default=None, ge=1, le=MAX_EXPLICIT_FREQUENCIES)
     frequency_spacing: Literal["log", "linear"] = "log"
     # Explicit sweep points, solved verbatim instead of a generated grid. The
     # BEM cost per point is flat (same-size matrix at every frequency), so this
@@ -250,8 +253,8 @@ class SolveOptions(JobModel):
             )
         if not self.frequencies_hz:
             raise ValueError("frequencies_hz must contain at least one frequency")
-        if len(self.frequencies_hz) > 401:
-            raise ValueError("frequencies_hz must contain at most 401 frequencies")
+        if len(self.frequencies_hz) > MAX_EXPLICIT_FREQUENCIES:
+            raise ValueError(f"frequencies_hz must contain at most {MAX_EXPLICIT_FREQUENCIES} frequencies")
         if not all(math.isfinite(value) for value in self.frequencies_hz):
             raise ValueError("frequencies_hz values must be finite")
         if any(value <= 0 for value in self.frequencies_hz):
@@ -278,7 +281,7 @@ class SolveOptionsResponse(SolveOptions):
     solver_mode: Literal["auto", "full_3d", "circsym"]
     symmetry: str
     frequency_range: list[float] | None
-    num_frequencies: int | None = Field(ge=1, le=401)
+    num_frequencies: int | None = Field(ge=1, le=MAX_EXPLICIT_FREQUENCIES)
     frequency_spacing: Literal["log", "linear"]
     frequencies_hz: list[float] | None
     verbose: bool
