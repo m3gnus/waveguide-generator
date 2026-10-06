@@ -582,6 +582,10 @@ The jobs API also accepts the WG UI's displayed press directly:
 - `POST /api/jobs/{job_id}/approvals` takes `{preparation_id, finding_ids}`.
   It records only blocking findings on that refused job's exact preparation,
   without solving. A different preparation is a 422, as on the operation shim.
+- `POST /api/jobs/{job_id}/dismiss` dismisses a CAD solve that was never bound:
+  it deletes the refused job and its refused ancestors in one transaction, as
+  the compatibility Dismiss does, so a reconnect cannot bring a parent back. A
+  solve still preparing is a 409 (stop it first); so is a job with a request.
 
 Both solve routes return `SolveAccepted {job_id}`. Unknown jobs, ingests and
 setup revisions are 404; a missing retained snapshot is 409. New work during
@@ -718,9 +722,11 @@ The lane does not write a second outcome after binding.
    and `approves the exact preparation then continues with those approvals, without operation calls`.
 2. Met: a bound CAD retry carries its inputs and adds `retried_from`, dropping
    `refusal`, `solve_again_press_sha256`, `last_stage` and `manual_waiting`.
-   Solve again carries the recorded frame too. Tests:
+   Solve again carries the recorded frame too, unless the press names another
+   axis; binding then records the new frame. Tests:
    `test_f2_bound_cad_retry_carries_inputs_without_the_parents_lifecycle` and
-   `test_f2_solve_again_carries_setup_frame_preparation_and_operation`.
+   `test_f2_solve_again_carries_setup_frame_preparation_and_operation` and
+   `test_f2_solve_again_with_another_axis_does_not_carry_the_parents_frame`.
 3. Met: run details use `cad_provenance.operation_id`, then
    `cad_intent.operation_id`, or retained imported geometry. They do not parse
    a submission key. Tests:
@@ -730,6 +736,51 @@ The lane does not write a second outcome after binding.
    already knows them, and summaries read the job when binding happens later.
    Tests: `test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis`
    and `test_f2_early_ledger_acceptance_reads_provenance_from_the_later_bound_job`.
+
+**What the frontend coordinator still owns.** Stage 5 also deletes the frontend's CAD
+operation machinery and the live layer. Send makes no job, so several things the
+coordinator guarantees have no job equivalent and need an owner and a test first.
+Rows marked *job* moved with S4-F2; the rest must be re-homed before deletion. Paths
+are under `frontend/src/` unless they start with `server/`. Tests are named as
+`file :: test`.
+
+| # | Guarantee (what the user sees) | Today | Job equivalent | Owner after Stage 5 | Covered today by | Replacement test needed |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | An accepted Send ingests and fronts its snapshot once, without a solve; a new Send id fronts the same model again | `shell/CadLinkCoordinator.tsx` (accepted-Send display), `stores/cadOperations.ts`, `server/cadlink/live/deliveries.py` | none | a retained Send receipt read model and a receipt-keyed display action | `CadLinkCoordinator.sends.test.tsx :: ingests and shows a new Send once…`, `:: brings a re-Send of the same model back to the front…` | receipt with no job; shown once across reload; new id fronts again |
+| 2 | A refused Send, or one whose folder entry is gone, is said, never dropped | `shell/CadLinkCoordinator.tsx` | none | receipt outcome fields and a CAD feedback store | `CadLinkCoordinator.sends.test.tsx :: says so when WG refused a Send…`, `:: says so when an accepted Send is no longer in the WGLink folder` | refusal recovered after reload; missing source vs unreadable vs retained copy |
+| 3 | Requests not about the model on screen sit under "Earlier requests (n)" | `shell/CadOperationsSection.tsx` | partial (solves are jobs; Fusion recovery is not) | a request selector joining jobs and recovery notices | `CadOperationsSection.onScreen.test.tsx :: gives a card only to the solve of the model on screen…` | mixed jobs and notices keep count, collapse, order, guarded project opening |
+| 4 | Dismiss and Clear all act on the named requests once and never claim a repair | `shell/CadOperationsSection.tsx`, `server/cadlink/api.py` | partial: solves use `POST /api/jobs/{id}/dismiss` | job dismiss plus recovery-notice dismissal | `CadLinkPanel.test.tsx :: holds Dismiss until its operation moves on…`, `:: dismisses the durable card without claiming that Fusion was repaired` | dismissal racing binding; reload cannot revive a dismissed request |
+| 5 | An older listing, ingest, Send display or mesh load never replaces a newer selection | `shell/cadlink/arrivals.ts`, `shell/CadLinkCoordinator.tsx`, `stores/cadReturn.ts` | none (job fencing is not selection fencing) | the existing selection and viewport generations | `CadLinkCoordinator.test.tsx :: keeps the newest rapid selection…`, `:: ignores an older return listing…`, `CadLinkCoordinator.sends.test.tsx :: never replaces a return the user selects while a Send is being displayed` | deferred responses that ignore abort; stale success/error cannot touch newer state |
+| 6 | After a reconnect, pending work reloads and missed outcomes of awaited requests are found | `stores/cadOperations.ts`, `shell/JobsCoordinator.tsx` | partial (solves: jobs) | jobs reconnect plus exact-id reads for non-solve receipts | `cadOperations.test.ts :: preserves an exact awaited solve across a failed recovery…` | a job ends while disconnected; failed recovery stays retryable |
+| 7 | Sends accepted before the page connected, or during an outage, are discovered | `stores/cadOperations.ts` (ten-minute window, 50 rows) | none | a cursor-based Send receipt feed | `cadInbox.test.ts :: recovers, on the first connection, a Send accepted before the page connected…`, `:: does not move the watermark past a Send when a recovery fails…` | more than 50 receipts; restart; overlapping and failed pages |
+| 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` | *job* | job/client-request-keyed claims | `JobsCoordinator.mutex.test.tsx`, `M1Acceptance.test.tsx :: makes no second job and no second result…` | — |
+| 9 | A pinned result stays until the new run has results; Results is revealed once, only if the user has not navigated | `api/results.ts`, `shell/ResultsPanel.tsx`, `shell/solveAttention.ts` | yes | unchanged | `ResultsPanel.transition.test.tsx`, `solveAttention.test.tsx` | — |
+| 10 | With coordination off, idle CAD work makes no routine reads; events and moving work resume them | `shell/CadLinkCoordinator.tsx`, `server/cadlink/api.py` | none | a CAD observation scheduler reading job and request activity | `CadLinkCoordinator.pollGate.test.tsx :: off, nothing in flight…`, `:: off: a parked operation that moves on again brings the reads back` | idle silence, wake-ups, hidden-page suppression |
+| 11 | A held Fusion status ages into "last report" and a superseded read cannot drive an action | `shell/CadLinkCoordinator.tsx`, `shell/cadWorkflowView.ts` | none | a timestamped connection-observation store | `CadLinkCoordinator.pollGate.test.tsx :: off: a fresh status held while idle stops claiming "Matches Fusion"…`, `CadLinkCoordinator.test.tsx :: refuses rather than deciding from a status another read has already replaced` | TTL without traffic; overlapping reads |
+| 12 | The model view shows the solver mesh at once and swaps in the full tessellation when ready | `shell/CadLinkCoordinator.tsx`, `server/cadlink/api.py` | none (before a solve) | an ingest-keyed artifact loader | `CadLinkPanel.test.tsx :: shows the solve mesh at once when the display tessellation is still building…`, `CadLinkCoordinator.test.tsx :: never lets a display mesh finishing for one model cancel…` | missed readiness event; newer selection wins |
+| 13 | The solver-mesh view shows the exact verified solve triangles in its own slot | `shell/CadLinkCoordinator.tsx`, `viewport/importedMeshStore.ts` | none | separate ingest-keyed `cad` and `cadSolver` slots | `importedMeshStore.test.ts :: drops the CAD solve mesh with the CAD geometry it belongs to` | solver view never fetches tessellation |
+| 14 | Delivery health explains a disabled, declining or hung intake; a healthy idle one is quiet | `shell/CadDeliveryHealth.tsx`, `server/cadlink/api.py` | none (fails before a job) | the server's delivery-health projection and its own frontend store | `CadDeliveryHealth.test.tsx` | survives removal of the operation store |
+| 15 | Intake refusals with no operation or job stay visible and deduplicated, also for a late page | `stores/cadOperations.ts`, `shell/CadDeliveryHealth.tsx` | none | a bounded server refusal log and per-window seen state | `cadInbox.test.ts :: keeps a refusal pushed on the jobs channel`, `CadDeliveryHealth.test.tsx :: lists refusals the server kept for a page that connected late` | refusal after reconnect counted once |
+| 16 | An interrupted Insert/Update is loud only for the active Fusion document, settles from evidence, and Dismiss never repeats it | `shell/CadOperationsSection.tsx`, `server/cadlink/fusion_outcomes.py`, `server/cadlink/live/requests.py` | none | a durable Fusion mutation-recovery read model | `CadOperationsSection.onScreen.test.tsx :: makes a recovery loud only while the active Fusion document reports it…`, `CadLinkPanel.test.tsx :: settles a recovery card from Fusion evidence…` | restart restores the notice; evidence alone settles it |
+| 17 | Sending WG changes picks guarded Insert/Update from current evidence, confirms a two-way conflict and fences late identity adoption | `shell/cadlink/send.ts`, `shell/CadLinkCoordinator.tsx` | none | an outbound-command controller and the connection store | `CadLinkCoordinator.test.tsx :: runs the send guards against the link the folder picker revealed…`, `:: parks a both-changed send on the conflict dialog…` | every entry point shares the guards |
+| 18 | Solve captures the snapshot and settings on screen before any await, under the right project | `shell/JobsCoordinator.tsx`, `shell/cadOnScreenSettings.ts` | *job* (press captured into `POST /api/jobs/cad-solve`) | unchanged capture, job submission | `JobsCoordinator.mutex.test.tsx :: uses the clicked settings while the fresh Advanced plan is pending`, `CadLinkCoordinator.test.tsx :: records the settings on screen only for the model, ingestion and project they belong to` | — |
+| 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | `stores/cadSolverFrame.ts`, `shell/JobsCoordinator.tsx` | *job* (axis passed explicitly) | the ingest-keyed frame store | `cadSolverFrame.test.ts`, `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` | — |
+| 20 | Only deliberate settings edits publish a project setup, with retries and correct-project flushing | `shell/cadSetupPublisher.ts` | none (not tied to a job) | the publisher, mounted outside the coordinator | `cadSetupPublisher.test.ts` | publisher mounts without the coordinator |
+| 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | `stores/cadReturn.ts` | none | the project/inventory-keyed profile store | `cadReturn.test.ts :: carries the solve setup across a same-inventory arrival`, `:: resets fully when an arrival changes the source inventory` | Send receipts use the same rules |
+| 22 | A return for another project never replaces the parametric design or its undo history | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts` | none | selection policy keyed by design/project | `CadLinkCoordinator.test.tsx :: refuses an arriving return that names a design the open model is not`, `CadLinkCoordinator.sends.test.tsx :: displaying a new Send leaves the parametric design and its undo history as they were` | recovered receipt for another project |
+| 23 | Entering an empty CAD mode reopens the remembered project only while still empty | `shell/cadlink/restores.ts` | none | project memory plus a guarded restore effect | `CadLinkCoordinator.test.tsx :: reopens the remembered CAD project when the mode comes back empty`, `:: never restores over a selection the listing already made` | late reads cannot overwrite a selection |
+| 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick | `shell/cadlink/restores.ts` | partial (`cad_source`, `cad_setup` on the job) | a job-model restore action | `CadLinkCoordinator.test.tsx :: restores driver, crossover, mesh, and sweep inputs from a historical CAD run`, `:: keeps the newest archived CAD run…` | restore with the coordinator absent |
+| 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout | `shell/cadlink/arrivals.ts`, `server/cadlink/api.py` | none (a correlation id, not a job) | a request-id return waiter | `CadLinkCoordinator.test.tsx :: resolves a pull with the exact correlated arrival and times the wait out`, `:: ends a pull the moment Fusion refuses it…` | settles once under manual supersession |
+| 26 | Onshape returns stay ingestible with their own origin, without Fusion-folder polling | `shell/CadLinkCoordinator.tsx`, `shell/cadlink/arrivals.ts` | none | an origin-aware Onshape return action (behind its build flag) | `CadLinkCoordinator.test.tsx :: skips the Fusion returns poll while Onshape is selected` | coordinator absent |
+| 27 | Retries and reloads keep one solve identity; a waiting solve for the snapshot is continued, not duplicated | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` | *job* | client request id and `/solve-again` | `M1bSolveCard.test.tsx`, `JobsCoordinator.mutex.test.tsx :: continues a request for the model on screen that waits for its first settings…` | — |
+| 28 | The solve card shows the latest request for its snapshot, never a previous run's outcome | `shell/CadSolveCard.tsx`, `shell/CadOperationsSection.tsx` | *job* (`cad_state`) | the job selector | `CadSolveCard.test.tsx :: never shows a previous run's outcome under a new request for the same snapshot` | — |
+| 29 | Solve again continues a refused solve with its inputs and approvals; repeated presses share one child | `server/jobs/runtime.py`, `jobs/cadSolve.ts` | *job* | `/solve-again` | `server/tests/test_job_cad_lane.py :: test_two_solve_again_presses_share_one_continuation` | — |
+| 30 | A newly actionable request fronts CAD Link only while the user has not navigated away | `shell/solveAttention.ts` | partial (solve gates: jobs; recovery: row 16) | job attention plus a recovery-notice observer | `solveAttention.test.tsx :: does not yank a user who navigated after the request arrived…` | recovery changes stay discoverable |
+
+Two limits hold today and must survive the move: an accepted Send whose folder entry
+has gone is reported, not opened from the retained copy; and first-connection
+discovery looks back ten minutes and reads 50 terminal operations, so discovery
+across a long outage is not guaranteed.
 
 ## The `preparing` job status
 
