@@ -18,6 +18,10 @@ from server.solver.beat_runtime import cleanup, host, ipc, registry as r, spawn
 
 def test_production_spawn_ignores_test_worker_environment(launch, monkeypatch):
     key, directory, children = launch
+    # Other tests may legitimately import the installed engine; prove that this
+    # spawn path does not, independent of test order.
+    for name in [name for name in sys.modules if name == 'beat_engine' or name.startswith('beat_engine.')]:
+        monkeypatch.delitem(sys.modules, name)
     monkeypatch.setattr(spawn, 'HOST_MODULE', 'server.solver.beat_runtime.host')
     monkeypatch.setenv('WG2_BEAT_TEST_WORKER', 'builtins:dict')
     monkeypatch.setenv('WG2_BEAT_TEST_OTHER', 'injected')
