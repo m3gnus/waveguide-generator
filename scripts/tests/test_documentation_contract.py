@@ -177,6 +177,7 @@ def test_the_three_gatekeeper_texts_say_the_same_thing() -> None:
 
     surfaces = {
         "README.md": _read("README.md"),
+        "docs/INSTALL.md": _read("docs/INSTALL.md"),
         "release notes": _read(".github/workflows/release.yml"),
         "READ ME FIRST.txt": BundleBuilder(
             ROOT, system=lambda: "Darwin", machine=lambda: "arm64"
@@ -237,7 +238,7 @@ def test_the_readme_never_sends_anyone_to_open_anyway_for_the_app() -> None:
     no dialog at all. Gatekeeper assesses quarantined items; nothing else.
     """
 
-    launch = _between(_read("README.md"), "## Launch", "## Run the server directly (dev)")
+    launch = _between(_read("docs/INSTALL.md"), "## Launch", "## Run the server directly (dev)")
     normalized = " ".join(launch.split())
 
     assert "Open Anyway" not in launch

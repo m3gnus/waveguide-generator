@@ -49,6 +49,33 @@ The retired application is preserved on `origin/v1`; use immutable Git objects f
 that branch when legacy behavior must be rechecked. A removed sibling checkout is not
 a valid runtime dependency.
 
+## Building the frontend and running the tests
+
+Build the frontend **before running the Python tests**, including on a fresh
+clone. The server mounts `frontend/dist`, which is generated and not checked in.
+From the repository root, using Node 20:
+
+```bash
+npm --prefix frontend ci
+npm --prefix frontend run build
+.venv/bin/python -m pytest server/tests scripts/tests -v
+```
+
+On Windows use `.venv\Scripts\python.exe` for the Python command. Tests that
+exercise the Tk status view require an importable Tk installation; those view
+tests skip explicitly when Tk cannot load; controller tests that do not import
+the view still run. A missing frontend build stops the server suite once with
+the build commands, rather than failing each app-constructing test separately.
+
+JS frame codec (explicit file path — directory mode trips the node runner): `node --test shared/js/frame.test.mjs`
+
+Frontend unit tests: `npm --prefix frontend test`
+
+Real solves are never run in hosted CI; Metal and bempp parity run on owned
+qualification hardware, and their archived reports back the release gates. Use
+the [solver release qualification checklist](validation/SOLVER-QUALIFICATION.md)
+for the mandatory macOS, Windows, full/quarter, and cross-solver runs.
+
 ## Verification
 
 Run checks in proportion to the change:

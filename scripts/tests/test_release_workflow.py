@@ -67,8 +67,7 @@ def test_the_tag_is_created_after_the_assets_and_before_publication() -> None:
 
 
 def test_release_instructions_are_two_phases_that_tag_last() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    release = readme.split("## Releasing", 1)[1].split("## License", 1)[0]
+    release = (ROOT / "docs" / "RELEASING.md").read_text(encoding="utf-8")
 
     bump = release.index("release.sh waveguide-generator patch")
     publish = release.index("release.sh waveguide-generator publish")

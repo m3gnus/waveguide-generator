@@ -454,11 +454,11 @@ def test_the_backend_check_asks_the_capability_probes_not_an_import():
 def test_the_backend_check_runs_standalone():
     # v1 exposed this as an npm script. v2 has no package.json at the root, so
     # the equivalent promise is that the file is directly runnable and the
-    # README says so.
+    # install guide says so.
     source = read(ROOT / "scripts" / "check_backends.py")
     assert source.startswith("#!/usr/bin/env python3")
     assert 'if __name__ == "__main__":' in source
-    assert "check_backends.py" in read(ROOT / "README.md")
+    assert "check_backends.py" in read(ROOT / "docs" / "INSTALL.md")
 
 
 # ---------------------------------------------------------------------------

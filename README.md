@@ -1,573 +1,106 @@
 # Waveguide Generator
 
-Interactive 3D design and BEM simulation for acoustic waveguides — a
-from-scratch rebuild of the Waveguide Generator application on a TypeScript/React
-frontend and a FastAPI backend, with the mesher as the single geometry authority.
-This is the second-generation rewrite, historically called v2, and replaces the
-original application.
+Waveguide Generator designs loudspeaker waveguides and horns, and predicts how
+they will sound. You shape the waveguide in a live 3D view, then run an
+acoustic simulation that shows its frequency response, directivity and
+impedance.
 
 ![Waveguide Generator interface](docs/assets/waveguide-generator-interface.png)
 
-The [documentation index](docs/README.md) separates the user and development guides,
-current contracts, accepted design gates, legacy notes, and dated validation evidence.
-To add flanges, ports or drivers in Fusion and solve the finished speaker, follow
-the [CAD Link and driver setup guide](docs/CAD-LINK-GUIDE.md).
+## What you can do with it
+
+- **Design.** Start from a ready-made profile (OSSE, R-OSSE, ICW or freeform),
+  or open an existing ATH `.cfg` file. The 3D view updates as you change the
+  numbers.
+- **Simulate.** Run a solve on your computer. It uses the graphics card when
+  it can and the processor when it can't. You don't need to pick a solver,
+  because the app picks the fastest one that works on your machine.
+- **Compare results.** Look at on-axis response, polar maps, directivity,
+  impedance and power response. Keep several runs side by side, and export
+  plots and data.
+- **Finish the speaker in Fusion.** Send a waveguide to Autodesk Fusion with
+  CAD Link, add a baffle, ports or a driver there, and solve the finished
+  speaker. See the [CAD Link guide](docs/CAD-LINK-GUIDE.md).
+
+Everything runs locally. Your designs never leave your computer.
 
 ## Install
 
-Clone the repository — do not download a ZIP, because the installer updates
-itself with Git and the pinned HornLab modules are installed from Git too.
-Then run the installer for your platform:
+Download the file for your system from the
+[latest release](https://github.com/m3gnus/waveguide-generator/releases/latest)
+and open it.
 
-| | |
-|---|---|
-| macOS | double-click `installers/macos/install-wg.command` |
-| Windows | double-click `installers\windows\install-and-update.bat` |
-| Linux | `bash installers/linux/install.sh` |
+| System | Download | Then |
+|---|---|---|
+| macOS (Apple silicon) | `…-macos-arm64.dmg` | Drag the app to Applications and open it. |
+| Windows 10/11 | `…-windows-x86_64-setup.exe` | Run it. If SmartScreen warns you, click **More info → Run anyway**. |
+| Linux (Ubuntu 24.04) | `…-linux-x86_64.tar.gz` | Extract it and run `./install.sh`. |
 
-For a self-contained macOS install, download the release's
-**Waveguide.Generator-&lt;version&gt;-macos-arm64.dmg** and open it.
+The app is free and isn't signed with a paid Apple or Microsoft certificate.
+That's why both systems warn you the first time. The warning is about the
+missing certificate, not about anything found in the app.
 
-**macOS refuses to open the app on first launch, and the dialog offers no way
-forward.** It reports *"Apple could not verify 'Waveguide Generator' is free of
-malware that may harm your Mac or compromise your privacy"*, offering only
-**Done** and **Move to Bin**. That is a statement about a missing Apple
-signature rather than a finding about the app, and the dialog is not where you
-approve it: the exception is granted in **System Settings → Privacy & Security**.
+**On macOS, the first launch is blocked.** macOS says it "could not verify"
+the app and only offers **Done** and **Move to Bin**. Click **Done**. Then
+open **System Settings → Privacy & Security**, scroll to Security, and click
+**Open Anyway**. You only do this once.
 
-Drag the app to Applications first — an item still on the mounted disk image is
-on read-only storage — then open it, click **Done**, and go straight to
-**System Settings → Privacy & Security → Security**, where it is listed as
-blocked. Click **Open Anyway**. Do it promptly: the entry describes the most
-recent block, so opening something else first can replace it.
-
-The disk image also carries **`Install Waveguide Generator.command`** beside the
-app. It is an equivalent starting point rather than a fallback: it is refused
-with the same wording and approved the same way, and it then copies the app to
-Applications, clears the download flag and starts it, so you drag nothing. Both
-routes were confirmed working on macOS 26.5.2.
-
-If Privacy & Security lists neither item, drag the app to Applications and run
-this once in Terminal instead:
+The disk image also contains `Install Waveguide Generator.command`. You can
+open that instead. It is approved the same way, then copies the app to
+Applications for you. If Privacy & Security doesn't list either one, move the
+app to Applications and run this once in Terminal:
 
 ```bash
 xattr -dr com.apple.quarantine "/Applications/Waveguide Generator.app"
 ```
 
-All three routes are spelled out inside the disk image in `READ ME FIRST.txt`,
-and any of them is needed once, not on every launch.
+Need more detail, such as installing from a Git checkout, Linux system
+libraries, or the portable Windows ZIP? See the
+[install guide](docs/INSTALL.md).
 
-**Why the warning appears at all.** Apps distributed outside the App Store need
-a paid Apple Developer ID to be notarized. This build is signed *ad-hoc*
-instead, which lets it execute but gives Gatekeeper no developer identity of
-ours to show you, so the first-launch dialog is a dead end by design and
-Privacy & Security is where the override lives.
+## Updates
 
-Which items macOS offers an override for is not something this project can
-promise. Measured 2026-09-02, the ad-hoc bundle assesses as `rejected` with no
-`source` line while an unsigned script reports `source=no usable signature`,
-and that difference was once read as meaning the app would never be listed and
-the script always would. Two real installs on 2026-09-06 refuted it in both
-directions: the app was listed and opened, and so was the script. The `source`
-line is therefore not the predictor it was taken for, which is why all three
-routes are documented and none is described as impossible.
+When a new version is out, the version number in the top-left corner turns
+amber and says **update available**. Click it, then **Install update**. The app
+checks the download, swaps it in and restarts. If anything goes wrong, it
+rolls back to the version you had.
 
-Shipping the app unsigned is not an escape either: an unsigned arm64 executable
-is killed by the kernel on Apple silicon whatever its quarantine state, which is
-measured too. Control-clicking and choosing Open does not help; Apple removed
-that bypass in macOS Sequoia. The transcripts are in
-[docs/validation/2026-09/MACOS-GATEKEEPER.md](docs/validation/2026-09/MACOS-GATEKEEPER.md).
+## Where your files go
 
-For a self-contained Windows install, download
-**Waveguide.Generator-&lt;version&gt;-windows-x86_64-setup.exe** from the release page
-and run it. It is unsigned, so Microsoft Defender SmartScreen asks once — **More
-info → Run anyway** — and then never again, because the installer writes its
-payload itself and nothing it writes carries the download mark. It installs to
-`%LOCALAPPDATA%\Programs` without elevation, which is what lets the in-app
-updater replace files in place later, and it refuses an over-long install folder
-up front instead of failing partway through. An upgrade stays in the folder you
-used before when that folder is under `%LOCALAPPDATA%\Programs` or Program Files;
-for any other folder, such as `C:\wg`, setup suggests the standard one instead, and
-says on its last page how to remove the old copy, which it never deletes itself.
-Setup also offers an explicit
-**Install WGLink for Autodesk Fusion** task. It is preselected only when Fusion's
-AddIns folder already exists, installs entirely from the verified bundle without
-network access, and never replaces a developer or externally managed WGLink.
-Silent installs opt in with `/TASKS="wglink"`.
+Exported results are saved in `Documents/Waveguide Generator/runs`. You can
+choose a different folder in **Settings → Workspace**.
 
-For a self-contained Linux install, download
-**Waveguide.Generator-&lt;version&gt;-linux-x86_64.tar.gz**, extract it, and run
-`./install.sh` inside the extracted folder. It needs no root and no package
-manager: it copies the application to `~/.local/share/waveguide-generator`, adds
-a menu entry and icon, and puts `waveguide-generator` on your `PATH` at
-`~/.local/bin`. Run it again to upgrade in place. `uninstall.sh` is kept next to
-the installed application, so removing it does not need the download; add
-`--data` to remove designs and job history too.
+## Uninstall
 
-To check a Linux download, run `sha256sum "<downloaded-file>.tar.gz"` and
-compare the result with the matching release asset's `digest` (without the
-`sha256:` prefix) in GitHub's [release asset metadata](https://docs.github.com/en/rest/releases/assets#get-a-release-asset).
-If sharing a build outside GitHub, include its filename, build commit and
-SHA-256 from the original build with the link. A matching checksum confirms
-that the copy matches that build; it is not a publisher signature. A missing
-digest is not verification.
+- **macOS:** drag the app to the Bin.
+- **Windows:** use **Settings → Apps**, like any other program.
+- **Linux:** run `uninstall.sh` in `~/.local/share/waveguide-generator`.
 
-Per-user is deliberate, and it is the same reason the Windows installer avoids
-Program Files: the in-app updater replaces files inside the installation and
-cannot elevate, so a root-owned copy under `/opt` would install once and then
-refuse every update it was offered.
+If you installed from a Git checkout, run `bash installers/macos/uninstall.sh`,
+`bash installers/linux/uninstall.sh` or `installers\windows\uninstall.bat`.
+Add `--data` to any of them to also delete your designs and job history.
 
-The bundle brings its own Python, its own Tcl/Tk and every Python package. What
-it does not carry is the system OpenGL and X11 libraries the mesher loads at
-start — ordinary desktop libraries that a desktop system already has and a
-server install may not. `install.sh` checks by importing gmsh with the bundled
-interpreter and stops before copying anything, printing the exact command; on
-Ubuntu 24.04 that is `sudo apt install libglu1-mesa libgl1 libgomp1
-libfontconfig1 libxrender1 libxcursor1 libxft2 libxinerama1 libxi6 libxext6`.
-The Linux bundle opens the interface in its own native window using the
-bundled Qt/PySide6 backend. Qt also needs desktop libraries; if its startup
-check fails, the launcher explains the missing dependency and offers the
-existing status-window/browser recovery path. `--browser` requests that mode
-explicitly. The application does not install system packages or ask for root.
+## Learn more
 
-**This build is Ubuntu 24.04 LTS on x86-64**, and distributions close enough to
-it — not "Linux". There is no arm64 build and no musl build. Other
-distributions may well work; they are not what it was built and verified
-against.
+- [User guide](docs/USER-GUIDE.md): the interface, solvers and results.
+- [CAD Link guide](docs/CAD-LINK-GUIDE.md): finishing a speaker in Fusion.
+- [Install guide](docs/INSTALL.md): every install option, launcher flags and
+  troubleshooting.
+- [Documentation index](docs/README.md): everything else.
 
-A portable copy is still published, as
-**Waveguide.Generator-&lt;version&gt;-windows-x86_64.zip** on the
-`v<version>-updates` companion release rather than on the release page, so
-there is one file per platform to choose from there. It needs both of the steps
-the installer does for you: right-click the ZIP → Properties → tick **Unblock**
-*before* extracting, or Explorer copies the download mark onto every extracted
-file and the unsigned launcher meets a SmartScreen dialog whose only visible
-button is "Don't run"; and **extract it to a short path such as `C:\wg`.** The
-bundle's deepest internal path is 133
-characters, so an install root longer than roughly 127 characters exceeds
-Windows' 260-character limit and extraction fails with a flood of "cannot find
-path" errors rather than one clear message. `C:\Program Files\...` is fine; a
-OneDrive-redirected Documents folder with a long company name may not be. Then
-double-click **Waveguide Generator.exe** in the extracted folder. The native
-window requires the **Microsoft Edge
-WebView2 Evergreen Runtime (x64)**, which is normally present on current Windows
-10 and Windows 11 systems; when it is missing or its pythonnet bridge cannot load,
-WG shows repair instructions containing the WebView2 download URL and opens the
-interface in the default browser. The folder
-also includes `WaveguideGenerator.ico` for a shortcut. The executable itself keeps
-the generic Python icon until a future signed build adds the icon as a Windows
-executable resource.
-
-It fast-forwards the checkout, downloads that version's prebuilt interface from
-the GitHub release and **refuses to extract it unless it matches the published
-SHA-256**, creates `.venv` with CPython 3.13 and the locked dependency set,
-checks that a solve can actually run, and starts the app. On macOS and Windows
-it also installs the exact compatible WGLink source into Fusion 360 and reuses
-WG's environment for spline resampling; users need no add-in checkout or second
-virtual environment. Running the installer again updates WG's managed copy but
-preserves a developer-managed WGLink registration. The exact source, integrity,
-and takeover rules are in the [WGLink packaging contract](integrations/wglink/README.md).
-
-Prerequisites, all reported with the command that installs them: CPython 3.13
-(exactly — the dependency set is locked against one series), Git 2.20+, the
-Microsoft Visual C++ Redistributable on Windows, and the Xcode Command Line
-Tools on Apple Silicon for the Metal solver.
-
-Useful flags: `--tag vX.Y.Z` installs a specific release, `--skip-spa` leaves
-`frontend/dist` alone while you are working on the interface, `--no-launch`
-stops before starting the app, and `--force` fully repairs the environment by
-reinstalling declared distributions and removing undeclared ones.
-`--skip-wglink` leaves Fusion untouched; `--replace-wglink` deliberately
-replaces a developer-managed copy; and `--wglink-archive PATH` rehearses an
-already-built, provenance-checked package without fetching its source.
-
-To check the solve backends at any time without a full install:
-
-```
-.venv/bin/python scripts/check_backends.py
-```
-
-### Uninstall
-
-```
-bash installers/macos/uninstall.sh         # macOS: also its managed WGLink copy
-bash installers/linux/uninstall.sh         # Linux: same options
-installers\windows\uninstall.bat            # Windows: also its managed WGLink copy
-# Add --data to also remove designs, job history, meshes, and logs.
-```
-
-Neither touches the checkout itself — delete the folder yourself when you are
-done with it.
-
-## Launch
-
-The launchers open a compact status window with separate backend and frontend
-lamps, the local URL, an **Open in browser** button, and a **Quit** button. Quit
-or close the window to stop the complete server process tree.
-
-| | |
-|---|---|
-| macOS | open `launchers/macos/Waveguide Generator.app` |
-| Windows | double-click `launchers\windows\launch-wg.bat` |
-| Linux | `./launchers/linux/launch-wg.sh` |
-
-The macOS launcher app is deliberately unsigned, and from a Git checkout that
-costs you nothing: Gatekeeper only assesses files that carry the "downloaded
-from the internet" flag, and `git clone` does not set it. Measured 2026-09-02 on
-macOS 26.5.2 — it opens on the first double-click, with no dialog. That is not
-true of the `.dmg` above, which *is* downloaded; see the disk-image instructions
-in [Install](#install).
-
-The repository root intentionally has no duplicate install or launch scripts;
-use the platform folders above. On first launch the entry creates `.venv` with
-CPython 3.13 and installs the locked dependencies.
-
-On macOS, Windows and Linux, append `--window` to the command launcher to open the
-interface in one native desktop window instead of the tkinter status window.
-Closing that window stops the owned server. `--browser` explicitly keeps the
-normal status-window/browser workflow. Linux uses Qt/PySide6 and checks that
-its platform libraries can load before starting the native window. The source
-environment installs this Linux backend through the runtime requirements.
-
-`--help` prints usage and exits without starting a server or window. Unknown
-options are rejected before startup.
-
-For the original plain-terminal behavior, append `--no-gui`:
-
-```
-./launchers/macos/launch-wg.command --no-gui
-./launchers/linux/launch-wg.sh --no-gui
-launchers\windows\launch-wg.bat --no-gui
-```
-
-The launcher uses the first available port from 3100 through 3109. Advanced
-server flags such as `--port`, `--no-browser`, and `--data-dir` can be appended.
-The committed app icon is reproducible with
-`python launchers/macos/generate_icon.py` on macOS; the generator uses only the
-standard library and validates the resulting ICNS container with `iconutil`.
-
-### When the status window does not open
-
-The application and the status window fail independently. The window is drawn
-with tkinter, which belongs to the Python installation rather than to Waveguide
-Generator, so a Python without a working Tk gives an application that runs
-perfectly under `--no-gui` and a window that never appears. Reinstalling
-Waveguide Generator cannot change that, in either direction.
-
-When the window cannot open, WG writes a full diagnosis to `statusapp.log` in
-the application log directory and, on Windows, shows the cause and the remedy in
-a dialog. The diagnosis names the interpreter it actually used, lists the Tk
-files it looked for, and distinguishes the three causes, which have three
-different fixes:
-
-| What the report says | What it means |
-|---|---|
-| does not include tkinter | that Python was installed without Tk, or the launcher is using a different Python from the one you added Tk to |
-| Tcl/Tk libraries could not be loaded | Tk is installed; something is stopping it loading. Re-ticking the installer option changes nothing |
-| Tk loaded but failed to create a window | usually `TCL_LIBRARY` or `TK_LIBRARY` set by other software, or no interactive desktop session |
-
-The same report can be produced on demand, which is the quickest thing to ask
-for from a machine you cannot reach:
-
-On Windows:
-
-```
-.venv\Scripts\python.exe launchers\statusapp\diagnostics.py
-```
-
-On macOS and Linux:
-
-```
-./.venv/bin/python launchers/statusapp/diagnostics.py
-```
-
-It exits 0 when the window can open. A machine with no graphical session at all
-is reported as such and is not treated as a fault.
-
-### Application updates
-
-The version in the top-left corner checks GitHub's latest published full
-release after the interface opens. When a newer, complete release is available
-it turns amber and says **update available**. In the standalone application,
-click **Install update** to download the checksum-verified app layer and, when
-its content id changed, the matching runtime layer. WG stages them in its data
-directory, closes only after verification succeeds, swaps the complete layers,
-restores the ad-hoc bundle signature, and restarts. An asset that carries no
-published digest is refused before it is downloaded, and one whose bytes do not
-match it is refused before anything is extracted. That check establishes
-**integrity, not authenticity**: it proves the copy matches the release GitHub
-describes, over TLS to `api.github.com`. It is not a publisher signature — the
-application is ad-hoc signed and carries no signing identity. The previous layers
-remain
-available for automatic rollback until the updated native application starts successfully.
-An update interrupted part-way through is decided on the next start from a
-transaction journal in the data directory: it is finished or rolled back before the
-server starts, in whichever mode the application is opened. The one window that is
-not automatic is an interruption while the application layer itself is being
-replaced — the launcher needs that layer to run any of this — and the repair command
-for it is written to the update log.
-The same action is available from the command palette as **Application update**.
-
-The job-log dialog reads and renders at most the first 1.0 MB. For example, opening
-a 50 MB log keeps a 1.0 MB preview in the interface; **Download complete log** uses
-the browser's download path for the full file, and **Copy preview** copies only the
-bounded text shown in the dialog.
-
-WG caches successful checks, retries incomplete releases quickly, and keeps the
-last known result when the network is unavailable. It also inspects the local
-checkout without changing it: modified, development, detached, and non-Git
-installs are explained instead of being handed an action that would silently do
-the wrong thing. Checkout-based installs keep their existing platform-installer
-handoff and exact command fallback; automatic installation there is available
-when WG was opened through its status window. For a copied checkout command,
-close Waveguide Generator first so the installer can acquire the application
-data lock.
-
-### Output workspace
-
-Manual and automatic run exports default to `Documents/Waveguide Generator/runs`.
-This folder is user-visible and does not require browser download permission or
-approval for a protected operating-system data directory. A different output
-folder can be selected once in **Settings → Workspace**; the path displayed
-there is authoritative. Internal databases, logs, and process locks remain
-under the platform application-data directory; result exports do not.
-
-With `--data-dir` or a non-empty `WG2_DATA_DIR`, the implicit output folder is
-`<data dir>/workspace` instead. A workspace already saved in that data directory
-still takes priority, including one outside it. Existing Documents runs are not
-moved; select their folder in **Settings → Workspace** to see them, or remove the
-override to use the normal default and checkout-output adoption.
-
-The Fusion WGLink exchange folder is configured separately under **Settings →
-CAD Link**. Changing the output folder never moves or disconnects Fusion's
-`.wglink` and `.wgreturn` exchange.
-
-## Run the server directly (dev)
-
-```
-python3.13 scripts/bootstrap.py
-.venv/bin/python launch/serve.py --port 3100
-```
-
-The bootstrap is idempotent: unchanged, valid environments do not contact the
-package index. Run `.venv/bin/python scripts/bootstrap.py --check` to validate
-without installing. `--force` force-reinstalls every declared distribution and
-removes distributions that are not declared by the dependency manifests.
-
-## Headless evaluation
-
-The installer also provisions a repository-aware `wg` command in `.venv/bin` on
-macOS/Linux and `.venv\Scripts` on Windows. It validates or solves `.mwg`/`.cfg`
-designs and accepts the same strict JSON `SolveRequest` as the HTTP API:
-
-```text
-.venv/bin/wg validate design.mwg --json
-.venv/bin/wg solve --request request.json --events ndjson --output run-001
-```
-
-See the canonical [CLI contract](docs/reference/CLI.md) and
-[external evaluation API](docs/reference/EXTERNAL-EVALUATION.md). A standard-library
-[reference client](examples/external_evaluator.py) demonstrates persistent HTTP use.
-
-Flags: `--no-browser`, `--data-dir` (or `WG2_DATA_DIR`); `WG2_ENABLE_DRYRUN=1` exposes the dry-run engine (dev/test only).
-
-## Test commands
-
-Build the frontend **before running the Python tests**, including on a fresh
-clone. The server mounts `frontend/dist`, which is generated and not checked in.
-From the repository root, using Node 20:
-
-```bash
-npm --prefix frontend ci
-npm --prefix frontend run build
-.venv/bin/python -m pytest server/tests scripts/tests -v
-```
-
-On Windows use `.venv\Scripts\python.exe` for the Python command. Tests that
-exercise the Tk status view require an importable Tk installation; those view
-tests skip explicitly when Tk cannot load; controller tests that do not import
-the view still run. A missing frontend build stops the server suite once with
-the build commands, rather than failing each app-constructing test separately.
-
-JS frame codec (explicit file path — directory mode trips the node runner): `node --test shared/js/frame.test.mjs`
-
-Frontend unit tests: `npm --prefix frontend test`
-
-Real solves are never run in hosted CI; Metal and bempp parity run on owned
-qualification hardware, and their archived reports back the release gates. Use
-the [solver release qualification checklist](docs/validation/SOLVER-QUALIFICATION.md)
-for the mandatory macOS, Windows, full/quarter, and cross-solver runs.
-
-## Releasing
-
-Versions are `MAJOR.MINOR.PATCH`, optionally with a release pre-release label —
-`0.3.2-rc.1`. The application is still being built,
-so it stays **pre-1.0**: the line is `0.MINOR.PATCH`, a minor for features and a
-patch for fixes, and 1.0.0 is reserved for the first release that is no longer a
-beta. The original application is a separate, retired 1.x line, and nothing
-resolves this project by version, so the two never collide.
-
-The version lives in `shared/version.json` — `/health` and the FastAPI metadata
-read it at runtime, and Vite injects it into the SPA as `__WG2_VERSION__` at
-build time. npm keeps two further copies in `frontend/package.json` and
-`frontend/package-lock.json`, and the macOS app has two bundle-version keys, so
-move all of them with one command rather than by hand:
-
-```bash
-python scripts/bump_version.py patch
-```
-
-`major` and `minor` do the obvious thing, `rc`, `beta` and `alpha` produce a
-release candidate (below), `--set X.Y.Z` sets an exact version, and `--check`
-proves every copy agrees. CI's drift job runs `--check`, and so does
-`server/tests/test_version_consistency.py`.
-
-Releases are two deliberate commands, and **the tag is created last, by CI**:
-
-```bash
-../hornlab-policy/release.sh waveguide-generator patch   # bump, commit, push main, wait for CI
-../hornlab-policy/release.sh waveguide-generator publish # build, validate, tag, publish
-```
-
-Phase 1 stops once CI is green on the exact release commit; nothing is tagged
-and no version is spent. Phase 2 dispatches
-`.github/workflows/release.yml` against that **commit**, which **refuses to run
-when `shared/version.json` does not move forward past every published tag, the
-commit is not reachable from `origin/main`, or `ci.yml`, which the workflow
-runs on that exact commit before building anything, fails** — a build that
-misreports itself is worse than a failed release.
-
-Its SPA job attaches `update-spa-<version>.tar.gz`; the macOS job
-builds the canonical platform-neutral app ZIP and manifest, the macOS runtime ZIP,
-and `Waveguide.Generator-<version>-macos-arm64.dmg`; the Windows job checks its
-independently built app ZIP against the canonical one by content digest and builds
-the Windows runtime ZIP, `Waveguide.Generator-<version>-windows-x86_64-setup.exe`,
-and the portable `Waveguide.Generator-<version>-windows-x86_64.zip`.
-
-A final publisher job validates the exact inventory and every checksum, then
-splits it across **two releases**. The user-facing `v<version>` carries exactly
-two files, the macOS disk image and the Windows installer, so the page a person
-lands on is one row per platform. Everything else — the update layers, the SPA
-archive, and the portable Windows ZIP — goes to a companion release tagged
-`v<version>-updates`, flagged as a pre-release so it is never "Latest" and the
-stable update channel never sees it. It is a separate *release* rather than a
-separate repository deliberately: the assets stay in this repository, so the
-updater's `trusted_asset_url` keeps rejecting anything served from elsewhere.
-The in-app updater reads the companion and falls back to the release's own
-assets, so where a layer sits is not something an installed client depends on.
-
-Checksums are computed and verified for every asset; only the SPA archive's
-`.sha256` is published, because GitHub serves a per-asset digest the updater
-reads and `scripts/fetch_spa.py` fetches by URL without touching the releases
-API. The publisher uploads to a draft, **then** creates the annotated
-tag and makes the release public.
-
-That order is deliberate. The tag used to be pushed by hand and was what
-triggered the build, so the version was committed to before anything was known
-to build. When a cross-platform gate failed twice on 2026-08-26, `v0.2.5` and
-`v0.2.6` became permanently dead tags with no assets and the work shipped as
-`v0.2.7`. A draft release does not create a git ref, so a failure now costs
-nothing and the same version is retried.
-
-Installer filenames use dots because those are the names GitHub serves; the
-installed application and extracted Windows folder retain spaces. The prebuilt
-SPA means installing Waveguide Generator needs no Node runtime.
-
-Build metadata (`+build`) is deliberately unsupported: the tag is built as `v` +
-this string, and nothing in this project can compare it.
-
-### Release candidates
-
-A pre-release rehearses the release itself — packaging, the installers, and the
-in-app update path — against a version number that has not been spent. Publish
-one when the change touches packaging, the app layer, the updater, or anything
-cross-platform; a pure solver or UI change does not need one
-(`GIT-WORKFLOW.md` §4). `rc`, `beta` and `alpha` are levels like any other, so
-the sequence is the same two commands each time:
-
-```bash
-../hornlab-policy/release.sh waveguide-generator rc       # 0.3.1      -> 0.3.2-rc.1
-../hornlab-policy/release.sh waveguide-generator publish
-../hornlab-policy/release.sh waveguide-generator rc       # 0.3.2-rc.1 -> 0.3.2-rc.2
-../hornlab-policy/release.sh waveguide-generator publish
-../hornlab-policy/release.sh waveguide-generator patch    # 0.3.2-rc.2 -> 0.3.2   (the release)
-../hornlab-policy/release.sh waveguide-generator publish
-```
-
-**`patch` on a candidate removes the label and keeps the core numbers.** That is
-the row to get right: `0.3.2-rc.2` finalises to `0.3.2`, the version its
-candidates were candidates *for*. Incrementing to `0.3.3` would strand `0.3.2`
-forever, because a published tag is immutable and `0.3.2` sorts above its own
-RCs, so nothing could ever fill the hole. `minor` and `major` drop the label the
-same way when the core already names the version being finalised —
-`0.4.0-rc.1` + `minor` = `0.4.0` — and otherwise bump as usual, so
-`0.3.2-rc.1` + `minor` = `0.4.0`.
-
-These are [node-semver's `inc`
-rules](https://github.com/npm/node-semver#functions), which npm's `version`
-command uses. [`cargo release`](https://github.com/crate-ci/cargo-release)
-spells the candidate levels identically (`1.0.0` → `1.0.1-rc.1`, `1.0.1-rc.1` →
-`1.0.1-rc.2`) and calls the finalising step `release`; it differs on `minor` and
-`major` from a candidate, where it would give `0.5.0` and strand `0.4.0`. We
-follow node-semver, for the reason above.
-
-`alpha` → `beta` → `rc` promotes within the same version (`0.3.2-beta.2` →
-`0.3.2-rc.1`); going back down is refused, because
-[SemVer](https://semver.org/spec/v2.0.0.html) rule 11 compares alphanumeric
-identifiers in ASCII order and the result would not move forward. No ladder is
-written down anywhere — `bump_version.py` compares the two versions with the
-same comparator `release.yml` orders published tags with.
-
-**A candidate never reaches the stable channel**, and two independent things
-enforce that. `release.yml` derives GitHub's pre-release flag from the declared
-version (`shared/release_assets.is_prerelease`) and sets it on the release, and
-GitHub defines `/releases/latest` as the newest release *without* that flag —
-which is the only endpoint the stable channel reads. Independently,
-`server/updates/service.py` refuses any tag but a plain triple on the stable
-channel (`_is_offerable_release_tag(..., allow_prerelease=False)`), so a
-pre-release arriving there anyway is still not offered. See
-[`docs/reference/UPDATE-CHANNELS.md`](docs/reference/UPDATE-CHANNELS.md).
-
-### A candidate is not a build stamp
-
-SemVer gives both the same slot, and they are different things:
-
-| | Example | What it is | Published by |
-|---|---|---|---|
-| Release pre-release | `0.3.2-rc.1` | A release. A candidate for `0.3.2`. | `release.yml`, flagged as a pre-release |
-| Build stamp | `0.4.0-main.7` | A build of `main`, not a release at all | its own workflow — see UPDATE-CHANNELS.md |
-
-**The identifier is what tells them apart**, and it is the only thing that can:
-a label beginning `alpha`, `beta` or `rc` is a release pre-release, and every
-other label is a build stamp. `shared/release_assets.release_prerelease` owns
-that whitelist, and every place both can appear asks it:
-
-- `scripts/bump_version.py --check` — which `ci.yml`'s drift job runs —
-  accepts a stable version or a candidate, and refuses a build stamp. A
-  release tree may not carry one. `--build-stamp` is the build's own route to
-  the same verification.
-- `scripts/bump_version.py <level>` refuses to compute anything from a build
-  stamp: there is no next patch after `0.4.0-main.7`.
-- `release.yml`'s guard refuses a build stamp outright. It publishes releases;
-  a build of `main` is published by its own workflow.
-
-A whitelist rather than a pattern, because that is the safe direction: a
-build-stamp prefix nobody has thought of yet is refused by the release path the
-day it is invented, where the reverse would publish it as a release.
+**For developers:** the [development guide](docs/DEVELOPMENT.md) covers the
+code layout and tests. The [release guide](docs/RELEASING.md) covers versions
+and publishing. There is also a command-line tool, `wg`, for running designs
+without the interface; see the [CLI reference](docs/reference/CLI.md).
 
 ## License
 
-AGPL-3.0-or-later. See [LICENSE](LICENSE). The pinned HornLab solver, mesher,
-and plotting modules are separate repositories referenced by commit SHA in
-[pins.json](pins.json), and all are AGPL-3.0-or-later with one exception:
-`hornlab-beat-bem` is **GPL-3.0-or-later**, because it vendors the
-Burton-Miller Julia solver from [boundary-lab](https://github.com/m3gnus/boundary-lab).
-GPL-3 and AGPL-3 are mutually compatible, but the BEAT engine's terms are its
-own and stay with that repository — which is why it is pinned rather than
-vendored here.
+AGPL-3.0-or-later. See [LICENSE](LICENSE).
 
-WGLink is packaged from the separate AGPL-3.0-or-later
-`hornlab-fusion-addin` repository at the full commit recorded in
-[`integrations/wglink/source.json`](integrations/wglink/source.json). Its
-upstream license and per-file source provenance travel in every installed
-package.
+The solver, mesher and plotting modules live in separate HornLab repositories,
+pinned by commit in [pins.json](pins.json). They are AGPL-3.0-or-later too,
+except `hornlab-beat-bem`, which is **GPL-3.0-or-later** because it includes
+the solver from [boundary-lab](https://github.com/m3gnus/boundary-lab). The two
+licenses are compatible. The Fusion add-in (WGLink) comes from the
+AGPL-3.0-or-later `hornlab-fusion-addin` repository, at the commit recorded in
+[`integrations/wglink/source.json`](integrations/wglink/source.json).

@@ -23,7 +23,7 @@ they agree.
     python scripts/bump_version.py --set 2.0.0
 
 This script only moves the number. **The tag is created last, by CI** -- see
-``README.md``'s *Releasing* section and GIT-WORKFLOW.md section 4 -- so a failed
+``docs/RELEASING.md`` and GIT-WORKFLOW.md section 4 -- so a failed
 build spends no version. ``release.yml`` refuses to build when the declared
 version disagrees with what it may publish, which is what makes this the last
 chance to notice a drift.

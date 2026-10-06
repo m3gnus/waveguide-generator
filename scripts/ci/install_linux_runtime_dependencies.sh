@@ -7,7 +7,7 @@
 set -euo pipefail
 
 # Keep this list synchronized with the Ubuntu 24.04 command in
-# scripts/build_bundle.py, README.md, and docs/DEVELOPMENT.md. Do not replace
+# scripts/build_bundle.py, docs/INSTALL.md, and docs/DEVELOPMENT.md. Do not replace
 # the installer's preflight with --skip-checks.
 sudo apt-get update
 sudo apt-get install --yes --no-install-recommends \
