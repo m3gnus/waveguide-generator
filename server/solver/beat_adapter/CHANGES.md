@@ -453,3 +453,50 @@ Metal support review round 2, fixed directly: HBB Metal evidence now requires
 device assembly (`regular_assembly_mode` = `metal_fused_burton_miller` or
 `metal_native_*`). Host-staged CPU assembly and the `metal_default` placeholder
 no longer count, and the dead `assembly` alternative is gone.
+
+## PLAN slice 9 — selected production provider
+
+Files per review PR / manifest row:
+
+- **W2 / production requests and routing:** `server/solver/{beat,beat_imported,
+  official_beat}.py`; `server/engines/registry.py`; provider/readiness cases in
+  `server/tests/test_official_beat_bridge.py` and
+  `server/tests/beat_runtime/test_{readiness_facade,review_round1}.py`.
+- **W3 / production results and loading:** shared response packaging in
+  `server/solver/{beat,beat_imported,official_beat}.py`; driver/trace assertions
+  in `server/tests/test_official_beat_bridge.py`;
+  `server/tests/beat_adapter/fixtures/{hbb_production.json,README.md}`.
+- **W5 / managed plain/adaptive sweeps:** `server/solver/beat_adapter/results.py`;
+  session/sweep/cancellation helpers in `server/solver/official_beat.py` and
+  their production callers; sweep tests in `server/tests/test_official_beat_bridge.py`.
+- **Shared W2/W3/W5:** this file. These are review slices of shared files.
+
+Exact `WG2_BEAT_PROVIDER=official` now routes CPU/Metal production solves through
+request/result adapters and the default host manager used by warm-up. Registry
+production rows follow matching official compiled readiness, including live
+invalidation without HBB. The default path retains HBB; frozen pre-change
+responses check identical JSON and binary artifact hashes with a fixed clock.
+The prototype's duplicated request/decoder/standalone port is retired into the
+shared production path; its explicit solve entry remains. No pins/dependencies,
+engine checkout, HBB directories, CUDA/ROCm code or runtime namespace changes.
+
+Official JWSound supersedes the design's fork destination. Existing ground,
+infinite-baffle and imported frame/axis refusals remain; a TODO explicitly defers
+official rigid-ground enablement. Cancelled multi-channel responses keep acquired
+rows; bases/traces use the acquired channels' common axis so exported arrays
+remain coherent. Generalized forces remain in acquired solver logs, separate
+from historical mean-pressure driver loading; they are not interpolated as a
+new product quantity. Tests use an in-process host transport fake and existing
+runtime ownership machinery, never Julia. Installed/platform, numerical and
+startup/performance qualification remain outside this code-only gate.
+
+Validation (requested interpreter, targeted launcher, unpiped): common runtime/
+adapter/solver check **1494 passed, 1 optional skip in 110.15 s**; requested
+production/bridge/adaptive/registry/CPU/imported check plus geometry-contract and
+changed readiness tests **304 passed in 34.70 s**. Runtime/adapter Ruff, Ruff on
+all other changed Python files and `git diff --check` passed. All checks stayed
+below two minutes. No Julia, downloads, frontend/full-suite jobs, donor edits,
+user/HBB-directory writes or commits. Real CAD-ingestion companion tests were
+identified but not run under the light-check constraint; imported solve tests
+use recorded geometry and fake workers. All requested code work is complete;
+real installed CPU/Metal and performance qualification remains a separate gate.

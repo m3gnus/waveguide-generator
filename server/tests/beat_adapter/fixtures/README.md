@@ -25,3 +25,11 @@ transcription of `hornlab_beat_bem/result.py:127–161` on the two small pressur
 arrays in `test_results.py`, after unit-acceleration conversion. The floor is
 20 µPa × 1e-6. Main assertions need no HBB install; separate optional cross-checks
 compare the frozen controls with HBB's private helpers when available.
+
+`hbb_production.json` freezes production responses from WG commit
+`0a1b901df0727885d74e25f95410208adf465d4a` using the recording HBB stand-in in
+`server/tests/test_imported_beat.py`. The clock is fixed at 1700000000; binary
+channel-bases artifacts are represented by their SHA-256. Plain/adaptive parametric and
+multi-channel imported requests, numerical arrays, frame metadata, diagnostics,
+trace refusal metadata and artifact hashes are compared on the selector-off
+path. This is application-contract preservation, not real-engine qualification.

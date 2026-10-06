@@ -70,10 +70,16 @@ from .result_mapping import (
 from .warmup import BEAT_WARMUP_STAGE_MESSAGE, beat_warmup_in_progress
 
 
-try:
-    import hornlab_beat_bem as _beat
-except (ImportError, OSError):
-    _beat = None  # type: ignore[assignment]
+from .beat_runtime.provider import official_selected
+
+
+if official_selected():
+    _beat = None
+else:
+    try:
+        import hornlab_beat_bem as _beat
+    except (ImportError, OSError):
+        _beat = None  # type: ignore[assignment]
 
 
 class BeatUnavailable(RuntimeError):
@@ -582,6 +588,9 @@ def solve_beat_from_msh_text(
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
+    _official: bool | None = None, _worker_manager: Any = None,
+    _julia_executable: str | None = None, _precision: str = "float32",
+    _mesh_scale_to_m: float = 1.0,
 ) -> dict[str, Any]:
     """Solve one authoritative Gmsh artifact on a named BEAT Engine backend.
 
@@ -591,19 +600,29 @@ def solve_beat_from_msh_text(
     engine name still asks for.
     """
 
+    official = official_selected() if _official is None else _official
     context.validate()
     del mesh_metadata
+    # TODO: qualify official rigid-ground mesh/frame/field evaluation before enabling it.
     if context.ground_plane is not None:
         raise BeatUnavailable(
             "The HornLab BEAT adapter cannot apply a rigid ground plane; "
             "select a ground-plane-capable engine."
         )
     reject_beat_infinite_baffle(context)
-    package = _load_api()
-    if package is None:
-        raise BeatUnavailable("hornlab-beat-bem is not installed.")
+    if official:
+        from .official_beat import production_statuses
+
+        statuses = production_statuses()
+        package = None
+    else:
+        package = _load_api()
+        if package is None:
+            raise BeatUnavailable("hornlab-beat-bem is not installed.")
     if backend is None:
-        status = beat_status()
+        status = (next((statuses[name] for name in ("metal", "cpu")
+                        if statuses[name]["available"]), statuses["cpu"])
+                  if official else beat_status())
         if not status["available"]:
             raise BeatUnavailable(status["reason"])
         backend = resolve_beat_backend(status)
@@ -611,7 +630,7 @@ def solve_beat_from_msh_text(
         # Availability is asked per backend, not of BEAT as a whole: on a Mac
         # the package probe reports ``metal``, and answering "is BEAT
         # available" there would refuse a CPU solve the user explicitly chose.
-        status = beat_backend_statuses().get(backend)
+        status = (statuses if official else beat_backend_statuses()).get(backend)
         if status is None:
             raise BeatUnavailable(
                 f"Unknown BEAT backend {backend!r}; expected one of " + ", ".join(BEAT_BACKENDS)
@@ -637,19 +656,39 @@ def solve_beat_from_msh_text(
         stage_callback("setup", 0.0, f"Configuring BEAT Engine BEM solve ({backend})")
     announce_beat_warmup_wait(stage_callback)
 
-    observation = observation_config(
-        context,
-        package.ObservationConfig,
-        BeatUnavailable,
-        "hornlab-beat-bem",
-        msh_text=msh_text,
-    )
-    frame = native_observation_frame(context, msh_text, package.ObservationFrame)
-    if frame is None:
-        raise BeatUnavailable(
-            "hornlab-beat-bem requires the authoritative observation frame "
-            "(source-tagged Gmsh 2.2 artifact)."
+    if official:
+        plane = native_symmetry_plane(context)
+        if plane in {"xz", "xy"}:
+            raise BeatUnavailable(
+                "hornlab-beat-bem native symmetry supports 'yz' half and 'yz+xz' "
+                f"quarter domains; {plane!r} is not "
+                "representable by the BEAT Engine solver"
+            )
+        from .beat_adapter.request import build_parametric_request
+        from .official_beat import response_config, solve_compiled, sort_official_result
+
+        def compiled_request(frequencies):
+            return build_parametric_request(
+                msh_text, context, frequencies_hz=frequencies, backend=backend,
+                engine_id=beat_engine_name(backend), surface_traces=retain_traces,
+                precision=_precision, mesh_scale_to_m=_mesh_scale_to_m,
+            )
+
+        config = response_config(compiled_request(live_execution_frequencies(context)), context)
+    else:
+        observation = observation_config(
+            context,
+            package.ObservationConfig,
+            BeatUnavailable,
+            "hornlab-beat-bem",
+            msh_text=msh_text,
         )
+        frame = native_observation_frame(context, msh_text, package.ObservationFrame)
+        if frame is None:
+            raise BeatUnavailable(
+                "hornlab-beat-bem requires the authoritative observation frame "
+                "(source-tagged Gmsh 2.2 artifact)."
+            )
 
     completed = [0]
     adaptive = adaptive_enabled(context)
@@ -658,7 +697,7 @@ def solve_beat_from_msh_text(
     )
 
     def progress(index: int, total: int, frequency_hz: float) -> None:
-        if cancellation_callback:
+        if cancellation_callback and not official:
             cancellation_callback()
         if adaptive:
             completed[0] += 1
@@ -675,7 +714,7 @@ def solve_beat_from_msh_text(
             )
 
     def on_frequency_result(index: int, frequency_hz: float, entry: dict[str, Any]) -> bool:
-        if cancellation_callback:
+        if cancellation_callback and not official:
             cancellation_callback()
         if result_callback is not None:
             result_callback(
@@ -693,31 +732,32 @@ def solve_beat_from_msh_text(
                     config=config,
                     context=context,
                     backend="beat",
-                    sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+                    sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
                 ),
             )
         return True
 
-    try:
-        config = package.SolveConfig(
-            freq_min_hz=context.frequency_range[0],
-            freq_max_hz=context.frequency_range[1],
-            freq_count=context.num_frequencies,
-            freq_spacing=context.frequency_spacing,
-            observation=observation,
-            frame_override=frame,
-            native_symmetry_plane=native_symmetry_plane(context),
-            mesh_scale=1.0,
-            beat_backend=backend,
-            julia_threads=beat_julia_threads(backend),
-            source_motion=context.source_motion,
-            **({"surface_traces": True} if retain_traces else {}),
-            progress_callback=progress,
-            on_frequency_result=(on_frequency_result if result_callback is not None else None),
-        )
-        package.reject_unsupported_native_symmetry(config)
-    except NotImplementedError as exc:
-        raise BeatUnavailable(str(exc)) from exc
+    if not official:
+        try:
+            config = package.SolveConfig(
+                freq_min_hz=context.frequency_range[0],
+                freq_max_hz=context.frequency_range[1],
+                freq_count=context.num_frequencies,
+                freq_spacing=context.frequency_spacing,
+                observation=observation,
+                frame_override=frame,
+                native_symmetry_plane=native_symmetry_plane(context),
+                mesh_scale=1.0,
+                beat_backend=backend,
+                julia_threads=beat_julia_threads(backend),
+                source_motion=context.source_motion,
+                **({"surface_traces": True} if retain_traces else {}),
+                progress_callback=progress,
+                on_frequency_result=(on_frequency_result if result_callback is not None else None),
+            )
+            package.reject_unsupported_native_symmetry(config)
+        except NotImplementedError as exc:
+            raise BeatUnavailable(str(exc)) from exc
 
     def stage_status(message: str) -> None:
         if stage_callback and message:
@@ -727,69 +767,102 @@ def solve_beat_from_msh_text(
                 message,
             )
 
-    path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            suffix=".msh",
-            delete=False,
-            encoding="utf-8",
-            dir=temporary_directory_root(),
-        ) as handle:
-            path = Path(handle.name)
-            handle.write(msh_text)
+    if official:
+        def solve_batch(frequencies):
+            return solve_compiled(
+                compiled_request(frequencies), channel_id="source", worker_manager=_worker_manager,
+                julia_executable=_julia_executable, cancellation_callback=cancellation_callback,
+                progress_callback=progress,
+                on_frequency_result=None if adaptive else on_frequency_result,
+                status_callback=stage_status,
+            )
+
+        if adaptive:
+            revision = [0]
+
+            def publish(native):
+                if result_callback:
+                    snapshot = build_solver_response(
+                        result=native, config=config, context=context, start_time=started,
+                        metadata={"provisional": {
+                            "completed_frequency_count": native.adaptive_sampling["solved_count"],
+                            "expected_frequency_count": context.num_frequencies}},
+                        sound_speed_m_per_s=343.0,
+                    )
+                    result_callback(revision[0], snapshot)
+                    revision[0] += 1
+
+            result = solve_native_adaptively(
+                context, solve_batch, distance_m=config.observation.distance_m,
+                sound_speed=343.0, publish=publish, cancel=cancellation_callback,
+            )
+        else:
+            result = solve_batch(live_execution_frequencies(context))
+        sort_official_result(result)
+    else:
+        path: Path | None = None
         try:
-            if adaptive_enabled(context):
-                config.on_frequency_result = None
-                revision = [0]
-
-                def publish(native):
-                    if result_callback:
-                        snapshot = build_solver_response(
-                            result=native,
-                            config=config,
-                            context=context,
-                            start_time=started,
-                            metadata={
-                                "provisional": {
-                                    "completed_frequency_count": native.adaptive_sampling[
-                                        "solved_count"
-                                    ],
-                                    "expected_frequency_count": context.num_frequencies,
-                                },
-                            },
-                            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
-                        )
-                        result_callback(revision[0], snapshot)
-                        revision[0] += 1
-
-                result = solve_native_adaptively(
-                    context,
-                    lambda frequencies: package.solve_frequencies(
-                        str(path), frequencies, config, status_callback=stage_status
-                    ),
-                    distance_m=config.observation.distance_m,
-                    sound_speed=solver_sound_speed_m_per_s("hornlab_beat_bem"),
-                    publish=publish,
-                    cancel=cancellation_callback,
-                )
-            else:
-                result = package.solve_frequencies(
-                    str(path),
-                    live_execution_frequencies(context).tolist(),
-                    config,
-                    status_callback=stage_status,
-                )
-        except NotImplementedError as exc:
-            raise BeatUnavailable(str(exc)) from exc
-        sort_native_result_frequencies(result)
-    finally:
-        if path is not None:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                suffix=".msh",
+                delete=False,
+                encoding="utf-8",
+                dir=temporary_directory_root(),
+            ) as handle:
+                path = Path(handle.name)
+                handle.write(msh_text)
             try:
-                path.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning("Could not remove temporary BEAT mesh %s: %s", path, exc)
-    if cancellation_callback:
+                if adaptive_enabled(context):
+                    config.on_frequency_result = None
+                    revision = [0]
+
+                    def publish(native):
+                        if result_callback:
+                            snapshot = build_solver_response(
+                                result=native,
+                                config=config,
+                                context=context,
+                                start_time=started,
+                                metadata={
+                                    "provisional": {
+                                        "completed_frequency_count": native.adaptive_sampling[
+                                            "solved_count"
+                                        ],
+                                        "expected_frequency_count": context.num_frequencies,
+                                    },
+                                },
+                                sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+                            )
+                            result_callback(revision[0], snapshot)
+                            revision[0] += 1
+
+                    result = solve_native_adaptively(
+                        context,
+                        lambda frequencies: package.solve_frequencies(
+                            str(path), frequencies, config, status_callback=stage_status
+                        ),
+                        distance_m=config.observation.distance_m,
+                        sound_speed=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
+                        publish=publish,
+                        cancel=cancellation_callback,
+                    )
+                else:
+                    result = package.solve_frequencies(
+                        str(path),
+                        live_execution_frequencies(context).tolist(),
+                        config,
+                        status_callback=stage_status,
+                    )
+            except NotImplementedError as exc:
+                raise BeatUnavailable(str(exc)) from exc
+            sort_native_result_frequencies(result)
+        finally:
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Could not remove temporary BEAT mesh %s: %s", path, exc)
+    if cancellation_callback and not (official and getattr(result, "cancelled", False)):
         cancellation_callback()
     if stage_callback:
         stage_callback("finalizing", 1.0, "Packaging BEAT Engine solver results")
@@ -807,14 +880,14 @@ def solve_beat_from_msh_text(
     metadata = {
         "solver_backend": "beat",
         "solver_mode": "full_3d",
-        "engine": "hornlab-beat-bem",
+        "engine": "beat-engine" if official else "hornlab-beat-bem",
         "phase_time_convention": PHASE_TIME_CONVENTION,
         "beat_backend": backend,
         "device_interface": {
             "selected": f"beat-{backend}",
             f"beat-{backend}": status,
         },
-        "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "hornlab-beat-bem"},
+        "mesh_validation": {"mode": context.mesh_validation_mode, "backend": "beat-engine" if official else "hornlab-beat-bem"},
         "verbose": context.verbose,
         "performance": {
             "total_time_seconds": time.time() - started,
@@ -836,13 +909,15 @@ def solve_beat_from_msh_text(
             "solver_log": json_safe_native_value(response_solver_log(solver_log)),
         },
     }
+    if official:
+        metadata["cancelled"] = bool(result.cancelled)
     response = build_solver_response(
         result=result,
         config=config,
         context=context,
         start_time=started,
         metadata=metadata,
-        sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+        sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
     )
     field_traces = (
         build_field_trace_artifact(
@@ -850,7 +925,7 @@ def solve_beat_from_msh_text(
             [("default", result)],
             config,
             backend=BEAT_FIELD_TRACE_BACKEND,
-            sound_speed_m_per_s=solver_sound_speed_m_per_s("hornlab_beat_bem"),
+            sound_speed_m_per_s=(343.0 if official else solver_sound_speed_m_per_s("hornlab_beat_bem")),
         )
         if retain_traces
         else None

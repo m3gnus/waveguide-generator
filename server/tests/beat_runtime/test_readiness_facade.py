@@ -132,7 +132,7 @@ def test_invalidation_updates_live_registry_without_hbb(official, monkeypatch):
             readiness.probe_cache_clear()
             await asyncio.wait_for(registry._refresh_cpu_backend(), 2)
             entries = {entry.name: entry for entry in await registry.capabilities()}
-            assert not entries["beat-cpu"].available and not entries["beat-metal"].available
+            assert entries["beat-cpu"].available and not entries["beat-metal"].available
             assert registry.official_runtime_statuses["cpu"]["available"]
             usable.clear()
             readiness.probe_cache_clear()

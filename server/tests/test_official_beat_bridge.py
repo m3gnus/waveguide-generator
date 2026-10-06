@@ -1,775 +1,524 @@
-"""Standalone official BEAT bridge protocol and application-boundary tests."""
+"""Production provider routing with managed fake engine events; no Julia."""
 
 from __future__ import annotations
 
-import asyncio
 import base64
-import copy
+import importlib
+import json
 from pathlib import Path
-import threading
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from server.contracts.conventions import PHASE_TIME_CONVENTION
-from server.solver import official_beat as bridge
+from server.contracts.conventions import SOLVER_TIME_CONVENTION
+from server.solver import beat, beat_imported, official_beat as bridge
+from server.solver.beat_runtime import manager, readiness, registry
 from server.solver.context import SolverContext
 from server.platform import temp_session
-from server.solver.beat_runtime import manager, registry
-from server.solver.result_mapping import _gmsh22_observation_frame
-
+from server.tests import test_imported_beat as cad
 
 MESH = Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh"
 
 
-@pytest.fixture(autouse=True)
-def runtime_boundary(monkeypatch, tmp_path):
-    monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
-    monkeypatch.setattr(manager, "resolve_key", lambda backend, **options: registry.host_key({
-        "backend": backend, "julia_executable": "/fixture/julia",
-        "julia_identity": "fixture", "solver_script": "/fixture/solver.jl",
-        "julia_project": "/fixture/project", "julia_sysimage": None,
-        "julia_threads": 2, "engine_fingerprint": "fixture", "runtime_fingerprint": "fixture",
-        "environment": {"JULIA_NUM_THREADS": "2"},
-    }))
-    runtimes = []
-
-    def child(factory):
-        runtime = manager.WorkerManager(mode="child", engine_factory=factory)
-        runtimes.append(runtime)
-        return runtime
-
-    yield child
-    for runtime in runtimes:
-        runtime.shutdown()
-
-
-def _context(**overrides) -> SolverContext:
-    values = {"design": None, "frequency_range": (500.0, 2000.0), "num_frequencies": 3}
+def _context(**overrides):
+    values = dict(design=None, frequency_range=(500., 2000.), num_frequencies=3)
     values.update(overrides)
     return SolverContext(**values)
 
 
-def _wire(values: np.ndarray) -> dict:
-    array = np.asarray(values, dtype="<c8")
-    return {"encoding": "base64", "dtype": "complex64", "shape": list(array.shape),
-            "order": "C", "byte_order": "little",
-            "content_base64": base64.b64encode(array.tobytes()).decode("ascii")}
+def _wire(values):
+    data = np.asarray(values, dtype="<c8")
+    return dict(encoding="base64", dtype="complex64", shape=list(data.shape),
+                order="C", byte_order="little",
+                content_base64=base64.b64encode(data.tobytes()).decode("ascii"))
 
 
-def _result(frequency: float, planes: list[str], angles: np.ndarray) -> dict:
-    quantities = [
-        {"id": f"pressure:{plane}", "quantity": "exterior_pressure", "unit": "Pa",
-         "axes": ["excitation", "observation"],
-         "values": _wire(np.full((1, len(angles)), 2 + 3j))}
-        for plane in planes
-    ]
-    quantities.append({"id": "impedance", "quantity": "radiation_impedance",
-                       "unit": "N*s/m", "axes": ["radiator"], "values": _wire(np.asarray([4 + 5j]))})
-    return {"schema_version": 2, "freq_hz": frequency,
-            "excitation_port_ids": [bridge.SOURCE_ID], "quantities": quantities,
-            "diagnostics": {"phasor_convention": bridge.PHASOR,
-                            "bem_backend": "cpu", "precision": "float32", "symmetry": "off"}}
+def _result(request, frequency):
+    mesh = request["compiled_system"]["meshes"][0]["mesh_data"]
+    ports = len(request["excitation_port_ids"])
+    nodes = mesh["points"]["shape"][0]
+    faces = mesh["cells"][0]["connectivity"]["shape"][0]
+    quantities = []
+    for output in request["outputs"]:
+        kind = output["quantity"]
+        if kind == "exterior_pressure":
+            count = len(output["options"]["points_m"])
+            axis, unit = "observation", "Pa"
+            # Smooth complex free-field phase keeps adaptive interpolation meaningful.
+            values = np.full((ports, count), np.exp(-2j*np.pi*frequency*2/343) / (1+frequency/1000))
+        elif kind == "radiation_impedance":
+            axis, unit, values = "radiator", "N*s/m", np.full(ports, 9000+100j)
+        elif kind == "bem_boundary_pressure":
+            axis, unit, values = "bem_node", "Pa", np.tile(np.arange(nodes)+2+3j, (ports, 1))
+        else:
+            axis, unit, values = "bem_face", "Pa/m", np.tile(np.arange(faces)+5-2j, (ports, 1))
+        quantities.append(dict(id=output["id"], quantity=kind, unit=unit, target_id=None,
+                               axes=[axis] if axis == "radiator" else ["excitation", axis],
+                               values=_wire(values)))
+    options = request["solver_options"]
+    return dict(schema_version=2, freq_hz=float(np.float32(frequency)),
+                excitation_port_ids=request["excitation_port_ids"], quantities=quantities,
+                diagnostics={name: options[name] for name in
+                             ("precision", "symmetry", "bem_backend", "phasor_convention")})
 
 
-def test_compiled_request_has_absolute_owned_files_and_exact_frequency_axis(tmp_path) -> None:
-    msh = MESH.read_text()
-    context = _context(frequencies_hz=(500.0, 700.0, 2000.0))
-    request, planes, angles, area = bridge.build_compiled_request(
-        tmp_path / "surface.msh", tmp_path / "cancel.marker", context, msh,
-        backend="cpu", precision="float32",
-    )
-    assert request["frequencies_hz"] == [500.0, 2000.0, 700.0]
-    assert request["compiled_system"]["meshes"][0]["file"].startswith(str(tmp_path))
-    assert request["cancel_path"].startswith(str(tmp_path))
-    assert request["compiled_system"]["boundaries"][0]["group"]["tag"] == 2
-    assert request["compiled_system"]["regions"][0]["density_kg_per_m3"] > 0
-    assert len(planes) >= 1 and len(angles) > 0 and area > 0
-
-
-def test_millimetre_mesh_scales_origin_and_area_but_not_polar_radius(tmp_path) -> None:
-    msh = MESH.read_text()
-    context = _context()
-    metre, _, _, area = bridge.build_compiled_request(
-        tmp_path / "surface.msh", tmp_path / "cancel", context, msh,
-        backend="cpu", precision="float32",
-    )
-    millimetre, _, _, scaled_area = bridge.build_compiled_request(
-        tmp_path / "surface.msh", tmp_path / "cancel", context, msh,
-        backend="cpu", precision="float32", mesh_scale_to_m=0.001,
-    )
-    assert millimetre["compiled_system"]["meshes"][0]["scale_to_m"] == 0.001
-    assert scaled_area == pytest.approx(area * 1e-6)
-    # Each cut retains its requested 2 m source-to-probe distance even when
-    # the mesh's raw coordinate units are millimetres.
-    a = np.asarray(metre["outputs"][0]["options"]["points_m"])
-    b = np.asarray(millimetre["outputs"][0]["options"]["points_m"])
-    np.testing.assert_allclose(a - a[0], b - b[0], atol=1e-12)
-    _, raw_origin, _, _ = _gmsh22_observation_frame(
-        msh, origin_at="mouth", symmetry_plane=None, aperture_tag=None,
-    )
-    assert np.linalg.norm(raw_origin) > 0.01
-    np.testing.assert_allclose(b[0] - a[0], (0.001 - 1.0) * raw_origin, atol=1e-12)
-    assert np.linalg.norm(b[0]) > 1.0
-
-
-def test_metal_float64_is_refused_before_submission(tmp_path) -> None:
-    with pytest.raises(bridge.OfficialBeatUnavailable, match="Metal.*float32"):
-        bridge.build_compiled_request(
-            tmp_path / "surface.msh", tmp_path / "cancel", _context(), MESH.read_text(),
-            backend="metal", precision="float64",
-        )
-
-
-def test_signed_velocity_to_acceleration_scale_preserves_complex_phase() -> None:
-    msh = MESH.read_text()
-    _, planes, angles, area = bridge.build_compiled_request(
-        Path("/tmp/mesh.msh"), Path("/tmp/cancel"), _context(), msh,
-        backend="cpu", precision="float32",
-    )
-    pressure, impedance = bridge.parse_result(
-        _result(500.0, planes, angles), frequency_hz=500.0,
-        planes=planes, angles=angles, source_area_m2=area,
-    )
-    scale = 1 / (-1j * 2 * np.pi * 500)
-    assert pressure.shape == (len(planes), len(angles))
-    np.testing.assert_allclose(pressure, (2 + 3j) * scale)
-    np.testing.assert_allclose(impedance, (4 + 5j) / area * scale)
-
-
-@pytest.mark.parametrize("change", [
-    lambda result: result.update(schema_version=1),
-    lambda result: result.update(freq_hz=501.0),
-    lambda result: result.update(excitation_port_ids=["other"]),
-    lambda result: result["quantities"].append(copy.deepcopy(result["quantities"][0])),
-    lambda result: result["quantities"][0].update(unit="dB"),
-    lambda result: result["quantities"][0].update(axes=["observation", "excitation"]),
-    lambda result: result["quantities"][0]["values"].update(dtype="float32"),
-    lambda result: result["quantities"][0]["values"].update(order="F"),
-    lambda result: result["quantities"][0]["values"].update(byte_order="big"),
-    lambda result: result["quantities"][0]["values"].update(shape=[1, 1]),
-    lambda result: result["quantities"][0]["values"].update(content_base64="a"),
-    lambda result: result["quantities"][0]["values"].update(content_base64=""),
-    lambda result: result["diagnostics"].update(phasor_convention="exp(+i omega t)"),
-    lambda result: result["diagnostics"].update(symmetry="xy"),
-    lambda result: result.update(schema_version=2.0),
-    lambda result: result.update(freq_hz=True),
-    lambda result: result["quantities"].append("not an object"),
-    lambda result: result["quantities"][0].update(values=_wire(np.asarray([[complex(float("nan"), 0), 1j]]))),
-])
-def test_malformed_result_fails_closed(change) -> None:
-    planes, angles = ["horizontal"], np.asarray([0.0, 90.0])
-    result = _result(500.0, planes, angles)
-    change(result)
-    with pytest.raises(bridge.OfficialBeatProtocolError):
-        bridge.parse_result(result, frequency_hz=500.0, planes=planes,
-                            angles=angles, source_area_m2=1.0)
-
-
-def test_direct_entry_refuses_unqualified_physics() -> None:
-    msh = MESH.read_text()
-    for context in (_context(source_motion="axial"), _context(quadrants=1),
-                    _context(sim_type=1)):
-        with pytest.raises(bridge.OfficialBeatUnavailable):
-            bridge.solve_official_beat_from_msh_text(msh, context)
-
-
-@pytest.mark.parametrize("mode", ["ground", "imported", "axial", "quarter", "baffle", "sphere"])
-def test_run_refuses_unsupported_mode_before_mesh_or_artifact(monkeypatch, mode) -> None:
-    context = _context(
-        source_motion="axial" if mode == "axial" else "normal",
-        quadrants=1 if mode == "quarter" else bridge.FULL_DOMAIN_QUADRANTS,
-        sim_type=1 if mode == "baffle" else 2,
-    )
-    if mode == "sphere":
-        context.polar_config["spherical_sampling"] = True
-    monkeypatch.setattr(bridge.SolverContext, "from_request", lambda *_args, **_kwargs: context)
-    monkeypatch.setattr(bridge, "build_solver_mesh", lambda *_args, **_kwargs: pytest.fail("meshed"))
-    request = SimpleNamespace(
-        options=SimpleNamespace(ground_plane=SimpleNamespace(enabled=mode == "ground"),
-                                solver_mode="full_3d"),
-        geometry=None, design=object(),
-    )
-
-    async def artifact(*_args):
-        pytest.fail("artifact published")
-
-    with pytest.raises(bridge.OfficialBeatUnavailable):
-        asyncio.run(bridge.OfficialBeatEngine().run(
-            request, cancel_cb=lambda: None, stage_cb=lambda *_: None,
-            artifact_cb=artifact, imported_record={"source": "other"} if mode == "imported" else None,
-        ))
-
-
-def test_worker_negotiates_before_submit_and_cleans_job_files(monkeypatch, runtime_boundary) -> None:
-    msh = MESH.read_text()
-    calls = []
-    paths = []
-    requests = []
-
-    class Stream:
-        def __init__(self, events):
-            self.events = iter(events)
-            self.closed = False
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            return next(self.events)
-
-        def close(self):
-            self.closed = True
-            calls.append("close")
+@pytest.fixture
+def runtime(monkeypatch, tmp_path):
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
+    monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
+                        readiness.BackendReadiness(True, "ready", "matching compiled proof"))
+    monkeypatch.setattr(manager, "resolve_key", lambda backend, **options: registry.host_key({
+        "backend": backend, "julia_executable": str(tmp_path / "julia"),
+        "julia_identity": "fixture", "solver_script": str(tmp_path / "solver.jl"),
+        "julia_project": str(tmp_path / "project"), "julia_sysimage": None,
+        "julia_threads": 2, "engine_fingerprint": "fixture", "runtime_fingerprint": "fixture",
+        "environment": {"JULIA_NUM_THREADS": "2"},
+    }))
+    state = SimpleNamespace(requests=[], paths=[], streams=[], workers=[], calls=[],
+                            cancel_after=None, cancel_submission=None, mutate=None, result_count=0, fail=False)
 
     class Worker:
-        def __init__(self, **kwargs):
-            self.worker_info = {"ready": True}
-            self.stream = None
-            calls.append("construct")
+        worker_info = {"type": "ready"}
+
+        def __init__(self, *args, **kwargs):
+            state.workers.append(self)
 
         def ensure_started(self):
-            calls.append("ready")
+            state.calls.append("start")
 
-        def submit(self, request_path, **kwargs):
-            calls.append("submit")
-            paths.append(request_path)
-            request = __import__("json").loads(request_path.read_text())
-            requests.append(request)
-            _, planes, angles, _ = bridge.build_compiled_request(
-                Path(request["compiled_system"]["meshes"][0]["file"]),
-                Path(request["cancel_path"]), _context(), msh,
-                backend="cpu", precision="float32")
-            frequencies = request["frequencies_hz"]
-            events = [{"type": "result", "result": _result(f, planes, angles)} for f in frequencies]
-            events.append({"type": "completed", "solved_count": len(frequencies)})
-            self.stream = Stream(events)
-            return self.stream
+        def submit(self, path, **kwargs):
+            state.calls.append("submit")
+            state.paths.append(path)
+            request = json.loads(path.read_text())
+            state.requests.append(request)
+
+            def events():
+                solved = 0
+                if state.fail:
+                    yield {"type": "failed", "error": "assembly failed"}
+                    return
+                for frequency in request["frequencies_hz"]:
+                    if ((state.cancel_after is not None and solved == state.cancel_after
+                         and (state.cancel_submission is None
+                              or state.cancel_submission == len(state.requests)))
+                            or Path(request["cancel_path"]).exists()):
+                        yield {"type": "cancelled", "solved_count": solved}
+                        return
+                    raw = _result(request, frequency)
+                    if state.mutate:
+                        state.mutate(raw)
+                    solved += 1
+                    state.result_count += 1
+                    yield {"type": "result", "result": raw}
+                yield {"type": "completed", "solved_count": solved}
+
+            class Stream:
+                iterator = events()
+                closed = False
+
+                def __iter__(self):
+                    return self
+
+                def __next__(self):
+                    return next(self.iterator)
+
+                def close(self):
+                    self.closed = True
+                    self.iterator.close()
+
+            stream = Stream()
+            state.streams.append(stream)
+            return stream
 
         def terminate(self):
-            calls.append("terminate")
+            state.calls.append("terminate")
 
-    def negotiate(ready, request, operation):
-        assert ready == {"ready": True} and operation == "solve"
-        calls.append("negotiate")
+        def detach(self):
+            state.calls.append("detach")
 
-    original_import = bridge.importlib.import_module
+        shutdown = terminate
 
-    def fake_import(name):
-        if name == "beat_engine":
-            return SimpleNamespace(engine_paths=lambda backend: SimpleNamespace(
-                system_solver=Path("/fake/solver.jl"), project=Path("/fake/project")))
+    def validate(request):
+        assert request["schema_version"] == 1
+        assert request["solver_options"]["phasor_convention"] == SOLVER_TIME_CONVENTION
+        state.calls.append("validate")
+
+    def negotiate(info, request, operation):
+        assert info == Worker.worker_info and operation == "solve"
+        assert Path(request["cancel_path"]).parent.is_relative_to(tmp_path)
+        state.calls.append("negotiate")
+
+    original_import = importlib.import_module
+
+    def fake_import(name, *args, **kwargs):
         if name == "beat_engine.beat_contract.worker":
-            return SimpleNamespace(validate_solve_request=lambda request: calls.append("validate"),
-                                   negotiate_submission=negotiate)
-        return original_import(name)
-
-    monkeypatch.setattr(bridge.importlib, "import_module", fake_import)
-    provisional = []
-    final = bridge.solve_official_beat_from_msh_text(
-        msh, _context(), worker_manager=runtime_boundary(Worker),
-        result_callback=lambda index, response: provisional.append((index, response)),
-    )
-    assert calls.index("negotiate") < calls.index("submit")
-    assert len(provisional) == 3
-    assert final["metadata"]["solver_backend"] == "beat"
-    assert final["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
-    frame = final["metadata"]["observation_frame_basis"]
-    first_point = requests[0]["outputs"][0]["options"]["points_m"][0]
-    np.testing.assert_allclose(
-        first_point,
-        np.asarray(frame["origin_m"]) + 2.0 * np.asarray(frame["axis"]),
-        atol=1e-12,
-    )
-    assert final["frequencies"] == [500.0, 1000.0, 2000.0]
-    assert [response["frequencies"] for _, response in provisional] == [
-        [500.0], [2000.0], [1000.0]
-    ]
-    assert final["spl_on_axis"]["phase_degrees"][0] == pytest.approx(
-        provisional[0][1]["spl_on_axis"]["phase_degrees"][0]
-    )
-    assert all(not path.exists() for path in paths)
-    assert calls[-1] == "close"
-    assert "terminate" not in calls
-
-
-def test_worker_failed_event_is_error_and_cleans_files(monkeypatch, runtime_boundary) -> None:
-    msh = MESH.read_text()
-    observed_paths = []
-    calls = []
-
-    class Stream:
-        def __init__(self):
-            self.closed = False
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            return {"type": "failed", "error": "assembly failed"}
-
-        def close(self):
-            self.closed = True
-            calls.append("close")
-
-    class Worker:
-        worker_info = {"ready": True}
-
-        def __init__(self, **kwargs):
-            self.stream = Stream()
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            observed_paths.append(path)
-            return self.stream
-
-        def terminate(self):
-            calls.append("terminate")
-
-    _fake_package(monkeypatch)
-    with pytest.raises(bridge.OfficialBeatProtocolError, match="assembly failed"):
-        bridge.solve_official_beat_from_msh_text(msh, _context(), worker_manager=runtime_boundary(Worker))
-    assert calls == ["close", "terminate"]
-    assert observed_paths and not observed_paths[0].exists()
-
-
-def test_stream_close_failure_still_terminates_worker(monkeypatch, runtime_boundary) -> None:
-    _fake_package(monkeypatch)
-    calls = []
-    paths = []
-
-    class Stream:
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            return {"type": "completed", "solved_count": 0}
-
-        def close(self):
-            calls.append("close")
-            raise OSError("close failed")
-
-    class Worker:
-        worker_info = {"ready": True}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            paths.append(path)
-            return Stream()
-
-        def terminate(self):
-            calls.append("terminate")
-
-    with pytest.raises(OSError, match="close failed"):
-        bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
-        )
-    assert calls == ["close", "terminate"]
-    assert paths and not paths[0].exists()
-
-
-def _fake_package(monkeypatch, negotiate=None):
-    original_import = bridge.importlib.import_module
-
-    def fake_import(name):
-        if name == "beat_engine":
-            return SimpleNamespace(engine_paths=lambda backend: SimpleNamespace(
-                system_solver=Path("/fake/solver.jl"), project=Path("/fake/project")))
-        if name == "beat_engine.beat_contract.worker":
-            return SimpleNamespace(validate_solve_request=lambda request: None,
-                                   negotiate_submission=negotiate or (lambda *_: None))
-        return original_import(name)
-
-    monkeypatch.setattr(bridge.importlib, "import_module", fake_import)
-
-
-def test_incompatible_worker_never_receives_submit(monkeypatch, runtime_boundary) -> None:
-    submitted = []
-
-    class Worker:
-        worker_info = {"protocol_version": 0}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            submitted.append(path)
-
-        def terminate(self):
-            pass
-
-    def refuse(*_):
-        raise RuntimeError("compiled_system version 1 unavailable")
-
-    _fake_package(monkeypatch, refuse)
-    with pytest.raises(RuntimeError, match="compiled_system version 1"):
-        bridge.solve_official_beat_from_msh_text(MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker))
-    assert submitted == []
-
-
-def test_one_frequency_completion_rejects_boolean_count(monkeypatch, runtime_boundary) -> None:
-    _fake_package(monkeypatch)
-    context = _context(frequency_range=(500.0, 500.0), num_frequencies=1,
-                       frequencies_hz=(500.0,))
-    paths = []
-
-    class Stream:
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            if not hasattr(self, "sent"):
-                self.sent = True
-                return {"type": "completed", "solved_count": True}
-            raise StopIteration
-
-        def close(self):
-            pass
-
-    class Worker:
-        worker_info = {"ready": True}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            paths.append(path)
-            return Stream()
-
-        def terminate(self):
-            pass
-
-    with pytest.raises(bridge.OfficialBeatProtocolError, match="completion count"):
-        bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), context, worker_manager=runtime_boundary(Worker),
-        )
-    assert paths and not paths[0].exists()
-
-
-def test_cancel_interrupts_blocked_startup_before_submit(monkeypatch, runtime_boundary) -> None:
-    cancel = threading.Event()
-    terminated = threading.Event()
-    submitted = []
-
-    class Worker:
-        worker_info = {"ready": True}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            cancel.set()
-            assert terminated.wait(timeout=2)
-
-        def submit(self, path, **kwargs):
-            submitted.append(path)
-
-        def terminate(self):
-            terminated.set()
-
-    def cancel_cb():
-        if cancel.is_set():
-            raise RuntimeError("job cancelled")
-
-    _fake_package(monkeypatch)
-    with pytest.raises(RuntimeError, match="job cancelled"):
-        bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
-            cancellation_callback=cancel_cb,
-        )
-    assert submitted == [] and terminated.is_set()
-
-
-def test_cancel_interrupts_blocked_result_read_and_discards_worker(monkeypatch, runtime_boundary) -> None:
-    cancel = threading.Event()
-    terminated = threading.Event()
-    paths = []
-
-    class Stream:
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            cancel.set()
-            assert terminated.wait(timeout=2)
-            raise StopIteration
-
-        def close(self):
-            pass
-
-    class Worker:
-        worker_info = {"ready": True}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            paths.append(path)
-            return Stream()
-
-        def terminate(self):
-            terminated.set()
-
-    def cancel_cb():
-        if cancel.is_set():
-            raise RuntimeError("job cancelled")
-
-    _fake_package(monkeypatch)
-    with pytest.raises(RuntimeError, match="job cancelled"):
-        bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
-            cancellation_callback=cancel_cb,
-        )
-    assert terminated.is_set() and paths and not paths[0].exists()
-
-
-def test_julia_resolution_prefers_explicit_and_refuses_wrong_path(monkeypatch, tmp_path) -> None:
-    executable = tmp_path / "julia"
-    executable.write_text("stub")
-    executable.chmod(0o755)
-    assert bridge.resolve_julia_executable(str(executable)) == str(executable)
-    assert bridge.resolve_julia_executable(str(tmp_path / "missing")) is None
-
-
-def test_installed_official_contract_accepts_compiled_request_if_present(tmp_path) -> None:
-    contract = pytest.importorskip("beat_engine.beat_contract")
-    request, _, _, _ = bridge.build_compiled_request(
-        tmp_path / "surface.msh", tmp_path / "cancel.marker", _context(), MESH.read_text(),
-        backend="cpu", precision="float32",
-    )
-    contract.validate_solve_request(request)
-
-
-def test_adaptive_official_batches_reuse_one_worker_and_close_every_stream(monkeypatch, runtime_boundary):
-    import json
-    _fake_package(monkeypatch)
-    context = _context(num_frequencies=48, frequency_range=(500., 600.),
-                       adaptive_frequency_sampling=True)
-    workers = []
-    paths = []
-    _, planes, angles, _ = bridge.build_compiled_request(
-        Path('/fake/surface.msh'), Path('/fake/cancel'), context, MESH.read_text(),
-        backend='cpu', precision='float32')
-
-    class Stream:
-        def __init__(self, frequencies):
-            self.frequencies = frequencies
-            self.closed = False
-            self.events = iter([{'type': 'result', 'result': _result(f, planes, angles)}
-                                for f in frequencies] +
-                               [{'type': 'completed', 'solved_count': len(frequencies)}])
-
-        def __iter__(self):
-            return self
-
-        def __next__(self):
-            return next(self.events)
-
-        def close(self):
-            self.closed = True
-
-    class Worker:
-        worker_info = {'ready': True}
-
-        def __init__(self, **kwargs):
-            self.terminated = False
-            workers.append(self)
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            paths.append(path)
-            self.stream = Stream(json.loads(path.read_text())['frequencies_hz'])
-            return self.stream
-
-        def terminate(self):
-            self.terminated = True
-
-    snapshots = []
-    result = bridge.solve_official_beat_from_msh_text(
-        MESH.read_text(), context, worker_manager=runtime_boundary(Worker),
-        result_callback=lambda revision, payload: snapshots.append((revision, payload)))
-    assert len(workers) == 1
-    assert len(paths) >= 3
-    assert not workers[0].terminated and workers[0].stream.closed
-    assert all(not path.exists() for path in paths)
-    assert result['frequencies'] == np.geomspace(500, 600, 48).tolist()
-    assert result['frequency_status'][0] == result['frequency_status'][-1] == 'solved'
-    assert [revision for revision, _ in snapshots] == list(range(len(snapshots)))
-    assert all(len(payload['frequencies']) == 48 for _, payload in snapshots)
-
-
-@pytest.mark.parametrize("cancelled", [False, True])
-def test_managed_bridge_reuses_worker_and_retains_cancelled_results(
-    monkeypatch, runtime_boundary, cancelled,
-):
-    import json
-
-    _fake_package(monkeypatch)
-    workers = []
-    streams = []
-
-    class Stream:
-        def __init__(self, request):
-            _, planes, angles, _ = bridge.build_compiled_request(
-                Path(request["compiled_system"]["meshes"][0]["file"]),
-                Path(request["cancel_path"]), _context(), MESH.read_text(),
-                backend="cpu", precision="float32")
-            frequencies = request["frequencies_hz"][:1] if cancelled else request["frequencies_hz"]
-            self.events = iter([
-                {"type": "result", "result": _result(f, planes, angles)} for f in frequencies
-            ] + [{"type": "cancelled" if cancelled else "completed", "solved_count": len(frequencies)}])
-            self.closed = False
-            streams.append(self)
-
-        def __next__(self):
-            return next(self.events)
-
-        def close(self):
-            self.closed = True
-
-    class Worker:
-        worker_info = {"ready": True}
-
-        def __init__(self, **kwargs):
-            self.terminated = False
-            workers.append(self)
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            return Stream(json.loads(path.read_text()))
-
-        def terminate(self):
-            self.terminated = True
-
-    runtime = runtime_boundary(Worker)
-    for _ in range(2):
-        result = bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_manager=runtime,
-        )
-        assert result["metadata"]["cancelled"] is cancelled
-        assert result["frequencies"] == ([500.0] if cancelled else [500.0, 1000.0, 2000.0])
-    assert len(workers) == 1 and not workers[0].terminated
-    assert len(streams) == 2 and all(stream.closed for stream in streams)
-
-
-@pytest.mark.parametrize('adaptive', [False, True])
-def test_adaptive_cancelled_short_batch_returns_partial_response(monkeypatch, runtime_boundary, adaptive):
-    import json
-
-    _fake_package(monkeypatch)
-    context = _context(num_frequencies=48, frequency_range=(500., 600.),
+            return SimpleNamespace(validate_solve_request=validate, negotiate_submission=negotiate)
+        if name.startswith("hornlab_beat_bem"):
+            pytest.fail("official path imported HBB")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(importlib, "import_module", fake_import)
+    monkeypatch.setattr(beat, "_load_api", lambda: pytest.fail("official path used HBB"))
+    monkeypatch.setattr(beat_imported, "_load_api", lambda: pytest.fail("official CAD path used HBB"))
+    # Exercise host-mode admission/cache/session with an in-process fake transport.
+    monkeypatch.setattr(manager, "HostedWorker", Worker)
+    runtime = manager.WorkerManager(mode="host", directory=tmp_path / "workers")
+    monkeypatch.setattr(bridge, "get_manager", lambda: runtime)
+    state.manager = runtime
+    yield state
+    runtime.shutdown()
+    assert all(stream.closed for stream in state.streams)
+    assert all(not path.exists() for path in state.paths)
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal"])
+@pytest.mark.parametrize("motion", ["normal", "axial"])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_parametric_production(runtime, backend, motion, adaptive):
+    frames, progress = [], []
+    context = _context(source_motion=motion, num_frequencies=24 if adaptive else 3,
                        adaptive_frequency_sampling=adaptive)
-    _, planes, angles, _ = bridge.build_compiled_request(
-        Path('/fake/surface.msh'), Path('/fake/cancel'), context, MESH.read_text(),
-        backend='cpu', precision='float32')
-
-    class Stream:
-        def __init__(self, frequency):
-            self.events = iter([{'type': 'result', 'result': _result(frequency, planes, angles)},
-                                {'type': 'cancelled', 'solved_count': 1}])
-
-        def __next__(self):
-            return next(self.events)
-
-        def close(self):
-            pass
-
-    class Worker:
-        worker_info = {'ready': True}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            return Stream(json.loads(path.read_text())['frequencies_hz'][0])
-
-        def terminate(self):
-            pass
-
-    result = bridge.solve_official_beat_from_msh_text(
-        MESH.read_text(), context, worker_manager=runtime_boundary(Worker))
-    assert result['metadata']['cancelled'] is True
-    assert result['frequencies'] == [500.0]
+    context.polar_config.update(enabled_axes=["vertical", "diagonal", "horizontal"],
+                               spherical_sampling=True, spherical_theta_count=3,
+                               spherical_phi_count=4, inclination=23.)
+    response = beat.solve_beat_from_msh_text(
+        MESH.read_text(), context, backend=backend,
+        result_callback=lambda i, frame: frames.append((i, frame)), progress_callback=progress.append,
+    )
+    assert response["metadata"]["engine"] == "beat-engine"
+    assert response["frequencies"] == sorted(response["frequencies"])
+    assert len(response["frequencies"]) == context.num_frequencies
+    assert response["_field_traces"] is not None
+    assert response["_field_trace_unavailable_reason"] is None
+    assert frames and progress
+    assert len(runtime.workers) == 1
+    assert runtime.calls.index("negotiate") < runtime.calls.index("submit")
+    wire = runtime.requests[0]
+    assert wire["compiled_system"]["contract_version"] == (2 if motion == "axial" else 1)
+    assert wire["solver_options"]["regular_quadrature_mode"] == ("wavelength" if backend == "cpu" else "fixed")
+    assert [output["id"] for output in wire["outputs"]][:3] == [
+        "pressure:vertical", "pressure:diagonal", "pressure:horizontal"]
+    assert adaptive or wire["frequencies_hz"][:2] == [500., 2000.]
+    assert "terminate" not in runtime.calls
 
 
-def test_cooperative_zero_result_cancel_raises_callers_exception(monkeypatch, runtime_boundary):
-    from server.tests.beat_runtime.fake_host_worker import wait_until
-
-    _fake_package(monkeypatch)
-    cancelled = threading.Event()
-    error = RuntimeError('original caller JobCancelled')
-
-    def check():
-        if cancelled.is_set():
-            raise error
-
-    class Stream:
-        def __init__(self, path):
-            import json
-            self.marker = Path(json.loads(path.read_text())['cancel_path'])
-
-        def __next__(self):
-            cancelled.set()
-            wait_until(self.marker.exists, timeout=1)
-            return {'type': 'cancelled', 'solved_count': 0}
-
-        def close(self):
-            pass
-
-    class Worker:
-        worker_info = {'ready': True}
-
-        def __init__(self, **kwargs):
-            pass
-
-        def ensure_started(self):
-            pass
-
-        def submit(self, path, **kwargs):
-            return Stream(path)
-
-        def terminate(self):
-            pass
-
-    with pytest.raises(RuntimeError) as caught:
-        bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_manager=runtime_boundary(Worker),
-            cancellation_callback=check)
-    assert caught.value is error
+@pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("axial", [False, True])
+def test_imported_production(runtime, adaptive, axial):
+    msh = cad.MESH_Z if axial else cad.MESH
+    request = cad._request(drive_channels=[
+        {"id": "left", "source_ids": ["source-a", "source-b"], "motion": "axial" if axial else "normal"},
+        {"id": "right", "source_ids": ["source-c"]},
+    ])
+    request.options.adaptive_frequency_sampling = adaptive
+    if adaptive:
+        request.options.frequency_range = [100., 1000.]
+        request.options.frequencies_hz = None
+        request.options.num_frequencies = 24
+    frames = []
+    result = beat_imported.solve_imported_beat_from_msh_text(
+        msh, request, cad._record(msh_text=msh), backend="cpu",
+        result_callback=lambda i, frame: frames.append((i, frame)),
+    )
+    assert result["channel_order"] == ["left", "right"]
+    assert set(result["channels"]) == {"left", "right"}
+    assert "impedance" not in result["channels"]["left"]
+    assert "impedance" in result["channels"]["right"]
+    assert result["_field_traces"] is not None
+    assert result["_channel_bases_npz"]
+    assert frames and [i for i, _ in frames] == list(range(len(frames)))
+    assert set(result["metadata"]["beat_solver_frame"]) == {"rotation_rows", "origin_m", "note"}
+    assert len(runtime.workers) == 1
+    # Independent ports retain original tags and unrotated node/face order.
+    system = runtime.requests[0]["compiled_system"]
+    assert system["metadata"]["source_tags"] == {"source-a": 101, "source-b": 102}
+    points = system["meshes"][0]["mesh_data"]["points"]
+    decoded = np.frombuffer(base64.b64decode(points["data"]), dtype="<f8").reshape(points["shape"])
+    np.testing.assert_allclose(decoded[0], [.01, 0, 0] if not axial else [0, 0, 0])
 
 
-@pytest.mark.parametrize('error_type', [bridge.JuliaDiscoveryError, bridge.AssetsUnavailable])
-def test_runtime_discovery_and_assets_unavailability_maps_to_prototype_fallback(monkeypatch, error_type):
-    _fake_package(monkeypatch)
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_cancelled_prefix_is_packaged(runtime, imported, adaptive):
+    runtime.cancel_after = 1
+    if imported:
+        request = cad._request(drive_channels=[{"id": "right", "source_ids": ["source-c"]}],
+                               mesh={"rigid_size_mm": 8., "transition_mm": 20.,
+                                     "source_size_mm": {"source-c": 4.}})
+        request.options.adaptive_frequency_sampling = adaptive
+        if adaptive:
+            request.options.frequency_range = [100., 1000.]
+            request.options.frequencies_hz = None
+            request.options.num_frequencies = 24
+        result = beat_imported.solve_imported_beat_from_msh_text(
+            cad.MESH, request, cad._record(), backend="cpu")
+    else:
+        context = _context(adaptive_frequency_sampling=adaptive, num_frequencies=24 if adaptive else 3)
+        result = beat.solve_beat_from_msh_text(MESH.read_text(), context, backend="cpu")
+    assert len(result["frequencies"]) == 1
+    assert result["metadata"]["cancelled"] is True
+    assert result["_field_traces"] is not None
 
-    class UnavailableManager:
-        def get_worker(self, *args, **kwargs):
-            raise error_type('runtime unavailable')
 
-    with pytest.raises(bridge.OfficialBeatUnavailable, match='runtime unavailable'):
-        bridge.solve_official_beat_from_msh_text(
-            MESH.read_text(), _context(), worker_manager=UnavailableManager())
+@pytest.mark.parametrize("mutation", [
+    lambda raw: raw.update(freq_hz=1.),
+    lambda raw: raw.update(schema_version=1),
+    lambda raw: raw.update(excitation_port_ids=["wrong"]),
+    lambda raw: raw["quantities"][0].update(unit="dB"),
+    lambda raw: raw["quantities"][0]["values"].update(content_base64="bad"),
+    lambda raw: raw["diagnostics"].update(phasor_convention="exp(+i omega t)"),
+    lambda raw: raw["diagnostics"].update(bem_backend="metal"),
+    lambda raw: raw["quantities"].reverse(),
+])
+def test_protocol_failures_close_and_remove_staging(runtime, mutation):
+    runtime.mutate = mutation
+    with pytest.raises(bridge.OfficialBeatProtocolError):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert all(stream.closed for stream in runtime.streams)
+    assert all(not path.exists() for path in runtime.paths)
+
+
+def test_worker_failure(runtime):
+    runtime.fail = True
+    with pytest.raises(bridge.OfficialBeatProtocolError, match="assembly failed"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+
+
+def test_result_callback_failure_releases_worker(runtime):
+    def fail(*args):
+        raise LookupError("callback failed")
+    with pytest.raises(LookupError, match="callback failed"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu", result_callback=fail)
+    beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert len(runtime.workers) == 1
+
+
+def test_stale_readiness_refuses_before_submission(runtime, monkeypatch):
+    monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
+                        readiness.BackendReadiness(False, "stale", "compiled proof is stale"))
+    with pytest.raises(beat.BeatUnavailable, match="compiled proof is stale"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert not runtime.requests
+
+
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, imported, adaptive):
+    monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    monkeypatch.setattr(beat.time, "time", lambda: 1700000000.)
+    monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
+    original = importlib.import_module
+    imports = []
+    def watched(name, *args, **kwargs):
+        imports.append(name)
+        if name.startswith("beat_engine"):
+            pytest.fail("default path imported official engine")
+        return original(name, *args, **kwargs)
+    monkeypatch.setattr(importlib, "import_module", watched)
+    package = cad._RecordingBeat()
+    statuses = {"cpu": dict(available=True, backend="cpu", surface_traces=False, reason="HBB")}
+    monkeypatch.setattr(beat, "_load_api", lambda: package)
+    monkeypatch.setattr(beat_imported, "_load_api", lambda: package)
+    monkeypatch.setattr(beat, "beat_backend_statuses", lambda: statuses)
+    monkeypatch.setattr(beat_imported, "beat_backend_statuses", lambda: statuses)
+    # Constants are part of the fake HBB package too.
+    def hbb_import(name, *args, **kwargs):
+        if name == "hornlab_beat_bem._constants":
+            imports.append(name)
+            return SimpleNamespace(SPEED_OF_SOUND=343.)
+        return watched(name, *args, **kwargs)
+    monkeypatch.setattr(importlib, "import_module", hbb_import)
+    request = cad._request()
+    request.options.adaptive_frequency_sampling = adaptive
+    if adaptive:
+        request.options.frequency_range = [100., 1000.]
+        request.options.frequencies_hz = None
+        request.options.num_frequencies = 24
+    result = (beat_imported.solve_imported_beat_from_msh_text(
+        cad.MESH, request, cad._record(), backend="cpu") if imported else
+        beat.solve_beat_from_msh_text(
+            MESH.read_text(), _context(adaptive_frequency_sampling=adaptive,
+                                      num_frequencies=24 if adaptive else 3), backend="cpu"))
+    assert package.solves
+    metadata = result["metadata"]
+    assert (metadata["solver_engine"]["package"] if imported else metadata["engine"]) == "hornlab-beat-bem"
+    assert not any(name.startswith("beat_engine") for name in imports)
+    snapshot = _snapshot(result)
+    expected = json.loads((Path(__file__).parent / "beat_adapter/fixtures/hbb_production.json").read_text())
+    key = ("imported" if imported else "parametric") + ("_adaptive" if adaptive else "")
+    assert snapshot == expected[key]
+
+
+def _snapshot(value):
+    """Freeze the response, including binary artifact identity, for HBB parity."""
+    import hashlib
+
+    if isinstance(value, bytes):
+        return {"sha256": hashlib.sha256(value).hexdigest()}
+    if isinstance(value, dict):
+        return {k: _snapshot(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_snapshot(v) for v in value]
+    return value
+
+
+@pytest.mark.parametrize("traces", [False, True])
+def test_imported_driver_uses_pressure_loading_and_scales_traces(runtime, traces):
+    from server.solver.driver_lem import channel_drive_scaling
+    from server.solver.combine import deserialize_channel_bases
+
+    driver = dict(sd_cm2=210., bl_t_m=10.5, re_ohm=5.3, le_mh=.5,
+                  mmd_g=12., cms_m_per_n=4e-4, rms_kg_per_s=1.2)
+    request = cad._request(drive_channels=[
+        {"id": "left", "source_ids": ["source-a", "source-b"]},
+        {"id": "right", "source_ids": ["source-c"], "driver": driver},
+    ])
+    request.options.polar_config.field_plane = traces
+    record = cad._record()
+    # Driver loading uses the ingestion record's physical area for the piston.
+    record["sources"][2]["observed"] = {"total_area_mm2": 21000.}
+    result = beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, record, backend="cpu")
+    channel = result["channels"]["right"]
+    frequencies = np.asarray(result["frequencies"])
+    # source-c's triangle nodes 1,3,4: arithmetic P1 mean, independent of force output.
+    mean = ((2+3j)+(4+3j)+(5+3j))/3
+    acceleration_pressure = mean / (-2j*np.pi*frequencies)
+    scale, expected = channel_drive_scaling(
+        frequencies, acceleration_pressure, .021, request.geometry.drive_channels[1].driver,
+        drive_voltage_v=request.geometry.drive_voltage_v, rg_ohm=request.geometry.rg_ohm)
+    np.testing.assert_allclose(channel["impedance"]["real"], expected["electrical_impedance_ohm"]["real"])
+    np.testing.assert_allclose(channel["impedance"]["imaginary"], expected["electrical_impedance_ohm"]["imaginary"])
+    assert channel["metadata"]["impedance_units"] == "ohms"
+    bases = deserialize_channel_bases(result["_channel_bases_npz"])
+    raw = np.exp(-2j*np.pi*frequencies*2/343)/(1+frequencies/1000)/(-2j*np.pi*frequencies)
+    np.testing.assert_allclose(bases["results_by_id"]["right"].pressure_complex[:, 0, 0], raw*scale, rtol=1e-6)
+    assert bool(result["_field_traces"] is not None) == traces
+    if traces:
+        artifact = result["_field_traces"]
+        expected_pressure = (np.arange(4)+2+3j)[None, :] / (-2j*np.pi*frequencies[:, None]) * scale[:, None]
+        np.testing.assert_allclose(artifact.channels[1].pressure_p1, expected_pressure, rtol=1e-6)
+    assert all("surface:pressure" in [o["id"] for o in r["outputs"]] for r in runtime.requests)
+
+
+@pytest.mark.parametrize("mode", ["ground", "baffle", "y-half"])
+def test_production_refusals_precede_worker(runtime, mode):
+    from server.solver.ground_plane import GroundPlane
+
+    context = _context(ground_plane=GroundPlane("y", 1.) if mode == "ground" else None,
+                       sim_type=1 if mode == "baffle" else 2,
+                       quadrants=12 if mode == "y-half" else 1234)
+    with pytest.raises((beat.BeatUnavailable, ValueError)):
+        beat.solve_beat_from_msh_text(MESH.read_text(), context, backend="cpu")
+    assert not runtime.requests
+
+
+def test_worker_warmup_and_production_share_the_manager(runtime):
+    from server.solver.beat_runtime import warmup
+
+    warmup.warm_up(beat_backend="cpu", mode="worker", worker_manager=runtime.manager)
+    client = runtime.manager.get_worker("cpu")
+    beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert runtime.manager.get_worker("cpu") is client
+    assert len(runtime.workers) == 1
+
+
+@pytest.mark.parametrize("imported", [False, True])
+def test_callback_cancellation_retains_emitted_rows(runtime, imported):
+    cancelled = []
+    def cancel():
+        if cancelled:
+            raise RuntimeError("requested cancellation")
+    def publish(*args):
+        cancelled.append(True)
+    if imported:
+        request = cad._request()
+        result = beat_imported.solve_imported_beat_from_msh_text(
+            cad.MESH, request, cad._record(), backend="cpu",
+            cancellation_callback=cancel, result_callback=publish)
+    else:
+        result = beat.solve_beat_from_msh_text(
+            MESH.read_text(), _context(), backend="cpu", cancellation_callback=cancel,
+            result_callback=publish)
+    assert result["frequencies"] == [100.] if imported else result["frequencies"] == [500.]
+    assert result["metadata"]["cancelled"]
+
+
+def test_registry_official_readiness_without_hbb(runtime, monkeypatch):
+    import asyncio
+    from server.engines.registry import EngineRegistry, detect_engines
+
+    async def scenario():
+        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")))
+        try:
+            rows = await engines.capabilities()
+            assert all(row.available and row.field_traces for row in rows)
+            monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *args, **kwargs:
+                                readiness.BackendReadiness(False, "stale", "new identity"))
+            readiness.probe_cache_clear()
+            await engines._refresh_cpu_backend()
+            assert all(not row.available for row in await engines.capabilities())
+        finally:
+            await engines.shutdown_prewarm()
+    asyncio.run(scenario())
+
+
+def test_cancellation_during_second_channel_exports_shared_artifact_axis(runtime):
+    from server.solver.combine import deserialize_channel_bases
+
+    runtime.cancel_after, runtime.cancel_submission = 1, 2
+    result = beat_imported.solve_imported_beat_from_msh_text(
+        cad.MESH, cad._request(), cad._record(), backend="cpu")
+    assert len(result["channels"]["left"]["frequencies"]) == 3
+    assert result["channels"]["right"]["frequencies"] == [100.]
+    artifact = result["_field_traces"]
+    np.testing.assert_equal(artifact.frequencies_hz, [100.])
+    assert all(member.pressure_p1.shape[0] == 1 for member in artifact.channels)
+    bases = deserialize_channel_bases(result["_channel_bases_npz"])
+    assert all(member.pressure_complex.shape[0] == 1 for member in bases["results_by_id"].values())
+
+
+def test_empty_cancellation_and_startup_callback_keep_errors(runtime):
+    runtime.cancel_after = 0
+    with pytest.raises(beat.BeatUnavailable, match="before any results"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    original = RuntimeError("cancelled before startup")
+    def cancel():
+        raise original
+    with pytest.raises(RuntimeError) as error:
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu", cancellation_callback=cancel)
+    assert error.value is original
+
+
+def test_fresh_official_import_has_no_hbb_dependency(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    code = """
+import importlib.abc, sys
+class RefuseHBB(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.startswith('hornlab_beat_bem'):
+            raise AssertionError('official import reached HBB: ' + fullname)
+sys.meta_path.insert(0, RefuseHBB())
+from server.solver import beat, beat_imported, official_beat
+assert not any(name.startswith('hornlab_beat_bem') for name in sys.modules)
+assert not any(name.startswith('beat_engine') for name in sys.modules)
+"""
+    subprocess.run([sys.executable, "-c", code], check=True, timeout=15,
+                   env=dict(os.environ, WG2_BEAT_PROVIDER="official",
+                            WG2_BEAT_RUNTIME_DIR=str(tmp_path / "runtime")))
+    assert not (tmp_path / "runtime").exists()
+
+
+def test_official_imported_combined_channel(runtime):
+    request = cad._request(combine={"members": ["left", "right"], "crossovers_hz": [500.]})
+    result = beat_imported.solve_imported_beat_from_msh_text(
+        cad.MESH, request, cad._record(), backend="cpu")
+    name = request.geometry.combine.id
+    assert result["channel_order"] == ["left", "right", name]
+    assert result["channels"][name]["metadata"]["engine"] == "beat-engine"
+    assert "impedance" not in result["channels"][name]
+    assert result["channels"][name]["frequencies"] == result["frequencies"]

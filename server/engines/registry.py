@@ -336,7 +336,14 @@ def detect_engines(
         BEAT_BACKENDS, beat_backend_statuses, beat_engine_name,
     )
     try:
-        backend_statuses = beat_backend_statuses()
+        from server.solver.beat_runtime.provider import official_selected
+
+        if official_selected():
+            from server.solver.official_beat import production_statuses
+
+            backend_statuses = production_statuses()
+        else:
+            backend_statuses = beat_backend_statuses()
     except Exception as exc:  # a broken optional stack is unavailable, not fatal
         backend_statuses = {
             backend: {
@@ -416,8 +423,9 @@ def _beat_row_updates(
     from server.solver.beat_runtime.provider import official_selected
 
     if official_selected():
-        # Official preparation cannot change the HBB solve adapter's readiness.
-        return {}
+        return {f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
+                for backend, status in _official_runtime_statuses().items()
+                if backend in {"cpu", "metal"}}
 
     updates = {"beat-cpu": cpu_backend_status(package)}
     if beat_cpu_runtime.cpu_preparation_in_flight():
@@ -1038,19 +1046,21 @@ class EngineRegistry:
             try:
                 if official_selected():
                     self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
-                package = _load_api()
-                if package is not None:
-                    updates = await asyncio.to_thread(
-                        _beat_row_updates, package, _cpu_backend_status
-                    )
+                selected = official_selected()
+                package = None if selected else _load_api()
+                if selected or package is not None:
+                    updates = ({f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
+                                for backend, status in self.official_runtime_statuses.items()
+                                if backend in {"cpu", "metal"}} if selected else
+                               await asyncio.to_thread(_beat_row_updates, package, _cpu_backend_status))
                     async with self._lock:
                         if self._cache is not None and not self._listener_removed:
                             self._cache = tuple(
                                 _beat_engine_info(beat_engine_backend(item.name), {
                                     "available": updates[item.name][0],
                                     "reason": updates[item.name][1],
-                                    "version": getattr(package, "__version__", item.version),
-                                    "surface_traces": _package_retains_surface_traces(package),
+                                    "version": None if selected else getattr(package, "__version__", item.version),
+                                    "surface_traces": True if selected else _package_retains_surface_traces(package),
                                 })
                                 if item.name in updates
                                 else item

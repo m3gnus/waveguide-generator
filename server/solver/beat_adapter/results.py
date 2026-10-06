@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import binascii
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import TYPE_CHECKING, Any
 
@@ -272,6 +272,16 @@ class SweepResult:
     solver_log: list[dict[str, Any]]
     radiation_impedance: np.ndarray | None = None
 
+    timings: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        totals: dict[str, float] = {}
+        for entry in self.solver_log:
+            for name, value in entry.get("timings", {}).items():
+                if isinstance(value, (int, float)) and math.isfinite(value):
+                    totals[name] = totals.get(name, 0.0) + value
+        self.timings = totals
+
     @property
     def is_partial(self) -> bool:
         return len(self.frequencies_hz) < self.requested_frequency_count
@@ -304,6 +314,7 @@ def map_sweep(
     progress_callback: Callable[[int, int, float], None] | None = None,
     on_frequency_result: Callable[[int, float, dict[str, Any]], bool | None] | None = None,
     request_cancel: Callable[[], None] | None = None,
+    compiled_request: CompiledRequest | None = None, channel_id: str | None = None,
 ) -> SweepResult:
     """Consume and close an owned stream, including on callback/decoder failure.
 
@@ -313,6 +324,8 @@ def map_sweep(
     """
     stream = iter(events)
     try:
+        if compiled_request is not None and channel_id not in compiled_request.channel_ports:
+            raise ValueError("Compiled sweep requires a named WG channel")
         frequencies = np.asarray(list(frequencies_hz), dtype=float)
         if (frequencies.ndim != 1 or frequencies.size == 0 or not np.isfinite(frequencies).all()
                 or np.any(frequencies <= 0) or np.unique(frequencies).size != frequencies.size):
@@ -350,11 +363,13 @@ def map_sweep(
                 index = len(rows)
                 if index >= len(frequencies):
                     raise ResultContractError("Worker returned extra frequency rows")
-                row = parse_frequency(
+                row = (parse_compiled_frequency(
+                    event.get("result"), compiled_request, frequency_hz=float(frequencies[index])
+                )[channel_id] if compiled_request is not None else parse_frequency(
                     event.get("result"), frequency_hz=float(frequencies[index]), layout=layout,
                     source_area_m2=source_area_m2, excitation_port_id=excitation_port_id,
                     symmetry=symmetry, precision=precision, backend=backend, trace_counts=trace_counts,
-                    boundary_loading=boundary_loading, source_motion=source_motion)
+                    boundary_loading=boundary_loading, source_motion=source_motion))
                 rows.append(row)
                 logs.append(row.log_entry(layout))
                 if progress_callback:

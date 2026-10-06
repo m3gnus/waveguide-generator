@@ -79,8 +79,8 @@ def test_production_registry_availability_follows_solve_adapter(selected, monkey
         try:
             entries = {entry.name: entry for entry in await registry.capabilities()}
             await registry._refresh_cpu_backend()
-            assert entries["beat-cpu"].available == hbb_ready
-            assert not entries["beat-metal"].available
+            assert entries["beat-cpu"].available == official_ready
+            assert entries["beat-metal"].available == official_ready
             assert registry.official_runtime_statuses["cpu"]["available"] == official_ready
         finally:
             await registry.shutdown_prewarm()
@@ -171,11 +171,12 @@ def test_cross_process_state_stamp_refreshes_live_registry(selected, monkeypatch
                 await registry._refresh_cpu_backend()
                 before = len(computations)
             subprocess.run(command, check=True, timeout=10)
-            entries = await registry.capabilities()
+            await registry.capabilities()
             await registry._refresh_cpu_backend()
             assert len(computations) > before
             assert registry.official_runtime_statuses["cpu"]["available"] == (operation == "provision")
-            assert not entries[0].available
+            refreshed = await registry.capabilities()
+            assert refreshed[0].available == (operation == "provision")
         finally:
             await registry.shutdown_prewarm()
 
