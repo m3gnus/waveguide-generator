@@ -173,11 +173,11 @@ export function frameSolveBlocker(ingestId: string | null | undefined): string |
 export async function confirmDisplayedFrame(
   ingestId: string,
   fetcher: typeof fetch = fetch,
+  displayed: CadFrameView | undefined = useCadSolverFrameStore.getState().frames[ingestId],
 ): Promise<SolverFrameAxis | null> {
-  const view = useCadSolverFrameStore.getState().frames[ingestId];
+  const view = displayed;
   if (!view || view.linked || !view.frame || view.status !== 'ready') return null;
-  const blocker = frameSolveBlocker(ingestId);
-  if (blocker) throw new Error(blocker);
+  if (!view.axis) throw new Error('Choose which way this model radiates, in the CAD Link panel, then press Solve.');
   const axis = view.axis!;
   if (view.frame.confirmed?.axis === axis) return axis;
   const answer = await confirmSolverFrame({ ingestId }, axis, fetcher);

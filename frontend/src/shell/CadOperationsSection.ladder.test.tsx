@@ -13,6 +13,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
+import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
+import { jobsSocket } from '../api/jobsSocket';
 import { useCadOperationsStore } from '../stores/cadOperations';
 
 const coordinator = vi.hoisted(() => ({
@@ -51,31 +53,36 @@ const onScreen = { manifest_sha256: `sha256:${'a'.repeat(64)}` } as CadReturnIng
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
 function stubBackend(approvals: Array<{ preparation_id: string; finding_id: string }> = []) {
+  reviewApprovals = approvals;
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = decodeURIComponent(String(input));
-    if (url.startsWith('/api/cadlink/operations/manual-solve:op-1')) {
-      return json({
-        ...operation('frame_confirmation_required'),
-        approvals,
-        preparation: {
-          preparationId: 'wgi_prep1', ingestId: 'wgi_prep1', snapshotSha256: 'sha256:s', setupRevisionId: 'wgs_1',
-          reportSha256: 'sha256:r', blockingFindingIds: [FINDING], attemptGeneration: 1,
-        },
-      });
-    }
-    if (url.startsWith('/api/cadlink/ingest/wgi_prep1')) {
-      return json({ findings: [{ id: FINDING, kind: 'scope-degradation', detail: 'skipped bodies: Body11', blocking: true }] });
-    }
-    throw new Error(`unexpected ${url}`);
+    if (url.includes('/api/cadlink/operations/')) throw new Error('operation endpoint is gone');
+    if (url.endsWith('/approvals')) return json({});
+    if (url.endsWith('/solve-again')) return json({ job_id: 'child' });
+    return json({ findings: [{ id: FINDING, kind: 'scope-degradation', detail: 'skipped bodies: Body11', blocking: true }] });
   }));
 }
 
+let reviewIds: string[] = [FINDING];
+let reviewApprovals: Array<{ preparation_id: string; finding_id: string }> = [];
+function setRequests({ operations }: { operations: Record<string, CadOperationSummary> }): void {
+  useCadOperationsStore.setState({ operations: Object.fromEntries(Object.entries(operations).filter(([, item]) => item.kind !== 'prepare_and_solve')) });
+  publishCadJobs(Object.values(operations).filter((item) => item.kind === 'prepare_and_solve').map((item) => {
+    const job = cadJobFixture(item);
+    if (job.cad_state?.preparation) job.cad_state.preparation.blocking_finding_ids = reviewIds;
+    job.cad_state!.approvals = reviewApprovals;
+    return job;
+  }));
+}
 describe('the needs_user_input ladder', () => {
   let host: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    reviewIds = [FINDING]; reviewApprovals = [];
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -85,12 +92,13 @@ describe('the needs_user_input ladder', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
-    useCadOperationsStore.setState({ operations: {} });
+    setRequests({ operations: {} });
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   async function show(summary: CadOperationSummary): Promise<HTMLOListElement> {
-    useCadOperationsStore.setState({ operations: { [summary.operationId]: summary } });
+    setRequests({ operations: { [summary.operationId]: summary } });
     await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
     await vi.waitFor(() => expect(host.querySelector('.cad-operation-ladder')).not.toBeNull());
     return host.querySelector<HTMLOListElement>('.cad-operation-ladder')!;
@@ -117,7 +125,7 @@ describe('the needs_user_input ladder', () => {
   });
 
   it('uses an active header while a manual solve is being prepared', async () => {
-    useCadOperationsStore.setState({ operations: { 'manual-solve:op-1': operation('', {
+    setRequests({ operations: { 'manual-solve:op-1': operation('', {
       state: 'processing', stage: 'preparing-mesh', reason: null,
     }) } });
     await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
@@ -127,15 +135,7 @@ describe('the needs_user_input ladder', () => {
   });
 
   it('at the frame gate with no blocking findings, lists only the frame', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      if (String(input).startsWith('/api/cadlink/operations/')) {
-        return json({
-          ...operation('frame_confirmation_required'), approvals: [],
-          preparation: { preparationId: 'wgi_prep1', ingestId: 'wgi_prep1', snapshotSha256: 's', setupRevisionId: 'wgs_1', reportSha256: 'r', blockingFindingIds: [], attemptGeneration: 1 },
-        });
-      }
-      return json({ findings: [] });
-    }));
+    stubBackend(); reviewIds = [];
     const ladder = await show(operation('frame_confirmation_required'));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(steps(ladder).map((step) => step.gate)).toEqual(['frame']);
@@ -154,9 +154,7 @@ describe('the needs_user_input ladder', () => {
     expect(host.textContent).not.toContain(FINDING);
     await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="Approve and solve: PartyMEH"]')!.click(); });
     // The approval continues the preparation it was given for, with its settings.
-    expect(coordinator.approveOperation).toHaveBeenCalledWith('manual-solve:op-1', {
-      preparationId: 'wgi_prep1', findingIds: [FINDING],
-    });
+    expect(vi.mocked(fetch).mock.calls).toContainEqual([expect.stringContaining('/approvals'), expect.objectContaining({ body: JSON.stringify({ preparation_id: 'wgi_prep1', finding_ids: [FINDING] }) })]);
     expect(coordinator.solveOperationWithSettings).not.toHaveBeenCalled();
   });
 
@@ -179,7 +177,7 @@ describe('the needs_user_input ladder', () => {
     ['op-fusion', 'ready_to_solve', null, ['Dismiss']],
   ])('leaves %s after %s to the Solve card', async (operationId, reason, words, buttons) => {
     stubBackend();
-    useCadOperationsStore.setState({ operations: { [operationId]: operation(reason, { operationId }) } });
+    setRequests({ operations: { [operationId]: operation(reason, { operationId }) } });
     await act(async () => root.render(<CadOperationsSection record={onScreen}/>));
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const card = host.querySelector<HTMLElement>('.cad-operation')!;
@@ -190,11 +188,11 @@ describe('the needs_user_input ladder', () => {
   });
 
   it('keeps a waiting request of the model on screen off this section when the Solve card shows it', async () => {
-    useCadOperationsStore.setState({ operations: { 'op-fusion': operation('setup_required', { operationId: 'op-fusion' }) } });
+    setRequests({ operations: { 'op-fusion': operation('setup_required', { operationId: 'op-fusion' }) } });
     await act(async () => root.render(<CadOperationsSection record={onScreen} solves={false}/>));
     expect(host.querySelector('.cad-operation')).toBeNull();
     // Not on screen: it stays a quiet line here (the control).
-    useCadOperationsStore.setState({ operations: { 'op-fusion': operation('setup_required', {
+    setRequests({ operations: { 'op-fusion': operation('setup_required', {
       operationId: 'op-fusion', snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Other', projectLineageId: 'wgl_1' },
     }) } });
     await act(async () => root.render(<CadOperationsSection record={onScreen} solves={false}/>));
@@ -203,24 +201,8 @@ describe('the needs_user_input ladder', () => {
 
   it('counts an approval only on the preparation it was given for, as the backend records them', async () => {
     const SECOND = 'finding-area-drift-0001';
-    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
-      const url = decodeURIComponent(String(input));
-      if (url.startsWith('/api/cadlink/operations/')) {
-        return json({
-          ...operation('findings_need_review'),
-          // One approved on this preparation, one on an earlier one.
-          approvals: [
-            { preparation_id: 'wgi_prep1', finding_id: FINDING },
-            { preparation_id: 'wgi_prep0', finding_id: SECOND },
-          ],
-          preparation: {
-            preparationId: 'wgi_prep1', ingestId: 'wgi_prep1', snapshotSha256: 's', setupRevisionId: 'wgs_1',
-            reportSha256: 'r', blockingFindingIds: [FINDING, SECOND], attemptGeneration: 1,
-          },
-        });
-      }
-      return json({ findings: [] });
-    }));
+    stubBackend([{ preparation_id: 'wgi_prep1', finding_id: FINDING }, { preparation_id: 'wgi_prep0', finding_id: SECOND }]);
+    reviewIds = [FINDING, SECOND];
     const ladder = await show(operation('findings_need_review'));
     await vi.waitFor(() => expect(steps(ladder)[0].text).toContain('1 finding'));
     expect(steps(ladder)[0].text).not.toContain('2 findings');

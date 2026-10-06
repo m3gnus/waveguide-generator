@@ -1,6 +1,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { CadSolveInputs } from './CadSolveInputs';
 
@@ -34,6 +35,23 @@ describe('CAD solve input identities', () => {
     host.remove();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it('describes a retried CAD job entirely from cad_state with the operation endpoint gone', async () => {
+    const fetcher = vi.fn(async () => json({ detail: 'gone' }, 404));
+    vi.stubGlobal('fetch', fetcher);
+    const job = cadJobFixture(operation({ jobId: 'child', state: 'needs_user_input', reason: 'frame_confirmation_required', message: 'Confirm the frame.' }), { client_request_id: null, parent_job_id: 'parent' });
+    await act(async () => root.render(<CadSolveInputs operationId="op-1" job={job} jobCad={job.cad_provenance} resolvedEngine="metal" engineSource="job"/>));
+    expect(host.textContent).toContain(`SnapshotTritonia${manifest}`);
+    expect(host.textContent).toContain('State needs_user_input'.replace(' ', ''));
+    expect(host.textContent).toContain('Stage ready'.replace(' ', ''));
+    expect(host.textContent).toContain('Reasonframe_confirmation_required');
+    expect(host.textContent).toContain('Received2026-09-14T10:00:00Z');
+    expect(host.textContent).toContain('Last moved2026-09-14T10:00:05Z');
+    expect(host.textContent).toContain('Preparationwgp_1');
+    expect(host.textContent).toContain('Setup revisionwgs_1');
+    expect(host.textContent).toContain('Confirm the frame.');
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it('reads a pending operation engine from its setup revision despite a different job engine', async () => {
@@ -228,7 +246,7 @@ describe('CAD solve input identities', () => {
         setup: { revision_id: 'wgs_job', digest: 'sha256:d', origin: 'wg_defaults' },
       }}
     />));
-    await vi.waitFor(() => expect(host.textContent).toContain('Could not read all bound inputs'));
+    expect(fetcher).not.toHaveBeenCalled();
 
     expect(host.querySelector('[data-setup-defaults="true"]')?.textContent)
       .toBe("Using WG's default settings \u2014 change them in WG.");

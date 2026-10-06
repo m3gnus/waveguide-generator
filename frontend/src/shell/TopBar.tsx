@@ -9,6 +9,7 @@ import { restoreParametricWorkingDesign } from '../jobs/showJobModel';
 import { RESULT_PANEL_COUNTS, preferencesStore, runDisplayName, usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { waveguideDefinitionAppliesNow } from '../stores/waveguideLink';
+import { cadJobSummaries } from '../jobs/cadSolve';
 import { useCadOperationsStore } from '../stores/cadOperations';
 import type { FusionCadStatus } from '../api/cadlink';
 import { operationNeedsUser, solveAttention, useReadyRun } from './solveAttention';
@@ -272,7 +273,10 @@ export function AttentionNotices() {
   const unseenRefusals = useCadOperationsStore((state) => state.unseenRefusals);
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const waiting = Object.values(operations).filter(operationNeedsUser);
+  const waiting = [
+    ...Object.values(operations).filter((operation) => operation.kind !== 'prepare_and_solve'),
+    ...Object.values(cadJobSummaries(jobs)),
+  ].filter(operationNeedsUser);
   const showWaiting = waiting.length > 0 && !(mode === 'cad' && workspaceNavigation.isVisible('cadlink'));
   const showReady = readyRun !== null && !workspaceNavigation.isVisible('results');
   // A request WG took and refused has no row to wait in; this is its route.

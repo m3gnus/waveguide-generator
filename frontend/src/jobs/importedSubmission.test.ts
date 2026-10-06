@@ -3,7 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { expandLegacy, toWire, withChannel, withDelayMode } from '../results/crossoverSpec';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
-import { acknowledgeManualCadSolvePreparation, manualCadSolveIdentity, manualCadSolveIngestFor, buildImportedSubmission, forgetManualCadSolveOperationId, importedSubmissionBlocker, importedSubmissionNotices, manualCadSolveOperationId, manualCadSolvePreparationAcknowledged, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
+import { buildImportedSubmission, importedSubmissionBlocker, importedSubmissionNotices, undrivenChannels, widenPolarToDerivation } from './importedSubmission';
 
 const bundle = {
   name: 'three-way.wgreturn', bundlePath: 'wgreturn/three-way.wgreturn', modifiedAt: '2026-08-13T12:00:00Z', readable: true,
@@ -170,25 +170,6 @@ describe('imported solve submission wire', () => {
 
     expect(importedSubmissionBlocker(useCadReturnStore.getState())).toBeNull();
     expect(buildImportedSubmission(useCadReturnStore.getState()).geometry.acknowledged_findings).toEqual([]);
-  });
-});
-
-describe('manual CAD solve identity', () => {
-  it('survives a retry and a module reload through storage', () => {
-    const values = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => { values.set(key, value); },
-      removeItem: (key: string) => { values.delete(key); },
-    };
-    const first = manualCadSolveOperationId('wgi_1', storage);
-    expect(manualCadSolveOperationId('wgi_1', storage)).toBe(first);
-    expect(manualCadSolvePreparationAcknowledged('wgi_1', first, storage)).toBe(false);
-    acknowledgeManualCadSolvePreparation('wgi_1', first, storage);
-    expect(manualCadSolvePreparationAcknowledged('wgi_1', first, storage)).toBe(true);
-    expect(manualCadSolveOperationId('wgi_2', storage)).not.toBe(first);
-    forgetManualCadSolveOperationId('wgi_1', first, storage);
-    expect(manualCadSolveOperationId('wgi_1', storage)).not.toBe(first);
   });
 });
 
@@ -367,20 +348,5 @@ describe('widening a polar grid onto the ingestion derivation', () => {
     widenPolarToDerivation(wire, derivation(false));
 
     expect(wire.polar_config).toMatchObject({ enabled_axes: ['horizontal', 'vertical'], inclination: 35 });
-  });
-});
-
-
-describe('matching a finished manual solve to the ingestion it was submitted for', () => {
-  beforeEach(() => { sessionStorage.clear(); });
-
-  it('finds the ingestion by the operation id, not by whichever identity is stored first', () => {
-    const run = () => ({ designName: 'Speaker', label: 'Speaker1' });
-    const first = manualCadSolveIdentity('wgi_a', run);
-    const second = manualCadSolveIdentity('wgi_b', run);
-    expect(first.operationId).not.toBe(second.operationId);
-    expect(manualCadSolveIngestFor(second.operationId)).toBe('wgi_b');
-    expect(manualCadSolveIngestFor(first.operationId)).toBe('wgi_a');
-    expect(manualCadSolveIngestFor('manual-solve:someone-else')).toBeNull();
   });
 });

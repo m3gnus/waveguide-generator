@@ -5,7 +5,7 @@ import type { CadReturnBundle, CadReturnFinding, CadReturnIngestRecord } from '.
 import { OnshapePublicConsentRequired, sendDesignToOnshape, unlinkOnshape } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
 import { useCadReturnStore } from '../stores/cadReturn';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { cadJobSummaries, useCadJobs } from '../jobs/cadSolve';
 import { currentDocumentLoad, isCurrentDocumentLoad, recordCommittedAthPolars, useDesignStore } from '../stores/design';
 import { keptContentKeyOf, rememberSentCopy } from '../design/replacementCheck';
 import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions';
@@ -543,7 +543,7 @@ export function CadLinkPanel() {
     setAddinReply({ detail, under: cadLinkCoordinatorBridge.getSnapshot().fusionStatus });
     setInstallingAddin(false);
   }
-  const operations = useCadOperationsStore((current) => current.operations);
+  const jobs = useCadJobs();
   const onshapeSendGeneration = useRef(0);
   const onshape = preferences.cadApplication === 'onshape';
   const {
@@ -706,7 +706,7 @@ export function CadLinkPanel() {
   const addinVersion = !onshape && fusionStatus?.running && fusionStatus.adapterVersion
     ? `WGLink add-in ${fusionStatus.adapterVersion}`
     : undefined;
-  const solvesOnScreen = onScreenSolves(operations, record);
+  const solvesOnScreen = onScreenSolves(cadJobSummaries(jobs), record);
   const fusionBothChanged = Boolean(fusionStatus?.wgChangesAvailable && fusionStatus.fusionChangesAvailable);
   const staleModel = Boolean(record && state.needsIngest);
   const solveCard = Boolean(record) && !staleModel && !ingesting;
@@ -898,9 +898,9 @@ export function CadLinkPanel() {
           title="The snapshot is the returned model, named by its manifest hash. The preparation is the ingestion whose mesh is on screen and would be solved."
         >Snapshot <code>{shortSha256(record.manifest_sha256)}</code> · Preparation <code>{record.ingest_id}</code></p>
         {solvesOnScreen.map((operation) => <CadSolveInputs
-          key={operation.operationId}
+          key={operation.jobId ?? operation.operationId}
           operationId={operation.operationId}
-          operation={operation}
+          job={jobs.find((job) => job.id === operation.jobId)}
           engineSource="setup-revision"
         />)}
       </details>}

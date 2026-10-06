@@ -1,4 +1,6 @@
 import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { cadJobSummary, latestCadJobs } from '../jobs/cadSolve';
+import type { JobItem } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
 import { isPendingCadOperation } from '../api/cadOperations';
 import { workspaceModeStore } from '../stores/workspaceMode';
@@ -67,6 +69,10 @@ export const solveAttention = {
     if (pendingSolve === null) return;
     operationArms.set(operationId, pendingSolve);
     pendingSolve = null;
+  },
+  followJob(from: string, jobId: string): void {
+    const arm = operationArms.get(from);
+    if (arm !== undefined) operationArms.set(jobId, arm);
   },
   /** A command given on an operation now: an action on its card. */
   armOperation(operationId: string): void {
@@ -165,4 +171,24 @@ export function useOperationAttention(operations: Record<string, CadOperationSum
     }
     if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
   }, [operations]);
+}
+
+/** Solve gates belong to jobs; Fusion edit recovery retains operation attention. */
+export function useJobAttention(jobs: JobItem[]): void {
+  const seen = useRef(new Map<string, string | null>());
+  useEffect(() => {
+    let front = false;
+    for (const job of latestCadJobs(jobs)) {
+      const operation = cadJobSummary(job);
+      if (job.parent_job_id) solveAttention.followJob(job.parent_job_id, job.id);
+      if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);
+      if (isPendingCadOperation(operation)) solveAttention.noticeOperation(job.id);
+      const key = attentionKey(operation);
+      const previous = seen.current.get(job.id);
+      seen.current.set(job.id, key);
+      if (key === null || key === previous) continue;
+      if (solveAttention.operationArmed(job.id)) front = true;
+    }
+    if (front && workspaceModeStore.getSnapshot().mode === 'cad') workspaceNavigation.activate('cadlink');
+  }, [jobs]);
 }

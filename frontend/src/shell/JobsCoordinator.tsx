@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
-import { createCadOperation, createSetupRevision, getCadOperation, getSetupRevision, isPendingCadOperation, prepareCadOperation, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
+import { createSetupRevision, getSetupRevision, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
 import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
 import {
@@ -13,7 +13,8 @@ import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
 import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
-import { acknowledgeManualCadSolveCompletion, acknowledgeManualCadSolvePreparation, buildImportedSubmission, forgetManualCadSolveOperationId, importedSubmissionBlocker, isManualCadSolveOperationId, manualCadSolveIdentity, manualCadSolveIngestFor, manualCadSolvePreparationAcknowledged } from '../jobs/importedSubmission';
+import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
+import { acknowledgeCadSolve, beginCadSolve, cadJobSummaries, discardUnsubmittedCadSolve, forgetPendingCadSolve, hasLegacyCadSolve, cadSolveClaim, latestCadJobs, pendingCadSolve, recoverLegacyCadSolves, releaseCadSolve, rememberCadSolve, retainCadSolvePress, solveCadAgain, submitCadSolve } from '../jobs/cadSolve';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
@@ -32,7 +33,7 @@ import { importedMeshStore } from '../viewport/importedMeshStore';
 import { buildCadProjectSetup } from './cadSetupPublisher';
 import { getCrossoverDraftError, useCrossoverDraftError } from '../design/crossoverDrafts';
 import { inFlightWords, onScreenRequestInFlight, onScreenRequestToContinue } from './cadOnScreenSettings';
-import { solveAttention, useOperationAttention } from './solveAttention';
+import { solveAttention, useJobAttention, useOperationAttention } from './solveAttention';
 import { solvedCadModels } from './cadlink/solvedModel';
 
 /**
@@ -76,9 +77,8 @@ interface CoordinatorBridgeSnapshot {
   /** Resolves with the submitted job id, or null when the submission mutex
    * refused this call. */
   runImported(submission: ImportedSolveSubmission): Promise<string | null>;
-  /** The single CAD solve entry point: readiness gate, submission build, and
-   * submit through runImported so every caller inherits the typed capability
-   * error, the submission mutex, run naming, and the job-list refresh.
+  /** The single CAD solve entry point: displayed-press capture, readiness,
+   * job intake or continuation, submission mutex, naming and list refresh.
    * Throws the blocking reason; returns 'busy' when a solve is already in
    * flight so an automatic caller can say so instead of silently doing
    * nothing. */
@@ -201,7 +201,8 @@ function cadInputBlockerNow(): string | null {
  * preparing or submitting, and the words that say so. Always the snapshot
  * captured at the press, never whatever is selected by the time it is asked. */
 function heldOnRequest(record: CadReturnIngestRecord | null): { operation: CadOperationSummary; words: string } | null {
-  const operation = onScreenRequestInFlight(useCadOperationsStore.getState().operations, record);
+  if (record && pendingCadSolve(record.ingest_id)?.press) return null;
+  const operation = onScreenRequestInFlight(cadJobSummaries(jobsSocket.getSnapshot().jobs), record);
   return operation ? { operation, words: inFlightWords(operation) } : null;
 }
 
@@ -209,7 +210,7 @@ function heldOnRequest(record: CadReturnIngestRecord | null): { operation: CadOp
  * button's hold -- is that request's: its arm follows it, so the gate it stops
  * at or the result it ends in follows the user. Nothing new is created. */
 function holdOnRequest(held: { operation: CadOperationSummary }): 'submitted' {
-  solveAttention.bindOperation(held.operation.operationId);
+  solveAttention.bindOperation(held.operation.jobId!);
   return 'submitted';
 }
 
@@ -268,93 +269,42 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
 
   useEffect(() => { jobsSocket.start(); return () => jobsSocket.stop(); }, []);
 
-  const completeManualCadSolve = useCallback((ingestId: string, operation: CadOperationSummary) => {
-    if (operation.state !== 'accepted' || !operation.jobId) return;
-    const identity = acknowledgeManualCadSolveCompletion(ingestId, operation.operationId);
-    if (!identity) return;
-    acceptSubmittedLabel(identity.designName);
-    compareSelection.awaitRun(operation.jobId);
-    solveAttention.bindRun(operation.jobId, operation.operationId);
-    solvedCadModels.claim(operation.jobId, {
-      manifestSha256: operation.snapshot?.manifestSha256 ?? null,
-      sourceIngestId: ingestId,
-    });
-    void jobsSocket.refresh().catch((reason: unknown) => {
-      setActionError(reason instanceof Error ? reason.message : String(reason));
+  const completeCadSolve = useCallback((job: JobItem) => {
+    if (job.cad_state?.state !== 'accepted') return;
+    const claim = acknowledgeCadSolve(job, 'completion');
+    if (!claim) return;
+    if (claim.designName) acceptSubmittedLabel(claim.designName);
+    compareSelection.awaitRun(job.id);
+    if (job.client_request_id) solveAttention.followJob(job.client_request_id, job.id);
+    solveAttention.bindRun(job.id, job.id);
+    // The run names the model its preparation made; show that model once the
+    // solve claims its run, while the same return is still on screen.
+    solvedCadModels.claim(job.id, {
+      manifestSha256: job.cad_state.snapshot?.manifest_sha256 ?? null,
+      sourceIngestId: claim.sourceIngestId ?? null,
     });
   }, []);
 
-  // A prepare request returns before the backend finishes. The jobs-channel
-  // operation event owns the one-time effects that used to happen in
-  // submitImported's response path, with session storage fencing reloads and
-  // duplicate events.
   useEffect(() => {
-    for (const operation of Object.values(cadOperations)) {
-      if (operation.kind !== 'prepare_and_solve' || operation.state !== 'accepted' || !operation.jobId) continue;
-      // The ingestion it was submitted for, which a newer snapshot on screen
-      // does not change: the run stays owned by its original input.
-      const ingestId = manualCadSolveIngestFor(operation.operationId);
-      if (ingestId) completeManualCadSolve(ingestId, operation);
-    }
-  }, [cadOperations, completeManualCadSolve]);
-
-  // A solve Fusion asked for is the user's command too, given in Fusion: its
-  // run is claimed for the primary slot as a WG solve's is, once, when this
-  // page watched it finish. One that was already finished when this page
-  // first saw it is history, not news, and the manual solves above have their
-  // own session-fenced completion.
-  const watchedOperations = useRef(new Set<string>());
-  const claimedOperations = useRef(new Set<string>());
-  useEffect(() => {
-    for (const operation of Object.values(cadOperations)) {
-      if (operation.kind !== 'prepare_and_solve' || operation.operationId.startsWith('manual-solve:')) continue;
-      // A request a WG Solve continued completes as that solve, above, and is
-      // claimed for good: the held identity rotates on the next Solve, and
-      // its run must not be claimed again then.
-      if (manualCadSolveIngestFor(operation.operationId) !== null) {
-        claimedOperations.current.add(operation.operationId);
-        continue;
+    recoverLegacyCadSolves(jobs);
+    for (const job of latestCadJobs(jobs)) {
+      const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);
+      const inherited = parent ? cadSolveClaim(parent) : null;
+      if (inherited && !cadSolveClaim(job)) rememberCadSolve(job.id, inherited.designName);
+      if (job.cad_state?.state === 'received' || job.cad_state?.state === 'processing') {
+        if (!cadSolveClaim(job)) rememberCadSolve(job.id, '');
       }
-      if (isPendingCadOperation(operation)) {
-        watchedOperations.current.add(operation.operationId);
-        continue;
+      completeCadSolve(job);
+      if (job.cad_state?.state === 'rejected') {
+        if (!acknowledgeCadSolve(job, 'refusal')) continue;
+        setActionError(`The solve of ${job.cad_state.snapshot?.document_name ?? 'the model'} was refused: ${job.cad_state.message ?? job.cad_state.reason ?? 'no reason given'}`);
       }
-      if (operation.state !== 'accepted' || !operation.jobId) continue;
-      if (!watchedOperations.current.has(operation.operationId)) continue;
-      if (claimedOperations.current.has(operation.operationId)) continue;
-      claimedOperations.current.add(operation.operationId);
-      compareSelection.awaitRun(operation.jobId);
-      solveAttention.bindRun(operation.jobId, operation.operationId);
-      solvedCadModels.claim(operation.jobId, {
-        manifestSha256: operation.snapshot?.manifestSha256 ?? null,
-        sourceIngestId: null,
-      });
-      void jobsSocket.refresh().catch(() => undefined);
     }
-  }, [cadOperations]);
+  }, [jobs, completeCadSolve]);
 
-  // A solve this page was waiting for that ended refused says so, whether its
-  // outcome arrived live or was recovered on reconnect (review F1): the Solve
-  // the user gave -- here or in Fusion -- must not simply stop existing.
-  const reportedRefusals = useRef(new Set<string>());
-  useEffect(() => {
-    for (const operation of Object.values(cadOperations)) {
-      if (operation.kind !== 'prepare_and_solve' || operation.state !== 'rejected') continue;
-      if (reportedRefusals.current.has(operation.operationId)) continue;
-      // A solve this window holds -- its own, or a request its Solve
-      // continued, across a reload -- or a Fusion request it watched.
-      const mine = manualCadSolveIngestFor(operation.operationId) !== null
-        || (!operation.operationId.startsWith('manual-solve:') && watchedOperations.current.has(operation.operationId));
-      if (!mine) continue;
-      reportedRefusals.current.add(operation.operationId);
-      const name = operation.snapshot?.documentName ?? 'the model';
-      setActionError(`The solve of ${name} was refused: ${operation.message ?? operation.reason ?? 'no reason given'}`);
-    }
-  }, [cadOperations]);
-
-  // A request that stops to wait for the user fronts the CAD Link panel while
-  // its command is still the user's latest intention (shell/solveAttention).
-  useOperationAttention(cadOperations);
+  useJobAttention(jobs);
+  useOperationAttention(Object.fromEntries(Object.entries(cadOperations)
+    .filter(([, operation]) => operation.kind !== 'prepare_and_solve')));
 
   let currentOptions: SolveOptions | null = null;
   let solveOptionsError: string | null = null;
@@ -388,7 +338,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     !cadViewportGeometry.ingestId
     || cadViewportGeometry.ingestId !== cadReturn.ingestRecord?.ingest_id
   );
-  const inFlight = cadGeometryActive ? onScreenRequestInFlight(cadOperations, cadReturn.ingestRecord) : null;
+  const inFlight = cadGeometryActive && !pendingCadSolve(cadReturn.ingestRecord?.ingest_id ?? '')?.press
+    ? onScreenRequestInFlight(cadJobSummaries(jobs), cadReturn.ingestRecord) : null;
   const cadSolveBlocker = cadGeometryMismatch
     ? CAD_VIEWPORT_MISMATCH
     : cadGeometryActive
@@ -497,164 +448,112 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     }
   }, [now, preferences]);
 
-  // The manual CAD solve is a durable backend operation. Its id is retained
-  // before the first request, so retrying after any lost response recovers the
-  // same row and cannot create a second job.
+  // Capture the displayed press before any plan, frame or setup request waits.
   const solveCurrentCadImport = useCallback(async (
     clicked?: { cad: ReturnType<typeof useCadReturnStore.getState>; checkPlan: () => Promise<void> },
   ) => {
     if (submissionInFlight.current) return 'busy' as const;
-    // The input is what is on screen at the press: the snapshot and the
-    // settings are captured here, before anything is awaited, and everything
-    // below uses these -- never whatever is selected by the time an answer
-    // arrives (PLAN.md M1b, "captures the displayed snapshot").
     const cad = clicked?.cad ?? useCadReturnStore.getState();
-    const heldAtPress = heldOnRequest(cad.ingestRecord);
-    if (heldAtPress) return holdOnRequest(heldAtPress);
-    const blocker = cadInputBlockerNow();
-    if (blocker) throw new Error(blocker);
     const ingestId = cad.ingestRecord?.ingest_id;
     if (!ingestId) throw new Error('Ingest a CAD return before solving.');
-    // A first-time CAD document has no project lineage yet. The manual solve
-    // still binds the setup on screen; the lineage is only filing metadata in
-    // buildCadProjectSetup and is not sent on the setup-revision route.
+    const frameAtPress = useCadSolverFrameStore.getState().frames[ingestId];
     const project = cad.ingestRecord?.project?.lineage_id ?? cad.projectLineageId ?? null;
     const built = buildCadProjectSetup(cad, undefined, undefined, project ?? 'manual-solve');
-    if (!built) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
+    const designName = currentRunNameSource().name;
+    if (hasLegacyCadSolve(ingestId)) {
+      submissionInFlight.current = true;
+      try {
+        await jobsSocket.refresh();
+        recoverLegacyCadSolves(jobsSocket.getSnapshot().jobs);
+      } finally { submissionInFlight.current = false; }
+      if (hasLegacyCadSolve(ingestId)) throw new Error("The previous solve is not showing in the jobs list yet. Reconnect before trying it again.");
+    }
+    const retained = pendingCadSolve(ingestId);
+    if (retained?.recoveredJobId) {
+      const recovered = jobsSocket.getSnapshot().jobs.find((job) => job.id === retained.recoveredJobId);
+      releaseCadSolve(ingestId, retained, retained.recoveredJobId);
+      if (recovered) completeCadSolve(recovered);
+      return 'submitted' as const;
+    }
+    const heldAtPress = retained ? null : heldOnRequest(cad.ingestRecord);
+    if (heldAtPress) return holdOnRequest(heldAtPress);
+    const blocker = cadInputBlockerNow();
+    if (blocker && !retained?.press) throw new Error(blocker);
+    const waiting = onScreenRequestToContinue(cadJobSummaries(jobsSocket.getSnapshot().jobs), cad.ingestRecord);
+    if (!retained?.press && waiting?.snapshot?.projectLineageId && waiting.snapshot.projectLineageId !== project) {
+      throw new Error('The model on screen is filed under another project than this request names. Open that project first.');
+    }
+    const waitingJob = jobsSocket.getSnapshot().jobs.find((job) => job.id === waiting?.jobId);
+    if (!built && !retained?.press) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
+    const identity = retained ?? beginCadSolve(ingestId, designName, nextRunLabel(designName, preferencesStore.getSnapshot(), now()));
     submissionInFlight.current = true;
     try {
       setSubmitting(true);
       setActionError(null);
-      if (clicked) await clicked.checkPlan();
-      // A Solve given right after a preparation (Bring in & solve) waits for
-      // the frame read the card has under way for this snapshot.
-      const reading = frameReadInFlight(ingestId);
-      if (reading) await reading;
-      const frameBlocker = frameSolveBlocker(ingestId);
-      if (frameBlocker) throw new Error(frameBlocker);
-      // The frame on screen is part of the input (PLAN.md M1b/M1e): Solve
-      // confirms the axis the card shows before anything is prepared, and the
-      // server records whether that was its suggestion or the user's choice.
-      // The preparation is then held to that axis: a confirmation changed
-      // elsewhere stops it at the frame gate rather than change the axis.
-      const frameAxis = await confirmDisplayedFrame(ingestId);
-      // Solve remembers the settings it uses for this model's project, so a
-      // later solve -- Fusion's too -- starts from them. Never a global default,
-      // never the CAD document.
-      if (project) await putProjectSetup(built);
-      // A request for this snapshot that started while those were answered:
-      // this press is that request's, not a second one.
-      const heldNow = heldOnRequest(cad.ingestRecord);
-      if (heldNow) return holdOnRequest(heldNow);
-      // A new identity is a new run of the design. When a request for this
-      // very snapshot is waiting on screen (Fusion's "Solve in WG", say), the
-      // identity names that operation instead: this press continues it with
-      // the settings and frame on screen. The same operation id is the
-      // explicit continuation -- one request, one card, nothing inferred from
-      // equal manifests on the backend -- and, held like any manual solve's,
-      // it survives a lost response and a reload.
-      const newRun = (continuing = true) => {
-        const designName = currentRunNameSource().name;
-        const waiting = continuing
-          ? onScreenRequestToContinue(useCadOperationsStore.getState().operations, cad.ingestRecord)
-          : null;
-        return {
-          designName,
-          label: nextRunLabel(designName, preferencesStore.getSnapshot(), now()),
-          ...(waiting ? { operationId: waiting.operationId } : {}),
+      if (!identity.press) {
+        // Start confirmation now: a later pick cannot replace the displayed axis.
+        const reading = frameReadInFlight(ingestId);
+        if (reading) await reading;
+        const frameBlocker = frameSolveBlocker(ingestId);
+        if (frameBlocker) throw new Error(frameBlocker);
+        const frameConfirmation = confirmDisplayedFrame(ingestId, fetch, frameAtPress?.status === 'ready' ? frameAtPress : undefined);
+        const frameAxis = await frameConfirmation;
+        if (clicked) await clicked.checkPlan();
+        if (project) await putProjectSetup(built!);
+        const heldNow = heldOnRequest(cad.ingestRecord);
+        if (heldNow) {
+          discardUnsubmittedCadSolve(ingestId);
+          return holdOnRequest(heldNow);
+        }
+        const setup = {
+          ...built!.setup, label: identity.label,
+          options: { ...built!.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
         };
-      };
-      let identity = manualCadSolveIdentity(ingestId, newRun);
-      let operationId = identity.operationId;
-      // The operation as the backend holds it, when it is unfinished.
-      let pending: CadOperationSummary | null = null;
-      // The storage entry survives a reload. Ask the authoritative store
-      // whether it still names unfinished work: 404 means the first create
-      // never committed, pending means recover it, terminal means this click
-      // is a new explicit solve and therefore needs a fresh identity.
-      try {
-        let held = await getCadOperation(operationId);
-        const heldManifest = held.snapshot?.manifestSha256 ?? null;
-        if (heldManifest && heldManifest !== cad.ingestRecord?.manifest_sha256) {
-          // The identity names a request for another snapshot. The settings
-          // on screen are never sent to it: a solve of its own instead.
-          forgetManualCadSolveOperationId(ingestId, operationId);
-          identity = manualCadSolveIdentity(ingestId, newRun);
-          operationId = identity.operationId;
-          held = await getCadOperation(operationId);
-        }
-        if (!isPendingCadOperation(held)) {
-          if (!manualCadSolvePreparationAcknowledged(ingestId, operationId)) {
-            // A lost prepare response can race the backend all the way to a
-            // terminal outcome. Observing that row completes the retry; it
-            // must not turn the retry into a second explicit solve.
-            solveAttention.bindOperation(operationId);
-            useCadOperationsStore.getState().apply(held);
-            acknowledgeManualCadSolvePreparation(ingestId, operationId);
-            if (held.state !== 'accepted') {
-              throw new Error(held.message || `CAD solve operation was ${held.state}.`);
-            }
-            completeManualCadSolve(ingestId, held);
-            return 'submitted' as const;
-          }
-          useCadOperationsStore.getState().apply(held);
-          completeManualCadSolve(ingestId, held);
-          forgetManualCadSolveOperationId(ingestId, operationId);
-          identity = manualCadSolveIdentity(ingestId, newRun);
-          operationId = identity.operationId;
-        } else {
-          pending = held;
-        }
-      } catch (reason) {
-        if (!(reason instanceof CadLinkApiError && reason.status === 404)) throw reason;
-        if (!isManualCadSolveOperationId(operationId)) {
-          // The request it continued no longer exists: a solve of its own.
-          forgetManualCadSolveOperationId(ingestId, operationId);
-          identity = manualCadSolveIdentity(ingestId, () => newRun(false));
-          operationId = identity.operationId;
-        }
+        const bound = waiting?.setupRevisionId;
+        const keepBound = bound && await getSetupRevision(bound)
+          .then((revision) => solveInputsKey(revision.setup) === solveInputsKey(setup), () => false);
+        const revisionId = keepBound ? bound : (await createSetupRevision(setup)).revisionId;
+        identity.jobId = waiting?.jobId ?? undefined;
+        const preparation = waitingJob?.cad_state?.preparation;
+        const approved = keepBound && preparation ? waitingJob?.cad_state?.approvals
+          .filter((approval) => approval.preparation_id === preparation.preparation_id
+            && preparation.blocking_finding_ids.includes(approval.finding_id))
+          .map((approval) => approval.finding_id) : [];
+        identity.press = {
+          client_request_id: identity.requestId, ingest_id: ingestId,
+          setup_revision_id: revisionId, label: identity.label, submit: true,
+          ...(frameAxis ? { frame_axis: frameAxis } : {}),
+          ...(approved?.length && preparation ? { approvals: { preparation_id: preparation.preparation_id, finding_ids: approved } } : {}),
+        };
+        retainCadSolvePress(ingestId, identity);
       }
-      // The operation this press creates or recovers carries its arm, so the
-      // run it ends in -- or the gate it stops at -- may follow the user.
-      solveAttention.bindOperation(operationId);
-      const setup = {
-        ...built.setup,
-        label: identity.label,
-        options: { ...built.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
-      };
-      // A continued request already holds a setup: when the settings on screen
-      // are that setup, it is kept -- a continuation with unchanged inputs
-      // changes nothing, so its preparation, and any approval given on it,
-      // still apply. Different settings on screen are the user's correction,
-      // bound deliberately by this press.
-      const continued = !isManualCadSolveOperationId(operationId);
-      const bound = continued
-        ? (pending?.operationId === operationId ? pending : useCadOperationsStore.getState().operations[operationId])
-          ?.setupRevisionId ?? null
-        : null;
-      // A bound setup that cannot be read is not kept: the settings on screen
-      // are bound instead, which is what this press asked for anyway.
-      const keepBound = bound !== null && await getSetupRevision(bound)
-        .then((revision) => solveInputsKey(revision.setup) === solveInputsKey(setup), () => false);
-      const revisionId = keepBound ? null : (await createSetupRevision(setup)).revisionId;
-      // A continued request exists already; only a solve of its own is created.
-      if (!continued) {
-        const created = await createCadOperation({ operationId, ingestId });
-        useCadOperationsStore.getState().apply(created);
-      }
-      const prepared = await prepareCadOperation(operationId, {
-        ...(revisionId ? { setupRevisionId: revisionId } : {}),
-        submit: true,
-        ...(frameAxis ? { frameAxis } : {}),
-      });
-      acknowledgeManualCadSolvePreparation(ingestId, operationId);
-      useCadOperationsStore.getState().apply(prepared);
+      // The completion claim exists before HTTP: an event may beat the response.
+      rememberCadSolve(`cad-solve:manual-solve:${identity.requestId}`, identity.designName);
+      if (identity.jobId) rememberCadSolve(identity.jobId, identity.designName);
+      solveAttention.bindOperation(identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`);
+      const response = identity.jobId
+        ? await solveCadAgain(identity.jobId, identity.press)
+        : await submitCadSolve(identity.press);
+      rememberCadSolve(response.job_id, identity.designName);
+      solveAttention.followJob(identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`, response.job_id);
+      solveAttention.bindRun(response.job_id, identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`);
+      releaseCadSolve(ingestId, identity, response.job_id);
+      await jobsSocket.refresh();
+      const job = jobsSocket.getSnapshot().jobs.find((candidate) => candidate.id === response.job_id);
+      if (job) completeCadSolve(job);
       return 'submitted' as const;
+    } catch (reason) {
+      // A definitive refusal answered this press; transport failures retain it.
+      if (reason instanceof CadLinkApiError && reason.status && reason.status >= 400 && reason.status < 500) {
+        forgetPendingCadSolve(ingestId, identity.requestId);
+      }
+      throw reason;
     } finally {
+      discardUnsubmittedCadSolve(ingestId);
       submissionInFlight.current = false;
       setSubmitting(false);
     }
-  }, [completeManualCadSolve, now]);
+  }, [completeCadSolve, now]);
 
   const retry = useCallback(async (jobId: string) => {
     if (submissionInFlight.current) return;

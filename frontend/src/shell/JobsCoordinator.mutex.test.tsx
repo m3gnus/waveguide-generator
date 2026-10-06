@@ -2,9 +2,11 @@ import { act } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cadJobFixture, publishCadSummary } from '../jobs/cadSolve.fixtures';
+import { pendingCadSolve } from '../jobs/cadSolve';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary, CadSolveSetup } from '../api/cadOperations';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
+import { resetCadOperationsStore } from '../stores/cadOperations';
 import { compareSelection } from '../api/results';
 import { preferencesStore } from '../prefs/preferences';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
@@ -39,7 +41,8 @@ const mocks = vi.hoisted(() => ({
   useRealImportedPlan: false,
   useRealSolvePlan: false,
   createSetupRevision: vi.fn(),
-  createCadOperation: vi.fn(),
+  submitCadSolve: vi.fn(),
+  solveCadAgain: vi.fn(),
   prepareCadOperation: vi.fn(),
   getCadOperation: vi.fn(),
   putProjectSetup: vi.fn(),
@@ -73,12 +76,15 @@ vi.mock('../api/cadOperations', async (importOriginal) => {
   return {
     ...actual,
     createSetupRevision: mocks.createSetupRevision,
-    createCadOperation: mocks.createCadOperation,
-    prepareCadOperation: mocks.prepareCadOperation,
     getCadOperation: mocks.getCadOperation,
     putProjectSetup: mocks.putProjectSetup,
   };
 });
+
+vi.mock('../jobs/cadSolve', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../jobs/cadSolve')>(),
+  submitCadSolve: mocks.submitCadSolve, solveCadAgain: mocks.solveCadAgain,
+}));
 
 vi.mock('../jobs/actions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../jobs/actions')>();
@@ -259,8 +265,9 @@ describe('solve invocation mutex', () => {
     mocks.solvePlanPending = false;
     mocks.planSolveDesign.mockResolvedValue(mocks.solvePlan);
     mocks.createSetupRevision.mockResolvedValue({ revisionId: 'wgs_manual', contentSha256: 'sha256:setup', createdAt: 'now' });
-    mocks.createCadOperation.mockImplementation(async ({ operationId }: { operationId: string }) => operation(operationId));
-    mocks.prepareCadOperation.mockImplementation(async (operationId: string) => operation(operationId, 'processing'));
+    mocks.submitCadSolve.mockResolvedValue({ job_id: 'job-cad' });
+    mocks.solveCadAgain.mockResolvedValue({ job_id: 'job-child' });
+
     mocks.getCadOperation.mockRejectedValue(new CadLinkApiError('Unknown CAD operation', [], 404));
     compareSelection.clear();
     publishJobs([]);
@@ -789,10 +796,8 @@ describe('solve invocation mutex', () => {
     await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
 
     expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
-    expect(mocks.createCadOperation).toHaveBeenCalledWith(expect.objectContaining({ ingestId }));
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(
-      expect.any(String), { setupRevisionId: 'wgs_manual', submit: true },
-    );
+    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: ingestId }));
+    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ setup_revision_id: 'wgs_manual', submit: true }));
     expect(mocks.submitImported).not.toHaveBeenCalled();
     expect(mocks.submitDesign).not.toHaveBeenCalled();
   });
@@ -908,7 +913,7 @@ describe('solve invocation mutex', () => {
     expect(host.querySelector('.solve-notice-blocked')?.textContent).toMatch(/greater than 0 Hz/);
     expect(solve.disabled).toBe(true);
     expect(mocks.createSetupRevision).not.toHaveBeenCalled();
-    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
     act(() => {
       input.focus();
       input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -972,50 +977,21 @@ describe('solve invocation mutex', () => {
     expect(useDocumentStore.getState().designName).toBe('horn');
   });
 
-  it('selects an accepted durable job, refreshes jobs, and advances its CAD label once', async () => {
-    readyCad('wgi_completed');
-    act(() => workspaceModeStore.setMode('cad'));
+  it('selects an accepted durable job and advances its CAD label once across duplicate events and reload', async () => {
+    readyCad('wgi_once');
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
-    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    await act(async () => {
-      useCadOperationsStore.getState().apply(operation(operationId, 'accepted', { jobId: 'job-cad' }));
-      await Promise.resolve(); await Promise.resolve();
-    });
+    const request = mocks.submitCadSolve.mock.calls[0][0];
+    const accepted = cadJobFixture(operation(`manual-solve:${request.client_request_id}`, 'accepted', { jobId: 'job-cad' }));
+    await act(async () => { publishJobs([accepted]); });
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
     expect(compareSelection.getSnapshot().awaiting).toBe('job-cad');
-    expect(jobsSocket.refresh).toHaveBeenCalled();
-    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
-    await act(async () => {
-      useCadOperationsStore.getState().apply(operation(operationId, 'accepted', {
-        jobId: 'job-cad', updatedAt: '2026-09-15T10:00:01Z',
-      }));
-      await Promise.resolve();
-    });
-    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
-  });
-
-  // What the selector holds is what a CAD solve sends: the user's pick as they
-  // left it -- AUTO stays AUTO for the server to resolve -- and never an engine
-  // the browser chose on their behalf.
-  it.each(['beat-cpu', 'auto'])('submits the engine selected in the solver selector (%s) for a CAD solve', async (engine) => {
-    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    readyCad(ingestId);
-    act(() => useSolveOptionsStore.getState().setEngine(engine));
-    act(() => useSolveOptionsStore.getState().setSolverMode('full_3d'));
-
-    await act(async () => {
-      root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>);
-    });
-    act(() => workspaceModeStore.setMode('cad'));
-    const solve = host.querySelector<HTMLButtonElement>('button')!;
-    expect(solve.textContent).toBe('Solve');
-    await act(async () => { solve.click(); await Promise.resolve(); await Promise.resolve(); });
-
-    const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
-    expect(setup.options.engine).toBe(engine);
-    expect(setup.options.solver_mode).toBe('full_3d');
-    expect(mocks.submitImported).not.toHaveBeenCalled();
-    // Submitting leaves the selection alone.
-    expect(useSolveOptionsStore.getState().engine).toBe(engine);
+    const awaitRun = vi.spyOn(compareSelection, 'awaitRun');
+    await act(async () => { publishJobs([{ ...accepted }]); });
+    act(() => root.unmount());
+    root = createRoot(host);
+    await act(async () => { root.render(<JobsCoordinator><span>reloaded</span></JobsCoordinator>); });
+    expect(awaitRun).not.toHaveBeenCalled();
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
   });
 
   it('binds the same request fields as the old imported submission builder', async () => {
@@ -1033,403 +1009,191 @@ describe('solve invocation mutex', () => {
     expect(setup.options).toEqual(old.options);
   });
 
-  /** The model on screen, prepared from this listing and filed under its
-   * project: what the settings on screen may be recorded for. */
   function filedCad(ingestId: string): CadReturnIngestRecord {
     const record = { ...readyCad(ingestId), project: { lineage_id: 'wgl_test' } } as CadReturnIngestRecord;
     const bundle = useCadReturnStore.getState().selectedBundle!;
     useCadReturnStore.setState({ ingestRecord: record, ingestedBundleIdentity: bundleIdentity(bundle) });
-    // The backend answers for the requests it holds, as the route does.
-    mocks.getCadOperation.mockImplementation(async (operationId: string) => {
-      const held = useCadOperationsStore.getState().operations[operationId];
-      if (!held) throw new CadLinkApiError('Unknown CAD operation', [], 404);
-      return held;
-    });
+    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project' });
     return record;
   }
 
-  it("continues a request for the model on screen that waits for its first settings, instead of adding a second", async () => {
-    const record = filedCad('wgi_waiting');
-    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', {
-        reason: 'setup_required',
-        snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
-      }));
-    });
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    // The same operation id: no second request, no second card.
-    expect(mocks.createCadOperation).not.toHaveBeenCalled();
-    // The settings of an ordinary WG Solve, bound to that operation, and
-    // remembered for the model's project (M1b), without the run's name.
-    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
-    expect(mocks.putProjectSetup).toHaveBeenCalledOnce();
-    expect(mocks.putProjectSetup.mock.calls[0][0]).toMatchObject({ lineageId: 'wgl_test' });
-    expect((mocks.putProjectSetup.mock.calls[0][0] as { setup: CadSolveSetup }).setup.label).toBeUndefined();
-    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-fusion', { setupRevisionId: 'wgs_manual', submit: true });
-  });
-
-  it('continues with the imported-solve settings and run name of an ordinary WG Solve', async () => {
-    const record = filedCad('wgi_normalised');
-    act(() => workspaceModeStore.setMode('cad'));
-    // Left over from parametric work: an imported model is solved in full 3-D.
-    act(() => useSolveOptionsStore.getState().setSolverMode('full_3d'));
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', {
-        reason: 'setup_required',
-        snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
-      }));
-    });
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    const setup = mocks.createSetupRevision.mock.calls[0][0] as CadSolveSetup;
-    expect(setup.options.solver_mode).toBe('full_3d');
-    expect(setup.options.symmetry).toBe('auto');
-    expect(setup.label).toBe('Speaker1');
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-fusion', { setupRevisionId: 'wgs_manual', submit: true });
-    // Its run is numbered like any WG Solve once it is accepted, and claimed
-    // once: as the WG Solve it now is, not again as a Fusion request.
-    const refreshes = vi.mocked(jobsSocket.refresh).mock.calls.length;
-    await act(async () => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'accepted', {
-        jobId: 'job-continued', updatedAt: '2026-09-15T10:00:01Z',
-        snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
-      }));
-      await Promise.resolve(); await Promise.resolve();
-    });
-    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
-    expect(compareSelection.getSnapshot().awaiting).toBe('job-continued');
-    expect(vi.mocked(jobsSocket.refresh).mock.calls.length - refreshes).toBe(1);
-  });
-
-  it.each([false, true])('never adds a second solve when a continuation response is lost (reload: %s)', async (reload) => {
-    const record = filedCad('wgi_lost_continuation');
-    const waiting = { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' };
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', { reason: 'setup_required', snapshot: waiting }));
-    });
-    // The preparation made a job; its HTTP response never arrived.
-    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
-    });
-    const accepted = operation('op-fusion', 'accepted', { jobId: 'job-continued', updatedAt: '2026-09-15T10:00:01Z', snapshot: waiting });
-    if (reload) {
-      // A reload: the operation list is empty until the channel refills it.
-      act(() => root.unmount());
-      resetCadOperationsStore();
-      root = createRoot(host);
-      await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
-    } else {
-      // The jobs channel reports it accepted.
-      act(() => { useCadOperationsStore.getState().apply(accepted); });
-    }
-    mocks.getCadOperation.mockResolvedValue(accepted);
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    expect(mocks.createCadOperation).not.toHaveBeenCalled();
-    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.getCadOperation).toHaveBeenCalledWith('op-fusion');
-  });
-
-  it('continues the request for this snapshot even when an older one for another snapshot also waits', async () => {
-    const record = filedCad('wgi_two_waiting');
-    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-older', 'needs_user_input', {
-        reason: 'setup_required', createdAt: '2026-09-15T09:00:00Z',
-        snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' },
-      }));
-      useCadOperationsStore.getState().apply(operation('op-this', 'needs_user_input', {
-        reason: 'setup_required',
-        snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
-      }));
-    });
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    expect(mocks.createCadOperation).not.toHaveBeenCalled();
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-this', { setupRevisionId: 'wgs_manual', submit: true });
-  });
-
-  it('never claims a continued request\'s run again after the next Solve starts another', async () => {
-    const record = filedCad('wgi_claim_once');
-    act(() => workspaceModeStore.setMode('cad'));
-    const snapshot = { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' };
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', { reason: 'setup_required', snapshot }));
-    });
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-    await act(async () => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'accepted', {
-        jobId: 'job-old', updatedAt: '2026-09-15T10:00:01Z', snapshot,
-      }));
-      await Promise.resolve();
-    });
-    const awaited = vi.spyOn(compareSelection, 'awaitRun');
-
-    // The user pins another result, then solves again: a new run.
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-      await Promise.resolve();
-    });
-
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    expect(awaited).not.toHaveBeenCalledWith('job-old');
-  });
-
-  it('reports a continued solve refused after a reload', async () => {
-    const record = filedCad('wgi_refused_after_reload');
-    const snapshot = { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test', documentName: 'Speaker' };
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', { reason: 'setup_required', snapshot }));
-    });
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-    act(() => root.unmount());
-    resetCadOperationsStore();
-    root = createRoot(host);
-    await act(async () => { root.render(<JobsCoordinator now={() => new Date(2026, 7, 12, 12)}><span>ready</span></JobsCoordinator>); });
-
-    await act(async () => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'processing', { snapshot, updatedAt: '2026-09-15T10:00:01Z' }));
-    });
-    await act(async () => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'rejected', {
-        reason: 'snapshot_invalid', message: 'The return is damaged.', snapshot, updatedAt: '2026-09-15T10:00:02Z',
-      }));
-    });
-
-    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('The solve of Speaker was refused: The return is damaged.');
-  });
-
-  it('never sends the settings on screen to a held request for another snapshot', async () => {
-    const record = filedCad('wgi_stale_mapping');
-    // A held identity that names another snapshot's request.
-    sessionStorage.setItem('wg2.cad.manual-solve.v1:wgi_stale_mapping', JSON.stringify({
-      operationId: 'op-other', prepareAcknowledged: false, completionAcknowledged: false,
-      designName: 'Speaker', label: 'Speaker1',
-    }));
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-other', 'needs_user_input', {
-        reason: 'setup_required', snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' },
-      }));
-    });
-    expect(record.manifest_sha256).not.toBe(`sha256:${'9'.repeat(64)}`);
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    expect(mocks.prepareCadOperation).not.toHaveBeenCalledWith('op-other', expect.anything());
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    const created = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    expect(created).toMatch(/^manual-solve:/);
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(created, { setupRevisionId: 'wgs_manual', submit: true });
-  });
-
-  it('starts a solve of its own when the request it continued no longer exists', async () => {
-    const record = filedCad('wgi_gone');
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-gone', 'needs_user_input', {
-        reason: 'setup_required', snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
-      }));
-    });
-    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
-    });
-    // Gone from the backend (its row 404s) and from the list.
-    act(() => resetCadOperationsStore());
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    const created = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    expect(created).toMatch(/^manual-solve:/);
-    expect(mocks.prepareCadOperation).toHaveBeenLastCalledWith(created, { setupRevisionId: 'wgs_manual', submit: true });
-  });
-
-  it.each([
-    ['another snapshot', { reason: 'setup_required', snapshot: { manifestSha256: `sha256:${'9'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
-    // The backend queues it again by itself once the restart is over.
-    ['the update restart', { reason: 'update_restart_pending', snapshot: { manifestSha256: `sha256:${'1'.repeat(64)}`, projectLineageId: 'wgl_test' } }],
-  ] as const)('still starts a new solve beside a request waiting for %s', async (_case, waiting) => {
-    filedCad('wgi_other');
-    mocks.putProjectSetup.mockResolvedValue({ revisionId: 'wgs_project', contentSha256: 'sha256:p', createdAt: 'now' });
-    act(() => {
-      useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', waiting));
-    });
-
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    const created = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    expect(created).not.toBe('op-fusion');
-    expect(mocks.prepareCadOperation).toHaveBeenCalledWith(created, { setupRevisionId: 'wgs_manual', submit: true });
-  });
-
-  it.each(['frame_confirmation_required', 'engine_unavailable', 'preparation_failed', 'findings_need_review'])(
-    'continues a request for the model on screen waiting at %s, instead of adding a second',
-    async (reason) => {
-      const record = filedCad('wgi_gate');
-      act(() => {
-        useCadOperationsStore.getState().apply(operation('op-fusion', 'needs_user_input', {
-          reason, snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
-        }));
-      });
-      await act(async () => {
-        await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-      });
-      expect(mocks.createCadOperation).not.toHaveBeenCalled();
-      expect(mocks.prepareCadOperation).toHaveBeenCalledWith('op-fusion', { setupRevisionId: 'wgs_manual', submit: true });
+  it.each(['setup_required', 'frame_confirmation_required', 'engine_unavailable', 'preparation_failed', 'findings_need_review'])(
+    'continues the on-screen job waiting at %s with the displayed setup', async (reason) => {
+      const record = filedCad('wgi_waiting');
+      act(() => publishCadSummary(operation('op-fusion', 'needs_user_input', {
+        reason, snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
+      })));
+      await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+      expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+      expect(mocks.solveCadAgain).toHaveBeenCalledWith('op-fusion', expect.objectContaining({ setup_revision_id: 'wgs_manual', submit: true }));
+      expect(mocks.putProjectSetup.mock.calls[0][0]).toMatchObject({ lineageId: 'wgl_test' });
+      expect(mocks.createSetupRevision.mock.calls[0][0]).toMatchObject({ label: 'horn1', options: { solver_mode: 'full_3d', symmetry: 'auto' } });
+      const child = cadJobFixture(operation('op-fusion', 'accepted', { jobId: 'job-child' }), { parent_job_id: 'op-fusion' });
+      await act(async () => publishJobs([child]));
+      expect(compareSelection.getSnapshot().awaiting).toBe('job-child');
+      expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
     },
   );
 
-  it('gates solveCurrentCadImport on readiness and reports a busy solve instead of dropping it', async () => {
-    // Automatic callers (Pull & Solve, a Fusion solve command) use this action,
-    // so its refusal has to be a thrown reason and never a silent no-op.
-    await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport())
-      .rejects.toThrow('Ingest a CAD return before solving.');
-    expect(mocks.submitImported).not.toHaveBeenCalled();
+  it.each([false, true])('reposts the same captured press after a lost response (reload: %s)', async (reload) => {
+    filedCad('wgi_lost');
+    mocks.submitCadSolve.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed'); });
+    const first = mocks.submitCadSolve.mock.calls[0][0];
+    act(() => useCadReturnStore.setState({ frequencyCount: 99 }));
+    if (reload) {
+      act(() => root.unmount());
+      root = createRoot(host);
+      await act(async () => root.render(<JobsCoordinator><span>reloaded</span></JobsCoordinator>));
+    }
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve.mock.calls[1][0]).toEqual(first);
+    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
+    expect(pendingCadSolve('wgi_lost')).toBeNull();
+  });
 
-    const ingestId = 'wgi_01J5A8QK3M9T2XVBH0RD7NWE6C';
-    readyCad(ingestId);
-    const pending = deferred<CadOperationSummary>();
-    mocks.prepareCadOperation.mockReturnValue(pending.promise);
+  it.each([false, true])('continues the same parent after a lost child response (reload: %s)', async (reload) => {
+    const record = filedCad('wgi_child');
+    act(() => publishCadSummary(operation('op-fusion', 'needs_user_input', {
+      reason: 'setup_required', snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
+    })));
+    mocks.solveCadAgain.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed'); });
+    if (reload) {
+      act(() => root.unmount());
+      publishJobs([]);
+      root = createRoot(host);
+      await act(async () => root.render(<JobsCoordinator><span>reloaded</span></JobsCoordinator>));
+    }
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.solveCadAgain.mock.calls[1]).toEqual(mocks.solveCadAgain.mock.calls[0]);
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+  });
 
+  it('keeps Solve available to recover a lost response even when the job event already says preparing', async () => {
+    const record = readyCad('wgi_lost_preparing');
+    act(() => workspaceModeStore.setMode('cad'));
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
+    mocks.submitCadSolve.mockRejectedValueOnce(new Error('response lost'));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow(); });
+    const press = mocks.submitCadSolve.mock.calls[0][0];
+    await act(async () => publishCadSummary(operation(`manual-solve:${press.client_request_id}`, 'processing', {
+      jobId: 'job-cad', snapshot: { manifestSha256: record.manifest_sha256 },
+    })));
+    expect(host.querySelector<HTMLButtonElement>('button')!.disabled).toBe(false);
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve.mock.calls[1][0]).toEqual(press);
+  });
+
+  it('releases a definitively refused press so corrected settings can make a new intent', async () => {
+    readyCad('wgi_known_refusal');
+    mocks.submitCadSolve.mockRejectedValueOnce(new CadLinkApiError('request refused', [], 409));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('request refused'); });
+    expect(pendingCadSolve('wgi_known_refusal')).toBeNull();
+    act(() => useCadReturnStore.setState({ frequencyCount: 42 }));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve.mock.calls[1][0].client_request_id).not.toBe(mocks.submitCadSolve.mock.calls[0][0].client_request_id);
+    expect(mocks.createSetupRevision.mock.calls[1][0].options.num_frequencies).toBe(42);
+  });
+
+  it('holds rapid continuation presses and claims the returned child instead of its parent', async () => {
+    const record = filedCad('wgi_rapid_child');
+    const parent = cadJobFixture(operation('op-parent', 'needs_user_input', {
+      reason: 'setup_required', snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'wgl_test' },
+    }));
+    act(() => publishJobs([parent]));
+    const pending = deferred<{ job_id: string }>();
+    mocks.solveCadAgain.mockReturnValueOnce(pending.promise);
     let first!: Promise<'submitted' | 'busy'>;
-    let second!: 'submitted' | 'busy';
     await act(async () => {
       first = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
-      second = await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      expect(await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).toBe('busy');
     });
-    expect(second).toBe('busy');
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.submitImported).not.toHaveBeenCalled();
-    await act(async () => { pending.resolve(operation('manual', 'processing')); await expect(first).resolves.toBe('submitted'); });
+    expect(mocks.solveCadAgain).toHaveBeenCalledOnce();
+    await act(async () => { pending.resolve({ job_id: 'job-child' }); await first; });
+    await act(async () => publishJobs([parent, cadJobFixture(operation('op-parent', 'accepted', { jobId: 'job-child' }), { parent_job_id: parent.id })]));
+    expect(compareSelection.getSnapshot().awaiting).toBe('job-child');
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
   });
 
-  it('reuses the manual operation id when a click is retried after prepare fails', async () => {
-    readyCad('wgi_retry');
-    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('temporary prepare failure'));
+  it('holds rapid double presses, then uses a new id for a deliberate later press', async () => {
+    readyCad('wgi_double');
+    const pending = deferred<{ job_id: string }>();
+    mocks.submitCadSolve.mockReturnValueOnce(pending.promise);
+    let first!: Promise<'submitted' | 'busy'>;
     await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('temporary prepare failure');
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
+      first = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport();
+      expect(await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).toBe('busy');
     });
-    expect(mocks.createCadOperation).toHaveBeenCalledTimes(2);
-    expect(mocks.createCadOperation.mock.calls[0][0].operationId)
-      .toBe(mocks.createCadOperation.mock.calls[1][0].operationId);
-    expect(mocks.submitImported).not.toHaveBeenCalled();
+    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
+    await act(async () => { pending.resolve({ job_id: 'job-cad' }); await first; });
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve.mock.calls[1][0].client_request_id).not.toBe(mocks.submitCadSolve.mock.calls[0][0].client_request_id);
   });
 
-  it('rotates the operation id after the authoritative row is terminal', async () => {
-    readyCad('wgi_repeat');
+  it('advances a lost-response label once when the jobs channel finds the accepted job', async () => {
+    readyCad('wgi_terminal');
+    mocks.submitCadSolve.mockRejectedValueOnce(new Error('connection closed'));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow(); });
+    const request = mocks.submitCadSolve.mock.calls[0][0];
+    const accepted = cadJobFixture(operation(`manual-solve:${request.client_request_id}`, 'accepted', { jobId: 'job-cad' }));
+    await act(async () => publishJobs([accepted]));
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve.mock.calls[1][0]).toEqual(request);
+    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceNext: 2 });
+  });
+
+  it('reports a refused job once after reload and never reads its operation', async () => {
+    readyCad('wgi_refused');
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    act(() => root.unmount());
+    root = createRoot(host);
+    await act(async () => root.render(<JobsCoordinator><span>reloaded</span></JobsCoordinator>));
+    const refused = cadJobFixture(operation('op-refused', 'rejected', { jobId: 'job-cad', message: 'The return is damaged.' }));
+    await act(async () => publishJobs([refused]));
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toContain('The return is damaged.');
+    expect(mocks.getCadOperation).not.toHaveBeenCalled();
+  });
+
+  it('recovers an identity left by the previous build through the jobs list', async () => {
+    readyCad('wgi_legacy');
+    sessionStorage.setItem('wg2.cad.manual-solve.v1:wgi_legacy', JSON.stringify({ operationId: 'manual-solve:old', designName: 'Speaker', label: 'Speaker1' }));
+    await act(async () => publishCadSummary(operation('manual-solve:old', 'accepted', { jobId: 'job-old' })));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    expect(compareSelection.getSnapshot().awaiting).toBe('job-old');
+    expect(sessionStorage.getItem('wg2.cad.manual-solve.v1:wgi_legacy')).toBeNull();
+  });
+
+  it.each(['another snapshot', 'update_restart_pending'])('starts a new solve beside a request for %s', async (reason) => {
+    const record = filedCad('wgi_other');
+    act(() => publishCadSummary(operation('op-other', 'needs_user_input', {
+      reason: reason === 'another snapshot' ? 'setup_required' : reason,
+      snapshot: { manifestSha256: reason === 'another snapshot' ? 'other' : record.manifest_sha256 },
+    })));
+    await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
+    expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+  });
+
+  it('refuses to record the settings under a mismatched job project', async () => {
+    const record = filedCad('wgi_mismatch');
+    act(() => publishCadSummary(operation('op-other', 'needs_user_input', {
+      reason: 'setup_required', snapshot: { manifestSha256: record.manifest_sha256, projectLineageId: 'another-project' },
+    })));
+    await act(async () => { await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('another project'); });
+    expect(mocks.putProjectSetup).not.toHaveBeenCalled();
+    expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+  });
+
+  it.each(['createSetupRevision', 'submitCadSolve'] as const)('shows a refusal from %s', async (route) => {
+    readyCad('wgi_refusal');
+    mocks[route].mockRejectedValueOnce(new Error('refused with 409'));
+    await act(async () => root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>));
     act(() => workspaceModeStore.setMode('cad'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-    const first = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted', { jobId: 'job-first' }));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-    expect(mocks.createCadOperation.mock.calls[1][0].operationId).not.toBe(first);
-    expect((mocks.createSetupRevision.mock.calls[1][0] as CadSolveSetup).label).toBe('Speaker2');
-    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
-  });
-
-  it('does not rotate when a lost prepare response already became terminal', async () => {
-    readyCad('wgi_lost_prepare');
-    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
-    });
-    const first = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.prepareCadOperation).toHaveBeenCalledOnce();
-    mocks.getCadOperation.mockResolvedValueOnce(operation(first, 'accepted'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-    });
-    expect(mocks.createCadOperation).toHaveBeenCalledTimes(2);
-    expect(mocks.createCadOperation.mock.calls[1][0].operationId).not.toBe(first);
-  });
-
-  it('advances a lost-response solve label once when terminal recovery finds it accepted', async () => {
-    readyCad('wgi_lost_label');
-    act(() => workspaceModeStore.setMode('cad'));
-    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
-    });
-    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    mocks.getCadOperation.mockResolvedValueOnce(operation(operationId, 'accepted', { jobId: 'job-lost' }));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).resolves.toBe('submitted');
-      await Promise.resolve();
-    });
-    expect(preferencesStore.getSnapshot()).toMatchObject({ runSequenceName: 'Speaker', runSequenceNext: 2 });
-    expect(compareSelection.getSnapshot().awaiting).toBe('job-lost');
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-  });
-
-  it.each(['rejected', 'cancelled'])('surfaces a recovered %s operation instead of reporting submitted', async (state) => {
-    readyCad(`wgi_${state}`);
-    mocks.prepareCadOperation.mockRejectedValueOnce(new Error('connection closed'));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport()).rejects.toThrow('connection closed');
-    });
-    const operationId = mocks.createCadOperation.mock.calls[0][0].operationId as string;
-    mocks.getCadOperation.mockResolvedValueOnce(operation(operationId, state, { message: `${state} by backend` }));
-    await act(async () => {
-      await expect(jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport())
-        .rejects.toThrow(`${state} by backend`);
-    });
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ['setup revision', 'createSetupRevision'],
-    ['operation lookup', 'getCadOperation'],
-    ['operation creation', 'createCadOperation'],
-    ['operation preparation', 'prepareCadOperation'],
-  ] as const)('shows a 409 from %s instead of swallowing it', async (_label, route) => {
-    readyCad(`wgi_${route}`);
-    act(() => workspaceModeStore.setMode('cad'));
-    const refusal = new Error(`${route} refused with 409`);
-    mocks[route].mockRejectedValueOnce(refusal);
-    await act(async () => { root.render(<JobsCoordinator><MainSolveButton/></JobsCoordinator>); });
-    await act(async () => {
-      host.querySelector<HTMLButtonElement>('button')!.click();
-      await Promise.resolve(); await Promise.resolve();
-    });
-    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe(refusal.message);
-    expect(mocks.submitImported).not.toHaveBeenCalled();
+    await act(async () => { host.querySelector<HTMLButtonElement>('button')!.click(); });
+    expect(jobsCoordinatorBridge.getSnapshot().actionError).toBe('refused with 409');
   });
 
   it('keeps a standalone msh import inspection-only', async () => {
@@ -1438,7 +1202,7 @@ describe('solve invocation mutex', () => {
     const solve = host.querySelector<HTMLButtonElement>('button')!;
     expect(solve.disabled).toBe(true);
     expect(solve.title).toContain('viewport-only');
-    expect(mocks.createCadOperation).not.toHaveBeenCalled();
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
     expect(mocks.submitImported).not.toHaveBeenCalled();
   });
 
@@ -1473,8 +1237,8 @@ describe('solve invocation mutex', () => {
     await act(async () => { buttons[0].click(); await Promise.resolve(); await Promise.resolve(); });
     expect(pullAndSolve).not.toHaveBeenCalled();
     expect(pullFromFusion).not.toHaveBeenCalled();
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.createCadOperation).toHaveBeenCalledWith(expect.objectContaining({ ingestId: 'wgi_displayed' }));
+    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
+    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: 'wgi_displayed' }));
     expect(mocks.submitImported).not.toHaveBeenCalled();
   });
 
@@ -1494,8 +1258,8 @@ describe('solve invocation mutex', () => {
       await Promise.resolve(); await Promise.resolve();
     });
     expect(pullAndSolve).not.toHaveBeenCalled();
-    expect(mocks.createCadOperation).toHaveBeenCalledOnce();
-    expect(mocks.createCadOperation).toHaveBeenCalledWith(expect.objectContaining({ ingestId: 'wgi_displayed' }));
+    expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
+    expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: 'wgi_displayed' }));
   });
 
   it('offers the Fusion refresh as its own action on the source line, which never solves', async () => {
@@ -1514,8 +1278,8 @@ describe('solve invocation mutex', () => {
     const refresh = [...line.querySelectorAll('button')].find((button) => button.textContent === 'Refresh')!;
     await act(async () => { refresh.click(); await Promise.resolve(); });
     expect(pullFromFusion).toHaveBeenCalledOnce();
-    expect(mocks.createCadOperation).not.toHaveBeenCalled();
-    expect(mocks.prepareCadOperation).not.toHaveBeenCalled();
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    expect(mocks.solveCadAgain).not.toHaveBeenCalled();
   });
 
   it('enters CAD mode without an ingest and exposes the submission blocker', async () => {

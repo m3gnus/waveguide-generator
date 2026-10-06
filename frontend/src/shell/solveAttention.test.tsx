@@ -1,13 +1,15 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cadJobFixture, publishCadJobs, publishCadSummary } from '../jobs/cadSolve.fixtures';
+import { useCadJobs } from '../jobs/cadSolve';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { FusionCadStatus } from '../api/cadlink';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { AttentionNotices, cadSourceLine } from './TopBar';
-import { operationNeedsUser, resetSolveAttentionForTests, solveAttention, useOperationAttention } from './solveAttention';
+import { operationNeedsUser, resetSolveAttentionForTests, solveAttention, useJobAttention, useOperationAttention } from './solveAttention';
 import {
   bindWorkspaceNavigation,
   navigationGeneration,
@@ -35,6 +37,7 @@ const waiting = (id: string, overrides: Partial<CadOperationSummary> = {}) => op
 });
 
 function Attention() {
+  useJobAttention(useCadJobs());
   useOperationAttention(useCadOperationsStore((state) => state.operations));
   return <AttentionNotices/>;
 }
@@ -118,6 +121,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetSolveAttentionForTests();
     resetWorkspaceNavigationForTests();
+    publishCadJobs([]);
     resetCadOperationsStore();
     resetCadReturnStore();
     activations = [];
@@ -139,7 +143,7 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     vi.restoreAllMocks();
   });
 
-  const arrive = (summary: CadOperationSummary) => act(() => { useCadOperationsStore.getState().apply(summary); });
+  const arrive = (summary: CadOperationSummary) => act(() => { publishCadSummary(summary); });
 
   it('fronts the CAD Link panel in CAD mode when a request arrives needing the user', () => {
     act(() => workspaceModeStore.setMode('cad'));
@@ -177,6 +181,21 @@ describe('F8: a blocked operation reaches the user in either mode', () => {
     act(() => { workspaceNavigation.navigate('geometry'); });
     activations.length = 0;
     arrive(waiting('op-fusion', { updatedAt: '2026-09-21T10:00:05Z' }));
+    expect(activations).toEqual([]);
+    expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
+  });
+
+  it('does not repeat a job gate or inherit a fresh arm after navigation when a child arrives', () => {
+    act(() => workspaceModeStore.setMode('cad'));
+    arrive(waiting('parent'));
+    arrive(waiting('parent'));
+    expect(activations).toEqual(['cadlink']);
+    act(() => workspaceNavigation.navigate('geometry'));
+    activations.length = 0;
+    act(() => publishCadJobs([
+      cadJobFixture(waiting('parent')),
+      cadJobFixture(waiting('child', { reason: 'findings_need_review' }), { parent_job_id: 'parent' }),
+    ]));
     expect(activations).toEqual([]);
     expect(host.querySelector('.attention-waiting')?.textContent).toContain('A solve is waiting for you');
   });

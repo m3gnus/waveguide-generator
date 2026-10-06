@@ -22,6 +22,7 @@ import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { Icon } from './icons';
 import { LogDialog } from './LogDialog';
 import { middleEllipsis } from './ResultsPanel';
+import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
 import { SolveProgressView, useSolveClock } from './solveProgress';
 
@@ -194,11 +195,9 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
   const cancelled = job.status === 'cancelled';
   const rating = job.rating ?? 0;
   const [editing, setEditing] = useState(false);
-  // A solve CAD Link submitted for a Fusion request is keyed by its operation.
-  const requestId = job.client_request_id;
-  const cadOperationId = typeof requestId === 'string' && requestId.startsWith('cad-solve:')
-    ? requestId.slice('cad-solve:'.length)
-    : null;
+  const cadOperationId = cadJobOperationId(job);
+  const cadInputs = Boolean(cadOperationId || job.cad_state || job.cad_setup || job.cad_source || job.config_summary.geometry_type === 'imported'
+    || job.config_summary.imported_geometry);
   const [titleDraft, setTitleDraft] = useState(job.label ?? '');
   const [displayLabel, setDisplayLabel] = useState(job.label);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -298,9 +297,10 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
     </header>
     {renameError && <div className="job-error job-rename-error" role="alert">{renameError}</div>}
     {job.results_discarded_at && <div className="job-retention-note">Results were cleaned up to save space.</div>}
-    {expanded && cadOperationId && <CadSolveInputs
+    {expanded && cadInputs && <CadSolveInputs
       className="job-cad-operation"
-      operationId={cadOperationId}
+      operationId={cadOperationId ?? 'not recorded'}
+      job={job}
       engineSource="job"
       resolvedEngine={job.solve_options.engine}
       jobStatus={job.status}

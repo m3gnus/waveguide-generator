@@ -6,7 +6,8 @@ import {
   type CadOperationSummary,
   type SetupRevisionDetail,
 } from '../api/cadOperations';
-import type { CadProvenance } from '../api/jobsSocket';
+import { cadJobSummary } from '../jobs/cadSolve';
+import type { JobItem, CadProvenance } from '../api/jobsSocket';
 
 interface LoadState<T> {
   key: string;
@@ -59,6 +60,7 @@ function setupEngine(detail: SetupRevisionDetail | null): string | null {
 
 export interface CadSolveInputsProps {
   operationId: string;
+  job?: JobItem;
   /** Present on the live-operation surface; job history resolves it by id. */
   operation?: CadOperationSummary;
   /** A job's persisted engine is the resolved engine that actually ran. */
@@ -78,15 +80,17 @@ export interface CadSolveInputsProps {
 export function CadSolveInputs({
   operationId,
   operation: suppliedOperation,
+  job,
   resolvedEngine,
   engineSource,
   jobStatus,
-  jobCad,
+  jobCad: suppliedJobCad,
   className,
 }: CadSolveInputsProps) {
+  const jobCad = job?.cad_provenance ?? suppliedJobCad;
   const [operationLoad, setOperationLoad] = useState<LoadState<CadOperationDetail>>(EMPTY_LOAD);
   useEffect(() => {
-    if (suppliedOperation) return undefined;
+    if (suppliedOperation || job?.cad_state || jobCad || operationId === 'not recorded') return undefined;
     let current = true;
     setOperationLoad({ key: operationId, value: null, error: null });
     void getCadOperation(operationId).then(
@@ -94,10 +98,10 @@ export function CadSolveInputs({
       (reason: unknown) => { if (current) setOperationLoad({ key: operationId, value: null, error: message(reason) }); },
     );
     return () => { current = false; };
-  }, [operationId, suppliedOperation]);
+  }, [operationId, suppliedOperation, job?.cad_state, jobCad]);
 
   const loadedOperation = operationLoad.key === operationId ? operationLoad.value : null;
-  const operation = suppliedOperation ?? loadedOperation;
+  const operation = job?.cad_state ? cadJobSummary(job) : suppliedOperation ?? loadedOperation;
   const setupRevisionId = jobCad?.setup?.revision_id ?? operation?.setupRevisionId ?? null;
   // The job's own record, else the operation's.
   const setupDefaults = jobCad?.setup ? jobCad.setup.origin === 'wg_defaults' : Boolean(operation?.setupDefaults);
@@ -125,10 +129,10 @@ export function CadSolveInputs({
   const setupError = engineSource === 'setup-revision' && setupRevisionId && setupLoad.key === setupRevisionId
     ? setupLoad.error
     : null;
-  const loadingOperation = !operation && !operationError;
+  const loadingOperation = !operation && !jobCad && !operationError && operationId !== 'not recorded';
   const loadingEngine = Boolean(operation && engineSource === 'setup-revision'
     && setupRevisionId && !engine && !setupError);
-  const manifest = operation?.snapshot?.manifestSha256 ?? null;
+  const manifest = operation?.snapshot?.manifestSha256 ?? job?.cad_source?.manifest_sha256 ?? null;
   // The frame is said once: the job's own record answers first, and only a
   // job without one falls back to what the operation says. An automatic axis
   // is the sentence with its Change; any other provenance is the Frame row.

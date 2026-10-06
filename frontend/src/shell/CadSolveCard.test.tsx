@@ -13,11 +13,12 @@ import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { cadJobFixture } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
-import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
+import { resetCadOperationsStore } from '../stores/cadOperations';
 import { resetCadReturnStore } from '../stores/cadReturn';
 import { resetSolveOptionsStore } from '../stores/solveOptions';
 import { resetSolveStageClocksForTests } from './solveProgress';
@@ -63,14 +64,19 @@ function job(overrides: Partial<JobItem> = {}): JobItem {
   } as JobItem;
 }
 
+let currentOperation: CadOperationSummary | null = null;
 function publishJobs(jobs: JobItem[]): void {
+  jobs = jobs.map((item) => currentOperation ? { ...cadJobFixture(currentOperation), ...item, cad_state: cadJobFixture(currentOperation).cad_state } : item);
   const manager = jobsSocket as unknown as { snapshot: JobsSnapshot; listeners: Set<() => void> };
   manager.snapshot = { connection: 'connected', epoch: 1, cursor: 1, jobs, error: null };
   manager.listeners.forEach((listener) => listener());
 }
 
 function publishOperation(op: CadOperationSummary): void {
-  useCadOperationsStore.setState({ operations: { [op.operationId]: op } });
+  currentOperation = op;
+  const existing = jobsSocket.getSnapshot().jobs.find((job) => job.id === op.jobId);
+  const item = { ...cadJobFixture(op), ...(existing ?? {}), cad_state: cadJobFixture(op).cad_state };
+  publishJobs([item]);
 }
 
 describe('CAD Solve card run status', () => {
@@ -79,6 +85,8 @@ describe('CAD Solve card run status', () => {
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    currentOperation = null;
+    publishJobs([]);
     resetCadOperationsStore();
     resetCadReturnStore();
     resetSolveOptionsStore();
@@ -94,7 +102,7 @@ describe('CAD Solve card run status', () => {
     act(() => root.unmount());
     host.remove();
     publishJobs([]);
-    useCadOperationsStore.setState({ operations: {} });
+    currentOperation = null;
     vi.useRealTimers();
   });
 
@@ -159,12 +167,7 @@ describe('CAD Solve card run status', () => {
     // validated, no job of its own yet. Only op-old's operation store entry
     // is replaced (a real re-solve creates a new operation id); the old
     // job is still in the jobs list, exactly as it would be after a reload.
-    act(() => useCadOperationsStore.setState({
-      operations: {
-        'op-old': operation({ operationId: 'op-old', state: 'accepted', jobId: 'job-old', updatedAt: '2026-09-22T23:00:00Z' }),
-        'op-new': operation({ operationId: 'op-new', state: 'received', stage: 'validating', jobId: null, updatedAt: NOW }),
-      },
-    }));
+    act(() => publishOperation(operation({ operationId: 'op-new', state: 'received', stage: 'validating', jobId: null, createdAt: NOW, updatedAt: NOW })));
     expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('Solved');
     expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Received');
   });
@@ -357,19 +360,14 @@ describe('CAD Solve card run status', () => {
     expect(host.querySelector('.cad-solve-run')?.textContent).toContain('Cancelled · Simulation cancelled by user');
   });
 
-  it('stops assuming a missing job is about to appear once the accepted operation is stale', async () => {
-    // Just accepted: the ordinary gap before the job arrives.
-    publishOperation(operation({ updatedAt: NOW }));
+  it('shows a refused continuation child from the job even when the operation row is gone', async () => {
+    const parent = cadJobFixture(operation({ jobId: 'parent' }), { status: 'complete' });
+    const child = cadJobFixture(operation({ state: 'needs_user_input', reason: 'setup_required', jobId: 'child' }), { parent_job_id: 'parent', created_at: NOW });
+    currentOperation = null;
+    publishJobs([parent, child]);
     await act(async () => root.render(<CadSolveCard record={record()} label="PartyMEH"/>));
-    expect(host.querySelector('.cad-solve-run .job-stage-word')?.textContent).toBe('Preparing mesh');
-
-    // The same operation, accepted well over the grace window ago, and still
-    // no matching job -- as a reload might find. No job is ever published in
-    // this test.
-    act(() => publishOperation(operation({ updatedAt: '2026-09-22T23:59:00Z' })));
-    const text = host.querySelector('.cad-solve-run')?.textContent ?? '';
-    expect(text).not.toBe('Preparing mesh');
-    expect(text.toLowerCase()).toContain("isn't showing in the jobs list");
+    expect(host.querySelector('.cad-solve-run')?.textContent).toContain('needs its solve settings');
+    expect(host.querySelector('.cad-solve-run')?.textContent).not.toContain('Done');
   });
 
   it('states the concluded domain from the record\'s decision on the model card', async () => {

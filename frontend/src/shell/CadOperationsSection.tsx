@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { getIngest, type CadReturnFinding, type CadReturnIngestRecord } from '../api/cadlink';
-import { getCadOperation, type CadOperationSummary } from '../api/cadOperations';
+import type { CadOperationSummary } from '../api/cadOperations';
 import { listCadProjects } from '../api/cadProjects';
 import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import { cadLinkCoordinatorBridge } from './CadLinkCoordinator';
 import { openCadProject } from './CadProjectPanel';
+import { approveCadJob, cadJobSummaries, dismissCadJob, useCadJobs } from '../jobs/cadSolve';
+import { jobsCoordinatorBridge } from './JobsCoordinator';
+import { solveAttention } from './solveAttention';
 import { inFlightWords } from './cadOnScreenSettings';
 import { fullTime, relativeTime } from './cadTime';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -58,6 +61,8 @@ const LADDER_REASONS: ReadonlySet<string> = new Set(['frame_confirmation_require
  * only at their own gate is what let a user fix the frame and then hit a second
  * wall with no warning it was coming. */
 function useFindingReview(operation: CadOperationSummary): FindingReview & { retry: () => void } {
+  const jobs = useCadJobs();
+  const job = jobs.find((item) => item.id === operation.jobId);
   const wanted = operation.kind === 'prepare_and_solve'
     && operation.state === 'needs_user_input'
     && LADDER_REASONS.has(operation.reason ?? '');
@@ -67,20 +72,20 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
     if (!wanted) return undefined;
     let current = true;
     void (async () => {
-      const detail = await getCadOperation(operation.operationId);
-      const preparation = detail.preparation;
+      const detail = job?.cad_state;
+      const preparation = detail?.preparation;
       if (!current) return;
       if (!preparation) throw new Error('the backend has not recorded its preparation yet');
       // The ids are the review; the ingestion record only puts words to them.
-      const findings = await getIngest(preparation.ingestId)
-        .then((record) => record.findings.filter((finding) => preparation.blockingFindingIds.includes(finding.id)))
+      const findings = await getIngest(String(job?.cad_setup?.ingest_id ?? job?.cad_intent?.ingest_id ?? ''))
+        .then((record) => record.findings.filter((finding) => preparation.blocking_finding_ids.includes(finding.id)))
         .catch(() => [] as CadReturnFinding[]);
       if (current) {
-        const approvedIds = approvedFindingIds(detail.approvals, preparation.preparationId)
-          .filter((id) => preparation.blockingFindingIds.includes(id));
+        const approvedIds = approvedFindingIds(detail!.approvals, preparation.preparation_id)
+          .filter((id) => preparation.blocking_finding_ids.includes(id));
         setReview({
-          preparationId: preparation.preparationId,
-          findingIds: preparation.blockingFindingIds,
+          preparationId: preparation.preparation_id,
+          findingIds: preparation.blocking_finding_ids,
           approvedIds,
           findings,
           error: null,
@@ -90,7 +95,7 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
       if (current) setReview({ ...NO_REVIEW, error: reason instanceof Error ? reason.message : String(reason) });
     });
     return () => { current = false; };
-  }, [wanted, operation.operationId, operation.preparationId, operation.attemptGeneration, operation.reason, attempt]);
+  }, [wanted, operation.operationId, operation.preparationId, operation.attemptGeneration, operation.reason, job, attempt]);
   return { ...(wanted ? review : NO_REVIEW), retry: () => setAttempt((count) => count + 1) };
 }
 
@@ -242,17 +247,17 @@ function guidance(operation: CadOperationSummary): Guidance {
 }
 
 function CadOperationCard({ operation, showStatus = true }: { operation: CadOperationSummary; showStatus?: boolean }) {
-  const coordinator = useSyncExternalStore(
-    cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
-  );
+  const jobs = useCadJobs();
+  const job = jobs.find((item) => item.id === operation.jobId)!;
   // The action asked for, and the operation as it stood then. The answer is
   // the row as it was before the backend claimed it, so that action stays held
   // until the operation moves on -- a newer attempt, or another state -- or the
   // request fails. Re-enabling on the answer let a second press start a second
   // attempt. The other actions stay available: the request can still be dismissed.
-  const [asked, setAsked] = useState<{ action: OperationAction; attemptGeneration: number; state: string } | null>(null);
+  const [asked, setAsked] = useState<{ action: OperationAction; jobId: string; preparationId: string | null; state: string } | null>(null);
+  const askedRef = useRef<typeof asked>(null);
   const heldAction = asked !== null
-    && asked.attemptGeneration === operation.attemptGeneration && asked.state === operation.state
+    && asked.jobId === job.id && asked.preparationId === operation.preparationId && asked.state === operation.state
     ? asked.action
     : null;
   const review = useFindingReview(operation);
@@ -271,8 +276,16 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
   // its preparation still apply. Everything else this request waits for is
   // the Solve card's one Solve, which continues this very request.
   const ask = (action: OperationAction, request: () => Promise<void>) => {
-    setAsked({ action, attemptGeneration: operation.attemptGeneration, state: operation.state });
-    void request().catch(() => setAsked(null));
+    const held = askedRef.current;
+    if (held?.action === action && held.jobId === job.id && held.preparationId === operation.preparationId && held.state === operation.state) return;
+    const press = { action, jobId: job.id, preparationId: operation.preparationId, state: operation.state };
+    askedRef.current = press;
+    setAsked(press);
+    void request().catch((reason: unknown) => {
+      askedRef.current = null;
+      setAsked(null);
+      jobsCoordinatorBridge.getSnapshot().reportError(reason instanceof Error ? reason.message : String(reason));
+    });
   };
   // The stage is the backend's bookkeeping ("validating"); the state and the
   // reason are what the user acts on.
@@ -319,7 +332,7 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         disabled={heldAction === 'dismiss'}
         aria-label={`Dismiss: ${label}`}
         title="Dismiss this request. Fusion will not offer it again."
-        onClick={() => ask('dismiss', () => coordinator.dismissOperation(operation.operationId))}
+        onClick={() => ask('dismiss', () => dismissCadJob(job))}
       >Dismiss</button>}
       {review.error && operation.reason === 'findings_need_review' && <button aria-label={`Retry reading the findings for ${label}`} onClick={review.retry}>Retry</button>}
       {help.simulation && <button
@@ -330,9 +343,10 @@ function CadOperationCard({ operation, showStatus = true }: { operation: CadOper
         className="primary"
         disabled={heldAction === 'approve'}
         aria-label={`Approve and solve: ${label}`}
-        onClick={() => ask('approve', () => coordinator.approveOperation(operation.operationId, {
-          preparationId: reviewedPreparation, findingIds: review.findingIds,
-        }))}
+        onClick={() => ask('approve', () => (async () => {
+          solveAttention.armOperation(job.id);
+          await approveCadJob(job, reviewedPreparation, review.findingIds);
+        })())}
       >Approve and solve</button>}
     </div>
   </div>;
@@ -385,6 +399,7 @@ function EarlierRequests({ operations }: { operations: CadOperationSummary[] }) 
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
+  const jobs = useCadJobs();
   const [dismissing, setDismissing] = useState<ReadonlySet<string>>(new Set());
   const [opening, setOpening] = useState(false);
   const openingRef = useRef(false);
@@ -392,7 +407,9 @@ function EarlierRequests({ operations }: { operations: CadOperationSummary[] }) 
     setDismissing((held) => new Set([...held, ...ids]));
     void (async () => {
       for (const id of ids) {
-        await coordinator.dismissOperation(id).catch(() => undefined);
+        const operation = operations.find((item) => item.operationId === id);
+        const job = jobs.find((item) => item.id === operation?.jobId);
+        await (job ? dismissCadJob(job) : coordinator.dismissOperation(id)).catch(() => undefined);
       }
     })().finally(() => setDismissing((held) => new Set([...held].filter((id) => !ids.includes(id)))));
   };
@@ -480,11 +497,11 @@ export function onScreenSolves(
  * shows them: what each still needs, in words, with only the actions Solve
  * does not take -- approving a finding, dismissing the request. */
 export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord | null }) {
-  const operations = useCadOperationsStore((state) => state.operations);
-  const solves = onScreenSolves(operations, record);
+  const jobs = useCadJobs();
+  const solves = onScreenSolves(cadJobSummaries(jobs), record);
   if (!solves.length) return null;
   return <div className="cad-operations cad-operations-on-screen">
-    {solves.map((operation) => <CadOperationCard key={operation.operationId} operation={operation} showStatus={false}/>)}
+    {solves.map((operation) => <CadOperationCard key={operation.jobId ?? operation.operationId} operation={operation} showStatus={false}/>)}
   </div>;
 }
 
@@ -494,10 +511,15 @@ export function OnScreenSolveStatus({ record }: { record: CadReturnIngestRecord 
  * (`solves={false}` here) -- and the rest are one quiet line each. */
 export function CadOperationsSection({ record, solves = true }: { record: CadReturnIngestRecord | null; solves?: boolean }) {
   const operations = useCadOperationsStore((state) => state.operations);
+  const jobs = useCadJobs();
+  const combined = {
+    ...Object.fromEntries(Object.entries(operations).filter(([, operation]) => operation.kind !== 'prepare_and_solve')),
+    ...cadJobSummaries(jobs),
+  };
   const coordinator = useSyncExternalStore(
     cadLinkCoordinatorBridge.subscribe, cadLinkCoordinatorBridge.getSnapshot, cadLinkCoordinatorBridge.getSnapshot,
   );
-  const pending = pendingCadOperations(operations)
+  const pending = pendingCadOperations(combined)
     .filter((operation) => operation.kind === 'prepare_and_solve'
       || (operation.state === 'recovery_required'
         && (operation.kind === 'insert_link' || operation.kind === 'update_link')));
@@ -509,7 +531,7 @@ export function CadOperationsSection({ record, solves = true }: { record: CadRet
   if (!current.length && !earlier.length) return null;
   return <div className="cad-operations">
     {current.map((operation) => operation.kind === 'prepare_and_solve'
-      ? <CadOperationCard key={operation.operationId} operation={operation}/>
+      ? <CadOperationCard key={operation.jobId ?? operation.operationId} operation={operation}/>
       : <RecoveryOperationCard key={operation.operationId} operation={operation}/>)}
     {earlier.length > 0 && <EarlierRequests operations={earlier}/>}
   </div>;

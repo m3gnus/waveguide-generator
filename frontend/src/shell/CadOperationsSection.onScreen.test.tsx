@@ -10,6 +10,8 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import type { CadOperationSummary } from '../api/cadOperations';
+import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
+import { jobsSocket } from '../api/jobsSocket';
 import { useCadOperationsStore } from '../stores/cadOperations';
 
 const coordinator = vi.hoisted(() => ({
@@ -55,30 +57,36 @@ const recovery = (overrides: Partial<CadOperationSummary> = {}): CadOperationSum
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
 function stubReview(approvals: Array<{ preparation_id: string; finding_id: string }> = []) {
+  reviewApprovals = approvals;
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
     const url = decodeURIComponent(String(input));
-    if (url.startsWith('/api/cadlink/operations/')) {
-      return json({
-        ...solve(), approvals,
-        preparation: {
-          preparationId: 'wgi_prep1', ingestId: 'wgi_prep1', snapshotSha256: 's', setupRevisionId: 'wgs_1',
-          reportSha256: 'r', blockingFindingIds: [FINDING], attemptGeneration: 1,
-        },
-      });
-    }
-    if (url.startsWith('/api/cadlink/ingest/')) {
-      return json({ findings: [{ id: FINDING, kind: 'scope-degradation', detail: 'skipped bodies: Body11', blocking: true }] });
-    }
-    throw new Error(`unexpected ${url}`);
+    if (url.includes('/api/cadlink/operations/')) throw new Error('operation endpoint is gone');
+    if (url.endsWith('/approvals')) return json({});
+    if (url.endsWith('/solve-again')) return json({ job_id: 'child' });
+    return json({ findings: [{ id: FINDING, kind: 'scope-degradation', detail: 'skipped bodies: Body11', blocking: true }] });
   }));
 }
 
+let reviewIds: string[] = [FINDING];
+let reviewApprovals: Array<{ preparation_id: string; finding_id: string }> = [];
+function setRequests({ operations }: { operations: Record<string, CadOperationSummary> }): void {
+  useCadOperationsStore.setState({ operations: Object.fromEntries(Object.entries(operations).filter(([, item]) => item.kind !== 'prepare_and_solve')) });
+  publishCadJobs(Object.values(operations).filter((item) => item.kind === 'prepare_and_solve').map((item) => {
+    const job = cadJobFixture(item);
+    if (job.cad_state?.preparation) job.cad_state.preparation.blocking_finding_ids = reviewIds;
+    job.cad_state!.approvals = reviewApprovals;
+    return job;
+  }));
+}
 describe('operation cards for the model on screen', () => {
   let host: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    reviewIds = [FINDING]; reviewApprovals = [];
+    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -89,12 +97,13 @@ describe('operation cards for the model on screen', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
-    useCadOperationsStore.setState({ operations: {} });
+    setRequests({ operations: {} });
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   async function show(operations: CadOperationSummary[]) {
-    useCadOperationsStore.setState({ operations: Object.fromEntries(operations.map((item) => [item.operationId, item])) });
+    setRequests({ operations: Object.fromEntries(operations.map((item) => [item.operationId, item])) });
     await act(async () => root.render(<CadOperationsSection record={record}/>));
   }
 
@@ -103,7 +112,7 @@ describe('operation cards for the model on screen', () => {
 
   it('keeps waiting guidance and actions without a second solve status', async () => {
     stubReview();
-    useCadOperationsStore.setState({ operations: { 'op-screen': solve() } });
+    setRequests({ operations: { 'op-screen': solve() } });
     await act(async () => root.render(<OnScreenSolveStatus record={record}/>));
     expect(host.querySelector('.cad-operation [role="status"]')).toBeNull();
     expect(host.querySelector('.cad-operation')?.textContent).not.toContain('Waiting for you');
@@ -132,12 +141,13 @@ describe('operation cards for the model on screen', () => {
     expect(disclosure.textContent).not.toContain('Journal phase');
 
     await act(async () => { lines[1].querySelector<HTMLButtonElement>('button')!.click(); });
-    expect(coordinator.dismissOperation).toHaveBeenCalledWith('manual-solve:old');
-    coordinator.dismissOperation.mockClear();
+    expect(jobsSocket.deleteJob).toHaveBeenCalledWith('manual-solve:old');
+    coordinator.dismissOperation.mockClear(); vi.mocked(jobsSocket.deleteJob).mockClear();
     const clear = [...disclosure.querySelectorAll('button')].find((button) => button.textContent === 'Clear all')!;
     await act(async () => { clear.click(); });
-    await vi.waitFor(() => expect(coordinator.dismissOperation).toHaveBeenCalledTimes(2));
-    expect(coordinator.dismissOperation.mock.calls.map(([id]) => id)).toEqual([RECOVERY_ID, 'manual-solve:old']);
+    await vi.waitFor(() => expect(coordinator.dismissOperation).toHaveBeenCalledOnce());
+    expect(coordinator.dismissOperation).toHaveBeenCalledWith(RECOVERY_ID);
+    expect(jobsSocket.deleteJob).toHaveBeenCalledWith('manual-solve:old');
   });
 
   it('shows no Earlier requests at all when every request is about the model on screen', async () => {
@@ -207,7 +217,7 @@ describe('operation cards for the model on screen', () => {
     await show([solve({ reason: 'frame_confirmation_required' })]);
     const [card] = cards();
     // The review has been read (both requests answered) before the ladder is judged.
-    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls).toHaveLength(2));
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls).toHaveLength(1));
     await act(async () => { for (let i = 0; i < 6; i += 1) await Promise.resolve(); });
     expect([...card.querySelectorAll<HTMLElement>('.cad-operation-ladder li')].map((item) => item.dataset.gate)).toEqual(['frame']);
   });

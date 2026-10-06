@@ -1,6 +1,6 @@
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { putProjectSetup, type CadOperationSummary } from '../api/cadOperations';
-import { importedSubmissionBlocker, manualCadSolveIngestFor } from '../jobs/importedSubmission';
+import { importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { bundleIdentity, useCadReturnStore } from '../stores/cadReturn';
 import { pendingCadOperations, useCadOperationsStore } from '../stores/cadOperations';
 import { buildCadProjectSetup } from './cadSetupPublisher';
@@ -57,14 +57,13 @@ const IN_FLIGHT: ReadonlySet<string> = new Set(['received', 'processing']);
 /** The request for the model on screen that the backend is preparing or
  * submitting right now, if any.
  *
- * One operation per intent (PLAN.md M1b): while it is in flight, Solve does
+ * One job per intent (PLAN.md M1b): while it is in flight, Solve does
  * not start a second request for the same snapshot. It is held on this one,
  * which either stops at a gate -- where Solve continues it -- or finishes and
  * reveals its own result.
  *
- * A request this window's Solve already holds -- its own solve, or one it
- * continued -- is not this: Solve recovers that one under the identity it
- * holds (a lost response, a retry), which is the same operation again. */
+ * JobsCoordinator checks its persisted press before using this hold: a
+ * response it lost is recovered by reposting that captured job request. */
 export function onScreenRequestInFlight(
   operations: Record<string, CadOperationSummary>,
   record: CadReturnIngestRecord | null,
@@ -72,8 +71,7 @@ export function onScreenRequestInFlight(
   if (!record) return null;
   return pendingCadOperations(operations).find((operation) => operation.kind === 'prepare_and_solve'
     && IN_FLIGHT.has(operation.state)
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256
-    && manualCadSolveIngestFor(operation.operationId) === null) ?? null;
+    && operation.snapshot?.manifestSha256 === record.manifest_sha256) ?? null;
 }
 
 /** What the Solve card and the top bar say while Solve is held on that request. */
@@ -92,9 +90,8 @@ const NOT_CONTINUED: ReadonlySet<string> = new Set(['update_restart_pending']);
  * its gates -- its first settings, its solver frame, an engine that cannot
  * solve it, a failed or interrupted preparation.
  *
- * Solve continues that operation, with the settings and frame on screen,
- * instead of creating a second one for the same snapshot: the same operation
- * id is the explicit continuation (PLAN.md M1b, "one card per intent"). A
+ * Solve continues that job, with the settings and frame on screen, using
+ * its id explicitly (PLAN.md M1b, "one card per intent"). A
  * request for another snapshot is not this, and neither is one the backend is
  * still preparing or will queue again by itself. */
 export function onScreenRequestToContinue(

@@ -223,7 +223,8 @@ describe('jobs panel run list', () => {
   it('keeps collapsed CAD runs to one line and only reads operation detail after expansion', async () => {
     const fromFusion = job(14, 'Speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
-    fromFusion.client_request_id = 'cad-solve:op-7';
+    fromFusion.client_request_id = null;
+    fromFusion.cad_intent = { operation_id: 'op-7' };
     const byHand = job(13, 'Parametric');
     byHand.client_request_id = 'something-else';
     const fetcher = vi.fn(async (_input: RequestInfo | URL) => new Response(JSON.stringify({
@@ -251,10 +252,42 @@ describe('jobs panel run list', () => {
       .filter((path) => path === '/api/cadlink/operations/op-7')).toHaveLength(1);
   });
 
+  it('shows inputs for a retried CAD job without a submission key while the operation endpoint is gone', async () => {
+    const retried = job(17, 'Retried speaker', 'cad-import');
+    retried.client_request_id = null;
+    retried.parent_job_id = 'old-job';
+    retried.cad_provenance = { operation_id: 'op-retained', setup: { revision_id: 'setup', digest: 'digest', origin: 'user' } };
+    retried.cad_state = {
+      operation_id: 'op-retained', job_id: retried.id, state: 'accepted', stage: 'submitted', reason: null, message: null,
+      snapshot: { document_name: 'Retried speaker', manifest_sha256: 'retained-snapshot', artifact_sha256: 'artifact', project_lineage_id: 'project' },
+      preparation: { preparation_id: 'retained-preparation', blocking_finding_ids: [], report_sha256: 'report' },
+      approvals: [], setup_defaults: false, frame_axis_automatic: null, received_at: 'received', updated_at: 'moved',
+    };
+    const fetcher = vi.fn(async (_input: RequestInfo | URL) => new Response('{}', { status: 404 }));
+    vi.stubGlobal('fetch', fetcher);
+    publishJobs([retried]); compareSelection.setPrimary(retried.id);
+    await act(async () => root.render(<JobsPanel/>));
+    const inputs = host.querySelector('.cad-solve-inputs')!;
+    expect(inputs.textContent).toContain('SnapshotRetried speakerretained-snapshot');
+    expect(inputs.textContent).toContain('Preparationretained-preparation');
+    expect(inputs.textContent).toContain('Setup revisionsetup');
+    expect(fetcher.mock.calls.some(([input]) => String(input).includes('/operations/'))).toBe(false);
+  });
+
+  it('shows imported geometry inputs when no operation identity was retained', async () => {
+    const imported = job(18, 'Imported', 'cad-import');
+    imported.client_request_id = null;
+    imported.config_summary = { geometry_type: 'imported', ingest_id: 'ingest' };
+    publishJobs([imported]); compareSelection.setPrimary(imported.id);
+    await act(async () => root.render(<JobsPanel/>));
+    expect(host.querySelector('.cad-solve-inputs')?.textContent).toContain('Operationnot recorded');
+  });
+
   it('names every bound input of a CAD-created solve from its operation and job', async () => {
     const fromFusion = job(16, 'Bound speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
-    fromFusion.client_request_id = 'cad-solve:op-bound';
+    fromFusion.client_request_id = null;
+    fromFusion.cad_intent = { operation_id: 'op-bound' };
     fromFusion.solve_options = { ...fromFusion.solve_options, engine: 'beat-cpu' };
     const manifest = `sha256:${'a'.repeat(64)}`;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -288,7 +321,8 @@ describe('jobs panel run list', () => {
   it('does not infer a historical job engine from its bound setup revision', async () => {
     const fromFusion = job(17, 'Old speaker', 'cad-import');
     fromFusion.config_summary = { geometry_type: 'imported', ingest_id: 'wgi_example' };
-    fromFusion.client_request_id = 'cad-solve:op-old';
+    fromFusion.client_request_id = null;
+    fromFusion.cad_intent = { operation_id: 'op-old' };
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe('/api/cadlink/operations/op-old');
       return new Response(JSON.stringify({

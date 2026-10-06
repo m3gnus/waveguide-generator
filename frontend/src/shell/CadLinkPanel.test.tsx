@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadReturnIngestRecord, CadReturnListing, FusionCadStatus } from '../api/cadlink';
 import { resetCadCoordinationForTests } from '../api/cadCoordination';
 import type { CadOperationSummary } from '../api/cadOperations';
+import { cadJobFixture, publishCadJobs } from '../jobs/cadSolve.fixtures';
 import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import { applyOpenedDesign } from '../design/openCadProject';
 import type { OnshapeLink } from '../api/onshape';
@@ -106,6 +107,8 @@ describe('CadLinkPanel', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     resetCadReturnStore(); resetSolveOptionsStore(); resetDocumentStore(); resetDesignStore(); preferencesStore.resetForTests();
     capabilityClient.clear();
+    publishCadJobs([]); sessionStorage.clear();
+    reviewDetail = undefined; missingReview = false;
     resetCadOperationsStore();
     resetCadCoordinationForTests('on');
     workspaceModeStore.setMode('parametric');
@@ -221,6 +224,23 @@ describe('CadLinkPanel', () => {
     ...overrides,
   });
 
+  let reviewDetail: Record<string, unknown> | undefined;
+  let missingReview = false;
+  function applyCadRequest(summary: CadOperationSummary): void {
+    if (summary.kind !== 'prepare_and_solve') { useCadOperationsStore.getState().apply(summary); return; }
+    const item = cadJobFixture(summary);
+    item.cad_intent = { ...item.cad_intent, ingest_id: record.ingest_id };
+    const preparation = reviewDetail?.preparation as { preparationId: string; blockingFindingIds: string[]; reportSha256: string } | undefined;
+    if (preparation && item.cad_state) {
+      item.cad_state.preparation = missingReview ? null : {
+        preparation_id: preparation.preparationId, blocking_finding_ids: preparation.blockingFindingIds,
+        report_sha256: preparation.reportSha256,
+      };
+    }
+    const previous = jobsSocket.getSnapshot().jobs.filter((job) => job.cad_state?.operation_id !== summary.operationId && job.id !== item.id);
+    publishCadJobs([...previous, item]);
+  }
+
   const buttonTexts = (card: HTMLElement) => [...card.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.textContent);
   const buttonLabels = (card: HTMLElement) => [...card.querySelectorAll<HTMLButtonElement>('button')].map((button) => button.getAttribute('aria-label'));
   const operationCard = (operationId: string) => host.querySelector<HTMLElement>(`[data-operation-id="${operationId}"]`)!;
@@ -242,6 +262,7 @@ describe('CadLinkPanel', () => {
   } = {}) => {
     const posted: Array<{ path: string; body: unknown }> = [];
     let detailFailures = options.detailFailures ?? 0;
+    reviewDetail = options.detail; missingReview = detailFailures > 0;
     const base = vi.mocked(fetch).getMockImplementation()!;
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
@@ -260,6 +281,11 @@ describe('CadLinkPanel', () => {
           revisionId, contentSha256: 'sha256:setup', createdAt: '2026-09-14T10:00:00Z',
           setup: { schema_version: 1, geometry: {}, options: { engine: options.setupEngine ?? 'auto' } },
         });
+      }
+      if (path.startsWith('/api/jobs/')) {
+        posted.push({ path, body: init?.body ? JSON.parse(String(init.body)) : null });
+        if (path.endsWith('/solve-again')) return json({ job_id: 'child' });
+        return json({});
       }
       if (path.startsWith('/api/cadlink/operations/')) {
         const operationId = decodeURIComponent(path.split('/')[4]);
@@ -290,7 +316,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: 'op-restart', reason: 'update_restart_pending',
         message: 'Waveguide Generator is about to restart to install 0.3.4, so it is not starting new solves. Submit this again after the restart.',
       }));
@@ -308,7 +334,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     act(() => {
-      const { apply } = useCadOperationsStore.getState();
+      const apply = applyCadRequest;
       for (const kind of ['request_return', 'insert_link', 'update_link']) {
         apply(cadOperation({ operationId: `op-${kind}`, kind, state: 'received', stage: 'received' }));
       }
@@ -342,7 +368,7 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     await reportRecovery('op-update');
     act(() => {
-      const { apply } = useCadOperationsStore.getState();
+      const apply = applyCadRequest;
       apply(cadOperation({ operationId: 'op-return', kind: 'request_return', state: 'recovery_required' }));
       apply(cadOperation({ operationId: 'op-insert', kind: 'insert_link', state: 'processing' }));
       apply(cadOperation({ operationId: 'op-update', kind: 'update_link', state: 'recovery_required' }));
@@ -362,7 +388,7 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     await reportRecovery('op-update');
     const posted = recordOperationRequests({ reconcileAccepted: ['op-update'] });
-    act(() => useCadOperationsStore.getState().apply(cadOperation({
+    act(() => applyCadRequest(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
     })));
 
@@ -388,7 +414,7 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     await reportRecovery('op-update');
     const posted = recordOperationRequests();
-    act(() => useCadOperationsStore.getState().apply(cadOperation({
+    act(() => applyCadRequest(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
     })));
 
@@ -410,7 +436,7 @@ describe('CadLinkPanel', () => {
     await renderAndSelect();
     await clickIngest();
     const posted = recordOperationRequests();
-    act(() => useCadOperationsStore.getState().apply(cadOperation({
+    act(() => applyCadRequest(cadOperation({
       operationId: 'op-update', kind: 'update_link', state: 'recovery_required',
     })));
 
@@ -438,7 +464,7 @@ describe('CadLinkPanel', () => {
     };
     act(() => jobManager.listeners.forEach((listener) => listener()));
     act(() => {
-      const { apply } = useCadOperationsStore.getState();
+      const apply = applyCadRequest;
       apply(cadOperation({ operationId: 'op-ready' }));
       apply(cadOperation({
         operationId: 'op-engine', reason: 'engine_unavailable', preparationId: null, createdAt: '2026-09-14T10:00:01Z',
@@ -497,13 +523,13 @@ describe('CadLinkPanel', () => {
     await act(async () => { engine.querySelector<HTMLButtonElement>('button')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted).toEqual([
-      { path: '/api/cadlink/operations/op-engine/cancel', body: null },
+      { path: '/api/jobs/op-engine', body: null },
     ]);
     jobManager.snapshot = previousJobs;
     expect(useSolveOptionsStore.getState().engine).toBe(engineBefore);
   });
 
-  it('shows the blocking findings a preparation reported, retries a failed read, and approves them on that preparation only', async () => {
+  it('recovers missing job preparation details and approves its blocking findings on that preparation only', async () => {
     await renderAndSelect();
     await clickIngest();
     const posted = recordOperationRequests({
@@ -518,7 +544,7 @@ describe('CadLinkPanel', () => {
       },
     });
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7',
         message: 'Review the blocking findings, then approve them to solve.',
       }));
@@ -526,16 +552,21 @@ describe('CadLinkPanel', () => {
     const card = operationCard('op-review');
     await vi.waitFor(() => expect(card.textContent).toContain('Could not read the findings'));
     expect(buttonIn(card, 'Approve and solve')).toBeUndefined();
-    await act(async () => { buttonIn(card, 'Retry')!.click(); });
+    await act(async () => {
+      const retry = buttonIn(card, 'Retry')!;
+      missingReview = false;
+      applyCadRequest(cadOperation({ operationId: 'op-review', reason: 'findings_need_review', preparationId: 'wgp_7' }));
+      retry.click();
+    });
     await vi.waitFor(() => expect(card.querySelector('.cad-operation-findings')?.textContent).toBe('freshness'));
     expect(card.textContent).not.toContain('Could not read the findings');
     // In words, never by id.
     expect(card.textContent).not.toContain('finding-a');
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[0]).toEqual({
-      path: '/api/cadlink/operations/op-review/prepare',
-      body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+      path: '/api/jobs/op-review/approvals',
+      body: { preparation_id: 'wgp_7', finding_ids: ['finding-a'] },
     });
   });
 
@@ -566,17 +597,17 @@ describe('CadLinkPanel', () => {
       },
     });
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: manual, reason: 'findings_need_review', preparationId: 'wgp_7', setupRevisionId: 'wgs_manual',
       }));
     });
     const card = operationCard(manual);
     await vi.waitFor(() => expect(buttonIn(card, 'Approve and solve')).toBeDefined());
     await act(async () => { buttonIn(card, 'Approve and solve')!.click(); });
-    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    await vi.waitFor(() => expect(posted).toHaveLength(2));
     expect(posted[0]).toEqual({
-      path: `/api/cadlink/operations/${encodeURIComponent(manual)}/prepare`,
-      body: { submit: true, approvals: { preparationId: 'wgp_7', findingIds: ['finding-a'] } },
+      path: `/api/jobs/${encodeURIComponent(manual)}/approvals`,
+      body: { preparation_id: 'wgp_7', finding_ids: ['finding-a'] },
     });
     // Its progress line is about the user's own solve, not one Fusion sent.
     await vi.waitFor(() => expect(host.querySelector('.cad-status-strip')?.textContent).toBeTruthy());
@@ -586,13 +617,13 @@ describe('CadLinkPanel', () => {
     // the Solve card's one Solve, which sends the settings on screen
     // (M1bSolveCard.test.tsx). No second Solve here.
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: 'op-fusion', reason: 'engine_unavailable', createdAt: '2026-09-14T10:00:03Z',
       }));
     });
     expect(operationCard('op-fusion').textContent).toContain('then press Solve');
     expect(buttonIn(operationCard('op-fusion'), 'Solve now')).toBeUndefined();
-    expect(posted).toHaveLength(1);
+    expect(posted).toHaveLength(2);
   });
 
   it('holds Dismiss until its operation moves on, offers it again when the request fails, and leaves a received one to the backend', async () => {
@@ -600,7 +631,7 @@ describe('CadLinkPanel', () => {
     await clickIngest();
     const posted = recordOperationRequests();
     act(() => {
-      const { apply } = useCadOperationsStore.getState();
+      const apply = applyCadRequest;
       apply(cadOperation({ operationId: 'op-ready' }));
       apply(cadOperation({
         operationId: 'op-new', state: 'received', stage: 'received', reason: null, message: null,
@@ -618,7 +649,7 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(dismiss().disabled).toBe(false));
     await act(async () => { dismiss().click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toEqual({ path: '/api/cadlink/operations/op-ready/cancel', body: null });
+    expect(posted[0]).toEqual({ path: '/api/jobs/op-ready', body: null });
   });
 
   /** The design on screen as it was opened from its own project. */
@@ -662,7 +693,7 @@ describe('CadLinkPanel', () => {
     }));
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: 'op-other', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
         message: 'Choose the solve settings for this model in WG, then press Solve now.',
         snapshot: { manifestSha256: `sha256:${'b'.repeat(64)}`, documentName: 'Tritonia', projectLineageId: 'wgl_other' },
@@ -718,7 +749,7 @@ describe('CadLinkPanel', () => {
       message: 'Choose the solve settings for this model in WG, then press Solve now.',
     };
     act(() => {
-      const { apply } = useCadOperationsStore.getState();
+      const apply = applyCadRequest;
       apply(cadOperation({
         ...waiting, operationId: 'op-v1',
         snapshot: { manifestSha256: `sha256:${'d'.repeat(64)}`, documentName: 'Tritonia v1', projectLineageId: 'wgl_other' },
@@ -741,7 +772,7 @@ describe('CadLinkPanel', () => {
   it('lists a request whose model has no project yet as a quiet line to dismiss', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: 'op-first', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
         message: 'Choose the solve settings for this model in WG, then press Solve now.',
         snapshot: { manifestSha256: `sha256:${'c'.repeat(64)}`, documentName: 'Tritonia v2', projectLineageId: null },
@@ -777,7 +808,7 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(cadLinkCoordinatorBridge.getSnapshot().fusionStatus?.running).toBe(false));
     const posted = recordOperationRequests({ detailFromStore: true });
     act(() => {
-      useCadOperationsStore.getState().apply(cadOperation({
+      applyCadRequest(cadOperation({
         operationId: 'op-stored', reason: 'setup_required', stage: 'received', setupRevisionId: null, preparationId: null,
         message: 'Choose the solve settings for this model in WG, then press Solve now.',
       }));
@@ -785,16 +816,16 @@ describe('CadLinkPanel', () => {
     const solve = () => host.querySelector<HTMLButtonElement>('.cad-solve-card button[data-action="solve"]')!;
     await vi.waitFor(() => expect(solve().disabled).toBe(false));
     await act(async () => { solve().click(); });
-    await vi.waitFor(() => expect(posted.filter((item) => item.path.endsWith('/prepare'))).toHaveLength(1));
+    await vi.waitFor(() => expect(posted.filter((item) => item.path.endsWith('/solve-again'))).toHaveLength(1));
     expect(posted[0]).toMatchObject({
       path: '/api/cadlink/project-setups',
       body: { lineageId: 'wgl_speaker', inventory: [{ id: 'source-hf', role: 'HF', required: true }] },
     });
     expect((posted[0].body as { setup: { schema_version: number } }).setup.schema_version).toBe(1);
     // The same request, prepared with the settings on screen; nothing created beside it.
-    const prepared = posted.find((item) => item.path.endsWith('/prepare'))!;
-    expect(prepared.path).toBe('/api/cadlink/operations/op-stored/prepare');
-    expect(prepared.body).toMatchObject({ setupRevisionId: expect.any(String), submit: true });
+    const prepared = posted.find((item) => item.path.endsWith('/solve-again'))!;
+    expect(prepared.path).toBe('/api/jobs/op-stored/solve-again');
+    expect(prepared.body).toMatchObject({ setup_revision_id: expect.any(String), submit: true });
     expect(posted.some((item) => item.path === '/api/cadlink/operations')).toBe(false);
   });
 

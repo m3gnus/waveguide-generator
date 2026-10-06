@@ -588,7 +588,14 @@ setup revisions are 404; a missing retained snapshot is 409. New work during
 an approved update restart uses the jobs API's `update_restart_pending` refusal.
 All bodies use snake_case and are described by OpenAPI.
 
-The unchanged frontend uses compatibility shims:
+WG's Solve controls use these job routes and the jobs channel. Solve cards,
+waiting notices and completion claims read the latest job of each continuation
+chain, independently of operation events. Session-scoped client ids retain an
+unfinished displayed press across a lost response or reload; a known response
+releases the id for a later deliberate solve. The previous build's manual ids
+are read once and recovered through the jobs list.
+
+Older clients can still use compatibility shims:
 
 - `POST /operations` resolves a retained ingest and creates an unstarted manual
   intent. It meshes nothing until the next Prepare press supplies the displayed
@@ -702,17 +709,23 @@ The lane does not write a second outcome after binding.
 
 **What Stage 5 still needs before operations can be deleted.**
 
-1. The backend read model is ready. Run details still need the frontend switch
-   to `cad_state` for snapshot, State, Stage, Reason, preparation and timings,
-   and the WG Solve controls need the three job routes. Jobs made before the
-   snapshot record existed still need the compatibility fallback.
+1. Met, including the frontend: run details read snapshot, State, Stage,
+   Reason, preparation and timings from `cad_state`; WG Solve, continuation
+   and approvals use the job routes. Jobs with neither `cad_state` nor
+   `cad_provenance` retain the compatibility fallback. Tests:
+   `describes a retried CAD job entirely from cad_state with the operation endpoint gone`,
+   `acceptance: a Fusion request, settings and engine changed in WG, then Solve uses those choices and retry reverts nothing`,
+   and `approves the exact preparation then continues with those approvals, without operation calls`.
 2. Met: a bound CAD retry carries its inputs and adds `retried_from`, dropping
    `refusal`, `solve_again_press_sha256`, `last_stage` and `manual_waiting`.
    Solve again carries the recorded frame too. Tests:
    `test_f2_bound_cad_retry_carries_inputs_without_the_parents_lifecycle` and
    `test_f2_solve_again_carries_setup_frame_preparation_and_operation`.
-3. The run details find a CAD job by its `cad-solve:` submission key; they need
-   to find it from `cad_provenance.operation_id` or from `imported_geometry`.
+3. Met: run details use `cad_provenance.operation_id`, then
+   `cad_intent.operation_id`, or retained imported geometry. They do not parse
+   a submission key. Tests:
+   `shows inputs for a retried CAD job without a submission key while the operation endpoint is gone`
+   and `shows imported geometry inputs when no operation identity was retained`.
 4. Met: acceptance joins record defaults and the automatic axis when the job
    already knows them, and summaries read the job when binding happens later.
    Tests: `test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis`

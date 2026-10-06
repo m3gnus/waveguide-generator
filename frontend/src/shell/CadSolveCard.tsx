@@ -1,9 +1,8 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import type { CadOperationSummary } from '../api/cadOperations';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { cadJobSummary, latestCadJobs } from '../jobs/cadSolve';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useCadSolverFrameStore } from '../stores/cadSolverFrame';
 import { parseFrequencyList } from '../stores/frequencyList';
@@ -18,15 +17,6 @@ import { pluralized } from './cadTime';
 import { useOptionalSolveControl } from './JobsCoordinator';
 import { clearSolveStageClock, resolveEngineLabel, SolveProgressView } from './solveProgress';
 import { workspaceNavigation } from './workspaceNavigation';
-
-/** How long an accepted operation may have no matching job yet before the
- * status line stops assuming "it just hasn't arrived" and says so plainly.
- * A few seconds covers the ordinary gap between the jobs system accepting a
- * submission and its first `JobItem` reaching this browser; past that -- in
- * particular after a page reload finds an operation whose job is not, or is
- * no longer, in the list -- staying on "Solve submitted." forever would be
- * a silent lie. */
-const JOB_APPEAR_GRACE_MS = 5_000;
 
 const ROLE_ORDER = ['LF', 'MF', 'HF', 'PORT_EXIT', 'PASSIVE_CARDIOID'];
 
@@ -126,36 +116,11 @@ function SettingsLine({ record }: { record: CadReturnIngestRecord }) {
   </p>;
 }
 
-function newest(operations: CadOperationSummary[]): CadOperationSummary | null {
-  return operations.reduce<CadOperationSummary | null>((latest, operation) => (
-    !latest || (operation.updatedAt ?? '') > (latest.updatedAt ?? '') ? operation : latest
-  ), null);
-}
-
-/**
- * The latest `prepare_and_solve` request for this snapshot, at whatever
- * stage it is at -- before its job exists, while it waits on the user, or
- * after it has one. Every state is a candidate, not just the terminal ones:
- * filtering to `accepted`/`rejected`/`cancelled` used to mean a *new*
- * request for the same snapshot, still `received` or `processing`, was
- * invisible to `newest()`, so the previous request's own outcome (often
- * "Solved · its results are in Results.") kept showing under the new one
- * until it too reached one of those three states. Reading every state keeps
- * `newest()` honest about which request is actually the latest one.
- *
- * The one line this renders is one monotonic sequence end to end: the CAD
- * operation's own stage (`operationStageWord`, ./solveProgress) up to
- * `ready`/`submitted`, then the job's own stage (`solveStageWord`, the same
- * module) from the moment it exists -- never a step backward, and never a
- * previous run's outcome shown under a new request.
- */
 function RunLine({ record }: { record: CadReturnIngestRecord }) {
-  const operations = useCadOperationsStore((state) => state.operations);
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
-  const latest = newest(Object.values(operations).filter((operation) => operation.kind === 'prepare_and_solve'
-    && operation.snapshot?.manifestSha256 === record.manifest_sha256));
+  const latestJob = latestCadJobs(jobs).find((job) => job.cad_state?.snapshot?.manifest_sha256 === record.manifest_sha256);
+  const latest = latestJob ? cadJobSummary(latestJob) : null;
   if (!latest) return null;
-  const latestJob = latest.jobId ? jobs.find((item) => item.id === latest.jobId) : undefined;
   let tone: 'ok' | 'info' | 'warn' = 'info';
   let body: ReactNode;
   if (latest.state === 'rejected') {
@@ -164,15 +129,13 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
   } else if (latest.state === 'cancelled') {
     body = 'Dismissed before it was solved.';
   } else if (latest.state !== 'accepted') {
-    // received, processing, needs_user_input, recovery_required or
-    // cancel_requested: no job exists yet (or ever will). The shared
-    // component reads the operation's own stage/state, the same vocabulary
-    // its job will use once it has one.
+    // Preparing and refused intents use the job's CAD stage and gate;
+    // bound requests below use the same progress vocabulary for execution.
     if (latest.state === 'needs_user_input') tone = 'warn';
     body = <SolveProgressView operation={latest} variant="compact"/>;
   } else {
-    const job: JobItem | undefined = jobs.find((item) => item.id === latest.jobId);
-    switch (job?.status) {
+    const job: JobItem = latestJob!;
+    switch (job.status) {
       case 'preparing':
       case 'queued':
         body = <SolveProgressView job={job} variant="compact"/>;
@@ -187,18 +150,6 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
       case 'complete': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'ok'; break;
       case 'error': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
       case 'cancelled': clearSolveStageClock(job.id); body = <SolveProgressView job={job} variant="compact"/>; tone = 'warn'; break;
-      default: {
-        // Accepted, but no matching job in the list -- ordinarily because it
-        // has not arrived yet. Past a short grace window (in particular
-        // after a reload that finds no such job at all) that assumption
-        // stops being honest, so the line says so instead of sitting on
-        // "Solve submitted." forever.
-        const updatedMs = Date.parse(latest.updatedAt ?? '');
-        const stale = Number.isFinite(updatedMs) && Date.now() - updatedMs > JOB_APPEAR_GRACE_MS;
-        body = stale ? "Accepted, but its run isn't showing in the jobs list."
-          : <SolveProgressView operation={latest} variant="compact"/>;
-        if (stale) tone = 'warn';
-      }
     }
   }
   return <>
@@ -231,7 +182,7 @@ function RunLine({ record }: { record: CadReturnIngestRecord }) {
  * and one Solve. That press is the same command as the top bar's: it captures
  * the snapshot, settings, frame and domain on screen, confirms the frame shown,
  * remembers the settings for the model's project, and advances one durable
- * operation -- continuing a waiting Fusion request for this snapshot rather
+ * job -- continuing a waiting Fusion request for this snapshot rather
  * than starting a second. It never pulls a newer snapshot and never approves
  * a finding: those keep their own actions.
  */
