@@ -51,9 +51,11 @@ def validate_native_backend(native: Any, backend: str, *, official: bool,
             raise ValueError("Native device backend differs from requested backend")
         if not official and backend == "metal":
             mode = diagnostic.get("regular_assembly_mode")
-            if not ((isinstance(mode, str) and mode.startswith("metal_"))
-                    or diagnostic.get("assembly") == "metal_fused_burton_miller"):
-                # HBB emits metal_pipeline=false on CPU too: presence is no proof.
+            # Only device assembly counts: host-staged CPU assembly uploaded to the
+            # GPU and the metal_default placeholder are not Metal evidence, and
+            # HBB emits metal_pipeline=false on CPU too.
+            if not (isinstance(mode, str) and (mode == "metal_fused_burton_miller"
+                                                or mode.startswith("metal_native_"))):
                 raise ValueError("HBB Metal execution evidence is missing or indicates CPU fallback")
         if official and backend == "metal":
             device = execution.get("device", diagnostic.get("device"))

@@ -695,3 +695,21 @@ def test_nonempty_output_refuses_probe_fails_before_solve_retry(inputs, monkeypa
     assert error.value.code == 2 and calls == ["probe"]
     assert "empty output directory" in capsys.readouterr().err
     assert all(p.read_bytes() == content for p, content in before.items())
+
+
+@pytest.mark.parametrize(("mode", "accepted"), [
+    ("metal_fused_burton_miller", True), ("metal_native_operators", True),
+    ("metal_host_staged_cpu_assembly", False), ("metal_default", False),
+    ("cpu_colored_threads", False), (None, False),
+])
+def test_hbb_metal_evidence_requires_device_assembly(mode, accepted):
+    from scripts.beat_conformance import settings
+    row = {"backend": "metal", "blas_threads": 4}
+    if mode is not None:
+        row["regular_assembly_mode"] = mode
+    native = type("Native", (), {"solver_log": [{"native_diagnostics": row}], "frequencies_hz": [500.0]})()
+    if accepted:
+        settings.validate_native_backend(native, "metal", official=False)
+    else:
+        with pytest.raises(ValueError, match="HBB Metal execution evidence"):
+            settings.validate_native_backend(native, "metal", official=False)

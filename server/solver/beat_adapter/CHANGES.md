@@ -448,3 +448,8 @@ requiring assembly evidence avoids treating HBB's CPU pipeline field as Metal pr
 No production caller, engine, pin, dependency or numerical budget changes.
 Fake tests only; real reruns remain orchestrator work. Changes are uncommitted
 as requested.
+
+Metal support review round 2, fixed directly: HBB Metal evidence now requires
+device assembly (`regular_assembly_mode` = `metal_fused_burton_miller` or
+`metal_native_*`). Host-staged CPU assembly and the `metal_default` placeholder
+no longer count, and the dead `assembly` alternative is gone.
