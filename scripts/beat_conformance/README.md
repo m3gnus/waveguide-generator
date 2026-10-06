@@ -178,3 +178,23 @@ lazy; no engine-specific extension is required.
 rounding and shortest decimal wire representation after undoing acceleration
 scaling. This diagnostic never changes gate inputs or tolerances. Float64
 comparison against HBB is capped near 6e-8 by HBB's Float32 wire output.
+
+Same-mesh `run_agreement` accepts `--backend cpu|metal` (default CPU). CPU keeps
+its existing precision choices, one-thread default and wavelength quadrature.
+Metal requires `--precision float32`, uses fixed q4/s4 and defaults to WG's
+performance-core thread budget with Metal headroom. `--threads auto` or a
+positive explicit count resolves once for both engines. Metal records use a
+`metal-` case prefix to distinguish them from existing CPU artifacts.
+Official runs use the installed wheel's `julia_metal` project through WG's child
+manager/session and the recorder's `assert_metal_device.jl` kernel check. Every
+native row must report the selected backend; official native device provenance
+must match the independently probed device. HBB uses its public one-shot Metal
+API and native backend diagnostics. Float64 and silent CPU fallback refuse;
+failed records remain failures. Linear-solver diagnostics determine the existing
+LU/reference budgets. No Metal-specific tolerance relaxation is permitted.
+For matched Metal threading, the official child worker receives its supported
+`OPENBLAS_NUM_THREADS` count equal to the frozen Julia count plus one when
+Julia is multithreaded. The compiled Metal sweep reserves that extra thread;
+HBB's Metal API already sets BLAS to the frozen Julia count. The override is scoped to the worker;
+CPU launch settings and the parent environment are preserved. Native BLAS
+observations must still agree before numerical gates can qualify.

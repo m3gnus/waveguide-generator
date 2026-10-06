@@ -356,3 +356,41 @@ Agreement runners, review round 2, fixed directly:
   record hashes; the HBB record is assembled by the runner from its public API,
   and its mesh/case fields are not independent observations (HBB's observed mesh
   evidence is node/triangle counts and tag areas).
+
+## PLAN slice 8 — Metal agreement runners
+
+- **W2 / frozen-input PR:** `scripts/beat_conformance/{runners,run_agreement}.py`;
+  `server/tests/beat_adapter/test_runners.py`. Optional CPU/Metal selection,
+  unchanged CPU defaults, Metal Float32/fixed q4/s4 and resolved WG headroom.
+- **W3 / native-result evidence PR:** `scripts/beat_conformance/settings.py`;
+  `server/tests/beat_adapter/test_runners.py`. Every frequency must report the
+  requested native backend; missing/conflicting/CPU fallback labels refuse.
+- **W5 / managed-sweep qualification PR:** `scripts/beat_conformance/{runners,recorder}.py`;
+  `server/tests/beat_adapter/test_{runners,conformance}.py`. Metal uses the wheel
+  project through child manager/session; native device must match the existing
+  independent dispatched-kernel probe. Both engines retain their linear-solver
+  diagnostics. No numerical tolerance changes.
+- **Shared W2/W3/W5:** this file and `scripts/beat_conformance/README.md`.
+
+Official JWSound is the target. No caller, pin, requirement or engine changes.
+The brokered evidence and commands remain in the external workspace report.
+Source stays uncommitted as requested; the orchestrator will rerun from the
+committed tree. Fake tests do not establish numerical or performance agreement.
+
+Metal evidence exposed different BLAS policies: HBB sets BLAS to its Julia
+thread count, while official Metal inherits the process BLAS count and reserves
+one thread for multithreaded sweeps. W5's `runners.py` sets worker-only
+`OPENBLAS_NUM_THREADS` to the frozen count plus that reservation (one for a
+single-thread run), so actual sweep BLAS threads match HBB.
+CPU and ambient settings remain unchanged. The managed-session fake covers both
+backends, matching BLAS, preserved offline settings and cleanup on errors.
+This application-side adaptation preserves the frozen threading gate; it does
+not relax numerical limits or require engine changes.
+
+Validation: 1303 passed / 1 existing optional schema skip (99.17 s), focused
+127 passed (2.18 s), Ruff and whitespace checks passed. Broker job
+`261006-035822-compute-9022` passes the refined 376-frequency Metal Float32
+quarter case with native six Julia/BLAS threads, device proof, all resonance
+and unchanged numerical gates, including actual-LU budgets. Earlier startup
+and threading failures remain failed in the external report. The committed-tree
+rerun belongs to the orchestrator; no startup/performance claim is made here.

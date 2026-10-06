@@ -1,4 +1,4 @@
-"""Run one meaningful CPU exterior comparison inside a compute-broker job."""
+"""Run a frozen CPU or Metal exterior comparison inside a compute-broker job."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import numpy as np
 
 from server.solver.beat_adapter.mesh import read_surface
 from server.solver.beat_adapter.results import SweepResult
+from server.solver.beat_runtime.threads import resolve_julia_threads
 
 from .agreement import compare_results
 from .cases import ConformanceCase
@@ -59,11 +60,15 @@ def main() -> int:
     parser.add_argument("--prominence-db", type=float, required=True)
     parser.add_argument("--expect-pressure-column", type=int, action="append", default=[])
     parser.add_argument("--precision", choices=("float64", "float32"), action="append", required=True)
-    parser.add_argument("--threads", type=int, default=1)
+    parser.add_argument("--backend", choices=("cpu", "metal"), default="cpu")
+    parser.add_argument("--threads", help="Positive count or auto; defaults to 1 for CPU, WG headroom for Metal")
     parser.add_argument("--julia", required=True)
     parser.add_argument("--engine-source", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
+    if args.backend == "metal" and any(p != "float32" for p in args.precision):
+        parser.error("Metal agreement requires float32 precision")
+    threads = resolve_julia_threads(args.backend, args.threads or ("auto" if args.backend == "metal" else 1))
     frequencies = tuple(float(f) for f in args.frequencies.split(","))
     validate_frequency_axis(frequencies)
     args.output_dir = output_directory(args.output_dir, engine_source=args.engine_source)
@@ -74,11 +79,11 @@ def main() -> int:
     (args.output_dir / "surface.msh").write_bytes(mesh_bytes)
     all_passed = True
     for precision in args.precision:
-        name = f"{args.symmetry}-{precision}"
+        name = f"{args.symmetry}-{precision}" if args.backend == "cpu" else f"metal-{args.symmetry}-{precision}"
         directory = args.output_dir / name
         inputs = FrozenExterior(mesh_bytes, frequencies,
                                 precision=precision, symmetry=args.symmetry,
-                                source_tag=args.source_tag, threads=args.threads)
+                                source_tag=args.source_tag, threads=threads, backend=args.backend)
         write_record(directory / "inputs.json", {"settings": inputs.settings(),
                      "original_mesh_sha256": hashlib.sha256(original).hexdigest(),
                      "mesh_sha256": hashlib.sha256(mesh_bytes).hexdigest(),
@@ -87,8 +92,8 @@ def main() -> int:
                      "expected_pressure_columns": args.expect_pressure_column})
         # The engine snapshot gets its own file; only the finally block below
         # writes {name}.json, so a killed comparison never leaves a "passed" record.
-        case = ConformanceCase(f"{name}-engine", "Frozen same-mesh CPU exterior agreement", inputs.frequencies_hz,
-                               precision=precision, min_solved_count=len(inputs.frequencies_hz),
+        case = ConformanceCase(f"{name}-engine", f"Frozen same-mesh {args.backend} exterior agreement", inputs.frequencies_hz,
+                               backend=args.backend, precision=precision, min_solved_count=len(inputs.frequencies_hz),
                                make_request=inputs.compiled,
                                accept=accept_pressure)
         report = {"passed": False}

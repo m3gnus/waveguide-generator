@@ -89,6 +89,13 @@ def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict
             record["terminal_events"] = terminal_events
     else:
         result = _direct_solve(request, selection, facts, terminal_events, record)
+    from .settings import validate_native_backend
+    validate_native_backend(result, backend, official=True,
+                            device_name=facts["device_name"] if backend == "metal" else None)
+    if backend == "metal":
+        record["observations"]["native_device_name"] = {
+            "status": "observed", "value": facts["device_name"],
+            "source": "solver_log.native_diagnostics; matched independent Metal kernel probe"}
     count = terminal_events[-1]["solved_count"] if terminal_events[-1]["type"] == "completed" else 0
     record["observations"]["solve_count"] = {"status": "observed", "value": count}
     for name, field in (("backend", "bem_backend"), ("precision", "precision")):
