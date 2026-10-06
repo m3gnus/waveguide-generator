@@ -121,13 +121,12 @@ class JobsProtocol:
                 if event_task in done:
                     event = event_task.result()
                     # Ephemeral kinds carry no cursor: result deltas and CAD
-                    # notifications. Durable operation state is stored before
-                    # publication; viewport readiness has a slow HTTP fallback.
-                    if event.get("kind") in {
-                        "partialResult",
-                        "cadOperation",
-                        "cadViewportReady",
-                    }:
+                    # notifications (operation state, viewport readiness,
+                    # delivery status, add-in changes, inbox refusals). Each
+                    # has its own HTTP recovery. Only a durable job event has
+                    # a cursor, so its absence -- not a list of kinds that
+                    # must keep up with every new notice -- decides.
+                    if "cursor" not in event:
                         message = dict(event)
                         message["epoch"] = self.epoch
                         await transport.send_json(message)

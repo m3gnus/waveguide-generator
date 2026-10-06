@@ -273,3 +273,45 @@ def test_protocol_forwards_cad_viewport_readiness_without_a_cursor(tmp_path: Pat
         await task
 
     asyncio.run(scenario())
+
+
+def test_protocol_forwards_every_cursorless_cad_notice_and_keeps_the_connection(
+    tmp_path: Path,
+) -> None:
+    """Delivery status, add-in changes and inbox refusals carry no cursor either.
+
+    Each one used to raise ``KeyError: 'cursor'`` in the handler, which closed
+    the page's jobs connection and lost whatever was queued behind it.
+    """
+
+    notices = [
+        {"v": 1, "kind": "cadDeliveryStatus", "status": {"consumer": "running"}},
+        {"v": 1, "kind": "cadAddinStatusChanged"},
+        {"v": 1, "kind": "cadInboxRefusal", "refusal": {"code": "x", "message": "no"}},
+    ]
+
+    async def scenario() -> None:
+        store = JobStore(tmp_path / "jobs.db")
+        store.initialize()
+        runtime = JobRuntime(store)
+        runtime._started = True
+        transport = FakeTransport()
+        protocol = JobsProtocol(runtime, epoch=7, heartbeat_seconds=1)
+        task = asyncio.create_task(protocol.run(transport))
+        await _wait_until(lambda: len(transport.json) >= 2)
+
+        for notice in notices:
+            runtime.events.publish(notice)
+        event = store.create_job(_job("job-after"), initial_event=("queued", {}))
+        assert event is not None
+        runtime.events.publish(event)
+        await _wait_until(lambda: len(transport.json) >= 6)
+
+        assert not task.done()
+        assert transport.json[2:5] == [{**notice, "epoch": 7} for notice in notices]
+        assert transport.json[5]["kind"] == "event"
+        assert transport.json[5]["jobId"] == "job-after"
+        await transport.incoming.put(None)
+        await task
+
+    asyncio.run(scenario())
