@@ -398,6 +398,21 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(claim.mock.calls.every(([, value]) => value.sourceIngestId === 'wgi_first')).toBe(true);
   });
 
+  it('keeps the press ingestion for a child an Approve claimed before it arrived', async () => {
+    const { rememberCadSolve } = await import('../jobs/cadSolve');
+    const claim = vi.spyOn(solvedCadModels, 'claim');
+    await mount();
+    await pressSolve();
+    const press = mocks.submitCadSolve.mock.calls[0][0];
+    const parent = cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'needs_user_input', { jobId: 'job-1', reason: 'findings_need_review' }));
+    await jobs([parent]);
+    // approveCadJob claims the child it got back before the coordinator sees it.
+    rememberCadSolve('job-2', '');
+    const child = { ...cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-2' })), parent_job_id: 'job-1' };
+    await jobs([parent, child, { ...cadJob('job-2'), parent_job_id: 'job-1' }]);
+    expect(claim).toHaveBeenCalledWith('job-2', expect.objectContaining({ sourceIngestId: 'wgi_first' }));
+  });
+
   it('solves from the card when the dock renders it in its own React root, outside the coordinator', async () => {
     // Workspace.tsx renders every dock panel with its own createRoot, so the
     // CAD Link panel's card never sits under the coordinator's context.

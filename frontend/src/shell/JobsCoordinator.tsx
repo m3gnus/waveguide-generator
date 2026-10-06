@@ -314,7 +314,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     for (const job of latestCadJobs(jobs)) {
       const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);
       const inherited = parent ? cadSolveClaim(parent) : null;
-      if (inherited && !cadSolveClaim(job)) rememberCadSolve(job.id, inherited.designName, inherited.sourceIngestId ?? null);
+      // Merge, not only create: an Approve may have claimed the child first, without the ingestion.
+      if (inherited) rememberCadSolve(job.id, inherited.designName, inherited.sourceIngestId ?? null);
       if (job.cad_state?.state === 'received' || job.cad_state?.state === 'processing') {
         if (!cadSolveClaim(job)) rememberCadSolve(job.id, '');
       }
