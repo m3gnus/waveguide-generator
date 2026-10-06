@@ -149,15 +149,24 @@ def test_cross_process_state_stamp_refreshes_live_registry(selected, monkeypatch
     monkeypatch.setattr(readiness, "backend_readiness", verdict)
     monkeypatch.setattr(beat, "_load_api", lambda: None)
 
+    async def settled(registry):
+        # capabilities() schedules a background refresh when the state stamp
+        # moved; let every scheduled refresh finish so counts are deterministic.
+        while registry._refresh_task is not None and not registry._refresh_task.done():
+            await registry._refresh_task
+        await asyncio.sleep(0)
+
     async def scenario():
         registry = EngineRegistry(detector=lambda: [EngineInfo("beat-cpu", False, "HBB absent", None)], cpu_refresh=True)
         try:
             await registry.capabilities()
             await registry._refresh_cpu_backend()
+            await settled(registry)
             assert not registry.official_runtime_statuses["cpu"]["available"]
             before = len(computations)
             await registry.capabilities()
             await registry._refresh_cpu_backend()
+            await settled(registry)
             assert len(computations) == before
             if operation == "provision":
                 code = "import pathlib, sys; pathlib.Path(sys.argv[1]).write_text('{\"ready\": true}')"
@@ -169,6 +178,7 @@ def test_cross_process_state_stamp_refreshes_live_registry(selected, monkeypatch
                 os.utime(target, ns=(1, 1))
                 registry._check_official_state()
                 await registry._refresh_cpu_backend()
+                await settled(registry)
                 before = len(computations)
             subprocess.run(command, check=True, timeout=10)
             await registry.capabilities()
