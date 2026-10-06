@@ -386,6 +386,34 @@ describe('M1b: one Solve card, to the revealed result', () => {
     expect(activations.filter((panel) => panel === 'results')).toEqual(['results']);
   });
 
+  it('solves from the card when the dock renders it in its own React root, outside the coordinator', async () => {
+    // Workspace.tsx renders every dock panel with its own createRoot, so the
+    // CAD Link panel's card never sits under the coordinator's context.
+    const panelHost = document.createElement('div');
+    document.body.append(panelHost);
+    const panelRoot = createRoot(panelHost);
+    try {
+      await act(async () => {
+        root.render(<JobsCoordinator now={() => new Date(2026, 8, 22, 12)}><div className="topbar"><SolveActions/></div></JobsCoordinator>);
+        await flush(8);
+      });
+      const record = useCadReturnStore.getState().ingestRecord!;
+      await act(async () => { panelRoot.render(<CadSolveCard record={record} label="Speaker"/>); await flush(8); });
+      await vi.waitFor(() => expect(panelHost.querySelector('[data-frame-preview="ready"]')).not.toBeNull());
+      const button = panelHost.querySelector<HTMLButtonElement>('button[data-action="solve"]')!;
+      await vi.waitFor(() => expect(button.disabled).toBe(false));
+      expect(button.title).not.toBe('Solve is not available here.');
+      await act(async () => { button.click(); await flush(12); });
+      expect(mocks.submitCadSolve).toHaveBeenCalledWith(expect.objectContaining({ ingest_id: 'wgi_first' }));
+      // Once the coordinator is gone, the card has no command to borrow.
+      await act(async () => { root.render(<div/>); await flush(); });
+      expect(panelHost.querySelector<HTMLButtonElement>('button[data-action="solve"]')!.disabled).toBe(true);
+    } finally {
+      act(() => panelRoot.unmount());
+      panelHost.remove();
+    }
+  });
+
   it('acceptance: a Fusion request, settings and engine changed in WG, then Solve uses those choices and retry reverts nothing', async () => {
     await deliver(operation('cmd-fusion', 'needs_user_input', { reason: 'setup_required' }));
     await mount();

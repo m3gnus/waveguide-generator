@@ -120,10 +120,35 @@ export function useSolveControl(): SolveControl {
   return value;
 }
 
+/** The Solve command, published for panels the dock renders in their own
+ * React roots (`Workspace.tsx`), where the coordinator's context does not reach. */
+let publishedSolveControl: SolveControl | null = null;
+const solveControlListeners = new Set<() => void>();
+const publishedSolveControlStore = {
+  getSnapshot: () => publishedSolveControl,
+  subscribe(listener: () => void) {
+    solveControlListeners.add(listener);
+    return () => { solveControlListeners.delete(listener); };
+  },
+};
+
+function publishSolveControl(control: SolveControl | null): void {
+  publishedSolveControl = control;
+  solveControlListeners.forEach((listener) => listener());
+}
+
 /** The Solve command where one exists: the CAD Link panel's Solve card is the
- * same command as the top bar's, and is rendered on its own in some tests. */
+ * same command as the top bar's, and is rendered on its own in some tests.
+ * The card lives in a dock panel, outside the coordinator's React tree, so it
+ * reads the published command when the context is absent. */
 export function useOptionalSolveControl(): SolveControl | null {
-  return useContext(SolveContext);
+  const context = useContext(SolveContext);
+  const published = useSyncExternalStore(
+    publishedSolveControlStore.subscribe,
+    publishedSolveControlStore.getSnapshot,
+    publishedSolveControlStore.getSnapshot,
+  );
+  return context ?? published;
 }
 
 /** What a setup revision binds for a solve, without the run's own name: the
@@ -717,6 +742,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
                 ? capabilityError ?? importedUnavailable ?? 'No engine can solve imported CAD geometry here'
                 : parametricUnavailable,
   }), [cadGeometryActive, capabilityError, fileGeometryActive, importedUnavailable, importedEngineLabel, notice, parametricUnavailable, selectedEngine, solve, solveEnabled, solveBlocker, solvePlan, submitting]);
+
+  useEffect(() => {
+    publishSolveControl(control);
+    return () => publishSolveControl(null);
+  }, [control]);
 
   return <SolveContext.Provider value={control}>{children}<JobAnnouncer jobs={jobs}/></SolveContext.Provider>;
 }
