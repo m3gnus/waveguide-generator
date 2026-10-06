@@ -27,9 +27,10 @@ DEFAULT_PINS = REPO_ROOT / "pins.json"
 DEFAULT_OUTPUT = REPO_ROOT / "server" / "requirements-pins.txt"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 # Distribution names remain the manifest keys and #egg identities. Pins live at
-# m3gnus/<distribution> except these explicit owner/repository exceptions: WG
-# pins the official BEAT engine, never the m3gnus/BEAT_Engine PR fork.
-REPOSITORIES = {"beat-engine": "JWSound/BEAT_Engine"}
+# m3gnus/<distribution> except these explicit repository-name exceptions. WG pins
+# the m3gnus/BEAT_Engine fork, which carries our improvements before the official
+# JWSound/BEAT_Engine merges them.
+REPOSITORIES = {"beat-engine": "m3gnus/BEAT_Engine"}
 
 
 def render_requirements(pins_path: Path = DEFAULT_PINS) -> str:
