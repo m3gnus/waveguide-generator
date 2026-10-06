@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -415,37 +416,40 @@ def test_corpus_fast_production_meshing_is_deterministic(case, tmp_path):
     pytest.importorskip("hornlab_mesher")
     import time
     from pathlib import Path
-    from tempfile import TemporaryDirectory
-    with TemporaryDirectory(prefix="beat-corpus-mesh-") as mesh_directory:
-        first_dir, second_dir = Path(mesh_directory) / "first", Path(mesh_directory) / "second"
-        first_dir.mkdir()
-        second_dir.mkdir()
-        start = time.monotonic()
-        first = corpus.freeze_case(case, first_dir)
-        first_elapsed = time.monotonic() - start
-        start = time.monotonic()
-        second = corpus.freeze_case(case, second_dir)
-        assert first_elapsed < 5 and time.monotonic() - start < 5
-        assert first.mesh_bytes == second.mesh_bytes
-        assert first.sha256 == second.sha256
-        runner.settings_for(first, "cpu", "float32")
-        if first.record:
-            from server.solver.beat_imported import imported_beat_preflight
-            from server.jobs.models import SolveRequest
-            request = SolveRequest.model_validate(first.request)
-            assert imported_beat_preflight(first.record, first.mesh_bytes.decode(), request.geometry.drive_channels) is None
-        if case.name == "imported-tilted-rear":
-            from server.solver.beat_adapter.mesh import read_surface
-            mesh = read_surface(first.mesh_bytes.decode())
-            points = mesh.points_m[mesh.faces[mesh.tags == first.record["source_tags"]["curved-rear"]]]
-            vector = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]).sum(axis=0)
-            assert vector[2] < 0 and vector[0] > 0
+    # pytest's tmp_path, like WG's other CAD-ingestion tests: on Windows a
+    # strict TemporaryDirectory cleanup raises WinError 32 while the gmsh
+    # session or ingestion store still holds a handle in the directory.
+    first_dir, second_dir = Path(tmp_path) / "first", Path(tmp_path) / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    start = time.monotonic()
+    first = corpus.freeze_case(case, first_dir)
+    first_elapsed = time.monotonic() - start
+    start = time.monotonic()
+    second = corpus.freeze_case(case, second_dir)
+    assert first_elapsed < 5 and time.monotonic() - start < 5
+    assert first.mesh_bytes == second.mesh_bytes
+    assert first.sha256 == second.sha256
+    runner.settings_for(first, "cpu", "float32")
+    if first.record:
+        from server.solver.beat_imported import imported_beat_preflight
+        from server.jobs.models import SolveRequest
+        request = SolveRequest.model_validate(first.request)
+        assert imported_beat_preflight(first.record, first.mesh_bytes.decode(), request.geometry.drive_channels) is None
+    if case.name == "imported-tilted-rear":
+        from server.solver.beat_adapter.mesh import read_surface
+        mesh = read_surface(first.mesh_bytes.decode())
+        points = mesh.points_m[mesh.faces[mesh.tags == first.record["source_tags"]["curved-rear"]]]
+        vector = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]).sum(axis=0)
+        assert vector[2] < 0 and vector[0] > 0
 
 
 def test_corpus_isolation_launches_sequential_children_with_separate_environments(frozen, tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "require_official_ready", lambda *args: None)
     monkeypatch.setattr(runner, "wg_identity", lambda: {})
-    monkeypatch.setenv("JULIA_DEPOT_PATH", "/official/depot")
+    official_depot = tmp_path / "official-depot"
+    hbb_chain = os.pathsep.join(str(tmp_path / name) for name in ("hbb-writable", "hbb-precompiled"))
+    monkeypatch.setenv("JULIA_DEPOT_PATH", str(official_depot))
     monkeypatch.setenv("JULIA_LOAD_PATH", "/official/load")
     monkeypatch.setenv("JULIA_PROJECT", "/official/project")
     monkeypatch.setenv("BLAB_TEST_OVERRIDE", "unsafe")
@@ -470,7 +474,7 @@ def test_corpus_isolation_launches_sequential_children_with_separate_environment
     from pathlib import Path
     monkeypatch.setattr(runner.subprocess, "Popen", Process)
     reference, candidate = runner.isolated_pair(frozen, (500., 750., 1000.), tmp_path / "coarse",
-                                               backend="cpu", precision="float32", julia="julia", hbb_depot="/hbb/writable:/hbb/precompiled")
+                                               backend="cpu", precision="float32", julia="julia", hbb_depot=hbb_chain)
     assert len(calls) == 2
     for i, (command, options) in enumerate(calls):
         assert command[2] == "scripts.beat_conformance.run_corpus"
@@ -487,9 +491,10 @@ def test_corpus_isolation_launches_sequential_children_with_separate_environment
         if i:
             assert env["WG2_BEAT_RUNTIME_DIR"] == str(tmp_path / "official-runtime")
             assert env["WG2_BEAT_WORKER_DIR"] == str(tmp_path / "official-workers")
-            assert env["JULIA_DEPOT_PATH"] == "/official/depot"
+            assert env["JULIA_DEPOT_PATH"] == str(official_depot.resolve())
         else:
-            assert env["JULIA_DEPOT_PATH"] == "/hbb/writable:/hbb/precompiled"
+            assert env["JULIA_DEPOT_PATH"] == os.pathsep.join(
+                str((tmp_path / name).resolve()) for name in ("hbb-writable", "hbb-precompiled"))
             for key in ("JULIA_LOAD_PATH", "JULIA_PROJECT", "WG2_BEAT_RUNTIME_DIR", "WG2_BEAT_WORKER_DIR", "WG2_BEAT_JULIA"):
                 assert key not in env
         assert all(options["env"][k] == "1" for k in runner.THREAD_ENV)
