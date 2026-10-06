@@ -39,7 +39,6 @@ class CorpusCase:
     quadrants: int = 1234
     coarse_hz: tuple[float, ...] = tuple(float(f) for f in range(500, 3501, 250))
     prominence_db: float = 1.
-    max_refine_count: int = 61
     max_vertices: int = 650
     coarse_minutes: tuple[int, int] = (2, 5)
     refine_minutes: tuple[int, int] = (4, 9)
@@ -98,11 +97,11 @@ CASES = {case.name: case for case in (
                coarse_hz=tuple(float(f) for f in range(500, 2501, 250)), coarse_minutes=(2, 6)),
     CorpusCase("narrow-resonance", "300 mm straight throat duct and OSSE termination; high-Q longitudinal modes",
                "server/design/schema.py:DesignCommon.throat_ext_length", geometry="duct", quadrants=1,
-               coarse_hz=tuple(float(f) for f in range(200, 1401, 50)), max_refine_count=81,
+               coarse_hz=tuple(float(f) for f in range(200, 1401, 50)),
                expected_pressure_columns=(0,), coarse_minutes=(2, 6), refine_minutes=(4, 10)),
     CorpusCase("imported-two-sources", "Two independently driven CAD discs; channel order and source identity",
                "server/tests/test_cadlink_domain_automatic.py:_box/_bundle", geometry="imported-box",
-               coarse_hz=tuple(float(f) for f in range(500, 2501, 250)), max_refine_count=41,
+               coarse_hz=tuple(float(f) for f in range(500, 2501, 250)),
                coarse_minutes=(2, 6), refine_minutes=(4, 10)),
     CorpusCase("imported-tilted-rear", "Curved normal drive, tilted net normal with a rear component",
                "server/tests/test_cadlink_domain_automatic.py:_curved_source_sheet/_curved_face",

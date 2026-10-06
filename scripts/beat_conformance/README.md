@@ -277,12 +277,41 @@ settings, mesh hash, engine identities and thread settings must remain the same.
 
 `refine-plan.json` discovers peaks and inverted dips **only from HBB**, using
 `agreement.py`'s 1 dB topographic prominence on every pressure column and
-normalized acoustic impedance. Windows extend to the prominence bases, which
-also bracket broad features. Their dyadic frequency steps are at most 0.25%
-of the feature frequency, exactly representable on HBB's Float32 wire. Acquisition
-is bounded to 41/61/81 frequencies per invocation, depending on the case, with
-two-row overlaps at part boundaries. Larger windows are split into numbered
-parts; an incomplete window cannot pass by losing a peak at the boundary.
+normalized acoustic impedance. Each feature at coarse frequency `f[k]` gets
+the local window `[f[k-1], f[k+1]]`, clamped to the coarse axis ends.
+Overlapping windows and windows sharing a boundary are merged. Each merged
+window uses a dyadic step at most 0.25% of its **lowest feature frequency**,
+exactly representable on HBB's Float32 wire. Frequencies stay inside the windows;
+exact coarse bounds are retained even when they fall between dyadic grid points.
+
+Parts use the measured coarse wall seconds per frequency for **both engines**.
+The estimate is `count * (hbb_wall/count + official_wall/count) + startup`.
+For fresh startup and serialization, each part conservatively reserves one
+additional full coarse pair's wall time (the amortized rate already includes
+coarse startup). `--max-part-minutes` sets the hard estimated part budget,
+default **8 minutes**. Use the same budget on coarse and subsequent refine
+invocations. A budget too small for three frequencies and startup is refused.
+The plan records `part_count`, unique `count`, `acquired_frequency_count`
+(including overlaps), per-part and total `estimated_minutes`, the measured
+costs, and the startup policy. Timing is measurement context, never an agreement
+gate. Actual runtime may vary from this estimate.
+
+Each `coarse/{hbb,official}.json` and `refine/{hbb,official}.json` records
+parent-process `wall_seconds`, average `wall_seconds_per_frequency`, and native
+per-frequency component timings keyed by channel and frequency. Coarse scores,
+part records, and final scores retain both engines' timing context. Legacy
+captures use `metadata.performance.total_time_seconds`, explicitly labelled
+`legacy_production_route_wall`; these exclude the surrounding Python child
+startup, so their estimates have less timing coverage.
+
+Larger acquisitions split into numbered parts with two-row overlaps. Complete
+windows are scored after joining the parts, so a feature on a part boundary
+remains interior to its scoring window. Every coarse feature must have a unique
+reference peak or dip of the same quantity, column and kind inside its original
+coarse bracket. If it falls below the prominence threshold in the merged local
+window, the score records `feature_resolution.features[].status="not_resolved"`
+with the feature identity and reference prominence. This is a gate failure;
+matching reference and candidate curves cannot pass by losing that feature.
 
 For subsequent parts use another empty output directory and `--refine-part K`.
 On the last part, supply every earlier part using repeated `--refine-dir`:

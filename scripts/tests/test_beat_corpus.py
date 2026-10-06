@@ -45,6 +45,8 @@ def evidence(frozen, frequencies, settings, *, official, gain=1.):
     name = "beat-engine" if official else "hornlab-beat-bem"
     return {"native": {"source": native(frequencies, settings, gain=gain)}, "response": {},
             "official": official, "mesh_sha256": frozen.sha256, "frequencies_hz": list(frequencies),
+            "timing": {"source": "fixture_wall", "wall_seconds": len(frequencies),
+                       "frequency_count": len(frequencies), "wall_seconds_per_frequency": 1., "per_frequency": []},
             "identity": {"distributions": {name: {"revision": "official-revision" if official else "hbb-pin"}}}}
 
 
@@ -54,7 +56,6 @@ def test_corpus_catalogue_uses_valid_wg_requests(case):
     assert request.options.frequencies_hz == list(case.coarse_hz)
     assert request.options.polar_config.spherical_sampling
     assert 3 <= len(case.coarse_hz) <= 25
-    assert 0 < case.max_refine_count <= 81
     assert case.coarse_minutes[1] < 10 and case.refine_minutes[1] < 12
     assert case.fixture and case.covers
 
@@ -122,8 +123,9 @@ def test_corpus_refine_topographic_rule_dyadic_steps_and_parts():
     pressure = 10 ** (levels / 20)
     result = ResultSet(MESH, f, pressure[:, None], np.ones(len(f)) / f,
                        np.ones(len(f)), np.ones(len(f)), {}, "hbb")
-    case = replace(corpus.CASES["osse-quarter"], max_refine_count=11)
-    plan = runner.refine_windows({"a": result}, case)
+    case = corpus.CASES["osse-quarter"]
+    timing = {name: {"wall_seconds": 10., "wall_seconds_per_frequency": 20.} for name in ("hbb", "official")}
+    plan = runner.refine_windows({"a": result}, case, timing=timing)
     assert len(plan["windows"]) == 2
     assert len(plan["parts"]) > 1
     assert all(3 <= len(p["frequencies_hz"]) <= 11 for p in plan["parts"])
@@ -131,6 +133,145 @@ def test_corpus_refine_topographic_rule_dyadic_steps_and_parts():
         assert all(window["step_hz"] / feat["frequency_hz"] < .005 for feat in window["features"])
         assert np.all(np.diff(window["frequencies_hz"]) == window["step_hz"])
         assert np.array_equal(np.asarray(window["frequencies_hz"]), np.asarray(window["frequencies_hz"], dtype=np.float32))
+
+
+def planning_reference(frequencies, levels):
+    f = np.asarray(frequencies, dtype=float)
+    pressure = 10 ** (np.asarray(levels, dtype=float) / 20)
+    return ResultSet(MESH, f, pressure, np.ones(len(f)) / f,
+                     np.ones(len(f)), np.ones(len(f)), {}, "hbb")
+
+
+def planning_timing(hbb=1., official=1., count=13):
+    return {name: {"wall_seconds": cost * count, "wall_seconds_per_frequency": cost}
+            for name, cost in (("hbb", hbb), ("official", official))}
+
+
+def test_corpus_local_windows_clamp_merge_adjacent_and_keep_gaps():
+    f = np.arange(500., 3001., 250.)
+    levels = np.zeros((len(f), 4))
+    for column, index in enumerate((1, 3, 7, 9)):
+        levels[index, column] = 3
+    ref = planning_reference(f, levels)
+    plan = runner.refine_windows({"source": ref}, corpus.CASES["osse-quarter"], timing=planning_timing())
+    assert [(w["start_hz"], w["end_hz"]) for w in plan["windows"]] == [(500., 1500.), (2000., 3000.)]
+    assert [len(w["features"]) for w in plan["windows"]] == [2, 2]
+    assert runner.local_bounds(f, 0) == (500., 750.)
+    assert runner.local_bounds(f, len(f) - 1) == (2750., 3000.)
+    frequencies = {f for part in plan["parts"] for f in part["frequencies_hz"]}
+    assert not any(1500 < f < 2000 for f in frequencies)
+    for window in plan["windows"]:
+        assert window["step_hz"] <= .0025 * min(feat["frequency_hz"] for feat in window["features"])
+        assert all(window["start_hz"] <= f <= window["end_hz"] for f in window["frequencies_hz"])
+
+
+def test_corpus_local_windows_overlap_across_channels_and_quantities():
+    f = np.arange(500., 1751., 250.)
+    a = planning_reference(f, [0, 0, 3, 0, 0, 0])
+    b = planning_reference(f, [0, 0, 0, 3, 0, 0])
+    b = replace(b, impedance_per_acceleration=10 ** (np.array([0, 0, 0, 0, 3, 0]) / 20) / f)
+    plan = runner.refine_windows({"a": a, "b": b}, corpus.CASES["osse-quarter"], timing=planning_timing())
+    assert len(plan["windows"]) == 1
+    window = plan["windows"][0]
+    assert (window["start_hz"], window["end_hz"]) == (750., 1750.)
+    assert len(window["features"]) == 3 and window["step_hz"] == 2
+
+
+def test_corpus_local_windows_do_not_round_outside_off_grid_neighbours():
+    ref = planning_reference([500, 751, 1001, 1251, 1500], [0, 0, 3, 0, 0])
+    plan = runner.refine_windows({"source": ref}, corpus.CASES["osse-quarter"], timing=planning_timing())
+    window = plan["windows"][0]
+    axis = np.asarray(window["frequencies_hz"])
+    assert axis[0] == 751 and axis[-1] == 1251
+    assert np.max(np.diff(axis)) <= window["step_hz"] == 2
+    np.testing.assert_array_equal(axis, axis.astype(np.float32))
+
+
+@pytest.mark.parametrize("official_cost,max_minutes", [(1., 8.), (10., 8.), (10., 3.)])
+def test_corpus_parts_use_both_measured_costs_and_startup(official_cost, max_minutes):
+    ref = planning_reference([500, 750, 1000, 1250, 1500], [0, 0, 3, 0, 0])
+    timing = planning_timing(official=official_cost)
+    plan = runner.refine_windows({"source": ref}, corpus.CASES["osse-quarter"], timing=timing,
+                                 max_part_minutes=max_minutes)
+    cost = 1 + official_cost
+    startup = 13 * cost
+    limit = int((max_minutes * 60 - startup) // cost)
+    assert plan["per_part_limit"] == limit
+    assert plan["part_count"] == len(plan["parts"])
+    assert plan["estimated_minutes"] == pytest.approx(sum(p["estimated_minutes"] for p in plan["parts"]))
+    for part in plan["parts"]:
+        count = len(part["frequencies_hz"])
+        assert count <= limit
+        assert part["estimated_minutes"] == pytest.approx((count * cost + startup) / 60)
+        assert part["estimated_minutes"] <= max_minutes
+    for left, right in zip(plan["parts"], plan["parts"][1:]):
+        assert left["frequencies_hz"][-2:] == right["frequencies_hz"][:2]
+    acquired = [f for part in plan["parts"] for f in part["frequencies_hz"]]
+    assert plan["count"] == len(set(acquired)) == 251
+    assert plan["acquired_frequency_count"] == len(acquired)
+
+
+@pytest.mark.parametrize("minutes", [0, -1, float("nan"), float("inf"), .01])
+def test_corpus_invalid_or_unusable_part_budget_refuses(minutes):
+    ref = planning_reference([500, 750, 1000], [0, 3, 0])
+    with pytest.raises(ValueError, match="max-part-minutes|Part wall budget"):
+        runner.refine_windows({"source": ref}, corpus.CASES["osse-quarter"],
+                              timing=planning_timing(), max_part_minutes=minutes)
+
+
+def test_corpus_invalid_part_budget_refuses_before_meshing(tmp_path):
+    with pytest.raises(ValueError, match="max-part-minutes"):
+        runner.run_case(corpus.CASES["osse-quarter"], tmp_path / "run", backend="cpu",
+                        precision="float32", julia="fake", max_part_minutes=float("nan"),
+                        freezer=lambda *a, **k: pytest.fail("meshing started"))
+
+
+@pytest.mark.parametrize("kind,sign", [("peaks", 1), ("dips", -1)])
+@pytest.mark.parametrize("quantity", ["pressure_complex", "impedance_per_acceleration"])
+def test_corpus_each_feature_must_resolve_even_when_same_column_has_another(kind, sign, quantity):
+    f = np.arange(500., 2001., 250.)
+    levels = sign * np.array([0, 3, 0, 0, .5, 0, 0])
+    ref = planning_reference(f, levels)
+    if quantity == "impedance_per_acceleration":
+        ref = replace(ref, impedance_per_acceleration=10 ** (levels / 20) / f)
+    features = [{"channel": "source", "quantity": quantity, "column": 0, "kind": kind,
+                 "frequency_hz": center, "start_hz": center - 250, "end_hz": center + 250}
+                for center in (750., 1500.)]
+    resolution = runner.resolve_features(ref, features, 1.)
+    assert not resolution["passed"]
+    assert [f["status"] for f in resolution["features"]] == ["resolved", "not_resolved"]
+    assert resolution["features"][1]["reference_prominence_db"] == pytest.approx(.5)
+
+
+def test_corpus_two_coarse_features_cannot_share_one_refined_peak():
+    ref = planning_reference([500, 750, 1000, 1250, 1500], [0, 0, 3, 0, 0])
+    features = [{"channel": "source", "quantity": "pressure_complex", "column": 0, "kind": "peaks",
+                 "frequency_hz": f, "start_hz": 500., "end_hz": 1500.} for f in (750., 1250.)]
+    resolution = runner.resolve_features(ref, features, 1.)
+    assert not resolution["passed"]
+    assert sorted(f["status"] for f in resolution["features"]) == ["not_resolved", "resolved"]
+
+
+def test_corpus_broad_reference_below_local_prominence_fails_end_to_end(frozen, tmp_path):
+    case = replace(frozen.case, coarse_hz=(500., 750., 1000., 1250., 1500.))
+    frozen = replace(frozen, case=case, request=case.request().model_dump(mode="json"))
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    def pair(frozen, frequencies, directory, **kwargs):
+        directory.mkdir()
+        runs = [evidence(frozen, frequencies, settings, official=value) for value in (False, True)]
+        levels = 2 * (1 - ((np.asarray(frequencies) - 1000) / 500) ** 2)
+        for name, run in zip(("hbb", "official"), runs):
+            run["native"]["source"]["pressure_complex"][:] = (10 ** (levels / 20))[:, None, None]
+            run["timing"].update(wall_seconds=.1 * len(frequencies), wall_seconds_per_frequency=.1)
+            runner.write_json(directory / f"{name}.json", run)
+        return tuple(runs)
+    report = runner.run_case(case, tmp_path / "run", backend="cpu", precision="float32", julia="fake",
+                             freezer=lambda *a, **k: frozen, pair_runner=pair)
+    assert report["status"] == "complete" and not report["passed"]
+    local = report["local_windows"][0]["channels"]["source"]
+    assert not local["passed"] and not local["metrics"] and not local["extra_fields"]
+    assert all(f["status"] == "not_resolved" for f in local["feature_resolution"]["features"])
+    assert all("not_resolved" in f for f in local["failures"])
 
 
 @pytest.mark.parametrize("kind", ["file", "directory"])
@@ -182,6 +323,32 @@ def test_corpus_verdict_scoring_passthrough(frozen, gain, passed):
     assert "pressure" in report["channels"]["source"]["metrics"]
     assert report["channels"]["source"]["thresholds"]["pressure"]["relative_l2"] == 1e-4
     assert "surface_pressure_complex" in report["unavailable"]["hbb"]["source"]
+
+
+def test_corpus_wall_timing_is_context_only(frozen):
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    runs = [evidence(frozen, frozen.case.coarse_hz, settings, official=value) for value in (False, True)]
+    runs[0]["timing"]["wall_seconds"] = 100000
+    runs[1].pop("timing")
+    report = runner.score_pair(*runs, frozen, settings, frequency_step=250)
+    assert report["passed"]
+    assert report["timing"]["hbb"][0]["wall_seconds"] == 100000
+    assert report["timing"]["official"][0]["source"] == "unavailable"
+
+
+def test_corpus_legacy_wall_and_per_frequency_native_timings_are_labelled():
+    run = {"frequencies_hz": [500., 750., 1000.],
+           "response": {"metadata": {"performance": {"total_time_seconds": 6.}}},
+           "native": {"a": {"solver_log": [{"frequency_hz": 1000., "timings": {"solve_s": .1}},
+                                           {"frequency_hz": 500., "timings": {"solve_s": .2}}]}}}
+    timing = runner.engine_timing(run)
+    assert timing["source"] == "legacy_production_route_wall"
+    assert timing["wall_seconds_per_frequency"] == 2
+    assert timing["per_frequency"] == [
+        {"channel": "a", "frequency_hz": 1000., "native_timings": {"solve_s": .1}},
+        {"channel": "a", "frequency_hz": 500., "native_timings": {"solve_s": .2}}]
+    measured = runner.engine_timing(run, wall_seconds=9.)
+    assert measured["source"] == "parent_process_wall" and measured["wall_seconds_per_frequency"] == 3
 
 
 def test_corpus_missing_sphere_never_fabricated(frozen):
@@ -267,6 +434,8 @@ def test_corpus_fast_production_meshing_is_deterministic(case, tmp_path):
 
 def test_corpus_isolation_launches_sequential_children_and_preserves_runtime_env(frozen, tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "require_official_ready", lambda *args: None)
+    clock = iter((0., 8., 8., 13.))
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
     calls = []
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "official-runtime"))
     monkeypatch.setenv("WG2_BEAT_WORKER_DIR", str(tmp_path / "official-workers"))
@@ -293,6 +462,12 @@ def test_corpus_isolation_launches_sequential_children_and_preserves_runtime_env
         assert options["env"]["WG2_BEAT_WORKER_DIR"] == str(tmp_path / "official-workers")
         assert all(options["env"][k] == "1" for k in runner.THREAD_ENV)
     assert reference is not candidate
+    for run in (reference, candidate):
+        assert run["timing"]["source"] == "parent_process_wall"
+        assert run["timing"]["wall_seconds_per_frequency"] == run["timing"]["wall_seconds"] / 3
+    assert runner.read_json(tmp_path / "coarse/hbb.json")["timing"] == reference["timing"]
+    assert reference["timing"]["wall_seconds"] == 8
+    assert candidate["timing"]["wall_seconds"] == 5
 
 
 def test_corpus_both_route_refusals_are_recorded(frozen, tmp_path):
@@ -305,8 +480,8 @@ def test_corpus_both_route_refusals_are_recorded(frozen, tmp_path):
     assert report["refusals"] == {"hbb": "exact HBB refusal", "official": "exact official refusal"}
 
 
-def test_corpus_refine_parts_remain_incomplete_until_complete_windows(frozen, tmp_path):
-    frozen = replace(frozen, case=replace(frozen.case, max_refine_count=201))
+@pytest.mark.parametrize("max_minutes", [7.2, 4.67])
+def test_corpus_refine_parts_remain_incomplete_until_complete_windows(frozen, tmp_path, max_minutes):
     settings = runner.settings_for(frozen, "cpu", "float32")
     def pair(frozen, frequencies, directory, **kwargs):
         directory.mkdir()
@@ -321,14 +496,21 @@ def test_corpus_refine_parts_remain_incomplete_until_complete_windows(frozen, tm
         return tuple(runs)
     first = tmp_path / "first"
     report = runner.run_case(frozen.case, first, backend="cpu", precision="float32", julia="julia",
-                             freezer=lambda *a, **k: frozen, pair_runner=pair)
+                             freezer=lambda *a, **k: frozen, pair_runner=pair, max_part_minutes=max_minutes)
     assert report["status"] == "refine_incomplete" and not report["passed"]
     assert report["required_refine_parts"] == 2 and report["completed_refine_parts"] == [1]
     final = runner.run_case(frozen.case, tmp_path / "last", backend="cpu", precision="float32", julia="julia",
-                            phase="refine", coarse_dir=first, refine_part=2, refine_dirs=(first,), pair_runner=pair)
+                            phase="refine", coarse_dir=first, refine_part=2, refine_dirs=(first,), pair_runner=pair,
+                            max_part_minutes=max_minutes)
     assert final["status"] == "complete" and final["passed"]
     assert final["completed_refine_parts"] == [1, 2]
     assert len(final["local_windows"]) == 1
+    assert len(final["agreement"]["timing"]["hbb"]) == 3
+    assert final["agreement"]["timing"]["hbb"][0]["frequency_count"] == len(frozen.case.coarse_hz)
+    assert runner.read_json(first / "part.json")["timing"]["official"]["wall_seconds_per_frequency"] == 1
+    if max_minutes == 4.67:
+        plan = runner.read_json(first / "refine-plan.json")
+        assert plan["parts"][1]["frequencies_hz"][0] == 1500.  # Peak on an acquisition boundary.
 
 
 def test_corpus_merge_refuses_mixed_engine_revisions(frozen):

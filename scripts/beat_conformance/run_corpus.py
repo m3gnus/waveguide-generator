@@ -12,11 +12,13 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import time
 from types import SimpleNamespace
 from typing import Any, Callable
 
 import numpy as np
-from scipy.signal import peak_prominences
+from scipy.optimize import linear_sum_assignment
+from scipy.signal import find_peaks
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
 from server.jobs.models import SolveRequest
@@ -223,7 +225,7 @@ def require_official_ready(backend: str, julia: str) -> None:
 
 
 def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory: Path, *,
-                  backend: str, precision: str, julia: str) -> tuple[dict, dict]:
+                  backend: str, precision: str, julia: str, timeout_seconds: float = 480.) -> tuple[dict, dict]:
     """Sequential subprocesses; official child manager cannot adopt a warm host."""
     require_official_ready(backend, julia)
     directory.mkdir(parents=True)
@@ -238,11 +240,12 @@ def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory:
         command = [sys.executable, "-m", "scripts.beat_conformance.run_corpus", "--engine-child", str(directory / "job.json"),
                    "--engine-output", str(target), "--official-child", str(int(official)),
                    "--backend", backend, "--precision", precision, "--julia", julia]
+        started = time.monotonic()
         with (directory / f"{name}.log").open("w") as log:
             process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                process.wait(timeout=240 if directory.name == "coarse" else 320)
+                process.wait(timeout=240 if directory.name == "coarse" else timeout_seconds)
             except BaseException:
                 # Only the recorded process group belongs to this invocation.
                 os.killpg(process.pid, signal.SIGTERM)
@@ -254,7 +257,11 @@ def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory:
                 raise
         if not target.exists():
             raise ValueError(f"{name} child produced no raw result; inspect {name}.log")
-        runs.append(read_json(target))
+        elapsed = time.monotonic() - started
+        run = read_json(target)
+        run["timing"] = engine_timing(run, wall_seconds=elapsed, frequency_count=len(frequencies))
+        write_json(target, run)
+        runs.append(run)
     return tuple(runs)
 
 
@@ -325,11 +332,64 @@ def map_results(run: dict, frozen: FrozenCase, settings: dict, *, official: bool
     return mapped, unavailable
 
 
-def refine_windows(reference: dict[str, ResultSet], case: CorpusCase) -> dict[str, Any]:
-    """Reference-only topographic prominence; dyadic steps strictly below 0.5%."""
-    windows = {}
+def engine_timing(run: dict, *, wall_seconds: float | None = None,
+                  frequency_count: int | None = None) -> dict:
+    """Measured acquisition context, never a numerical agreement gate.
+
+    Legacy captures have route wall time but no parent process wall measurement.
+    Preserve that distinction; do not substitute native kernel time for wall time.
+    """
+    if wall_seconds is None and "timing" in run:
+        return run["timing"]
+    source = "parent_process_wall" if wall_seconds is not None else "legacy_production_route_wall"
+    if wall_seconds is None:
+        wall_seconds = run.get("response", {}).get("metadata", {}).get("performance", {}).get("total_time_seconds")
+    count = frequency_count if frequency_count is not None else len(run.get("frequencies_hz", ()))
+    if not count or wall_seconds is None or not math.isfinite(wall_seconds) or wall_seconds <= 0:
+        raise ValueError("Measured wall time per engine is required for refinement planning")
+    rows = []
+    for channel, values in run.get("native", {}).items():
+        for row in values.get("solver_log", ()):
+            if "frequency_hz" in row:
+                rows.append({"channel": channel, "frequency_hz": row["frequency_hz"],
+                             "native_timings": row.get("timings", {})})
+    return {"source": source, "wall_seconds": wall_seconds, "frequency_count": count,
+            "wall_seconds_per_frequency": wall_seconds / count, "per_frequency": rows}
+
+
+def timing_context(run: dict) -> list[dict]:
+    if "acquisition_timing" in run:
+        return run["acquisition_timing"]
+    try:
+        return [engine_timing(run)]
+    except ValueError as exc:
+        return [{"source": "unavailable", "reason": str(exc)}]
+
+
+def local_bounds(frequencies: np.ndarray, index: int) -> tuple[float, float]:
+    return (float(frequencies[max(0, index - 1)]),
+            float(frequencies[min(len(frequencies) - 1, index + 1)]))
+
+
+def refine_windows(reference: dict[str, ResultSet], case: CorpusCase, *,
+                   timing: dict[str, dict], max_part_minutes: float = 8.) -> dict[str, Any]:
+    """Reference-only neighbour windows; acquisition parts sized by coarse wall cost."""
+    if not math.isfinite(max_part_minutes) or max_part_minutes <= 0:
+        raise ValueError("--max-part-minutes must be positive and finite")
+    # Wall/count already amortizes startup. Additionally reserve an entire coarse
+    # pair's wall time per part for fresh startup/serialization, conservatively.
+    costs = [timing[name]["wall_seconds_per_frequency"] for name in ("hbb", "official")]
+    startups = [timing[name]["wall_seconds"] for name in ("hbb", "official")]
+    if any(not math.isfinite(v) or v <= 0 for v in (*costs, *startups)):
+        raise ValueError("Measured wall costs must be positive and finite")
+    cost, startup = sum(costs), sum(startups)
+    limit = math.floor((max_part_minutes * 60 - startup) / cost)
+    windows = []
     for channel, result in reference.items():
         f = result.frequencies_hz
+        if len(f) < 3 or np.any(np.diff(f) <= 0):
+            raise ValueError("Coarse axis must be increasing and bracket interior features")
+        validate_frequency_axis(tuple(f))
         for quantity in ("pressure_complex", "impedance_per_acceleration"):
             data = np.asarray(getattr(result, quantity)).reshape(len(f), -1)
             if quantity == "impedance_per_acceleration":
@@ -337,36 +397,85 @@ def refine_windows(reference: dict[str, ResultSet], case: CorpusCase) -> dict[st
             for column in range(data.shape[1]):
                 levels = 20 * np.log10(np.maximum(np.abs(data[:, column]), np.finfo(float).tiny))
                 for kind, indices in _extrema(levels, case.prominence_db).items():
-                    signed = levels if kind == "peaks" else -levels
-                    _, left_bases, right_bases = peak_prominences(signed, indices)
-                    for index, left, right in zip(indices, left_bases, right_bases):
-                        # Full prominence bases bracket broad physical features too;
-                        # neighboring samples alone can erase their prominence.
-                        key = (float(f[left]), float(f[right]), float(f[index]))
-                        step = 2. ** math.floor(math.log2(float(f[index]) * 0.0025))
-                        start, end = key[:2]
-                        axis = np.arange(math.floor(start / step), math.ceil(end / step) + 1) * step
-                        axis = axis[axis > 0]
-                        validate_frequency_axis(tuple(axis))
-                        entry = windows.setdefault(key, {"frequencies_hz": axis.tolist(), "step_hz": step, "features": []})
-                        entry["features"].append({"channel": channel, "quantity": quantity,
-                                                 "column": column, "kind": kind, "frequency_hz": float(f[index])})
-    parts, current = [], set()
-    # Split acquisition only, with two-row overlaps. Score complete windows after
-    # gathering parts; a peak on a part boundary cannot disappear from the gate.
-    for window in windows.values():
-        for frequency in window["frequencies_hz"]:
-            if frequency in current:
-                continue
-            if len(current) == case.max_refine_count:
-                parts.append(sorted(current))
-                current = set(sorted(current)[-2:])
-            current.add(frequency)
-    if current:
-        parts.append(sorted(current))
-    return {"prominence_db": case.prominence_db, "windows": list(windows.values()),
-            "parts": [{"part": i + 1, "frequencies_hz": axis} for i, axis in enumerate(parts)],
-            "count": len(set(f for p in parts for f in p)), "per_part_limit": case.max_refine_count}
+                    for index in indices:
+                        start, end = local_bounds(f, index)
+                        feature = {"channel": channel, "quantity": quantity, "column": column,
+                                   "kind": kind, "frequency_hz": float(f[index]),
+                                   "start_hz": start, "end_hz": end}
+                        windows.append({"start_hz": start, "end_hz": end, "features": [feature]})
+    merged = []
+    for window in sorted(windows, key=lambda w: (w["start_hz"], w["end_hz"])):
+        if merged and window["start_hz"] <= merged[-1]["end_hz"]:
+            merged[-1]["end_hz"] = max(merged[-1]["end_hz"], window["end_hz"])
+            merged[-1]["features"].extend(window["features"])
+        else:
+            merged.append(window)
+    for window in merged:
+        lowest = min(feat["frequency_hz"] for feat in window["features"])
+        step = 2. ** math.floor(math.log2(lowest * 0.0025))
+        start, end = window["start_hz"], window["end_hz"]
+        axis = np.arange(math.ceil(start / step), math.floor(end / step) + 1) * step
+        # Include the exact coarse neighbours even for off-grid bounds, never
+        # round outward. End intervals are then no larger than the declared step.
+        bounds = [feat[key] for feat in window["features"] for key in ("start_hz", "end_hz")]
+        axis = np.unique(np.r_[axis, bounds])
+        validate_frequency_axis(tuple(axis))
+        window.update(frequencies_hz=axis.tolist(), step_hz=step)
+    if merged and limit < 3:
+        raise ValueError("Part wall budget cannot fit three frequencies plus startup and two-row overlap")
+    # Split acquisition only; score complete windows after gathering parts.
+    axis = sorted({f for w in merged for f in w["frequencies_hz"]})
+    parts = []
+    offset = 0
+    while offset < len(axis):
+        frequencies = axis[offset:offset + limit]
+        parts.append({"part": len(parts) + 1, "frequencies_hz": frequencies,
+                      "estimated_minutes": (len(frequencies) * cost + startup) / 60})
+        if offset + limit >= len(axis):
+            break
+        offset += limit - 2
+    return {"prominence_db": case.prominence_db, "windows": merged, "parts": parts,
+            "count": len(axis), "acquired_frequency_count": sum(len(p["frequencies_hz"]) for p in parts),
+            "part_count": len(parts), "per_part_limit": limit, "max_part_minutes": max_part_minutes,
+            "estimated_minutes": sum(p["estimated_minutes"] for p in parts),
+            "timing": timing, "pair_seconds_per_frequency": cost, "startup_seconds_per_part": startup,
+            "startup_policy": "reserve one full coarse pair wall time in addition to amortized wall/frequency"}
+
+
+def resolve_features(reference: ResultSet, features: list[dict], prominence_db: float) -> dict:
+    """One-to-one reference matches: no coarse feature can silently disappear."""
+    f = reference.frequencies_hz
+    entries = []
+    groups = {}
+    for feature in features:
+        groups.setdefault((feature["quantity"], feature["column"], feature["kind"]), []).append(feature)
+    for (quantity, column, kind), expected in groups.items():
+        data = np.asarray(getattr(reference, quantity)).reshape(len(f), -1)[:, column]
+        if quantity == "impedance_per_acceleration":
+            data = data * (-1j * 2 * np.pi * f) / (1.2041 * 343.)
+        levels = 20 * np.log10(np.maximum(np.abs(data), np.finfo(float).tiny))
+        indices, properties = find_peaks(levels if kind == "peaks" else -levels,
+                                         prominence=(None, None))
+        prominences = properties["prominences"]
+        # Dummy columns make unresolved features explicit. Valid matches always
+        # beat dummies; maximize their number before minimizing coarse shifts.
+        penalty = (len(expected) + 1) * (float(f[-1] - f[0]) + 1)
+        costs = np.full((len(expected), len(indices) + len(expected)), penalty)
+        for row, feature in enumerate(expected):
+            valid = ((f[indices] > feature["start_hz"]) & (f[indices] < feature["end_hz"])
+                     & (prominences >= prominence_db))
+            costs[row, :len(indices)] = np.where(valid, np.abs(f[indices] - feature["frequency_hz"]), 2 * penalty)
+        rows, columns = linear_sum_assignment(costs)
+        for row, col in zip(rows, columns):
+            feature = expected[row]
+            resolved = col < len(indices) and costs[row, col] < penalty
+            local = (f[indices] > feature["start_hz"]) & (f[indices] < feature["end_hz"])
+            entries.append(dict(feature, status="resolved" if resolved else "not_resolved",
+                                refined_frequency_hz=float(f[indices[col]]) if resolved else None,
+                                reference_prominence_db=float(prominences[col]) if resolved else
+                                float(np.max(prominences[local], initial=0.)),
+                                reason=None if resolved else "reference feature not resolved at the declared local prominence"))
+    return {"passed": all(e["status"] == "resolved" for e in entries), "features": entries}
 
 
 def merge_runs(runs: list[dict]) -> dict:
@@ -392,20 +501,33 @@ def merge_runs(runs: list[dict]) -> dict:
                 target[field] = None
         target["solver_log"] = [rows[f][0]["solver_log"][rows[f][1]] for f in axis]
     merged["frequencies_hz"] = axis
+    merged["acquisition_timing"] = [entry for r in runs for entry in timing_context(r)]
+    merged.pop("timing", None)
     return merged
 
 
 def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, settings: dict, *,
                frequency_step: float, expected: bool = False,
-               expected_by_channel: dict[str, dict[str, tuple[int, ...]]] | None = None) -> dict:
+               expected_by_channel: dict[str, dict[str, tuple[int, ...]]] | None = None,
+               expected_features: list[dict] | None = None) -> dict:
     reference, unavailable_ref = map_results(reference_run, frozen, settings, official=False)
     candidate, unavailable_got = map_results(candidate_run, frozen, settings, official=True)
     reports = {}
     for channel in reference.keys() & candidate.keys():
+        resolution = resolve_features(reference[channel],
+            [feat for feat in (expected_features or []) if feat["channel"] == channel], frozen.case.prominence_db)
+        if not resolution["passed"]:
+            reports[channel] = {"passed": False, "metrics": {}, "extra_fields": {},
+                                "feature_resolution": resolution, "failures": [
+                f"not_resolved: {feat['quantity']} column {feat['column']} {feat['kind']} at coarse {feat['frequency_hz']} Hz"
+                for feat in resolution["features"] if feat["status"] == "not_resolved"]}
+            continue
         reports[channel] = compare_results(reference[channel], candidate[channel], frequency_step_hz=frequency_step,
                     resonance_prominence_db=frozen.case.prominence_db,
                     expected_resonance_columns=(expected_by_channel or {}).get(channel,
                         {"pressure_complex": frozen.case.expected_pressure_columns} if expected else None))
+        if expected_features:
+            reports[channel]["feature_resolution"] = resolution
         # Sphere is complex pressure too, and gets the identical 30 dB gate/budgets.
         a, b = reference_run["native"][channel], candidate_run["native"][channel]
         extras = {}
@@ -439,6 +561,8 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
         values.get("electrical_impedance_ohm") is None for run in (reference_run, candidate_run)
         for values in run.get("native", {}).values())
     return {"passed": bool(reports) and set(reports) == required and all(r["passed"] for r in reports.values()) and not trace_missing and not driver_missing,
+            "timing": {name: timing_context(run)
+                       for name, run in (("hbb", reference_run), ("official", candidate_run))},
             "channels": reports, "unavailable": {"hbb": unavailable_ref, "official": unavailable_got},
             "limitations": ["Identities from installed VCS metadata are attested, not source-byte verified",
                             "Production captures are API rows, not recorder-owned terminal counts",
@@ -448,7 +572,9 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
 def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str, julia: str,
              phase: str = "both", coarse_dir: Path | None = None, refine_part: int = 1,
              refine_dirs: tuple[Path, ...] = (), pair_runner: Callable = isolated_pair,
-             freezer: Callable = freeze_case) -> dict:
+             freezer: Callable = freeze_case, max_part_minutes: float = 8.) -> dict:
+    if not math.isfinite(max_part_minutes) or max_part_minutes <= 0:
+        raise ValueError("--max-part-minutes must be positive and finite")
     directory = empty_output(directory)
     if backend == "metal" and precision != "float32":
         raise ValueError("Metal production agreement requires float32")
@@ -489,7 +615,8 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                                   frequency_step=max(np.diff(case.coarse_hz)), expected=True)
         write_json(directory / "coarse-score.json", coarse_score)
         reference, _ = map_results(reference_run, frozen, settings, official=False)
-        plan = refine_windows(reference, case)
+        plan = refine_windows(reference, case, timing={"hbb": engine_timing(reference_run),
+                              "official": engine_timing(candidate_run)}, max_part_minutes=max_part_minutes)
         write_json(directory / "refine-plan.json", plan)
         verdict = {"passed": False, "status": "coarse_complete", "coarse": coarse_score,
                    "required_refine_parts": len(plan["parts"]), "completed_refine_parts": []}
@@ -508,11 +635,13 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                     raise ValueError("--refine-part outside the reference plan")
                 part = plan["parts"][refine_part - 1]
                 a, b = pair_runner(frozen, tuple(part["frequencies_hz"]), directory / "refine",
-                                  backend=backend, precision=precision, julia=julia)
+                                  backend=backend, precision=precision, julia=julia,
+                                  timeout_seconds=max_part_minutes * 60)
                 if any("error" in r for r in (a, b)):
                     raise ValueError(f"Refine engine failure: {[r.get('error') for r in (a, b)]}")
                 write_json(directory / "part.json", {"part": refine_part, "plan": plan,
-                           "mesh_sha256": frozen.sha256, "backend": backend, "precision": precision})
+                           "mesh_sha256": frozen.sha256, "backend": backend, "precision": precision,
+                           "timing": {"hbb": engine_timing(a), "official": engine_timing(b)}})
                 refs.append(a)
                 candidates.append(b)
                 completed.add(refine_part)
@@ -544,7 +673,8 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                 expected_columns = {ch: {name: tuple(sorted(cols)) for name, cols in quantities.items()}
                                     for ch, quantities in expected_columns.items()}
                 local_reports.append(score_pair(slice_run(final_ref), slice_run(final_got), frozen, settings,
-                                                frequency_step=window["step_hz"], expected_by_channel=expected_columns))
+                                                frequency_step=window["step_hz"], expected_by_channel=expected_columns,
+                                                expected_features=window["features"]))
             complete = len(completed) == len(plan["parts"]) and len(local_reports) == len(plan["windows"])
             verdict.update(passed=complete and report["passed"] and all(r["passed"] for r in local_reports),
                            status="complete" if complete else "refine_incomplete", agreement=report,
@@ -565,6 +695,8 @@ def main() -> int:
     parser.add_argument("--phase", choices=("coarse", "refine", "both"), default="both")
     parser.add_argument("--coarse-dir", type=Path)
     parser.add_argument("--refine-part", type=int, default=1)
+    parser.add_argument("--max-part-minutes", type=float, default=8.,
+                        help="Hard estimated wall budget per part for both engines including startup (default: 8)")
     parser.add_argument("--refine-dir", type=Path, action="append", default=[])
     parser.add_argument("--engine-child", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--engine-output", type=Path, help=argparse.SUPPRESS)
@@ -578,7 +710,8 @@ def main() -> int:
     try:
         verdict = run_case(CASES[args.case], args.output_dir, backend=args.backend, precision=args.precision,
                            julia=args.julia, phase=args.phase, coarse_dir=args.coarse_dir,
-                           refine_part=args.refine_part, refine_dirs=tuple(args.refine_dir))
+                           refine_part=args.refine_part, refine_dirs=tuple(args.refine_dir),
+                           max_part_minutes=args.max_part_minutes)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         parser.exit(2, f"{type(exc).__name__}: {exc}\n")
     print(dumps(verdict))
