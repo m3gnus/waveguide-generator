@@ -581,8 +581,9 @@ The jobs API also accepts the WG UI's displayed press directly:
   restart, setup or lifecycle checks, including after that child binds, runs,
   completes or fails. Binding keeps the press hash in the job's CAD provenance.
   A first press captured on a waiting job records its hash on that job, so the
-  same press again is that job while it prepares or runs; once it was refused or
-  stopped, the same settings again are a new Solve again.
+  same press again is that job while it prepares and once it has bound,
+  however its run ended; only a preparation refused or stopped before binding
+  takes the same settings as a new Solve again.
   A different press whose continuation has bound is a 409; a bound job's
   faithful retry remains `POST /api/jobs/{job_id}/retry`, without a body.
 - `POST /api/jobs/{job_id}/approvals` takes `{preparation_id, finding_ids}`.
