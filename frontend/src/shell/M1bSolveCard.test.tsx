@@ -38,6 +38,7 @@ import { ResultsPanel } from './ResultsPanel';
 import { SolveActions } from './TopBar';
 import { CadSolveCard } from './CadSolveCard';
 import { CadOperationsSection } from './CadOperationsSection';
+import { solvedCadModels } from './cadlink/solvedModel';
 import { resetSolveAttentionForTests } from './solveAttention';
 import {
   bindWorkspaceNavigation,
@@ -384,6 +385,17 @@ describe('M1b: one Solve card, to the revealed result', () => {
     await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1'))]);
     expect(compareSelection.getSnapshot().primary).toBe('job-1');
     expect(activations.filter((panel) => panel === 'results')).toEqual(['results']);
+  });
+
+  it('hands the solved-model adoption the ingestion the press solved from', async () => {
+    const claim = vi.spyOn(solvedCadModels, 'claim');
+    await mount();
+    await pressSolve();
+    const press = mocks.submitCadSolve.mock.calls[0][0];
+    await jobs([cadJobFixture(operation(`manual-solve:${press.client_request_id}`, 'accepted', { jobId: 'job-1' }), cadJob('job-1'))]);
+    // Without it, adoption would replace a newer rebuild of the same return.
+    expect(claim).toHaveBeenCalledWith('job-1', expect.objectContaining({ sourceIngestId: 'wgi_first' }));
+    expect(claim.mock.calls.every(([, value]) => value.sourceIngestId === 'wgi_first')).toBe(true);
   });
 
   it('solves from the card when the dock renders it in its own React root, outside the coordinator', async () => {

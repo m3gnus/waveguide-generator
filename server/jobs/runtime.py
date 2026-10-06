@@ -3409,10 +3409,12 @@ class JobRuntime:
         row = self._require_job(job_id)
         digest = self._cad_solve_press_sha256(job_id, **press)
         # The first press admitted on this very job (a waiting manual solve):
-        # while the job runs that press, a replay is that job. Once it was
-        # refused or stopped, the same settings again are a new Solve again.
-        if (cad_of(row).get("first_press_sha256") == digest
-                and row["status"] not in {"error", "cancelled"}):
+        # a replay is that job once it has bound its request, however its run
+        # ended, and while it still prepares. Only a preparation refused or
+        # stopped before binding takes the same settings as a new Solve again.
+        if cad_of(row).get("first_press_sha256") == digest and (
+            intent_of(row) is None or row["status"] not in {"error", "cancelled"}
+        ):
             return job_id
         seen = {job_id}
         child_id = self.store.job_for_submission_key(f"cad-solve-again:{job_id}")

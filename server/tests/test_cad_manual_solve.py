@@ -547,3 +547,28 @@ def test_r2_the_same_settings_after_a_refusal_are_a_new_solve_again(harness):
         status, child = await _post_job(app, f"/api/jobs/{job_id}/solve-again", body)
         assert status == 200 and child["job_id"] != job_id
     harness._loop.run(flow())
+
+
+@pytest.mark.parametrize("ending", ["cancelled", "error"])
+def test_r3_a_replayed_first_press_recovers_its_bound_job_however_it_ended(harness, ending):
+    ingest_id, _ = _ingest(harness)
+    revision = _revision(harness.store, _setup(engine="metal"))
+    _create(harness, ingest_id)
+    job_id = harness.jobs_store.latest_cad_job("manual-1")["id"]
+    app = _jobs_app(harness)
+    body = {"setup_revision_id": revision, "frame_axis": "+z"}
+    async def flow():
+        status, first = await _post_job(app, f"/api/jobs/{job_id}/solve-again", body)
+        assert status == 200 and first["job_id"] == job_id
+        await harness.runtime.wait_cad_preparations()
+        assert harness.jobs_store.get_job_row(job_id)["status"] == "queued"
+        if ending == "cancelled":
+            await harness.runtime.stop(job_id)
+        else:
+            harness.jobs_store.update_job(job_id, status="error", error_message="solver failed")
+        assert harness.jobs_store.get_job_row(job_id)["status"] == ending
+        # The first answer was lost; the bound run ended; the same press is still that job.
+        status, replay = await _post_job(app, f"/api/jobs/{job_id}/solve-again", body)
+        assert (status, replay["job_id"]) == (200, job_id)
+        assert harness.jobs_store.list_jobs()[1] == 1
+    harness._loop.run(flow())

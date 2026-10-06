@@ -314,7 +314,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     for (const job of latestCadJobs(jobs)) {
       const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);
       const inherited = parent ? cadSolveClaim(parent) : null;
-      if (inherited && !cadSolveClaim(job)) rememberCadSolve(job.id, inherited.designName);
+      if (inherited && !cadSolveClaim(job)) rememberCadSolve(job.id, inherited.designName, inherited.sourceIngestId ?? null);
       if (job.cad_state?.state === 'received' || job.cad_state?.state === 'processing') {
         if (!cadSolveClaim(job)) rememberCadSolve(job.id, '');
       }
@@ -565,13 +565,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         retainCadSolvePress(ingestId, identity);
       }
       // The completion claim exists before HTTP: an event may beat the response.
-      rememberCadSolve(`cad-solve:manual-solve:${identity.requestId}`, identity.designName);
-      if (identity.jobId) rememberCadSolve(identity.jobId, identity.designName);
+      rememberCadSolve(`cad-solve:manual-solve:${identity.requestId}`, identity.designName, ingestId);
+      if (identity.jobId) rememberCadSolve(identity.jobId, identity.designName, ingestId);
       solveAttention.bindOperation(identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`);
       const response = identity.jobId
         ? await solveCadAgain(identity.jobId, identity.press)
         : await submitCadSolve(identity.press);
-      rememberCadSolve(response.job_id, identity.designName);
+      rememberCadSolve(response.job_id, identity.designName, ingestId);
       solveAttention.followJob(identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`, response.job_id);
       solveAttention.bindRun(response.job_id, identity.jobId ?? `cad-solve:manual-solve:${identity.requestId}`);
       releaseCadSolve(ingestId, identity, response.job_id);

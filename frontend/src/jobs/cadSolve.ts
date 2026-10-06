@@ -49,7 +49,11 @@ export function retainCadSolvePress(ingestId: string, held: PendingCadSolve): vo
 export function rememberCadSolve(key: string, designName: string, sourceIngestId: string | null = null): void {
   const held = read<CadSolveClaim>(CLAIM + key);
   if (!held) write(CLAIM + key, { designName, completionAcknowledged: false, sourceIngestId });
-  else if (!held.designName && designName && !held.completionAcknowledged) write(CLAIM + key, { ...held, designName });
+  else if (!held.completionAcknowledged && ((!held.designName && designName) || (!held.sourceIngestId && sourceIngestId))) {
+    // A claim made before the press knew its ingestion (an event can beat
+    // the response) gains what it lacked; nothing it recorded is replaced.
+    write(CLAIM + key, { ...held, designName: held.designName || designName, sourceIngestId: held.sourceIngestId ?? sourceIngestId });
+  }
 }
 export function cadSolveClaim(job: JobItem): CadSolveClaim | null {
   return read(CLAIM + job.id) ?? (job.client_request_id ? read(CLAIM + job.client_request_id) : null);
