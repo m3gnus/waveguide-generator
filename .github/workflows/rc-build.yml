@@ -258,6 +258,48 @@ jobs:
             --imported-engine beat-cpu \
             --imported-engine-when-offered metal
 
+      - name: Qualify the official BEAT engine on the same candidate
+        # Qualify both routes until the provider switch; slice 10 removes HBB.
+        # Reuse the installed payload, with a fresh official runtime and depot.
+        # Planning estimate: +10-25 min for Julia download, bundle instantiate/
+        # precompile and solves (unmeasured); macOS may also prepare Metal.
+        # No explicit job timeout-minutes; revisit the default after RC timings.
+        if: ${{ !cancelled() }}
+        env:
+          WG2_BEAT_PROVIDER: official
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          manifest="$(ls build/bundle/update-app-*.manifest.json)"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py \
+            --payload "$root/Waveguide Generator.app" \
+            --payload-kind dmg-ditto \
+            --work "$root/official-work" \
+            --output "$root/official-qualification" \
+            --pins-json pins.json \
+            --build-manifest "$manifest" \
+            --imported-engine beat-cpu \
+            --imported-engine-when-offered metal
+
+      - name: Preserve the official BEAT qualification logs
+        if: always()
+        # Into the job log rather than a new artifact: this workflow's artifact
+        # set is the candidate a person hand-tests, and a gate's evidence should
+        # not change what is offered for that.
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/official-qualification" ]; then
+            echo "No official BEAT qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/official-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
       - name: Qualify Quit during a blocked mesh build on the same candidate
         # The packaged half of the shutdown gate
         # (docs/reference/SHUTDOWN-AND-RECOVERY.md): the installed server,
@@ -466,6 +508,51 @@ jobs:
             throw "The CPU qualification exited $LASTEXITCODE"
           }
 
+      - name: Qualify the official BEAT engine on the same candidate
+        # Qualify both routes until the provider switch; slice 10 removes HBB.
+        # Reuse the installed payload, with a fresh official runtime and depot.
+        # Planning estimate: +15-35 min for Julia download, bundle instantiate/
+        # precompile and solves (unmeasured).
+        # No explicit job timeout-minutes; revisit the default after RC timings.
+        if: ${{ !cancelled() }}
+        env:
+          WG2_BEAT_PROVIDER: official
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root) {
+            throw "The CPU gate did not prepare the installed candidate."
+          }
+          $manifest = (Get-ChildItem -File build/bundle/update-app-*.manifest.json |
+                       Select-Object -First 1).FullName
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py `
+            --payload (Join-Path $root "app") `
+            --payload-kind windows-installer `
+            --work (Join-Path $root "official-work") `
+            --output (Join-Path $root "official-qualification") `
+            --pins-json pins.json `
+            --build-manifest $manifest `
+            --imported-engine beat-cpu
+          if ($LASTEXITCODE -ne 0) {
+            throw "The official BEAT qualification exited $LASTEXITCODE"
+          }
+
+      - name: Preserve the official BEAT qualification logs
+        if: always()
+        shell: pwsh
+        run: |
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "official-qualification"))) {
+            Write-Host "No official BEAT qualification output was produced."
+            exit 0
+          }
+          Get-ChildItem -File (Join-Path $root "official-qualification") | ForEach-Object {
+            Write-Host "===== $($_.Name) ====="
+            Get-Content -Tail 4000 -LiteralPath $_.FullName
+            Write-Host ""
+          }
+
       - name: Qualify Quit during a blocked mesh build on the installed candidate
         # See the macOS job. On Windows the stopped server also has to end its
         # own BEMPP child through its kill-on-close Job Object, since the gate
@@ -628,6 +715,47 @@ jobs:
             --imported-engine beat-cpu \
             --ib-engine bempp \
             --ib-expect-backend any
+
+      - name: Qualify the official BEAT engine on the same candidate
+        # Qualify both routes until the provider switch; slice 10 removes HBB.
+        # Reuse the installed payload, with a fresh official runtime and depot.
+        # Planning estimate: +10-25 min for Julia download, bundle instantiate/
+        # precompile and solves (unmeasured).
+        # No explicit job timeout-minutes; revisit the default after RC timings.
+        if: ${{ !cancelled() }}
+        env:
+          WG2_BEAT_PROVIDER: official
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          manifest="$(ls build/bundle/update-app-*.manifest.json)"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py \
+            --payload "$root/prefix/waveguide-generator" \
+            --payload-kind linux-install-sh \
+            --work "$root/official-work" \
+            --output "$root/official-qualification" \
+            --pins-json pins.json \
+            --build-manifest "$manifest" \
+            --imported-engine beat-cpu
+
+      - name: Preserve the official BEAT qualification logs
+        if: always()
+        # Into the job log rather than a new artifact: this workflow's artifact
+        # set is the candidate a person hand-tests, and a gate's evidence should
+        # not change what is offered for that.
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/official-qualification" ]; then
+            echo "No official BEAT qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/official-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
 
       - name: Qualify Quit during a blocked mesh build on the same candidate
         # See the macOS job.

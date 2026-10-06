@@ -265,6 +265,28 @@ directory = Path(sys.argv[1]) / paths.PROVIDER_ID
 print(json.dumps(inspect_hosts(directory, stop=sys.argv[2] == "stop")))
 """
 
+# Read-only: the installed app must have prepared this runtime itself. This
+# checks its current content identity and compiled proof without starting Julia.
+_READ_OFFICIAL_RUNTIME = r"""
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["WG2_APP_ROOT"])
+from server.solver.beat_runtime import paths, probe, readiness, state
+from server.solver.beat_runtime.provider import official_selected
+
+if not official_selected():
+    raise RuntimeError("Official runtime inspection requires WG2_BEAT_PROVIDER=official")
+root = paths.runtime_dir()
+expected = Path(os.environ["WG2_BEAT_RUNTIME_DIR"]) / paths.PROVIDER_ID
+if root.resolve() != expected.resolve():
+    raise RuntimeError("Official runtime escaped the qualification directory")
+record = state.read_state(root, backend="cpu") or {}
+verdict = readiness.backend_readiness("cpu", root)
+print(json.dumps({"ready": verdict.ready, "reason": verdict.reason,
+                  "runtime_dir": str(root), "probe_contract_expected": probe.PROBE_CONTRACT,
+                  "record": record}))
+"""
+
 #: Read PEP 610 metadata from the packaged interpreter. Asked of the runtime
 #: that will run the solve, never of the interpreter running this file: an
 #: editable install resolves to a working tree and would qualify whatever
@@ -485,6 +507,37 @@ def check_pins(
                 f"pin {name} is {entry.get('commit')!r}, expected {commit!r}"
             )
     return {"checked": sorted(expected), "found": found}
+
+
+def check_official_runtime(
+    interpreter: Path, app: Path, environment: dict[str, str], output: Path,
+    revision: str,
+) -> dict[str, Any]:
+    """Record the installed app's matching official compiled-runtime proof."""
+
+    completed = subprocess.run(  # noqa: S603 - packaged interpreter, read-only program
+        [str(interpreter), "-c", _READ_OFFICIAL_RUNTIME], cwd=str(app), env=environment,
+        capture_output=True, text=True, timeout=PROBE_TIMEOUT_S, check=False,
+    )
+    (output / "official-runtime-inspection.log").write_text(
+        completed.stdout + completed.stderr, encoding="utf-8"
+    )
+    if completed.returncode != 0:
+        raise QualificationError(f"official runtime inspection failed: {completed.stderr[-2000:]}")
+    try:
+        answer = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError) as exc:
+        raise QualificationError(f"unreadable official runtime inspection: {exc}") from exc
+    record = answer.get("record") or {}
+    if (answer.get("ready") is not True or record.get("provider") != "wg-beat-engine"
+            or record.get("status") != "ready" or record.get("backend") != "cpu"
+            or not answer.get("probe_contract_expected")
+            or record.get("probe_contract") != answer["probe_contract_expected"]
+            or not record.get("engine_fingerprint") or not record.get("runtime_fingerprint")):
+        raise QualificationError(f"no matching official compiled CPU runtime proof: {answer!r}")
+    if not _inside(answer.get("runtime_dir"), Path(environment["WG2_BEAT_RUNTIME_DIR"])):
+        raise QualificationError("official runtime inspection reported an unisolated directory")
+    return {"beat_engine_revision": revision, **answer}
 
 
 # ---------------------------------------------------------------------------
@@ -1104,15 +1157,22 @@ def check_axes(
     }
 
 
-def check_solve(result: dict[str, Any], expected_pins: dict[str, str]) -> dict[str, Any]:
+def check_solve(
+    result: dict[str, Any], expected_pins: dict[str, str], *, official: bool = False,
+) -> dict[str, Any]:
     """The solve reported the CPU backend, drifted from nothing, and has numbers."""
 
     metadata = result.get("metadata", {})
-    actual = {key: metadata.get(key) for key in CPU_RESULT_CONTRACT}
-    if actual != CPU_RESULT_CONTRACT:
+    contract = dict(CPU_RESULT_CONTRACT, engine="beat-engine") if official else CPU_RESULT_CONTRACT
+    actual = {key: metadata.get(key) for key in contract}
+    if actual != contract:
         raise QualificationError(
-            f"a {CPU_ENGINE!r} solve reported {actual!r}, expected {CPU_RESULT_CONTRACT!r}"
+            f"a {CPU_ENGINE!r} solve reported {actual!r}, expected {contract!r}"
         )
+    reported_revision = (result.get("provenance", {}).get("dependency_shas") or {}).get("beat-engine")
+    if official and (not expected_pins.get("beat-engine")
+                     or reported_revision != expected_pins["beat-engine"]):
+        raise QualificationError("the official solve must report the pinned beat-engine revision")
     provenance = check_dependency_drift(result, expected_pins)
     return {
         "engine": metadata.get("engine"),
@@ -1503,6 +1563,7 @@ def check_imported_result(
     *,
     channels: list[str],
     frequencies: list[float],
+    official: bool = False,
 ) -> dict[str, Any]:
     """An imported solve ran on the engine asked for, answered what was asked, and has numbers.
 
@@ -1525,6 +1586,8 @@ def check_imported_result(
             f"an imported solve requested on {requested!r} reported "
             f"solver_engine.engine {engine!r}"
         )
+    if official and requested.startswith("beat-") and solver_engine.get("package") != "beat-engine":
+        raise QualificationError("the imported official solve must report package 'beat-engine'")
     if metadata.get("geometry_type") != "imported":
         raise QualificationError(
             f"an imported solve on {requested!r} reported geometry_type "
@@ -1545,6 +1608,11 @@ def check_imported_result(
         if not isinstance(payload, Mapping):
             raise QualificationError(
                 f"channel {channel!r} of the imported result on {requested!r} is not an object"
+            )
+        if (official and requested.startswith("beat-")
+                and (payload.get("metadata") or {}).get("engine") != "beat-engine"):
+            raise QualificationError(
+                f"imported official channel {channel!r} must report engine 'beat-engine'"
             )
         try:
             checked[str(channel)] = check_axes(dict(payload), planes)
@@ -1869,6 +1937,7 @@ def qualify_imported_return(
                 engine,
                 channels=[str(channel["id"]) for channel in geometry["drive_channels"]],
                 frequencies=list(IMPORTED_FREQUENCIES),
+                official=provider.official_selected(environment),
             )
             entry.update(
                 decision="solved",
@@ -1976,9 +2045,12 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     data_dir = work / "data"
     environment = isolated_environment(app, work)
     expected_pins = pins_from_file(arguments.pins_json)
+    pinned_beat_revision = expected_pins.get("beat-engine")
     expected_pins.update(arguments.expected_pin or {})
+    official = provider.official_selected(environment)
 
     report.update({
+        "provider": "official" if official else "hbb",
         "payload": str(resources),
         "payload_kind": arguments.payload_kind,
         "platform": {"system": platform.system(), "machine": platform.machine()},
@@ -2009,6 +2081,8 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
         if value is not None:
             expected_identity[field] = value
     report["app_manifest"] = check_manifest(app, expected_identity)
+    if official and (not pinned_beat_revision or expected_pins.get("beat-engine") != pinned_beat_revision):
+        raise QualificationError("official qualification requires the beat-engine revision from --pins-json")
     report["pins"] = check_pins(interpreter, expected_pins, environment)
 
     # A control file per launch, never one shared between them. The server
@@ -2053,10 +2127,15 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
             "after": "the application's own preparation",
             "settled": report["cpu_preparation"]["settled"],
         }
+        if official:
+            report["official_runtime"] = check_official_runtime(
+                interpreter, app, environment, output,
+                report["pins"]["found"]["beat-engine"]["commit"],
+            )
         report["workspace"] = workspace_isolation(server.base, work)
         result = server.completed(server.solve(SOLVE_FREQUENCIES, CPU_ENGINE))
         (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
-        report["solve"] = check_solve(result, expected_pins)
+        report["solve"] = check_solve(result, expected_pins, official=official)
         report["gpu_independence"] = gpu_independence(capabilities, report["solve"])
         if arguments.ib_engine:
             section: dict[str, Any] = {}

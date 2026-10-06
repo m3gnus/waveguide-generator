@@ -732,11 +732,60 @@ def test_every_platform_candidate_is_qualified_for_cpu(job: str) -> None:
 
     runs = [step for step in _steps(job) if "qualify_installed_cpu.py" in (step.get("run") or "")]
 
-    assert len(runs) == 1, f"{job} does not run the CPU qualification exactly once"
+    assert len(runs) == 2, f"{job} must qualify both default and official routes"
     command = runs[0]["run"]
     assert "--pins-json pins.json" in command, job
     assert "--build-manifest" in command, job
     assert "--payload-kind" in command, job
+
+
+@pytest.mark.parametrize("job", PLATFORM_JOBS)
+def test_official_gate_reuses_the_candidate_and_preserves_its_own_evidence(job: str) -> None:
+    workflow = _workflow()
+    steps = _steps(job)
+    default_index = next(i for i, step in enumerate(steps)
+                         if step.get("name", "").startswith("Qualify BEAT CPU"))
+    official = steps[default_index + 1]
+    assert official["name"] == "Qualify the official BEAT engine on the same candidate"
+    assert official["if"] == "${{ !cancelled() }}"
+    assert official["env"] == {"WG2_BEAT_PROVIDER": "official"}
+    assert "WG2_BEAT_PROVIDER" not in workflow.get("env", {})
+    assert "WG2_BEAT_PROVIDER" not in workflow["jobs"][job].get("env", {})
+    assert all("WG2_BEAT_PROVIDER" not in step.get("env", {})
+               and "WG2_BEAT_PROVIDER" not in step.get("run", "")
+               for step in steps if step is not official)
+    command = official["run"]
+    assert "WG2_CPU_GATE_ROOT" in command
+    for arg in ("--pins-json pins.json", "--build-manifest", "--imported-engine beat-cpu",
+                "--work", "official-work", "--output", "official-qualification"):
+        assert arg in command
+    payload, kind = {
+        "macos-bundle": ('$root/Waveguide Generator.app', 'dmg-ditto'),
+        "windows-bundle": ('Join-Path $root "app"', 'windows-installer'),
+        "linux-bundle": ('$root/prefix/waveguide-generator', 'linux-install-sh'),
+    }[job]
+    assert payload in command
+    assert f"--payload-kind {kind}" in command
+    assert ("--imported-engine-when-offered metal" in command) == (job == "macos-bundle")
+    for preparation in ("mktemp", "New-Item", "hdiutil ", "Start-Process", "install.sh"):
+        assert preparation not in command
+    assert not any(line.lstrip().startswith("ditto ") for line in command.splitlines())
+    if job == "windows-bundle":
+        assert official["shell"] == "pwsh"
+        assert command.index("$LASTEXITCODE") > command.index("qualify_installed_cpu.py")
+        assert 'throw "The official BEAT qualification exited $LASTEXITCODE"' in command
+    else:
+        assert "set -euo pipefail" in command
+    logs = steps[default_index + 2]
+    assert logs["name"] == "Preserve the official BEAT qualification logs"
+    assert logs["if"] == "always()"
+    default_logs = next(step for step in steps if step.get("name") == "Preserve the CPU qualification logs")
+    assert logs["run"] == default_logs["run"].replace(
+        '"qualification"', '"official-qualification"'
+    ).replace('$root/qualification', '$root/official-qualification').replace(
+        'No qualification output', 'No official BEAT qualification output'
+    )
+    assert logs.get("shell") == default_logs.get("shell")
 
 
 @pytest.mark.parametrize("job", PLATFORM_JOBS)
@@ -3041,3 +3090,177 @@ def test_shared_selector_qualifier_report_paths(tmp_path, monkeypatch, selector,
     prefix = "WG2" if official else "HORNLAB"
     assert report["isolated"]["beat_runtime_dir"] == environment[f"{prefix}_BEAT_RUNTIME_DIR"]
     assert report["isolated"]["worker_registry"] == environment[f"{prefix}_BEAT_WORKER_DIR"]
+
+
+# Official qualification must fail closed even when HBB is still installed.
+OFFICIAL_REVISION = json.loads((RC_WORKFLOW_PATH.parents[2] / "pins.json").read_text())["modules"]["beat-engine"]["sha"]
+OFFICIAL_PINS = {**PINS, "beat-engine": OFFICIAL_REVISION}
+
+
+def _official_result():
+    return _result(metadata=dict(gate.CPU_RESULT_CONTRACT, engine="beat-engine"),
+                   provenance={"dependency_drift": [], "dependency_shas": OFFICIAL_PINS})
+
+
+@pytest.mark.parametrize("damage", [None, "hbb", "gpu", "missing-revision", "wrong-revision"])
+def test_official_parametric_contract_refuses_fallback_and_unpinned_revisions(damage):
+    result = _official_result()
+    if damage == "hbb":
+        result["metadata"]["engine"] = "hornlab-beat-bem"
+    elif damage == "gpu":
+        result["metadata"]["beat_backend"] = "metal"
+    elif damage == "missing-revision":
+        result["provenance"]["dependency_shas"] = PINS
+    elif damage == "wrong-revision":
+        result["provenance"]["dependency_shas"] = {**OFFICIAL_PINS, "beat-engine": "f" * 40}
+    if damage:
+        with pytest.raises(gate.QualificationError):
+            gate.check_solve(result, OFFICIAL_PINS, official=True)
+    else:
+        report = gate.check_solve(result, OFFICIAL_PINS, official=True)
+        assert report["engine"] == "beat-engine"
+        assert "beat-engine" in report["pins_cross_checked"]
+
+
+@pytest.mark.parametrize("damage", [None, "hbb-package", "missing-package", "hbb-channel", "missing-channel-engine"])
+def test_official_imported_contract_checks_package_and_each_channel(damage):
+    result = _imported_result()
+    result["metadata"]["solver_engine"]["package"] = "beat-engine"
+    result["channels"]["drive-hf"]["metadata"] = {"engine": "beat-engine"}
+    if damage == "hbb-package":
+        result["metadata"]["solver_engine"]["package"] = "hornlab-beat-bem"
+    elif damage == "missing-package":
+        result["metadata"]["solver_engine"].pop("package")
+    elif damage == "hbb-channel":
+        result["channels"]["drive-hf"]["metadata"]["engine"] = "hornlab-beat-bem"
+    elif damage == "missing-channel-engine":
+        result["channels"]["drive-hf"].pop("metadata")
+    if damage:
+        with pytest.raises(gate.QualificationError, match="official"):
+            gate.check_imported_result(result, "beat-cpu", channels=["drive-hf"],
+                                       frequencies=[500.0, 1000.0], official=True)
+    else:
+        gate.check_imported_result(result, "beat-cpu", channels=["drive-hf"],
+                                   frequencies=[500.0, 1000.0], official=True)
+
+
+@pytest.mark.parametrize("damage", [None, "hbb", "not-ready", "missing-proof", "missing-fingerprint", "escaped", "probe-exit", "unreadable"])
+def test_official_runtime_inspection_records_only_matching_installed_proof(tmp_path, monkeypatch, damage):
+    environment = {"WG2_BEAT_PROVIDER": "official", "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime")}
+    answer = {"ready": True, "probe_contract_expected": "compiled-proof", "runtime_dir": str(tmp_path / "runtime" / "wg-beat-engine"),
+              "record": {"provider": "wg-beat-engine", "status": "ready", "backend": "cpu",
+                         "probe_contract": "compiled-proof", "engine_fingerprint": "a" * 64,
+                         "runtime_fingerprint": "b" * 64}}
+    if damage == "hbb":
+        answer["record"]["provider"] = "hornlab-beat-bem"
+    elif damage == "not-ready":
+        answer["ready"] = False
+    elif damage == "missing-proof":
+        answer["record"].pop("probe_contract")
+    elif damage == "missing-fingerprint":
+        answer["record"].pop("runtime_fingerprint")
+    elif damage == "escaped":
+        answer["runtime_dir"] = str(tmp_path / "elsewhere")
+
+    def run(command, **kwargs):
+        assert command == ["installed-python", "-c", gate._READ_OFFICIAL_RUNTIME]
+        assert kwargs["cwd"] == str(tmp_path / "app")
+        assert kwargs["env"] == environment
+        return subprocess.CompletedProcess(command, 1 if damage == "probe-exit" else 0,
+                                           stdout="rubbish" if damage == "unreadable" else json.dumps(answer), stderr="")
+
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    if damage:
+        with pytest.raises(gate.QualificationError):
+            gate.check_official_runtime(Path("installed-python"), tmp_path / "app", environment, tmp_path, OFFICIAL_REVISION)
+    else:
+        report = gate.check_official_runtime(Path("installed-python"), tmp_path / "app", environment, tmp_path, OFFICIAL_REVISION)
+        assert report["beat_engine_revision"] == OFFICIAL_REVISION
+        assert report["record"]["provider"] == "wg-beat-engine"
+        assert report["record"]["runtime_fingerprint"] == "b" * 64
+    assert (tmp_path / "official-runtime-inspection.log").exists()
+
+
+def test_official_runtime_probe_cannot_pass_an_empty_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    app = Path(__file__).resolve().parents[2]
+    environment = gate.isolated_environment(app, tmp_path / "work")
+    with pytest.raises(gate.QualificationError, match="compiled CPU runtime proof"):
+        gate.check_official_runtime(Path(sys.executable), app, environment, tmp_path, OFFICIAL_REVISION)
+    assert not (tmp_path / "work" / "official-beat-runtime").exists()
+
+
+@pytest.mark.parametrize("damage", [None, "hbb", "missing-pin", "override-pin", "wrong-installed-pin"])
+def test_official_qualification_entrypoint_keeps_identity_and_rejects_hbb(tmp_path, monkeypatch, damage):
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    payload = _payload(tmp_path)
+    pins_file = tmp_path / "pins.json"
+    pins_file.write_text(json.dumps({"modules": {"beat-engine": {"sha": OFFICIAL_REVISION}}}
+                                    if damage != "missing-pin" else {"modules": {"hornlab-beat-bem": {"sha": PINS["hornlab-beat-bem"]}}}))
+    _pin_reader(monkeypatch, {"beat-engine": {"commit": "f" * 40 if damage == "wrong-installed-pin" else OFFICIAL_REVISION}})
+    result = _result() if damage == "hbb" else _official_result()
+
+    class Server:
+        base = "stub"
+        def __init__(self, interpreter, app, environment, *args):
+            assert app == payload / "app"
+            assert environment["WG2_BEAT_PROVIDER"] == "official"
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def capabilities(self):
+            return {"engines": [{"name": "beat-cpu", "available": True}]}
+        def solve(self, frequencies, engine):
+            assert engine == "beat-cpu"
+            return "job"
+        def completed(self, job):
+            return result
+
+    monkeypatch.setattr(gate, "Server", Server)
+    monkeypatch.setattr(gate, "await_cpu_row", lambda *args: {"settled": "available"})
+    monkeypatch.setattr(gate, "workspace_isolation", lambda *args: {})
+    inspected = []
+    def inspect_runtime(interpreter, app, environment, output, revision):
+        inspected.append(revision)
+        return {"beat_engine_revision": revision, "record": {"provider": "wg-beat-engine", "runtime_fingerprint": "b" * 64}}
+    monkeypatch.setattr(gate, "check_official_runtime", inspect_runtime)
+    monkeypatch.setattr(gate, "stop_our_workers", lambda *args: {"contained": True})
+    imported = []
+    def qualify_imported(interpreter, app, environment, work, output, **kwargs):
+        imported.append(environment["WG2_BEAT_PROVIDER"])
+        assert kwargs["required"] == ["beat-cpu"]
+    monkeypatch.setattr(gate, "qualify_imported_return", qualify_imported)
+    args = ["--payload", str(payload), "--work", str(tmp_path / "work"),
+            "--output", str(tmp_path / "out"), "--pins-json", str(pins_file),
+            "--imported-engine", "beat-cpu"]
+    if damage == "override-pin":
+        args += ["--expected-pin", "beat-engine=" + "f" * 40]
+    code = gate.main(args)
+    report = json.loads((tmp_path / "out" / "cpu-qualification.json").read_text())
+    assert report["provider"] == "official"
+    assert report["qualified"] == (damage is None)
+    assert code == (1 if damage else 0)
+    if damage in (None, "hbb"):
+        assert inspected == [OFFICIAL_REVISION]
+        assert report["official_runtime"]["beat_engine_revision"] == OFFICIAL_REVISION
+        assert report["worker_cleanup"]["contained"] is True
+    else:
+        assert inspected == []
+    assert imported == ([] if damage else ["official"])
+
+
+def test_official_imported_phase_cannot_qualify_a_stub_on_hbb(tmp_path, _in_process):
+    payload = _stub_payload(tmp_path)
+    output = tmp_path / "out"
+    output.mkdir()
+    section = {}
+    with pytest.raises(gate.QualificationError, match="official.*package"):
+        gate.qualify_imported_return(
+            payload / "runtime" / "bin" / "python3.13", payload / "app",
+            {"WG2_BEAT_PROVIDER": "official"}, tmp_path / "work", output,
+            required=["beat-cpu"], when_offered=[], fixture=gate.DEFAULT_IMPORTED_FIXTURE,
+            section=section,
+        )
+    assert section["engines"][0]["engine"] == "beat-cpu"
+    assert section["engines"][0].get("decision") != "solved"
