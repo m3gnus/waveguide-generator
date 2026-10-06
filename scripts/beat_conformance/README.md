@@ -411,6 +411,12 @@ record `unsupported`; a one-engine error records `failed` even in `phase=both`.
 Strict JSON preserves complex/bytes/array types, array dtype/shape, and distinct
 +infinity, -infinity and NaN via tagged floats. User mappings containing reserved
 tag keys are escaped so they cannot decode as arrays, complex numbers or bytes.
+Path values and path mapping keys are evidence strings using `as_posix()`:
+Windows separators become `/` (for example `D:/runtime/julia`), while drive
+letters, relative/rooted paths and UNC/extended prefixes are retained. This is
+lossless when Windows evidence is reparsed with `PureWindowsPath`, including on
+POSIX; the reader returns strings and never resolves or rebases them on its host.
+POSIX filename backslashes and ordinary strings are unchanged.
 Callbacks are omitted with reasons (sequence positions retain explicit markers);
 unknown objects fail with their evidence path and become child error records.
 Capture occurs **after `apply_channel_driver`**, before display packaging. The

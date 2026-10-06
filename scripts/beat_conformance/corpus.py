@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import closing
 from copy import deepcopy
 from dataclasses import dataclass
 import hashlib
@@ -162,6 +163,7 @@ def _cad_fixture(case: CorpusCase, directory: Path) -> tuple[bytes, dict[str, An
     sys.path.insert(0, tests)
     try:
         import test_cadlink_domain_automatic as fixtures
+        from server.cadlink.store import CadLinkStore
         from server.mesh.gmsh_worker import _run_in_gmsh_session
         if case.geometry == "imported-box":
             discs = [(0., 0., 25.)] if case.name == "driver-loading" else [(-28., -12., 10.), (19., 17., 12.)]
@@ -188,8 +190,12 @@ def _cad_fixture(case: CorpusCase, directory: Path) -> tuple[bytes, dict[str, An
                 _run_in_gmsh_session(rotate)
             bundle = fixtures._bundle(directory, case.name, tilted, fixtures._curved_face,
                                       sources=["curved-rear"], domain=None)
-        record = fixtures._ingest(bundle, directory / "ingestion", symmetry_mode="full")
-        mesh = Path(record["mesh_store_path"]).read_bytes()
+        ingestion = directory / "ingestion"
+        # This one-shot corpus build owns its registry, including connections
+        # opened on the gmsh worker. Release them before freezing the evidence.
+        with closing(CadLinkStore(ingestion / "cadlink.db")) as store:
+            record = fixtures._ingest(bundle, ingestion, store=store, symmetry_mode="full")
+            mesh = Path(record["mesh_store_path"]).read_bytes()
         return mesh, record, record["mesh"]["stats"]
     finally:
         sys.path.remove(tests)

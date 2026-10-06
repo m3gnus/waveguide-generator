@@ -16,6 +16,7 @@ record publication). The expectations were written before the rule existed.
 
 from __future__ import annotations
 
+from contextlib import closing, nullcontext
 import hashlib
 import json
 import math
@@ -629,16 +630,49 @@ def _sizes(bundle: Path) -> dict[str, Any]:
     return {**MESH_SIZES, "source_size_mm": {source["id"]: 8 for source in manifest["sources"]}}
 
 
-def _ingest(bundle: Path, data_dir: Path, **prep: Any) -> dict[str, Any]:
-    return _run_in_gmsh_session(
-        ingest_bundle,
-        bundle,
-        _sizes(bundle),
-        [],
-        CadLinkStore(data_dir / "cadlink.db"),
-        data_dir,
-        prep_options={"symmetry_mode": "auto", **prep},
-    )
+def _ingest(bundle: Path, data_dir: Path, *, store: CadLinkStore | None = None, **prep: Any) -> dict[str, Any]:
+    """Close fixture-owned stores on every exit; supplied stores belong to the caller."""
+    scope = closing(CadLinkStore(data_dir / "cadlink.db")) if store is None else nullcontext(store)
+    with scope as active_store:
+        return _run_in_gmsh_session(
+            ingest_bundle,
+            bundle,
+            _sizes(bundle),
+            [],
+            active_store,
+            data_dir,
+            prep_options={"symmetry_mode": "auto", **prep},
+        )
+
+
+@pytest.mark.parametrize("refused", [False, True])
+def test_ingest_fixture_closes_owned_store_on_every_exit(tmp_path, monkeypatch, refused):
+    import shutil
+    import sqlite3
+
+    stores, connections = [], []
+
+    def ingest(bundle, sizes, skipped, store, data_dir, **kwargs):
+        store.initialize()
+        stores.append(store)
+        connections.extend(store._connections)
+        if refused:
+            raise IngestRefusal("fixture", "test refusal")
+        return {"ingest_id": "fixture"}
+
+    monkeypatch.setattr(f"{__name__}._sizes", lambda _: {})
+    monkeypatch.setattr(f"{__name__}.ingest_bundle", ingest)
+    data_dir = tmp_path / "ingestion"
+    if refused:
+        with pytest.raises(IngestRefusal, match="test refusal"):
+            _ingest(tmp_path / "bundle", data_dir)
+    else:
+        assert _ingest(tmp_path / "bundle", data_dir) == {"ingest_id": "fixture"}
+    shutil.rmtree(data_dir)
+    assert connections and all(not store._connections for store in stores)
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            connection.execute("SELECT 1")
 
 
 def _store(data_dir: Path) -> CadLinkStore:

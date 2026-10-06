@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import threading
 from typing import Any
 
@@ -59,9 +59,10 @@ def assert_sample(decoded, expected):
     np.testing.assert_array_equal(decoded["frequencies_hz"], expected.frequencies_hz)
     assert "progress_callback" not in decoded["config"]
     assert decoded["config"]["__omitted_fields__"] == {"progress_callback": json_io.CALLABLE_REASON}
-    assert decoded["config"]["julia_executable"] == "/external/julia"
+    assert decoded["config"]["julia_executable"] == expected.config.julia_executable.as_posix()
     assert decoded["timings"] == {"solve": 1.5, "unavailable": np.inf}
     log = decoded["solver_log"][0]
+    assert log["step"] == expected.solver_log[0]["step"].as_posix()
     assert log["count"] == 3 and log["complete"] is True
     assert log["__omitted_fields__"]["hook"] == json_io.CALLABLE_REASON
     assert np.isnan(log["samples"][0])
@@ -75,6 +76,39 @@ def test_corpus_json_dataclass_callbacks_and_numpy_roundtrip(tmp_path, dtype):
     runner.write_json(path, expected)
     assert_sample(runner.read_json(path), expected)
     assert "NaN" not in path.read_text() and "Infinity" not in path.read_text()
+
+
+@pytest.mark.parametrize("path", [
+    PureWindowsPath(r"D:\runtime\julia.exe"),
+    PureWindowsPath(r"D:runtime\julia.exe"),
+    PureWindowsPath(r"\external\julia"),
+    PureWindowsPath(r"runtime\julia.exe"),
+    PureWindowsPath(r"\\server\share\runtime\julia.exe"),
+    PureWindowsPath(r"\\?\D:\runtime\julia.exe"),
+    PureWindowsPath(r"\\?\UNC\server\share\julia.exe"),
+])
+def test_corpus_json_windows_paths_roundtrip_without_changing_identity(path, tmp_path):
+    output = tmp_path / "paths.json"
+    runner.write_json(output, {"executable": path, "by_path": {path: "evidence"}})
+    decoded = runner.read_json(output)
+    assert decoded["executable"] == path.as_posix()
+    assert decoded["by_path"] == {path.as_posix(): "evidence"}
+    assert PureWindowsPath(decoded["executable"]) == path
+    assert PureWindowsPath(decoded["executable"]).parts == path.parts
+    assert "\\" not in decoded["executable"]
+
+
+def test_corpus_json_path_conversion_preserves_posix_backslashes_and_strings(tmp_path):
+    path = PurePosixPath(r"/external/literal\filename")
+    value = {"path": path, "string": r"D:\runtime\julia.exe"}
+    runner.write_json(tmp_path / "paths.json", value)
+    assert runner.read_json(tmp_path / "paths.json") == {"path": path.as_posix(), "string": value["string"]}
+
+
+def test_corpus_json_normalized_path_key_collision_is_refused():
+    path = PureWindowsPath(r"D:\runtime\julia.exe")
+    with pytest.raises(ValueError, match="Colliding JSON mapping key"):
+        json_io.dumps({path: 1, path.as_posix(): 2})
 
 
 @pytest.mark.parametrize("official", [False, True])

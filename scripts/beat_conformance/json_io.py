@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
 import json
 import math
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any
 
 import numpy as np
@@ -22,6 +22,11 @@ def json_value(value: Any, *, _path: str = "$") -> Any:
     Sequence positions cannot be dropped without changing array shapes, so they
     retain an explicit unavailable marker. Unknown objects fail with their path;
     neither values nor arbitrary mapping keys are silently stringified.
+    Paths (including mapping keys) are evidence strings in as_posix() form:
+    only Windows separators change; drives, roots, UNC/extended prefixes and
+    POSIX literal backslashes survive. Reparse Windows evidence with
+    PureWindowsPath to retain its meaning on any host; do not resolve/rebase it.
+    Ordinary strings are never treated as paths or rewritten.
     """
     if callable(value):
         return {"__unavailable__": CALLABLE_REASON}
@@ -40,9 +45,9 @@ def json_value(value: Any, *, _path: str = "$") -> Any:
         for key, item in value.items():
             if isinstance(key, np.generic):
                 key = key.item()
-            if not isinstance(key, (str, int, float, bool, Path)) or isinstance(key, float) and not math.isfinite(key):
+            if not isinstance(key, (str, int, float, bool, PurePath)) or isinstance(key, float) and not math.isfinite(key):
                 raise TypeError(f"Unsupported mapping key {type(key).__name__} at {_path}")
-            key = str(key)
+            key = key.as_posix() if isinstance(key, PurePath) else str(key)
             if key in result or key in omitted:
                 raise ValueError(f"Colliding JSON mapping key at {_path}.{key}")
             if callable(item):
@@ -64,8 +69,8 @@ def json_value(value: Any, *, _path: str = "$") -> Any:
         return json_value(value.item(), _path=_path)
     if isinstance(value, float) and not math.isfinite(value):
         return {"__float__": "nan" if math.isnan(value) else "+inf" if value > 0 else "-inf"}
-    if isinstance(value, Path):
-        return str(value)
+    if isinstance(value, PurePath):
+        return value.as_posix()
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
     raise TypeError(f"Unsupported evidence type {type(value).__name__} at {_path}")

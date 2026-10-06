@@ -416,32 +416,63 @@ def test_corpus_fast_production_meshing_is_deterministic(case, tmp_path):
     pytest.importorskip("hornlab_mesher")
     import time
     from pathlib import Path
-    # pytest's tmp_path, like WG's other CAD-ingestion tests: on Windows a
-    # strict TemporaryDirectory cleanup raises WinError 32 while the gmsh
-    # session or ingestion store still holds a handle in the directory.
-    first_dir, second_dir = Path(tmp_path) / "first", Path(tmp_path) / "second"
-    first_dir.mkdir()
-    second_dir.mkdir()
-    start = time.monotonic()
-    first = corpus.freeze_case(case, first_dir)
-    first_elapsed = time.monotonic() - start
-    start = time.monotonic()
-    second = corpus.freeze_case(case, second_dir)
-    assert first_elapsed < 5 and time.monotonic() - start < 5
-    assert first.mesh_bytes == second.mesh_bytes
-    assert first.sha256 == second.sha256
-    runner.settings_for(first, "cpu", "float32")
-    if first.record:
-        from server.solver.beat_imported import imported_beat_preflight
-        from server.jobs.models import SolveRequest
-        request = SolveRequest.model_validate(first.request)
-        assert imported_beat_preflight(first.record, first.mesh_bytes.decode(), request.geometry.drive_channels) is None
-    if case.name == "imported-tilted-rear":
-        from server.solver.beat_adapter.mesh import read_surface
-        mesh = read_surface(first.mesh_bytes.decode())
-        points = mesh.points_m[mesh.faces[mesh.tags == first.record["source_tags"]["curved-rear"]]]
-        vector = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]).sum(axis=0)
-        assert vector[2] < 0 and vector[0] > 0
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory(prefix="beat-corpus-mesh-") as mesh_directory:
+        first_dir, second_dir = Path(mesh_directory) / "first", Path(mesh_directory) / "second"
+        first_dir.mkdir()
+        second_dir.mkdir()
+        start = time.monotonic()
+        first = corpus.freeze_case(case, first_dir)
+        first_elapsed = time.monotonic() - start
+        start = time.monotonic()
+        second = corpus.freeze_case(case, second_dir)
+        assert first_elapsed < 5 and time.monotonic() - start < 5
+        assert first.mesh_bytes == second.mesh_bytes
+        assert first.sha256 == second.sha256
+        runner.settings_for(first, "cpu", "float32")
+        if first.record:
+            from server.solver.beat_imported import imported_beat_preflight
+            from server.jobs.models import SolveRequest
+            request = SolveRequest.model_validate(first.request)
+            assert imported_beat_preflight(first.record, first.mesh_bytes.decode(), request.geometry.drive_channels) is None
+        if case.name == "imported-tilted-rear":
+            from server.solver.beat_adapter.mesh import read_surface
+            mesh = read_surface(first.mesh_bytes.decode())
+            points = mesh.points_m[mesh.faces[mesh.tags == first.record["source_tags"]["curved-rear"]]]
+            vector = np.cross(points[:, 1] - points[:, 0], points[:, 2] - points[:, 0]).sum(axis=0)
+            assert vector[2] < 0 and vector[0] > 0
+
+
+@pytest.mark.parametrize("case", [c for c in corpus.CASES.values() if c.geometry.startswith("imported")],
+                         ids=lambda c: c.name)
+def test_corpus_freeze_closes_ingestion_connections_before_directory_removal(case, tmp_path, monkeypatch):
+    pytest.importorskip("gmsh")
+    pytest.importorskip("hornlab_mesher")
+    import shutil
+    import sqlite3
+    from pathlib import Path
+
+    ingestion = tmp_path / "ingestion"
+    connections = []
+    connect = sqlite3.connect
+
+    def tracked_connect(database, *args, **kwargs):
+        connection = connect(database, *args, **kwargs)
+        if Path(database) == ingestion / "cadlink.db":
+            # Keep strong references: GC cannot hide a missing explicit close
+            # on POSIX, where unlinking an open database would otherwise pass.
+            connections.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", tracked_connect)
+    frozen = corpus.freeze_case(case, tmp_path)
+    shutil.rmtree(ingestion)
+    assert not ingestion.exists()
+    assert connections
+    for connection in connections:
+        with pytest.raises(sqlite3.ProgrammingError, match="closed database"):
+            connection.execute("SELECT 1")
+    assert frozen.mesh_bytes and frozen.record
 
 
 def test_corpus_isolation_launches_sequential_children_with_separate_environments(frozen, tmp_path, monkeypatch):
@@ -833,8 +864,11 @@ def test_corpus_dirty_tree_refuses_before_julia_probe(monkeypatch):
     assert all(command[0] == "git" for command in calls)
 
 
-@pytest.mark.parametrize("value", [None, "", "/hbb:"])
-def test_corpus_requires_explicit_hbb_depot(value):
+@pytest.mark.parametrize("malformed", ["missing", "empty", "trailing", "leading"])
+def test_corpus_requires_explicit_hbb_depot(malformed, tmp_path):
+    depot = str(tmp_path / "hbb")
+    value = {"missing": None, "empty": "", "trailing": f"{depot}{os.pathsep}",
+             "leading": f"{os.pathsep}{depot}"}[malformed]
     with pytest.raises(ValueError, match="hbb-depot"):
         runner.child_environment(official=False, julia="fake", hbb_depot=value)
 
@@ -1023,7 +1057,7 @@ def test_corpus_paths_inside_repository_refuse_up_front(monkeypatch, tmp_path, o
     monkeypatch.setattr(runner, "ROOT", root)
     kwargs = {"coarse_dir": alias / "old"} if option == "coarse" else (
         {"refine_dirs": (alias / "part",)} if option == "refine" else (
-            {"hbb_depot": str(tmp_path / "hbb") + ":" + str(alias / "depot")} if option == "depot" else {}))
+            {"hbb_depot": os.pathsep.join((str(tmp_path / "hbb"), str(alias / "depot")))} if option == "depot" else {}))
     output = alias / "out" if option == "output" else tmp_path / "external"
     with pytest.raises(ValueError, match="outside the WG repository root"):
         runner.run_case(corpus.CASES["osse-full"], output, backend="cpu", precision="float32", julia="forbidden",
@@ -1043,10 +1077,10 @@ def test_corpus_depot_chains_refuse_shared_entries_even_read_only(monkeypatch, t
         monkeypatch.delenv("JULIA_DEPOT_PATH", raising=False)
         assert paths.runtime_dir() / "depot" == shared
     else:
-        monkeypatch.setenv("JULIA_DEPOT_PATH", str(tmp_path / "official") + ":" + str(shared))
+        monkeypatch.setenv("JULIA_DEPOT_PATH", os.pathsep.join((str(tmp_path / "official"), str(shared))))
     for official in (False, True):
         with pytest.raises(ValueError, match="distinct chains.*read-only"):
-            runner.child_environment(official=official, julia="forbidden", hbb_depot=str(tmp_path / "hbb") + ":" + str(alias))
+            runner.child_environment(official=official, julia="forbidden", hbb_depot=os.pathsep.join((str(tmp_path / "hbb"), str(alias))))
 
 
 @pytest.mark.parametrize("key", ["JULIA_CPU_TARGET", "WG2_BEAT_OTHER", "HORNLAB_BEAT_RUNTIME_DIR",
