@@ -219,7 +219,11 @@ def test_the_note_covers_shortcuts_and_closing_the_app(code: str) -> None:
     # desktopicon is never remembered (UsePreviousTasks=no), so only this
     # run's choice can have replaced the old desktop shortcut.
     assert "if WizardIsTaskSelected('desktopicon') then" in note
-    assert note.count("pin Waveguide Generator again from the Start menu") == 2
+    assert note.count("pin Waveguide Generator again from the Start menu") == 3
+    # A Waveguide Generator desktop shortcut was removed earlier in
+    # ssPostInstall when the task was not ticked; the note says so.
+    assert "else if DesktopShortcutRemoved then" in note
+    assert "'The desktop shortcut was removed. A taskbar or Start pin" in note
     assert "A desktop shortcut, or a taskbar or Start pin, made for the old copy still opens the old one" in note
     # Files of a running copy cannot be deleted; both wordings say so.
     assert note.count("closed Waveguide Generator") == 2

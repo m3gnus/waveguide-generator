@@ -76,7 +76,10 @@ def test_finish_notice_is_silent_safe_and_preserves_wglink_outcome(script: str) 
     # branch is the full generated guidance. The note about a copy left at a
     # previous install folder sits between them, outside both conditions.
     assert "WgLinkStatus;\n  if PreviousCopyNotice <> '' then" in finish
-    assert "PreviousCopyNotice;\n  { Hide the install advice" in finish
+    # A removed desktop shortcut is mentioned on its own only when no
+    # previous-copy note (which already covers it) is shown.
+    assert "PreviousCopyNotice\n  else if DesktopShortcutRemoved then" in finish
+    assert "tick \"Create a desktop shortcut\".';\n  { Hide the install advice" in finish
     assert "if CpuOpenClRuntimeRegistered() then" in finish
     assert "OpenClGuidanceTitle + #13#10 + OpenClGuidanceText;" in finish
     assert finish.index("  else\n    OpenClNotice.Text") > finish.index("CpuOpenClRuntimeRegistered()")

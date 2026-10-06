@@ -174,8 +174,9 @@ and a note saying why. The user can still browse anywhere, including back.
   holds anything besides Waveguide Generator's own entries (the root names
   `[UninstallDelete]` lists, plus `unins###.exe`/`.dat`), it lists exactly the
   entries to delete; otherwise it says "the Waveguide Generator files in" it. It
-  also says that an old desktop shortcut (unless this run ticked the desktop task)
-  and any taskbar or Start pin still open the old copy. There is no note when the
+  also says that any taskbar or Start pin still opens the old copy, and that the
+  desktop shortcut was removed or, if this run ticked the desktop task, now opens
+  the new install. There is no note when the
   new folder and the previous one are the same or nested either way, compared as
   spelled and as `GetFinalPathNameByHandleW` resolves them (8.3 names, SUBST and
   mapped drives; setup cannot open a junction an unelevated user made, error 448).
@@ -195,6 +196,25 @@ non-standard folder; the interactive wizard offered the standard folder; install
 elsewhere moved the uninstall key and shortcut and showed the note; and running the
 old folder's `unins000.exe` afterwards removed the new install's uninstall key and
 Start menu shortcut, which is why the note warns against it.
+
+### The desktop shortcut
+
+Every setup since 0.3.1 writes the same `Waveguide Generator.lnk` on the desktop
+when **Create a desktop shortcut** is ticked, and `UsePreviousTasks=no` means the
+silent in-app updater never ticks it, so a shortcut from an earlier install used to
+outlive every upgrade. From 0.3.5, at `ssPostInstall`:
+
+- A run that ticks the task records the choice in
+  `HKCU\Software\Hornlab\Waveguide Generator`, value `DesktopShortcutChosen`.
+- A run that does not tick it removes the desktop `Waveguide Generator.lnk` only when
+  the shortcut is Waveguide Generator's: its target is a `Waveguide Generator.exe`
+  that exists, with `app\APP-MANIFEST.json` beside it. A shortcut with the same name
+  pointing anywhere else, or one that cannot be read, is left alone.
+- A silent run keeps even Waveguide Generator's shortcut when the choice is
+  recorded, so an in-app update never removes a shortcut the user asked for. The
+  interactive wizard ticks the task for such a shortcut; unticking it removes the
+  shortcut and the record.
+- The finish page says when the shortcut was removed. Uninstall deletes the record.
 
 ## Gate 7 needs a different machine, and a human
 

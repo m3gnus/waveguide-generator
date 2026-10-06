@@ -92,12 +92,15 @@ def test_silent_upgrade_still_never_reuses_or_forces_wglink(script: str) -> None
     # No task is defaulted on by the installer for a silent run.
     assert "Flags: unchecked" in script.split('Name: "wglink"', 1)[1].splitlines()[0]
     # The Fusion-aware preselection is armed only for an interactive run that
-    # named no task choice of its own, and it is the only selection setup makes.
+    # named no task choice of its own; the only other selection setup makes is
+    # the desktop shortcut the user already asked for (see
+    # test_windows_installer_desktop_shortcut.py).
     init = _body(script, "procedure InitializeWizard();")
     assert "WgLinkPreselectPending := False;" in init
     assert "WgLinkPreselectPending := not WizardSilent() and not TaskChoiceOnCommandLine();" in init
     assert "WizardSelectTasks(" not in init
-    assert script.count("WizardSelectTasks(") == 1
+    assert script.count("WizardSelectTasks(WgLinkTaskName)") == 1
+    assert script.count("WizardSelectTasks(") == 2
 
 
 def test_fusion_preselection_runs_on_the_first_interactive_tasks_page(script: str) -> None:
