@@ -1692,3 +1692,27 @@ PRs 13-14 review round 2, fixed directly:
   keeps the old text and quoting; HBB status lines still record the step and
   notify. Only the official path suppresses per-line notifications.
 - The state-file stamp includes st_ino, since records are replaced atomically.
+
+## Hosted Windows/Linux CI follow-up (2026-10-06)
+
+- Windows registry privacy accepts the token user, LocalSystem and
+  TrustedInstaller as owners; an Administrators owner additionally requires
+  enabled membership in the effective token (UAC deny-only membership is
+  insufficient). DACL allow ACEs remain restricted to the user and those local
+  privileged principals, including read access because records hold secrets.
+  Null/unsupported ACLs, foreign owners and untrusted readers/writers remain
+  refused. New roots retain protected, inheritable user-only DACLs. Unlike
+  HBB's directory selection plus POSIX-only chmod, WG still checks Windows
+  ownership and DACLs on roots and files through ctypes, without pywin32.
+- Linux AF_UNIX accept-queue saturation returns EAGAIN immediately; endpoint
+  connects now retry that specific condition within one original deadline,
+  closing the socket on exhaustion. Pending-peer tests retain every socket for
+  cleanup, including when a subsequent connection fails.
+- Platform tests supply a simulated POSIX uid/token branch, compare path
+  components, use native Windows command-line parsing and model owned Windows
+  Julia trees. The installed-probe fixture uses the real qualification profile
+  environment, preserving Windows USERPROFILE/LOCALAPPDATA discovery.
+- Adaptive tie ordering and the pre-switch golden replay are documented in
+  `docs/reference/adaptive-frequency-sampling.md` and the adapter fixtures
+  README. Float tolerance applies only to adaptive numerical roundoff; plain
+  cases remain exact and the ZIP creator-OS field is canonicalized for hashes.

@@ -17,6 +17,7 @@ from server.solver.beat_runtime import manager, readiness, registry
 from server.solver.context import SolverContext
 from server.platform import temp_session
 from server.tests import test_imported_beat as cad
+from server.tests.beat_adapter.hbb_snapshot import assert_production_snapshot
 
 MESH = Path(__file__).resolve().parents[1] / "solver" / "warmup_mesh.msh"
 
@@ -319,7 +320,18 @@ def test_stale_readiness_refuses_before_submission(runtime, monkeypatch):
 
 @pytest.mark.parametrize("imported", [False, True])
 @pytest.mark.parametrize("adaptive", [False, True])
-def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, imported, adaptive):
+@pytest.mark.parametrize("zip_creator_system", [0, 3])
+def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, imported, adaptive,
+                                                       zip_creator_system):
+    import zipfile
+
+    original_zip_info = zipfile.ZipInfo.__init__
+
+    def zip_info(self, *args, **kwargs):
+        original_zip_info(self, *args, **kwargs)
+        self.create_system = zip_creator_system
+
+    monkeypatch.setattr(zipfile.ZipInfo, "__init__", zip_info)
     monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
     monkeypatch.setattr(beat.time, "time", lambda: 1700000000.)
     monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
@@ -359,23 +371,10 @@ def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, 
     metadata = result["metadata"]
     assert (metadata["solver_engine"]["package"] if imported else metadata["engine"]) == "hornlab-beat-bem"
     assert not any(name.startswith("beat_engine") for name in imports)
-    snapshot = _snapshot(result)
     expected = json.loads((Path(__file__).parent / "beat_adapter/fixtures/hbb_production.json").read_text())
     key = ("imported" if imported else "parametric") + ("_adaptive" if adaptive else "")
-    assert snapshot == expected[key]
+    assert_production_snapshot(result, expected[key], key, Path(__file__).parent / "beat_adapter/fixtures")
 
-
-def _snapshot(value):
-    """Freeze the response, including binary artifact identity, for HBB parity."""
-    import hashlib
-
-    if isinstance(value, bytes):
-        return {"sha256": hashlib.sha256(value).hexdigest()}
-    if isinstance(value, dict):
-        return {k: _snapshot(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_snapshot(v) for v in value]
-    return value
 
 
 @pytest.mark.parametrize("traces", [False, True])

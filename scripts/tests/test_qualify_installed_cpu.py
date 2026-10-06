@@ -68,11 +68,10 @@ def test_shared_selector_registry_probe_and_isolation(tmp_path, monkeypatch, pro
 
 def test_official_probe_runs_in_app_root_without_engine_or_registry(tmp_path):
     root = Path(__file__).resolve().parents[2]
-    environment = {
-        "WG2_APP_ROOT": str(root), "WG2_BEAT_PROVIDER": "official",
-        "WG2_BEAT_WORKER_DIR": str(tmp_path / "workers"),
-        "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime"),
-    }
+    # The real qualification environment supplies a profile on Windows too.
+    environment = gate.isolated_environment(root, tmp_path / "work")
+    environment.update(WG2_BEAT_PROVIDER="official", WG2_BEAT_WORKER_DIR=str(tmp_path / "workers"),
+                       WG2_BEAT_RUNTIME_DIR=str(tmp_path / "runtime"))
     report = gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
     assert report["contained"] and report["verified"] == report["refused"] == []
     assert not (tmp_path / "workers").exists()

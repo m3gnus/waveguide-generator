@@ -69,7 +69,7 @@ def test_mac_application_bundle_layout(tmp_path):
     source = archive(tmp_path, members={"Julia-1.12.app/Contents/Resources/julia/bin/julia": b"mac Julia"})
     binary = installer.extract_julia(source, paths.runtime_dir(), spec)
     assert binary.read_bytes() == b"mac Julia"
-    assert str(binary).endswith("Contents/Resources/julia/bin/julia")
+    assert binary.parts[-5:] == ("Contents", "Resources", "julia", "bin", "julia")
 
 
 @pytest.mark.parametrize("members", [

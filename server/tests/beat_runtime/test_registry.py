@@ -98,7 +98,8 @@ def test_missing_corrupt_linked_and_nonprivate_records(tmp_path, record):
 
 def test_foreign_socket_and_key_cannot_be_used(tmp_path, record):
     record.endpoint = ipc.Endpoint("unix", path=tmp_path / "foreign.sock")
-    with pytest.raises(r.RecordRefused, match="outside"):
+    reason = "Unix host record unavailable on Windows" if os.name == "nt" else "outside"
+    with pytest.raises(r.RecordRefused, match=reason):
         r.write_record(record, tmp_path)
     with pytest.raises(r.RecordRefused):
         r.validate_record(record, r.host_key({"threads": 9}), tmp_path)
@@ -300,12 +301,14 @@ def test_explicit_directory_checked_root_rejects_hbb_before_mutation(tmp_path, r
 
 @pytest.mark.parametrize("state", ["Z", "Z+"])
 def test_posix_zombie_liveness_is_dead_without_pid_signal(monkeypatch, state):
+    monkeypatch.setattr(r, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"}))
     monkeypatch.setattr(r, "_posix_process", lambda pid: (state, "start"))
     monkeypatch.setattr(r.os, "kill", lambda *args: pytest.fail("Zombie queried with kill"))
     assert not r.pid_alive(12345)
 
 
 def test_linux_process_start_uses_stat_field_22_and_boot_identity(tmp_path, monkeypatch):
+    monkeypatch.setattr(r, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"}))
     # The command name contains spaces and ')'; starttime is field 22.
     proc_stat = tmp_path / "stat"
     proc_stat.write_text('42 (a tricky) name) S ' + ' '.join([str(i) for i in range(4, 23)]))
@@ -317,6 +320,7 @@ def test_linux_process_start_uses_stat_field_22_and_boot_identity(tmp_path, monk
 
 
 def test_posix_ps_process_start_and_zombie_stat_with_fixed_locale(monkeypatch):
+    monkeypatch.setattr(r, "os", types.SimpleNamespace(**{**vars(os), "name": "posix"}))
     monkeypatch.setattr(r, "sys", types.SimpleNamespace(platform="darwin"))
     calls = []
 

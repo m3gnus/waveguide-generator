@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes as w
 from pathlib import Path
+import struct
 
 
 class _SecurityAttributes(ctypes.Structure):
@@ -19,8 +20,26 @@ class _AceHeader(ctypes.Structure):
     _fields_ = [("kind", w.BYTE), ("flags", w.BYTE), ("size", w.WORD)]
 
 
+def _nt_sid(*subauthorities: int) -> bytes:
+    return bytes([1, len(subauthorities)]) + (5).to_bytes(6, "big") + struct.pack(
+        "<" + "I" * len(subauthorities), *subauthorities
+    )
+
+
+ADMINISTRATORS = _nt_sid(32, 544)
+LOCAL_SYSTEM = _nt_sid(18)
+TRUSTED_INSTALLER = _nt_sid(80, 956008885, 3418522649, 1831038044, 1853292631, 2271478464)
+PRIVILEGED_SIDS = {ADMINISTRATORS, LOCAL_SYSTEM, TRUSTED_INSTALLER}
+
+
 class WindowsSecurity:
-    """Refuse unknown ACLs; new registry roots grant access only to this user."""
+    """Keep tokens private to the user and Windows' local privileged principals.
+
+    Elevated processes commonly create Administrators-owned files. Accept that
+    owner only with enabled Administrators membership in the effective token;
+    LocalSystem and TrustedInstaller also already control local security. None
+    of these owners excuses a permissive DACL. New roots remain user-only.
+    """
 
     def __init__(self) -> None:
         self.kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -34,6 +53,7 @@ class WindowsSecurity:
             "OpenProcessToken": (self.advapi, [w.HANDLE, w.DWORD, ctypes.POINTER(w.HANDLE)], w.BOOL),
             "GetTokenInformation": (self.advapi, [w.HANDLE, ctypes.c_int, pointer, w.DWORD,
                                                  ctypes.POINTER(w.DWORD)], w.BOOL),
+            "CheckTokenMembership": (self.advapi, [w.HANDLE, pointer, ctypes.POINTER(w.BOOL)], w.BOOL),
             "GetLengthSid": (self.advapi, [pointer], w.DWORD),
             "ConvertSidToStringSidW": (self.advapi, [pointer, ctypes.POINTER(w.LPWSTR)], w.BOOL),
             "ConvertStringSecurityDescriptorToSecurityDescriptorW":
@@ -77,6 +97,13 @@ class WindowsSecurity:
         finally:
             self.kernel.CloseHandle(token)
 
+    def _is_member(self, sid: bytes) -> bool:
+        enabled = w.BOOL()
+        buffer = ctypes.create_string_buffer(sid)
+        # NULL checks the effective token, including UAC deny-only restrictions.
+        self._require(self.advapi.CheckTokenMembership(None, buffer, ctypes.byref(enabled)))
+        return bool(enabled.value)
+
     def create_directory(self, path: Path) -> None:
         descriptor = ctypes.c_void_p()
         sddl = f"O:{self.sid_text}D:P(A;OICI;FA;;;{self.sid_text})"
@@ -97,8 +124,12 @@ class WindowsSecurity:
         if error:
             raise ctypes.WinError(error)
         try:
-            if self._sid_bytes(owner.value) != self.sid:
-                raise ValueError("Registry path belongs to another Windows user")
+            owner_sid = self._sid_bytes(owner.value)
+            if owner_sid != self.sid:
+                if owner_sid not in PRIVILEGED_SIDS:
+                    raise ValueError("Registry path belongs to another Windows user")
+                if owner_sid == ADMINISTRATORS and not self._is_member(ADMINISTRATORS):
+                    raise ValueError("Registry Administrators owner requires enabled token membership")
             if not dacl.value:
                 raise ValueError("Registry path has an unrestricted Windows DACL")
             size = _AclSize()
@@ -108,15 +139,18 @@ class WindowsSecurity:
                 ace = ctypes.c_void_p()
                 self._require(self.advapi.GetAce(dacl, index, ctypes.byref(ace)))
                 header = ctypes.cast(ace, ctypes.POINTER(_AceHeader)).contents
-                # Only ordinary user allow/deny ACEs are accepted. Unknown or
+                # Only ordinary allow/deny ACEs are accepted. Unknown or
                 # object/callback ACEs cannot establish an owner-private ACL.
                 if header.kind not in {0, 1} or header.size < 16:
                     raise ValueError("Unsupported Windows registry ACE")
                 sid = self._sid_bytes(ace.value + 8)
                 if header.kind == 0:
-                    if sid != self.sid:
+                    if sid != self.sid and sid not in PRIVILEGED_SIDS:
+                        # Read access also exposes authentication secrets; reject
+                        # untrusted readers as well as writers, even with deny ACEs.
                         raise ValueError("Registry Windows DACL grants another user access")
-                    allowed = True
+                    if not header.flags & 0x08:  # INHERIT_ONLY_ACE grants no access here.
+                        allowed |= sid == self.sid or (sid == ADMINISTRATORS and self._is_member(sid))
             if not allowed:
                 raise ValueError("Registry Windows DACL does not grant its owner access")
         finally:

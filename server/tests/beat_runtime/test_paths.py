@@ -1,8 +1,17 @@
 from pathlib import Path
+import os
+from types import SimpleNamespace
 
 import pytest
 
 from server.solver.beat_runtime import paths
+
+
+@pytest.fixture(autouse=True)
+def simulated_user(monkeypatch):
+    # Platform arguments exercise POSIX layouts even on Windows. Supply the
+    # simulated user's uid instead of calling a host-only POSIX API.
+    monkeypatch.setattr(paths, "os", SimpleNamespace(**{**vars(os), "getuid": lambda: 123}))
 
 
 @pytest.mark.parametrize(("system", "env", "expected"), [

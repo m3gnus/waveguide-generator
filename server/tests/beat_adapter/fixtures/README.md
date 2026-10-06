@@ -33,3 +33,39 @@ channel-bases artifacts are represented by their SHA-256. Plain/adaptive paramet
 multi-channel imported requests, numerical arrays, frame metadata, diagnostics,
 trace refusal metadata and artifact hashes are compared on the selector-off
 path. This is application-contract preservation, not real-engine qualification.
+
+CI portability update (2026-10-06): the geometric tie-breaks from
+`fix/adaptive-sweep-flake` `60fb3474`, plus the difference/peak ordering closure
+at 1e-12 dB resolution, changed the adaptive fake-HBB batch order on macOS.
+Only the two adaptive entries were re-frozen; both non-adaptive entries,
+including their artifact hashes, are unchanged. Neither the sample-fit tolerance
+change in `60fb3474` nor `30ada125` was applied.
+
+The replay used a detached worktree at the pre-switch production commit
+`0a1b901df0727885d74e25f95410208adf465d4a`, with **only** the current
+`server/solver/adaptive_sweep.py` tie-break diff applied to production code.
+The shared test helper `server/tests/beat_adapter/hbb_snapshot.py` was copied
+into that worktree and invoked there, using the recording HBB stand-in from
+that commit and the fixed clock/context/requests of the selector-off test:
+
+```sh
+# From the CI fix worktree; PY is the supplied macOS test interpreter.
+FIX_ROOT="$PWD"
+REPLAY=/tmp/wg-beat-pre-switch-ci
+git worktree add --detach "$REPLAY" 0a1b901d
+git diff -- server/solver/adaptive_sweep.py > /tmp/wg-beat-ci-ties.patch
+git -C "$REPLAY" apply /tmp/wg-beat-ci-ties.patch
+mkdir -p "$REPLAY/server/tests/beat_adapter"
+cp server/tests/beat_adapter/hbb_snapshot.py "$REPLAY/server/tests/beat_adapter/"
+(cd "$REPLAY" && "$PY" -m server.tests.beat_adapter.hbb_snapshot \
+  "$FIX_ROOT/server/tests/beat_adapter/fixtures")
+```
+
+No Julia or installed HBB engine was run. The replay helper asserts that the
+non-adaptive snapshots remain exact before publishing the adaptive entries.
+`hbb_production_imported_adaptive.npz` retains the replay's numerical artifact;
+its hash is bound to the JSON fixture before comparing all its arrays, dtypes,
+shapes and metadata. Adaptive floats allow relative 1e-12 noise with zero
+absolute tolerance; every other value is exact. Non-adaptive snapshots remain
+exact. NPZ hashes normalize only the ZIP creator-OS field (Windows emits 0,
+Unix emits 3); numerical bytes and other archive metadata are preserved.

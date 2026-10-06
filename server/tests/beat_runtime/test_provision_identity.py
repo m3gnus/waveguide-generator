@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shutil
+import json
+import os
 
 import pytest
 
@@ -122,10 +124,17 @@ def test_short_windows_version_directory_does_not_trigger_upgrade(cpu_provisioni
     from server.solver.beat_runtime import installer
 
     root, _, actual, calls, options = cpu_provisioning
-    current = root / "julia" / installer.JULIA_VERSION / "bin/julia"
+    tree = root / "julia" / installer.JULIA_VERSION
+    current = tree / "bin" / ("julia.exe" if os.name == "nt" else "julia")
     current.parent.mkdir(parents=True)
     current.write_bytes(actual.read_bytes())
     current.chmod(0o755)
+    # Real managed installs carry the ownership marker; Windows recovery checks
+    # the short version directory before reusing its executable.
+    spec = installer.julia_download("Windows", "x86_64")
+    (tree / ".wg-julia.json").write_text(json.dumps({
+        "provider": installer.PROVIDER_ID, "version": installer.JULIA_VERSION, "platform": spec.platform,
+    }))
     discovery.write_julia_record(root, current, origin="managed", version=installer.JULIA_VERSION)
     options["julia_executable"] = None
     ready = provision.provision_cpu(**options)

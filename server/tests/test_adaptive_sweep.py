@@ -363,3 +363,77 @@ def test_cancelled_short_batch_keeps_rows_from_previous_acquisitions():
     assert result.frequencies_hz.tolist() == sorted(acquired)
     assert result.impedance.tolist() == [complex(f) for f in sorted(acquired)]
     assert len(result.pressure_complex) == len(result.directivity_db) == len(acquired)
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_geometric_selection_ignores_host_log_roundoff(direction):
+    from server.solver.adaptive_sweep import _largest_gaps, _nearest_log_point
+
+    f = np.geomspace(100, 10000, 65)
+    shifted = f.copy()
+    for _ in range(3):
+        shifted = np.nextafter(shifted, np.inf if direction > 0 else -np.inf)
+    np.testing.assert_array_equal(SweepPlanner(f, delays_s=0).pending,
+                                  SweepPlanner(shifted, delays_s=0).pending)
+    gaps = np.ones(4)
+    gaps[[1, 3]] = np.nextafter(1., np.inf)
+    np.testing.assert_array_equal(_largest_gaps(gaps), np.arange(4))
+    for grid in [f, shifted]:
+        # An exact geometric midpoint between neighboring grid points.
+        target = (np.log(grid[20]) + np.log(grid[21])) / 2
+        assert _nearest_log_point(grid, np.array([20, 21]), target) == 20
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_difference_peak_selection_prefers_lower_index_at_db_resolution(direction):
+    from server.solver.adaptive_sweep import _largest_disagreements, difference_db
+
+    a = np.ones((8, 2), dtype=complex)
+    b = a.copy()
+    b[[1, 3, 5]] += .01
+    baseline = difference_db(a, b)
+    perturbed = b.copy()
+    for _ in range(3):
+        perturbed[3] = np.nextafter(perturbed[3].real, np.inf if direction > 0 else -np.inf)
+    scores = difference_db(a, perturbed)
+    np.testing.assert_array_equal(_largest_disagreements(baseline), _largest_disagreements(scores))
+    np.testing.assert_array_equal(_largest_disagreements(scores)[:3], [1, 3, 5])
+    # Differences larger than the stated resolution retain their priority.
+    scores[5] += 1e-10
+    assert _largest_disagreements(scores)[0] == 5
+
+
+@pytest.mark.parametrize("direction", [-1, 1])
+def test_planner_disagreement_queries_ignore_peak_ulp_noise(monkeypatch, direction):
+    from server.solver import adaptive_sweep as sweep
+
+    f = np.geomspace(100, 101, 16)  # Density met: exercise disagreement acquisition.
+    a = np.ones((len(f), 1), complex)
+    b = a.copy()
+    b[[1, 3, 5]] += .01
+    scores = sweep.difference_db(a, b)
+    shifted = b.copy()
+    for _ in range(3):
+        shifted[3] = np.nextafter(shifted[3].real, np.inf if direction > 0 else -np.inf)
+    noisy_scores = sweep.difference_db(a, shifted)
+
+    class Model:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(self, grid):
+            return np.ones((len(grid), 1), complex)
+
+        def safe(self):
+            return True
+
+    monkeypatch.setattr(sweep, "SweepModel", Model)
+    selections = []
+    for estimate in (scores, noisy_scores):
+        monkeypatch.setattr(sweep, "difference_db", lambda left, right:
+                            estimate.copy() if len(left) == len(f) else np.zeros(len(left)))
+        planner = SweepPlanner(f, delays_s=0, batch_size=2)
+        planner.add(planner.pending, a[planner.pending])
+        selections.append(planner.pending.copy())
+    np.testing.assert_array_equal(selections[0], selections[1])
+    assert 1 in selections[0] and 3 not in selections[0]

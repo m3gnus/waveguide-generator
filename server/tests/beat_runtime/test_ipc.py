@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
@@ -144,8 +145,11 @@ def test_local_endpoint_roundtrip_and_no_second_bind(tmp_path, transport, monkey
 
 def test_encoded_unix_overflow_and_windows_fall_back(tmp_path, monkeypatch):
     deep = tmp_path / ("λ" * 90)
-    for transport in (None, "unix", "tcp"):
+    for transport in ((None, "unix", "tcp") if os.name == "posix" else (None, "tcp")):
         assert ipc.endpoint_for("0123456789abcdef", deep, transport=transport).kind == "tcp"
+    if os.name == "nt":
+        with pytest.raises(ValueError, match="Unix sockets unavailable"):
+            ipc.endpoint_for("0123456789abcdef", deep, transport="unix")
     assert not deep.exists()
     monkeypatch.delattr(ipc.socket, "AF_UNIX", raising=False)
     assert ipc.endpoint_for("0123456789abcdef", tmp_path).kind == "tcp"
@@ -258,3 +262,43 @@ def test_windows_loopback_exclusive_address_use(monkeypatch):
     assert ipc.Endpoint("tcp").listen() is server
     assert events[0] == ("exclusive", (socket.SOL_SOCKET, -5, 1))
     assert events[1][0] == "bind"
+
+
+@pytest.mark.parametrize("errors", [[errno.EAGAIN, None], [errno.EAGAIN] * 3, [errno.EACCES]])
+def test_unix_connect_retries_full_accept_queue_with_one_deadline(monkeypatch, tmp_path, errors):
+    import errno
+
+    now = [0.0]
+    calls, budgets, closed = [], [], []
+
+    class Client:
+        def settimeout(self, timeout):
+            budgets.append(timeout)
+
+        def connect(self, address):
+            calls.append(address)
+            error = errors[min(len(calls) - 1, len(errors) - 1)]
+            if error is not None:
+                raise BlockingIOError(error, "fixture queue full")
+
+        def close(self):
+            closed.append(True)
+
+    client = Client()
+    monkeypatch.setattr(ipc.Endpoint, "_socket", lambda self: client)
+    monkeypatch.setattr(ipc.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(ipc.time, "sleep", lambda duration: now.__setitem__(0, now[0] + duration))
+    endpoint = ipc.Endpoint("unix", path=tmp_path / "host.sock")
+    if errors[-1] is None:
+        assert endpoint.connect(.025) is client
+        assert len(calls) == 2 and not closed
+        assert budgets[1] < budgets[0]
+    elif errors[0] == errno.EAGAIN:
+        with pytest.raises(TimeoutError, match="deadline"):
+            endpoint.connect(.025)
+        assert len(calls) == 3 and closed == [True]
+        assert now[0] == .025
+    else:
+        with pytest.raises(BlockingIOError):
+            endpoint.connect(.025)
+        assert len(calls) == 1 and closed == [True] and now[0] == 0

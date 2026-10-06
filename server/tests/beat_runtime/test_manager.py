@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from server.platform import temp_session
-from server.solver.beat_runtime import assets, manager, registry, threads
+from server.solver.beat_runtime import assets, manager, paths, registry, threads
 from server.solver.beat_runtime.ownership import OwnershipClosed
 from server.solver.beat_runtime.session import SolveSession
 from server.tests.beat_runtime.fake_host_worker import events
@@ -41,7 +41,7 @@ def test_key_resolves_paths_threads_content_and_effective_environment(engine_tre
     assert key["julia_threads"] == 6
     assert key["environment"]["JULIA_NUM_THREADS"] == "6"
     assert key["environment"]["BLAB_TEST"] == "1"
-    assert key["environment"]["JULIA_DEPOT_PATH"].endswith("wg-beat-engine/depot")
+    assert Path(key["environment"]["JULIA_DEPOT_PATH"]) == (paths.runtime_dir(environ=options["environment"]) / "depot").resolve()
     assert Path(key["julia_executable"]).is_absolute()
     assert Path(key["solver_script"]).is_absolute()
     assert manager.resolve_key("metal", **options) == key

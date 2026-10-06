@@ -205,7 +205,8 @@ def test_cwd_independent_provision_command_runs_from_unrelated_directory(selecte
     fake.mkdir()
     (fake / "beat_engine.py").write_text("raise ImportError('fixture engine absent')")
     env = dict(os.environ, PYTHONPATH=str(fake))
-    command = shlex.split(facade.provision_command())
+    rendered = facade.provision_command()
+    command = rendered if os.name == "nt" else shlex.split(rendered)
     result = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True, text=True, timeout=10)
     assert result.returncode == 1
     assert "not importable" in result.stderr

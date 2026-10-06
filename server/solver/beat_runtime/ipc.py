@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import errno
 import json
 import math
 import os
@@ -186,8 +187,22 @@ class Endpoint:
             raise ValueError("Unpublished TCP endpoint")
         client = self._socket()
         try:
-            client.settimeout(timeout)
-            client.connect(self._address())
+            deadline = time.monotonic() + timeout
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Host connection deadline expired")
+                client.settimeout(remaining)
+                try:
+                    client.connect(self._address())
+                    break
+                except BlockingIOError as exc:
+                    # Linux AF_UNIX returns EAGAIN immediately when the accept
+                    # queue is full, even with a socket timeout. No connection
+                    # has started; retry within the caller's original budget.
+                    if self.kind != "unix" or exc.errno != errno.EAGAIN:
+                        raise
+                    time.sleep(min(0.01, max(0, deadline - time.monotonic())))
         except BaseException:
             client.close()
             raise

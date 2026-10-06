@@ -69,8 +69,11 @@ def test_close_unpublishes_before_slow_engine_retirement(launch):
 def test_pending_peers_cannot_reserve_authenticated_capacity(launch):
     key, directory, _ = launch
     record = spawn.start_host(key, directory)
-    pending = [record.endpoint.connect(1) for _ in range(32)]
+    pending = []
     try:
+        # Keep ownership of every socket even if a later connect fails.
+        for _ in range(32):
+            pending.append(record.endpoint.connect(1))
         with authenticated(record) as client:
             ipc.send_frame(client, {'op': 'ping'})
             assert ipc.receive_frame(client)['type'] == 'pong'
