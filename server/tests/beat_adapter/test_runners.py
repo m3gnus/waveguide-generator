@@ -34,7 +34,9 @@ def native(inputs):
                                "backend": inputs.backend, "bem_backend": inputs.backend, "precision": inputs.precision,
                                "phasor_convention": "exp(-i omega t)",
                                "symmetry": compiled.wire["solver_options"]["symmetry"],
-                               "blas_threads": 1, "regular_quadrature_mode": "wavelength" if inputs.backend == "cpu" else "fixed",
+                               "blas_threads": inputs.threads,
+                               "regular_assembly_mode": inputs.backend + "_fused_burton_miller",
+                               "regular_quadrature_mode": "wavelength" if inputs.backend == "cpu" else "fixed",
                                "regular_quadrature_order": 2 if inputs.backend == "cpu" else 4, "dense_solve_method": "lu",
                                "engine_provenance": {"runtime": {"julia_threads": inputs.threads},
                                                      "execution": {"backend": inputs.backend,
@@ -134,7 +136,8 @@ def test_managed_solve_stages_negotiates_maps_and_closes(inputs, raw_result, lay
     compiled = replace(inputs.compiled(), layout=layout, surface_traces=traces)
     compiled.wire["outputs"] = []  # Fake contract accepts a wire; real validation stays engine-owned.
     state = {"shutdown": 0, "closed": 0, "negotiated": False}
-    monkeypatch.setenv("BLAB_BEAT_CPU_BLAS_THREADS", "2")
+    if backend == "cpu":
+        monkeypatch.setenv("BLAB_BEAT_CPU_BLAS_THREADS", "2")
     monkeypatch.setenv("OPENBLAS_NUM_THREADS", "2")
     monkeypatch.setenv("JULIA_PKG_OFFLINE", "true")
     class Stream:
@@ -177,7 +180,7 @@ def test_managed_solve_stages_negotiates_maps_and_closes(inputs, raw_result, lay
             assert options["julia_threads"] == inputs.threads
             if backend == "metal":
                 assert options["environment"]["OPENBLAS_NUM_THREADS"] == "7"
-                assert options["environment"]["BLAB_BEAT_CPU_BLAS_THREADS"] == "2"
+                assert not any(k.startswith("BLAB_") for k in options["environment"])
                 assert options["environment"]["JULIA_PKG_OFFLINE"] == "true"
             else:
                 assert "environment" not in options
@@ -206,7 +209,8 @@ def test_managed_solve_stages_negotiates_maps_and_closes(inputs, raw_result, lay
         assert events == [{"type": "completed", "solved_count": 3}]
     assert state["shutdown"] == 1 and state["closed"] and state["terminated"]
     assert not state["staging"].exists()
-    assert runners.os.environ["BLAB_BEAT_CPU_BLAS_THREADS"] == "2"
+    if backend == "cpu":
+        assert runners.os.environ["BLAB_BEAT_CPU_BLAS_THREADS"] == "2"
     assert runners.os.environ["OPENBLAS_NUM_THREADS"] == "2"
 
 
@@ -552,3 +556,142 @@ def test_cli_metal_float64_refuses_before_reading_mesh(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as error:
         run_agreement.main()
     assert error.value.code == 2 and not (tmp_path / "output").exists()
+
+
+@pytest.mark.parametrize("override", ["BLAB_METAL_REGULAR_KERNEL_MODE", "BLAB_METAL_SINGULAR_MODE",
+                                      "BLAB_BEAT_CPU_BLAS_THREADS"])
+def test_metal_assembly_policy_override_refuses_before_probe_or_worker(inputs, monkeypatch, override):
+    selected = replace(inputs, backend="metal", precision="float32", threads=6)
+    monkeypatch.setenv(override, "pair_owned" if override.endswith("KERNEL_MODE") else "1")
+    monkeypatch.setattr(recorder, "verify_runtime", lambda *a, **kw: pytest.fail("Probe launched"))
+    monkeypatch.setattr(runners, "import_module", lambda *a: pytest.fail("Worker imported"))
+    selection = runners.official_runner("fake", threads=6)(selected.compiled())
+    with pytest.raises(ValueError, match="BLAB_.*" + override):
+        recorder._observed_solve(selected.compiled(), selection, {})
+    with pytest.raises(ValueError, match="BLAB_"):
+        runners.managed_solve(selected.compiled(), selection, {}, [])
+
+
+def test_metal_operator_matrix_policy_refuses_blas_reservation(inputs, monkeypatch):
+    selected = replace(inputs, backend="metal", precision="float32", threads=6)
+    compiled = selected.compiled()
+    compiled.wire["solver_options"]["burton_miller_assembly"] = "operator_matrices"
+    monkeypatch.setattr(recorder, "verify_runtime", lambda *a, **kw: pytest.fail("Probe launched"))
+    with pytest.raises(ValueError, match="direct_system"):
+        recorder._observed_solve(compiled, recorder.EngineRun("fake", 6, runtime_mode="child"), {})
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal"])
+@pytest.mark.parametrize("official", [False, True])
+@pytest.mark.parametrize("missing", ["blas_threads", "backend"])
+@pytest.mark.parametrize("row_index", [0, -1])
+def test_missing_blas_or_backend_observation_fails_closed_on_each_row(inputs, backend, official, missing, row_index):
+    from scripts.beat_conformance.settings import observed_settings
+    selected = replace(inputs, backend=backend, precision="float32" if backend == "metal" else "float64")
+    mapped = native(selected)
+    diagnostic = mapped.solver_log[row_index]["native_diagnostics"]
+    if missing == "backend":
+        diagnostic.pop("backend")
+        diagnostic.pop("bem_backend")
+    else:
+        diagnostic.pop(missing)
+    with pytest.raises(ValueError, match="blas_threads|native backend"):
+        observed_settings(selected.settings(), mapped, official=official, native_symmetry="off")
+
+
+@pytest.mark.parametrize("execution", [None, "cpu_fused_burton_miller", "cpu_default"])
+def test_hbb_metal_request_echo_cannot_hide_cpu_execution(inputs, fake_hbb, tmp_path, monkeypatch, execution):
+    selected = replace(inputs, backend="metal", precision="float32")
+    mapped = native(selected)
+    diagnostic = mapped.solver_log[-1]["native_diagnostics"]
+    diagnostic.pop("regular_assembly_mode")
+    if execution is not None:
+        diagnostic["regular_assembly_mode"] = execution
+    diagnostic["metal_pipeline"] = False  # HBB emits this on CPU as well.
+    monkeypatch.setattr(sys.modules["hornlab_beat_bem"], "solve_frequencies", lambda *a: mapped)
+    with pytest.raises(ValueError, match="Metal execution evidence"):
+        runners.hbb_runner(selected, julia_executable="fake", expected_revision="a" * 40,
+                           directory=tmp_path / "output")
+    record = json.loads((tmp_path / "output/hbb-run.json").read_text())
+    assert record["engine_status"] == "failed"
+
+
+@pytest.mark.parametrize("official", [False, True])
+def test_cpu_native_backend_accepts_real_driver_diagnostic_spellings(inputs, official):
+    from scripts.beat_conformance.settings import observed_settings, validate_native_backend
+    mapped = native(inputs)
+    # Frozen spellings from coupled_solver.jl's exterior diagnostics/provenance
+    # and HBB BeatEngineDriver.jl; HBB exposes no precision/provenance here.
+    diagnostic = ({"bem_backend": "cpu", "precision": "float64", "blas_threads": 1,
+                   "linear_solver": "cpu_dense_lu", "burton_miller_assembly": "operator_matrices",
+                   "engine_provenance": {"execution": {"backend": "cpu", "device": "apple_m1"}}}
+                  if official else
+                  {"backend": "cpu", "blas_threads": 1, "dense_solve_method": "lu",
+                   "regular_assembly_mode": "cpu_fused_burton_miller", "metal_pipeline": False})
+    mapped.solver_log = [{"native_diagnostics": dict(diagnostic)} for _ in inputs.frequencies_hz]
+    validate_native_backend(mapped, "cpu", official=official)
+    _, evidence = observed_settings(inputs.settings(), mapped, official=official, native_symmetry="off")
+    assert evidence["backend"]["status"] == evidence["blas_threads"]["status"] == "observed"
+    assert evidence["precision"]["status"] == ("observed" if official else "declared")
+
+
+@pytest.mark.parametrize("threads,launch_count", [(1, "1"), (6, "7")])
+def test_worker_only_openblas_override_is_declared_in_record(inputs, monkeypatch, threads, launch_count):
+    selected = replace(inputs, backend="metal", precision="float32", threads=threads)
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "2")
+    # Fail the independent probe so even pre-solve failure records keep launch policy.
+    def fail(*args, **kwargs):
+        raise RuntimeError("fake device probe failed")
+    monkeypatch.setattr(recorder, "verify_runtime", fail)
+    record = {}
+    with pytest.raises(RuntimeError, match="probe failed"):
+        recorder._observed_solve(selected.compiled(), recorder.EngineRun("fake", threads, runtime_mode="child"), record)
+    assert record["launch_settings"]["status"] == "declared"
+    assert record["launch_settings"]["scope"] == "official child worker"
+    assert record["launch_settings"]["environment"] == {"OPENBLAS_NUM_THREADS": launch_count}
+    assert runners.os.environ["OPENBLAS_NUM_THREADS"] == "2"
+
+
+def agreement_cli(monkeypatch, tmp_path, *, threads="1"):
+    from scripts.beat_conformance import run_agreement
+    monkeypatch.setattr(sys, "argv", ["run_agreement", "--mesh", str(tmp_path / "input.msh"),
+                                    "--frequencies", "500,502,504", "--frequency-step", "2",
+                                    "--prominence-db", "0.1", "--precision", "float32", "--backend", "metal",
+                                    "--julia", "fake", "--threads", threads, "--output-dir", str(tmp_path / "output")])
+    return run_agreement
+
+
+@pytest.mark.parametrize("threads", ["0", "-1", "nonsense", "1.5", ""])
+def test_invalid_threads_are_argparse_errors_before_io(monkeypatch, tmp_path, capsys, threads):
+    run_agreement = agreement_cli(monkeypatch, tmp_path, threads=threads)
+    with pytest.raises(SystemExit) as error:
+        run_agreement.main()
+    assert error.value.code == 2
+    assert "error:" in capsys.readouterr().err
+    assert not (tmp_path / "output").exists()
+
+
+def test_nonempty_output_refuses_probe_fails_before_solve_retry(inputs, monkeypatch, tmp_path, capsys):
+    run_agreement = agreement_cli(monkeypatch, tmp_path)
+    (tmp_path / "input.msh").write_bytes(inputs.mesh_bytes)
+    calls = []
+    def fail_probe(*args, **kwargs):
+        calls.append("probe")
+        raise RuntimeError("fake device probe failed before solve")
+    monkeypatch.setattr(recorder, "verify_runtime", fail_probe)
+    monkeypatch.setattr(runners, "managed_solve", lambda *a, **kw: pytest.fail("Solve launched"))
+    # An initial failure has a failed agreement and no final passed record.
+    assert run_agreement.main() == 1
+    directory = tmp_path / "output/metal-full-float32"
+    assert not json.loads((directory / "agreement.json").read_text())["passed"]
+    assert not (directory / "metal-full-float32.json").exists()
+    # Simulate an earlier successful run in the reused directory; a retry must
+    # refuse before the failing probe can coexist with that stale success.
+    recorder.write_record(directory / "metal-full-float32.json", {"status": "passed", "qualified": True})
+    recorder.write_record(directory / "agreement.json", {"passed": True})
+    before = {p: p.read_bytes() for p in directory.iterdir() if p.is_file()}
+    with pytest.raises(SystemExit) as error:
+        run_agreement.main()
+    assert error.value.code == 2 and calls == ["probe"]
+    assert "empty output directory" in capsys.readouterr().err
+    assert all(p.read_bytes() == content for p, content in before.items())

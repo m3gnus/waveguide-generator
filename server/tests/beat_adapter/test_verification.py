@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,9 +28,13 @@ def observer(tmp_path, monkeypatch):
     monkeypatch.setattr(verification.metadata, "distribution", lambda name: Distribution())
     monkeypatch.setattr(verification, "engine_assets", lambda backend: assets)
     monkeypatch.setattr(verification, "engine_fingerprint", lambda assets: "independent-content-hash")
-    state = {"commands": [], "version": "julia version 1.12.7", "kernel": "WG_DEVICE=Test GPU\nWG_KERNEL_VERIFIED=true"}
-    def run(command):
+    monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setenv("JULIA_DEPOT_PATH", str(tmp_path / "depot"))
+    state = {"commands": [], "environments": [], "assets": assets,
+             "version": "julia version 1.12.7", "kernel": "WG_DEVICE=Test GPU\nWG_KERNEL_VERIFIED=true"}
+    def run(command, **kwargs):
         state["commands"].append(command)
+        state["environments"].append(kwargs.get("environment"))
         if "--version" in command:
             return state["version"]
         if "-e" in command:
@@ -68,7 +73,7 @@ def test_independent_metal_probe_requires_dispatched_kernel_not_functionality(ob
 
 def test_probe_subprocess_failures_are_not_runner_attestations(observer, monkeypatch):
     binary, _ = observer
-    def fail(command):
+    def fail(command, **kwargs):
         raise OSError("binary cannot execute")
     monkeypatch.setattr(verification, "_run", fail)
     with pytest.raises(OSError, match="cannot execute"):
@@ -106,7 +111,7 @@ def test_source_revision_requires_tracked_clean_engine_tree(observer, monkeypatc
             return json.dumps({"dir_info": {"editable": True}})
     monkeypatch.setattr(verification.metadata, "distribution", lambda name: SourceDistribution())
     original = verification._run
-    def run(command):
+    def run(command, **kwargs):
         if command[0] == "git":
             state["commands"].append(command)
             if "rev-parse" in command:
@@ -114,7 +119,7 @@ def test_source_revision_requires_tracked_clean_engine_tree(observer, monkeypatc
             if "status" in command:
                 return " M src/beat_engine/client.py" if dirty else ""
             return "src/beat_engine/__init__.py"
-        return original(command)
+        return original(command, **kwargs)
     monkeypatch.setattr(verification, "_run", run)
     if dirty:
         with pytest.raises(ValueError, match="uncommitted"):
@@ -198,3 +203,49 @@ def test_revision_verification_blob_read_is_binary_and_bounded(tmp_path, monkeyp
         return SimpleNamespace(stdout=b"exact bytes\x00\n")
     monkeypatch.setattr(verification.subprocess, "run", run)
     assert verification._blob(tmp_path, "a" * 40, "src/beat_engine/__init__.py") == b"exact bytes\x00\n"
+
+
+@pytest.mark.parametrize("destination", ["depot", "relative_depot", "symlink_depot", "project"])
+def test_metal_probe_destination_isolation_precedes_any_julia_launch(observer, monkeypatch, tmp_path, destination):
+    binary, state = observer
+    legacy = tmp_path / "hbb-runtime"
+    monkeypatch.setenv("HORNLAB_BEAT_RUNTIME_DIR", str(legacy))
+    if destination == "project":
+        state["assets"].project = legacy / "project"
+    else:
+        depot = legacy / "depot"
+        if destination == "relative_depot":
+            monkeypatch.chdir(tmp_path)
+            depot = Path("hbb-runtime/depot")
+        elif destination == "symlink_depot":
+            alias = tmp_path / "alias"
+            alias.symlink_to(legacy, target_is_directory=True)
+            depot = alias / "depot"
+        monkeypatch.setenv("JULIA_DEPOT_PATH", str(depot))
+    with pytest.raises(ValueError, match="overlaps"):
+        verification.verify_runtime(str(binary), "metal")
+    assert not state["commands"] and not legacy.exists()
+
+
+def test_metal_probe_receives_validated_environment_and_explicit_project(observer, monkeypatch, tmp_path):
+    binary, state = observer
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("JULIA_DEPOT_PATH", "isolated-depot")
+    monkeypatch.setenv("JULIA_PROJECT", str(tmp_path / "hbb-project"))
+    monkeypatch.setenv("JULIA_PKG_OFFLINE", "true")
+    verification.verify_runtime(str(binary), "metal")
+    environment = state["environments"][-1]
+    assert environment["JULIA_DEPOT_PATH"] == str(tmp_path / "isolated-depot")
+    assert environment["JULIA_PROJECT"] == str(state["assets"].project)
+    assert environment["JULIA_PKG_OFFLINE"] == "true"
+    assert f"--project={environment['JULIA_PROJECT']}" in state["commands"][-1]
+    assert not (tmp_path / "isolated-depot").exists()
+
+
+def test_probe_subprocess_passes_validated_environment(monkeypatch):
+    environment = {"JULIA_DEPOT_PATH": "/fake/isolated-depot"}
+    def run(command, **kwargs):
+        assert kwargs["env"] == environment
+        return SimpleNamespace(stdout="verified\n")
+    monkeypatch.setattr(verification.subprocess, "run", run)
+    assert verification._run(["fake-julia"], environment=environment) == "verified"

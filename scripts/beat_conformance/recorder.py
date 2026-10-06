@@ -73,6 +73,16 @@ def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict
     precision = request.wire["solver_options"]["precision"]
     if selection.runtime_mode not in {"direct", "child"}:
         raise ValueError("Qualification runtime mode must be direct or child")
+    if backend == "metal" and selection.runtime_mode == "child":
+        from .runners import metal_worker_environment
+        environment = metal_worker_environment(
+            selection.julia_threads,
+            assembly=request.wire["solver_options"].get("burton_miller_assembly", "direct_system"))
+        record["launch_settings"] = {
+            "status": "declared", "scope": "official child worker",
+            "environment": {"OPENBLAS_NUM_THREADS": environment["OPENBLAS_NUM_THREADS"]},
+            "assembly_policy": "engine defaults; BLAB_* overrides refused",
+        }
     verify_options = {"engine_source": selection.engine_source} if selection.engine_source else {}
     facts = verify_runtime(selection.julia_executable, backend, **verify_options)
     revision_status = facts.pop("engine_revision_status", "observed")

@@ -180,6 +180,17 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
         if not reference.mesh_bytes or reference.mesh_bytes != candidate.mesh_bytes:
             raise ValueError("Original mesh bytes differ or are empty")
         report["mesh_sha256"] = hashlib.sha256(reference.mesh_bytes).hexdigest()
+        if (reference.settings.get("backend") == "metal"
+                or reference.setting_evidence is not None or candidate.setting_evidence is not None):
+            for result in (reference, candidate):
+                for name in ("backend", "blas_threads"):
+                    evidence = (result.setting_evidence or {}).get(name, {})
+                    if (name not in result.settings or evidence.get("status") != "observed"
+                            or not settings_equal(name, result.settings[name], evidence.get("value"))):
+                        raise ValueError(f"Both engines require observed {name} on every row")
+                count = result.settings["blas_threads"]
+                if type(count) is not int or count < 1:
+                    raise ValueError("Observed blas_threads must be a positive integer")
         if reference.setting_evidence is not None or candidate.setting_evidence is not None:
             if reference.setting_evidence is None or candidate.setting_evidence is None:
                 raise ValueError("Both engines require observed/declared setting evidence")

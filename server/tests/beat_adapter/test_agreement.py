@@ -330,12 +330,14 @@ def test_recorder_to_agreement_binding_uses_hbb_actual_dense_solve_method(refere
 
 def test_vacuous_settings_equality_declared_values_are_never_verified(reference):
     from scripts.beat_conformance.settings import flatten
-    values = flatten(reference.settings)
+    values = {**flatten(reference.settings), "blas_threads": 4}
     evidence = {key: {"status": "declared", "value": value} for key, value in values.items()}
+    for name in ("backend", "blas_threads"):
+        evidence[name]["status"] = "observed"
     a = replace(reference, settings=values, setting_evidence=evidence)
     b = replace(a, revision="official-exact-sha")
     report = compare(a, b)
-    assert report["passed"] and report["settings_observed_equal"] == []
+    assert report["passed"] and report["settings_observed_equal"] == ["backend", "blas_threads"]
     assert "precision" in report["settings_declared"]
     assert any("not verified equality" in text for text in report["limitations"])
     changed = replace(b, settings={**values, "precision": "float32"})
@@ -344,10 +346,11 @@ def test_vacuous_settings_equality_declared_values_are_never_verified(reference)
 
 def test_vacuous_settings_equality_detects_different_actual_quadrature_orders(reference):
     from scripts.beat_conformance.settings import flatten
-    values = flatten(reference.settings)
+    values = {**flatten(reference.settings), "blas_threads": 4}
+    evidence = {key: {"status": "observed", "value": values[key]} for key in ("backend", "blas_threads")}
     name = "quadrature.regular_quadrature_order"
     a = replace(reference, settings={**values, name: [2] * len(reference.frequencies_hz)},
-                setting_evidence={name: {"status": "observed"}})
+                setting_evidence={**evidence, name: {"status": "observed"}})
     b = replace(a, revision="official-exact-sha", settings={**a.settings, name: [4] * len(reference.frequencies_hz)})
     report = compare(a, b)
     assert not report["passed"] and "Frozen settings" in " ".join(report["failures"])
@@ -363,3 +366,29 @@ def test_recorder_to_agreement_binding_actual_method_overrides_linear_solver_lab
     assert report["passed"] and not report["forced_lu_reference"]
     assert report["reference_record_sha256"] == ref.recorder_sha256
     assert report["candidate_record_sha256"] == candidate.recorder_sha256
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal"])
+@pytest.mark.parametrize("missing", ["backend", "blas_threads"])
+@pytest.mark.parametrize("defect", ["absent_both", "declared_both", "absent_candidate"])
+def test_agreement_missing_blas_or_backend_observations_cannot_compare_equal(reference, backend, missing, defect):
+    settings = {**reference.settings, "backend": backend, "blas_threads": 4}
+    evidence = {name: {"status": "observed", "value": value} for name, value in settings.items()}
+    a = replace(reference, settings=dict(settings), setting_evidence=dict(evidence))
+    b = replace(a, revision="official-exact-sha", settings=dict(settings), setting_evidence=dict(evidence))
+    assert compare(a, b)["passed"]
+    affected = (b,) if defect == "absent_candidate" else (a, b)
+    for result in affected:
+        if defect == "declared_both":
+            result.setting_evidence[missing] = {"status": "declared", "value": settings[missing]}
+        else:
+            result.setting_evidence.pop(missing)
+            if missing == "blas_threads":
+                result.settings.pop(missing)
+    report = compare(a, b)
+    assert not report["passed"] and f"observed {missing}" in " ".join(report["failures"])
+
+
+def test_metal_agreement_without_any_observation_evidence_fails_closed(reference):
+    a = replace(reference, settings={**reference.settings, "backend": "metal"})
+    assert not compare(a, a)["passed"]

@@ -68,10 +68,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.backend == "metal" and any(p != "float32" for p in args.precision):
         parser.error("Metal agreement requires float32 precision")
-    threads = resolve_julia_threads(args.backend, args.threads or ("auto" if args.backend == "metal" else 1))
+    try:
+        thread_setting = args.threads if args.threads is not None else ("auto" if args.backend == "metal" else 1)
+        threads = resolve_julia_threads(args.backend, thread_setting)
+    except ValueError as exc:
+        parser.error(str(exc))
     frequencies = tuple(float(f) for f in args.frequencies.split(","))
     validate_frequency_axis(frequencies)
     args.output_dir = output_directory(args.output_dir, engine_source=args.engine_source)
+    if args.output_dir.exists() and (not args.output_dir.is_dir() or any(args.output_dir.iterdir())):
+        parser.error("Agreement requires an empty output directory; choose a fresh directory for retries")
     pin = hbb_pin()
     original = args.mesh.read_bytes()
     mesh_bytes = metre_mesh(original, args.mesh_scale)

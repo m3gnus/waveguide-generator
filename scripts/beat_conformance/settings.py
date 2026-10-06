@@ -49,6 +49,12 @@ def validate_native_backend(native: Any, backend: str, *, official: bool,
         execution = diagnostic.get("engine_provenance", {}).get("execution", {})
         if execution and execution.get("backend") != backend:
             raise ValueError("Native device backend differs from requested backend")
+        if not official and backend == "metal":
+            mode = diagnostic.get("regular_assembly_mode")
+            if not ((isinstance(mode, str) and mode.startswith("metal_"))
+                    or diagnostic.get("assembly") == "metal_fused_burton_miller"):
+                # HBB emits metal_pipeline=false on CPU too: presence is no proof.
+                raise ValueError("HBB Metal execution evidence is missing or indicates CPU fallback")
         if official and backend == "metal":
             device = execution.get("device", diagnostic.get("device"))
             if (not isinstance(device, str) or not device.strip()
@@ -68,6 +74,8 @@ def observed_settings(declared: dict, native: Any, *, official: bool,
     diagnostics = [row.get("native_diagnostics") or {} for row in rows]
     if len(rows) != len(native.frequencies_hz) or any(not d for d in diagnostics):
         raise ValueError("Agreement requires per-frequency native diagnostics")
+    if any(type(d.get("blas_threads")) is not int or d["blas_threads"] < 1 for d in diagnostics):
+        raise ValueError("Agreement requires observed positive blas_threads on every row")
 
     def observe(name, value, source):
         if name in values:

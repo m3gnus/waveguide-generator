@@ -151,20 +151,16 @@ def solve(compiled: request.CompiledRequest) -> EngineRun:
 def managed_solve(compiled: request.CompiledRequest, selection: EngineRun,
                   facts: dict[str, Any], terminal_events: list[dict]) -> results.SweepResult:
     """Use WG admission/staging and public engine negotiation, always releasing workers."""
+    options = compiled.wire["solver_options"]
+    launch_options = {}
+    if options["bem_backend"] == "metal":
+        launch_options["environment"] = metal_worker_environment(
+            selection.julia_threads, assembly=options.get("burton_miller_assembly", "direct_system"))
     contract = import_module("beat_engine.beat_contract.worker")
 
     contract.validate_solve_request(compiled.wire)
     manager = WorkerManager(mode="child")
-    options = compiled.wire["solver_options"]
     loading = compiled.channel_loading["source"]
-    launch_options = {}
-    if options["bem_backend"] == "metal":
-        # HBB Metal sets BLAS to Julia threads. Official Metal inherits BLAS
-        # then reserves one thread when Julia is multithreaded; match its sweep.
-        environment = dict(os.environ)
-        count = resolve_julia_threads("metal", selection.julia_threads)
-        environment["OPENBLAS_NUM_THREADS"] = str(count + (count > 1))
-        launch_options["environment"] = environment
     try:
         client = manager.get_worker(options["bem_backend"], julia_executable=facts["julia_executable"],
                                     julia_project=Path(facts["project"]),
@@ -189,6 +185,20 @@ def managed_solve(compiled: request.CompiledRequest, selection: EngineRun,
                 request_cancel=session.request_cancel)
     finally:
         manager.shutdown()
+
+
+def metal_worker_environment(threads: int | str, *, assembly: str = "direct_system") -> dict[str, str]:
+    """Qualify engine defaults only; alternate assembly may not reserve a core."""
+    environment = dict(os.environ)
+    overrides = sorted(name for name in environment if name.startswith("BLAB_"))
+    if overrides:
+        raise ValueError("Metal agreement refuses BLAB_* overrides: " + ", ".join(overrides))
+    if assembly != "direct_system":
+        raise ValueError("Metal agreement requires direct_system assembly")
+    count = resolve_julia_threads("metal", threads)
+    # HBB uses T BLAS threads; official direct assembly reserves one for T > 1.
+    environment["OPENBLAS_NUM_THREADS"] = str(count + (count > 1))
+    return environment
 
 
 def result_set(inputs: FrozenExterior, native: Any, *, revision: str,

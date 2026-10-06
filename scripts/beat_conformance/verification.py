@@ -6,16 +6,20 @@ import hashlib
 import importlib
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import subprocess
 from typing import Any
 
 from server.solver.beat_runtime.assets import engine_assets
 from server.solver.beat_runtime.identity import engine_fingerprint
+from server.solver.beat_runtime.julia_steps import julia_environment
 
 
-def _run(command: list[str]) -> str:
-    return subprocess.run(command, capture_output=True, text=True, check=True, timeout=60).stdout.strip()
+def _run(command: list[str], *, environment: dict[str, str] | None = None) -> str:
+    options = {"env": environment} if environment is not None else {}
+    return subprocess.run(command, capture_output=True, text=True, check=True, timeout=60,
+                          **options).stdout.strip()
 
 
 def _installed_source_revision(package_path: Path, source: Path) -> str:
@@ -50,14 +54,16 @@ def _blob(source: Path, revision: str, name: str) -> bytes:
 def verify_runtime(julia_executable: str, backend: str, *, engine_source: Path | None = None) -> dict[str, Any]:
     """Run the selected binary and inspect the loaded distribution, never provision."""
     executable = Path(julia_executable).resolve(strict=True)
-    version = _run([str(executable), "--startup-file=no", "--version"])
-    if not version.startswith("julia version "):
-        raise ValueError("Executable did not identify itself as Julia")
     binary_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
     package = importlib.import_module("beat_engine")
     distribution = metadata.distribution("beat-engine")
     package_path = Path(package.__file__).resolve().parent
     assets = engine_assets(backend)
+    project, environment = julia_environment(assets.project, os.environ)
+    environment["JULIA_PROJECT"] = str(project)
+    version = _run([str(executable), "--startup-file=no", "--version"], environment=environment)
+    if not version.startswith("julia version "):
+        raise ValueError("Executable did not identify itself as Julia")
     if package_path != assets.root:
         raise ValueError("Loaded engine and selected assets differ")
     direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
@@ -84,13 +90,15 @@ def verify_runtime(julia_executable: str, backend: str, *, engine_source: Path |
         raise ValueError("Engine has no exact observed revision")
     script = Path(__file__).with_name("assert_metal_device.jl")
     if backend == "metal":
-        output = _run([str(executable), "--startup-file=no", f"--project={assets.project}", str(script)])
+        output = _run([str(executable), "--startup-file=no", f"--project={project}", str(script)],
+                      environment=environment)
         if "WG_KERNEL_VERIFIED=true" not in output.splitlines():
             raise ValueError("Metal requires a verified dispatched device kernel")
         device = next((line.removeprefix("WG_DEVICE=") for line in output.splitlines()
                        if line.startswith("WG_DEVICE=")), "")
     else:
-        device = _run([str(executable), "--startup-file=no", "-e", "print(Sys.CPU_NAME)"])
+        device = _run([str(executable), "--startup-file=no", f"--project={project}",
+                       "-e", "print(Sys.CPU_NAME)"], environment=environment)
     if not device:
         raise ValueError("Independent device identity is missing")
     return {"backend": backend, "julia_executable": str(executable), "julia_version": version,
@@ -102,5 +110,5 @@ def verify_runtime(julia_executable: str, backend: str, *, engine_source: Path |
             "engine_fingerprint": engine_fingerprint(assets),
             "artifact_kind": "installed" if installed else "source",
             "device_class": "gpu" if backend == "metal" else "cpu", "device_name": device,
-            "device_kernel_verified": backend == "metal", "project": str(assets.project),
+            "device_kernel_verified": backend == "metal", "project": str(project),
             "solver_script": str(assets.system_solver)}
