@@ -31,7 +31,7 @@ import textwrap
 import threading
 import time
 from types import SimpleNamespace
-from typing import Any, NamedTuple
+from typing import Any, Callable, Iterator, NamedTuple
 import zipfile
 
 import pytest
@@ -90,7 +90,9 @@ REPOSITORY_ROOT = Path(apply_update_module.__file__).resolve().parents[1]
 
 
 @pytest.fixture(autouse=True)
-def _updater_state_stays_in_this_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def _updater_state_stays_in_this_test(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[None]:
     """No updater dialog, and no claim or grant outside this test's directory.
 
     The same two isolations ``test_apply_update.py`` applies, for the same
@@ -105,6 +107,26 @@ def _updater_state_stays_in_this_test(tmp_path: Path, monkeypatch: pytest.Monkey
         lambda message, platform_name: None,
     )
     monkeypatch.setattr(update_lock, "cache_root", lambda **_kwargs: tmp_path / "cache")
+
+    # Controllers and no-GUI starts also construct settlements. Stop every
+    # worker before monkeypatch restores the claim directory, platform and
+    # filesystem hooks, even when an assertion fails before the explicit join.
+    settlements: list[healthy_start.HealthyStartSettlement] = []
+    original_init = healthy_start.HealthyStartSettlement.__init__
+
+    def init(settlement: healthy_start.HealthyStartSettlement, *args: Any, **kwargs: Any) -> None:
+        original_init(settlement, *args, **kwargs)
+        settlements.append(settlement)
+
+    monkeypatch.setattr(healthy_start.HealthyStartSettlement, "__init__", init)
+    yield
+    for settlement in settlements:
+        settlement.cancel()
+    for settlement in settlements:
+        thread = settlement._retry_thread
+        if thread is not None:
+            thread.join(timeout=2.0)
+            assert not thread.is_alive(), "settlement retry escaped test teardown"
 
 
 # ---------------------------------------------------------------------------
@@ -5058,6 +5080,35 @@ def test_an_outcome_detail_names_the_home_folder_as_a_problem_report_does(
 # Review round 3: contention retries and dependencies behind directory aliases.
 
 
+@pytest.fixture
+def settlement_retry_gate(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> Callable[[healthy_start.HealthyStartSettlement], threading.Event]:
+    """Release this settlement's retry after the test has released the claim.
+
+    Journal writes and scheduler load must not exhaust a shortened backoff
+    before the worker can exercise validation. Keep the real worker, claim,
+    cancellation event and settlement; control only its backoff wait.
+    """
+
+    def gate(settlement: healthy_start.HealthyStartSettlement) -> threading.Event:
+        resume = threading.Event()
+
+        def wait(_delay: float) -> bool:
+            resume.wait()
+            return settlement._retry_stop.is_set()
+
+        def release_on_teardown() -> None:
+            settlement.cancel()
+            resume.set()
+
+        request.addfinalizer(release_on_teardown)
+        monkeypatch.setattr(settlement._retry_stop, "wait", wait)
+        return resume
+
+    return gate
+
+
 def _join_settlement_retry(settlement: healthy_start.HealthyStartSettlement) -> None:
     thread = settlement._retry_thread
     assert thread is not None and thread.daemon
@@ -5068,12 +5119,13 @@ def _join_settlement_retry(settlement: healthy_start.HealthyStartSettlement) -> 
 @pytest.mark.parametrize("mode", ["desktop", "browser", "no-gui"])
 @pytest.mark.parametrize("replacement", [False, True], ids=["ordinary-update", "full-installer"])
 def test_healthy_start_retries_after_the_relaunch_helper_releases_its_claim(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str, replacement: bool
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    settlement_retry_gate: Callable[[healthy_start.HealthyStartSettlement], threading.Event],
+    mode: str, replacement: bool,
 ) -> None:
     setup = _replacement_bridge_target if replacement else _valid_bridge_target
     installation, transaction = setup(tmp_path)
     monkeypatch.setattr(healthy_start.sys, "platform", "win32")
-    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04, 0.08))
     paths = tuple(installation[:3])
     if mode == "no-gui":
         start = serve._NoGuiHealthyStart(paths)
@@ -5096,6 +5148,7 @@ def test_healthy_start_retries_after_the_relaunch_helper_releases_its_claim(
             url="http://127.0.0.1:3100", pid=123, exit_code=None,
         )
         observe = lambda: controller.settle_update_transaction(snapshot, report=lambda _m: None)
+    resume_retry = settlement_retry_gate(settlement)
     with apply_update_module._claim_update(installation.resources):
         before = time.monotonic()
         observe()
@@ -5104,6 +5157,7 @@ def test_healthy_start_retries_after_the_relaunch_helper_releases_its_claim(
         worker = settlement._retry_thread
         assert not settlement.settled
         assert read_journal(installation.data_dir, installation.resources) is not None
+    resume_retry.set()
     _join_settlement_retry(settlement)
     assert settlement._retry_thread is worker
     assert settlement.settled
@@ -5163,25 +5217,24 @@ def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_bac
     elapsed = 0.0
     waits: list[float] = []
 
-    if timing != "ordinary":
-        # Advance only this module's clock: joining and the real claim keep
-        # their native timing. Simulate 25 ms of work or scheduler lateness
-        # after each retry without relying on a loaded CI runner.
-        monkeypatch.setattr(
-            healthy_start, "time", SimpleNamespace(monotonic=lambda: elapsed), raising=False
-        )
+    # Record the requested waits without sleeping. Slow claim work and late
+    # wakeups must not consume attempts or alter the backoff sequence. If the
+    # worker ever uses an elapsed-time budget again, it sees this same clock.
+    monkeypatch.setattr(
+        healthy_start, "time", SimpleNamespace(monotonic=lambda: elapsed), raising=False
+    )
 
-        def wait(delay: float) -> bool:
-            nonlocal elapsed
-            waits.append(delay)
-            elapsed += delay + (0.025 if timing == "late-wakeup" else 0.0)
-            return settlement._retry_stop.is_set()
+    def wait(delay: float) -> bool:
+        nonlocal elapsed
+        waits.append(delay)
+        elapsed += delay + (0.025 if timing == "late-wakeup" else 0.0)
+        return settlement._retry_stop.is_set()
 
-        monkeypatch.setattr(settlement._retry_stop, "wait", wait)
+    monkeypatch.setattr(settlement._retry_stop, "wait", wait)
 
     def claim(resources: Path) -> Any:
         nonlocal elapsed
-        attempts.append(time.monotonic())
+        attempts.append(elapsed)
         if timing == "slow-claim" and len(attempts) > 1:
             elapsed += 0.025
         return original(resources)
@@ -5191,8 +5244,13 @@ def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_bac
         assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
         _join_settlement_retry(settlement)
     assert len(attempts) == 4
-    if timing != "ordinary":
-        assert waits == list(healthy_start.SETTLEMENT_RETRY_DELAYS)
+    assert waits == list(healthy_start.SETTLEMENT_RETRY_DELAYS)
+    lateness = 0.025 if timing == "late-wakeup" else 0.0
+    claim_work = 0.025 if timing == "slow-claim" else 0.0
+    assert attempts == pytest.approx([
+        0.0, 0.01 + lateness, 0.03 + 2 * lateness + claim_work,
+        0.07 + 3 * lateness + 2 * claim_work,
+    ])
     assert not settlement.settled
     assert (installation.resources / "runtime.previous").is_dir()
     assert healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
@@ -5202,12 +5260,14 @@ def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_bac
 
 @pytest.mark.parametrize("changed", ["build", "transaction"])
 def test_settlement_retry_never_reuses_readiness_for_a_different_build_or_transaction(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    settlement_retry_gate: Callable[[healthy_start.HealthyStartSettlement], threading.Event],
+    changed: str,
 ) -> None:
     installation, _transaction = _replacement_bridge_target(tmp_path)
     monkeypatch.setattr(healthy_start.sys, "platform", "win32")
-    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04))
     settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+    resume_retry = settlement_retry_gate(settlement)
     with apply_update_module._claim_update(installation.resources):
         assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
         if changed == "build":
@@ -5219,6 +5279,7 @@ def test_settlement_retry_never_reuses_readiness_for_a_different_build_or_transa
             )
             set_journal_state(installation.data_dir, installation.resources, "rolled-back")
         before = read_journal(installation.data_dir, installation.resources)
+    resume_retry.set()
     _join_settlement_retry(settlement)
     assert not settlement.settled
     assert read_journal(installation.data_dir, installation.resources) == before
@@ -5228,13 +5289,15 @@ def test_settlement_retry_never_reuses_readiness_for_a_different_build_or_transa
 
 @pytest.mark.parametrize("boundary", ["validation", "commit"])
 def test_quit_during_a_settlement_retry_leaves_cleanup_for_the_next_start(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    settlement_retry_gate: Callable[[healthy_start.HealthyStartSettlement], threading.Event],
+    boundary: str,
 ) -> None:
     installation, _transaction = _replacement_bridge_target(tmp_path)
     monkeypatch.setattr(healthy_start.sys, "platform", "win32")
-    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04))
     paths = tuple(installation[:3])
     settlement = healthy_start.HealthyStartSettlement(lambda: paths)
+    resume_retry = settlement_retry_gate(settlement)
     name = "running_build_uses_retained_material" if boundary == "validation" else "commit_transaction"
     original = getattr(healthy_start, name)
 
@@ -5246,6 +5309,7 @@ def test_quit_during_a_settlement_retry_leaves_cleanup_for_the_next_start(
     monkeypatch.setattr(healthy_start, name, cancel_after)
     with apply_update_module._claim_update(installation.resources):
         assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
+    resume_retry.set()
     _join_settlement_retry(settlement)
     assert not settlement.settled
     assert (installation.resources / "runtime.previous").is_dir()
