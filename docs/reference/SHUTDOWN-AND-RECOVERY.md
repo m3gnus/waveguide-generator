@@ -32,7 +32,7 @@ Within the budget, in this order:
    and waits for their next checkpoint only as long as the budget allows.
 4. The gmsh worker drops queued work and stops waiting for a running OCC call
    once the budget says so.
-5. The BEMPP worker is closed and this server's BEAT workers are stopped,
+5. This server's BEAT workers are stopped,
    including persistent hosts. BEAT cleanup waits at most 5 s, logs failures
    or timeouts, and lets shutdown continue.
 6. The instance lock is released and the logs are flushed.
@@ -58,7 +58,7 @@ skips is crash-safe by construction:
   renamed into place (`server/solver/field_traces_store.py`), and exports and
   CAD bundles through `publish_staging_directory`. A staged directory a kill
   leaves behind is hidden and never referenced.
-- **Owned children** (the BEMPP worker, the isolated CAD child) were closed
+- **Owned children** (the isolated CAD child) were closed
   earlier in the budget, and each also leaves when its parent does: a process
   group on macOS and Linux, a kill-on-close Job Object on Windows.
 - **The instance lock** and the temporary-session lock are OS locks, released
@@ -121,7 +121,7 @@ that clean exit requests host shutdown through the pinned package's registry.
 - **Every CI platform**, against a real `launch/serve.py`
   (`server/tests/test_bounded_server_shutdown.py`): a stop during a blocked mesh
   build and during a blocked preview build exits on its own before the
-  launcher's kill; the owned BEMPP child is gone (macOS/Linux); an orphaned
+  launcher's kill; an orphaned
   server and a second Ctrl+C exit on their own deadlines (macOS/Linux); a
   process ended mid-budget still leaves its job interrupted by Quit; the next
   start sweeps what the stopped build left and nothing a live process owns; a

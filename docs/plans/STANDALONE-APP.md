@@ -467,10 +467,10 @@ Not verifiable here, and therefore open:
   first `windows-bundle` CI run must show the uv Windows
   layout, the launcher loading its adjacent DLLs through the isolated `._pth`,
   a no-argument executable starting the desktop path, `-c` remaining usable by worker
-  subprocesses, bempp/numba ready, the server answering, and the app-layer ZIP matching the
-  macOS one byte for byte. A real Windows machine must then show an
+  subprocesses, BEAT CPU readiness or its runtime preparation reason, the server
+  answering, and the app-layer ZIP matching the macOS one byte for byte. A real Windows machine must then show an
   Explorer double-click starting without a console, the SmartScreen prompt, a
-  clean-machine numba load from the bundled MSVC DLLs, the WebView2 window and
+  clean-machine runtime load from the bundled MSVC DLLs, the WebView2 window and
   its browser fallback, and one in-app update including launcher refresh and the
   `-m launchers.desktop` argument-preserving relaunch.
 - Gatekeeper on a genuinely downloaded DMG (quarantined by the browser), which
@@ -502,8 +502,8 @@ browser tab rather than a window.
   for radiation impedance, so it does not depend on a new-window JavaScript
   bridge and behaves the same in pywebview and a normal browser.
 
-Freezing tools (PyInstaller, py2app, Nuitka) are rejected: numba/llvmlite,
-gmsh's `find_library` lookup, bempp's hooks and WG's `sys.executable` worker
+Freezing tools (PyInstaller, py2app, Nuitka) are rejected: gmsh's `find_library`
+lookup and WG's `sys.executable` worker
 subprocesses all fight them. The relocatable interpreter keeps every module as
 plain Python.
 
@@ -647,7 +647,7 @@ Verification is part of the script: after building, it launches
 of the bundle in a temporary directory and requires Metal ready (on Apple
 Silicon), then starts the server with `--no-browser` on a free port and
 fetches `/` and `/health`, then re-verifies the ad-hoc signature (the stub
-redirects `__pycache__` and the numba cache outside the bundle so a run
+redirects `__pycache__` outside the bundle so a run
 never breaks the seal).
 
 `.github/workflows/release.yml` gains a `macos-bundle` job on
@@ -712,7 +712,7 @@ cleanup.
   pythonnet; the Evergreen WebView2
   runtime ships with Windows 11 and recent Windows 10, and the launcher
   reports a precise repair hint when it is absent.
-- numba/llvmlite need the MSVC runtime; the build job copies
+- The Windows runtime carries the MSVC runtime; the build job copies
   `vcruntime140.dll`, `vcruntime140_1.dll`, `msvcp140.dll` from the runner's
   redistributable into `runtime/` so a clean machine does not need the
   installer. `scripts/check_backends.py` is the gate, as on macOS.

@@ -1,5 +1,8 @@
 # Dependency inputs for the 0.3.4 candidate
 
+Status: historical 0.3.4 dependency and qualification record. For current engine
+choices, see [the user guide](../USER-GUIDE.md#what-each-backend-can-solve).
+
 The candidate uses the exact commits in `pins.json`. Each Python module below
 has an immutable release tag at the same commit; generated requirements retain
 the full SHA rather than resolving a tag at installation time.

@@ -1,5 +1,9 @@
 # Proposal: the `WG.Solve` `Engine` / `SolverMode` contract
 
+The proposal and implementation account below are historical. Current design
+loading rules are in [CFG-FORMAT.md](../reference/CFG-FORMAT.md#keys-wg-accepts-and-discards),
+including the 0.3.6 retired-engine compatibility rule.
+
 **Status: enacted in full, 2026-09-05.** C1, C2b, C3 and C4 are all done.
 `CFG-FORMAT.md` no longer advertises `Engine` in its canonical block and no
 longer claims the key is validated; the open report shows each migration's note

@@ -479,7 +479,7 @@ press at all when WG is confident.
   - A source the mirror does not cut, with an axis across the mirror plane, is not
     projected: the CAD reduction is refused for that excitation
     (`excitation_problem`) and the model is solved whole ("Solve it as shown").
-  - Metal and BEMPP receive `source_axes={tag: axis}` (module contract
+  - Metal receives `source_axes={tag: axis}` (module contract
     `SolveConfig.source_axes`). A module without it makes the adapter unavailable
     ("Installed hornlab-<x>-bem does not support per-source axial axes"); an imported
     solve never falls back to the module's frame-axis path.

@@ -143,8 +143,14 @@ has not been solved has no measured rig to show, and WG does not guess one.
 ### What each backend can solve
 
 WG uses Full 3D solving with ordinary AUTO, half, and quarter symmetry reduction.
-The backend selector chooses **Metal** (Apple GPU), one of the **BEAT**
-engines, or **BEMPP** (CPU OpenCL, with numba fallback).
+The backend selector chooses **Metal** (Apple GPU) or one of the **BEAT** engines.
+
+**BEMPP was removed in 0.3.6; BEAT CPU replaces BEMPP.** CPU-only computers use
+**BEAT · CPU** with AUTO. Older designs that chose BEMPP still load and run with
+the automatic choice. The same applies to older projects, stored jobs, API
+requests and CAD Link requests that name `bempp` or carry a BEMPP-only option.
+WG treats that legacy choice as `auto` and shows a short note:
+`BEMPP was removed; this run uses <engine>`, naming the engine actually selected.
 
 BEAT is one solver with four interchangeable execution backends, and the Solver
 backend list offers each of them separately:
@@ -156,10 +162,9 @@ backend list offers each of them separately:
 | **BEAT · Metal** | an Apple Silicon GPU |
 | **BEAT · CPU** | any machine, once its Julia runtime has been provisioned |
 
-They all solve the same problem and differ only in speed, so on a machine with
-both a GPU and the CPU path you can pick either and compare. Any engine this
-machine cannot run stays in the list, greyed out, with the reason on the row —
-so a missing driver or an uninstalled runtime says so instead of vanishing.
+Any current engine this machine cannot run stays in the list, greyed out, with
+the reason on the row — so a missing driver or an uninstalled runtime says so
+instead of vanishing.
 
 **BEAT · CPU needs a runtime, and says so until it has one.** It runs on a
 private Julia runtime that has to be downloaded, instantiated, and then proved
@@ -168,72 +173,34 @@ report itself available. Source installations prepare it during setup; the
 packaged application prepares it in the background on its first launch on
 Windows, Linux and macOS, including GPU hosts when readiness is recorded per
 backend. The engine becomes selectable when preparation finishes, without
-restarting. On CPU-only computers, while preparation is pending or has failed,
-AUTO uses BEMPP if it is ready. The BEAT row keeps its progress or failure reason.
+restarting. On CPU-only computers, preparation must finish before a solve can
+start. The BEAT row keeps its progress or failure reason.
 `WG2_SKIP_BEAT_CPU_PROVISION=1` switches preparation off.
 
 On Apple Silicon, AUTO prefers Metal. AUTO walks the same order on every
-platform: Metal, then the BEAT GPU engines, then BEAT · CPU, then BEMPP.
-BEAT · CPU is the fastest measured CPU engine after the 0.3.4 SIMD work.
-BEMPP remains the fallback when BEAT · CPU is unavailable or refuses the
-request, and the CPU engine for infinite baffle.
+platform: Metal, then the BEAT GPU engines, then BEAT · CPU. AUTO selects an
+available engine that supports the request; if none is ready and compatible,
+WG shows the reason before starting a solve.
 
-BEMPP prefers a CPU OpenCL runtime whose device passes a real assembly/solve smoke test. It never uses
-GPU OpenCL devices. CPU vendor does not decide eligibility: Intel's CPU runtime
-can work on AMD CPUs too, and PoCL on Linux is another CPU runtime. Enumeration
-alone does not qualify a device; zero, incorrect or timed-out compute probes
-are rejected. If no CPU device passes, BEMPP falls back to numba: correct but
-slow, with about a minute of first-solve compilation.
-
-Qualification runs in background capability threads or isolated solve/warmup
-workers, so it cannot block startup or the event loop. Each child's interpreter
-startup and imports have a separate 60-second limit. After the child reports
-that imports are ready, inventory gets 10 seconds and each CPU smoke test gets
-20 seconds, with 30 seconds of compute time across the qualification. Import
-time does not consume those compute budgets. Passes and definitive failures
-persist for the process. A timeout temporarily selects numba; later capability
-or solve requests can retry after five seconds. Registry prewarm also schedules
-these retries, so an idle app can recover without a request or restart. At most
-one qualification runs at a time, with two retries after the initial attempt.
-After three consecutive timeouts the timeout verdict persists until restart.
-Recovery updates the capability record (including imported CAD eligibility) and
-subsequent solves select OpenCL.
-
-A capabilities request waits at most 30 seconds for qualification. If the first
-check is still pending, it reports qualification in progress, unavailable
-engines, null assembly backend/device fields and a null OpenCL reason code.
-A retry still in progress returns the last capability snapshot (including the
-temporary numba fallback).
-A later request reads the completed result. `inventory_timeout` also covers a
-stalled inventory child's startup/import; `smoke_test_timeout` covers a stalled
-smoke child's startup/import, computation or an exhausted compute budget;
-`no_device` identifies missing CPU devices or a failed inventory process. Unknown guidance reason codes still show platform driver
-guidance.
-
-Imported CAD geometry follows the same order with two differences: AUTO does
+Imported CAD geometry follows the same order, except AUTO does
 not choose a BEAT GPU engine for it in Fast (choose BEAT · Metal yourself, or
-Accurate), and BEMPP offers it only where it assembles on OpenCL. AUTO prefers
-ready BEAT · CPU, then a compatible BEMPP with compute-qualified CPU OpenCL,
-for a CAD return too. BEAT · CPU is available only after its provisioning probe
-has succeeded. BEMPP's numba route remains unavailable for imported geometry.
-BEAT · CPU's imported path is qualified against Metal; BEMPP's is not yet.
-Choosing an engine yourself always overrides AUTO: an
-explicit BEMPP stays BEMPP, an explicit BEAT · CPU stays BEAT · CPU, and an
+Accurate). On a CPU-only computer, AUTO uses ready BEAT · CPU for a CAD return
+too. BEAT · CPU is available only after its provisioning probe has succeeded.
+BEAT · CPU's imported path is qualified against Metal.
+Choosing a current engine yourself overrides AUTO: an
+explicit BEAT · CPU stays BEAT · CPU, and an
 explicit BEAT · Metal stays BEAT · Metal, in Fast as well as Accurate. BEAT ·
 CUDA and BEAT · ROCm take a CAD return only in Accurate; picking one in Fast is
 refused, naming the available engines that declare CAD geometry (one of them may
 still refuse this particular return, for example on its cut planes).
 
-The infinite-baffle setting is design physics, not a solver choice. Metal full 3D and current BEMPP full 3D both implement the coupled interior plus
-Rayleigh-aperture formulation. BEMPP currently uses a validated full-domain mesh
-for that formulation; Metal can also use half/quarter domains. BEAT does not yet
-support coupled infinite baffle, so choosing it, or a BEMPP without coupled
-support, for an infinite-baffle design refuses the solve before it starts and never
+The infinite-baffle setting is design physics, not a solver choice. Metal full 3D
+implements the coupled interior plus Rayleigh-aperture formulation, including
+half/quarter domains. BEAT does not yet support coupled infinite baffle, so
+choosing it for an infinite-baffle design refuses the solve before it starts and never
 switches engine or mounting silently. No backend substitutes an image/double-horn
-approximation for a flush-mounted waveguide. Infinite baffle uses the same
-CPU-OpenCL-first rule. If no CPU device passes, the numba fallback remains
-available and the IB selector shows the “correct but slow” notice. Imported
-CAD still requires a compute-qualified CPU OpenCL device.
+approximation for a flush-mounted waveguide. A CPU-only computer currently has
+no compatible engine for coupled infinite baffle.
 
 The **ground plane** in Solve options is a different boundary, not another name
 for the baffle, and the difference matters because picking the wrong one still
@@ -251,33 +218,23 @@ clear the surface, and a solve that would not is refused with the smallest
 height that works rather than solved with the horn buried. Standing the model
 off the surface removes the matching mirror plane, so Auto symmetry drops to
 the reduction that survives -- a floor costs the horizontal cut but keeps the
-left/right one. The ground plane needs BEMPP full 3D on this build; asking any
-other engine for one is refused rather than solved without the surface, and it
-is not available for imported CAD geometry on any engine; an imported solve
-with the ground plane on is refused when it is submitted. It
-cannot be combined with an infinite baffle -- the two are different half-space
-boundaries, each claiming the whole exterior, and the pair is refused when the
+left/right one. No current engine supports the ground plane. The capability
+response marks it unavailable, and new requests that require it are refused
+before solving. It cannot be combined with an infinite baffle -- the two are
+different half-space boundaries, each claiming the whole exterior, and the pair is refused when the
 solve is submitted whichever engine you choose.
 
 Imported CAD geometry takes the same engine choice as a design: the CAD solve
 options list the engines, and AUTO takes the first available one that solves
 imported geometry. Metal does, and so does BEAT · CPU, which runs on every
 platform without a GPU. BEAT · Metal does when you choose it yourself, in Fast
-or Accurate. BEMPP does too, where it assembles on an OpenCL device;
-a build that would fall back to numba does not offer imported geometry.
+or Accurate.
 BEAT · CPU mirrors an x0 half and an x0+y0 quarter natively; a return cut on y0
-alone is refused on BEAT with the reason, and solves on Metal or BEMPP. BEMPP
-refuses a return with open edges off its mirror planes, because it holds the
-pressure at zero on a free rim where Metal does not; close the shell in CAD, or
-choose another engine. It also refuses a return prepared by a WG too old to
-record that count; prepare it again. The passive-cardioid campaign is
-Metal-only. Field-plane traces are available
-from free-standing Metal and BEMPP full-3D solves; coupled-IB and
-ground-plane solves report that traces are unavailable. A grounded solve keeps
-none because the field evaluation carries no ground image: it would draw the
-horn in free space with no floor in the picture, while the polar and impedance
-results it is shown beside do include the surface. Turn the ground plane off if
-you need the field plane. The capability response drives these
+alone is refused on BEAT with the reason, and solves on Metal. The
+passive-cardioid campaign is Metal-only. Field-plane traces are available
+from free-standing Metal and BEAT full-3D solves when the installed engine
+advertises trace support; coupled-IB solves report that traces are unavailable.
+The capability response drives these
 controls, so an older optional solver package cannot advertise a feature it does
 not implement. Designs carrying an unavailable option remain editable and show
 an actionable reason instead of silently changing the physics.

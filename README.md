@@ -13,6 +13,10 @@ current contracts, accepted design gates, legacy notes, and dated validation evi
 To add flanges, ports or drivers in Fusion and solve the finished speaker, follow
 the [CAD Link and driver setup guide](docs/CAD-LINK-GUIDE.md).
 
+BEMPP was removed in **0.3.6**; **BEAT CPU replaces BEMPP**. CPU-only computers
+use BEAT CPU with the automatic engine choice. Older designs that chose BEMPP
+still load and run with the automatic choice, with a note naming the engine used.
+
 ## Install
 
 Clone the repository — do not download a ZIP, because the installer updates
@@ -393,7 +397,7 @@ JS frame codec (explicit file path — directory mode trips the node runner): `n
 
 Frontend unit tests: `npm --prefix frontend test`
 
-Real solves are never run in hosted CI; Metal and bempp parity run on owned
+Solver parity and release qualification for Metal and BEAT CPU run on owned
 qualification hardware, and their archived reports back the release gates. Use
 the [solver release qualification checklist](docs/validation/SOLVER-QUALIFICATION.md)
 for the mandatory macOS, Windows, full/quarter, and cross-solver runs.

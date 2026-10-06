@@ -108,8 +108,7 @@ to bring those edits into WG; the apps do not continuously synchronize geometry.
    Component exports are checked against what Fusion actually puts in STEP;
    WGLink refuses a scope that cannot safely leave its unwanted bodies out.
 
-Closed solids are the simplest starting point. Open shells need particular care:
-BEMPP refuses free edges away from mirror planes. A fully enclosed void inside a
+Closed solids are the simplest starting point. A fully enclosed void inside a
 solid can also be refused during STEP healing; re-export it with the cavity
 opened to the outside or as separate boundary shells, as the error advises.
 
@@ -163,8 +162,8 @@ renaming a Fusion body does not create separate left/right channels.
    one source can contain several disconnected diaphragm patches.
 3. Keep **Motion → Normal** for driver-model solves. It moves each face along
    its own normal. **Axial (pistonic)** describes a rigid piston along its source
-   axis. Metal and BEMPP solve it along each source's own axis with the module
-   versions WG ships; an older installed Metal or BEMPP package that lacks
+   axis. Metal solves it along each source's own axis with the module
+   version WG ships; an older installed Metal package that lacks
    per-source axes refuses it. WG reports any refusal before running; it does
    not silently use Normal. An axial channel cannot carry a Thiele/Small driver
    model either. BEAT can use CAD axial motion only when each resolved source
@@ -286,10 +285,16 @@ the model you happen to display in the viewport.
    compatible available engines. An explicit choice stays yours; WG refuses an
    unsupported combination rather than silently switching engines.
 
+   **BEMPP was removed in 0.3.6; BEAT CPU replaces BEMPP.** CPU-only computers
+   use **BEAT · CPU** with AUTO. Older designs that chose BEMPP run with the
+   automatic choice. Older CAD Link requests and saved setups naming `bempp`
+   or carrying a BEMPP-only option still load: WG treats that legacy choice as
+   `auto` and shows `BEMPP was removed; this run uses <engine>`, naming the
+   selected engine.
+
    | Solver | CAD use today |
    |---|---|
    | **Metal** | Apple GPU; Normal and axial CAD sources, and passive cardioid. An older installed package without per-source axes refuses CAD axial. |
-   | **BEMPP** | Imported CAD requires OpenCL assembly and no free rim away from mirror planes. CAD axial is solved along each source's axis; an older installed package without per-source axes refuses it. |
    | **BEAT · CPU** | Requires its provisioned Julia runtime. Can solve imported CAD; passive cardioid is refused. |
    | **BEAT · Metal / CUDA / ROCm** | Requires the matching available GPU/runtime. CUDA and ROCm are not qualified on real hardware yet. Choose Accurate for CUDA/ROCm CAD solves; explicit BEAT · Metal also accepts CAD in Fast. Passive cardioid is refused. |
 
@@ -378,11 +383,9 @@ examples show x = 0; the same checks apply at y = 0.
 | “no source meets x = 0, so nothing shows it is the speaker's symmetry plane rather than an open side” | Send the whole model or correct the cut and source geometry. Do not invent a source just to pass the check. |
 | “its mirror image would stand in for the other side's own source” | Send the whole model for independently identified sides. Rename only if the name wrongly identifies a shared source as one side's driver. |
 | “Return the whole model from CAD to solve it whole.” | Turn **Force full domain** off for a valid CAD-cut model, or send the complete speaker. |
-| “Installed hornlab-metal-bem does not support per-source axial axes.” / “Installed hornlab-bempp-bem does not support per-source axial axes.” | The installed Metal or BEMPP package is older than the version WG ships and cannot solve that CAD axial drive. Update the module, choose Normal only if it represents the intended motion, or use an available compatible BEAT route without a driver model. |
+| “Installed hornlab-metal-bem does not support per-source axial axes.” | The installed Metal package is older than the version WG ships and cannot solve that CAD axial drive. Update the module, choose Normal only if it represents the intended motion, or use an available compatible BEAT route without a driver model. |
 | “BEAT drives axial sources along its z axis” | That source's axis is tilted relative to the radiation axis. Use Normal only if appropriate; BEAT cannot represent that tilted axial drive. |
 | “Complete the driver, or clear it to solve that channel unit-driven.” | Supply the listed missing T/S values, or clear the driver. |
-| “BEMPP does not solve the passive cardioid; it is solved on Metal only. Select Metal for this return.” | Choose Metal. A CPU/GPU backend change cannot preserve this feature on BEMPP or BEAT. |
-| “BEMPP solves imported CAD geometry on an OpenCL device only.” | Use an available compatible engine, or an OpenCL assembly setup the app accepts. A free-rim refusal additionally requires closing the shell or choosing Metal/BEAT · CPU. |
 | “imported geometry supports free-space solves only; infinite baffle is unavailable” | Use free-space mounting for this CAD solve. |
 | “Turn the ground plane off to solve this return.” | Disable the ground plane; imported CAD cannot be stood above a floor on this route. |
 | **Fusion shows:** “WG took the request but has not confirmed it. Check WG's CAD Link panel before sending this model again.” | Inspect CAD Link first. Sending again creates a new request and may duplicate work. |

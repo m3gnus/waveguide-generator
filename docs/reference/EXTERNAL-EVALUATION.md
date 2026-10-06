@@ -22,6 +22,13 @@ Catalog `editor_bounds` describe the editor, not hard validity or recommended se
 ranges. The strict request/design schema and WG validation are authoritative. Search
 ranges belong to the calling study.
 
+Since 0.3.6, BEMPP is absent from engine discovery and the current engine contract;
+BEAT CPU replaces BEMPP, and AUTO uses BEAT CPU on CPU-only computers. For backward
+compatibility, a request naming `engine: "bempp"` or carrying a BEMPP-only option
+is accepted as `auto`, with the user-visible note
+`BEMPP was removed; this run uses <engine>` naming the resolved engine. Saved designs/projects, stored job reloads
+and CAD Link requests follow the same rule.
+
 ## HTTP lifecycle
 
 1. Submit a strict `SolveRequest` to `POST /api/solve`.

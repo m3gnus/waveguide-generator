@@ -26,9 +26,8 @@ A ground plane (`SolveOptions.ground_plane`) is an infinite, perfectly rigid
 reflecting surface through the origin, and the model is translated to stand
 above it. It is named by the single axis it bounds -- `x`, `y`, or `z`, with
 the fluid in `axis >= 0` -- never by an axis-pair token, because `xy` already
-means legacy bi-symmetry here and x-and-y mirrors in BEAT, and it means the
-z = 0 plane in `hornlab-bempp-bem`. WG's frame runs the waveguide axis along z
-with y vertical, so `y` is the floor.
+means legacy bi-symmetry here and x-and-y mirrors in BEAT. WG's frame runs the
+waveguide axis along z with y vertical, so `y` is the floor.
 
 Standing the model off the surface is what removes the matching mirror plane: a
 reduced mesh is cut *on* its plane and must touch it, while a model above a

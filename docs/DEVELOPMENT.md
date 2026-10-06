@@ -89,11 +89,11 @@ constellation checks, a real browser, or owned qualification hardware. Hosted CI
 solver qualification; its only real solves are the two tiny ones below.
 
 `server/tests/test_real_pipeline.py` is the one default test with nothing faked: a tiny
-OSSE through `/api/solve` on the pinned mesher and BEMPP, and a committed `.wgreturn`
-through ingest, backend preparation and solve (on BEMPP-OpenCL or Metal), holding the
+OSSE through `/api/solve` on the pinned mesher and BEAT CPU, and a committed `.wgreturn`
+through ingest, backend preparation and solve (on BEAT CPU or Metal), holding the
 results and the installed module commits to `pins.json`. Each solve must finish within
 60 seconds; the separate 300-second job timeout is a hang guard. Hosted Ubuntu's server
-job installs pinned PoCL CPU OpenCL and requires the CAD path; other hosted jobs may skip
+job prepares the pinned BEAT CPU runtime and requires the CAD path; other hosted jobs may skip
 it with the registry's reasons. Before any pin move, run this file on a capable local
 qualification host in an environment installed from the pins, explicitly requiring both
 paths (a missing imported engine must fail):
@@ -149,7 +149,7 @@ defaults to four xdist workers. Set `WG_TEST_WORKERS` or pass `-n` to override i
 the supported range is 0–6. Explicit targeted runs remain serial unless given `-n`.
 Collection-only runs omit the default worker count. Never use `-n auto` on the shared Mac.
 Two broker lanes may be active together, so four workers per lane can already mean
-eight workers. The suite also limits BLAS, OpenMP, and Numba pools to one thread per
+eight workers. The suite also limits BLAS and OpenMP pools to one thread per
 process so the native libraries do not multiply that budget again.
 
 Run heavy gates through the workspace compute broker, with an honest expected
@@ -182,8 +182,9 @@ Parallel landing is permitted only with identical pass/skip counts from serial
 and parallel runs on that tree; a fast inner-loop run is never landing evidence.
 Use `--full -n0` for landing until that tree has parity evidence.
 
-S1-full qualification on the shared ten-logical-CPU Mac used a fresh Python 3.13
-environment and both complete Python suites, with slow tests included:
+Historical S1-full qualification (2026-09-29) on the shared ten-logical-CPU Mac
+used a fresh Python 3.13 environment and both complete Python suites, with slow
+tests included:
 
 | Execution | Wall time | Passed / skipped | Mean CPU cores | Broker job |
 | --- | ---: | ---: | ---: | --- |
@@ -205,8 +206,8 @@ capacity for foreground work. These are individual broker runs on the shared
 Mac; their logs record host load before and after execution.
 
 `--durations=30` identified the largest export calls at about 104, 54, and 52
-seconds, alongside real BEMPP, scale, and shutdown integrations. The `slow`
-selection covers 21 of 5746 tests. Refresh the duration evidence when changing
+seconds, alongside real BEMPP, scale, and shutdown integrations in that historical
+tree. The `slow` selection covered 21 of 5746 tests. Refresh the duration evidence when changing
 expensive tests; keep all of them in the full gate.
 
 The server suite does not need `frontend/dist` as a whole: only the tests that build the
@@ -286,8 +287,8 @@ name GitHub serves, while the archive root keeps the product's spaces. The runti
 same pinned CPython patch as macOS and carries `vcruntime140.dll`,
 `vcruntime140_1.dll`, and `msvcp140.dll` for clean machines. Bundle verification runs
 the renamed `pythonw.exe` launcher with `-c`, requires `scripts/check_backends.py` to
-report the bempp/numba backend ready, and requires `/` and `/health` to answer. The
-bootstrap separately recognizes CPython's no-command state as the Explorer
+report BEAT CPU readiness or its runtime preparation reason, and requires `/`
+and `/health` to answer. The bootstrap separately recognizes CPython's no-command state as the Explorer
 double-click contract and enters `launchers.desktop`; `-c`, `-m`, and script
 invocations remain ordinary worker/interpreter paths. Executing that no-command path
 on Windows remains an open real-platform gate. The included
@@ -352,8 +353,8 @@ Three things differ from the other two platforms, each for a measured reason:
   because `rm -rf` over a path built from `--prefix` is how a home directory is lost.
 
 Bundle verification is the same shape as the other two: `scripts/check_backends.py`
-must report the bempp/numba backend ready, `/` and `/health` must answer, and then the
-*shipped launcher* is started with `--no-gui` and must serve the application — the gate
+must report BEAT CPU readiness or its runtime preparation reason, `/` and `/health`
+must answer, and then the *shipped launcher* is started with `--no-gui` and must serve the application — the gate
 that covers the script the desktop entry actually executes, which running the
 interpreter directly says nothing about. It is headless by request; the status window
 itself needs a display and is not covered.
@@ -428,9 +429,18 @@ is revalidated against the allowed GitHub release CDN. A rehearsal accepts plain
 `http://` only at the same literal loopback origin as the API base; redirects cannot
 escape it.
 
-The bundle stub's `PYTHONPYCACHEPREFIX` and `NUMBA_CACHE_DIR` remain inherited by the
-staged updater and restarted application. Runtime imports therefore continue to write
-only below the user cache directory, never into the signed bundle.
+The bundle stub's cache environment remains inherited by the staged updater and
+restarted application. `PYTHONPYCACHEPREFIX` keeps Python caches below the user cache
+directory, outside the signed bundle. Older 0.3.4/0.3.5 runtimes can still contain
+BEMPP and inherit `NUMBA_CACHE_DIR` during an update; that is updater compatibility,
+not a current solver requirement.
+
+Removing the runtime package in 0.3.6 must preserve the updater bridge from
+0.3.4/0.3.5 installs: keep `launchers/apply_update.py`,
+`launchers/bundle_recovery.py`, `launchers/update_lock.py`,
+`launchers/statusapp/updater.py`, `launchers/statusapp/healthy_start.py` and the
+`-updates` companion release logic intact. Old installed runtimes may keep their
+retired solver packages while completing or rolling back the update.
 
 ## Documentation changes
 

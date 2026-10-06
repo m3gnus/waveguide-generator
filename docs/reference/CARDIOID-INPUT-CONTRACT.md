@@ -1,5 +1,9 @@
 # Passive-cardioid campaign — input contract
 
+Status: input contract with historical F0 measurements and reproduction notes.
+The old runtime references below identify those measurements, not current setup
+requirements; see [the user guide](../USER-GUIDE.md#what-each-backend-can-solve).
+
 Established by the F0 spike, 2026-08-13, against reference run
 `hornlab-research/runs/fusion360/260704-124242-260627_-_PartyMEH_v10`.
 Every number below is measured, not quoted.

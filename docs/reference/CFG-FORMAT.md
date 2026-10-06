@@ -130,6 +130,13 @@ parses, so a hand-edited file cannot leave WG in a mode that refuses to solve.
 
 ### Keys WG accepts and discards
 
+BEMPP was removed in 0.3.6; BEAT CPU replaces BEMPP on CPU-only computers.
+Older designs and projects that chose `bempp` or carry a BEMPP-only option
+still load and run with the automatic engine choice. WG treats the legacy
+choice as `auto` and shows `BEMPP was removed; this run uses <engine>`, with
+the selected engine's name. This compatibility rule also applies to stored
+job reloads, API requests and CAD Link requests.
+
 Two settings are deliberately not portable, because they describe the machine
 rather than the design: which backend runs the solve, and which formulation it
 uses. A `.cfg` moves between machines, and `Engine = metal` means nothing on a
