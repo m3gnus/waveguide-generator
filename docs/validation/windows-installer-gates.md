@@ -174,9 +174,11 @@ and a note saying why. The user can still browse anywhere, including back.
   holds anything besides Waveguide Generator's own entries (the root names
   `[UninstallDelete]` lists, plus `unins###.exe`/`.dat`), it lists exactly the
   entries to delete; otherwise it says "the Waveguide Generator files in" it. It
-  also says that any taskbar or Start pin still opens the old copy, and that the
-  desktop shortcut was removed or, if this run ticked the desktop task, now opens
-  the new install. There is no note when the
+  also says that any taskbar or Start pin still opens the old copy, and, for the
+  desktop shortcut, one of three things: it now opens the new install (this run
+  ticked the desktop task), it was removed (it was Waveguide Generator's), or a
+  desktop shortcut may still open the old copy (one setup left in place: it points
+  elsewhere, cannot be read, or could not be deleted). There is no note when the
   new folder and the previous one are the same or nested either way, compared as
   spelled and as `GetFinalPathNameByHandleW` resolves them (8.3 names, SUBST and
   mapped drives; setup cannot open a junction an unelevated user made, error 448).
