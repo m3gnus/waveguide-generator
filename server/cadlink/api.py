@@ -2017,6 +2017,15 @@ async def post_cad_operation(
 ) -> ManualSolveOperationResponse | JSONResponse:
     """Create or recover a manual solve from an immutable retained CAD ingest."""
 
+    return await _create_manual_solve_operation(payload, request)
+
+
+async def _create_manual_solve_operation(
+    payload: ManualSolveOperationRequest, request: Request,
+    restart_response: Any = None,
+) -> ManualSolveOperationResponse | JSONResponse:
+    """Shared manual intake for the operation shim and the jobs route."""
+
     state = request.app.state
     try:
         recovered, _ingest, _record, _inputs = await asyncio.to_thread(
@@ -2054,7 +2063,11 @@ async def post_cad_operation(
 
     restart = getattr(state, "update_restart", None)
     refusal = restart.refusal() if restart is not None else None
-    if refusal is not None:
+    if restart_response is not None:
+        refused = restart_response()
+        if refused is not None:
+            return refused
+    elif refusal is not None:
         return JSONResponse(
             status_code=409,
             content=error_envelope(

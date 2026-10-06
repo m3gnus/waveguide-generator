@@ -1162,6 +1162,82 @@ class SolveRequest(JobModel):
         )
 
 
+class CadApprovalsRequest(JobModel):
+    preparation_id: str = Field(min_length=1)
+    finding_ids: list[str] = Field(min_length=1)
+
+
+class CadSolveAgainRequest(JobModel):
+    setup_revision_id: str | None = None
+    frame_axis: str | None = None
+    approvals: CadApprovalsRequest | None = None
+    submit: bool = True
+
+    @field_validator("frame_axis")
+    @classmethod
+    def known_axis(cls, value: str | None) -> str | None:
+        from server.cadlink.solver_frame import AXES as SOLVER_FRAME_AXES
+
+        if value is not None and value not in SOLVER_FRAME_AXES:
+            raise ValueError(f"frame_axis must be one of {', '.join(SOLVER_FRAME_AXES)}")
+        return value
+
+    def press(self) -> dict[str, Any]:
+        return {
+            "setup_revision_id": self.setup_revision_id,
+            "frame_axis": self.frame_axis,
+            "approve_preparation_id": self.approvals.preparation_id if self.approvals else None,
+            "approve_finding_ids": tuple(self.approvals.finding_ids) if self.approvals else (),
+            "submit": self.submit,
+        }
+
+
+class CadSolveRequest(CadSolveAgainRequest):
+    # The manual prefix is separate from the delivery id's charset and bound.
+    client_request_id: str = Field(
+        min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+        description="Stable manual Solve id; an exact ingest replay recovers its original job.",
+    )
+    ingest_id: str = Field(min_length=1)
+    label: str | None = None
+
+
+class CadStateSnapshot(JobModel):
+    document_name: str | None
+    manifest_sha256: str | None
+    artifact_sha256: str | None
+    project_lineage_id: str | None
+
+
+class CadStatePreparation(JobModel):
+    preparation_id: str
+    blocking_finding_ids: list[str]
+    report_sha256: str | None
+
+
+class CadStateApproval(JobModel):
+    preparation_id: str
+    finding_id: str
+
+
+class CadState(JobModel):
+    """The CAD solve's state, derived entirely from this job's record."""
+
+    operation_id: str | None
+    state: str
+    stage: str | None
+    reason: str | None
+    message: str | None
+    job_id: str | None
+    snapshot: CadStateSnapshot | None
+    preparation: CadStatePreparation | None
+    approvals: list[CadStateApproval]
+    setup_defaults: bool
+    frame_axis_automatic: str | None
+    received_at: str | None
+    updated_at: str | None
+
+
 class SolveAccepted(JobModel):
     job_id: str
     client_request_id: str | None = None
@@ -1320,6 +1396,8 @@ class JobItem(JobModel):
     #: ``provenance``, ``confirmed``, ``requirement``) and ``preparation``. Null
     #: for a run made without one.
     cad_provenance: dict[str, Any] | None = None
+    #: State and preparation read from this job alone, without its delivery ledger.
+    cad_state: CadState | None = None
     #: The CAD intent a ``preparing`` job holds instead of a request (``type`` is
     #: ``cad_intent``, with the operation, return and setup it was accepted
     #: with). Null for every job that has a request.
@@ -1393,6 +1471,13 @@ class JobMetadataPatch(JobModel):
 
 
 __all__ = [
+    "CadApprovalsRequest",
+    "CadSolveAgainRequest",
+    "CadSolveRequest",
+    "CadState",
+    "CadStateApproval",
+    "CadStatePreparation",
+    "CadStateSnapshot",
     "ClearFailedResponse",
     "DeleteResponse",
     "DesignAvailability",

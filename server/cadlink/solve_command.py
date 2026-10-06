@@ -1544,6 +1544,8 @@ def record_outcome(
     job_id: str | None = None,
     reason: str | None = None,
     command: PendingSolveCommand | None = None,
+    setup_defaults: bool = False,
+    frame_axis_automatic: str | None = None,
 ) -> dict[str, Any]:
     """Record a terminal outcome for a command id, and return the one that stands.
 
@@ -1563,7 +1565,13 @@ def record_outcome(
         raise ValueError(f"Unknown solve-command outcome: {state!r}")
     stored_state = _LEDGER_STATES[state]
     message = reason or None
-    outcome = {"message": message} if message else None
+    outcome = {"message": message} if message else {}
+    if state == "accepted":
+        if setup_defaults:
+            outcome["setup_defaults"] = True
+        if frame_axis_automatic is not None:
+            outcome["frame_axis_automatic"] = frame_axis_automatic
+    outcome = outcome or None
     requested = (state, job_id, message)
     delivered: tuple[dict[str, Any], dict[str, Any], str] | None = None
     if command is not None and command.command_id == command_id:

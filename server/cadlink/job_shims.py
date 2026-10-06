@@ -22,8 +22,8 @@ from server.jobs.cad_intent import CadSolveIntent, INTERRUPTED_MESSAGE, cad_of
 from server.jobs.models import SolveRequest
 from .operations import PREPARE_AND_SOLVE, TERMINAL_STATES
 from .preparation import (PreparationInput, _publish, _submission_refusal_reason, submission_key,
-                          retain_operation_snapshot, RETAINED, RETAIN_TRANSIENT)
-from .solve_command import record_outcome, live_held_operation_ids, waiting_claim_operation_ids
+                          retain_operation_snapshot, record_job_acceptance, RETAINED, RETAIN_TRANSIENT)
+from .solve_command import live_held_operation_ids, waiting_claim_operation_ids
 from .solver_frame import frame_provenance, record_solved_frame_provenance
 
 
@@ -205,7 +205,7 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
             await runtime.stop(job_id)
     await asyncio.to_thread(runtime.store.make_durable)
     if row["state"] not in TERMINAL_STATES:
-        await asyncio.to_thread(record_outcome, store, operation_id, state="accepted", job_id=job_id)
+        await asyncio.to_thread(record_job_acceptance, ctx, operation_id, job_id)
     current = await asyncio.to_thread(store.get_operation, operation_id)
     _publish(ctx, current)
     return job_id
@@ -257,7 +257,7 @@ async def accept_operation_solve_isolated(ctx, operation_id, **kwargs):
                 if result is not None:
                     await asyncio.to_thread(ctx.runtime.store.make_durable)
                     if row["state"] not in TERMINAL_STATES:
-                        await asyncio.to_thread(record_outcome, ctx.store, operation_id, state="accepted", job_id=result)
+                        await asyncio.to_thread(record_job_acceptance, ctx, operation_id, result)
         retries.pop(operation_id, None)
         return result
     except Exception as exc:

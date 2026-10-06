@@ -107,6 +107,8 @@ export interface JobItem extends JobNullableFields {
   cad_setup?: CadSetup | null;
   /** What the CAD operation that made this run resolved, kept on the job. */
   cad_provenance?: CadProvenance | null;
+  /** State and preparation read from this job's record. */
+  cad_state?: components['schemas']['CadState'] | null;
   /** What a `preparing` job holds instead of a request (`type: 'cad_intent'`). Null for every job with a request. */
   cad_intent?: Record<string, unknown> | null;
 }
@@ -326,6 +328,25 @@ function isNullableTimestamp(value: unknown): value is string | null {
   return value === null || isTimestamp(value);
 }
 
+function isCadState(value: unknown): value is components['schemas']['CadState'] {
+  if (!isRecord(value)) return false;
+  if (!['operation_id', 'stage', 'reason', 'message', 'job_id', 'frame_axis_automatic']
+    .every((key) => isNullableString(value[key]))) return false;
+  if (typeof value.state !== 'string' || typeof value.setup_defaults !== 'boolean') return false;
+  if (!isNullableTimestamp(value.received_at) || !isNullableTimestamp(value.updated_at)) return false;
+  const snapshot = value.snapshot;
+  if (!(snapshot === null || (isRecord(snapshot)
+    && ['document_name', 'manifest_sha256', 'artifact_sha256', 'project_lineage_id']
+      .every((key) => isNullableString(snapshot[key]))))) return false;
+  if (!(value.preparation === null || (isRecord(value.preparation)
+    && typeof value.preparation.preparation_id === 'string'
+    && isStringArray(value.preparation.blocking_finding_ids)
+    && isNullableString(value.preparation.report_sha256)))) return false;
+  return Array.isArray(value.approvals) && value.approvals.every((item) => (
+    isRecord(item) && typeof item.preparation_id === 'string' && typeof item.finding_id === 'string'
+  ));
+}
+
 function isCadSource(value: unknown): value is CadSource {
   return isRecord(value)
     && (['ingest_id', 'design_id', 'lineage_id', 'archive_stem', 'manifest_sha256', 'transformed_geometry_hash', 'solve_model_sha256', 'document_name', 'return_state_hash'] as const)
@@ -415,6 +436,7 @@ function isJobItem(value: unknown): value is JobItem {
   if (hasOwn(value, 'cad_source') && !(value.cad_source === null || isCadSource(value.cad_source))) return false;
   if (hasOwn(value, 'cad_setup') && !(value.cad_setup === null || isCadSetup(value.cad_setup))) return false;
   if (hasOwn(value, 'cad_provenance') && !(value.cad_provenance === null || isRecord(value.cad_provenance))) return false;
+  if (hasOwn(value, 'cad_state') && !(value.cad_state === null || isCadState(value.cad_state))) return false;
   if (hasOwn(value, 'cad_intent') && !(value.cad_intent === null || isRecord(value.cad_intent))) return false;
   return true;
 }

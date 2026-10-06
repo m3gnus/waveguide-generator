@@ -11,6 +11,7 @@ import pytest
 from cad_backends import JobsHarness
 from server.cadlink import api
 from server.cadlink.job_shims import sweep_pending_solves
+from server.cadlink.operations import REASON_CODES
 from server.cadlink.preparation import operation_summary
 from server.cadlink.setup import solve_request_for, validate_setup
 from server.jobs.cad_intent import cad_of
@@ -332,15 +333,15 @@ def test_dismissal_finishes_a_job_first_receipt_join_before_deleting_the_refusal
     generation = h.store.claim("cmd-1", 0)
     h.store.record_outcome("cmd-1", generation, "needs_user_input", reason="setup_required",
                            outcome={"message": "Choose settings"})
-    original = job_shims.record_outcome
+    original = job_shims.record_job_acceptance
     def lose_receipt(*args, **kwargs):
         raise RuntimeError("receipt write lost")
-    monkeypatch.setattr(job_shims, "record_outcome", lose_receipt)
+    monkeypatch.setattr(job_shims, "record_job_acceptance", lose_receipt)
     with pytest.raises(RuntimeError, match="receipt write lost"):
         h._loop.run(job_shims.accept_operation_solve(h.context(), "cmd-1"))
     root = h.jobs_store.latest_cad_job("cmd-1")["id"]
     assert h.row()["job_id"] is None
-    monkeypatch.setattr(job_shims, "record_outcome", original)
+    monkeypatch.setattr(job_shims, "record_job_acceptance", original)
     result = h._loop.run(api.post_cancel_cad_operation("cmd-1", _request(h)))
     assert result["state"] == "cancelled" and result["stage"] is None
     assert h.row()["state"] == "accepted" and h.row()["job_id"] == root
@@ -812,3 +813,174 @@ def test_real_cancel_before_admission_is_refused_when_delivery_is_collected(h):
     assert not list(inbox.iterdir())
     assert h.jobs_store.list_jobs()[1] == 0
     assert h.ingest.calls == h.submitted == []
+
+
+@pytest.mark.parametrize("status, reason, stage, expected", [
+    ("preparing", None, "received", "received"),
+    ("preparing", None, "preparing-mesh", "processing"),
+    ("preparing", None, "waiting-for-update-restart", "needs_user_input"),
+    *[("error", reason, "error", state) for reason, state in REASON_CODES.items()
+      if state in {"needs_user_input", "rejected"}],
+    ("cancelled", None, "cancelled", "cancelled"),
+    ("queued", None, "queued", "accepted"),
+])
+def test_f2_cad_state_matches_the_operation_view_using_only_the_job(h, status, reason, stage, expected):
+    from server.jobs.cad_intent import CadSolveIntent
+    from server.jobs.models import CadState
+
+    _received(h)
+    intent = CadSolveIntent(operation_id="cmd-1", bundle_path="wgreturn/model.wgreturn", manifest_sha256="sha256:" + "1" * 64, return_id="return")
+    record = h.runtime._preparing_record(intent)
+    cad = record["task_metadata"]["cad"]
+    cad.update(
+        snapshot={"document_name": "Speaker", "manifest_sha256": "sha256:" + "1" * 64,
+                  "artifact_sha256": "sha256:" + "2" * 64, "project_lineage_id": "lineage"},
+        setup={"revision_id": "rev", "digest": "sha256:" + "3" * 64, "origin": "wg_defaults"},
+        frame={"axis": "+x", "provenance": "automatic"}, last_stage="ready",
+        preparation={"preparation_id": "prep", "blocking_finding_ids": ["review"], "report_sha256": "report",
+                     "approvals": [{"preparation_id": "prep", "finding_id": "review"}]},
+    )
+    record.update(status=status, stage=stage, stage_message="Restart pending", started_at="2026-10-01T00:00:00Z" if stage == "preparing-mesh" else None)
+    if reason:
+        cad["refusal"] = {"code": reason, "message": "Refused precisely"}
+    if status == "queued":
+        record["config_json"] = {"geometry": {"type": "imported"}}
+    job_id, _, _ = h.jobs_store.create_job_idempotent(record, submission_key="cad-solve:cmd-1", request_sha256="delivery")
+    job = h.jobs_store.get_job_row(job_id)
+    state = h.runtime._serialize_job(job)["cad_state"]
+    assert CadState.model_validate(state).model_dump() == state
+    summary = operation_summary(h.row(), h.jobs_store)
+    assert state["state"] == summary["state"] == expected
+    for job_field, operation_field in [("operation_id", "operationId"), ("job_id", "jobId"), ("setup_defaults", "setupDefaults"), ("frame_axis_automatic", "frameAxisAutomatic"), ("updated_at", "updatedAt")]:
+        assert state[job_field] == summary[operation_field]
+    for field in ("stage", "reason", "message"):
+        assert state[field] == summary[field]
+    assert state["received_at"] == job["created_at"]
+    assert state["snapshot"] == cad["snapshot"]
+    assert state["preparation"] == {k: cad["preparation"][k] for k in ("preparation_id", "blocking_finding_ids", "report_sha256")}
+    assert state["approvals"] == cad["preparation"]["approvals"]
+    h.store.close()  # the read model cannot consult the operation ledger
+    assert h.runtime._serialize_job(job)["cad_state"] == state
+
+
+@pytest.mark.parametrize("record_kind", ["direct", "old_cad", "bare_intent"])
+def test_f2_cad_state_keeps_missing_historical_data_null(h, record_kind):
+    from server.jobs.cad_intent import CadSolveIntent
+
+    intent = CadSolveIntent(operation_id="old", bundle_path="old.wgreturn", manifest_sha256="sha256:" + "1" * 64, return_id="return")
+    row = h.runtime._preparing_record(intent)
+    if record_kind != "bare_intent":
+        row.update(status="queued", config_json={})
+    if record_kind in {"direct", "bare_intent"}:
+        row["task_metadata"] = {}
+    state = h.runtime._serialize_job(row)["cad_state"]
+    if record_kind == "direct":
+        assert state is None
+    else:
+        assert state["operation_id"] == "old"
+        assert state["snapshot"] is state["preparation"] is None
+        assert state["approvals"] == []
+
+
+@pytest.mark.parametrize("path", ["reconcile", "compat", "sweep", "delivery", "malformed"])
+@pytest.mark.parametrize("origin, provenance, axis", [("wg_defaults", "automatic", "+x"), ("user", "chosen", None)])
+def test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis(h, monkeypatch, path, origin, provenance, axis):
+    from server.cadlink import job_shims
+    from server.cadlink.preparation import reconcile_with_jobs, run_delivery_pass
+    from server.jobs.cad_intent import CadSolveIntent
+
+    _received(h)
+    record = h.runtime._preparing_record(CadSolveIntent(operation_id="cmd-1", bundle_path="unused.wgreturn", manifest_sha256="sha256:" + "1" * 64, return_id="return"))
+    record.update(status="queued", config_json={})
+    record["task_metadata"]["cad"].update(setup={"origin": origin}, frame={"axis": "+x", "provenance": provenance})
+    job_id, _, _ = h.jobs_store.create_job_idempotent(record, submission_key="cad-solve:cmd-1", request_sha256="old-request")
+    ctx = h.context()
+    ctx.job_for_submission = h.jobs_store.job_for_submission_key
+    if path == "reconcile":
+        reconcile_with_jobs(ctx, "cmd-1")
+    elif path == "compat":
+        h._loop.run(job_shims.accept_operation_solve(ctx, "cmd-1", manual=True))
+    elif path == "sweep":
+        h._loop.run(sweep_pending_solves(ctx))
+    elif path == "malformed":
+        async def interrupted_join(*args, **kwargs):
+            raise job_shims.BadSolvePayload("broken legacy inputs")
+        monkeypatch.setattr(job_shims, "accept_operation_solve", interrupted_join)
+        h._loop.run(job_shims.accept_operation_solve_isolated(ctx, "cmd-1"))
+    else:
+        h._loop.run(run_delivery_pass(ctx, spawn=lambda *_args: None))
+    outcome = json.loads(h.row()["outcome_json"] or "{}")
+    assert "cad_state" in h.runtime._serialize_job(h.jobs_store.get_job_row(job_id))
+    assert outcome.get("setup_defaults", False) == (origin == "wg_defaults")
+    assert outcome.get("frame_axis_automatic") == axis
+    assert h.row()["job_id"] == job_id
+
+
+def test_f2_early_ledger_acceptance_reads_provenance_from_the_later_bound_job(h):
+    from server.cadlink.job_shims import accept_operation_solve
+
+    _received(h)
+    h.runtime._ensure_prep_lane = lambda: None
+    job_id = h._loop.run(accept_operation_solve(h.context(), "cmd-1", manual=True))
+    early = h.row()["outcome_json"]
+    cad = dict(cad_of(h.jobs_store.get_job_row(job_id)))
+    cad.update(setup={"origin": "wg_defaults"}, frame={"axis": "+y", "provenance": "automatic"})
+    waiting = h.jobs_store.get_job_row(job_id)
+    assert h.jobs_store.admit_cad_press(job_id, waiting["config_json"])
+    assert h.jobs_store.claim_preparing_job(job_id, stage="ready", stage_message="Prepared", progress=0.09)
+    cad.pop("manual_waiting", None)
+    request = solve_request_for(validate_setup(_setup(engine="metal")), ingest_id="wgi_" + "0" * 26,
+                                manifest_sha256="sha256:" + "1" * 64, artifact_sha256="sha256:" + "2" * 64,
+                                acknowledged_findings=[])
+    assert h._loop.run(h.runtime._bind_cad_job(job_id, request, cad)) == "bound"
+    summary = operation_summary(h.row(), h.jobs_store)
+    assert summary["setupDefaults"] and summary["frameAxisAutomatic"] == "+y"
+    assert h.runtime._serialize_job(h.jobs_store.get_job_row(job_id))["cad_state"]["setup_defaults"]
+    assert json.loads(early or "{}").get("frame_axis_automatic") is None
+    assert h.row()["outcome_json"] == early
+
+
+def test_f2_solve_again_carries_setup_frame_preparation_and_operation(h):
+    from server.jobs.cad_intent import CadSolveIntent
+
+    h.runtime._ensure_prep_lane = lambda: None
+    cad = {"setup": {"revision_id": "setup", "origin": "user"}, "frame": {"axis": "+x", "provenance": "chosen"},
+           "preparation": {"preparation_id": "prep", "approvals": []}}
+    async def flow():
+        parent = await h.runtime.accept_cad_solve(
+            CadSolveIntent(operation_id="cmd-1", bundle_path="unavailable.wgreturn", manifest_sha256="sha256:" + "1" * 64, return_id="return"),
+            "cad-solve:cmd-1", prepare=False, cad_record=cad,
+            refusal={"code": "findings_need_review", "message": "Review"},
+        )
+        child = await h.runtime.solve_cad_again(parent)
+        assert cad_of(h.jobs_store.get_job_row(child)) == {**cad, "operation_id": "cmd-1", "solve_again_press_sha256": cad_of(h.jobs_store.get_job_row(child))["solve_again_press_sha256"]}
+    h._loop.run(flow())
+
+
+def test_f2_solve_again_with_another_axis_does_not_carry_the_parents_frame(h):
+    from server.jobs.cad_intent import CadSolveIntent
+
+    h.runtime._ensure_prep_lane = lambda: None
+    cad = {"setup": {"revision_id": "setup", "origin": "user"}, "frame": {"axis": "+y", "provenance": "automatic"},
+           "preparation": {"preparation_id": "prep", "approvals": []}}
+    async def flow():
+        parent = await h.runtime.accept_cad_solve(
+            CadSolveIntent(operation_id="cmd-2", bundle_path="unavailable.wgreturn", manifest_sha256="sha256:" + "2" * 64, return_id="return"),
+            "cad-solve:cmd-2", prepare=False, cad_record=cad,
+            refusal={"code": "findings_need_review", "message": "Review"},
+        )
+        same = await h.runtime.solve_cad_again(parent, frame_axis="+y")
+        assert cad_of(h.jobs_store.get_job_row(same))["frame"] == cad["frame"]
+    h._loop.run(flow())
+
+    async def other():
+        parent = await h.runtime.accept_cad_solve(
+            CadSolveIntent(operation_id="cmd-3", bundle_path="unavailable.wgreturn", manifest_sha256="sha256:" + "3" * 64, return_id="return"),
+            "cad-solve:cmd-3", prepare=False, cad_record=cad,
+            refusal={"code": "frame_confirmation_required", "message": "Frame"},
+        )
+        child = await h.runtime.solve_cad_again(parent, frame_axis="+x")
+        record = cad_of(h.jobs_store.get_job_row(child))
+        assert "frame" not in record
+        assert h.runtime._serialize_job(h.jobs_store.get_job_row(child))["cad_state"]["frame_axis_automatic"] is None
+    h._loop.run(other())

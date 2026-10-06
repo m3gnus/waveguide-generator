@@ -1369,6 +1369,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/jobs/cad-solve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cad Solve
+         * @description Accept the displayed CAD Solve press, or recover its original job.
+         */
+        post: operations["cad_solve_api_jobs_cad_solve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/clear-failed": {
         parameters: {
             query?: never;
@@ -1398,6 +1418,26 @@ export interface paths {
         post?: never;
         /** Delete Job */
         delete: operations["delete_job_api_jobs__job_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cad Approvals
+         * @description Record blocking findings on this refused job's exact preparation.
+         */
+        post: operations["cad_approvals_api_jobs__job_id__approvals_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1468,6 +1508,26 @@ export interface paths {
         put?: never;
         /** Retry Job */
         post: operations["retry_job_api_jobs__job_id__retry_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/jobs/{job_id}/solve-again": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Solve Again
+         * @description Capture a waiting first press, or continue a refused CAD preparation.
+         */
+        post: operations["solve_again_api_jobs__job_id__solve_again_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2074,6 +2134,13 @@ export interface components {
             /** Channel */
             channel: string;
         };
+        /** CadApprovalsRequest */
+        CadApprovalsRequest: {
+            /** Finding Ids */
+            finding_ids: string[];
+            /** Preparation Id */
+            preparation_id: string;
+        };
         /**
          * CadDriveChannelIdentity
          * @description The submitted channel address resolved against immutable return sources.
@@ -2203,6 +2270,41 @@ export interface components {
              */
             symmetryMode?: "auto" | "full";
         };
+        /** CadSolveAgainRequest */
+        CadSolveAgainRequest: {
+            approvals?: components["schemas"]["CadApprovalsRequest"] | null;
+            /** Frame Axis */
+            frame_axis?: string | null;
+            /** Setup Revision Id */
+            setup_revision_id?: string | null;
+            /**
+             * Submit
+             * @default true
+             */
+            submit?: boolean;
+        };
+        /** CadSolveRequest */
+        CadSolveRequest: {
+            approvals?: components["schemas"]["CadApprovalsRequest"] | null;
+            /**
+             * Client Request Id
+             * @description Stable manual Solve id; an exact ingest replay recovers its original job.
+             */
+            client_request_id: string;
+            /** Frame Axis */
+            frame_axis?: string | null;
+            /** Ingest Id */
+            ingest_id: string;
+            /** Label */
+            label?: string | null;
+            /** Setup Revision Id */
+            setup_revision_id?: string | null;
+            /**
+             * Submit
+             * @default true
+             */
+            submit?: boolean;
+        };
         /**
          * CadSource
          * @description Where an imported run came from, kept for the run archive.
@@ -2234,6 +2336,63 @@ export interface components {
             solve_model_sha256?: string | null;
             /** Transformed Geometry Hash */
             transformed_geometry_hash?: string | null;
+        };
+        /**
+         * CadState
+         * @description The CAD solve's state, derived entirely from this job's record.
+         */
+        CadState: {
+            /** Approvals */
+            approvals: components["schemas"]["CadStateApproval"][];
+            /** Frame Axis Automatic */
+            frame_axis_automatic: string | null;
+            /** Job Id */
+            job_id: string | null;
+            /** Message */
+            message: string | null;
+            /** Operation Id */
+            operation_id: string | null;
+            preparation: components["schemas"]["CadStatePreparation"] | null;
+            /** Reason */
+            reason: string | null;
+            /** Received At */
+            received_at: string | null;
+            /** Setup Defaults */
+            setup_defaults: boolean;
+            snapshot: components["schemas"]["CadStateSnapshot"] | null;
+            /** Stage */
+            stage: string | null;
+            /** State */
+            state: string;
+            /** Updated At */
+            updated_at: string | null;
+        };
+        /** CadStateApproval */
+        CadStateApproval: {
+            /** Finding Id */
+            finding_id: string;
+            /** Preparation Id */
+            preparation_id: string;
+        };
+        /** CadStatePreparation */
+        CadStatePreparation: {
+            /** Blocking Finding Ids */
+            blocking_finding_ids: string[];
+            /** Preparation Id */
+            preparation_id: string;
+            /** Report Sha256 */
+            report_sha256: string | null;
+        };
+        /** CadStateSnapshot */
+        CadStateSnapshot: {
+            /** Artifact Sha256 */
+            artifact_sha256: string | null;
+            /** Document Name */
+            document_name: string | null;
+            /** Manifest Sha256 */
+            manifest_sha256: string | null;
+            /** Project Lineage Id */
+            project_lineage_id: string | null;
         };
         /** CaptureDocumentRequest */
         CaptureDocumentRequest: {
@@ -3501,6 +3660,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             cad_source?: components["schemas"]["CadSource"] | null;
+            cad_state?: components["schemas"]["CadState"] | null;
             /** Cancellation Requested */
             cancellation_requested: boolean;
             /** Channel Solve Executions */
@@ -3685,6 +3845,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             cad_source?: components["schemas"]["CadSource"] | null;
+            cad_state?: components["schemas"]["CadState"] | null;
             /** Cancellation Requested */
             cancellation_requested: boolean;
             /** Channel Solve Executions */
@@ -7326,6 +7487,57 @@ export interface operations {
             };
         };
     };
+    cad_solve_api_jobs_cad_solve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CadSolveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolveAccepted"];
+                };
+            };
+            /** @description Unknown ingest or setup revision */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Restart pending, conflicting ingest or snapshot unavailable */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     clear_failed_api_jobs_clear_failed_delete: {
         parameters: {
             query?: never;
@@ -7364,6 +7576,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cad_approvals_api_jobs__job_id__approvals_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CadApprovalsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobStatusResponse"];
                 };
             };
             /** @description Validation Error */
@@ -7495,6 +7742,50 @@ export interface operations {
                 };
             };
             /** @description An update restart is pending (error envelope), or the job has no solve request to replay (`detail`), for example one still being prepared */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    solve_again_api_jobs__job_id__solve_again_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CadSolveAgainRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SolveAccepted"];
+                };
+            };
+            /** @description Restart pending or job cannot be continued */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -587,6 +587,16 @@ def settle_received_snapshots(ctx: PreparationContext) -> list[str]:
     return settled
 
 
+def record_job_acceptance(ctx: PreparationContext, operation_id: str, job_id: str) -> dict[str, Any]:
+    """Join acceptance to the job, keeping the provenance it already recorded."""
+
+    from server.jobs.cad_intent import acceptance_details
+
+    job = ctx.job_store.get_job_row(job_id) if ctx.job_store is not None else None
+    return record_outcome(ctx.store, operation_id, state="accepted", job_id=job_id,
+                          **acceptance_details(job or {}))
+
+
 def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str, Any] | None:
     """Record ``accepted`` when the operation's submission key already made a job.
 
@@ -602,7 +612,7 @@ def reconcile_with_jobs(ctx: PreparationContext, operation_id: str) -> dict[str,
         return None
     logger.info("CAD operation %s: its submission key already made job %s.", operation_id, job_id)
     try:
-        record_outcome(ctx.store, operation_id, state="accepted", job_id=job_id)
+        record_job_acceptance(ctx, operation_id, job_id)
     except SolveOutcomeConflict:
         pass
     return ctx.store.get_operation(operation_id)

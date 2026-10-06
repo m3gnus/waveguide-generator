@@ -154,7 +154,7 @@ def intent_of(row: Mapping[str, Any]) -> CadSolveIntent | None:
 #: continues from: its retained snapshot, the captured-document state cleanup
 #: keeps for it, the setup it prepared with, and its preparation with the
 #: approvals given on it.
-CARRIED = ("snapshot", "return_state_hash", "setup", "preparation")
+CARRIED = ("snapshot", "return_state_hash", "setup", "frame", "preparation")
 
 
 def solve_again_intent(
@@ -215,7 +215,22 @@ def cad_of(row: Mapping[str, Any]) -> Mapping[str, Any]:
     return cad if isinstance(cad, Mapping) else {}
 
 
+def acceptance_details(row: Mapping[str, Any]) -> dict[str, Any]:
+    """The settings and automatic axis the job recorded for its solve."""
+
+    cad = cad_of(row)
+    setup = cad.get("setup")
+    frame = cad.get("frame")
+    return {
+        "setup_defaults": bool(isinstance(setup, Mapping) and setup.get("origin") == "wg_defaults"),
+        "frame_axis_automatic": (
+            frame.get("axis") if isinstance(frame, Mapping) and frame.get("provenance") == "automatic" else None
+        ),
+    }
+
+
 __all__ = [
+    "acceptance_details",
     "BIND_BLOCKED",
     "BIND_STOPPED",
     "BOUND",

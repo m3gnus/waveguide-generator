@@ -100,6 +100,7 @@ from server.jobs.cad_intent import (
     BIND_STOPPED,
     STAGE_WAITING_FOR_RESTART,
     CadSolveIntent,
+    acceptance_details,
     approval_map,
     cad_of,
     intent_of,
@@ -146,7 +147,6 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     refusal = cad.get("refusal") if isinstance(cad.get("refusal"), Mapping) else None
     setup = cad.get("setup") if isinstance(cad.get("setup"), Mapping) else None
     preparation = cad.get("preparation") if isinstance(cad.get("preparation"), Mapping) else None
-    frame = cad.get("frame") if isinstance(cad.get("frame"), Mapping) else None
     reason: str | None = None
     message: str | None = None
     stage: str | None = str(row.get("stage") or "") or None
@@ -172,16 +172,15 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
         state = "needs_user_input"
         message = row.get("error_message")
     snapshot = cad.get("snapshot") if isinstance(cad.get("snapshot"), Mapping) else None
+    accepted = acceptance_details(row)
     return {
         "operationId": cad.get("operation_id"),
         "state": state,
         "stage": stage,
         "reason": reason,
         "message": message,
-        "setupDefaults": bool(setup and setup.get("origin") == DEFAULTS_ORIGIN and state == "accepted"),
-        "frameAxisAutomatic": (
-            frame.get("axis") if isinstance(frame, Mapping) and frame.get("provenance") == "automatic" else None
-        ),
+        "setupDefaults": accepted["setup_defaults"] and state == "accepted",
+        "frameAxisAutomatic": accepted["frame_axis_automatic"],
         "jobId": job_id,
         "setupRevisionId": setup.get("revision_id") if setup else None,
         "preparationId": preparation.get("preparation_id") if preparation else None,
@@ -194,6 +193,39 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
             if snapshot
             else None
         ),
+    }
+
+
+def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The job-side CAD read model; no operation row participates."""
+
+    metadata = row.get("task_metadata")
+    if not (isinstance(metadata, Mapping) and isinstance(metadata.get("cad"), Mapping)) and intent_of(row) is None:
+        return None
+    cad = cad_of(row)
+    view = job_operation_view(row)
+    intent = intent_of(row)
+    snapshot = cad.get("snapshot")
+    preparation = cad.get("preparation")
+    return {
+        "operation_id": view["operationId"] or (intent.operation_id if intent else None),
+        **{key: view[key] for key in ("state", "stage", "reason", "message")},
+        "job_id": view["jobId"],
+        "snapshot": (
+            {key: snapshot.get(key) for key in ("document_name", "manifest_sha256", "artifact_sha256", "project_lineage_id")}
+            if isinstance(snapshot, Mapping) else None
+        ),
+        "preparation": (
+            {"preparation_id": preparation["preparation_id"],
+             "blocking_finding_ids": list(preparation.get("blocking_finding_ids") or []),
+             "report_sha256": preparation.get("report_sha256")}
+            if isinstance(preparation, Mapping) and preparation.get("preparation_id") else None
+        ),
+        "approvals": list(preparation.get("approvals") or []) if isinstance(preparation, Mapping) else [],
+        "setup_defaults": view["setupDefaults"],
+        "frame_axis_automatic": view["frameAxisAutomatic"],
+        "received_at": row.get("created_at"),
+        "updated_at": row.get("updated_at"),
     }
 
 
@@ -882,6 +914,7 @@ def _job_provenance(
 __all__ = [
     "CadJobPort",
     "CadPreparationHost",
+    "job_cad_state",
     "job_operation_view",
     "prepare_job_sync",
     "run_cad_preparation",

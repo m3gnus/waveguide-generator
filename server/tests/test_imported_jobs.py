@@ -4630,3 +4630,46 @@ def test_real_metal_config_takes_a_single_axial_source(
 
     assert set(captured["config"].source_axes) == {101}
     assert 101 in captured["config"].velocity_sources
+
+
+def test_f2_bound_cad_retry_carries_inputs_without_the_parents_lifecycle(tmp_path: Path) -> None:
+    provenance = {
+        "operation_id": "op-retry",
+        "setup": {"revision_id": "wgs_a", "digest": "d" * 64, "origin": "wg_defaults"},
+        "frame": {"axis": "+z", "provenance": "automatic", "confirmed": False, "requirement": {}},
+        "preparation": {"preparation_id": "wgi_a", "report_sha256": "report", "blocking_finding_ids": [], "approvals": []},
+        "snapshot": {"document_name": "Speaker", "manifest_sha256": MANIFEST_SHA, "artifact_sha256": ARTIFACT_SHA, "project_lineage_id": None},
+        "return_state_hash": "state", "frame_axis_shown": "+z",
+        "refusal": {"code": "interrupted", "message": "Parent stopped"},
+        "last_stage": "ready", "manual_waiting": True, "solve_again_press_sha256": "parent-press",
+    }
+    async def flow():
+        runtime, ingest_id, _ = await _runtime_fixture(tmp_path)
+        runtime._ensure_scheduler = lambda: None
+        runtime.engine_registry = _AlwaysRegistry(SimpleNamespace(name="metal"))
+        try:
+            request = _request(ingest_id)
+            request.client_request_id = "cad-solve:op-retry"
+            parent = await runtime.submit(request, cad_provenance=provenance)
+            runtime.store.update_job(parent, status="error")
+            child_id = await runtime.retry(parent)
+            child = runtime.store.get_job_row(child_id)
+            cad = child["task_metadata"]["cad"]
+            assert cad == {**{k: v for k, v in provenance.items() if k not in {"refusal", "last_stage", "manual_waiting", "solve_again_press_sha256"}}, "retried_from": parent}
+            for key in ("setup", "frame", "preparation", "operation_id"):
+                assert cad[key] == provenance[key]
+            assert child["config_json"]["client_request_id"] is None and child["parent_job_id"] == parent
+            assert runtime._serialize_job(child)["cad_state"]["state"] == "accepted"
+            assert runtime.store.latest_cad_job("op-retry")["id"] == parent
+            # A bound retry is not an unfinished intent, even if its parent
+            # carried stale preparation bookkeeping before the retry.
+            assert runtime.store.dismiss_cad_intents("op-retry") == ([], [])
+            assert runtime.store.get_job_row(child_id) is not None
+            assert not any(item["return_state_hash"] == "state" for item in runtime.store.unreleased_cad_return_states())
+            direct = await runtime.submit(_request(ingest_id))
+            direct_child = await runtime.retry(direct)
+            assert runtime.store.get_job_row(direct_child)["task_metadata"].get("cad") is None
+            assert runtime._serialize_job(runtime.store.get_job_row(direct_child))["cad_state"] is None
+        finally:
+            await runtime.shutdown()
+    asyncio.run(flow())

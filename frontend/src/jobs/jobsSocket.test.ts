@@ -66,6 +66,30 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it.each([
+    { setup_defaults: 'yes' }, { state: null }, { stage: 3 },
+    { received_at: 'invalid' }, { updated_at: false },
+    { snapshot: { manifest_sha256: 3 } },
+    { preparation: { preparation_id: 'prep', blocking_finding_ids: [3], report_sha256: null } },
+    { approvals: [{ preparation_id: 'prep', finding_id: 3 }] },
+  ])('validates cad_state from a job snapshot (%j)', (invalid) => {
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');
+    const state: NonNullable<JobItem['cad_state']> = {
+      operation_id: 'op', state: 'received', stage: 'received', reason: null,
+      message: null, job_id: null, snapshot: null, preparation: null, approvals: [],
+      setup_defaults: false, frame_axis_automatic: null,
+      received_at: '2026-08-03T10:00:00Z', updated_at: '2026-08-03T10:00:00Z',
+    };
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 4, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 1, jobs: [job({ cad_state: state })] });
+    expect(manager.getSnapshot().jobs[0].cad_state).toEqual(state);
+    socket.message({ v: 1, kind: 'snapshot', epoch: 4, cursor: 2, jobs: [{ ...job(), cad_state: { ...state, ...invalid } }] });
+    expect(manager.getSnapshot().cursor).toBe(1);
+    manager.stop();
+  });
+
   it('accepts a preparing job, keeps it through a snapshot, and treats it as active', () => {
     const socket = new MockSocket();
     const manager = new JobsSocketManager(() => socket, vi.fn(), 'ws://test/ws/jobs');

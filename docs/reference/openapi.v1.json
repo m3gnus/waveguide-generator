@@ -52,6 +52,30 @@
         "title": "Body_choose_update_channel_api_updates_channel_put",
         "type": "object"
       },
+      "CadApprovalsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "finding_ids": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Finding Ids",
+            "type": "array"
+          },
+          "preparation_id": {
+            "minLength": 1,
+            "title": "Preparation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "finding_ids"
+        ],
+        "title": "CadApprovalsRequest",
+        "type": "object"
+      },
       "CadDriveChannelIdentity": {
         "additionalProperties": false,
         "description": "The submitted channel address resolved against immutable return sources.",
@@ -510,6 +534,122 @@
         "title": "CadReturnIngestRequest",
         "type": "object"
       },
+      "CadSolveAgainRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadApprovalsRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "frame_axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Axis"
+          },
+          "setup_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Revision Id"
+          },
+          "submit": {
+            "default": true,
+            "title": "Submit",
+            "type": "boolean"
+          }
+        },
+        "title": "CadSolveAgainRequest",
+        "type": "object"
+      },
+      "CadSolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "approvals": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadApprovalsRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "client_request_id": {
+            "description": "Stable manual Solve id; an exact ingest replay recovers its original job.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+            "title": "Client Request Id",
+            "type": "string"
+          },
+          "frame_axis": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Axis"
+          },
+          "ingest_id": {
+            "minLength": 1,
+            "title": "Ingest Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "setup_revision_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Setup Revision Id"
+          },
+          "submit": {
+            "default": true,
+            "title": "Submit",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "client_request_id",
+          "ingest_id"
+        ],
+        "title": "CadSolveRequest",
+        "type": "object"
+      },
       "CadSource": {
         "additionalProperties": false,
         "description": "Where an imported run came from, kept for the run archive.\n\nA CAD run used to be traceable only through the ingestion record, which is\naddressed by content and says nothing about which document a person opened.",
@@ -646,6 +786,262 @@
           "return_state_hash"
         ],
         "title": "CadSource",
+        "type": "object"
+      },
+      "CadState": {
+        "additionalProperties": false,
+        "description": "The CAD solve's state, derived entirely from this job's record.",
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/CadStateApproval"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "frame_axis_automatic": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Frame Axis Automatic"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "preparation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadStatePreparation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "received_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Received At"
+          },
+          "setup_defaults": {
+            "title": "Setup Defaults",
+            "type": "boolean"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadStateSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "operation_id",
+          "state",
+          "stage",
+          "reason",
+          "message",
+          "job_id",
+          "snapshot",
+          "preparation",
+          "approvals",
+          "setup_defaults",
+          "frame_axis_automatic",
+          "received_at",
+          "updated_at"
+        ],
+        "title": "CadState",
+        "type": "object"
+      },
+      "CadStateApproval": {
+        "additionalProperties": false,
+        "properties": {
+          "finding_id": {
+            "title": "Finding Id",
+            "type": "string"
+          },
+          "preparation_id": {
+            "title": "Preparation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "finding_id"
+        ],
+        "title": "CadStateApproval",
+        "type": "object"
+      },
+      "CadStatePreparation": {
+        "additionalProperties": false,
+        "properties": {
+          "blocking_finding_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Blocking Finding Ids",
+            "type": "array"
+          },
+          "preparation_id": {
+            "title": "Preparation Id",
+            "type": "string"
+          },
+          "report_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Sha256"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "blocking_finding_ids",
+          "report_sha256"
+        ],
+        "title": "CadStatePreparation",
+        "type": "object"
+      },
+      "CadStateSnapshot": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Artifact Sha256"
+          },
+          "document_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document Name"
+          },
+          "manifest_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Manifest Sha256"
+          },
+          "project_lineage_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Lineage Id"
+          }
+        },
+        "required": [
+          "document_name",
+          "manifest_sha256",
+          "artifact_sha256",
+          "project_lineage_id"
+        ],
+        "title": "CadStateSnapshot",
         "type": "object"
       },
       "CaptureDocumentRequest": {
@@ -4575,6 +4971,16 @@
               }
             ]
           },
+          "cad_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadState"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "cancellation_requested": {
             "title": "Cancellation Requested",
             "type": "boolean"
@@ -5217,6 +5623,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/CadSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cad_state": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CadState"
               },
               {
                 "type": "null"
@@ -12185,6 +12601,65 @@
         "summary": "List Jobs"
       }
     },
+    "/api/jobs/cad-solve": {
+      "post": {
+        "description": "Accept the displayed CAD Solve press, or recover its original job.",
+        "operationId": "cad_solve_api_jobs_cad_solve_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CadSolveRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolveAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Unknown ingest or setup revision"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending, conflicting ingest or snapshot unavailable"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cad Solve"
+      }
+    },
     "/api/jobs/clear-failed": {
       "delete": {
         "operationId": "clear_failed_api_jobs_clear_failed_delete",
@@ -12240,6 +12715,56 @@
           }
         },
         "summary": "Delete Job"
+      }
+    },
+    "/api/jobs/{job_id}/approvals": {
+      "post": {
+        "description": "Record blocking findings on this refused job's exact preparation.",
+        "operationId": "cad_approvals_api_jobs__job_id__approvals_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CadApprovalsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Cad Approvals"
       }
     },
     "/api/jobs/{job_id}/archive-snapshot": {
@@ -12415,6 +12940,66 @@
           }
         },
         "summary": "Retry Job"
+      }
+    },
+    "/api/jobs/{job_id}/solve-again": {
+      "post": {
+        "description": "Capture a waiting first press, or continue a refused CAD preparation.",
+        "operationId": "solve_again_api_jobs__job_id__solve_again_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CadSolveAgainRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolveAccepted"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Restart pending or job cannot be continued"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Solve Again"
       }
     },
     "/api/mesh-artifact/{job_id}": {

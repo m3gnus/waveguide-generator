@@ -20,6 +20,9 @@ from starlette.websockets import WebSocketDisconnect, WebSocketState
 from server.jobs.events import CLOSE_ORIGIN_REJECTED, JobsProtocol
 from server.integration.contracts import ErrorEnvelope, error_envelope
 from server.jobs.models import (
+    CadApprovalsRequest,
+    CadSolveAgainRequest,
+    CadSolveRequest,
     ChannelCombineSpec,
     ClearFailedResponse,
     DeleteResponse,
@@ -344,10 +347,9 @@ def create_jobs_router(
 
     ``restart_approval`` is the server's restart-approved latch
     (``docs/reference/UPDATE-TRANSACTION-CONTRACT.md`` §4.2). While it is set,
-    the two routes that start a job -- ``POST /api/solve`` and
-    ``POST /api/jobs/{job_id}/retry`` -- refuse with HTTP 409. Every other
-    route here reads, or acts on a job that already exists within its own
-    request, so they stay open.
+    routes that start work (Solve, Retry and CAD Solve again) refuse with
+    HTTP 409. An exact CAD intake replay can still recover its original job.
+    Read routes and approvals on an existing preparation stay open.
     """
 
     router = APIRouter(route_class=_JobsContractRoute)
@@ -548,6 +550,75 @@ def create_jobs_router(
             job_id=job_id,
             client_request_id=body.client_request_id,
         )
+
+    async def check_cad_setup(revision_id: str | None) -> None:
+        if revision_id and await asyncio.to_thread(runtime.cadlink_store.get_setup_revision, revision_id) is None:
+            raise HTTPException(status_code=404, detail=f"Unknown setup revision {revision_id}")
+
+    @router.post(
+        "/api/jobs/cad-solve", response_model=SolveAccepted,
+        responses={404: {"model": ErrorEnvelope, "description": "Unknown ingest or setup revision"},
+                   409: {"model": ErrorEnvelope, "description": "Restart pending, conflicting ingest or snapshot unavailable"}},
+    )
+    async def cad_solve(body: CadSolveRequest, request: Request) -> SolveAccepted | JSONResponse:
+        """Accept the displayed CAD Solve press, or recover its original job."""
+
+        from server.cadlink.api import ManualSolveOperationRequest, _create_manual_solve_operation
+        from server.jobs.cad_intent import cad_of
+
+        operation_id = f"manual-solve:{body.client_request_id}"
+        key = f"cad-solve:{operation_id}"
+        existing = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
+        existing_row = await asyncio.to_thread(runtime.store.get_job_row, existing) if existing else None
+        if existing_row is None or cad_of(existing_row).get("manual_waiting"):
+            await check_cad_setup(body.setup_revision_id)
+        result = await _create_manual_solve_operation(
+            ManualSolveOperationRequest(operation_id=operation_id, ingest_id=body.ingest_id), request,
+            restart_response=lambda: restart_refusal(body.client_request_id),
+        )
+        if isinstance(result, JSONResponse):
+            return result
+        job_id = await asyncio.to_thread(runtime.store.job_for_submission_key, key)
+        row = await asyncio.to_thread(runtime.store.get_job_row, job_id)
+        # A transport replay recovers the original job, even after refusal or
+        # binding. Only its waiting first press may be captured here.
+        if row is not None and cad_of(row).get("manual_waiting"):
+            await runtime.prepare_cad_solve(job_id, **body.press(), label=body.label)
+        return SolveAccepted(job_id=job_id, client_request_id=body.client_request_id)
+
+    @router.post(
+        "/api/jobs/{job_id}/solve-again", response_model=SolveAccepted,
+        responses={409: {"model": ErrorEnvelope, "description": "Restart pending or job cannot be continued"}},
+    )
+    async def solve_again(job_id: str, body: CadSolveAgainRequest) -> SolveAccepted | JSONResponse:
+        """Capture a waiting first press, or continue a refused CAD preparation."""
+
+        refused = restart_refusal()
+        if refused is not None:
+            return refused
+        await check_cad_setup(body.setup_revision_id)
+        try:
+            job = await runtime.get_job(job_id)
+            if job.get("cad_intent") is None:
+                raise JobConflictError("This solve already has a solve request; retry it instead")
+            return SolveAccepted(job_id=await runtime.prepare_cad_solve(job_id, **body.press()))
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @router.post("/api/jobs/{job_id}/approvals", response_model=JobStatusResponse)
+    async def cad_approvals(job_id: str, body: CadApprovalsRequest) -> JobStatusResponse:
+        """Record blocking findings on this refused job's exact preparation."""
+
+        try:
+            await runtime.get_job(job_id)
+            await asyncio.to_thread(runtime.store.approve_cad_preparation, job_id, body.preparation_id, body.finding_ids)
+            return JobStatusResponse.model_validate(await runtime.get_job(job_id))
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     @router.post("/api/stop/{job_id}", response_model=StopResponse)
     async def stop_job(job_id: str) -> StopResponse:

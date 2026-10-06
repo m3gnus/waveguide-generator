@@ -3364,6 +3364,7 @@ class JobRuntime:
                     intent, setup_revision_id=press.get("setup_revision_id"),
                     frame_axis=press.get("frame_axis") or intent.frame_axis,
                     submit=press.get("submit", True),
+                    label=press.get("label", intent.label),
                     approvals=(
                         {"preparation_id": press["approve_preparation_id"],
                          "finding_ids": list(press.get("approve_finding_ids") or ())}
@@ -3442,6 +3443,11 @@ class JobRuntime:
                 # Carry the newest refused job's record, exactly as a press on it
                 # would: retained snapshot, setup, preparation and its approvals.
                 record["task_metadata"]["cad"].update(carried_record(row))
+                carried_frame = record["task_metadata"]["cad"].get("frame")
+                if frame_axis and isinstance(carried_frame, Mapping) and carried_frame.get("axis") != frame_axis:
+                    # The press names another axis: the parent's frame record no
+                    # longer describes this solve. Binding records the new one.
+                    record["task_metadata"]["cad"].pop("frame")
                 record["task_metadata"]["cad"]["solve_again_press_sha256"] = press_sha256
                 existing, created, event = await asyncio.to_thread(
                     self.store.create_job_idempotent,
@@ -3718,6 +3724,15 @@ class JobRuntime:
         # submission. Reusing its key would either recover the source job or
         # conflict because the parent id is now different.
         request.client_request_id = None
+        provenance = None
+        if isinstance(request.geometry, ImportedGeometrySource) and cad_of(row):
+            provenance = {
+                key: value for key, value in cad_of(row).items()
+                if key not in {"refusal", "solve_again_press_sha256", "last_stage", "manual_waiting"}
+            }
+            provenance["retried_from"] = job_id
+        if provenance is not None:
+            return await self.submit(request, cad_provenance=provenance)
         return await self.submit(request)
 
     async def get_job(self, job_id: str) -> dict[str, Any]:
@@ -5436,6 +5451,8 @@ class JobRuntime:
         detailed: bool = False,
         cadlink_store: CadLinkStore | None = None,
     ) -> dict[str, Any]:
+        from server.jobs.cad_preparation import job_cad_state
+
         metadata = row.get("task_metadata") if isinstance(row.get("task_metadata"), dict) else {}
         field_metadata_present = any(
             key in metadata
@@ -5673,6 +5690,7 @@ class JobRuntime:
             "cad_provenance": (
                 dict(metadata["cad"]) if isinstance(metadata.get("cad"), Mapping) else None
             ),
+            "cad_state": job_cad_state(row),
             "cad_source": cad_source,
             "cad_setup": dict(geometry) if imported else None,
             "cad_intent": cad_intent,

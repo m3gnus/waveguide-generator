@@ -562,6 +562,32 @@ refused preparation is an unnumbered `error` job with the same reason and messag
 Per-project setup, frame and domain memory is unchanged. Approvals belong to the
 exact preparation and resume only when its complete identity matches.
 
+The jobs API also accepts the WG UI's displayed press directly:
+
+- `POST /api/jobs/cad-solve` takes `{client_request_id, ingest_id,
+  setup_revision_id?, frame_axis?, approvals?: {preparation_id, finding_ids},
+  label?, submit?: true}`. It creates the same manual ledger row and job as
+  the compatibility intake, under `manual-solve:<client_request_id>` and
+  `cad-solve:manual-solve:<client_request_id>`, and captures the first press.
+  The client id uses the delivery id's letters, digits, underscores and
+  hyphens, starts with a letter or digit, and has at most 128 characters.
+  Reposting the same id and ingest recovers the original job, including after
+  refusal or binding; another ingest under that id is a 409. An exact replay
+  still recovers while an update restart is pending or the retained copy is gone.
+- `POST /api/jobs/{job_id}/solve-again` takes `{setup_revision_id?, frame_axis?,
+  approvals?: {preparation_id, finding_ids}, submit?: true}`. It captures a
+  waiting first press on the same job, or continues a refused intent as a new
+  child. Identical presses share that child. A bound request is a 409; its
+  faithful replay remains `POST /api/jobs/{job_id}/retry`, without a body.
+- `POST /api/jobs/{job_id}/approvals` takes `{preparation_id, finding_ids}`.
+  It records only blocking findings on that refused job's exact preparation,
+  without solving. A different preparation is a 422, as on the operation shim.
+
+Both solve routes return `SolveAccepted {job_id}`. Unknown jobs, ingests and
+setup revisions are 404; a missing retained snapshot is 409. New work during
+an approved update restart uses the jobs API's `update_restart_pending` refusal.
+All bodies use snake_case and are described by OpenAPI.
+
 The unchanged frontend uses compatibility shims:
 
 - `POST /operations` resolves a retained ingest and creates an unstarted manual
@@ -656,23 +682,41 @@ The jobs API exposes the record as `cad_provenance` on a job (null when the job 
 none). The run details read "solved with WG's default settings" and the setup revision
 from it first, falling back to the operation for a job made before this record existed.
 
-The job's record is authoritative. After a recovery (`reconcile_with_jobs`, or a lost
-answer that resubmits and finds the job the first attempt made) the operation's outcome
-may lack `setup_defaults` and `frame_axis_automatic`, or differ from the job's record;
-the run details read the job first.
+The jobs API also exposes `cad_state` next to `cad_provenance`, null for a
+non-CAD job. It is built from `job_operation_view`, the job's own record and its
+timestamps; no operation row participates. Its snake_case fields are
+`operation_id`, `state`, `stage`, `reason`, `message`, `job_id`, `snapshot
+{document_name, manifest_sha256, artifact_sha256, project_lineage_id}`,
+`preparation {preparation_id, blocking_finding_ids, report_sha256}`, `approvals`,
+`setup_defaults`, `frame_axis_automatic`, `received_at` and `updated_at`.
+`received_at` is this job's creation time, including for a continuation or retry.
+The setup revision and frame details remain in `cad_provenance`. A historical
+job that never recorded its snapshot or preparation leaves those fields null;
+run details can still fall back to its operation while compatibility exists.
 
-**What Stage 5 still needs before operations can be deleted.** The record is written and
-read, but:
+The job's record is authoritative. Acceptance joins (`record_job_acceptance`)
+copy the recorded default-settings origin and automatic frame axis through
+`acceptance_details`. If acceptance precedes binding, the ledger cannot know
+them yet: `operation_summary` derives them from the later job at read time.
+The lane does not write a second outcome after binding.
 
-- run details still read the snapshot, State, Stage, Reason and timings from the
-  operation row (the preparation id now comes from the job first);
-- a retried job carries no `cad` record (`retry()` clears its submission key and submits
-  without one), so it shows no inputs; it must copy the parent's `task_metadata.cad`, or
-  "Solve again" must write one;
-- the run details find a CAD job by its `cad-solve:` submission key; they need to find it
-  from `cad_provenance.operation_id` or from `imported_geometry`;
-- the reconcile path records `accepted` without `setup_defaults` and
-  `frame_axis_automatic`, which only the job then holds.
+**What Stage 5 still needs before operations can be deleted.**
+
+1. The backend read model is ready. Run details still need the frontend switch
+   to `cad_state` for snapshot, State, Stage, Reason, preparation and timings,
+   and the WG Solve controls need the three job routes. Jobs made before the
+   snapshot record existed still need the compatibility fallback.
+2. Met: a bound CAD retry carries its inputs and adds `retried_from`, dropping
+   `refusal`, `solve_again_press_sha256`, `last_stage` and `manual_waiting`.
+   Solve again carries the recorded frame too. Tests:
+   `test_f2_bound_cad_retry_carries_inputs_without_the_parents_lifecycle` and
+   `test_f2_solve_again_carries_setup_frame_preparation_and_operation`.
+3. The run details find a CAD job by its `cad-solve:` submission key; they need
+   to find it from `cad_provenance.operation_id` or from `imported_geometry`.
+4. Met: acceptance joins record defaults and the automatic axis when the job
+   already knows them, and summaries read the job when binding happens later.
+   Tests: `test_f2_acceptance_joins_copy_the_jobs_defaults_and_automatic_axis`
+   and `test_f2_early_ledger_acceptance_reads_provenance_from_the_later_bound_job`.
 
 ## The `preparing` job status
 

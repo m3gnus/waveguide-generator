@@ -1114,12 +1114,12 @@ class JobStore:
 
         with self._lock, self._transaction() as conn:
             return conn.execute(
-                "UPDATE simulation_jobs SET config_json = ?, updated_at = ?, "
+                "UPDATE simulation_jobs SET config_json = ?, updated_at = ?, label = ?, "
                 "task_metadata_json = json_remove(task_metadata_json, '$.cad.manual_waiting') "
                 "WHERE id = ? AND status = 'preparing' AND started_at IS NULL "
                 "AND cancellation_requested = 0 "
                 "AND json_extract(task_metadata_json, '$.cad.manual_waiting') = 1",
-                (json.dumps(intent), _now_iso(), job_id),
+                (json.dumps(intent), _now_iso(), intent.get("label"), job_id),
             ).rowcount == 1
 
     def latest_cad_job(self, operation_id: str, job_id: str | None = None) -> dict[str, Any] | None:
