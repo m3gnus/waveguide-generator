@@ -74,11 +74,16 @@ class FrozenExterior:
     singular_order: int = 4
     density: float = 1.2041
     sound_speed: float = 343.
+    backend: str = "cpu"
 
     def compiled(self) -> request.CompiledRequest:
         """Freeze metre geometry and the HBB-representable observation frame."""
         if type(self.threads) is not int or self.threads < 1:
             raise ValueError("Qualification requires an explicit positive thread count")
+        if self.backend not in {"cpu", "metal"}:
+            raise ValueError("Agreement backend must be cpu or metal")
+        if self.backend == "metal" and self.precision != "float32":
+            raise ValueError("Metal agreement requires float32 precision")
         validate_frequency_axis(self.frequencies_hz)
         if not self.angle_range[0] <= 0 <= self.angle_range[1] or self.sphere_grid is None:
             raise ValueError("HBB comparison requires on-axis cuts and a complete sphere")
@@ -89,7 +94,7 @@ class FrozenExterior:
         return request.build_request(
             self.mesh_bytes.decode("utf-8"), sources=[request.SourceBasis("source", self.source_tag, port_id="source")],
             channel_ports={"source": ["source"]}, frame=FRAME, layout=layout,
-            frequencies_hz=self.frequencies_hz, precision=self.precision, engine_id="beat-cpu",
+            frequencies_hz=self.frequencies_hz, precision=self.precision, engine_id=f"beat-{self.backend}",
             symmetry=self.symmetry, quadrature_order=self.quadrature_order,
             singular_order=self.singular_order, density_kg_per_m3=self.density,
             sound_speed_m_per_s=self.sound_speed)
@@ -108,7 +113,7 @@ class FrozenExterior:
                 "observation_points": {k: v.tolist() for k, v in compiled.layout.points_m.items()},
                 "quadrature": {k: v for k, v in compiled.wire["solver_options"].items()
                                if "quadrature" in k or "wavelength" in k or k == "singular_order"},
-                "backend": "cpu", "precision": self.precision, "threads": self.threads,
+                "backend": self.backend, "precision": self.precision, "threads": self.threads,
                 "time_convention": SOLVER_TIME_CONVENTION, "density_kg_per_m3": self.density,
                 "sound_speed_m_per_s": self.sound_speed, "symmetry": self.symmetry,
                 "source_tag": self.source_tag, "source_motion": "normal"}
@@ -146,18 +151,22 @@ def solve(compiled: request.CompiledRequest) -> EngineRun:
 def managed_solve(compiled: request.CompiledRequest, selection: EngineRun,
                   facts: dict[str, Any], terminal_events: list[dict]) -> results.SweepResult:
     """Use WG admission/staging and public engine negotiation, always releasing workers."""
+    options = compiled.wire["solver_options"]
+    launch_options = {}
+    if options["bem_backend"] == "metal":
+        launch_options["environment"] = metal_worker_environment(
+            selection.julia_threads, assembly=options.get("burton_miller_assembly", "direct_system"))
     contract = import_module("beat_engine.beat_contract.worker")
 
     contract.validate_solve_request(compiled.wire)
     manager = WorkerManager(mode="child")
-    options = compiled.wire["solver_options"]
     loading = compiled.channel_loading["source"]
     try:
         client = manager.get_worker(options["bem_backend"], julia_executable=facts["julia_executable"],
                                     julia_project=Path(facts["project"]),
                                     solver_script=Path(facts["solver_script"]),
                                     julia_threads=selection.julia_threads,
-                                    compiled_request_policy=Path(request.__file__))
+                                    compiled_request_policy=Path(request.__file__), **launch_options)
         with SolveSession() as session:
             session.submit(client, compiled.wire, negotiate=contract.negotiate_submission)
             def observed():
@@ -176,6 +185,20 @@ def managed_solve(compiled: request.CompiledRequest, selection: EngineRun,
                 request_cancel=session.request_cancel)
     finally:
         manager.shutdown()
+
+
+def metal_worker_environment(threads: int | str, *, assembly: str = "direct_system") -> dict[str, str]:
+    """Qualify engine defaults only; alternate assembly may not reserve a core."""
+    environment = dict(os.environ)
+    overrides = sorted(name for name in environment if name.startswith("BLAB_"))
+    if overrides:
+        raise ValueError("Metal agreement refuses BLAB_* overrides: " + ", ".join(overrides))
+    if assembly != "direct_system":
+        raise ValueError("Metal agreement requires direct_system assembly")
+    count = resolve_julia_threads("metal", threads)
+    # HBB uses T BLAS threads; official direct assembly reserves one for T > 1.
+    environment["OPENBLAS_NUM_THREADS"] = str(count + (count > 1))
+    return environment
 
 
 def result_set(inputs: FrozenExterior, native: Any, *, revision: str,
@@ -236,15 +259,16 @@ def hbb_runner(inputs: FrozenExterior, *, julia_executable: str,
         observation=observation, native_symmetry_plane=None if inputs.symmetry == "full" else inputs.symmetry,
         mesh_scale=1., air_density=inputs.density, sound_speed=inputs.sound_speed,
         quadrature_order=inputs.quadrature_order, singular_order=inputs.singular_order,
-        regular_quadrature_mode="wavelength", solve_precision="double" if inputs.precision == "float64" else "single",
-        beat_backend="cpu", julia_executable=julia_executable, julia_threads=inputs.threads,
+        regular_quadrature_mode="wavelength" if inputs.backend == "cpu" else "fixed",
+        solve_precision="double" if inputs.precision == "float64" else "single",
+        beat_backend=inputs.backend, julia_executable=julia_executable, julia_threads=inputs.threads,
         persistent_worker=False)
     directory.mkdir(parents=True, exist_ok=True)
     record = {"evidence_mode": "real", "engine_distribution": "hornlab-beat-bem",
               "engine_revision": revision, "revision_source": "installed_vcs_metadata_attested",
               "engine_status": "failed", "requested_frequencies_hz": inputs.frequencies_hz,
               "declared_settings": inputs.settings(), "real_solved_count": 0,
-              "case": {"backend": "cpu", "precision": inputs.precision},
+              "case": {"backend": inputs.backend, "precision": inputs.precision},
               "runtime": {"engine_revision": revision},
               "mesh_sha256": hashlib.sha256(json.dumps(compiled.mesh.packed(), sort_keys=True).encode()).hexdigest(),
               "count_source": "HBB public API-validated rows; not terminal events or WG-observed transport"}

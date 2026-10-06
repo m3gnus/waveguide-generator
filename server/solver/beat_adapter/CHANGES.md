@@ -356,3 +356,100 @@ Agreement runners, review round 2, fixed directly:
   record hashes; the HBB record is assembled by the runner from its public API,
   and its mesh/case fields are not independent observations (HBB's observed mesh
   evidence is node/triangle counts and tag areas).
+
+## PLAN slice 8 — Metal agreement runners
+
+- **W2 / frozen-input PR:** `scripts/beat_conformance/{runners,run_agreement}.py`;
+  `server/tests/beat_adapter/test_runners.py`. Optional CPU/Metal selection,
+  unchanged CPU defaults, Metal Float32/fixed q4/s4 and resolved WG headroom.
+- **W3 / native-result evidence PR:** `scripts/beat_conformance/settings.py`;
+  `server/tests/beat_adapter/test_runners.py`. Every frequency must report the
+  requested native backend; missing/conflicting/CPU fallback labels refuse.
+- **W5 / managed-sweep qualification PR:** `scripts/beat_conformance/{runners,recorder}.py`;
+  `server/tests/beat_adapter/test_{runners,conformance}.py`. Metal uses the wheel
+  project through child manager/session; native device must match the existing
+  independent dispatched-kernel probe. Both engines retain their linear-solver
+  diagnostics. No numerical tolerance changes.
+- **Shared W2/W3/W5:** this file and `scripts/beat_conformance/README.md`.
+
+Official JWSound is the target. No caller, pin, requirement or engine changes.
+The brokered evidence and commands remain in the external workspace report.
+Source stays uncommitted as requested; the orchestrator will rerun from the
+committed tree. Fake tests do not establish numerical or performance agreement.
+
+Metal evidence exposed different BLAS policies: HBB sets BLAS to its Julia
+thread count, while official Metal inherits the process BLAS count and reserves
+one thread for multithreaded sweeps. W5's `runners.py` sets worker-only
+`OPENBLAS_NUM_THREADS` to the frozen count plus that reservation (one for a
+single-thread run), so actual sweep BLAS threads match HBB.
+CPU and ambient settings remain unchanged. The managed-session fake covers both
+backends, matching BLAS, preserved offline settings and cleanup on errors.
+This application-side adaptation preserves the frozen threading gate; it does
+not relax numerical limits or require engine changes.
+
+Validation: 1303 passed / 1 existing optional schema skip (99.17 s), focused
+127 passed (2.18 s), Ruff and whitespace checks passed. Broker job
+`261006-035822-compute-9022` passes the refined 376-frequency Metal Float32
+quarter case with native six Julia/BLAS threads, device proof, all resonance
+and unchanged numerical gates, including actual-LU budgets. Earlier startup
+and threading failures remain failed in the external report. The committed-tree
+rerun belongs to the orchestrator; no startup/performance claim is made here.
+
+## Metal support review round 1 fixes
+
+- **P1/A — fixed, because probes could write before manager isolation:**
+  validate projects and every depot with `julia_steps.julia_environment` before
+  any Julia launch; pass its environment and explicit project to device probes.
+  Fakes cover HBB projects/depots, relative paths, symlinks and environment forwarding.
+- **P2/B — fixed, because operator assembly skips the BLAS reservation:**
+  refuse all ambient `BLAB_*` overrides, including `pair_owned`, and explicit
+  operator-matrix requests before probing/solving. Default direct Metal assembly
+  retains the worker-only T+1 override (T=1 stays 1).
+- **P2/C — fixed, because two missing observations compared equal:**
+  require positive observed `blas_threads` and backend on every row from both
+  engines. Agreement also refuses missing/declared aggregate evidence. Tests
+  cover first/last rows, either engine, both backends and omissions on both sides.
+- **P2/D — fixed, because failed retries could retain earlier passed records:**
+  refuse nonempty output directories before startup; require a fresh retry
+  directory. Regression covers a device-probe failure before solving and refusal
+  to retry over existing final records.
+- **P2/E — fixed, because HBB's Metal backend label is a request echo:**
+  require a `metal_` regular assembly mode or `assembly=metal_fused_burton_miller`
+  on every row. HBB emits `metal_pipeline=false` on CPU too, so presence alone
+  is deliberately insufficient. Late CPU execution with Metal labels fails.
+- **P2/F — fixed, because CPU diagnostics must keep their real wire spellings:**
+  retain strict CPU validation; fixtures use official `bem_backend` plus
+  `engine_provenance.execution.backend`, and HBB `backend`, CPU fused assembly
+  and `metal_pipeline=false`. Both engines emit `blas_threads` on CPU.
+- **P3 — fixed, because launch policy and input errors need explicit evidence:**
+  record the worker-only `OPENBLAS_NUM_THREADS` override as declared launch
+  settings, including probe failures. Invalid/empty `--threads` produces an
+  argparse error before I/O. No parent environment mutation.
+
+Files per PR / manifest row for this round:
+
+- **W2 / frozen inputs and retry policy:**
+  `scripts/beat_conformance/run_agreement.py`;
+  `server/tests/beat_adapter/test_runners.py`.
+- **W3 / observed results and agreement:**
+  `scripts/beat_conformance/{settings,agreement}.py`;
+  `server/tests/beat_adapter/test_{runners,agreement}.py`.
+- **W5 / probe and worker launch evidence:**
+  `scripts/beat_conformance/{verification,runners,recorder}.py`;
+  `server/tests/beat_adapter/test_{verification,runners}.py`.
+- **Shared W2/W3/W5:** this file; `scripts/beat_conformance/README.md`.
+
+CPU qualification is affected by project/depot validation, required BLAS/backend
+observations and fresh output directories; CPU worker launch policy is unchanged.
+The separate CPU broker job `261006-040655-compute-93df` uses `74e17133`, so it does
+not validate these changes. Official JWSound remains the target. Refusing overrides
+and reused output directories selects the review's permitted conservative fixes;
+requiring assembly evidence avoids treating HBB's CPU pipeline field as Metal proof.
+No production caller, engine, pin, dependency or numerical budget changes.
+Fake tests only; real reruns remain orchestrator work. Changes are uncommitted
+as requested.
+
+Metal support review round 2, fixed directly: HBB Metal evidence now requires
+device assembly (`regular_assembly_mode` = `metal_fused_burton_miller` or
+`metal_native_*`). Host-staged CPU assembly and the `metal_default` placeholder
+no longer count, and the dead `assembly` alternative is gone.

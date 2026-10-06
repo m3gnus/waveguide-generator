@@ -178,3 +178,35 @@ lazy; no engine-specific extension is required.
 rounding and shortest decimal wire representation after undoing acceleration
 scaling. This diagnostic never changes gate inputs or tolerances. Float64
 comparison against HBB is capped near 6e-8 by HBB's Float32 wire output.
+
+Same-mesh `run_agreement` accepts `--backend cpu|metal` (default CPU). CPU keeps
+its existing precision choices, one-thread default and wavelength quadrature.
+Metal requires `--precision float32`, uses fixed q4/s4 and defaults to WG's
+performance-core thread budget with Metal headroom. `--threads auto` or a
+positive explicit count resolves once for both engines. Metal records use a
+`metal-` case prefix to distinguish them from existing CPU artifacts.
+Official runs use the installed wheel's `julia_metal` project through WG's child
+manager/session and the recorder's `assert_metal_device.jl` kernel check. Every
+native row must report the selected backend; official native device provenance
+must match the independently probed device. HBB uses its public one-shot Metal
+API and a Metal-specific native assembly mode, since its backend label echoes
+the request and `metal_pipeline=false` is also emitted on CPU. Float64 and silent CPU fallback refuse;
+failed records remain failures. Linear-solver diagnostics determine the existing
+LU/reference budgets. No Metal-specific tolerance relaxation is permitted.
+For matched Metal threading, the official child worker receives its supported
+`OPENBLAS_NUM_THREADS` count equal to the frozen Julia count plus one when
+Julia is multithreaded. The default direct Metal assembly reserves that extra thread;
+HBB's Metal API already sets BLAS to the frozen Julia count. The override is scoped to the worker;
+it is recorded under declared `launch_settings`. Metal agreement refuses all
+ambient `BLAB_*` overrides (including `BLAB_METAL_REGULAR_KERNEL_MODE=pair_owned`)
+and explicit operator-matrix assembly before probing or solving, since those
+policies can bypass the reservation. CPU launch settings and the parent
+environment are preserved. Both CPU and Metal agreement require observed
+positive BLAS counts and backend labels on every frequency row from both engines.
+Absent observations fail even when both sides omit the same field.
+
+Independent Julia probes validate their project and all depot destinations with
+the runtime's isolation checks before launching, and receive that validated
+environment. Agreement runs require an empty output directory; retries must use
+a fresh directory so an earlier passed record cannot stand for a failed retry.
+Invalid `--threads` values are command-line errors.

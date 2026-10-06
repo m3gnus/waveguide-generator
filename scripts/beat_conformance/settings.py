@@ -35,6 +35,36 @@ def flatten(values: dict[str, Any], prefix: str = "") -> dict[str, Any]:
     return flat
 
 
+def validate_native_backend(native: Any, backend: str, *, official: bool,
+                            device_name: str | None = None) -> None:
+    """Refuse fallback or absent native evidence, including conflicting aliases."""
+    rows = getattr(native, "solver_log", [])
+    if len(rows) != len(native.frequencies_hz) or not rows:
+        raise ValueError("Agreement requires per-frequency native backend diagnostics")
+    for row in rows:
+        diagnostic = row.get("native_diagnostics") or {}
+        labels = [diagnostic[key] for key in ("bem_backend", "backend") if key in diagnostic]
+        if not labels or any(label != backend for label in labels):
+            raise ValueError(f"Observed native backend differs from requested {backend} or is missing")
+        execution = diagnostic.get("engine_provenance", {}).get("execution", {})
+        if execution and execution.get("backend") != backend:
+            raise ValueError("Native device backend differs from requested backend")
+        if not official and backend == "metal":
+            mode = diagnostic.get("regular_assembly_mode")
+            # Only device assembly counts: host-staged CPU assembly uploaded to the
+            # GPU and the metal_default placeholder are not Metal evidence, and
+            # HBB emits metal_pipeline=false on CPU too.
+            if not (isinstance(mode, str) and (mode == "metal_fused_burton_miller"
+                                                or mode.startswith("metal_native_"))):
+                raise ValueError("HBB Metal execution evidence is missing or indicates CPU fallback")
+        if official and backend == "metal":
+            device = execution.get("device", diagnostic.get("device"))
+            if (not isinstance(device, str) or not device.strip()
+                    or device.lower() in {"cpu", "host"} or execution.get("device_query_error")
+                    or (device_name is not None and device != device_name)):
+                raise ValueError("Native Metal device is missing or differs from independently probed device")
+
+
 def observed_settings(declared: dict, native: Any, *, official: bool,
                       native_symmetry: str) -> tuple[dict, dict]:
     """Read every diagnostic row; never promote a config echo to observed usage."""
@@ -42,9 +72,12 @@ def observed_settings(declared: dict, native: Any, *, official: bool,
     values["symmetry_native"] = native_symmetry
     evidence = {key: {"status": "declared", "value": value} for key, value in values.items()}
     rows = getattr(native, "solver_log", [])
+    validate_native_backend(native, declared["backend"], official=official)
     diagnostics = [row.get("native_diagnostics") or {} for row in rows]
     if len(rows) != len(native.frequencies_hz) or any(not d for d in diagnostics):
         raise ValueError("Agreement requires per-frequency native diagnostics")
+    if any(type(d.get("blas_threads")) is not int or d["blas_threads"] < 1 for d in diagnostics):
+        raise ValueError("Agreement requires observed positive blas_threads on every row")
 
     def observe(name, value, source):
         if name in values:

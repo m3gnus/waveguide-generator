@@ -73,6 +73,16 @@ def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict
     precision = request.wire["solver_options"]["precision"]
     if selection.runtime_mode not in {"direct", "child"}:
         raise ValueError("Qualification runtime mode must be direct or child")
+    if backend == "metal" and selection.runtime_mode == "child":
+        from .runners import metal_worker_environment
+        environment = metal_worker_environment(
+            selection.julia_threads,
+            assembly=request.wire["solver_options"].get("burton_miller_assembly", "direct_system"))
+        record["launch_settings"] = {
+            "status": "declared", "scope": "official child worker",
+            "environment": {"OPENBLAS_NUM_THREADS": environment["OPENBLAS_NUM_THREADS"]},
+            "assembly_policy": "engine defaults; BLAB_* overrides refused",
+        }
     verify_options = {"engine_source": selection.engine_source} if selection.engine_source else {}
     facts = verify_runtime(selection.julia_executable, backend, **verify_options)
     revision_status = facts.pop("engine_revision_status", "observed")
@@ -89,6 +99,13 @@ def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict
             record["terminal_events"] = terminal_events
     else:
         result = _direct_solve(request, selection, facts, terminal_events, record)
+    from .settings import validate_native_backend
+    validate_native_backend(result, backend, official=True,
+                            device_name=facts["device_name"] if backend == "metal" else None)
+    if backend == "metal":
+        record["observations"]["native_device_name"] = {
+            "status": "observed", "value": facts["device_name"],
+            "source": "solver_log.native_diagnostics; matched independent Metal kernel probe"}
     count = terminal_events[-1]["solved_count"] if terminal_events[-1]["type"] == "completed" else 0
     record["observations"]["solve_count"] = {"status": "observed", "value": count}
     for name, field in (("backend", "bem_backend"), ("precision", "precision")):

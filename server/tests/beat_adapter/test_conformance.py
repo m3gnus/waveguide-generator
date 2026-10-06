@@ -27,6 +27,9 @@ def fake_solve(compiled_result):
         events = []
         for frequency in frequencies:
             raw = compiled_result(request, frequency=frequency)
+            raw["diagnostics"]["engine_provenance"] = {
+                "execution": {"backend": options["bem_backend"],
+                              "device": "Independent test device"}}
             if options["precision"] == "float64":
                 # Exact unit-acceleration analytic field encoded on the
                 # official velocity basis; exercises WG's decoder and scale.
