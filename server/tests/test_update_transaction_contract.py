@@ -5148,8 +5148,9 @@ def test_quit_cancels_pending_settlement_retries_without_waiting_for_the_helper(
     )
 
 
+@pytest.mark.parametrize("timing", ["ordinary", "slow-claim", "late-wakeup"])
 def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_backstop(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timing: str
 ) -> None:
     assert 30 <= sum(healthy_start.SETTLEMENT_RETRY_DELAYS) <= 60
     assert tuple(sorted(healthy_start.SETTLEMENT_RETRY_DELAYS)) == healthy_start.SETTLEMENT_RETRY_DELAYS
@@ -5159,9 +5160,30 @@ def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_bac
     settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
     original = healthy_start.claim_update
     attempts: list[float] = []
+    elapsed = 0.0
+    waits: list[float] = []
+
+    if timing != "ordinary":
+        # Advance only this module's clock: joining and the real claim keep
+        # their native timing. Simulate 25 ms of work or scheduler lateness
+        # after each retry without relying on a loaded CI runner.
+        monkeypatch.setattr(
+            healthy_start, "time", SimpleNamespace(monotonic=lambda: elapsed), raising=False
+        )
+
+        def wait(delay: float) -> bool:
+            nonlocal elapsed
+            waits.append(delay)
+            elapsed += delay + (0.025 if timing == "late-wakeup" else 0.0)
+            return settlement._retry_stop.is_set()
+
+        monkeypatch.setattr(settlement._retry_stop, "wait", wait)
 
     def claim(resources: Path) -> Any:
+        nonlocal elapsed
         attempts.append(time.monotonic())
+        if timing == "slow-claim" and len(attempts) > 1:
+            elapsed += 0.025
         return original(resources)
 
     monkeypatch.setattr(healthy_start, "claim_update", claim)
@@ -5169,6 +5191,8 @@ def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_bac
         assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
         _join_settlement_retry(settlement)
     assert len(attempts) == 4
+    if timing != "ordinary":
+        assert waits == list(healthy_start.SETTLEMENT_RETRY_DELAYS)
     assert not settlement.settled
     assert (installation.resources / "runtime.previous").is_dir()
     assert healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(

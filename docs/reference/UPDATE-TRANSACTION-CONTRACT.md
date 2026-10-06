@@ -663,6 +663,14 @@ reason. It never leaves the transaction open silently. The evidence differs by m
 In the code, `launchers/statusapp/healthy_start.py` is the one path, and every mode writes
 the same `update.log` lines through it.
 
+If the updater still holds the claim when readiness is confirmed, settlement starts
+one background worker and retries once after each delay: 1, 2, 4, 8, 8, 8, 8 and
+8 seconds. The bound is eight retries after the initial attempt, with 47 seconds of
+scheduled waits; claim work and scheduler lateness can extend elapsed time but never
+consume attempts. Only a busy claim is retried. Cancellation interrupts a pending wait,
+and a changed build or transaction cannot reuse the earlier readiness evidence.
+Exhausted retries leave rollback material for the next healthy start to settle.
+
 A start that settles writes `Healthy start: update transaction <id> committed from state
 '<state>'.`, then the cleanup's own lines, such as `Removed healthy-start rollback layer:
 <path>` and `Removed the update downloads: <path>`.

@@ -30,7 +30,6 @@ from pathlib import Path
 import shutil
 import sys
 import threading
-import time
 
 from launchers.apply_update import (
     ROLLBACK_MATERIAL_RETAINED,
@@ -61,8 +60,9 @@ from server.platform.instance import pid_is_running
 BundlePaths = tuple[Path, Path, Path]
 Report = Callable[[str], None]
 
-# Retry only a busy helper, over 47 seconds. A later launch remains the
-# backstop if that helper outlives this window or this process exits.
+# Retry only a busy helper, once per delay (47 seconds of scheduled waits).
+# Claim work and scheduler lateness must not consume retry attempts. A later
+# launch remains the backstop if the helper outlives these retries or we exit.
 SETTLEMENT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0, 8.0)
 
 
@@ -269,6 +269,8 @@ class HealthyStartSettlement:
     def _retry_after_contention(
         self, paths: BundlePaths, evidence: str, report: Report | None
     ) -> None:
+        """Retry once per delay while busy, unless cancelled or no longer safe."""
+
         # Called under _lock. Multiple readiness observations get one worker.
         if self._retry_thread is not None or self._retry_stop.is_set():
             return
@@ -278,10 +280,8 @@ class HealthyStartSettlement:
         delays = SETTLEMENT_RETRY_DELAYS
 
         def retry() -> None:
-            deadline = time.monotonic() + sum(delays)
             for delay in delays:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0 or self._retry_stop.wait(min(delay, remaining)):
+                if self._retry_stop.wait(delay):
                     return
                 try:
                     if self._settle(
