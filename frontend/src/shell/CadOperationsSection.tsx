@@ -77,7 +77,7 @@ function useFindingReview(operation: CadOperationSummary): FindingReview & { ret
       if (!current) return;
       if (!preparation) throw new Error('the backend has not recorded its preparation yet');
       // The ids are the review; the ingestion record only puts words to them.
-      const findings = await getIngest(String(job?.cad_setup?.ingest_id ?? job?.cad_intent?.ingest_id ?? ''))
+      const findings = await getIngest(String(preparation.ingest_id ?? ''))
         .then((record) => record.findings.filter((finding) => preparation.blocking_finding_ids.includes(finding.id)))
         .catch(() => [] as CadReturnFinding[]);
       if (current) {

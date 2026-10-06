@@ -225,6 +225,7 @@ def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
         ),
         "preparation": (
             {"preparation_id": preparation["preparation_id"],
+             "ingest_id": preparation.get("ingest_id"),
              "blocking_finding_ids": list(preparation.get("blocking_finding_ids") or []),
              "report_sha256": preparation.get("report_sha256")}
             if isinstance(preparation, Mapping) and preparation.get("preparation_id") else None

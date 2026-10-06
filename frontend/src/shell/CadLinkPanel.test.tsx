@@ -229,11 +229,11 @@ describe('CadLinkPanel', () => {
   function applyCadRequest(summary: CadOperationSummary): void {
     if (summary.kind !== 'prepare_and_solve') { useCadOperationsStore.getState().apply(summary); return; }
     const item = cadJobFixture(summary);
-    item.cad_intent = { ...item.cad_intent, ingest_id: record.ingest_id };
+
     const preparation = reviewDetail?.preparation as { preparationId: string; blockingFindingIds: string[]; reportSha256: string } | undefined;
     if (preparation && item.cad_state) {
       item.cad_state.preparation = missingReview ? null : {
-        preparation_id: preparation.preparationId, blocking_finding_ids: preparation.blockingFindingIds,
+        preparation_id: preparation.preparationId, ingest_id: record.ingest_id, blocking_finding_ids: preparation.blockingFindingIds,
         report_sha256: preparation.reportSha256,
       };
     }

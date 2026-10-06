@@ -1210,6 +1210,7 @@ class CadStateSnapshot(JobModel):
 
 
 class CadStatePreparation(JobModel):
+    ingest_id: str | None
     preparation_id: str
     blocking_finding_ids: list[str]
     report_sha256: str | None

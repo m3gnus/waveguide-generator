@@ -311,7 +311,6 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, []);
 
   useEffect(() => {
-    recoverLegacyCadSolves(jobs);
     for (const job of latestCadJobs(jobs)) {
       const parent = jobs.find((candidate) => candidate.id === job.parent_job_id);
       const inherited = parent ? cadSolveClaim(parent) : null;
@@ -489,9 +488,8 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       submissionInFlight.current = true;
       try {
         await jobsSocket.refresh();
-        recoverLegacyCadSolves(jobsSocket.getSnapshot().jobs);
+        await recoverLegacyCadSolves(jobsSocket.getSnapshot().jobs, ingestId);
       } finally { submissionInFlight.current = false; }
-      if (hasLegacyCadSolve(ingestId)) throw new Error("The previous solve is not showing in the jobs list yet. Reconnect before trying it again.");
     }
     const retained = pendingCadSolve(ingestId);
     if (retained?.recoveredJobId) {
@@ -504,11 +502,14 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     if (heldAtPress) return holdOnRequest(heldAtPress);
     const blocker = cadInputBlockerNow();
     if (blocker && !retained?.press) throw new Error(blocker);
-    const waiting = onScreenRequestToContinue(cadJobSummaries(jobsSocket.getSnapshot().jobs), cad.ingestRecord);
-    if (!retained?.press && waiting?.snapshot?.projectLineageId && waiting.snapshot.projectLineageId !== project) {
-      throw new Error('The model on screen is filed under another project than this request names. Open that project first.');
-    }
-    const waitingJob = jobsSocket.getSnapshot().jobs.find((job) => job.id === waiting?.jobId);
+    const selectWaiting = () => {
+      const waiting = onScreenRequestToContinue(cadJobSummaries(jobsSocket.getSnapshot().jobs), cad.ingestRecord);
+      if (waiting?.snapshot?.projectLineageId && waiting.snapshot.projectLineageId !== project) {
+        throw new Error('The model on screen is filed under another project than this request names. Open that project first.');
+      }
+      return waiting;
+    };
+    if (!retained?.press) selectWaiting();
     if (!built && !retained?.press) throw new Error('The CAD solve settings are incomplete. Review the Simulation settings and try again.');
     const identity = retained ?? beginCadSolve(ingestId, designName, nextRunLabel(designName, preferencesStore.getSnapshot(), now()));
     submissionInFlight.current = true;
@@ -526,7 +527,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         if (clicked) await clicked.checkPlan();
         if (project) await putProjectSetup(built!);
         const heldNow = heldOnRequest(cad.ingestRecord);
-        if (heldNow) {
+        if (heldNow && heldNow.operation.jobId !== identity.jobId) {
           discardUnsubmittedCadSolve(ingestId);
           return holdOnRequest(heldNow);
         }
@@ -534,13 +535,24 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
           ...built!.setup, label: identity.label,
           options: { ...built!.setup.options, solver_mode: 'full_3d', symmetry: 'auto' },
         };
+        let waiting = selectWaiting();
         const bound = waiting?.setupRevisionId;
         const keepBound = bound && await getSetupRevision(bound)
           .then((revision) => solveInputsKey(revision.setup) === solveInputsKey(setup), () => false);
         const revisionId = keepBound ? bound : (await createSetupRevision(setup)).revisionId;
-        identity.jobId = waiting?.jobId ?? undefined;
+        // A Fusion request can reach a gate during any of the above awaits.
+        // Select it against the snapshot captured at this press, just before
+        // persisting the target and immutable press together.
+        waiting = selectWaiting();
+        const heldAfterSettings = heldOnRequest(cad.ingestRecord);
+        if (heldAfterSettings && heldAfterSettings.operation.jobId !== identity.jobId) {
+          discardUnsubmittedCadSolve(ingestId);
+          return holdOnRequest(heldAfterSettings);
+        }
+        identity.jobId = waiting?.jobId ?? identity.jobId;
+        const waitingJob = jobsSocket.getSnapshot().jobs.find((job) => job.id === identity.jobId);
         const preparation = waitingJob?.cad_state?.preparation;
-        const approved = keepBound && preparation ? waitingJob?.cad_state?.approvals
+        const approved = revisionId === waiting?.setupRevisionId && preparation ? waitingJob?.cad_state?.approvals
           .filter((approval) => approval.preparation_id === preparation.preparation_id
             && preparation.blocking_finding_ids.includes(approval.finding_id))
           .map((approval) => approval.finding_id) : [];

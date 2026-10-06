@@ -1399,6 +1399,16 @@ class JobStore:
 
         now = _now_iso()
         with self._lock, self._transaction() as conn:
+            # Binding replaces preparation metadata with the run's provenance.
+            # The press identity belongs to acceptance and must survive it.
+            row = conn.execute(
+                "SELECT task_metadata_json FROM simulation_jobs WHERE id = ?", (job_id,),
+            ).fetchone()
+            metadata = dict(task_metadata)
+            previous_cad = json.loads(row["task_metadata_json"] or "{}").get("cad", {}) if row else {}
+            if previous_cad.get("solve_again_press_sha256"):
+                metadata["cad"] = {**(metadata.get("cad") or {}),
+                                   "solve_again_press_sha256": previous_cad["solve_again_press_sha256"]}
             changed = conn.execute(
                 """UPDATE simulation_jobs
                    SET status = 'queued', queued_at = ?, updated_at = ?, started_at = NULL,
@@ -1416,7 +1426,7 @@ class JobStore:
                     json.dumps(dict(mesh_stats)) if mesh_stats is not None else None,
                     label,
                     json.dumps(dict(script_snapshot)) if script_snapshot is not None else None,
-                    json.dumps(dict(task_metadata)),
+                    json.dumps(metadata),
                     job_id,
                 ),
             ).rowcount

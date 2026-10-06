@@ -963,6 +963,17 @@
             "title": "Blocking Finding Ids",
             "type": "array"
           },
+          "ingest_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingest Id"
+          },
           "preparation_id": {
             "title": "Preparation Id",
             "type": "string"
@@ -980,6 +991,7 @@
           }
         },
         "required": [
+          "ingest_id",
           "preparation_id",
           "blocking_finding_ids",
           "report_sha256"

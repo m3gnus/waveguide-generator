@@ -1035,6 +1035,32 @@ describe('solve invocation mutex', () => {
     },
   );
 
+  it.each(['setup_required', 'other-project'] as const)('selects a request that reaches %s during the settings await', async (gate) => {
+    const record = filedCad('wgi_late_gate');
+    const pending = deferred<{ revisionId: string }>();
+    mocks.createSetupRevision.mockReturnValueOnce(pending.promise);
+    let solve!: Promise<'submitted' | 'busy'>;
+    await act(async () => { solve = jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
+    expect(mocks.createSetupRevision).toHaveBeenCalledOnce();
+    await act(async () => publishCadSummary(operation('op-late-fusion', 'needs_user_input', {
+      reason: 'setup_required', snapshot: { manifestSha256: record.manifest_sha256,
+        projectLineageId: gate === 'other-project' ? 'elsewhere' : 'wgl_test' },
+    })));
+    // A later on-screen model must not replace the snapshot captured at the press.
+    act(() => {
+      const other = readyCad('wgi_different_screen');
+      useCadReturnStore.setState({ ingestRecord: { ...other, manifest_sha256: `sha256:${'9'.repeat(64)}` } });
+    });
+    await act(async () => {
+      pending.resolve({ revisionId: 'wgs_manual' });
+      if (gate === 'other-project') await expect(solve).rejects.toThrow('another project');
+      else expect(await solve).toBe('submitted');
+    });
+    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    if (gate !== 'other-project') expect(mocks.solveCadAgain).toHaveBeenCalledWith('op-late-fusion', expect.objectContaining({ ingest_id: 'wgi_late_gate' }));
+    else expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+  });
+
   it.each([false, true])('reposts the same captured press after a lost response (reload: %s)', async (reload) => {
     filedCad('wgi_lost');
     mocks.submitCadSolve.mockRejectedValueOnce(new Error('connection closed'));
@@ -1156,14 +1182,33 @@ describe('solve invocation mutex', () => {
     expect(mocks.getCadOperation).not.toHaveBeenCalled();
   });
 
-  it('recovers an identity left by the previous build through the jobs list', async () => {
+  it.each(['absent', 'waiting', 'bound'] as const)('resolves a legacy %s identity through the authoritative operation route', async (kind) => {
     readyCad('wgi_legacy');
     sessionStorage.setItem('wg2.cad.manual-solve.v1:wgi_legacy', JSON.stringify({ operationId: 'manual-solve:old', designName: 'Speaker', label: 'Speaker1' }));
-    await act(async () => publishCadSummary(operation('manual-solve:old', 'accepted', { jobId: 'job-old' })));
+    if (kind !== 'absent') {
+      const summary = operation('manual-solve:old', kind === 'bound' ? 'accepted' : 'received', { jobId: kind === 'bound' ? 'job-old' : null });
+      const job = cadJobFixture(summary, { id: 'job-old', cad_intent: kind === 'waiting' ? {
+        type: 'cad_intent', operation_id: 'manual-solve:old', submit: false,
+      } : null, cad_provenance: { operation_id: 'manual-solve:old', manual_waiting: kind === 'waiting' } } as Partial<JobItem>);
+      // The waiting compatibility summary has no bound jobId; the jobs channel
+      // carries the intent's identity and its durable manual_waiting marker.
+      await act(async () => publishJobs([job]));
+      mocks.getCadOperation.mockResolvedValue({ ...summary, approvals: [], preparation: null });
+    }
     await act(async () => { await jobsCoordinatorBridge.getSnapshot().solveCurrentCadImport(); });
-    expect(mocks.submitCadSolve).not.toHaveBeenCalled();
-    expect(compareSelection.getSnapshot().awaiting).toBe('job-old');
+    expect(mocks.getCadOperation).toHaveBeenCalledWith('manual-solve:old');
     expect(sessionStorage.getItem('wg2.cad.manual-solve.v1:wgi_legacy')).toBeNull();
+    if (kind === 'absent') {
+      expect(mocks.submitCadSolve).toHaveBeenCalledOnce();
+      expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+    } else if (kind === 'waiting') {
+      expect(mocks.solveCadAgain).toHaveBeenCalledWith('job-old', expect.objectContaining({ setup_revision_id: 'wgs_manual', submit: true }));
+      expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+    } else {
+      expect(mocks.submitCadSolve).not.toHaveBeenCalled();
+      expect(mocks.solveCadAgain).not.toHaveBeenCalled();
+      expect(compareSelection.getSnapshot().awaiting).toBe('job-old');
+    }
   });
 
   it.each(['another snapshot', 'update_restart_pending'])('starts a new solve beside a request for %s', async (reason) => {

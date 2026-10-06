@@ -59,6 +59,7 @@ function stubBackend(approvals: Array<{ preparation_id: string; finding_id: stri
     if (url.includes('/api/cadlink/operations/')) throw new Error('operation endpoint is gone');
     if (url.endsWith('/approvals')) return json({});
     if (url.endsWith('/solve-again')) return json({ job_id: 'child' });
+    expect(url).toBe('/api/cadlink/ingest/wgi_prep1');
     return json({ findings: [{ id: FINDING, kind: 'scope-degradation', detail: 'skipped bodies: Body11', blocking: true }] });
   }));
 }

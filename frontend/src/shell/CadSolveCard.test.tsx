@@ -14,7 +14,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cadJobFixture } from '../jobs/cadSolve.fixtures';
-import { jobsSocket, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
+import { jobsSocket, JobsSocketManager, type JobsWebSocketLike, type JobItem, type JobsSnapshot } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
 import type { CadReturnIngestRecord } from '../api/cadlink';
 import { RECOVERED_NEGATIVE_HALF } from '../api/domainDecision.fixtures';
@@ -104,6 +104,44 @@ describe('CAD Solve card run status', () => {
     publishJobs([]);
     currentOperation = null;
     vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('shows meshing and an update restart hold from real stage events', async () => {
+    const socket: JobsWebSocketLike = {
+      readyState: 1, onopen: null, onmessage: null, onerror: null, onclose: null,
+      send: vi.fn(), close: vi.fn(),
+    };
+    const received = { ...job(), ...cadJobFixture(operation({ state: 'received', stage: 'received' })), stage: 'received' };
+    const meshing = { ...received, stage: 'preparing-mesh', stage_message: 'Meshing the surface',
+      cad_state: { ...received.cad_state!, state: 'processing', stage: 'preparing-mesh' } };
+    const held = { ...meshing, stage: 'waiting-for-update-restart', stage_message: 'Restart approved',
+      cad_state: { ...meshing.cad_state!, state: 'needs_user_input', reason: 'update_restart_pending', message: 'Restart approved' } };
+    let response = meshing;
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(response), { headers: { 'Content-Type': 'application/json' } }));
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    vi.spyOn(jobsSocket, 'getSnapshot').mockImplementation(manager.getSnapshot);
+    vi.spyOn(jobsSocket, 'subscribe').mockImplementation(manager.subscribe);
+    const deliver = (value: unknown) => socket.onmessage?.({ data: JSON.stringify(value) });
+    manager.start();
+    try {
+      deliver({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+      deliver({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [received] });
+      expect(manager.getSnapshot().error).toBeNull();
+      await act(async () => root.render(<CadSolveCard record={record()} label="Speaker1"/>));
+      expect(host.querySelector('.job-stage-word')?.textContent).toBe('Received');
+      await act(async () => {
+        deliver({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: received.id, type: 'stage', payload: { stage: 'preparing-mesh', message: 'Meshing the surface' } });
+      });
+      await vi.waitFor(() => expect(host.querySelector('.job-stage-word')?.textContent).toBe('Preparing mesh'));
+      response = held;
+      await act(async () => {
+        deliver({ v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: received.id, type: 'stage', payload: { stage: 'waiting-for-update-restart', message: 'Restart approved' } });
+      });
+      await vi.waitFor(() => expect(host.textContent).toContain('held for the update restart'));
+      expect(manager.getSnapshot().jobs[0].cad_state?.reason).toBe('update_restart_pending');
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    } finally { manager.stop(); }
   });
 
   it('walks the CAD operation pipeline and the job it hands off to as one monotonic sequence', async () => {

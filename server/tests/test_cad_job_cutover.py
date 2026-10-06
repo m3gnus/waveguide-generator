@@ -837,7 +837,7 @@ def test_f2_cad_state_matches_the_operation_view_using_only_the_job(h, status, r
                   "artifact_sha256": "sha256:" + "2" * 64, "project_lineage_id": "lineage"},
         setup={"revision_id": "rev", "digest": "sha256:" + "3" * 64, "origin": "wg_defaults"},
         frame={"axis": "+x", "provenance": "automatic"}, last_stage="ready",
-        preparation={"preparation_id": "prep", "blocking_finding_ids": ["review"], "report_sha256": "report",
+        preparation={"preparation_id": "prep", "ingest_id": "ingest", "blocking_finding_ids": ["review"], "report_sha256": "report",
                      "approvals": [{"preparation_id": "prep", "finding_id": "review"}]},
     )
     record.update(status=status, stage=stage, stage_message="Restart pending", started_at="2026-10-01T00:00:00Z" if stage == "preparing-mesh" else None)
@@ -857,7 +857,7 @@ def test_f2_cad_state_matches_the_operation_view_using_only_the_job(h, status, r
         assert state[field] == summary[field]
     assert state["received_at"] == job["created_at"]
     assert state["snapshot"] == cad["snapshot"]
-    assert state["preparation"] == {k: cad["preparation"][k] for k in ("preparation_id", "blocking_finding_ids", "report_sha256")}
+    assert state["preparation"] == {k: cad["preparation"][k] for k in ("preparation_id", "ingest_id", "blocking_finding_ids", "report_sha256")}
     assert state["approvals"] == cad["preparation"]["approvals"]
     h.store.close()  # the read model cannot consult the operation ledger
     assert h.runtime._serialize_job(job)["cad_state"] == state
@@ -984,3 +984,38 @@ def test_f2_solve_again_with_another_axis_does_not_carry_the_parents_frame(h):
         assert "frame" not in record
         assert h.runtime._serialize_job(h.jobs_store.get_job_row(child))["cad_state"]["frame_axis_automatic"] is None
     h._loop.run(other())
+
+
+def test_review_compatibility_details_fill_a_partial_historical_job_record(h):
+    from server.cadlink.ingest import meshing_semantics_fingerprint
+    from server.cadlink.preparation import retain_operation_snapshot
+    from server.jobs.cad_intent import CadSolveIntent
+
+    _received(h)
+    revision = _revision(h.store, _setup(engine="metal"))
+    generation = h.store.claim("cmd-1", 0)
+    retain_operation_snapshot(h.store, h.data_dir, h.workspace, "cmd-1")
+    snapshot = json.loads(h.row()["snapshot_json"])
+    retained = h.data_dir / "imports" / "bundles" / (snapshot["manifest_sha256"].removeprefix("sha256:") + ".wgreturn")
+    ingest = h.ingest(retained, {}, [], h.store, h.data_dir, prep_options={}, commit_guard=lambda conn: True, retained_copy=True)
+    prep_id = ingest["ingest_id"]
+    h.store.advance_operation("cmd-1", generation, setup_revision_id=revision)
+    h.store.record_preparation("cmd-1", generation, preparation_id=prep_id, ingest_id=prep_id,
+                               snapshot_sha256=snapshot["manifest_sha256"], setup_revision_id=revision,
+                               report_sha256=ingest["report_sha256"], blocking_finding_ids=["review-1"],
+                               meshing_semantics=meshing_semantics_fingerprint())
+    h.store.add_approvals("cmd-1", prep_id, ["review-1"])
+    record = h.runtime._preparing_record(CadSolveIntent(operation_id="cmd-1", bundle_path="old.wgreturn",
+                                                      manifest_sha256=snapshot["manifest_sha256"], return_id="return"))
+    record.update(status="queued", config_json={})
+    record["task_metadata"]["cad"] = {"operation_id": "cmd-1"}
+    job_id, _, _ = h.jobs_store.create_job_idempotent(record, submission_key="cad-solve:cmd-1", request_sha256="old")
+    job = h.runtime._serialize_job(h.jobs_store.get_job_row(job_id))
+    assert job["cad_state"]["snapshot"] is job["cad_state"]["preparation"] is None
+    detail = h._loop.run(api.get_cad_operation("cmd-1", _request(h)))
+    assert detail["snapshot"]["manifestSha256"] == snapshot["manifest_sha256"]
+    assert detail["preparationId"] == prep_id
+    assert detail["preparation"]["ingestId"] == prep_id
+    assert detail["preparation"]["reportSha256"] == ingest["report_sha256"]
+    assert detail["setupRevisionId"] == revision
+    assert detail["approvals"] == [{"preparation_id": prep_id, "finding_id": "review-1"}]

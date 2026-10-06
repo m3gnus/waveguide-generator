@@ -118,6 +118,7 @@ export type CadFrameProvenance =
   | 'chosen' | 'suggested' | 'automatic' | 'carried' | 'confirmed' | 'linked' | 'unconfirmed';
 
 export interface CadProvenance {
+  manual_waiting?: boolean;
   operation_id?: string;
   setup?: {
     revision_id: string;
@@ -340,6 +341,7 @@ function isCadState(value: unknown): value is components['schemas']['CadState'] 
       .every((key) => isNullableString(snapshot[key]))))) return false;
   if (!(value.preparation === null || (isRecord(value.preparation)
     && typeof value.preparation.preparation_id === 'string'
+    && isNullableString(value.preparation.ingest_id)
     && isStringArray(value.preparation.blocking_finding_ids)
     && isNullableString(value.preparation.report_sha256)))) return false;
   return Array.isArray(value.approvals) && value.approvals.every((item) => (
@@ -1162,7 +1164,11 @@ export class JobsSocketManager {
   }
 
   private eventNeedsRefresh(message: EventMessage): boolean {
-    if (!this.snapshot.jobs.some((job) => job.id === message.jobId)) return true;
+    const job = this.snapshot.jobs.find((item) => item.id === message.jobId);
+    if (!job) return true;
+    // Preparation stages can also change the CAD gate, including restart holds.
+    if (message.type === 'stage' && job.cad_state
+      && (job.status === 'preparing' || (job.status === 'error' && job.cad_intent))) return true;
     return message.type === 'queued'
       || message.type === 'completed'
       || message.type === 'failed'

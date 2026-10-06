@@ -3380,6 +3380,36 @@ class JobRuntime:
             return await self.solve_cad_again(job_id, **press)
         return job_id
 
+    @staticmethod
+    def _cad_solve_press_sha256(
+        job_id: str, *, setup_revision_id: str | None = None,
+        frame_axis: str | None = None, approve_preparation_id: str | None = None,
+        approve_finding_ids: tuple[str, ...] | list[str] = (), submit: bool = True,
+    ) -> str:
+        return hashlib.sha256(json.dumps({
+            "parent_job_id": job_id,
+            "setup_revision_id": setup_revision_id,
+            "frame_axis": frame_axis,
+            "approve_preparation_id": approve_preparation_id,
+            "approve_finding_ids": sorted(approve_finding_ids),
+            "submit": submit,
+        }, sort_keys=True).encode()).hexdigest()
+
+    def recover_cad_solve_press(self, job_id: str, **press: Any) -> str | None:
+        """Resolve an exact continuation replay before any admission checks."""
+
+        self._require_job(job_id)
+        digest = self._cad_solve_press_sha256(job_id, **press)
+        seen = {job_id}
+        child_id = self.store.job_for_submission_key(f"cad-solve-again:{job_id}")
+        while child_id is not None and child_id not in seen:
+            seen.add(child_id)
+            child = self._require_job(child_id)
+            if cad_of(child).get("solve_again_press_sha256") == digest:
+                return child_id
+            child_id = self.store.job_for_submission_key(f"cad-solve-again:{child_id}")
+        return None
+
     async def solve_cad_again(
         self,
         job_id: str,
@@ -3406,14 +3436,18 @@ class JobRuntime:
         # The press is distinct from the parent we eventually continue: a changed
         # press on an ancestor follows refused descendants, while the same press
         # returns its child even if that preparation has already been refused.
-        press_sha256 = hashlib.sha256(json.dumps({
-            "parent_job_id": job_id,
-            "setup_revision_id": setup_revision_id,
-            "frame_axis": frame_axis,
-            "approve_preparation_id": approve_preparation_id,
-            "approve_finding_ids": sorted(approve_finding_ids),
-            "submit": submit,
-        }, sort_keys=True).encode()).hexdigest()
+        press_sha256 = self._cad_solve_press_sha256(
+            job_id, setup_revision_id=setup_revision_id, frame_axis=frame_axis,
+            approve_preparation_id=approve_preparation_id,
+            approve_finding_ids=approve_finding_ids, submit=submit,
+        )
+        replay = await asyncio.to_thread(
+            self.recover_cad_solve_press, job_id, setup_revision_id=setup_revision_id,
+            frame_axis=frame_axis, approve_preparation_id=approve_preparation_id,
+            approve_finding_ids=approve_finding_ids, submit=submit,
+        )
+        if replay is not None:
+            return replay
         existing_child_message = "This solve already has a continuing job; use that job instead"
         while True:
             if intent_of(row) is None:
@@ -3465,12 +3499,11 @@ class JobRuntime:
             # Check the durable intent both after lookup and after a competing
             # create. An error from a bound solver is not a refused preparation.
             child = self._require_job(existing)
+            if cad_of(child).get("solve_again_press_sha256") == press_sha256:
+                return existing
             if intent_of(child) is None or child["status"] not in {"preparing", "error"}:
                 raise JobConflictError(existing_child_message)
             if child["status"] == "preparing":
-                child_cad = (child.get("task_metadata") or {}).get("cad") or {}
-                if child_cad.get("solve_again_press_sha256") == press_sha256:
-                    return existing
                 raise JobConflictError(existing_child_message)
             row = child
 

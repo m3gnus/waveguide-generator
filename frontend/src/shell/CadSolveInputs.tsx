@@ -88,9 +88,16 @@ export function CadSolveInputs({
   className,
 }: CadSolveInputsProps) {
   const jobCad = job?.cad_provenance ?? suppliedJobCad;
+  const jobOperation = job?.cad_state ? cadJobSummary(job) : null;
+  const jobManifest = jobOperation?.snapshot?.manifestSha256 ?? job?.cad_source?.manifest_sha256 ?? null;
+  const jobDocument = jobOperation?.snapshot?.documentName ?? job?.cad_source?.document_name ?? null;
+  const jobPreparation = jobCad?.preparation?.preparation_id ?? jobOperation?.preparationId ?? null;
+  const jobReceived = jobOperation?.createdAt || job?.created_at || null;
+  const needsOperation = !suppliedOperation && operationId !== 'not recorded'
+    && (!jobManifest || !jobDocument || !jobPreparation || !jobReceived || !jobOperation?.updatedAt);
   const [operationLoad, setOperationLoad] = useState<LoadState<CadOperationDetail>>(EMPTY_LOAD);
   useEffect(() => {
-    if (suppliedOperation || job?.cad_state || jobCad || operationId === 'not recorded') return undefined;
+    if (!needsOperation) return undefined;
     let current = true;
     setOperationLoad({ key: operationId, value: null, error: null });
     void getCadOperation(operationId).then(
@@ -98,10 +105,24 @@ export function CadSolveInputs({
       (reason: unknown) => { if (current) setOperationLoad({ key: operationId, value: null, error: message(reason) }); },
     );
     return () => { current = false; };
-  }, [operationId, suppliedOperation, job?.cad_state, jobCad]);
+  }, [operationId, needsOperation]);
 
   const loadedOperation = operationLoad.key === operationId ? operationLoad.value : null;
-  const operation = job?.cad_state ? cadJobSummary(job) : suppliedOperation ?? loadedOperation;
+  const fallback = suppliedOperation ?? loadedOperation;
+  // The compatibility row fills historical omissions field by field. Its
+  // current state never replaces the state recorded by this particular job.
+  const operation = jobOperation ? {
+    ...jobOperation,
+    snapshot: jobOperation.snapshot ? {
+      manifestSha256: jobManifest ?? fallback?.snapshot?.manifestSha256 ?? null,
+      documentName: jobDocument ?? fallback?.snapshot?.documentName ?? null,
+      projectLineageId: jobOperation.snapshot.projectLineageId ?? fallback?.snapshot?.projectLineageId ?? null,
+    } : fallback?.snapshot ?? null,
+    preparationId: jobPreparation ?? fallback?.preparationId ?? null,
+    setupRevisionId: jobCad?.setup?.revision_id ?? jobOperation.setupRevisionId ?? fallback?.setupRevisionId ?? null,
+    createdAt: jobReceived ?? fallback?.createdAt ?? null,
+    updatedAt: jobOperation.updatedAt ?? fallback?.updatedAt ?? null,
+  } : fallback;
   const setupRevisionId = jobCad?.setup?.revision_id ?? operation?.setupRevisionId ?? null;
   // The job's own record, else the operation's.
   const setupDefaults = jobCad?.setup ? jobCad.setup.origin === 'wg_defaults' : Boolean(operation?.setupDefaults);
@@ -129,10 +150,11 @@ export function CadSolveInputs({
   const setupError = engineSource === 'setup-revision' && setupRevisionId && setupLoad.key === setupRevisionId
     ? setupLoad.error
     : null;
-  const loadingOperation = !operation && !jobCad && !operationError && operationId !== 'not recorded';
+  const loadingOperation = needsOperation && !fallback && !operationError;
   const loadingEngine = Boolean(operation && engineSource === 'setup-revision'
     && setupRevisionId && !engine && !setupError);
-  const manifest = operation?.snapshot?.manifestSha256 ?? job?.cad_source?.manifest_sha256 ?? null;
+  const manifest = jobManifest ?? operation?.snapshot?.manifestSha256 ?? null;
+  const documentName = jobDocument ?? operation?.snapshot?.documentName ?? null;
   // The frame is said once: the job's own record answers first, and only a
   // job without one falls back to what the operation says. An automatic axis
   // is the sentence with its Change; any other provenance is the Frame row.
@@ -146,7 +168,7 @@ export function CadSolveInputs({
     <dl>
       <div><dt>Operation</dt><dd><code>{operationId}</code></dd></div>
       <div><dt>Snapshot</dt><dd>
-        {operation?.snapshot?.documentName && <span>{operation.snapshot.documentName}</span>}
+        {documentName && <span>{documentName}</span>}
         {manifest ? <code>{manifest}</code> : loadingOperation ? 'reading…' : 'not recorded'}
       </dd></div>
       <div><dt>Preparation</dt><dd><code>{jobCad?.preparation?.preparation_id ?? operation?.preparationId ?? (loadingOperation ? 'reading…' : 'not recorded')}</code></dd></div>

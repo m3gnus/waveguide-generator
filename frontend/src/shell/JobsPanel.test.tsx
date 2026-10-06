@@ -260,7 +260,7 @@ describe('jobs panel run list', () => {
     retried.cad_state = {
       operation_id: 'op-retained', job_id: retried.id, state: 'accepted', stage: 'submitted', reason: null, message: null,
       snapshot: { document_name: 'Retried speaker', manifest_sha256: 'retained-snapshot', artifact_sha256: 'artifact', project_lineage_id: 'project' },
-      preparation: { preparation_id: 'retained-preparation', blocking_finding_ids: [], report_sha256: 'report' },
+      preparation: { preparation_id: 'retained-preparation', ingest_id: 'retained-ingest', blocking_finding_ids: [], report_sha256: 'report' },
       approvals: [], setup_defaults: false, frame_axis_automatic: null, received_at: 'received', updated_at: 'moved',
     };
     const fetcher = vi.fn(async (_input: RequestInfo | URL) => new Response('{}', { status: 404 }));

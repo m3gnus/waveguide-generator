@@ -54,6 +54,29 @@ describe('CAD solve input identities', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 
+  it.each(['missing', 'partial'] as const)('fills %s historical fields from the operation while keeping recorded job values', async (kind) => {
+    const fallback = operation({ setupRevisionId: 'op-setup', preparationId: 'op-prep',
+      snapshot: { manifestSha256: manifest, documentName: 'Historical speaker' },
+      createdAt: '2025-01-01T00:00:00Z', updatedAt: '2025-01-02T00:00:00Z' });
+    const fetcher = vi.fn(async () => json({ ...fallback, approvals: [], preparation: null }));
+    vi.stubGlobal('fetch', fetcher);
+    const job = cadJobFixture(operation({ jobId: 'old-job', setupRevisionId: 'job-setup', preparationId: null, snapshot: null }));
+    job.cad_state = { ...job.cad_state!, snapshot: kind === 'partial' ? {
+      document_name: 'Recorded speaker', manifest_sha256: null, artifact_sha256: null, project_lineage_id: null,
+    } : null, received_at: null, updated_at: kind === 'partial' ? '2026-01-02T00:00:00Z' : null };
+    // Historical records can also lack the job timestamp.
+    job.created_at = '';
+    await act(async () => root.render(<CadSolveInputs operationId="op-1" job={job} resolvedEngine="metal" engineSource="job"/>));
+    await vi.waitFor(() => expect(host.textContent).toContain('Preparationop-prep'));
+    expect(host.textContent).toContain(manifest);
+    expect(host.textContent).toContain(kind === 'partial' ? 'Recorded speaker' : 'Historical speaker');
+    expect(host.textContent).toContain('Setup revisionjob-setup');
+    expect(host.textContent).not.toContain('op-setup');
+    expect(host.textContent).toContain('Received2025-01-01T00:00:00Z');
+    expect(host.textContent).toContain(kind === 'partial' ? 'Last moved2026-01-02T00:00:00Z' : 'Last moved2025-01-02T00:00:00Z');
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it('reads a pending operation engine from its setup revision despite a different job engine', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe('/api/cadlink/setup-revisions/wgs_1');
@@ -246,7 +269,7 @@ describe('CAD solve input identities', () => {
         setup: { revision_id: 'wgs_job', digest: 'sha256:d', origin: 'wg_defaults' },
       }}
     />));
-    expect(fetcher).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledOnce();
 
     expect(host.querySelector('[data-setup-defaults="true"]')?.textContent)
       .toBe("Using WG's default settings \u2014 change them in WG.");

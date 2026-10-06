@@ -397,6 +397,8 @@ def test_f2_job_solve_again_captures_the_first_press_and_continues_a_refused_job
         assert bad_status == 422 and "another preparation" in bad["detail"]
         approved_status, approved = await _post_job(app, f"/api/jobs/{parent}/approvals", {"preparation_id": prep, "finding_ids": ["review-1"]})
         assert approved_status == 200
+        assert approved["cad_intent"].get("ingest_id") is None
+        assert approved["cad_state"]["preparation"]["ingest_id"] == prep
         assert approved["cad_state"]["approvals"] == [{"preparation_id": prep, "finding_id": "review-1"}]
         assert harness.jobs_store.list_jobs()[1] == 1  # approvals do not solve
         harness.runtime._ensure_prep_lane = lambda: None
@@ -474,3 +476,36 @@ def test_f2_job_dismiss_refuses_an_active_or_bound_solve(harness):
     status, result = harness._loop.run(_post_job(_jobs_app(harness), f"/api/jobs/{job_id}/dismiss", {}))
     assert status == 409 and "stop it before dismissing" in result["detail"]
     assert harness.jobs_store.get_job_row(job_id) is not None
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "complete", "error"])
+@pytest.mark.parametrize("restart", [False, True])
+def test_review_solve_again_replays_bound_child_before_all_refusals(harness, monkeypatch, status, restart):
+    ingest_id, _ = _ingest(harness)
+    revision = _revision(harness.store, _setup(engine="metal"))
+    app = _jobs_app(harness)
+
+    async def flow():
+        _, parent = await _post_job(app, "/api/jobs/cad-solve", {
+            "client_request_id": "review-parent", "ingest_id": ingest_id,
+            "setup_revision_id": revision, "frame_axis": "+z", "submit": False,
+        })
+        await harness.runtime.wait_cad_preparations()
+        body = {"setup_revision_id": revision, "frame_axis": "+z"}
+        accepted, child = await _post_job(app, f"/api/jobs/{parent['job_id']}/solve-again", body)
+        assert accepted == 200
+        before = harness.jobs_store.get_job_row(child["job_id"])["task_metadata"]["cad"]["solve_again_press_sha256"]
+        await harness.runtime.wait_cad_preparations()
+        row = harness.jobs_store.get_job_row(child["job_id"])
+        assert row["status"] == "queued"
+        assert row["task_metadata"]["cad"]["solve_again_press_sha256"] == before
+        harness.jobs_store.update_job(child["job_id"], status=status)
+        # Even an obsolete revision must not prevent recovery of committed work.
+        monkeypatch.setattr(harness.store, "get_setup_revision", lambda revision_id: None)
+        if restart:
+            harness.blocked = "Restart approved"
+        assert await _post_job(app, f"/api/jobs/{parent['job_id']}/solve-again", body) == (accepted, child)
+        harness.blocked = None
+        changed_status, _ = await _post_job(app, f"/api/jobs/{parent['job_id']}/solve-again", {"frame_axis": "-z"})
+        assert changed_status == 409
+    harness._loop.run(flow())

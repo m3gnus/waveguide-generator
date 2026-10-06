@@ -593,6 +593,12 @@ def create_jobs_router(
     async def solve_again(job_id: str, body: CadSolveAgainRequest) -> SolveAccepted | JSONResponse:
         """Capture a waiting first press, or continue a refused CAD preparation."""
 
+        try:
+            replay = await asyncio.to_thread(runtime.recover_cad_solve_press, job_id, **body.press())
+            if replay is not None:
+                return SolveAccepted(job_id=replay)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
         refused = restart_refusal()
         if refused is not None:
             return refused

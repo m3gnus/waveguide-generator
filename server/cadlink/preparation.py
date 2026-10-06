@@ -284,8 +284,18 @@ def operation_summary(row: Mapping[str, Any], job_store: Any = None) -> dict[str
             # Pre-cutover bound jobs may have no retained-snapshot provenance.
             if view.get("snapshot") is None:
                 view.pop("snapshot", None)
+            config = job.get("config_json")
+            if isinstance(config, Mapping) and config.get("type") != "cad_intent":
+                # Historical bound jobs may have only an operation identity.
+                # Keep ledger inputs where that job recorded no value.
+                for key in ("preparationId", "setupRevisionId"):
+                    if view.get(key) is None:
+                        view.pop(key, None)
+                if isinstance(view.get("snapshot"), Mapping) and isinstance(summary.get("snapshot"), Mapping):
+                    view["snapshot"] = {**summary["snapshot"],
+                                        **{key: value for key, value in view["snapshot"].items() if value is not None}}
             summary.update(view)
-            summary["updatedAt"] = job["updated_at"]
+            summary["updatedAt"] = job.get("updated_at") or summary["updatedAt"]
         elif job is None and row.get("job_id"):
             # A deleted job is a durable dismissal, including after reconnect.
             summary.update(state="cancelled", stage=None, reason=None, message=None, jobId=None)

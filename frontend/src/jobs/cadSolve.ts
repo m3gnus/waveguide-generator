@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { components } from '../api/generated/openapi';
-import { jsonRequest } from '../api/cadlink';
+import { CadLinkApiError, jsonRequest } from '../api/cadlink';
+import { getCadOperation } from '../api/cadOperations';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import type { CadOperationSummary } from '../api/cadOperations';
 
@@ -66,24 +67,37 @@ export function releaseCadSolve(ingestId: string, held: PendingCadSolve, jobId: 
   sessionStorage.removeItem(PENDING + ingestId);
 }
 
-/** Read identities left by the previous build once their job is available.
- * Until then they remain in storage: a failed reconnect cannot discard work. */
-export function recoverLegacyCadSolves(jobs: JobItem[]): void {
+/** Resolve old identities through the acceptance ledger before migrating them.
+ * A list missing a job is not evidence that its creation failed. */
+export async function recoverLegacyCadSolves(jobs: JobItem[], ingestId?: string): Promise<void> {
   for (const key of Object.keys(sessionStorage)) {
-    if (!key.startsWith(LEGACY)) continue;
+    if (!key.startsWith(LEGACY) || (ingestId && key !== LEGACY + ingestId)) continue;
     const raw = sessionStorage.getItem(key)!;
-    const held = read<{ operationId: string; designName?: string; prepareAcknowledged?: boolean; completionAcknowledged?: boolean }>(key)
+    const held = read<{ operationId: string; designName?: string; label?: string; completionAcknowledged?: boolean }>(key)
       ?? { operationId: raw };
-    const job = jobs.find((candidate) => candidate.client_request_id === `cad-solve:${held.operationId}`);
-    if (!job) continue;
-    write(CLAIM + job.id, {
+    let operation;
+    try {
+      operation = await getCadOperation(held.operationId);
+    } catch (reason) {
+      if (!(reason instanceof CadLinkApiError) || reason.status !== 404) throw reason;
+      // An authoritative absence means this build can accept a fresh press.
+      sessionStorage.removeItem(key);
+      continue;
+    }
+    const job = jobs.find((candidate) => candidate.id === operation.jobId)
+      ?? latestCadJobs(jobs).find((candidate) => cadJobOperationId(candidate) === held.operationId)
+      ?? jobs.find((candidate) => candidate.client_request_id === `cad-solve:${held.operationId}`);
+    const jobId = job?.id ?? operation.jobId;
+    if (!jobId) throw new Error('The previous solve could not be read from the jobs channel. Reconnect and try again.');
+    write(CLAIM + jobId, {
       designName: held.designName ?? '', completionAcknowledged: held.completionAcknowledged === true,
     });
-    if (!held.prepareAcknowledged) {
-      write(PENDING + key.slice(LEGACY.length), {
-        requestId: job.id, designName: held.designName ?? '', label: job.label ?? '', recoveredJobId: job.id,
-      });
-    }
+    const waiting = operation.state === 'received' && job?.cad_intent
+      && job.cad_provenance?.manual_waiting === true;
+    write(PENDING + key.slice(LEGACY.length), {
+      requestId: jobId, designName: held.designName ?? '', label: held.label ?? job?.label ?? '',
+      ...(waiting ? { jobId } : { recoveredJobId: jobId }),
+    });
     sessionStorage.removeItem(key);
   }
 }

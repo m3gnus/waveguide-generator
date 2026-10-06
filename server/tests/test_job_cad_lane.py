@@ -319,8 +319,9 @@ def test_two_solve_again_presses_share_one_continuation(h: JobsHarness) -> None:
     assert child["config_json"]["client_request_id"] != parent["config_json"]["submission_key"]
     assert len([row for row in h.jobs_store.list_jobs(limit=500)[0]
                 if row["config_json"].get("parent_job_id") == parent["id"]]) == 1
+    assert h._loop.run(h.runtime.solve_cad_again(parent["id"])) == first
     with pytest.raises(JobConflictError, match="continuing job"):
-        h._loop.run(h.runtime.solve_cad_again(parent["id"]))
+        h._loop.run(h.runtime.solve_cad_again(parent["id"], frame_axis="-z"))
 
 
 def test_retry_and_solve_again_share_one_continuation(h: JobsHarness) -> None:
@@ -396,8 +397,9 @@ def test_a_changed_parent_press_continues_the_newest_refused_child(h: JobsHarnes
     assert _row(h, grandchild)["status"] == "queued"
     assert _cad(_row(h, grandchild))["setup"]["revision_id"] == revision
     assert h.submitted[-1].geometry.mesh.rigid_size_mm == 12.0
+    assert h._loop.run(h.runtime.solve_cad_again(parent, **settings)) == grandchild
     with pytest.raises(JobConflictError, match="continuing job"):
-        h._loop.run(h.runtime.solve_cad_again(parent, **settings))
+        h._loop.run(h.runtime.solve_cad_again(parent, setup_revision_id=first_revision))
 
 
 def test_a_double_parent_press_after_the_new_child_is_refused_is_still_one_child(
@@ -434,7 +436,7 @@ def test_a_double_parent_press_after_the_new_child_is_refused_is_still_one_child
 
 
 @pytest.mark.parametrize("lost_lookup", [False, True])
-def test_a_bound_child_whose_solver_failed_is_an_existing_child_conflict(
+def test_a_bound_child_whose_solver_failed_recovers_only_the_identical_press(
     h: JobsHarness, monkeypatch: pytest.MonkeyPatch, lost_lookup: bool,
 ) -> None:
     _received(h)
@@ -450,9 +452,10 @@ def test_a_bound_child_whose_solver_failed_is_an_existing_child_conflict(
         # A competing call can bind and fail its child between lookup and create.
         # Exercise the idempotent-create loser as well as the early lookup.
         monkeypatch.setattr(h.jobs_store, "job_for_submission_key", lambda key: None)
-    # CAD-OPERATIONS: once the child has a request, use that job, even after failure.
+    # A lost response recovers committed work; different work is still refused.
+    assert h._loop.run(h.runtime.solve_cad_again(parent)) == child
     with pytest.raises(JobConflictError, match="already has a continuing job; use that job instead"):
-        h._loop.run(h.runtime.solve_cad_again(parent))
+        h._loop.run(h.runtime.solve_cad_again(parent, frame_axis="-z"))
     assert h.jobs_store.list_jobs(limit=50)[1] == 2
 
 

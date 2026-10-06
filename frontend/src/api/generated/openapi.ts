@@ -2400,6 +2400,8 @@ export interface components {
         CadStatePreparation: {
             /** Blocking Finding Ids */
             blocking_finding_ids: string[];
+            /** Ingest Id */
+            ingest_id: string | null;
             /** Preparation Id */
             preparation_id: string;
             /** Report Sha256 */

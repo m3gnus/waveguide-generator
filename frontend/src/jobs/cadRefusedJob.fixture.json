@@ -1,0 +1,40 @@
+{
+  "cad_intent": {
+    "type": "cad_intent",
+    "operation_id": "manual-solve:transport-parent",
+    "bundle_path": "ingest/wgi_01M496CVRH53EZG6M97SGR8XYH",
+    "manifest_sha256": "sha256:90b8f15cddd100d0081583931f716e070785bf5fe0dca9b7fb3af96a8fa75fed",
+    "return_id": "wgr_manual",
+    "setup_revision_id": "wgs_01M496CVRJ45VNPSYJ056B22BP",
+    "frame_axis": "+z",
+    "submission_key": "cad-solve:manual-solve:transport-parent",
+    "submit": false
+  },
+  "cad_state": {
+    "operation_id": "manual-solve:transport-parent",
+    "state": "needs_user_input",
+    "stage": "ready",
+    "reason": "findings_need_review",
+    "message": "Review the preparation's findings before solving: review-source",
+    "job_id": null,
+    "snapshot": {
+      "document_name": "Speaker",
+      "manifest_sha256": "sha256:90b8f15cddd100d0081583931f716e070785bf5fe0dca9b7fb3af96a8fa75fed",
+      "artifact_sha256": "sha256:78e75a25d80993a5a435a1ba5517574846097376373689d701c28ba02781bdb7",
+      "project_lineage_id": null
+    },
+    "preparation": {
+      "preparation_id": "wgi_01M496CVWEQGKC6B8G2S2EJMSE",
+      "ingest_id": "wgi_01M496CVWEQGKC6B8G2S2EJMSE",
+      "blocking_finding_ids": [
+        "review-source"
+      ],
+      "report_sha256": "sha256:3936e19d2277bd13140b82fb1e199c8d4abd096c2d32658eb69efa598dc9c893"
+    },
+    "approvals": [],
+    "setup_defaults": false,
+    "frame_axis_automatic": null,
+    "received_at": "2026-10-06T20:07:45.542246",
+    "updated_at": "2026-10-06T20:07:45.551188"
+  }
+}

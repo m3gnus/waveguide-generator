@@ -577,8 +577,11 @@ The jobs API also accepts the WG UI's displayed press directly:
 - `POST /api/jobs/{job_id}/solve-again` takes `{setup_revision_id?, frame_axis?,
   approvals?: {preparation_id, finding_ids}, submit?: true}`. It captures a
   waiting first press on the same job, or continues a refused intent as a new
-  child. Identical presses share that child. A bound request is a 409; its
-  faithful replay remains `POST /api/jobs/{job_id}/retry`, without a body.
+  child. The same parent and press hash recover the existing child before
+  restart, setup or lifecycle checks, including after that child binds, runs,
+  completes or fails. Binding keeps the press hash in the job's CAD provenance.
+  A different press whose continuation has bound is a 409; a bound job's
+  faithful retry remains `POST /api/jobs/{job_id}/retry`, without a body.
 - `POST /api/jobs/{job_id}/approvals` takes `{preparation_id, finding_ids}`.
   It records only blocking findings on that refused job's exact preparation,
   without solving. A different preparation is a 422, as on the operation shim.
@@ -597,7 +600,14 @@ waiting notices and completion claims read the latest job of each continuation
 chain, independently of operation events. Session-scoped client ids retain an
 unfinished displayed press across a lost response or reload; a known response
 releases the id for a later deliberate solve. The previous build's manual ids
-are read once and recovered through the jobs list.
+are resolved through `GET /api/cadlink/operations/{operationId}` on the next
+Solve. A 404 drops an identity whose creation never committed, allowing new
+work. An existing `received` manual intent still waiting for its first press
+is admitted through `/api/jobs/{job_id}/solve-again` with the displayed settings.
+Already admitted or bound work is recovered without another admission. A
+transport failure retains the legacy identity for another lookup. Continuation
+selection is repeated after the frame, plan and settings awaits against the
+snapshot and project captured at the press, before retaining that press.
 
 Older clients can still use compatibility shims:
 
@@ -698,12 +708,16 @@ non-CAD job. It is built from `job_operation_view`, the job's own record and its
 timestamps; no operation row participates. Its snake_case fields are
 `operation_id`, `state`, `stage`, `reason`, `message`, `job_id`, `snapshot
 {document_name, manifest_sha256, artifact_sha256, project_lineage_id}`,
-`preparation {preparation_id, blocking_finding_ids, report_sha256}`, `approvals`,
+`preparation {preparation_id, ingest_id, blocking_finding_ids, report_sha256}`, `approvals`,
 `setup_defaults`, `frame_axis_automatic`, `received_at` and `updated_at`.
 `received_at` is this job's creation time, including for a continuation or retry.
-The setup revision and frame details remain in `cad_provenance`. A historical
-job that never recorded its snapshot or preparation leaves those fields null;
-run details can still fall back to its operation while compatibility exists.
+The setup revision and frame details remain in `cad_provenance`. Stage events
+refresh preparing or refused CAD jobs, keeping preparation progress and the
+`update_restart_pending` hold visible without refreshing bound solver stages.
+A historical job that never recorded its snapshot or preparation leaves those fields null;
+run details read the compatibility operation only to fill fields the job lacks.
+The compatibility route also preserves ledger inputs omitted by a historical bound
+job, so its partial record cannot hide its snapshot, preparation or setup revision.
 
 The job's record is authoritative. Acceptance joins (`record_job_acceptance`)
 copy the recorded default-settings origin and automatic frame axis through
@@ -715,8 +729,9 @@ The lane does not write a second outcome after binding.
 
 1. Met, including the frontend: run details read snapshot, State, Stage,
    Reason, preparation and timings from `cad_state`; WG Solve, continuation
-   and approvals use the job routes. Jobs with neither `cad_state` nor
-   `cad_provenance` retain the compatibility fallback. Tests:
+   and approvals use the job routes. Historical jobs retain a compatibility
+   read for missing snapshot, preparation or timing fields, even with a partial
+   `cad_state` or `cad_provenance`; each recorded job value stays authoritative. Tests:
    `describes a retried CAD job entirely from cad_state with the operation endpoint gone`,
    `acceptance: a Fusion request, settings and engine changed in WG, then Solve uses those choices and retry reverts nothing`,
    and `approves the exact preparation then continues with those approvals, without operation calls`.
@@ -849,8 +864,10 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
   now. The new job resumes the preparation when the same snapshot, setup, meshing semantics,
   complete frame and domain plan make the same one, so nothing is meshed again and approvals
   bound to it still apply. `cad-solve-again:<parent job id>` makes two presses or a retry
-  and a press share one child. The child has its own `client_request_id`; once it has
-  a solve request, another press on the parent is refused with the existing-child reason.
+  and a press share one child. The child has its own `client_request_id` and retains
+  `solve_again_press_sha256` through binding. An identical parent and press recover
+  that child regardless of its lifecycle or an approved restart. A different press
+  on a parent whose child has a solve request is refused with the existing-child reason.
   A return WG rejected as invalid is not solved again.
 - **Binding** (`JobStore.bind_preparing_job`) is one transaction: `config_json` becomes the
   exact `SolveRequest`, the job's metadata, mesh artifact and run number are written, and it

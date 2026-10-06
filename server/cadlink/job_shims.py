@@ -281,6 +281,9 @@ def operation_detail(ctx: Any, row: Mapping[str, Any]) -> dict[str, Any]:
     job = ctx.job_store.latest_cad_job(str(row["operation_id"]), row.get("job_id"))
     cad = cad_of(job) if job else {}
     prep = cad.get("preparation")
+    config = job.get("config_json") if job else None
+    if prep is None and isinstance(config, Mapping) and config.get("type") != "cad_intent":
+        prep = migration_record(ctx.store, row).get("preparation")
     detail["approvals"] = list(prep.get("approvals") or []) if isinstance(prep, Mapping) else []
     detail["preparation"] = (
         {"preparationId": prep["preparation_id"], "ingestId": prep.get("ingest_id") or prep["preparation_id"],

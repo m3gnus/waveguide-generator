@@ -36,6 +36,32 @@ describe('CAD job commands and window identities', () => {
     expect(beginCadSolve('ingest', 'Speaker', 'Speaker2').requestId).not.toBe(held.requestId);
   });
 
+  it('recovers a bound child after losing the first solve-again response', async () => {
+    // The route answers an identical press with the child it made, even once
+    // that child is bound (server/tests/test_job_cad_lane.py covers the route).
+    let loseResponse = true;
+    const fetcher = vi.fn(async () => {
+      if (loseResponse) {
+        loseResponse = false;
+        throw new TypeError('response lost after binding');
+      }
+      return json({ job_id: 'bound-child' });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const press = { client_request_id: 'held', ingest_id: 'replay-ingest', setup_revision_id: 'displayed', frame_axis: '-y', submit: true };
+    const held = beginCadSolve('replay-ingest', 'Speaker', 'Speaker1');
+    held.jobId = 'parent';
+    held.press = { ...press, client_request_id: held.requestId };
+    retainCadSolvePress('replay-ingest', held);
+    await expect(solveCadAgain('parent', held.press!)).rejects.toThrow('response lost after binding');
+    const reloaded = pendingCadSolve('replay-ingest')!;
+    expect(reloaded.press).toEqual(held.press);
+    expect(await solveCadAgain(reloaded.jobId!, reloaded.press!)).toEqual({ job_id: 'bound-child' });
+    expect(fetcher.mock.calls[1]).toEqual(fetcher.mock.calls[0]);
+    releaseCadSolve('replay-ingest', reloaded, 'bound-child');
+    expect(pendingCadSolve('replay-ingest')).toBeNull();
+  });
+
   it('sends only solve-again fields and returns the child id', async () => {
     const fetcher = vi.fn(async () => json({ job_id: 'child' }));
     vi.stubGlobal('fetch', fetcher);
@@ -97,15 +123,15 @@ describe('CAD job commands and window identities', () => {
     expect(acknowledgeCadSolve({ ...job() }, 'refusal')).toBeNull();
   });
 
-  it('recovers old identities only once and preserves their completion fence', () => {
+  it('recovers old identities only once and preserves their completion fence', async () => {
+    const fetcher = vi.fn(async () => json({ ...cadJobSummary(job()), approvals: [], preparation: null }));
+    vi.stubGlobal('fetch', fetcher);
     sessionStorage.setItem('wg2.cad.manual-solve.v1:ingest', JSON.stringify({ operationId: 'manual-solve:press', completionAcknowledged: true, designName: 'Speaker' }));
-    recoverLegacyCadSolves([]);
-    expect(sessionStorage.getItem('wg2.cad.manual-solve.v1:ingest')).not.toBeNull();
-    recoverLegacyCadSolves([job()]);
+    await recoverLegacyCadSolves([job()]);
     expect(sessionStorage.getItem('wg2.cad.manual-solve.v1:ingest')).toBeNull();
     expect(pendingCadSolve('ingest')?.recoveredJobId).toBe('refused');
     expect(acknowledgeCadSolve(job(), 'completion')).toBeNull();
-    recoverLegacyCadSolves([job()]);
+    await recoverLegacyCadSolves([job()]);
     expect(acknowledgeCadSolve(job(), 'completion')).toBeNull();
   });
 
