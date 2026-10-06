@@ -253,3 +253,34 @@ Review round 2 (conformance), fixed directly:
   expected_resonance_columns; the corpus owner must declare them. A Python
   caller can still pass a canonical-named case with its own accept callable;
   the CLI cannot.
+
+
+## PLAN slice 8 — first real CPU agreement runners (2026-10-06)
+
+- **W2 / frozen-input PR:** `scripts/beat_conformance/{runners,run_agreement}.py`;
+  `server/tests/beat_adapter/test_runners.py`. Identical metre mesh bytes, tags,
+  winding/normals, axes, polar/sphere points, frequencies, medium, quadrature,
+  precision and explicit threads; unsupported comparison domains refuse.
+- **W3 / comparison-result PR:** the same runner/test files; common WG DI and
+  sampled-sphere power, historical mean pressure loading, exact-pin HBB API.
+- **W5 / managed-sweep/evidence PR:** `scripts/beat_conformance/{runners,recorder,
+  verification}.py`; `server/tests/beat_adapter/test_{runners,verification}.py`.
+  Recorder-owned managed child sessions, public negotiation, terminal evidence,
+  unconditional shutdown and optional clean-source/installed byte matching.
+- **Shared W2/W3/W5:** this file; `scripts/beat_conformance/README.md` and
+  the 2026-10-06 results report kept with the workspace evidence (commands, broker IDs and verdicts; not in this repository).
+
+Official JWSound remains the target. Qualification uses child mode to bound
+ownership to the broker job and avoid HBB adoption/signalling. HBB's public
+one-shot API preserves its own project/runtime and does no provisioning.
+Installed wheel source byte matching handles missing wheel VCS metadata.
+HBB revision binding remains explicitly attested; no stricter forced-LU or
+startup/performance claim is made. Fixed agreement tolerances are unchanged.
+No existing caller, pin, requirement, engine code or HBB directory changes.
+
+Brokered CPU evidence: coarse full/quarter scans retain failed sampling gates;
+quarter 2 Hz refinement passes Float64 and Float32 (1,632 frequency solves total).
+HBB Float32 wire serialization exactly explains Float64 pressure residuals and
+a flat peak's one-sample location shift. Full dense and narrow chamber/duct runs
+remain unqualified. Combined checks: 1262 passed, 1 optional schema skip;
+focused checks: 91 passed; Ruff and diff whitespace checks passed. Uncommitted.

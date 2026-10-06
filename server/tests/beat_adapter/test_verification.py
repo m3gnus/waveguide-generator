@@ -124,3 +124,39 @@ def test_source_revision_requires_tracked_clean_engine_tree(observer, monkeypatc
         assert facts["engine_revision"] == "b" * 40 and facts["engine_revision_status"] == "observed"
         assert facts["artifact_kind"] == "source"
     assert any("ls-files" in command and "--error-unmatch" in command for command in state["commands"])
+
+
+@pytest.mark.parametrize("defect", [None, "bytes", "extra", "missing", "dirty"])
+def test_wheel_without_vcs_metadata_requires_complete_clean_source_byte_match(tmp_path, monkeypatch, defect):
+    source = tmp_path / "candidate"
+    package = tmp_path / "installed"
+    package.mkdir()
+    root = source / "src/beat_engine"
+    root.mkdir(parents=True)
+    for name in ("__init__.py", "julia_local/Manifest-v1.12.toml", "beat_contract/system-v1.schema.json"):
+        for directory in (root, package):
+            path = directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"frozen package bytes")
+    names = ["src/beat_engine/" + p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()]
+    if defect == "bytes":
+        (package / "__init__.py").write_bytes(b"other package bytes")
+    if defect == "extra":
+        (package / "unexpected.jl").write_bytes(b"untracked")
+    if defect == "missing":
+        (package / "__init__.py").unlink()
+    def run(command):
+        if "status" in command:
+            return " M src/beat_engine/__init__.py" if defect == "dirty" else ""
+        if "ls-files" in command:
+            return "\n".join(names)
+        return "c" * 40
+    monkeypatch.setattr(verification, "_run", run)
+    if defect:
+        with pytest.raises(ValueError, match="differ|uncommitted"):
+            verification._installed_source_revision(package, source)
+    else:
+        assert verification._installed_source_revision(package, source) == "c" * 40
+        (package / "__pycache__").mkdir()
+        (package / "__pycache__/ignored.pyc").write_bytes(b"cache")
+        assert verification._installed_source_revision(package, source) == "c" * 40

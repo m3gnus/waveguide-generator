@@ -24,9 +24,12 @@ The job-owned `solve(CompiledRequest)` callback returns
 `recorder.EngineRun(julia_executable, julia_threads="auto")`. This is a launch
 selection: the recorder runs that executable to observe version/binary hash and
 CPU identity, inspects the loaded `beat-engine` distribution and exact revision,
-and dispatches/checks an integer Metal kernel for Metal cases. It then owns a
-public `EngineWorker`, consumes its result/terminal stream through WG's mapper,
-and terminates that worker. No private engine APIs, provisioning or downloads
+and dispatches/checks an integer Metal kernel for Metal cases. It then owns the solve and consumes its result/terminal stream through WG's
+mapper. `runners.official_runner` selects `runtime_mode="child"`, using
+`beat_runtime.manager.WorkerManager` and `SolveSession` for admission,
+negotiation, staging and cleanup. Child mode bounds qualification ownership to
+the broker job; it does not qualify detached-worker adoption. The default
+`EngineRun` direct mode is retained for the original conformance callback API. No private engine APIs, provisioning or downloads
 are used. All launch/probe work belongs inside the scoped broker job.
 
 `SolveEvidence` remains available for synthetic/precomputed contract tests;
@@ -36,7 +39,11 @@ precision, device and terminal solve count. Terminal counts must equal decoded
 rows and the complete declared frequency list. Device functionality without the
 checked Metal kernel cannot pass. Installed/source classification is inspected
 from distribution metadata or a clean tracked source tree, never a runner flag.
-Installed VCS metadata is independently read; its `engine_revision` evidence
+A wheel with no VCS metadata can supply `EngineRun.engine_source`, a local
+clean tracked engine checkout. The recorder compares the complete installed
+package file inventory and bytes to that tree before observing its revision.
+This does not assume any WG-specific behaviour in BEAT. Otherwise, installed
+VCS metadata is independently read; its `engine_revision` evidence
 field is **attested** because byte correspondence to upstream is unverified; an independent engine content fingerprint is retained.
 Worker temperature is unknown/attested, and no performance claim is made.
 
@@ -93,4 +100,46 @@ Persist the returned verdict with `recorder.write_record` alongside raw evidence
 The full migration corpus (OSSE, R-OSSE, resonant duct/chamber, imported sources,
 loading, cuts/sphere/traces) and installed platform runs remain broker work.
 This small declared-case tool does not claim corpus, startup/performance, or device parity
-qualification. No real runs or broker submissions are part of this change.
+qualification. The first brokered CPU results (2026-10-06) are kept with the workspace evidence, outside this repository, because they record machine-local paths.
+
+
+## Frozen real-solve runners
+
+`runners.FrozenExterior` constructs the compiled request with WG's adapter and
+one explicit thread count. `official_runner(julia, threads=..., engine_source=...)`
+returns the recorder's launch selection; the recorder independently observes
+runtime facts and terminal counts. `hbb_runner(inputs, julia_executable=...,
+expected_revision=..., directory=...)` uses the installed current-pin HBB
+`solve_frequencies` API and returns `agreement.ResultSet`. The HBB runner uses
+one-shot mode, avoiding persistent-worker registry adoption and stale-PID cleanup.
+It retains HBB's own solver/project; it never provisions either engine.
+
+The first runner scope is CPU, one normal source, the canonical origin/+z/+x/+y
+frame, full/yz/yz+xz domains, polar cuts and a full theta-major sphere. Other
+source/frame layouts need a separate runner with exact frozen HBB equivalence.
+`run_agreement.metre_mesh` creates a single shared metre artifact before either
+solve, preserving triangle/node IDs, ordering, winding and tags. Both engines
+receive identical frequency order, precision, medium, q4/s4 and CPU wavelength
+policy (p90, q1 threshold 0, q2 threshold 2). Inputs and raw samples persist in
+strict JSON via `recorder.write_record`. DI uses WG's spherical integration;
+power is the common solid-angle-weighted far-field estimate at the declared
+radius, not a surface flux or a production power claim. HBB's installed revision
+is checked against `pins.json` but remains a VCS-metadata attestation; unbound
+agreement uses the existing production limits, never the stricter forced-LU
+limits. Official real records still require independent probes and terminals.
+
+Submit `python -m scripts.beat_conformance.run_agreement --help`'s command through
+the compute broker with `--lane compute --priority 3 --requester "Beat engine
+switch"`. Set a fresh writable WG depot first and existing precompiled depots
+later. The CLI does not submit itself, download packages or change pins.
+Predeclare the explicit frequency axis, maximum dense step, prominence and
+expected resonance columns. Each precision retains a failed agreement record
+when launch, identity, decoding, or a gate fails. The CLI exits nonzero on any
+failed case. These case records do not qualify the entire conformance corpus.
+
+
+The original conformance CLI can use `--solve scripts.beat_conformance.runners:solve`.
+Set `WG2_BEAT_JULIA` to the selected executable, `JULIA_NUM_THREADS` to the
+explicit count (default 1), and `WG_BEAT_ENGINE_SRC` to the clean source-witness
+repository root for an installed wheel without VCS metadata. This callback only
+selects the managed child launch; run the real-mode CLI inside a broker job.
