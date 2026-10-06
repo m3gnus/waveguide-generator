@@ -115,6 +115,42 @@ def log_path(identifier: str, directory: Path | None = None) -> Path:
     return record_path(identifier, directory).with_suffix(".log")
 
 
+def _windows_append_fd(path: Path, *, create: bool) -> int:
+    """Open an append-only OS handle; caller applies the private-file checks.
+
+    CRT O_APPEND only seeks before that descriptor's writes. Subprocesses
+    inherit the OS handle without the CRT flag, so FILE_WRITE_DATA must be
+    absent to make their stdout/stderr append too. This fd cannot truncate.
+    """
+    import ctypes
+    from ctypes import wintypes as w
+    import msvcrt
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [w.LPCWSTR, w.DWORD, w.DWORD, ctypes.c_void_p,
+                                  w.DWORD, w.DWORD, w.HANDLE]
+    kernel.CreateFileW.restype = w.HANDLE
+    kernel.CloseHandle.argtypes, kernel.CloseHandle.restype = [w.HANDLE], w.BOOL
+    handle = kernel.CreateFileW(
+        # FILE_READ_ATTRIBUTES allows _private_file's fstat validation on Python
+        # 3.13 without granting FILE_WRITE_DATA (or the ability to overwrite).
+        str(path), 0x00000004 | 0x00100000 | 0x80,  # FILE_APPEND_DATA | SYNCHRONIZE | FILE_READ_ATTRIBUTES
+        0x1 | 0x2 | 0x4,  # FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        None, 4 if create else 3,  # OPEN_ALWAYS / OPEN_EXISTING
+        0x80 | 0x00200000, None,  # FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_WRONLY | os.O_APPEND)
+        if fd == -1:
+            raise OSError(errno.EBADF, "Cannot wrap Windows append handle")
+        return fd  # Ownership transfers to the CRT; os.close now closes the handle.
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+
+
 @contextmanager
 def _private_file(path: Path, *, create: bool = False, append: bool = False) -> Iterator[int]:
     info = path.parent.lstat()
@@ -137,7 +173,10 @@ def _private_file(path: Path, *, create: bool = False, append: bool = False) -> 
         if not stat.S_ISREG(info.st_mode):
             raise RecordRefused("Registry file must be regular")
         _check_path(path, info)
-    fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
+    if os.name == "nt" and append:
+        fd = _windows_append_fd(path, create=create)
+    else:
+        fd = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0), 0o600)
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):

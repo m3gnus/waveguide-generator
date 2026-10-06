@@ -49,8 +49,14 @@ def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: 
     command = [sys.executable, "-m", HOST_MODULE,
                "--key", str(r.launch_spec_path(identifier, directory)), "--dir", str(directory),
                "--idle-timeout", str(idle_timeout), "--ready", "--startup-timeout", str(timeout)]
-    with r._private_file(r.log_path(identifier, directory), create=True, append=True) as fd:
+    with contextlib.ExitStack() as stack:
+        log = r.log_path(identifier, directory)
+        fd = stack.enter_context(r._private_file(log, create=True, append=os.name != "nt"))
         os.ftruncate(fd, 0)
+        if os.name == "nt":
+            # The inherited handle must append at the OS level. It deliberately
+            # lacks FILE_WRITE_DATA, so truncate through the separate fd above.
+            fd = stack.enter_context(r._private_file(log, append=True))
         process = subprocess.Popen(command, cwd=str(root), env=environment, stdin=subprocess.DEVNULL,
                                    stdout=fd, stderr=subprocess.STDOUT, close_fds=True, **detached_options())
     # Detached children still need reaping. This thread also covers failures,
