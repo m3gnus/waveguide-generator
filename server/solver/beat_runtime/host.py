@@ -452,18 +452,26 @@ class WorkerHost:
         self._last_activity = time.monotonic()
         self._log(f"serving {self.identifier} (idle {self.idle_timeout:g}s)")
         accept_errors = 0
+        retrying_accept = False
         while not self._stopping.is_set():
             with self._state:
-                if self._clients == 0 and time.monotonic() - self._last_activity >= self.idle_timeout:
+                # Finish an active, bounded accept-error sequence even if log
+                # writes or scheduling take it past the ordinary idle deadline.
+                if (not retrying_accept and self._clients == 0
+                        and time.monotonic() - self._last_activity >= self.idle_timeout):
                     self._log("idle exit")
                     self._stopping.set()
                     break
             try:
                 connection, _ = self._server.accept()
             except socket.timeout:
+                # Restore idle-exit eligibility without forgiving prior errors;
+                # only an accepted connection resets the original error budget.
+                retrying_accept = False
                 continue
             except OSError as exc:
                 accept_errors += 1
+                retrying_accept = True
                 self._log(f"accept failed ({accept_errors}/{ACCEPT_ERROR_BUDGET}): {exc}")
                 if accept_errors >= ACCEPT_ERROR_BUDGET:
                     self._fail_stop()
@@ -471,6 +479,7 @@ class WorkerHost:
                 self._stopping.wait(0.02)
                 continue
             accept_errors = 0
+            retrying_accept = False
             with self._state:
                 self._last_activity = time.monotonic()
                 # Pending peers have their own small budget. Evict the oldest

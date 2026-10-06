@@ -27,7 +27,10 @@ def connect_authenticated(
     try:
         connection = record.endpoint.connect(remaining_time(deadline))
     except OSError as exc:
-        raise ConnectionError(exc.errno, f"Host endpoint unavailable: {exc}") from exc
+        # Socket deadline expiry commonly has no errno; retain its category
+        # when wrapping it so recovery can distinguish it from other failures.
+        error = errno.ETIMEDOUT if isinstance(exc, TimeoutError) else exc.errno
+        raise ConnectionError(error, f"Host endpoint unavailable: {exc}") from exc
     try:
         message = hello_message(record)
         connection.settimeout(remaining_time(deadline))
@@ -61,7 +64,8 @@ def cleanup_host(
     Pass a held slot SpawnLock to reuse spawn exclusion; otherwise this wrapper
     acquires it and raises LockBusy on contention timeout. One deadline bounds
     authentication, shutdown and exit. Unverified live/foreign/successor records
-    remain. Dead/reused PIDs permit pruning only after refused/missing endpoints.
+    remain. Dead/reused PIDs permit pruning after refused/missing endpoints, or
+    a loopback TCP connect timeout (Windows may delay a closed port's refusal).
     prune_only never requests shutdown, even when a fresh connection authenticates.
     """
     validate_record(record, expected_key, directory)
@@ -87,7 +91,12 @@ def _cleanup_locked(
     try:
         connection = connect_authenticated(record, expected_key, directory, deadline=deadline)
     except ConnectionError as exc:
-        if exc.errno not in {errno.ENOENT, errno.ECONNREFUSED} or _same_process(record):
+        prunable_failure = exc.errno in {errno.ENOENT, errno.ECONNREFUSED}
+        # A loopback port can time out before Windows reports refusal. Proven
+        # process death, not endpoint silence, authorizes removal of this private
+        # record. No responder is signalled, and successors are rechecked below.
+        prunable_failure |= record.endpoint.kind == "tcp" and exc.errno == errno.ETIMEDOUT
+        if not prunable_failure or _same_process(record):
             raise RecordRefused(f"Unverified live host refused: {exc}") from exc
         connection = None
     except RecordRefused:

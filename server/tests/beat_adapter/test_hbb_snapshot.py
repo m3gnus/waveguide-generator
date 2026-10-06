@@ -13,16 +13,18 @@ from server.tests.beat_adapter.hbb_snapshot import (
 
 
 def test_npz_creator_os_does_not_change_contract_hash(monkeypatch):
+    original = zipfile.ZipInfo.__init__
+
+    def creator_info(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        self.create_system = creator_os
+
+    monkeypatch.setattr(zipfile.ZipInfo, "__init__", creator_info)
+    creator_os = 3
     buffer = io.BytesIO()
     np.savez_compressed(buffer, frequencies=np.array([100., 500., 1000.]))
     unix = buffer.getvalue()
-    original = zipfile.ZipInfo.__init__
-
-    def windows_info(self, *args, **kwargs):
-        original(self, *args, **kwargs)
-        self.create_system = 0
-
-    monkeypatch.setattr(zipfile.ZipInfo, "__init__", windows_info)
+    creator_os = 0
     buffer = io.BytesIO()
     np.savez_compressed(buffer, frequencies=np.array([100., 500., 1000.]))
     windows = buffer.getvalue()

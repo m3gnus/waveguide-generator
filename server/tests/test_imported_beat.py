@@ -962,7 +962,13 @@ def test_adaptive_imported_live_frame_progress_counts_and_channel_intersection(
         f = np.asarray(frequencies)
         left = _elements(Path(path).read_text())[2] == beat_imported.VELOCITY_TAG
         pole = (250 - 90j) if left else (750 - 90j)
-        result.pressure_complex = (np.exp(2j * np.pi * f * 2 / 343) / (f - pole))[
+        pressure = np.exp(2j * np.pi * f * 2 / 343) / (f - pole)
+        if not left:
+            # Single-pole fits agree to roundoff on both channels. Give the
+            # right channel real additional structure so acquisition differs
+            # independently of sub-1e-12 dB score noise and host tie ordering.
+            pressure *= 1 + 0.5 * np.exp(-((f - 650) / 70) ** 2)
+        result.pressure_complex = pressure[
             :, None, None
         ] * np.ones((1, 1, 3))
         result.impedance[:] = 1j * REFERENCE_RHO_C

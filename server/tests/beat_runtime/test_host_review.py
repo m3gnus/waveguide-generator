@@ -111,10 +111,11 @@ def test_authenticated_capacity_is_enforced_at_admission(launch, monkeypatch):
     assert not serving.is_alive()
 
 
-@pytest.mark.parametrize('persistent', [False, True])
-def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent):
+@pytest.mark.parametrize('persistent,idle_polls', [(False, False), (True, False), (True, True)])
+def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent, idle_polls):
     key, directory, _ = launch
-    owner = host.WorkerHost(key, directory, idle_timeout=0.2, engine_factory=EngineWorker)
+    owner = host.WorkerHost(key, directory, idle_timeout=2 if idle_polls else 0.2,
+                            engine_factory=EngineWorker)
     owner.bind()
     listener = owner._server
 
@@ -126,7 +127,13 @@ def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent):
 
         def accept(self):
             self.calls += 1
+            if persistent and idle_polls and self.calls % 2 == 0:
+                raise TimeoutError('healthy idle poll between errors')
             if persistent or self.calls == 1:
+                if persistent and not idle_polls and self.calls == 1:
+                    # Deterministically model slow error logging/scheduling
+                    # crossing the idle deadline during the retry sequence.
+                    owner._last_activity -= owner.idle_timeout
                 raise OSError(errno.EINTR, 'fixture interrupted accept')
             return listener.accept()
 
@@ -141,7 +148,10 @@ def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent):
         if persistent:
             serving.join(timeout=1)
             assert not serving.is_alive()
-            assert faulty.calls == host.ACCEPT_ERROR_BUDGET
+            expected_calls = host.ACCEPT_ERROR_BUDGET
+            if idle_polls:
+                expected_calls += host.ACCEPT_ERROR_BUDGET - 1
+            assert faulty.calls == expected_calls
         else:
             with authenticated(owner.record) as client:
                 ipc.send_frame(client, {'op': 'ping'})
@@ -150,6 +160,42 @@ def test_accept_oserror_retries_with_bounded_error_budget(launch, persistent):
         owner.close()
         serving.join(timeout=1)
     assert 'accept failed' in r.log_path(owner.identifier, directory).read_text()
+
+
+def test_accept_error_followed_by_healthy_idle_poll_preserves_idle_exit(launch):
+    key, directory, _ = launch
+    owner = host.WorkerHost(key, directory, idle_timeout=0.2, engine_factory=EngineWorker)
+    owner.bind()
+    listener = owner._server
+
+    class RecoveringListener:
+        calls = 0
+
+        def settimeout(self, value):
+            listener.settimeout(value)
+
+        def accept(self):
+            self.calls += 1
+            if self.calls == 1:
+                owner._last_activity -= owner.idle_timeout
+                raise OSError(errno.EINTR, 'fixture interrupted accept')
+            raise TimeoutError('healthy idle poll')
+
+        def close(self):
+            listener.close()
+
+    recovering = RecoveringListener()
+    owner._server = recovering
+    serving = threading.Thread(target=owner.serve)
+    serving.start()
+    try:
+        serving.join(timeout=1)
+        assert not serving.is_alive()
+        assert recovering.calls == 2
+        assert 'idle exit' in r.log_path(owner.identifier, directory).read_text()
+    finally:
+        owner.close()
+        serving.join(timeout=1)
 
 
 def test_start_truncates_log_and_records_serving_idle_exit_and_failures(launch):

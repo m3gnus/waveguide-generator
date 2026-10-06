@@ -30,6 +30,14 @@ ADMINISTRATORS = _nt_sid(32, 544)
 LOCAL_SYSTEM = _nt_sid(18)
 TRUSTED_INSTALLER = _nt_sid(80, 956008885, 3418522649, 1831038044, 1853292631, 2271478464)
 PRIVILEGED_SIDS = {ADMINISTRATORS, LOCAL_SYSTEM, TRUSTED_INSTALLER}
+# OWNER RIGHTS is relative to the object's checked owner, not a trusted user.
+OWNER_RIGHTS = bytes([1, 1]) + (3).to_bytes(6, "big") + struct.pack("<I", 4)
+
+
+def _sid_text(sid: bytes) -> str:
+    authority = int.from_bytes(sid[2:8], "big")
+    subauthorities = struct.unpack("<" + "I" * sid[1], sid[8:])
+    return f"S-{sid[0]}-{authority}" + "".join(f"-{value}" for value in subauthorities)
 
 
 class WindowsSecurity:
@@ -145,12 +153,19 @@ class WindowsSecurity:
                     raise ValueError("Unsupported Windows registry ACE")
                 sid = self._sid_bytes(ace.value + 8)
                 if header.kind == 0:
-                    if sid != self.sid and sid not in PRIVILEGED_SIDS:
+                    if sid != self.sid and sid not in PRIVILEGED_SIDS and sid != OWNER_RIGHTS:
                         # Read access also exposes authentication secrets; reject
                         # untrusted readers as well as writers, even with deny ACEs.
-                        raise ValueError("Registry Windows DACL grants another user access")
+                        raise ValueError(
+                            "Registry Windows DACL grants another user access: "
+                            f"SID {_sid_text(sid)} "
+                            f"(inherited={bool(header.flags & 0x10)}, "
+                            f"inherit-only={bool(header.flags & 0x08)})"
+                        )
                     if not header.flags & 0x08:  # INHERIT_ONLY_ACE grants no access here.
-                        allowed |= sid == self.sid or (sid == ADMINISTRATORS and self._is_member(sid))
+                        allowed |= (sid == self.sid
+                                    or (sid == OWNER_RIGHTS and owner_sid == self.sid)
+                                    or (sid == ADMINISTRATORS and self._is_member(sid)))
             if not allowed:
                 raise ValueError("Registry Windows DACL does not grant its owner access")
         finally:

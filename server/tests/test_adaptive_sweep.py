@@ -393,6 +393,18 @@ def test_gap_ties_use_the_group_maximum_and_preserve_larger_differences():
     np.testing.assert_array_equal(_largest_gaps([1., 1. + 1e-10, 1.]), [1, 0, 2])
 
 
+@pytest.mark.parametrize("values, expected", [
+    ([np.nan, 1., 2., np.inf, -np.inf], [2, 1, 0, 3, 4]),
+    ([np.nan, 1., 1. + .75e-12, np.inf, -np.inf], [1, 2, 0, 3, 4]),
+    ([np.inf, np.nan, -np.inf], [0, 1, 2]),
+    ([], []),
+])
+def test_score_order_keeps_nonfinite_values_last_outside_finite_ties(values, expected):
+    from server.solver.adaptive_sweep import _largest_scores
+
+    np.testing.assert_array_equal(_largest_scores(values), expected)
+
+
 @pytest.mark.parametrize("seed", [0, 17, 91])
 @pytest.mark.parametrize("bounds", [(20, 20000), (100, 1000), (100, 10000), (200, 2000), (100, 101)])
 def test_geometric_gap_order_and_samples_ignore_random_log2_ulps(monkeypatch, seed, bounds):

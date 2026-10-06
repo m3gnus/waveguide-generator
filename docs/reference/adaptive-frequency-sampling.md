@@ -142,13 +142,11 @@ including deep nulls, so the masked numbers must not be read as a universal
 can increase acquisition counts. The new coverage query order can reduce the
 count for one fixture while increasing it for another.
 
-Platform-stable selection uses the geometric tie-breaks cherry-picked from
-`fix/adaptive-sweep-flake` commit `60fb3474`: log-gap scores are rounded to
-12 decimal places, and midpoint distances within `1e-12` log-frequency units
-prefer the lower frequency. The remaining difference/peak selection path
-(the review's former `adaptive_sweep.py:33` finding) groups disagreement scores
-within `1e-12` dB of the group's maximum, preferring the lower frequency/index
-on ties. A distance guard also handles scores straddling a decimal rounding
-boundary.
-Convergence and reported disagreement retain their unrounded values. The
-sample-fit tolerance changes from that branch are excluded.
+Platform-stable selection sorts finite scores largest first, then anchors each
+tie group at its maximum. Scores within `1e-12` of that anchor prefer the lower
+frequency/index; nearby neighbors do not chain into a wider group. Gap scores
+use octaves (`log2` frequency differences), and disagreement scores use dB.
+Midpoint distances within `1e-12` octaves of the minimum also prefer the lower
+frequency. NaN and infinite scores stay last, in their original index order.
+These ordering guards do not change convergence tests or reported disagreement,
+which retain their unrounded values.

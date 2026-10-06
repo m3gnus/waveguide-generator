@@ -341,11 +341,13 @@ def test_face_area_arithmetic_stays_float64_on_float32_solver_mesh(make_mesh):
     points = single.points_m.astype(np.float64)
     expected = np.linalg.norm(np.cross(points[1] - points[0], points[2] - points[0])) / 2
     assert single.areas_m2.dtype == np.float64
-    assert single.areas_m2[0] == expected
+    # The scalar norm uses a dot product; the batched axis norm uses a
+    # reduction. Their float64 sums can differ by one ulp across NumPy builds.
+    np.testing.assert_array_max_ulp(single.areas_m2[0], expected, maxulp=1)
     built = adapter.build_request(msh, sources=[adapter.SourceBasis("source", 2, port_id="p")],
                                   channel_ports={"ch": ["p"]}, frame=FRAME,
                                   frequencies_hz=[500], layout=build_observations(sphere_grid=None))
-    assert built.channel_loading["ch"].area_m2 == expected
+    np.testing.assert_array_max_ulp(built.channel_loading["ch"].area_m2, expected, maxulp=1)
 
 
 @pytest.mark.parametrize("imported_path", [False, True])

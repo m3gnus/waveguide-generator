@@ -231,18 +231,89 @@ def test_reused_pid_process_start_mismatch_pruned(tmp_path, host, monkeypatch, e
     assert r.read_record(record.identifier, tmp_path) is None
 
 
-@pytest.mark.parametrize("start", [None, "different-start"])
-def test_uncertain_endpoint_timeout_retains_even_reused_pid(tmp_path, host, monkeypatch, start):
+@pytest.mark.parametrize("start", [None, "same-start"])
+@pytest.mark.parametrize("error", [None, errno.ETIMEDOUT])
+def test_tcp_connect_timeout_retains_live_or_unidentifiable_pid(tmp_path, host, monkeypatch, start, error):
     record, peer = host
-    monkeypatch.setattr(c, "process_start_identity", lambda pid: start)
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: record.pid_start if start else None)
 
     def timeout(*args):
-        raise TimeoutError(errno.ETIMEDOUT, "unverified endpoint")
+        raise TimeoutError(error, "unverified endpoint")
 
     monkeypatch.setattr(ipc.Endpoint, "connect", timeout)
     with pytest.raises(r.RecordRefused):
         c.cleanup_host(record, record.key, tmp_path)
     assert r.read_record(record.identifier, tmp_path) == record
+
+
+@pytest.mark.parametrize("alive", [False, True])
+@pytest.mark.parametrize("error", [None, errno.ETIMEDOUT])
+def test_tcp_connect_timeout_prunes_only_proven_gone_process(tmp_path, host, monkeypatch, alive, error):
+    record, peer = host
+    monkeypatch.setattr(c, "pid_alive", lambda pid: alive)
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: "different-start")
+
+    def timeout(*args):
+        raise TimeoutError(error, "closed loopback port")
+
+    monkeypatch.setattr(ipc.Endpoint, "connect", timeout)
+    assert c.cleanup_host(record, record.key, tmp_path)
+    assert not peer.sent
+    assert r.read_record(record.identifier, tmp_path) is None
+
+
+def test_unix_connect_timeout_retains_even_reused_pid(tmp_path, host, monkeypatch):
+    from dataclasses import replace
+
+    record, peer = host
+    original = record
+    # Exercise the locked cleanup policy with a mocked Unix record, including
+    # on Windows where the outer registry correctly rejects Unix records.
+    record = replace(record, endpoint=ipc.Endpoint("unix", path=tmp_path / f"{record.identifier}.sock"))
+    monkeypatch.setattr(c, "read_record", lambda *args: record)
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: "different-start")
+
+    def timeout(*args):
+        raise ConnectionError(errno.ETIMEDOUT, "unverified Unix endpoint")
+
+    monkeypatch.setattr(c, "connect_authenticated", lambda *args, **kwargs: timeout())
+    with pytest.raises(r.RecordRefused):
+        c._cleanup_locked(record, record.key, tmp_path, float("inf"))
+    assert not peer.sent
+    assert r.read_record(record.identifier, tmp_path) == original
+
+
+def test_tcp_connect_timeout_never_removes_successor_record(tmp_path, host, monkeypatch):
+    from dataclasses import replace
+
+    record, peer = host
+    successor = replace(record, token=r.new_token())
+    monkeypatch.setattr(c, "pid_alive", lambda pid: False)
+
+    def timeout(*args):
+        r.write_record(successor, tmp_path)
+        raise TimeoutError("closed loopback port")
+
+    monkeypatch.setattr(ipc.Endpoint, "connect", timeout)
+    with pytest.raises(r.RecordRefused, match="Successor"):
+        c.cleanup_host(record, record.key, tmp_path)
+    assert not peer.sent
+    assert r.read_record(record.identifier, tmp_path) == successor
+
+
+def test_native_closed_loopback_port_prunes_proven_gone_record_with_short_deadline(tmp_path, monkeypatch):
+    endpoint = ipc.Endpoint("tcp")
+    listener = endpoint.listen()
+    listener.close()
+    record = r.HostRecord(r.host_key({}), os.getpid(), r.new_token(), endpoint, "previous-start")
+    r.write_record(record, tmp_path)
+    monkeypatch.setattr(c, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(c, "process_start_identity", lambda pid: "current-start")
+    monkeypatch.setattr(os, "kill", lambda *args: pytest.fail("Cleanup signalled a PID"))
+    # Windows can expire this budget before the closed port reports refusal;
+    # POSIX usually reports ECONNREFUSED immediately. Both prove the same policy.
+    assert c.cleanup_host(record, record.key, tmp_path, timeout=0.05)
+    assert r.read_record(record.identifier, tmp_path) is None
 
 
 def test_cleanup_reuses_held_spawn_lock(tmp_path, host):

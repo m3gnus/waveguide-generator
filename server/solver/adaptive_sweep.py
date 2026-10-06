@@ -44,14 +44,17 @@ def _largest_disagreements(estimate):
 
 
 def _largest_scores(values):
-    order = np.argsort(-np.asarray(values), kind="stable")
-    scores = np.asarray(values)[order]
+    values = np.asarray(values)
+    finite = np.flatnonzero(np.isfinite(values))
+    order = finite[np.argsort(-values[finite], kind="stable")]
+    scores = values[order]
     start = 0
     for stop in range(1, len(order) + 1):
         if stop == len(order) or scores[start] - scores[stop] > _ORDER_TOLERANCE:
             order[start:stop] = np.sort(order[start:stop])
             start = stop
-    return order
+    # Invalid scores cannot join a finite tie group or outrank finite scores.
+    return np.concatenate((order, np.flatnonzero(~np.isfinite(values))))
 
 
 def enabled(context) -> bool:
