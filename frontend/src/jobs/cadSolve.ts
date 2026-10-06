@@ -169,20 +169,8 @@ export async function approveCadJob(job: JobItem, preparationId: string, finding
 }
 export async function dismissCadJob(job: JobItem): Promise<void> {
   if (job.status === 'preparing' || job.status === 'queued' || job.status === 'running') await jobsSocket.stopJob(job.id);
-  else {
-    const ancestors: JobItem[] = [];
-    let parentId = job.parent_job_id;
-    const seen = new Set([job.id]);
-    while (parentId && !seen.has(parentId)) {
-      seen.add(parentId);
-      const parent = jobsSocket.getSnapshot().jobs.find((item) => item.id === parentId);
-      if (!parent?.cad_intent || (parent.status !== 'error' && parent.status !== 'cancelled')) break;
-      ancestors.unshift(parent);
-      parentId = parent.parent_job_id;
-    }
-    for (const parent of ancestors) await jobsSocket.deleteJob(parent.id);
-    await jobsSocket.deleteJob(job.id);
-  }
-  // Refresh also drops ancestors absent from a local, older snapshot.
+  // The backend deletes the refused chain in one transaction, so a reconnect
+  // can never revive a parent this snapshot did not know about.
+  else await post(`/api/jobs/${encodeURIComponent(job.id)}/dismiss`, {});
   await jobsSocket.refresh();
 }

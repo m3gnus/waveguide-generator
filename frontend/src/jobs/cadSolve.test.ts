@@ -62,26 +62,31 @@ describe('CAD job commands and window identities', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
-  it('dismisses refused ancestors before their child so reconnect cannot re-front them', async () => {
+  it('dismisses a refused chain through one backend call so reconnect cannot re-front an ancestor', async () => {
     const parent = { ...job(), id: 'parent' };
     const child = { ...job(), parent_job_id: 'parent' };
     publishCadJobs([parent, child]);
+    const fetcher = vi.fn(async () => json({ deleted: true, job_id: 'refused' }));
+    vi.stubGlobal('fetch', fetcher);
     const deleted = vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
-    vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
+    const refreshed = vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
     await dismissCadJob(child);
-    expect(deleted.mock.calls).toEqual([['parent'], ['refused']]);
+    expect(fetcher).toHaveBeenCalledOnce();
+    const [url, init] = fetcher.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('/api/jobs/refused/dismiss');
+    expect(init.method).toBe('POST');
+    expect(deleted).not.toHaveBeenCalled();
+    expect(refreshed).toHaveBeenCalled();
   });
 
-  it('stops an active intent and preserves bound ancestors', async () => {
+  it('stops an active intent instead of dismissing it', async () => {
     const stopped = vi.spyOn(jobsSocket, 'stopJob').mockResolvedValue();
-    const deleted = vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
+    const fetcher = vi.fn(async () => json({}));
+    vi.stubGlobal('fetch', fetcher);
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
     await dismissCadJob({ ...job(), status: 'preparing' });
     expect(stopped).toHaveBeenCalledWith('refused');
-    expect(deleted).not.toHaveBeenCalled();
-    publishCadJobs([{ ...job(), id: 'bound', cad_intent: null, status: 'complete' }]);
-    await dismissCadJob({ ...job(), parent_job_id: 'bound' });
-    expect(deleted.mock.calls).toEqual([['refused']]);
+    expect(fetcher).not.toHaveBeenCalled();
   });
 
   it('fences completion and refusal independently across reload and duplicate events', () => {

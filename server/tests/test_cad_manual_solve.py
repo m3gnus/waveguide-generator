@@ -440,3 +440,37 @@ def test_f2_job_solve_again_maps_restart_and_unknown_setup(harness, problem, exp
     else:
         assert result["detail"] == "Unknown setup revision gone"
     assert harness.jobs_store.get_job_row(job_id)["task_metadata"]["cad"]["manual_waiting"]
+
+
+def test_f2_job_dismiss_deletes_the_refused_chain_at_once(harness):
+    ingest_id, _ = _ingest(harness)
+    revision = _revision(harness.store, _setup(engine="metal"))
+    harness.ingest.findings = [{"id": "review-1", "blocking": True}]
+    _create(harness, ingest_id)
+    parent = harness.jobs_store.latest_cad_job("manual-1")["id"]
+    app = _jobs_app(harness)
+    async def flow():
+        await _post_job(app, f"/api/jobs/{parent}/solve-again", {"setup_revision_id": revision, "frame_axis": "+z"})
+        await harness.runtime.wait_cad_preparations()
+        assert harness.jobs_store.get_job_row(parent)["status"] == "error"
+        status, child = await _post_job(app, f"/api/jobs/{parent}/solve-again", {"setup_revision_id": revision, "frame_axis": "+z"})
+        assert status == 200 and child["job_id"] != parent
+        await harness.runtime.wait_cad_preparations()
+        assert harness.jobs_store.get_job_row(child["job_id"])["status"] == "error"
+        # Dismissing the child removes its refused parent in the same change.
+        status, result = await _post_job(app, f"/api/jobs/{child['job_id']}/dismiss", {})
+        assert status == 200 and result == {"deleted": True, "job_id": child["job_id"]}
+        assert harness.jobs_store.get_job_row(parent) is None
+        assert harness.jobs_store.get_job_row(child["job_id"]) is None
+        status, gone = await _post_job(app, f"/api/jobs/{child['job_id']}/dismiss", {})
+        assert status == 404
+    harness._loop.run(flow())
+
+
+def test_f2_job_dismiss_refuses_an_active_or_bound_solve(harness):
+    ingest_id, _ = _ingest(harness)
+    _create(harness, ingest_id)
+    job_id = harness.jobs_store.latest_cad_job("manual-1")["id"]
+    status, result = harness._loop.run(_post_job(_jobs_app(harness), f"/api/jobs/{job_id}/dismiss", {}))
+    assert status == 409 and "stop it before dismissing" in result["detail"]
+    assert harness.jobs_store.get_job_row(job_id) is not None

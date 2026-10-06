@@ -620,6 +620,28 @@ def create_jobs_router(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    @router.post(
+        "/api/jobs/{job_id}/dismiss", response_model=DeleteResponse,
+        responses={409: {"description": "Not a refused CAD solve, or still being prepared"}},
+    )
+    async def dismiss_cad_job(job_id: str) -> DeleteResponse:
+        """Dismiss a refused CAD solve with its refused ancestors, as one change.
+
+        Deleting the jobs one by one could leave a parent a reconnect revives.
+        """
+
+        try:
+            job = await runtime.get_job(job_id)
+            intent = job.get("cad_intent")
+            if intent is None or not intent.get("operation_id"):
+                raise JobConflictError("Only a CAD solve that was never bound can be dismissed")
+            await runtime.dismiss_cad_solve(str(intent["operation_id"]))
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="Job not found") from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return DeleteResponse(deleted=True, job_id=job_id)
+
     @router.post("/api/stop/{job_id}", response_model=StopResponse)
     async def stop_job(job_id: str) -> StopResponse:
         try:

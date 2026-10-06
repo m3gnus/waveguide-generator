@@ -79,6 +79,7 @@ function setRequests({ operations }: { operations: Record<string, CadOperationSu
   }));
 }
 describe('operation cards for the model on screen', () => {
+  let dismissed: string[] = [];
   let host: HTMLDivElement;
   let root: Root;
 
@@ -86,7 +87,11 @@ describe('operation cards for the model on screen', () => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     reviewIds = [FINDING]; reviewApprovals = [];
     vi.spyOn(jobsSocket, 'refresh').mockResolvedValue();
-    vi.spyOn(jobsSocket, 'deleteJob').mockResolvedValue();
+    dismissed = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      dismissed.push(url);
+      return new Response(JSON.stringify({ deleted: true, job_id: 'x' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }));
     host = document.createElement('div');
     document.body.append(host);
     root = createRoot(host);
@@ -141,13 +146,13 @@ describe('operation cards for the model on screen', () => {
     expect(disclosure.textContent).not.toContain('Journal phase');
 
     await act(async () => { lines[1].querySelector<HTMLButtonElement>('button')!.click(); });
-    expect(jobsSocket.deleteJob).toHaveBeenCalledWith('manual-solve:old');
-    coordinator.dismissOperation.mockClear(); vi.mocked(jobsSocket.deleteJob).mockClear();
+    expect(dismissed).toEqual(['/api/jobs/manual-solve%3Aold/dismiss']);
+    coordinator.dismissOperation.mockClear(); dismissed = [];
     const clear = [...disclosure.querySelectorAll('button')].find((button) => button.textContent === 'Clear all')!;
     await act(async () => { clear.click(); });
     await vi.waitFor(() => expect(coordinator.dismissOperation).toHaveBeenCalledOnce());
     expect(coordinator.dismissOperation).toHaveBeenCalledWith(RECOVERY_ID);
-    expect(jobsSocket.deleteJob).toHaveBeenCalledWith('manual-solve:old');
+    expect(dismissed).toEqual(['/api/jobs/manual-solve%3Aold/dismiss']);
   });
 
   it('shows no Earlier requests at all when every request is about the model on screen', async () => {

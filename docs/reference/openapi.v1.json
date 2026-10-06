@@ -12805,6 +12805,49 @@
         "summary": "Job Archive Snapshot"
       }
     },
+    "/api/jobs/{job_id}/dismiss": {
+      "post": {
+        "description": "Dismiss a refused CAD solve with its refused ancestors, as one change.\n\nDeleting the jobs one by one could leave a parent a reconnect revives.",
+        "operationId": "dismiss_cad_job_api_jobs__job_id__dismiss_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "Not a refused CAD solve, or still being prepared"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Dismiss Cad Job"
+      }
+    },
     "/api/jobs/{job_id}/log": {
       "get": {
         "operationId": "job_log_api_jobs__job_id__log_get",
