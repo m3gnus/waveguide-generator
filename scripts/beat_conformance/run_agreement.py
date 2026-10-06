@@ -85,7 +85,9 @@ def main() -> int:
                      "frequencies_hz": inputs.frequencies_hz,
                      "frequency_step_hz": args.frequency_step, "prominence_db": args.prominence_db,
                      "expected_pressure_columns": args.expect_pressure_column})
-        case = ConformanceCase(name, "Frozen same-mesh CPU exterior agreement", inputs.frequencies_hz,
+        # The engine snapshot gets its own file; only the finally block below
+        # writes {name}.json, so a killed comparison never leaves a "passed" record.
+        case = ConformanceCase(f"{name}-engine", "Frozen same-mesh CPU exterior agreement", inputs.frequencies_hz,
                                precision=precision, min_solved_count=len(inputs.frequencies_hz),
                                make_request=inputs.compiled,
                                accept=accept_pressure)

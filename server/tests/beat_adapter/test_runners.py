@@ -285,12 +285,16 @@ def test_engine_record_status_after_failed_agreement_and_cli_never_uses_comparat
                         None, None, None, None, False, 3, mapped.solver_log)
     def record_case(case, **kwargs):
         assert "comparator" not in kwargs and not state["hbb"]
+        # The engine snapshot never shares the final record's file name.
+        assert case.name == "full-float64-engine"
         return {"status": "passed", "qualified": True,
                 "case": {"backend": "cpu", "precision": "float64"},
                 "mesh_sha256": "fake-packed-mesh", "evidence_mode": "real",
                 "runtime": {"engine_revision": "b" * 40}, "result": asdict(sweep), "comparison": {"ran": False}}
     def reference(selected, **kwargs):
         state["hbb"] = True
+        # While HBB runs, no top-level record for the case exists yet.
+        assert not (output / "full-float64/full-float64.json").exists()
         return runners.result_set(selected, mapped, revision="a" * 40)
     def compare(*args, **kwargs):
         assert state["hbb"]
@@ -405,3 +409,13 @@ def test_thread_count_launch_selection_is_frozen_and_pin_path_ignores_cwd(inputs
     assert hbb_pin() == pin
     selected = replace(inputs, threads=3)
     assert runners.official_runner("fake", threads=selected.threads)(selected.compiled()).julia_threads == 3
+
+
+def test_official_observation_layout_is_declared_not_observed(inputs):
+    from scripts.beat_conformance import settings
+    mapped = native(inputs)
+    _, evidence = settings.observed_settings(inputs.settings(), mapped, official=True, native_symmetry="off")
+    for name in ("observation_angles_deg", "observation_planes"):
+        assert evidence.get(name, {}).get("status") != "observed"
+    _, hbb = settings.observed_settings(inputs.settings(), mapped, official=False, native_symmetry="off")
+    assert hbb["observation_angles_deg"]["status"] == "observed"

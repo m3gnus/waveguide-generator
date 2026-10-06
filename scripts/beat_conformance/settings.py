@@ -62,8 +62,11 @@ def observed_settings(declared: dict, native: Any, *, official: bool,
             if name != "quadrature.regular_quadrature_order" and any(v != value for v in samples):
                 raise ValueError(f"Native {name} changes during the sweep")
             observe(name, value, "solver_log.native_diagnostics")
-    observe("observation_angles_deg", native.observation_angles_deg, "native.observation_angles_deg")
-    observe("observation_planes", native.observation_planes, "native.observation_planes")
+    if not official:
+        # The official adapter copies these from WG's request layout, so they
+        # are an echo there (declared); HBB's driver returns its own.
+        observe("observation_angles_deg", native.observation_angles_deg, "native.observation_angles_deg")
+        observe("observation_planes", native.observation_planes, "native.observation_planes")
     if official:
         samples = [d.get("engine_provenance", {}).get("runtime", {}).get("julia_threads") for d in diagnostics]
         if all(v is not None for v in samples):

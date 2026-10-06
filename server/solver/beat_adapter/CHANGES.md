@@ -346,3 +346,13 @@ PASS with paired record bindings and stricter actual-LU budgets, exit 0 in
 The external report retains exact commands, environment, verdicts and hashes.
 All requested review fixes and the refined rerun are complete; source remains
 uncommitted as explicitly requested.
+
+Agreement runners, review round 2, fixed directly:
+- The official engine's observation angles and planes are an echo of WG's
+  request layout, so they are no longer counted as observed.
+- The engine snapshot is written as `<case>-engine.json`; `<case>.json` exists
+  only once the comparison verdict is known.
+- Wording: `evidence_binding: recorded` means the agreement is bound to both
+  record hashes; the HBB record is assembled by the runner from its public API,
+  and its mesh/case fields are not independent observations (HBB's observed mesh
+  evidence is node/triangle counts and tag areas).
