@@ -56,6 +56,8 @@ class EngineRun:
     """Launch selection only; the recorder owns probes, worker and event decoding."""
     julia_executable: str
     julia_threads: int | str = "auto"
+    runtime_mode: str = "direct"
+    engine_source: Path | None = None
 
 
 Solve = Callable[[CompiledRequest], SolveEvidence | EngineRun]
@@ -69,16 +71,50 @@ def _engine_worker(**options: Any) -> Any:
 def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict[str, Any]) -> SolveEvidence:
     backend = request.wire["solver_options"]["bem_backend"]
     precision = request.wire["solver_options"]["precision"]
-    facts = verify_runtime(selection.julia_executable, backend)
+    if selection.runtime_mode not in {"direct", "child"}:
+        raise ValueError("Qualification runtime mode must be direct or child")
+    verify_options = {"engine_source": selection.engine_source} if selection.engine_source else {}
+    facts = verify_runtime(selection.julia_executable, backend, **verify_options)
     revision_status = facts.pop("engine_revision_status", "observed")
     record["observations"] = {name: {"status": "observed", "value": value}
                               for name, value in facts.items()}
     record["observations"]["engine_revision"]["status"] = revision_status
+    record["runtime_mode"] = selection.runtime_mode
+    terminal_events = []
+    if selection.runtime_mode == "child":
+        from .runners import managed_solve
+        try:
+            result = managed_solve(request, selection, facts, terminal_events)
+        finally:
+            record["terminal_events"] = terminal_events
+    else:
+        result = _direct_solve(request, selection, facts, terminal_events, record)
+    count = terminal_events[-1]["solved_count"] if terminal_events[-1]["type"] == "completed" else 0
+    record["observations"]["solve_count"] = {"status": "observed", "value": count}
+    for name, field in (("backend", "bem_backend"), ("precision", "precision")):
+        samples = [row.get("native_diagnostics", {}).get(field) for row in result.solver_log]
+        if not samples or samples[0] is None or any(value != samples[0] for value in samples):
+            raise ValueError(f"Missing or inconsistent native {name} observations")
+        record["observations"][name] = {"status": "observed", "value": samples[0],
+                                       "source": "solver_log.native_diagnostics"}
+    record["observations"]["launch_threads"] = {
+        "status": "observed", "value": resolve_julia_threads(backend, selection.julia_threads)}
+    runtime = RuntimeEvidence(backend, precision, facts["julia_executable"], facts["julia_version"],
+                              facts["engine_path"], facts["engine_revision"],
+                              device_class=facts["device_class"], device_name=facts["device_name"],
+                              device_kernel_verified=facts["device_kernel_verified"],
+                              artifact_kind=facts["artifact_kind"], engine_fingerprint=facts["engine_fingerprint"])
+    return SolveEvidence(result, runtime)
+
+
+def _direct_solve(request: CompiledRequest, selection: EngineRun, facts: dict,
+                  terminal_events: list, record: dict) -> SweepResult:
+    backend = request.wire["solver_options"]["bem_backend"]
+    precision = request.wire["solver_options"]["precision"]
     worker = _engine_worker(
         julia_executable=facts["julia_executable"], solver_script=Path(facts["solver_script"]),
         julia_project=Path(facts["project"]),
         julia_threads=resolve_julia_threads(backend, selection.julia_threads))
-    terminal_events = []
     try:
         stream = worker.submit(request.wire)
         def observe():
@@ -94,21 +130,12 @@ def _observed_solve(request: CompiledRequest, selection: EngineRun, record: dict
         result = map_sweep(observe(), request.wire["frequencies_hz"], layout=request.layout,
                            source_area_m2=request.channel_loading["source"].area_m2,
                            excitation_port_id="source", boundary_loading=request.channel_loading["source"],
+                           symmetry=request.wire["solver_options"]["symmetry"],
                            precision=precision, backend=backend)
     finally:
         record["terminal_events"] = terminal_events
         worker.terminate()
-    # map_sweep checks terminal count against decoded rows and the full request.
-    count = terminal_events[-1]["solved_count"] if terminal_events[-1]["type"] == "completed" else 0
-    record["observations"]["solve_count"] = {"status": "observed", "value": count}
-    record["observations"]["backend"] = {"status": "observed", "value": backend}
-    record["observations"]["precision"] = {"status": "observed", "value": precision}
-    runtime = RuntimeEvidence(backend, precision, facts["julia_executable"], facts["julia_version"],
-                              facts["engine_path"], facts["engine_revision"],
-                              device_class=facts["device_class"], device_name=facts["device_name"],
-                              device_kernel_verified=facts["device_kernel_verified"],
-                              artifact_kind=facts["artifact_kind"], engine_fingerprint=facts["engine_fingerprint"])
-    return SolveEvidence(result, runtime)
+    return result
 
 
 Comparator = Callable[[SweepResult, dict[str, Any]], None]

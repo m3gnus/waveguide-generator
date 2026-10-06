@@ -18,7 +18,36 @@ def _run(command: list[str]) -> str:
     return subprocess.run(command, capture_output=True, text=True, check=True, timeout=60).stdout.strip()
 
 
-def verify_runtime(julia_executable: str, backend: str) -> dict[str, Any]:
+def _installed_source_revision(package_path: Path, source: Path) -> str:
+    """Compare every tracked package file and refuse extra installed payloads."""
+    source = source.resolve(strict=True)
+    prefix = "src/beat_engine/"
+    revision = _run(["git", "-C", str(source), "rev-parse", "HEAD"])
+    if _run(["git", "-C", str(source), "status", "--porcelain", "--untracked-files=all"]):
+        raise ValueError("Engine source tree has uncommitted changes")
+    names = _run(["git", "-C", str(source), "ls-tree", "-r", "--name-only", revision, "--", prefix]).splitlines()
+    if prefix + "__init__.py" not in names:
+        raise ValueError("Source tree does not track the engine package")
+    expected = {name.removeprefix(prefix) for name in names}
+    installed = {p.relative_to(package_path).as_posix() for p in package_path.rglob("*")
+                 if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
+    if installed != expected:
+        raise ValueError("Installed/source engine file inventories differ")
+    for name in names:
+        content = _blob(source, revision, name)
+        if content != (package_path / name.removeprefix(prefix)).read_bytes():
+            raise ValueError(f"Installed/source engine bytes differ: {name}")
+    if _run(["git", "-C", str(source), "rev-parse", "HEAD"]) != revision:
+        raise ValueError("Engine source HEAD changed during revision verification")
+    return revision
+
+
+def _blob(source: Path, revision: str, name: str) -> bytes:
+    return subprocess.run(["git", "-C", str(source), "cat-file", "blob", f"{revision}:{name}"],
+                          capture_output=True, check=True, timeout=60).stdout
+
+
+def verify_runtime(julia_executable: str, backend: str, *, engine_source: Path | None = None) -> dict[str, Any]:
     """Run the selected binary and inspect the loaded distribution, never provision."""
     executable = Path(julia_executable).resolve(strict=True)
     version = _run([str(executable), "--startup-file=no", "--version"])
@@ -34,10 +63,16 @@ def verify_runtime(julia_executable: str, backend: str) -> dict[str, Any]:
     direct_url = json.loads(distribution.read_text("direct_url.json") or "{}")
     installed = not direct_url.get("dir_info", {}).get("editable", False)
     revision = direct_url.get("vcs_info", {}).get("commit_id", "")
-    if installed and revision:
+    if installed and (revision or engine_source):
         recorded_package = Path(distribution.locate_file("beat_engine/__init__.py")).resolve().parent
         if recorded_package != package_path:
             raise ValueError("Loaded engine is not the recorded installed distribution")
+    matched_source = installed and engine_source is not None
+    if matched_source:
+        matched_revision = _installed_source_revision(package_path, engine_source)
+        if revision and matched_revision != revision:
+            raise ValueError("Installed metadata/source revisions differ")
+        revision = matched_revision
     if not revision or not installed:
         # Refuse an unrelated parent repository (for example a venv inside WG).
         _run(["git", "-C", str(package_path), "ls-files", "--error-unmatch", str(package_path / "__init__.py")])
@@ -61,8 +96,8 @@ def verify_runtime(julia_executable: str, backend: str) -> dict[str, Any]:
     return {"backend": backend, "julia_executable": str(executable), "julia_version": version,
             "julia_sha256": binary_hash, "engine_path": str(package_path),
             "engine_revision": revision,
-            "engine_revision_status": "attested" if installed else "observed",
-            "engine_revision_source": "installed_vcs_metadata" if installed else "clean_source_git",
+            "engine_revision_status": "attested" if installed and not matched_source else "observed",
+            "engine_revision_source": "installed_source_byte_match" if matched_source else "installed_vcs_metadata" if installed else "clean_source_git",
             "engine_distribution": "beat-engine",
             "engine_fingerprint": engine_fingerprint(assets),
             "artifact_kind": "installed" if installed else "source",
