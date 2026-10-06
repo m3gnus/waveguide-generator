@@ -18,12 +18,12 @@ import type { ResultPayload } from './types';
 
 /** The archived Speaker2 v4 run as stored before qualification existed. */
 function archived(): ResultPayload {
-  return JSON.parse(new TextDecoder().decode(readFileSync(new URL('../../../server/tests/data/power-qualification-speaker2-v4.json', import.meta.url)))) as ResultPayload;
+  return JSON.parse(new TextDecoder().decode(readFileSync('../server/tests/data/power-qualification-speaker2-v4.json'))) as ResultPayload;
 }
 
 /** The same run as the server serves it when opened: read-time flags added. */
 function served(): ResultPayload {
-  return JSON.parse(new TextDecoder().decode(readFileSync(new URL('../../../server/tests/data/power-qualification-speaker2-v4.read-time.json', import.meta.url)))) as ResultPayload;
+  return JSON.parse(new TextDecoder().decode(readFileSync('../server/tests/data/power-qualification-speaker2-v4.read-time.json'))) as ResultPayload;
 }
 
 function channel(wrapper: ResultPayload, id: string): ResultPayload {
@@ -262,10 +262,11 @@ it.each([false, true])('requires the selected BEAT provider pin (imported=%s)', 
       payload.metadata!.engine = pkg;
       payload.metadata!.solver_backend = 'beat';
       payload.provenance = { dependency_shas: { [availablePin]: 'pin' } };
-      const wrapper = imported ? {
+      const wrapper: ResultPayload = imported ? {
+        frequencies: payload.frequencies,
         metadata: { solver_engine: { package: pkg } },
         provenance: payload.provenance,
-      } as ResultPayload : payload;
+      } : payload;
       if (imported) delete payload.provenance;
       expect(powerQualificationOf(payload, wrapper)!.status)
         .toBe(pkg === availablePin ? 'qualified' : 'unknown');
