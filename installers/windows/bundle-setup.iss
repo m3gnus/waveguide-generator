@@ -212,6 +212,11 @@ const
   WgLinkMarkerName = 'wglink_install.json';
   WgLinkDeveloperMarkerName = 'wglink_dev.json';
   WgLinkTransactionJournalName = '.WGLink-install-transaction.json';
+  { Where setup records that a run ticked desktopicon. Nothing before 0.3.5
+    wrote it, so a Waveguide Generator desktop shortcut without it was left by
+    an earlier install rather than asked for. }
+  DesktopShortcutKey = 'Software\Hornlab\Waveguide Generator';
+  DesktopShortcutValue = 'DesktopShortcutChosen';
   { launchers/apply_update.py STAGING_ROOT_SUFFIX: kept identical so this
     installer and the server name the same folder. }
   UpdateStagingRootSuffix = '.update-staging';
@@ -255,6 +260,9 @@ var
   WgLinkStatus: String;
   { Set by InitializeWizard, spent by the first visit to the tasks page. }
   WgLinkPreselectPending: Boolean;
+  { The same for desktopicon, when the user's own shortcut is on the desktop. }
+  DesktopShortcutPreselectPending: Boolean;
+  DesktopShortcutRemoved: Boolean;
   PreviousVersion: String;
   { True once replacement began at ssInstall: this run owns the layer folders. }
   ProtectionStarted: Boolean;
@@ -692,6 +700,45 @@ begin
       exit;
     end;
   end;
+end;
+
+function DesktopShortcutPath(): String;
+begin
+  Result := ExpandConstant('{autodesktop}\Waveguide Generator.lnk');
+end;
+
+function DesktopShortcutRecorded(): Boolean;
+var
+  Value: Cardinal;
+begin
+  Result := RegQueryDWordValue(HKCU, DesktopShortcutKey, DesktopShortcutValue, Value) and (Value = 1);
+end;
+
+{ Waveguide Generator's only when its target is a Waveguide Generator.exe that
+  exists with app\APP-MANIFEST.json beside it. A shortcut that cannot be read,
+  or that points anywhere else, is never touched. }
+function DesktopShortcutIsOurs(const Link: String): Boolean;
+var
+  Shell, Shortcut: Variant;
+  Target: String;
+begin
+  Result := False;
+  if not FileExists(Link) then
+    exit;
+  try
+    Shell := CreateOleObject('WScript.Shell');
+    Shortcut := Shell.CreateShortcut(Link);
+    Target := Shortcut.TargetPath;
+  except
+    WgLog('Desktop shortcut: could not read ' + Link + '; left in place: ' + GetExceptionMessage());
+    exit;
+  end;
+  Result := (CompareText(ExtractFileName(Target), 'Waveguide Generator.exe') = 0) and
+    FileExists(Target) and
+    FileExists(AddBackslash(ExtractFileDir(Target)) + 'app\APP-MANIFEST.json');
+  if not Result then
+    WgLog('Desktop shortcut: ' + Link + ' points at "' + Target +
+      '", not a Waveguide Generator install; left in place.');
 end;
 
 procedure RecordWGLinkSetupChoice();
@@ -1268,6 +1315,8 @@ begin
     or Start shortcut is never replaced. }
   if WizardIsTaskSelected('desktopicon') then
     Shortcuts := 'The desktop shortcut now opens this installation, but a taskbar or Start pin made from the old copy still opens the old one: unpin it, and pin Waveguide Generator again from the Start menu.'
+  else if DesktopShortcutRemoved then
+    Shortcuts := 'The desktop shortcut was removed. A taskbar or Start pin made from the old copy still opens the old one: unpin it, and pin Waveguide Generator again from the Start menu if you want.'
   else
     Shortcuts := 'A desktop shortcut, or a taskbar or Start pin, made for the old copy still opens the old one: remove it, and pin Waveguide Generator again from the Start menu if you want.';
   PreviousCopyNotice :=
@@ -1309,6 +1358,10 @@ begin
     explicit /TASKS or /MERGETASKS on the command line is the user's choice and
     is left alone. }
   WgLinkPreselectPending := False;
+  { A shortcut an earlier run recorded as the user's choice is offered again:
+    leaving the box ticked keeps it, unticking it removes it. }
+  DesktopShortcutPreselectPending := not WizardSilent() and not TaskChoiceOnCommandLine() and
+    DesktopShortcutRecorded() and DesktopShortcutIsOurs(DesktopShortcutPath());
   if FusionDetected() then
   begin
     WgLog('WGLink: Fusion AddIns directory detected at ' + WgLinkAddInsDirectory() + '.');
@@ -1608,6 +1661,47 @@ begin
   end;
 end;
 
+{ ---- The desktop shortcut ----------------------------------------------------
+
+  Every setup since 0.3.1 writes the same desktop shortcut when desktopicon is
+  ticked, and UsePreviousTasks=no means the silent in-app updater never ticks
+  it. So the shortcut alone cannot tell a user's choice from a leftover; the
+  HKCU record a ticked run writes can. A run that did not tick desktopicon
+  removes the shortcut only when it is Waveguide Generator's, and a silent run
+  only when no run ever recorded the choice. }
+
+procedure SettleDesktopShortcut();
+var
+  Link: String;
+begin
+  if WizardIsTaskSelected('desktopicon') then
+  begin
+    if RegWriteDWordValue(HKCU, DesktopShortcutKey, DesktopShortcutValue, 1) then
+      WgLog('Desktop shortcut: created, and the choice recorded.')
+    else
+      WgLog('Desktop shortcut: created, but the choice could not be recorded.');
+    exit;
+  end;
+  Link := DesktopShortcutPath();
+  if not FileExists(Link) then
+    exit;
+  if WizardSilent() and DesktopShortcutRecorded() then
+  begin
+    WgLog('Desktop shortcut: kept; an earlier setup recorded that the user asked for it.');
+    exit;
+  end;
+  if not DesktopShortcutIsOurs(Link) then
+    exit;
+  if DeleteFile(Link) then
+  begin
+    DesktopShortcutRemoved := True;
+    RegDeleteValue(HKCU, DesktopShortcutKey, DesktopShortcutValue);
+    WgLog('Desktop shortcut: removed ' + Link + '; desktopicon was not selected.');
+  end
+  else
+    WgLog('Desktop shortcut: could not remove ' + Link + '.');
+end;
+
 procedure RewriteShortcutIcons();
 begin
   RewriteShortcut(ExpandConstant('{group}\Waveguide Generator.lnk'));
@@ -1634,6 +1728,7 @@ begin
     WgLog('Install phase: payload copied; committing verified complete installation.');
     CommitProtectedReplace();
     RewriteShortcutIcons();
+    SettleDesktopShortcut();
     NotePreviousCopy();
     if WizardIsTaskSelected(WgLinkTaskName) then
     begin
@@ -1701,6 +1796,9 @@ begin
   begin
     UninstallWGLink();
     RemoveUpdateStagingRoot();
+    { Inno removes the shortcut it made; the record of the choice goes too. }
+    RegDeleteValue(HKCU, DesktopShortcutKey, DesktopShortcutValue);
+    RegDeleteKeyIfEmpty(HKCU, DesktopShortcutKey);
   end;
 end;
 
@@ -1714,6 +1812,12 @@ begin
     WizardSelectTasks(WgLinkTaskName);
     WgLog('WGLink: task preselected because Fusion was detected.');
   end;
+  if (CurPageID = wpSelectTasks) and DesktopShortcutPreselectPending and not WizardSilent() then
+  begin
+    DesktopShortcutPreselectPending := False;
+    WizardSelectTasks('desktopicon');
+    WgLog('Desktop shortcut: task preselected; the user asked for the shortcut on the desktop.');
+  end;
   if (CurPageID <> wpFinished) or WizardSilent() then
     exit;
   if WgLinkStatus <> '' then
@@ -1721,7 +1825,11 @@ begin
       'Waveguide Generator was installed.' + #13#10#13#10 + WgLinkStatus;
   if PreviousCopyNotice <> '' then
     WizardForm.FinishedLabel.Caption :=
-      WizardForm.FinishedLabel.Caption + #13#10#13#10 + PreviousCopyNotice;
+      WizardForm.FinishedLabel.Caption + #13#10#13#10 + PreviousCopyNotice
+  else if DesktopShortcutRemoved then
+    WizardForm.FinishedLabel.Caption :=
+      WizardForm.FinishedLabel.Caption + #13#10#13#10 +
+      'The Waveguide Generator shortcut on the desktop was removed. To have one again, run setup again and tick "Create a desktop shortcut".';
   { Hide the install advice only when an Intel CPU runtime is already
     registered. The help button still opens the full guidance. }
   if CpuOpenClRuntimeRegistered() then
