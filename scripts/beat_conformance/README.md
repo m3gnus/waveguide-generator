@@ -569,3 +569,17 @@ is absent, the existing explicit-frequency validator coverage in
 `server/tests/test_jobs_luna.py` passed **11 tests** (41 deselected). The full
 comparator/runner tests passed **187 tests**. `ruff check scripts server` and
 `git diff --check` passed. These test counts describe separate, overlapping runs.
+
+## Owner decision: Float32 drift at sharp resonances (2026-10-06)
+
+The corpus run on WG 80547fa0 (HBB pin df45239 vs official 4839c7e) passed every case
+except `narrow-resonance` in Float32. Its Float64 run passes (complex L2 3.2e-8), and the
+resonance itself agrees: 278 Hz with Q of about 52 on both engines. In Float32, though, both
+engines differ from the Float64 result by about 6e-3: HBB by 5.7e-3 and official by 6.0e-3,
+worst at the 278 Hz peak. They differ from each other by 4.2e-3 (SPL 0.05 dB, phase 0.41 deg).
+This is single-precision conditioning near a high-Q resonance, not an engine disagreement.
+
+The owner accepted this drift as a known limitation. The gate is **not** widened: the Float32
+`narrow-resonance` verdict stays a recorded failure under the PLAN §5 budgets, and engine
+agreement is established by the Float64 run. Revisit if the official Float32 exterior path
+gains mixed-precision refinement.
