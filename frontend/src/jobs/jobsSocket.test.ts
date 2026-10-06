@@ -713,6 +713,72 @@ describe('jobs websocket state machine', () => {
     manager.stop();
   });
 
+  it('keeps a new run whose events arrive during a full refresh', async () => {
+    // A CAD Solve: the run's first events reach the page before it has the row,
+    // and the operation's acceptance asks for a full refresh while they stream.
+    // The server lists the run; being changed during the walk without being in
+    // the list yet is not a deletion.
+    const statuses: Array<(response: Response) => void> = [];
+    let resolveList!: (response: Response) => void;
+    const fetcher = vi.fn((input: RequestInfo | URL) => new Promise<Response>((resolve) => {
+      if (String(input).startsWith('/api/status/')) statuses.push(resolve);
+      else resolveList = resolve;
+    }));
+    const socket = new MockSocket();
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [job({ id: 'old', status: 'complete' })] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'new', type: 'stage', payload: { stage: 'ready' } });
+    const refresh = manager.refresh();
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 3, jobId: 'new', type: 'queued', payload: {} });
+    resolveList(json({
+      items: [job({ id: 'new', run_number: 2, status: 'queued' }), job({ id: 'old', status: 'complete' })],
+      total: 2,
+    }));
+    await refresh;
+    expect(manager.getSnapshot().jobs.map(({ id }) => id)).toEqual(['new', 'old']);
+
+    // The status refresh begun by the first event was superseded by the second;
+    // its follow-up still lands the newest server row.
+    statuses[0](json(job({ id: 'new', run_number: 2, status: 'queued' })));
+    await vi.waitFor(() => expect(statuses).toHaveLength(2));
+    statuses[1](json(job({ id: 'new', run_number: 2, status: 'running', progress: .5 })));
+    await vi.waitFor(() => expect(manager.getSnapshot().jobs.find(({ id }) => id === 'new'))
+      .toMatchObject({ status: 'running', progress: .5 }));
+    manager.stop();
+  });
+
+  it('lists a new run whose events outpace every status read, then reads it once more', async () => {
+    // A fast solve: each status read for the run the page has not listed yet
+    // returns after another of its events. The attempts used to run out with no
+    // row at all, and nothing read the run again once its events stopped.
+    const socket = new MockSocket();
+    let cursor = 2;
+    const fetcher = vi.fn(async () => {
+      // Like a real response, the event arrives after the read has begun.
+      await Promise.resolve();
+      if (cursor < 5) {
+        cursor += 1;
+        socket.message({ v: 1, kind: 'event', epoch: 1, cursor, jobId: 'new', type: 'stage', payload: { stage: `s${cursor}` } });
+        return json(job({ id: 'new', status: 'running', progress: .5 }));
+      }
+      return json(job({ id: 'new', status: 'complete', progress: 1, has_results: true }));
+    });
+    const manager = new JobsSocketManager(() => socket, fetcher, 'ws://test/ws/jobs');
+    manager.start();
+    socket.message({ v: 1, kind: 'hello', epoch: 1, heartbeatSec: 15 });
+    socket.message({ v: 1, kind: 'snapshot', epoch: 1, cursor: 1, jobs: [] });
+
+    socket.message({ v: 1, kind: 'event', epoch: 1, cursor: 2, jobId: 'new', type: 'stage', payload: { stage: 'received' } });
+
+    await vi.waitFor(() => expect(manager.getSnapshot().jobs.find(({ id }) => id === 'new'))
+      .toMatchObject({ status: 'complete', progress: 1 }));
+    expect(fetcher).toHaveBeenCalledTimes(4);
+    manager.stop();
+  });
+
   it('preserves a row skipped when a concurrent deletion shifts offset pages', async () => {
     const socket = new MockSocket();
     const initial = Array.from({ length: 201 }, (_unused, index) => job({

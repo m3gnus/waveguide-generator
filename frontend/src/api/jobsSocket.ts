@@ -765,6 +765,10 @@ export class JobsSocketManager {
   private refetchGeneration = 0;
   private jobMutationCounter = 0;
   private readonly jobMutationVersions = new Map<string, number>();
+  /** The mutation counter when this page last removed each job. Only a removal
+   * keeps a listed row out of a full refresh; any other change merely says the
+   * row is newer than the list. */
+  private readonly jobRemovalVersions = new Map<string, number>();
   private gapTargetCursor: number | null = null;
   private readonly jobGenerations = new Map<string, number>();
   private readonly jobRefreshes = new Map<string, Promise<void>>();
@@ -847,7 +851,7 @@ export class JobsSocketManager {
     deleted.forEach((jobId) => {
       this.invalidateJob(jobId);
       provisionalResults.remove(jobId);
-      this.markJobMutation(jobId);
+      this.markJobRemoved(jobId);
     });
     this.update({ jobs: this.snapshot.jobs.filter((job) => !deleted.has(job.id)) });
   }
@@ -857,7 +861,7 @@ export class JobsSocketManager {
     if (!response.ok) throw await responseError(response);
     this.invalidateJob(jobId);
     provisionalResults.remove(jobId);
-    this.markJobMutation(jobId);
+    this.markJobRemoved(jobId);
     this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
   }
 
@@ -1102,6 +1106,7 @@ export class JobsSocketManager {
       if (cursor === null || message.cursor !== cursor + 1) return;
       this.markJobMutation(message.jobId);
       if (message.type === 'deleted') {
+        this.markJobRemoved(message.jobId);
         this.invalidateJob(message.jobId);
         provisionalResults.remove(message.jobId);
         this.update({
@@ -1134,6 +1139,7 @@ export class JobsSocketManager {
     }
     this.markJobMutation(message.jobId);
     if (message.type === 'deleted') {
+      this.markJobRemoved(message.jobId);
       this.invalidateJob(message.jobId);
       provisionalResults.remove(message.jobId);
       this.update({
@@ -1236,9 +1242,11 @@ export class JobsSocketManager {
       }
       // REST pages are not one atomic server snapshot. Preserve current
       // membership when a mutation could have shifted an offset boundary, then
-      // overlay each job changed through WS/status/local traffic. A changed id
-      // absent from the current list represents a concurrent deletion and must
-      // not be resurrected by an older page.
+      // overlay each job changed through WS/status/local traffic. An id this
+      // page removed during the walk must not be resurrected by an older page.
+      // One changed but absent for any other reason is a job the page has not
+      // fetched yet -- a new run whose events arrived first -- and the list's
+      // row stands until its own status refresh brings the newer fields.
       const current = new Map(this.snapshot.jobs.map((job) => [job.id, job]));
       if (this.jobMutationCounter !== mutationBaseline) {
         // Insertions/deletions shift offset pagination. If anything changed
@@ -1249,16 +1257,21 @@ export class JobsSocketManager {
           if (!fetched.has(jobId)) fetched.set(jobId, job);
         });
       }
+      const adopted = new Set<string>();
       this.jobMutationVersions.forEach((version, jobId) => {
         if (version <= mutationBaseline) return;
         const live = current.get(jobId);
         if (live) fetched.set(jobId, live);
-        else fetched.delete(jobId);
+        else if ((this.jobRemovalVersions.get(jobId) ?? 0) > mutationBaseline) fetched.delete(jobId);
+        else if (fetched.has(jobId)) adopted.add(jobId);
       });
       const items = [...fetched.values()];
       new Set([...this.snapshot.jobs.map((job) => job.id), ...items.map((job) => job.id)])
-        .forEach((jobId) => this.invalidateJob(jobId));
+        .forEach((jobId) => { if (!adopted.has(jobId)) this.invalidateJob(jobId); });
       this.update({ jobs: this.sortJobs(items), error: this.gapTargetCursor === null ? null : this.snapshot.error });
+      // The adopted row predates the events that marked it; its status refresh
+      // (the one in flight, or a new one) replaces it with the server's newest.
+      adopted.forEach((jobId) => { void this.refreshJob(jobId); });
     } catch (error) {
       if (generation !== this.refetchGeneration) return;
       this.update({ error: error instanceof Error ? error.message : String(error) });
@@ -1270,12 +1283,18 @@ export class JobsSocketManager {
     if (existing) return existing;
 
     const generation = this.nextJobGeneration(jobId);
-    const refresh = this.refreshJobUntilStable(jobId, generation);
+    const stable = this.refreshJobUntilStable(jobId, generation);
+    const refresh = stable.then(() => undefined);
     this.jobRefreshes.set(jobId, refresh);
     const clearRefresh = () => {
       if (this.jobRefreshes.get(jobId) === refresh) this.jobRefreshes.delete(jobId);
     };
-    void refresh.then(clearRefresh, clearRefresh);
+    void stable.then((followUp) => {
+      clearRefresh();
+      // Events that reached the page while it fetched were not applied: the
+      // row was not there yet. Read it once more, now that it is.
+      if (followUp) void this.refreshJob(jobId);
+    }, clearRefresh);
     return refresh;
   }
 
@@ -1313,34 +1332,49 @@ export class JobsSocketManager {
     return refresh;
   }
 
-  private async refreshJobUntilStable(jobId: string, generation: number): Promise<void> {
+  /**
+   * Fetch one job until no event has changed it meanwhile, for at most
+   * MAX_JOB_REFRESH_ATTEMPTS reads. Resolves true when a follow-up read is due.
+   *
+   * A job the page already lists keeps its row when the attempts run out:
+   * the events kept it current. A job it does not list yet -- a new run whose
+   * events stream faster than a status read returns -- has no row for those
+   * events to patch, so the last read is applied anyway and read again after.
+   */
+  private async refreshJobUntilStable(jobId: string, generation: number): Promise<boolean> {
     for (let attempt = 0; attempt < MAX_JOB_REFRESH_ATTEMPTS; attempt += 1) {
       const mutationBaseline = this.jobMutationVersions.get(jobId) ?? 0;
+      const superseded = () => (this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline;
+      const retry = () => superseded() && (
+        attempt < MAX_JOB_REFRESH_ATTEMPTS - 1 || this.snapshot.jobs.some((item) => item.id === jobId)
+      );
       try {
         const response = await this.fetcher(`/api/status/${encodeURIComponent(jobId)}`);
-        if (this.jobGenerations.get(jobId) !== generation) return;
-        if ((this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) continue;
+        if (this.jobGenerations.get(jobId) !== generation) return false;
+        if (retry()) continue;
         if (response.status === 404) {
           this.invalidateJob(jobId);
-          this.markJobMutation(jobId);
+          this.markJobRemoved(jobId);
           this.update({ jobs: this.snapshot.jobs.filter((job) => job.id !== jobId) });
-          return;
+          return false;
         }
         if (!response.ok) throw await responseError(response);
         const job = await response.json() as unknown;
         if (!isJobItem(job) || job.id !== jobId) throw new Error('Invalid job status response');
-        if (this.jobGenerations.get(jobId) !== generation) return;
-        if ((this.jobMutationVersions.get(jobId) ?? 0) > mutationBaseline) continue;
+        if (this.jobGenerations.get(jobId) !== generation) return false;
+        if (retry()) continue;
+        const followUp = superseded();
         this.markJobMutation(jobId);
         const jobs = this.snapshot.jobs.filter((item) => item.id !== job.id);
         this.update({ jobs: this.sortJobs([...jobs, job]), error: null });
-        return;
+        return followUp;
       } catch (error) {
-        if (this.jobGenerations.get(jobId) !== generation) return;
+        if (this.jobGenerations.get(jobId) !== generation) return false;
         this.update({ error: error instanceof Error ? error.message : String(error) });
-        return;
+        return false;
       }
     }
+    return false;
   }
 
   private nextJobGeneration(jobId: string): number {
@@ -1356,6 +1390,11 @@ export class JobsSocketManager {
   private markJobMutation(jobId: string): void {
     this.jobMutationCounter += 1;
     this.jobMutationVersions.set(jobId, this.jobMutationCounter);
+  }
+
+  private markJobRemoved(jobId: string): void {
+    this.markJobMutation(jobId);
+    this.jobRemovalVersions.set(jobId, this.jobMutationCounter);
   }
 
   /** Apply a patch immediately, for local optimistic edits such as a rating. */
