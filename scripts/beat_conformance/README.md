@@ -213,216 +213,251 @@ Invalid `--threads` values are command-line errors.
 
 ## Production-route corpus
 
-`corpus.py` declares nine small WG requests. `run_corpus.py` calls
-`solve_beat_from_msh_text` or `solve_imported_beat_from_msh_text`, explicitly
-with `_official=False` followed by `_official=True`. Each engine/part has a new
-Python process. HBB uses `persistent_worker=False` and its own runtime/project
-paths; official uses an owned `WorkerManager(mode="child")`, inheriting
-`WG2_BEAT_RUNTIME_DIR` and `WG2_BEAT_WORKER_DIR` unchanged. Every Julia and BLAS
-thread setting is explicitly 1. CPU accepts float32/float64; Metal accepts
-float32. Prepare the runtimes separately before running this tool.
+`corpus.py` declares nine small WG requests. `run_corpus.py` calls the actual
+`solve_beat_from_msh_text` / `solve_imported_beat_from_msh_text` production routes,
+with HBB first and official second in fresh sequential Python processes. HBB
+uses one-shot execution; official uses an owned `WorkerManager(mode="child")`.
+All Julia and BLAS thread settings are 1. CPU supports float32/float64; Metal
+requires float32. This corpus scores agreement, and always reports
+`qualified=false`; installed/device/terminal qualification remains separate.
 
-Official readiness is checked before meshing or launching either engine. Keep
-the runtime root and Julia environment identical between provisioning, status
-and the corpus. `WG2_BEAT_RUNTIME_DIR` is a **base**: the runtime appends
-`wg-beat-engine`. CLI `--dir` is the **exact** directory. For example:
+Prepare both runtimes independently. `--hbb-depot DIR` is required and accepts
+an explicit depot chain, with a fresh writable entry first. HBB does not inherit
+`JULIA_DEPOT_PATH`, `JULIA_LOAD_PATH`, `JULIA_PROJECT`, the official
+`WG2_BEAT_RUNTIME_DIR`, `WG2_BEAT_WORKER_DIR`, or `WG2_BEAT_JULIA`.
+Its depot comes exclusively from this flag, and its Julia executable from
+`--julia`. Official receives its own provisioned environment. Neither child
+receives ambient `BLAB_*` overrides. Both effective environments, restricted to
+runtime/depot/project/thread keys, are retained in raw evidence and identities.
+
+Official readiness is checked before meshing or either engine launch. The
+runtime root and complete Julia depot chain must match provisioning, status,
+and the corpus. `WG2_BEAT_RUNTIME_DIR` is a **base** (`wg-beat-engine` is appended),
+whereas CLI `--dir` is exact. For example, provision separately with:
 
 ```sh
 export WG2_BEAT_RUNTIME_DIR=/private/tmp/wg-beat-corpus/runtime
 export WG2_BEAT_WORKER_DIR=/private/tmp/wg-beat-corpus/workers
 export WG2_BEAT_JULIA="$JULIA"
-export JULIA_DEPOT_PATH=/private/tmp/wg-beat-corpus/depot
+export JULIA_DEPOT_PATH=/private/tmp/wg-beat-corpus/official-depot
 export JULIA_PKG_OFFLINE=true
 python -m server.solver.beat_runtime.cli provision --backend cpu --julia "$JULIA"
 python -m server.solver.beat_runtime.cli status --backend cpu
 ```
 
-Omitting `--dir` uses the same provider directory as production readiness. If
-using `--dir`, supply `$WG2_BEAT_RUNTIME_DIR/wg-beat-engine`. A custom depot chain
-must be the same for all three commands: omit `--depot` to inherit
-`JULIA_DEPOT_PATH`, or repeat that complete chain. Provisioning with `--depot`
-set to only the first entry proves a different identity from a later status or
-solve inheriting the full chain. Default CLI threads (`auto`) match the
-production readiness query; the corpus's solve children separately use one
-thread. Readiness still requires matching source, executable and environment
-identities and compiled completion evidence.
+Omit `--dir` to use production readiness's directory. If supplying it, use
+`$WG2_BEAT_RUNTIME_DIR/wg-beat-engine`. Do not provision only the first depot
+entry and then query or solve with a different complete chain. Default CLI
+threads (`auto`) match the readiness query; corpus solve children use one.
+A provisioned external Julia is rediscovered without repeating `--julia` in
+status. Its `version=null` is intentional: discovery does not launch a probe;
+readiness checks the executable hash and compiled proof.
 
-A provisioned explicit external Julia is rediscovered without repeating
-`--julia` in status. External `version=null` is intentional: discovery and the
-installer do not run a version probe; readiness uses the executable hash and
-compiled proof. An installer-only explicit choice remains one-off until a
-backend has been provisioned with it.
-
-Run one case from the WG root, in the environment containing the current
-non-editable HBB pin and the official engine distribution (including the
-m3gnus fork while it is the installed candidate):
+From a clean WG checkout containing the non-editable current HBB pin and an
+exact-revision official distribution, run:
 
 ```sh
 python -m scripts.beat_conformance.run_corpus \
   --case osse-quarter --backend cpu --precision float64 \
-  --julia "$JULIA" --output-dir evidence/osse-quarter-coarse --phase coarse
+  --julia "$JULIA" --hbb-depot /private/tmp/wg-beat-corpus/hbb-depot \
+  --output-dir evidence/osse-quarter-dense --phase coarse
 
 python -m scripts.beat_conformance.run_corpus \
   --case osse-quarter --backend cpu --precision float64 \
-  --julia "$JULIA" --output-dir evidence/osse-quarter-part-1 --phase refine \
-  --coarse-dir evidence/osse-quarter-coarse --refine-part 1
+  --julia "$JULIA" --hbb-depot /private/tmp/wg-beat-corpus/hbb-depot \
+  --output-dir evidence/osse-quarter-part-1 --phase refine \
+  --coarse-dir evidence/osse-quarter-dense --refine-part 1
 ```
 
-`--phase both` meshes, runs coarse, and acquires refine part 1 in one invocation.
-A coarse-only invocation reports `coarse_complete`, with `passed=false`; its
-numerical score is retained in `coarse-score.json`. Output directories must be
-empty or absent, including retries. A refinement reuses the coarse directory's
-frozen bytes and ingestion record without meshing again. Backend, precision,
-settings, mesh hash, engine identities and thread settings must remain the same.
+The legacy names `coarse_hz`, `--phase coarse`, `coarse/`, `coarse-score.json`,
+and `coarse_complete` now describe the **predeclared dense uniform sweep**.
+`--phase both` meshes once, acquires the dense sweep, and acquires refine part 1.
+Dense-only evidence cannot pass. Output directories must be empty or absent.
+Refinement reuses the exact frozen mesh bytes and ingestion record. Catalogue
+parameters, dense axis, backend, precision, settings, mesh, WG commit, clean-tree
+observation, engine identities, and effective environments must match the
+original acquisition. Legacy 250 Hz evidence is refused, rather than relabelled
+dense. Every raw acquisition, coarse score, part record, and verdict carries WG
+commit and `git status --porcelain` evidence. Dirty WG trees refuse before Julia
+probes, meshing, or solves; identity changes across parts also refuse.
 
-`refine-plan.json` discovers peaks and inverted dips **only from HBB**, using
-`agreement.py`'s 1 dB topographic prominence on every pressure column and
-normalized acoustic impedance. Each feature at coarse frequency `f[k]` gets
-the local window `[f[k-1], f[k+1]]`, clamped to the coarse axis ends.
-Overlapping windows and windows sharing a boundary are merged. Each merged
-window uses a dyadic step at most 0.25% of its **lowest feature frequency**,
-exactly representable on HBB's Float32 wire. Frequencies stay inside the windows;
-exact coarse bounds are retained even when they fall between dyadic grid points.
+Features are pressure, normalized acoustic impedance, and (for a driver)
+electrical impedance peaks/dips at 1 dB topographic prominence. They are detected
+in **both engines on the dense sweep**. `refine-plan.json` uses their union.
+Each feature at `f[k]` contributes exactly `[f[k-1], f[k+1]]`. Only windows with
+intersecting interiors merge; touching endpoints alone do not merge windows.
+Each window's dyadic step is at most 0.25% of its own lowest feature frequency.
+The grid and exact dense neighbours remain Float32-wire representable and never
+extend outside the window. No reference features means
+`status="no_features_observed", passed=false`, unless the case predeclares
+`expect_no_features=True` with a reason. **No catalogue case declares this.**
 
-Parts use the measured coarse wall seconds per frequency for **both engines**.
-The estimate is `count * (hbb_wall/count + official_wall/count) + startup`.
-For fresh startup and serialization, each part conservatively reserves one
-additional full coarse pair's wall time (the amortized rate already includes
-coarse startup). `--max-part-minutes` sets the hard estimated part budget,
-default **8 minutes**. Use the same budget on coarse and subsequent refine
-invocations. A budget too small for three frequencies and startup is refused.
-The plan records `part_count`, unique `count`, `acquired_frequency_count`
-(including overlaps), per-part and total `estimated_minutes`, the measured
-costs, and the startup policy. Timing is measurement context, never an agreement
-gate. Actual runtime may vary from this estimate.
+Refinement uses measured paired wall cost `c = hbb_wall/N + official_wall/N`.
+For each fresh part it additionally reserves the full measured dense pair wall
+`S` as conservative startup/serialization allowance (the amortized rate already
+includes startup). Its limit is
+`min(SolveOptions.num_frequencies.schema_max, floor((60*budget-S)/c))`;
+the request schema currently allows 401 rows. The default budget is **8 minutes
+per paired part**, not a total refinement budget. A budget unable to fit three
+rows and startup refuses. Parts overlap by two rows. The recorded plan includes
+unique/acquired counts, per-part counts, total estimated minutes, and both timing
+records. Native logs are indexed by `frequency_hz`; overlapping rows must agree
+on backend, precision and numerical settings. Kernel timings and result samples
+are not settings. Array samples are joined verbatim without interpolation.
 
-Each `coarse/{hbb,official}.json` and `refine/{hbb,official}.json` records
-parent-process `wall_seconds`, average `wall_seconds_per_frequency`, and native
-per-frequency component timings keyed by channel and frequency. Coarse scores,
-part records, and final scores retain both engines' timing context. Legacy
-captures use `metadata.performance.total_time_seconds`, explicitly labelled
-`legacy_production_route_wall`; these exclude the surrounding Python child
-startup, so their estimates have less timing coverage.
+Each child timeout for the dense acquisition is the case's declared
+`coarse_minutes[1] * 60` seconds. Each refinement child timeout is
+`--max-part-minutes * 60` (default **480 seconds**). Only recorded process groups
+are terminated by timeout handling. Runtime can vary from the estimates.
 
-Larger acquisitions split into numbered parts with two-row overlaps. Complete
-windows are scored after joining the parts, so a feature on a part boundary
-remains interior to its scoring window. Every coarse feature must have a unique
-reference peak or dip of the same quantity, column and kind inside its original
-coarse bracket. If it falls below the prominence threshold in the merged local
-window, the score records `feature_resolution.features[].status="not_resolved"`
-with the feature identity and reference prominence. This is a gate failure;
-matching reference and candidate curves cannot pass by losing that feature.
+For later parts use fresh directories and `--refine-part K`. On the last part,
+supply all earlier part directories through repeated `--refine-dir`. Missing
+parts report `refine_incomplete`. Complete evidence scores the entire merged
+band using the **declared dense step**, and each complete local window with its
+own finer step. Prominence and feature resolution in a local window use the
+merged full-band shoulders, so clipping a broad feature cannot erase it.
+Every dense feature must resolve uniquely in its originating engine's bracket;
+candidate-only features are retained and fail the agreement gate. Resonance
+failure blocks error norms, including the electrical impedance gate. Pressure,
+sphere/traces, DI/power, and impedance retain the existing PLAN budgets and
+reference-defined 30 dB mask; nulls remain separately reported.
 
-For subsequent parts use another empty output directory and `--refine-part K`.
-On the last part, supply every earlier part using repeated `--refine-dir`:
+The narrow case uses the existing 300 mm straight throat extension with a 3 mm
+radius, a 10 mm OSSE termination at 2 degrees, and a driven closed end. The
+small open aperture reduces radiation loss, unlike the old broad flare. The
+quarter-wave estimate is `343/(4*0.310) = 276.6 Hz`; `ka ~= 0.015` there.
+Scoring requires a refined reference peak with measured absolute -3 dB
+crossings and `Q=f_peak/(f_right-f_left) >= 10`. A missing, unbracketed,
+dense-only or broad peak fails `resonance_not_narrow`. The peak must be acquired
+in refinement, and all samples spanning its measured -3 dB crossings must also
+come from refinement. Dense-only shoulders cannot establish the Q claim.
+No theoretical Q is substituted for that measurement. Actual reference Q
+remains unverified in this review because numerical solves were prohibited.
 
-```sh
-python -m scripts.beat_conformance.run_corpus \
-  --case osse-quarter --backend cpu --precision float64 --julia "$JULIA" \
-  --output-dir evidence/osse-quarter-last --phase refine \
-  --coarse-dir evidence/osse-quarter-coarse --refine-part 3 \
-  --refine-dir evidence/osse-quarter-part-1 \
-  --refine-dir evidence/osse-quarter-part-2
-```
+`non-45-cut` now uses the non-axisymmetric CAD box, with 30 degree diagonal,
+0 degree horizontal and 90 degree vertical cuts. The reference diagonal must
+differ by **more than 0.5 dB from each control** somewhere within their common
+30 dB mask, otherwise scoring fails `cut_not_discriminating`.
+The two-disc fixture has unequal radii (10 and 12 mm) and unequal x/y offsets
+(-28,-12) and (19,17) mm. A channel swap is no longer a mirror-image ambiguity:
+source area/impedance and the vertical plane can discriminate it as well.
+The driver fixture retains its 25 mm radius disc; `Sd=pi*2.5^2=19.635 cm²`.
+Its 20–300 Hz band brackets the unloaded driver resonance (~73 Hz) and its air
+load. Electrical impedance is read from `channels[id].impedance` only when
+`metadata.impedance_quantity == "electrical_input_impedance"`; production has
+already moved it out of `metadata.driver`. It participates in feature discovery,
+resonance matching, and the 0.01 dB / 0.1 degree norm budget.
 
-The number 3 is illustrative; use the recorded plan's part count. Missing parts
-report `refine_incomplete`. Complete evidence joins acquired rows without
-interpolation, checks the full sweep, and additionally scores each complete
-local window against its own declared dense step and expected feature columns.
-This preserves the one-step location limit without increasing it to the coarse
-spacing. Norms run only after resonances. All PLAN §5 budgets and the reference
-30 dB mask remain unchanged; nulls stay separate in the report.
+All cases request horizontal/vertical/diagonal cuts and a 9×16 full sphere at
+2 m. Only `sphere-traces` requests retained traces. Original WG fixtures and
+production ingestion/meshing are reused; the developer tool needs test and
+mesher dependencies. The 650-vertex CPU refusal budget remains. Measured mesh
+counts here: full/quarter OSSE 429/133, R-OSSE half 643, narrow duct 582,
+asymmetric two-source/cut box 270, curved tilted/rear 642, driver 295.
+All nine deterministic mesh builders remain below five seconds per invocation;
+the changed cases measured 0.61–1.35 seconds. Meshing test outputs live under
+system temporary directories and are deleted afterwards. These are agreement
+controls, not spatial mesh-convergence studies. The normal-motion curved case
+does not cover arbitrary oblique axial motion; ground and infinite baffles
+remain outside this corpus.
 
-The following CPU estimates include **both** engines, one thread, and cold
-starts. They are planning estimates, not measured solve timings. Refinement
-estimates are **per numbered part**; the total depends on HBB's detected features.
-There is a 650-vertex refusal budget, plus owned-child timeouts of 240 s per
-engine for coarse and 320 s per engine for refinement. No runtime, device or
-startup performance is qualified by these estimates.
+Evidence includes exact original mesh bytes/hash, WG request/ingestion/settings,
+complete production responses, unrounded native arrays, distribution VCS
+metadata, HBB pin, WG commit/cleanliness, Julia path/version, environments,
+load/battery context and both engines' timings. Installed VCS identities remain
+attested rather than source-byte verified. Imported HBB MeshInfo describes its
+production tag merge (rigid 1, active 2); original CAD tag areas stay declared.
+DI/power use the sampled full-sphere far-field estimator; native powers stay raw.
+Required missing pressure/loading/sphere/traces cannot pass. Both-route refusals
+record `unsupported`; a one-engine error records `failed` even in `phase=both`.
 
-| Case | PLAN coverage / reused WG control | Coarse axis (Hz; count) | Estimated coarse | Estimated refine part |
-| --- | --- | --- | --- | --- |
-| `osse-full` | Real-pipeline OSSE, full mesh, no image copies | 500–3500 / 250; 13 | 2–5 min | 4–9 min |
-| `osse-quarter` | Same OSSE, x0/y0 quarter and real symmetry copies | 500–3500 / 250; 13 | 1–3 min | 2–6 min |
-| `rosse-half` | Mesh-child R-OSSE R=150/r0=12.7/a=60/a0=15.5, yz half | 500–2500 / 250; 9 | 2–6 min | 4–9 min |
-| `narrow-resonance` | Existing 300 mm straight throat extension before OSSE termination; low radiation loss gives longitudinal duct resonances | 200–1400 / 50; 25 | 2–6 min | 4–10 min |
-| `imported-two-sources` | Real CAD box fixture with two discs, independently driven channels and physical source IDs | 500–2500 / 250; 9 | 2–6 min | 4–10 min |
-| `imported-tilted-rear` | Real curved source-sheet fixture, rigidly rotated 45° about y: tilted net normal with a rear-facing component; normal motion | 500–2500 / 250; 9 | 2–6 min | 4–9 min |
-| `driver-loading` | Real CAD box with one 25 mm disc, existing driver-LEM spec, adapter `BoundaryLoading` and production driver coupling | 200–1400 / 100; 13 | 2–5 min | 4–9 min |
-| `non-45-cut` | Quarter OSSE; 30° diagonal inclination with horizontal/vertical controls | 500–3500 / 250; 13 | 1–3 min | 2–6 min |
-| `sphere-traces` | Quarter OSSE; full sphere plus retained P1 pressure / DP0 Neumann traces | 500–3500 / 250; 13 | 1–3 min | 2–6 min |
+Strict JSON preserves complex/bytes/array types, array dtype/shape, and distinct
++infinity, -infinity and NaN via tagged floats. User mappings containing reserved
+tag keys are escaped so they cannot decode as arrays, complex numbers or bytes.
+Callbacks are omitted with reasons (sequence positions retain explicit markers);
+unknown objects fail with their evidence path and become child error records.
+Capture occurs **after `apply_channel_driver`**, before display packaging. The
+optional production hooks leave ordinary-call defaults unchanged; tests exercise
+SolveConfig propagation, exactly one callback per channel, default precision,
+and real driver coupling using stubbed engine packages. No test launches Julia.
+`verdict.json` is written at the end; killed/incomplete work cannot leave a pass.
 
-R-OSSE uses the permitted half alternative: the original full mesh and then the
-initial half exceeded the CPU budget. Coarsening the regional resolutions to
-25/50/50 mm produces a 643-vertex half here. Other measured mesh sizes are
-429/133 vertices for full/quarter OSSE, 194 for the duct, 268 for two sources,
-642 for the curved tilted/rear source, and 295 for driver loading. These are
-small agreement controls, not spatial mesh-convergence studies. The narrow
-case declares expected pressure resonance column 0: a monotone or unresolved
-coarse reference fails and must be investigated, rather than qualifying an
-empty resonance test. It uses a real WG duct feature; no bespoke geometry
-format or chamber surrogate is introduced.
+## Corpus review round 1
 
-Every case requests horizontal/vertical/diagonal cuts and a 9×16 full sphere at
-2 m. Only `sphere-traces` requests retained field traces. The CAD builders and
-bundle/ingestion helpers come from `server/tests/test_cadlink_domain_automatic.py`;
-therefore this developer tool needs WG's test dependencies as well as its mesher.
-The production mesher is called once per frozen artifact. The tests measured
-all nine builders below 5 s, compare two independent in-process meshes, and
-also retain tiny-fixture catalogue/runner tests for environments without the
-optional mesher. A changed mesher that breaks the size or time budget should
-be investigated and the declared geometry budget revised before qualification.
+Disposition of the two independent reviews and orchestrator decisions:
 
-No catalogue case is statically unsupported today: all nine mesh and the CAD
-cases pass WG's BEAT geometry preflight without either engine. A production
-refusal on both routes is recorded as `unsupported` with each exact refusal
-string, rather than dropping the case. A refusal on only one route or an engine
-identity failure remains a failed comparison. Arbitrary oblique **axial** motion
-is not covered by the normal-motion curved case; WG still refuses such axial
-motion on both BEAT routes. Ground and infinite-baffle combinations are outside
-these exterior cases and retain their existing refusals.
+- **A — fixed**, because every case now declares a dense uniform sweep; both
+  engines contribute feature windows, only overlapping interiors merge, local
+  dyadic refinement stays <=0.25%, full-band scoring retains the dense step,
+  and empty reference structure fails explicitly. Local prominence uses full
+  shoulders to avoid manufacturing feature disappearance by clipping.
+- **B — fixed**, because acquisition parts read the 401-row bound from the WG
+  request schema and also obey their measured paired time budget.
+- **C — fixed**, because the production electrical-response field is captured
+  and tested through the real imported route/driver channel on both providers;
+  the band brackets driver resonance, Sd matches the CAD disc, and electrical
+  features gate norms.
+- **D — fixed in geometry/scoring**, because the small-aperture driven tube
+  builds within the mesh/time budget and a measured refined Q>=10 is mandatory.
+  Reference Q is still an acquisition check, not a claimed result: this review
+  ran no numerical solves. A non-narrow future reference cannot pass.
+- **E — fixed**, because the cut fixture is non-axisymmetric and masked
+  reference differences from both control cuts must exceed 0.5 dB.
+- **F — fixed**, because HBB receives only its explicit depot chain, official
+  runtime variables are stripped from it, BLAB overrides are stripped from both,
+  and effective environments are recorded and regression-tested.
+- **G — fixed**, because log rows are frequency-keyed in merging and slicing,
+  and overlapping backend/precision/settings disagreement refuses.
+- **H — fixed**, because every acquisition/part/verdict records WG revision
+  and porcelain status, dirty trees refuse before launch, and mixed commits,
+  engine identities or environments cannot merge. Old coarse declarations refuse.
+- **I — fixed**, because regressions exercise both production hooks/routes,
+  unchanged default precision, single-engine failure in phase=both, schema cap,
+  zero-feature failure, measured Q sentinel and masked cut sentinel.
+- **J — fixed**, because reserved JSON keys round-trip as data, nonfinite signs
+  survive distinctly, documented timeouts match case/part code, capture is
+  correctly described after driver scaling, and unequal discs/offsets make
+  source swaps visible beyond the horizontal plane.
 
-Evidence includes `surface.msh`, its SHA-256, WG requests and ingestion records,
-compiled settings, each route's complete production response and unrounded
-native fields, distribution versions/direct_url/revisions, the HBB pin, WG
-commit/worktree, Julia path/version, thread/runtime environment, and raw
-`sysctl -n vm.loadavg` / `pmset -g batt` command output or an explicit unavailable
-reason. Complex and binary arrays round-trip through tagged JSON. Native source
-mean pressure feeds `ResultSet.impedance_per_acceleration`; electrical driver
-impedance is scored separately with the same 0.01 dB / 0.1° budget. Complex
-sphere and retained traces use production pressure budgets. DI and comparable
-power use the same full-sphere estimator as the existing agreement runner;
-native power remains raw and is labelled unavailable when absent. Missing
-required pressure, loading, sphere or requested traces cannot pass. No rounded
-SPL/balloon output is converted into fabricated complex samples.
+### Declared density and cost arithmetic
 
-All corpus artifacts, including frozen records and CLI verdict output, use the
-same strict serializer. Native dataclasses are traversed without deep-copying
-execution callbacks. Callable fields (including HBB's
-`native.<channel>.config.progress_callback`) are omitted with a reason in the
-containing object's `__omitted_fields__`; callable sequence entries retain an
-explicit `__unavailable__` marker to preserve positions. Values are never
-silently stringified. Paths become path strings, NumPy scalars become native
-scalars, arrays retain dtype/shape, and nonfinite numbers become unavailable
-nulls (decoded as NaN in numeric arrays/complex components). Unknown object
-types fail with their evidence path and become child error records.
+Historical timing input: system-temp evidence
+`/private/tmp/wg-beat-corpus-261006/corpus/*-float32-coarse/coarse/{hbb,official}.json`.
+Use paired wall/count `c` and paired cold wall `S` from those records.
+Conservative dense estimate `D=(N*c+S)/60` deliberately adds cold allowance to
+an already amortized rate. For the changed tube (194 -> 582 vertices), scale
+native assembly/field components by `(582/194)^2`, solve components by
+`(582/194)^3`, and retain measured amortized non-kernel overhead. This gives
+`c=1.1744 s/f` (old unscaled `0.4980`), `S=12.449 s`. The two-source box proxy
+(268 -> 270 vertices) similarly gives `c=1.6497`, `S=14.813`; this also sizes
+the cut case, replacing the axisymmetric quarter's cheaper timings.
+These extrapolations are planning estimates, not new solve measurements.
 
-Imported HBB's native MeshInfo describes its production tag merge (rigid 1,
-active source 2). Counts and those raw facts remain recorded; original CAD tag
-areas remain declared rather than falsely presented as observed equality.
+The refine estimate below is an illustrative **one isolated feature window at
+the lowest interior dense frequency**, a conservative step/count example.
+Its count `M` includes both dense neighbours; `R=(M*c+60*D)/60` reserves a
+whole dense pair, as the code does with actual measured timings. Actual total
+refinement depends on the union of observed features and is recorded in
+`refine-plan.json`; it cannot be known without the prohibited solves. Each
+paired acquisition part remains capped at eight estimated minutes.
 
-The production-route capture seams are optional internal overrides in `beat.py` and
-`beat_imported.py`: capture native fields before display packaging discards
-precision, pass explicit HBB execution controls, and give imported calls the
-same selector/precision/Julia/manager overrides already supported parametrically.
-Defaults preserve existing production callers and HBB golden responses. These
-seams avoid replacing production functions with lower-level runner solves.
-The runtime discovery production fix is recorded separately in
-`server/solver/beat_runtime/CHANGES.md`.
+| Case | Dense band / step Hz | N | c s/f | S s | Dense D min | Example M | Refine R min | D+R min |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| osse-full | 500–3500 / 25 | 121 | 1.1474 | 14.915 | 2.56 | 51 | 3.54 | 6.10 |
+| osse-quarter | 500–3500 / 10 | 301 | 0.8604 | 11.185 | 4.50 | 21 | 4.80 | 9.31 |
+| rosse-half | 500–2500 / 10 | 201 | 1.7515 | 15.764 | 6.13 | 21 | 6.74 | 12.87 |
+| narrow-resonance | 200–400 / 1 | 201 | 1.1744 | 12.449 | 4.14 | 5 | 4.24 | 8.38 |
+| imported-two-sources | 500–2500 / 10 | 201 | 1.6497 | 14.813 | 5.77 | 21 | 6.35 | 12.12 |
+| imported-tilted-rear | 500–2500 / 10 | 201 | 1.5596 | 14.036 | 5.46 | 21 | 6.00 | 11.46 |
+| driver-loading | 20–300 / 2 | 141 | 1.0398 | 13.518 | 2.67 | 129 | 4.90 | 7.57 |
+| non-45-cut | 500–2500 / 10 | 201 | 1.6497 | 14.813 | 5.77 | 21 | 6.35 | 12.12 |
+| sphere-traces | 500–3500 / 10 | 301 | 0.7998 | 10.397 | 4.19 | 21 | 4.47 | 8.65 |
 
-`verdict.json` is written only at the end. A killed or incomplete invocation
-cannot leave a successful verdict. `passed` scores this sampled production
-agreement; `qualified` remains false because these captures do not replace the
-recorder's installed/device/terminal-event qualification evidence. Declared
-settings and installed VCS metadata remain labelled as such. No tolerances are
-widened, and this implementation/test run launches no Julia, engine solve or broker.
+No finding is objected to. Changes are intentionally uncommitted for review.
+
+Validation: the requested filtered suite, invoked through `scripts/run_tests.py`,
+passed **133 tests** (3058 deselected). Additional comparator, conformance,
+full runtime and official-bridge coverage passed **1202 tests**. `ruff check
+scripts server` and `git diff --check` passed. No Julia, numerical solve, or
+broker was run. The changed geometries were meshed in temporary directories
+and removed after inspection.

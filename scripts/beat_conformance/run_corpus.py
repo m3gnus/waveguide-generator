@@ -21,7 +21,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.signal import find_peaks
 
 from server.contracts.conventions import SOLVER_TIME_CONVENTION
-from server.jobs.models import SolveRequest
+from server.jobs.models import SolveOptions, SolveRequest
 from server.solver.beat_adapter.request import build_imported_request, build_parametric_request
 from server.solver.beat_adapter.mesh import read_surface
 from server.solver.context import SolverContext
@@ -41,6 +41,45 @@ from .settings import observed_settings
 
 THREAD_ENV = ("JULIA_NUM_THREADS", "OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS",
               "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS")
+# Read the request schema's existing bound, rather than duplicating it.
+FREQUENCY_LIMIT = next(item.le for item in SolveOptions.model_fields["num_frequencies"].metadata
+                       if getattr(item, "le", None) is not None)
+ISOLATED_ENV = ("JULIA_DEPOT_PATH", "JULIA_LOAD_PATH", "JULIA_PROJECT", "WG2_BEAT_RUNTIME_DIR",
+                "WG2_BEAT_WORKER_DIR", "WG2_BEAT_JULIA", "HORNLAB_BEAT_JULIA", "WG2_BEAT_PROVIDER")
+
+
+def relevant_environment(env: dict) -> dict:
+    return {key: env.get(key) for key in sorted(set(ISOLATED_ENV) | set(THREAD_ENV)
+                                              | {k for k in env if k.startswith("BLAB_")})}
+
+
+def child_environment(*, official: bool, julia: str, hbb_depot: str) -> dict:
+    if not hbb_depot or any(not part for part in hbb_depot.split(os.pathsep)):
+        raise ValueError("--hbb-depot requires an explicit nonempty depot chain")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith("BLAB_") and (official or k not in ISOLATED_ENV)}
+    env.update({k: "1" for k in THREAD_ENV})
+    if official:
+        env.update(WG2_BEAT_PROVIDER="official", WG2_BEAT_JULIA=julia)
+        env.pop("HORNLAB_BEAT_JULIA", None)
+    else:
+        env.update(JULIA_DEPOT_PATH=hbb_depot, HORNLAB_BEAT_JULIA=julia)
+    return env
+
+
+def wg_identity() -> dict:
+    identity = {"wg_commit": command_evidence(["git", "rev-parse", "HEAD"]),
+                "wg_worktree": command_evidence(["git", "status", "--porcelain"])}
+    require_clean_wg(identity)
+    return identity
+
+
+def require_clean_wg(identity: dict) -> None:
+    commit, status = identity.get("wg_commit", {}), identity.get("wg_worktree", {})
+    if commit.get("returncode") != 0 or not commit.get("stdout") or status.get("returncode") != 0 or status.get("stdout"):
+        raise ValueError("Corpus requires an observed clean WG tree and exact commit")
+
+
 ARRAY_FIELDS = ("pressure_complex", "impedance", "sphere_pressure_complex",
                 "surface_pressure_complex", "surface_neumann_complex",
                 "radiated_power_surface_w", "radiated_power_sphere_w", "electrical_impedance_ohm")
@@ -84,14 +123,12 @@ def distribution_identity(name: str) -> dict[str, Any]:
 
 def capture_identity(julia: str) -> dict[str, Any]:
     """Capture in the engine child, including load and installed identities."""
-    return {"wg_commit": command_evidence(["git", "rev-parse", "HEAD"]),
-            "wg_worktree": command_evidence(["git", "status", "--porcelain"]),
+    return {**wg_identity(),
             "distributions": {name: distribution_identity(name) for name in ("hornlab-beat-bem", "beat-engine")},
             "hbb_pin": hbb_pin(), "julia_path": str(Path(julia).expanduser().resolve()),
             "julia_version": command_evidence([julia, "--startup-file=no", "--version"]),
             "thread_env": {name: os.environ.get(name) for name in THREAD_ENV},
-            "runtime_env": {name: os.environ.get(name) for name in
-                            ("WG2_BEAT_PROVIDER", "WG2_BEAT_RUNTIME_DIR", "WG2_BEAT_WORKER_DIR", "HORNLAB_BEAT_JULIA")},
+            "runtime_env": relevant_environment(os.environ),
             "load": command_evidence(["sysctl", "-n", "vm.loadavg"]),
             "battery": command_evidence(["pmset", "-g", "batt"]), "pid": os.getpid()}
 
@@ -153,7 +190,9 @@ def production_run(frozen: FrozenCase, frequencies: tuple[float, ...], *, offici
     natives = {}
 
     def capture(channel: str, native: Any) -> None:
-        # Copy immediately: imported driver scaling and later packaging may mutate arrays.
+        # Imported capture is AFTER apply_channel_driver; copy before display packaging.
+        if channel in natives:
+            raise ValueError(f"Native callback fired more than once for {channel}")
         natives[channel] = snapshot(native if is_dataclass(native) else vars(native))
 
     kwargs = {"backend": backend, "_official": official, "_precision": precision,
@@ -168,9 +207,11 @@ def production_run(frozen: FrozenCase, frequencies: tuple[float, ...], *, offici
         else:
             response = imported(frozen.mesh_bytes.decode(), request, frozen.record, **kwargs)
             for channel, values in natives.items():
-                driver = response.get("channels", {}).get(channel, {}).get("metadata", {}).get("driver", {})
-                electrical = driver.get("electrical_impedance_ohm")
-                if electrical:
+                channel_response = response.get("channels", {}).get(channel, {})
+                electrical = channel_response.get("impedance")
+                if channel_response.get("metadata", {}).get("impedance_quantity") == "electrical_input_impedance" and electrical:
+                    if not np.array_equal(electrical["frequencies"], frequencies):
+                        raise ValueError("Electrical impedance frequency axis differs from request")
                     values["electrical_impedance_ohm"] = np.asarray(electrical["real"]) + 1j * np.asarray(electrical["imaginary"])
         return {"response": response, "native": natives, "frequencies_hz": list(frequencies),
                 "mesh_sha256": frozen.sha256, "official": official}
@@ -186,9 +227,11 @@ def engine_child(input_path: Path, output_path: Path, *, official: bool, backend
     signal.signal(signal.SIGTERM, interrupted)
     values = read_json(input_path)
     frozen = load_frozen(input_path.parent, CASES[values["case"]])
-    identity = capture_identity(julia)
+    identity = {}
     name = "beat-engine" if official else "hornlab-beat-bem"
     try:
+        identity = capture_identity(julia)
+        require_clean_wg(identity)
         dist = identity["distributions"][name]
         if not dist.get("revision"):
             raise ValueError(f"{name} has no exact revision in direct_url/source metadata")
@@ -200,6 +243,10 @@ def engine_child(input_path: Path, output_path: Path, *, official: bool, backend
         # Serialization belongs to the child error boundary too.
         result = snapshot(result)
     except Exception as exc:
+        if not identity:
+            identity = {"wg_commit": command_evidence(["git", "rev-parse", "HEAD"]),
+                        "wg_worktree": command_evidence(["git", "status", "--porcelain"]),
+                        "runtime_env": relevant_environment(os.environ)}
         from server.solver.beat import BeatUnavailable
         result = {"identity": identity, "error": f"{type(exc).__name__}: {exc}",
                   "refusal": str(exc) if isinstance(exc, BeatUnavailable) else None}
@@ -225,27 +272,28 @@ def require_official_ready(backend: str, julia: str) -> None:
 
 
 def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory: Path, *,
-                  backend: str, precision: str, julia: str, timeout_seconds: float = 480.) -> tuple[dict, dict]:
+                  backend: str, precision: str, julia: str, hbb_depot: str,
+                  timeout_seconds: float | None = None) -> tuple[dict, dict]:
     """Sequential subprocesses; official child manager cannot adopt a warm host."""
+    wg_identity()
     require_official_ready(backend, julia)
+    environments = [child_environment(official=value, julia=julia, hbb_depot=hbb_depot) for value in (False, True)]
     directory.mkdir(parents=True)
     save_frozen(frozen, directory)
     write_json(directory / "job.json", {"case": frozen.case.name, "frequencies_hz": frequencies})
     runs = []
     for official, name in ((False, "hbb"), (True, "official")):
-        env = dict(os.environ, **{k: "1" for k in THREAD_ENV})
-        env.update(WG2_BEAT_PROVIDER="official" if official else "", WG2_BEAT_JULIA=julia, HORNLAB_BEAT_JULIA=julia)
-        # Inherit WG2_BEAT_RUNTIME_DIR/WG2_BEAT_WORKER_DIR verbatim; HBB uses its own directories.
+        env = environments[int(official)]
         target = directory / f"{name}.json"
         command = [sys.executable, "-m", "scripts.beat_conformance.run_corpus", "--engine-child", str(directory / "job.json"),
                    "--engine-output", str(target), "--official-child", str(int(official)),
-                   "--backend", backend, "--precision", precision, "--julia", julia]
+                   "--backend", backend, "--precision", precision, "--julia", julia, "--hbb-depot", hbb_depot]
         started = time.monotonic()
         with (directory / f"{name}.log").open("w") as log:
             process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=True)
             try:
-                process.wait(timeout=240 if directory.name == "coarse" else timeout_seconds)
+                process.wait(timeout=timeout_seconds if timeout_seconds is not None else frozen.case.coarse_minutes[1] * 60)
             except BaseException:
                 # Only the recorded process group belongs to this invocation.
                 os.killpg(process.pid, signal.SIGTERM)
@@ -259,6 +307,7 @@ def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory:
             raise ValueError(f"{name} child produced no raw result; inspect {name}.log")
         elapsed = time.monotonic() - started
         run = read_json(target)
+        run["environment"] = relevant_environment(env)
         run["timing"] = engine_timing(run, wall_seconds=elapsed, frequency_count=len(frequencies))
         write_json(target, run)
         runs.append(run)
@@ -320,7 +369,8 @@ def map_results(run: dict, frozen: FrozenCase, settings: dict, *, official: bool
             evidence["hbb_mesh_info_sha256"] = {"status": "observed", "value": record_sha256(facts),
                 "source": "HBB parsed MeshInfo after CAD tag merging; original tag areas remain declared"}
         mapped[channel] = ResultSet(frozen.mesh_bytes, frequencies, np.asarray(values["pressure_complex"]),
-                     np.asarray(values["impedance"]), di, power, observed, revision, setting_evidence=evidence)
+                     np.asarray(values["impedance"]), di, power, observed, revision, setting_evidence=evidence,
+                     electrical_impedance_ohm=values.get("electrical_impedance_ohm"))
         for field in ("surface_pressure_complex", "surface_neumann_complex", "radiated_power_surface_w", "radiated_power_sphere_w"):
             if values.get(field) is None:
                 unavailable.setdefault(channel, {})[field] = (
@@ -371,9 +421,39 @@ def local_bounds(frequencies: np.ndarray, index: int) -> tuple[float, float]:
             float(frequencies[min(len(frequencies) - 1, index + 1)]))
 
 
+def quantity_columns(result: ResultSet) -> dict[str, np.ndarray]:
+    f = result.frequencies_hz
+    data = {"pressure_complex": np.asarray(result.pressure_complex).reshape(len(f), -1),
+            "impedance_per_acceleration": np.asarray(result.impedance_per_acceleration).reshape(len(f), -1)
+                * (-1j * 2 * np.pi * f[:, None]) / (1.2041 * 343.)}
+    if result.electrical_impedance_ohm is not None:
+        data["electrical_impedance_ohm"] = np.asarray(result.electrical_impedance_ohm).reshape(len(f), -1)
+    return data
+
+
+def detect_features(results: dict[str, ResultSet], case: CorpusCase, *, engine: str = "hbb") -> list[dict]:
+    features = []
+    for channel, result in results.items():
+        f = result.frequencies_hz
+        validate_frequency_axis(tuple(f))
+        if len(f) < 3 or np.any(np.diff(f) <= 0):
+            raise ValueError("Dense axis must be increasing and bracket interior features")
+        for quantity, data in quantity_columns(result).items():
+            for column in range(data.shape[1]):
+                levels = 20 * np.log10(np.maximum(np.abs(data[:, column]), np.finfo(float).tiny))
+                for kind, indices in _extrema(levels, case.prominence_db).items():
+                    for index in indices:
+                        start, end = local_bounds(f, index)
+                        features.append({"engine": engine, "channel": channel, "quantity": quantity,
+                                         "column": column, "kind": kind, "frequency_hz": float(f[index]),
+                                         "start_hz": start, "end_hz": end})
+    return features
+
+
 def refine_windows(reference: dict[str, ResultSet], case: CorpusCase, *,
-                   timing: dict[str, dict], max_part_minutes: float = 8.) -> dict[str, Any]:
-    """Reference-only neighbour windows; acquisition parts sized by coarse wall cost."""
+                   timing: dict[str, dict], max_part_minutes: float = 8.,
+                   candidate: dict[str, ResultSet] | None = None) -> dict[str, Any]:
+    """Dense union neighbour windows; acquisition parts capped by schema and time."""
     if not math.isfinite(max_part_minutes) or max_part_minutes <= 0:
         raise ValueError("--max-part-minutes must be positive and finite")
     # Wall/count already amortizes startup. Additionally reserve an entire coarse
@@ -383,29 +463,13 @@ def refine_windows(reference: dict[str, ResultSet], case: CorpusCase, *,
     if any(not math.isfinite(v) or v <= 0 for v in (*costs, *startups)):
         raise ValueError("Measured wall costs must be positive and finite")
     cost, startup = sum(costs), sum(startups)
-    limit = math.floor((max_part_minutes * 60 - startup) / cost)
-    windows = []
-    for channel, result in reference.items():
-        f = result.frequencies_hz
-        if len(f) < 3 or np.any(np.diff(f) <= 0):
-            raise ValueError("Coarse axis must be increasing and bracket interior features")
-        validate_frequency_axis(tuple(f))
-        for quantity in ("pressure_complex", "impedance_per_acceleration"):
-            data = np.asarray(getattr(result, quantity)).reshape(len(f), -1)
-            if quantity == "impedance_per_acceleration":
-                data = data * (-1j * 2 * np.pi * f[:, None]) / (1.2041 * 343.)
-            for column in range(data.shape[1]):
-                levels = 20 * np.log10(np.maximum(np.abs(data[:, column]), np.finfo(float).tiny))
-                for kind, indices in _extrema(levels, case.prominence_db).items():
-                    for index in indices:
-                        start, end = local_bounds(f, index)
-                        feature = {"channel": channel, "quantity": quantity, "column": column,
-                                   "kind": kind, "frequency_hz": float(f[index]),
-                                   "start_hz": start, "end_hz": end}
-                        windows.append({"start_hz": start, "end_hz": end, "features": [feature]})
+    limit = min(FREQUENCY_LIMIT, math.floor((max_part_minutes * 60 - startup) / cost))
+    windows = [{"start_hz": feature["start_hz"], "end_hz": feature["end_hz"], "features": [feature]}
+               for engine, results in (("hbb", reference), ("official", candidate or {}))
+               for feature in detect_features(results, case, engine=engine)]
     merged = []
     for window in sorted(windows, key=lambda w: (w["start_hz"], w["end_hz"])):
-        if merged and window["start_hz"] <= merged[-1]["end_hz"]:
+        if merged and window["start_hz"] < merged[-1]["end_hz"]:
             merged[-1]["end_hz"] = max(merged[-1]["end_hz"], window["end_hz"])
             merged[-1]["features"].extend(window["features"])
         else:
@@ -450,9 +514,7 @@ def resolve_features(reference: ResultSet, features: list[dict], prominence_db: 
     for feature in features:
         groups.setdefault((feature["quantity"], feature["column"], feature["kind"]), []).append(feature)
     for (quantity, column, kind), expected in groups.items():
-        data = np.asarray(getattr(reference, quantity)).reshape(len(f), -1)[:, column]
-        if quantity == "impedance_per_acceleration":
-            data = data * (-1j * 2 * np.pi * f) / (1.2041 * 343.)
+        data = quantity_columns(reference)[quantity][:, column]
         levels = 20 * np.log10(np.maximum(np.abs(data), np.finfo(float).tiny))
         indices, properties = find_peaks(levels if kind == "peaks" else -levels,
                                          prominence=(None, None))
@@ -478,18 +540,74 @@ def resolve_features(reference: ResultSet, features: list[dict], prominence_db: 
     return {"passed": all(e["status"] == "resolved" for e in entries), "features": entries}
 
 
-def merge_runs(runs: list[dict]) -> dict:
-    """Join acquired rows without interpolation; duplicate frequency uses latest row."""
+def solver_rows(value: dict) -> dict[float, dict]:
+    rows = {}
+    for row in value.get("solver_log", ()):
+        if "frequency_hz" not in row:
+            raise ValueError("solver_log row has no frequency_hz")
+        f = float(row["frequency_hz"])
+        if f in rows and solver_settings(rows[f]) != solver_settings(row):
+            raise ValueError(f"Inconsistent duplicate solver_log row at {f} Hz")
+        rows[f] = row
+    if set(rows) != set(map(float, value["frequencies_hz"])):
+        raise ValueError("solver_log frequencies do not cover the native axis")
+    return rows
+
+
+def solver_settings(row: dict) -> str:
+    # Compare execution settings, not pressure samples or variable timing and
+    # convergence outcomes. Nested cost-model times are measurements as well.
+    def stable(value):
+        if not isinstance(value, dict):
+            return value
+        return {k: stable(v) for k, v in value.items()
+                if k != "timings" and not k.endswith(("_s", "_seconds")) and k not in {
+                    "message", "convergence_info", "dense_solve_iterations", "dense_solve_relative_residuals",
+                    "dense_solve_termination_reasons", "dense_solve_warm_start_used", "dense_solve_recent_fallback_hz"}}
+    return dumps(stable({k: v for k, v in row.items() if k in {
+        "frequency_hz", "native_diagnostics", "backend", "precision", "settings", "config",
+        "quadrature", "observation_angles_deg", "observation_planes"}}))
+
+
+def slice_run(run: dict, axis: list[float]) -> dict:
     from copy import deepcopy
+    result = deepcopy(run)
+    for value in result["native"].values():
+        indices = [list(value["frequencies_hz"]).index(f) for f in axis]
+        logs = solver_rows(value)
+        value["frequencies_hz"] = np.asarray(axis)
+        for field in ARRAY_FIELDS:
+            if value.get(field) is not None:
+                value[field] = np.asarray(value[field])[indices]
+        value["solver_log"] = [logs[f] for f in axis]
+    result["frequencies_hz"] = axis
+    return result
+
+
+def merge_runs(runs: list[dict]) -> dict:
+    """Join acquired arrays and frequency-keyed logs, checking overlapping settings."""
+    from copy import deepcopy
+    for run in runs:
+        require_clean_wg(run.get("identity", {}))
     for run in runs[1:]:
         if run.get("mesh_sha256") != runs[0].get("mesh_sha256"):
-            raise ValueError("Refine run mesh differs from coarse evidence")
-        for key in ("distributions", "wg_commit", "julia_path", "julia_version", "thread_env", "hbb_pin", "runtime_env"):
+            raise ValueError("Refine run mesh differs from dense evidence")
+        for key in ("distributions", "wg_commit", "wg_worktree", "julia_path", "julia_version", "thread_env", "hbb_pin", "runtime_env"):
             if run.get("identity", {}).get(key) != runs[0].get("identity", {}).get(key):
-                raise ValueError(f"Refine run identity {key} differs from coarse evidence")
+                raise ValueError(f"Refine run identity {key} differs from dense evidence")
+        if run.get("environment") != runs[0].get("environment"):
+            raise ValueError("Refine run environment differs from dense evidence")
+        if set(run["native"]) != set(runs[0]["native"]):
+            raise ValueError("Refine channels differ from dense evidence")
     merged = deepcopy(runs[0])
     for channel in merged["native"]:
         members = [r["native"][channel] for r in runs]
+        logs = {}
+        for member in members:
+            for f, row in solver_rows(member).items():
+                if f in logs and solver_settings(logs[f]) != solver_settings(row):
+                    raise ValueError(f"Inconsistent overlapping solver_log settings at {f} Hz")
+                logs[f] = row
         rows = {float(f): (m, i) for m in members for i, f in enumerate(m["frequencies_hz"])}
         axis = sorted(rows)
         target = merged["native"][channel]
@@ -499,23 +617,90 @@ def merge_runs(runs: list[dict]) -> dict:
                 target[field] = np.asarray([np.asarray(rows[f][0][field])[rows[f][1]] for f in axis])
             else:
                 target[field] = None
-        target["solver_log"] = [rows[f][0]["solver_log"][rows[f][1]] for f in axis]
+        target["solver_log"] = [logs[f] for f in axis]
     merged["frequencies_hz"] = axis
     merged["acquisition_timing"] = [entry for r in runs for entry in timing_context(r)]
     merged.pop("timing", None)
     return merged
 
 
+def narrowness_sentinel(results: dict[str, ResultSet], prominence_db: float,
+                        refined_frequencies: set[float]) -> dict:
+    features = []
+    for channel, result in results.items():
+        f = result.frequencies_hz
+        for quantity, data in quantity_columns(result).items():
+            for column in range(data.shape[1]):
+                levels = 20 * np.log10(np.maximum(np.abs(data[:, column]), np.finfo(float).tiny))
+                for index in _extrema(levels, prominence_db)["peaks"]:
+                    # A dense-only sample cannot establish the refined Q claim.
+                    if f[index] not in refined_frequencies:
+                        continue
+                    threshold = levels[index] - 3.
+                    left, right = index, index
+                    while left > 0 and levels[left] > threshold:
+                        left -= 1
+                    while right < len(f) - 1 and levels[right] > threshold:
+                        right += 1
+                    if levels[left] > threshold or levels[right] > threshold:
+                        continue  # endpoints do not establish a width
+                    if any(point not in refined_frequencies for point in f[left:right + 1]):
+                        continue  # the width itself, not just its peak, requires refinement
+                    lo = np.interp(threshold, levels[left:left + 2], f[left:left + 2])
+                    hi = np.interp(threshold, levels[right - 1:right + 1][::-1], f[right - 1:right + 1][::-1])
+                    width = float(hi - lo)
+                    if width > 0:
+                        features.append({"channel": channel, "quantity": quantity, "column": column,
+                                         "frequency_hz": float(f[index]), "width_3db_hz": width,
+                                         "crossings_hz": [float(lo), float(hi)], "q": float(f[index] / width)})
+    passed = any(feature["q"] >= 10 for feature in features)
+    return {"passed": passed, "status": "observed" if passed else "resonance_not_narrow",
+            "minimum_q": 10, "features": features,
+            "method": "refined peak and refined shoulders, linear absolute -3 dB crossings"}
+
+
+def cut_sentinel(results: dict[str, ResultSet], planes: list[str]) -> dict:
+    differences = {"horizontal": 0., "vertical": 0.}
+    if not {"horizontal", "vertical", "diagonal"} <= set(planes):
+        return {"passed": False, "status": "cut_not_discriminating", "reason": "missing control cuts"}
+    for result in results.values():
+        p = np.abs(result.pressure_complex)
+        mask = (p > 0) & (p >= p.max(axis=(1, 2), keepdims=True) * 10**(-30 / 20))
+        diagonal = planes.index("diagonal")
+        for name in differences:
+            control = planes.index(name)
+            use = mask[:, diagonal] & mask[:, control]
+            if np.any(use):
+                delta = np.abs(20 * np.log10(p[:, diagonal][use] / p[:, control][use]))
+                differences[name] = max(differences[name], float(delta.max()))
+    passed = all(value > .5 for value in differences.values())
+    return {"passed": passed, "status": "observed" if passed else "cut_not_discriminating",
+            "max_difference_db": differences, "threshold_db": .5, "reference_mask_db": 30}
+
+
 def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, settings: dict, *,
                frequency_step: float, expected: bool = False,
                expected_by_channel: dict[str, dict[str, tuple[int, ...]]] | None = None,
-               expected_features: list[dict] | None = None) -> dict:
+               expected_features: list[dict] | None = None,
+               feature_context: tuple[dict, dict] | None = None,
+               refined_frequencies: set[float] | None = None) -> dict:
+    for run in (reference_run, candidate_run):
+        require_clean_wg(run.get("identity", {}))
+    if reference_run["identity"]["wg_commit"] != candidate_run["identity"]["wg_commit"]:
+        raise ValueError("Reference/candidate WG commits differ")
     reference, unavailable_ref = map_results(reference_run, frozen, settings, official=False)
     candidate, unavailable_got = map_results(candidate_run, frozen, settings, official=True)
+    contexts = (reference, candidate) if feature_context is None else (
+        map_results(feature_context[0], frozen, settings, official=False)[0],
+        map_results(feature_context[1], frozen, settings, official=True)[0])
     reports = {}
     for channel in reference.keys() & candidate.keys():
-        resolution = resolve_features(reference[channel],
-            [feat for feat in (expected_features or []) if feat["channel"] == channel], frozen.case.prominence_db)
+        resolutions = [resolve_features(contexts[i][channel],
+            [feat for feat in (expected_features or []) if feat["channel"] == channel
+             and feat.get("engine", "hbb") == engine], frozen.case.prominence_db)
+            for i, engine in enumerate(("hbb", "official"))]
+        resolution = {"passed": all(r["passed"] for r in resolutions),
+                      "features": [feature for r in resolutions for feature in r["features"]]}
         if not resolution["passed"]:
             reports[channel] = {"passed": False, "metrics": {}, "extra_fields": {},
                                 "feature_resolution": resolution, "failures": [
@@ -525,7 +710,8 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
         reports[channel] = compare_results(reference[channel], candidate[channel], frequency_step_hz=frequency_step,
                     resonance_prominence_db=frozen.case.prominence_db,
                     expected_resonance_columns=(expected_by_channel or {}).get(channel,
-                        {"pressure_complex": frozen.case.expected_pressure_columns} if expected else None))
+                        {"pressure_complex": frozen.case.expected_pressure_columns} if expected else None),
+                    resonance_context=tuple(context[channel] for context in contexts) if feature_context else None)
         if expected_features:
             reports[channel]["feature_resolution"] = resolution
         # Sphere is complex pressure too, and gets the identical 30 dB gate/budgets.
@@ -560,7 +746,25 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
     driver_missing = frozen.case.name == "driver-loading" and any(
         values.get("electrical_impedance_ohm") is None for run in (reference_run, candidate_run)
         for values in run.get("native", {}).values())
-    return {"passed": bool(reports) and set(reports) == required and all(r["passed"] for r in reports.values()) and not trace_missing and not driver_missing,
+    status, sentinels = "scored", {}
+    reference_features = detect_features(contexts[0], frozen.case)
+    if feature_context is None and not reference_features:
+        if not (frozen.case.expect_no_features and frozen.case.no_features_reason):
+            status = "no_features_observed"
+    if feature_context is None and frozen.case.require_narrow:
+        sentinels["narrowness"] = narrowness_sentinel(reference, frozen.case.prominence_db, refined_frequencies or set())
+        if not sentinels["narrowness"]["passed"]:
+            status = "resonance_not_narrow"
+    if feature_context is None and frozen.case.require_cut_sensitivity:
+        sentinels["cut_sensitivity"] = cut_sentinel(reference, settings["observation_planes"])
+        if not sentinels["cut_sensitivity"]["passed"]:
+            status = "cut_not_discriminating"
+    if not reference_features and not (frozen.case.expect_no_features and frozen.case.no_features_reason):
+        status = "no_features_observed"
+    return {"status": status, "frequency_step": frequency_step, "sentinels": sentinels,
+            "reference_feature_count": len(reference_features),
+            "identities": {"hbb": reference_run["identity"], "official": candidate_run["identity"]},
+            "passed": status == "scored" and bool(reports) and set(reports) == required and all(r["passed"] for r in reports.values()) and not trace_missing and not driver_missing,
             "timing": {name: timing_context(run)
                        for name, run in (("hbb", reference_run), ("official", candidate_run))},
             "channels": reports, "unavailable": {"hbb": unavailable_ref, "official": unavailable_got},
@@ -572,7 +776,7 @@ def score_pair(reference_run: dict, candidate_run: dict, frozen: FrozenCase, set
 def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str, julia: str,
              phase: str = "both", coarse_dir: Path | None = None, refine_part: int = 1,
              refine_dirs: tuple[Path, ...] = (), pair_runner: Callable = isolated_pair,
-             freezer: Callable = freeze_case, max_part_minutes: float = 8.) -> dict:
+             freezer: Callable = freeze_case, max_part_minutes: float = 8., hbb_depot: str | None = None) -> dict:
     if not math.isfinite(max_part_minutes) or max_part_minutes <= 0:
         raise ValueError("--max-part-minutes must be positive and finite")
     directory = empty_output(directory)
@@ -585,10 +789,15 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
     if phase == "refine" and coarse_dir is None:
         raise ValueError("--phase refine requires --coarse-dir containing frozen coarse evidence")
     if pair_runner is isolated_pair:
+        wg_identity()
+        child_environment(official=False, julia=julia, hbb_depot=hbb_depot)
         require_official_ready(backend, julia)
     if phase == "refine":
         frozen = load_frozen(coarse_dir, case)
         inputs = read_json(coarse_dir / "inputs.json")
+        if (inputs["frequencies_hz"] != list(case.coarse_hz)
+                or inputs["frequency_step_hz"] != case.dense_step_hz or inputs["case"] != json_value(case)):
+            raise ValueError("Refinement catalogue/dense declaration differs from acquisition evidence")
         if inputs["backend"] != backend or inputs["precision"] != precision:
             raise ValueError("Refinement backend/precision must match coarse evidence")
         reference_run, candidate_run = (read_json(coarse_dir / "coarse" / f"{name}.json") for name in ("hbb", "official"))
@@ -604,7 +813,7 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                "environment_thread_policy": {k: "1" for k in THREAD_ENV}})
     if phase != "refine":
         reference_run, candidate_run = pair_runner(frozen, case.coarse_hz, directory / "coarse",
-                                backend=backend, precision=precision, julia=julia)
+                                backend=backend, precision=precision, julia=julia, hbb_depot=hbb_depot)
     refusals = [r.get("refusal") for r in (reference_run, candidate_run)]
     if all(refusals):
         verdict = {"passed": False, "status": "unsupported", "refusals": dict(zip(("hbb", "official"), refusals))}
@@ -612,15 +821,16 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
         verdict = {"passed": False, "status": "failed", "errors": [r.get("error") for r in (reference_run, candidate_run)]}
     else:
         coarse_score = score_pair(reference_run, candidate_run, frozen, settings,
-                                  frequency_step=max(np.diff(case.coarse_hz)), expected=True)
+                                  frequency_step=case.dense_step_hz, expected=True)
         write_json(directory / "coarse-score.json", coarse_score)
         reference, _ = map_results(reference_run, frozen, settings, official=False)
-        plan = refine_windows(reference, case, timing={"hbb": engine_timing(reference_run),
+        candidate, _ = map_results(candidate_run, frozen, settings, official=True)
+        plan = refine_windows(reference, case, candidate=candidate, timing={"hbb": engine_timing(reference_run),
                               "official": engine_timing(candidate_run)}, max_part_minutes=max_part_minutes)
         write_json(directory / "refine-plan.json", plan)
         verdict = {"passed": False, "status": "coarse_complete", "coarse": coarse_score,
                    "required_refine_parts": len(plan["parts"]), "completed_refine_parts": []}
-        if phase != "coarse":
+        if phase != "coarse" and coarse_score["status"] != "no_features_observed":
             refs, candidates = [reference_run], [candidate_run]
             completed = set()
             for source in refine_dirs:
@@ -636,35 +846,25 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                 part = plan["parts"][refine_part - 1]
                 a, b = pair_runner(frozen, tuple(part["frequencies_hz"]), directory / "refine",
                                   backend=backend, precision=precision, julia=julia,
-                                  timeout_seconds=max_part_minutes * 60)
+                                  timeout_seconds=max_part_minutes * 60, hbb_depot=hbb_depot)
                 if any("error" in r for r in (a, b)):
                     raise ValueError(f"Refine engine failure: {[r.get('error') for r in (a, b)]}")
                 write_json(directory / "part.json", {"part": refine_part, "plan": plan,
                            "mesh_sha256": frozen.sha256, "backend": backend, "precision": precision,
-                           "timing": {"hbb": engine_timing(a), "official": engine_timing(b)}})
+                           "timing": {"hbb": engine_timing(a), "official": engine_timing(b)},
+                           "identities": {"hbb": a["identity"], "official": b["identity"]}})
                 refs.append(a)
                 candidates.append(b)
                 completed.add(refine_part)
             final_ref, final_got = merge_runs(refs), merge_runs(candidates)
+            refined_axis = {f for index in completed for f in plan["parts"][index - 1]["frequencies_hz"]}
             report = score_pair(final_ref, final_got, frozen, settings,
-                                frequency_step=max(np.diff(case.coarse_hz)), expected=True)
+                                frequency_step=case.dense_step_hz, expected=True, refined_frequencies=refined_axis)
             local_reports = []
             for window in plan["windows"]:
                 axis = window["frequencies_hz"]
                 if not set(axis) <= set(final_ref["frequencies_hz"]):
                     continue
-                def slice_run(run):
-                    from copy import deepcopy
-                    result = deepcopy(run)
-                    for value in result["native"].values():
-                        indices = [list(value["frequencies_hz"]).index(f) for f in axis]
-                        value["frequencies_hz"] = np.asarray(axis)
-                        for field in ARRAY_FIELDS:
-                            if value.get(field) is not None:
-                                value[field] = np.asarray(value[field])[indices]
-                        value["solver_log"] = [value["solver_log"][i] for i in indices]
-                    result["frequencies_hz"] = axis
-                    return result
                 expected_columns = {}
                 for feature in window["features"]:
                     name = "normalized_impedance" if feature["quantity"] == "impedance_per_acceleration" else feature["quantity"]
@@ -672,14 +872,20 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                     columns.add(feature["column"])
                 expected_columns = {ch: {name: tuple(sorted(cols)) for name, cols in quantities.items()}
                                     for ch, quantities in expected_columns.items()}
-                local_reports.append(score_pair(slice_run(final_ref), slice_run(final_got), frozen, settings,
+                local_reports.append(score_pair(slice_run(final_ref, axis), slice_run(final_got, axis), frozen, settings,
                                                 frequency_step=window["step_hz"], expected_by_channel=expected_columns,
-                                                expected_features=window["features"]))
+                                                expected_features=window["features"], feature_context=(final_ref, final_got)))
             complete = len(completed) == len(plan["parts"]) and len(local_reports) == len(plan["windows"])
             verdict.update(passed=complete and report["passed"] and all(r["passed"] for r in local_reports),
                            status="complete" if complete else "refine_incomplete", agreement=report,
                            local_windows=local_reports, completed_refine_parts=sorted(completed))
-    verdict.update(case=case.name, phase=phase, qualified=False)
+    if "coarse" in verdict and verdict["coarse"]["status"] == "no_features_observed":
+        verdict.update(passed=False, status="no_features_observed")
+    if "agreement" in verdict and verdict["status"] == "complete" and verdict["agreement"]["status"] != "scored":
+        verdict.update(passed=False, status=verdict["agreement"]["status"])
+    verdict.update(case=case.name, phase=phase, qualified=False,
+                   identities={name: run.get("identity", {}) for name, run in
+                               (("hbb", reference_run), ("official", candidate_run))})
     # This corpus scores agreement; installed/device qualification still requires recorder evidence.
     write_json(directory / "verdict.json", verdict)
     return verdict
@@ -691,6 +897,7 @@ def main() -> int:
     parser.add_argument("--backend", choices=("cpu", "metal"), default="cpu")
     parser.add_argument("--precision", choices=("float32", "float64"), default="float32")
     parser.add_argument("--julia", required=True)
+    parser.add_argument("--hbb-depot", required=True, help="HBB-only Julia depot directory or explicit depot chain")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--phase", choices=("coarse", "refine", "both"), default="both")
     parser.add_argument("--coarse-dir", type=Path)
@@ -711,7 +918,7 @@ def main() -> int:
         verdict = run_case(CASES[args.case], args.output_dir, backend=args.backend, precision=args.precision,
                            julia=args.julia, phase=args.phase, coarse_dir=args.coarse_dir,
                            refine_part=args.refine_part, refine_dirs=tuple(args.refine_dir),
-                           max_part_minutes=args.max_part_minutes)
+                           max_part_minutes=args.max_part_minutes, hbb_depot=args.hbb_depot)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         parser.exit(2, f"{type(exc).__name__}: {exc}\n")
     print(dumps(verdict))

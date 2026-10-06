@@ -26,7 +26,7 @@ OSSE = {
     "source": {"shape": 2, "radius": -1, "curvature": 0, "velocity": 1},
     "simulation": {"sim_type": "freestanding"},
 }
-DRIVER = {"sd_cm2": 210., "bl_t_m": 10.5, "re_ohm": 5.3, "le_mh": 0.5,
+DRIVER = {"sd_cm2": math.pi * 2.5**2, "bl_t_m": 10.5, "re_ohm": 5.3, "le_mh": 0.5,
           "mmd_g": 12., "cms_m_per_n": 4e-4, "rms_kg_per_s": 1.2}
 
 
@@ -37,7 +37,12 @@ class CorpusCase:
     fixture: str
     geometry: str = "osse"
     quadrants: int = 1234
-    coarse_hz: tuple[float, ...] = tuple(float(f) for f in range(500, 3501, 250))
+    coarse_hz: tuple[float, ...] = tuple(float(f) for f in range(500, 3501, 25))
+    # coarse_hz is the legacy evidence-directory name; it now holds the DENSE axis.
+    expect_no_features: bool = False
+    no_features_reason: str | None = None
+    require_narrow: bool = False
+    require_cut_sensitivity: bool = False
     prominence_db: float = 1.
     max_vertices: int = 650
     coarse_minutes: tuple[int, int] = (2, 5)
@@ -48,6 +53,13 @@ class CorpusCase:
     precision: str = "float32"
     backend: str = "cpu"
     unsupported: str | None = None
+
+    @property
+    def dense_step_hz(self) -> float:
+        steps = [b - a for a, b in zip(self.coarse_hz, self.coarse_hz[1:])]
+        if not steps or min(steps) <= 0 or len(set(steps)) != 1:
+            raise ValueError("Catalogue dense sweep must be uniform and increasing")
+        return steps[0]
 
     def request(self, *, backend: str | None = None,
                 frequencies: tuple[float, ...] | None = None,
@@ -81,9 +93,10 @@ class CorpusCase:
                       "mesh": deepcopy(design["mesh"]), "simulation": design["simulation"]}
             design["mesh"].update(throat_resolution=25, mouth_resolution=50, rear_resolution=50)
         if self.geometry == "duct":
-            # Existing straight throat extension, before the small OSSE termination.
-            design.update(throat_ext_length=300, throat_ext_angle=0)
-            design["mesh"].update(length_segments=12, throat_resolution=15, mouth_resolution=20)
+            # Driven closed end and a small open aperture: ka ~ 0.02 at the
+            # quarter-wave mode (~276 Hz), rather than the old flared termination.
+            design.update(L=10, a=2, a0=2, r0=3, throat_ext_length=300, throat_ext_angle=0)
+            design["mesh"].update(length_segments=12, throat_resolution=3, mouth_resolution=3)
         return SolveRequest.model_validate({"design": design, "options": options})
 
 
@@ -91,32 +104,36 @@ CASES = {case.name: case for case in (
     CorpusCase("osse-full", "Full OSSE; no image symmetry", "server/tests/test_real_pipeline.py:PARAMETRIC_BODY"),
     CorpusCase("osse-quarter", "OSSE x0/y0 quarter and real symmetry copies",
                "server/tests/test_real_pipeline.py:PARAMETRIC_BODY", quadrants=1,
-               coarse_minutes=(1, 3), refine_minutes=(2, 6)),
+               coarse_hz=tuple(float(f) for f in range(500, 3501, 10)),
+               coarse_minutes=(1, 8), refine_minutes=(2, 8)),
     CorpusCase("rosse-half", "R-OSSE rollback; yz half keeps the CPU matrix under 650 vertices",
                "server/tests/test_mesh_child.py", geometry="rosse", quadrants=14,
-               coarse_hz=tuple(float(f) for f in range(500, 2501, 250)), coarse_minutes=(2, 6)),
-    CorpusCase("narrow-resonance", "300 mm straight throat duct and OSSE termination; high-Q longitudinal modes",
+               coarse_hz=tuple(float(f) for f in range(500, 2501, 10)), coarse_minutes=(2, 6)),
+    CorpusCase("narrow-resonance", "300 mm driven-end tube with 3 mm radius and small OSSE aperture; measured Q gate",
                "server/design/schema.py:DesignCommon.throat_ext_length", geometry="duct", quadrants=1,
-               coarse_hz=tuple(float(f) for f in range(200, 1401, 50)),
-               expected_pressure_columns=(0,), coarse_minutes=(2, 6), refine_minutes=(4, 10)),
+               coarse_hz=tuple(float(f) for f in range(200, 401, 1)),
+               require_narrow=True, coarse_minutes=(2, 6), refine_minutes=(4, 10)),
     CorpusCase("imported-two-sources", "Two independently driven CAD discs; channel order and source identity",
                "server/tests/test_cadlink_domain_automatic.py:_box/_bundle", geometry="imported-box",
-               coarse_hz=tuple(float(f) for f in range(500, 2501, 250)),
+               coarse_hz=tuple(float(f) for f in range(500, 2501, 10)),
                coarse_minutes=(2, 6), refine_minutes=(4, 10)),
     CorpusCase("imported-tilted-rear", "Curved normal drive, tilted net normal with a rear component",
                "server/tests/test_cadlink_domain_automatic.py:_curved_source_sheet/_curved_face",
-               geometry="imported-curved", coarse_hz=tuple(float(f) for f in range(500, 2501, 250)),
+               geometry="imported-curved", coarse_hz=tuple(float(f) for f in range(500, 2501, 10)),
                coarse_minutes=(2, 6)),
     CorpusCase("driver-loading", "Normal single-source CAD drive; P1 pressure loading and electrical driver coupling",
                "server/tests/test_cadlink_domain_automatic.py:_box/_bundle; server/tests/test_driver_lem.py:_spec",
-               geometry="imported-box", coarse_hz=tuple(float(f) for f in range(200, 1401, 100)),
+               geometry="imported-box", coarse_hz=tuple(float(f) for f in range(20, 301, 2)),
                coarse_minutes=(2, 5)),
     CorpusCase("non-45-cut", "30 degree diagonal cut, horizontal and vertical controls",
-               "server/tests/test_real_pipeline.py:PARAMETRIC_BODY", quadrants=1, inclination_deg=30.,
-               coarse_minutes=(1, 3), refine_minutes=(2, 6)),
+               "server/tests/test_cadlink_domain_automatic.py:_box/_bundle", geometry="imported-box",
+               inclination_deg=30., require_cut_sensitivity=True,
+               coarse_hz=tuple(float(f) for f in range(500, 2501, 10)),
+               coarse_minutes=(2, 8), refine_minutes=(2, 8)),
     CorpusCase("sphere-traces", "Full sphere and retained P1 pressure / DP0 Neumann traces",
                "server/tests/test_real_pipeline.py:PARAMETRIC_BODY", quadrants=1, traces=True,
-               coarse_minutes=(1, 3), refine_minutes=(2, 6)),
+               coarse_hz=tuple(float(f) for f in range(500, 3501, 10)),
+               coarse_minutes=(1, 8), refine_minutes=(2, 8)),
 )}
 
 
@@ -141,7 +158,7 @@ def _cad_fixture(case: CorpusCase, directory: Path) -> tuple[bytes, dict[str, An
         import test_cadlink_domain_automatic as fixtures
         from server.mesh.gmsh_worker import _run_in_gmsh_session
         if case.geometry == "imported-box":
-            discs = [(0., 0., 25.)] if case.name == "driver-loading" else [(-25., 0., 10.), (25., 0., 10.)]
+            discs = [(0., 0., 25.)] if case.name == "driver-loading" else [(-28., -12., 10.), (19., 17., 12.)]
             sources = ["driver"] if case.name == "driver-loading" else ["a", "b"]
             bundle = fixtures._bundle(
                 directory, case.name,

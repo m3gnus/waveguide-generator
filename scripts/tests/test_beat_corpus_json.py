@@ -54,17 +54,18 @@ def assert_sample(decoded, expected):
     for part in ("real", "imag"):
         values = getattr(expected.pressure_complex, part)
         np.testing.assert_array_equal(getattr(decoded["pressure_complex"], part),
-                                      np.where(np.isfinite(values), values, np.nan))
+                                      values)
     assert decoded["pressure_complex"].dtype == expected.pressure_complex.dtype
     np.testing.assert_array_equal(decoded["frequencies_hz"], expected.frequencies_hz)
     assert "progress_callback" not in decoded["config"]
     assert decoded["config"]["__omitted_fields__"] == {"progress_callback": json_io.CALLABLE_REASON}
     assert decoded["config"]["julia_executable"] == "/external/julia"
-    assert decoded["timings"] == {"solve": 1.5, "unavailable": None}
+    assert decoded["timings"] == {"solve": 1.5, "unavailable": np.inf}
     log = decoded["solver_log"][0]
     assert log["count"] == 3 and log["complete"] is True
     assert log["__omitted_fields__"]["hook"] == json_io.CALLABLE_REASON
-    assert log["samples"] == [None, None, 1+2j, b"NPZ"]
+    assert np.isnan(log["samples"][0])
+    assert log["samples"][1:] == [-np.inf, 1+2j, b"NPZ"]
 
 
 @pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
@@ -98,7 +99,8 @@ def test_corpus_engine_child_serializes_native_and_response(tmp_path, monkeypatc
     production = runner.production_run
     monkeypatch.setattr(runner, "production_run", lambda *a, **k: production(*a, **k, routes=(route, route)))
     name = "beat-engine" if official else "hornlab-beat-bem"
-    identity = {"distributions": {name: {"revision": "pin", "direct_url": {}}}, "hbb_pin": "pin"}
+    identity = {"distributions": {name: {"revision": "pin", "direct_url": {}}}, "hbb_pin": "pin", "wg_commit": {"returncode": 0, "stdout": "wg-test"},
+                "wg_worktree": {"returncode": 0, "stdout": ""}}
     monkeypatch.setattr(runner, "capture_identity", lambda _: identity)
     monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
     assert runner.engine_child(job, output, official=official, backend="cpu", precision="float64", julia="fake") == 0
@@ -166,12 +168,13 @@ def test_corpus_preflight_refuses_before_meshing_or_child(tmp_path, monkeypatch)
                         readiness.BackendReadiness(False, "stale", "depot differs"))
     monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: pytest.fail("child started"))
     case = corpus.CASES["osse-quarter"]
+    monkeypatch.setattr(runner, "wg_identity", lambda: {})
     with pytest.raises(ValueError, match="Official BEAT cpu readiness is stale.*No corpus solve started"):
-        runner.run_case(case, tmp_path / "run", backend="cpu", precision="float64", julia="fake",
+        runner.run_case(case, tmp_path / "run", backend="cpu", precision="float64", julia="fake", hbb_depot="/hbb/depot",
                         freezer=lambda *a, **k: pytest.fail("meshing started"))
     frozen = corpus.FrozenCase(case, {}, b"mesh", None, {})
     with pytest.raises(ValueError, match="depot differs"):
-        runner.isolated_pair(frozen, (500.,), tmp_path / "coarse", backend="cpu", precision="float64", julia="fake")
+        runner.isolated_pair(frozen, (500.,), tmp_path / "coarse", backend="cpu", precision="float64", julia="fake", hbb_depot="/hbb/depot")
     assert not (tmp_path / "coarse").exists()
 
 
@@ -184,7 +187,8 @@ def test_corpus_child_records_serialization_failure(tmp_path, monkeypatch, offic
     runner.write_json(job, {"case": case.name, "frequencies_hz": [500., 750., 1000.]})
     name = "beat-engine" if official else "hornlab-beat-bem"
     monkeypatch.setattr(runner, "capture_identity", lambda _: {
-        "distributions": {name: {"revision": "pin", "direct_url": {}}}, "hbb_pin": "pin"})
+        "distributions": {name: {"revision": "pin", "direct_url": {}}}, "hbb_pin": "pin", "wg_commit": {"returncode": 0, "stdout": "wg-test"},
+                "wg_worktree": {"returncode": 0, "stdout": ""}})
     monkeypatch.setattr(runner.signal, "signal", lambda *args: None)
     monkeypatch.setattr(runner, "production_run", lambda *a, **k: {"response": {"opaque": object()}})
     assert runner.engine_child(job, output, official=official, backend="cpu", precision="float64", julia="fake") == 1
@@ -199,7 +203,7 @@ def test_corpus_cli_verdict_uses_strict_serializer(monkeypatch, tmp_path, capsys
     verdict = {"passed": False, "native": sample()}
     monkeypatch.setattr(runner, "run_case", lambda *a, **k: verdict)
     monkeypatch.setattr(sys, "argv", ["run_corpus", "--case", "osse-quarter", "--julia", "fake",
-                                     "--output-dir", str(tmp_path)])
+                                     "--output-dir", str(tmp_path), "--hbb-depot", "/hbb/depot"])
     assert runner.main() == 1
     import json
     decoded = json.loads(capsys.readouterr().out, object_hook=json_io._decode)
@@ -227,4 +231,22 @@ def test_corpus_json_official_sweep_result(tmp_path):
     for field in ("pressure_complex", "sphere_pressure_complex", "surface_pressure_complex", "surface_neumann_complex"):
         for part in ("real", "imag"):
             values = getattr(getattr(result, field), part)
-            np.testing.assert_array_equal(getattr(decoded[field], part), np.where(np.isfinite(values), values, np.nan))
+            np.testing.assert_array_equal(getattr(decoded[field], part), values)
+
+
+@pytest.mark.parametrize("key", ["__array__", "__complex__", "__bytes__", "__float__", "__mapping__"])
+def test_corpus_json_reserved_mapping_keys_roundtrip_without_tag_collision(key, tmp_path):
+    value = {key: "ordinary data", "nested": {key: ["ordinary", 3]}, "shape": [1], "data": [2]}
+    runner.write_json(tmp_path / "reserved.json", value)
+    assert runner.read_json(tmp_path / "reserved.json") == value
+
+
+def test_corpus_json_preserves_all_nonfinite_signs_in_scalars_arrays_and_complex(tmp_path):
+    values = np.array([np.inf, -np.inf, np.nan])
+    value = {"scalars": list(values), "array": values,
+             "complex": complex(-np.inf, np.inf)}
+    runner.write_json(tmp_path / "nonfinite.json", value)
+    decoded = runner.read_json(tmp_path / "nonfinite.json")
+    np.testing.assert_array_equal(decoded["scalars"], values)
+    np.testing.assert_array_equal(decoded["array"], values)
+    assert decoded["complex"].real == -np.inf and decoded["complex"].imag == np.inf

@@ -42,6 +42,7 @@ class ResultSet:
     recorder_record: dict[str, Any] | None = None
     recorder_sha256: str = ""
     setting_evidence: dict[str, Any] | None = None
+    electrical_impedance_ohm: np.ndarray | None = None
 
 
 def _canonical(settings: dict[str, Any]) -> str:
@@ -69,7 +70,8 @@ def _extrema(levels: np.ndarray, prominence_db: float) -> dict[str, list[int]]:
 
 def resonance_gate(frequencies: np.ndarray, reference: np.ndarray, candidate: np.ndarray, *,
                    frequency_step_hz: float, prominence_db: float,
-                   expected_columns: tuple[int, ...] = ()) -> dict[str, Any]:
+                   expected_columns: tuple[int, ...] = (),
+                   bounds: tuple[float, float] | None = None) -> dict[str, Any]:
     failures, columns, unstructured = [], [], []
     if any(type(column) is not int or not 0 <= column < reference.shape[1] for column in expected_columns):
         raise ValueError("Expected resonance column is outside the result shape")
@@ -78,6 +80,9 @@ def resonance_gate(frequencies: np.ndarray, reference: np.ndarray, candidate: np
         levels = [20 * np.log10(np.maximum(np.abs(value[:, column]), np.finfo(float).tiny))
                   for value in (reference, candidate)]
         ref, got = (_extrema(value, prominence_db) for value in levels)
+        if bounds is not None:
+            ref, got = ({kind: [i for i in indices if bounds[0] < frequencies[i] < bounds[1]]
+                         for kind, indices in features.items()} for features in (ref, got))
         if not any(ref.values()):
             unstructured.append(column)
             if column in expected_columns:
@@ -131,7 +136,8 @@ def _masked_complex(reference: np.ndarray, candidate: np.ndarray) -> dict[str, A
 
 def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_step_hz: float,
                     resonance_prominence_db: float,
-                    expected_resonance_columns: dict[str, tuple[int, ...]] | None = None) -> dict[str, Any]:
+                    expected_resonance_columns: dict[str, tuple[int, ...]] | None = None,
+                    resonance_context: tuple[ResultSet, ResultSet] | None = None) -> dict[str, Any]:
     """Return a strict-JSON verdict; missing quantities/identity cannot pass.
 
     Inputs carry identical original mesh bytes and frozen settings. Impedance
@@ -141,7 +147,8 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
     corpus owner before running either engine.
     """
     report: dict[str, Any] = {"passed": False, "failures": [], "limitations": [], "metrics": {},
-                             "reference_revision": reference.revision, "candidate_revision": candidate.revision}
+                             "reference_revision": reference.revision, "candidate_revision": candidate.revision,
+                             "frequency_step": frequency_step_hz}
     try:
         if (not reference.revision.strip() or not candidate.revision.strip()
                 or reference.revision.strip() == candidate.revision.strip()):
@@ -240,13 +247,35 @@ def compare_results(reference: ResultSet, candidate: ResultSet, *, frequency_ste
         arrays["normalized_impedance"] = tuple(
             value * (-1j * 2 * np.pi * frequencies[:, None]) / rho_c
             for value in arrays["impedance_per_acceleration"])
-        for name in ("pressure_complex", "normalized_impedance"):
-            gate = resonance_gate(frequencies, *arrays[name], frequency_step_hz=frequency_step_hz,
+        gate_frequencies, gate_arrays, bounds = frequencies, dict(arrays), None
+        if reference.electrical_impedance_ohm is not None and candidate.electrical_impedance_ohm is not None:
+            gate_arrays["electrical_impedance_ohm"] = tuple(
+                _columns(r.electrical_impedance_ohm, count, "electrical_impedance_ohm")[order]
+                for r in (reference, candidate))
+        if resonance_context is not None:
+            # Keep prominence relative to the full band when checking a small
+            # refined window; clipping the shoulders can erase a broad feature.
+            context_a, context_b = resonance_context
+            gate_frequencies = context_a.frequencies_hz
+            if not np.array_equal(gate_frequencies, context_b.frequencies_hz):
+                raise ValueError("Resonance context axes differ")
+            bounds = (float(frequencies[0]), float(frequencies[-1]))
+            gate_arrays = {
+                "pressure_complex": tuple(np.asarray(r.pressure_complex).reshape(len(gate_frequencies), -1)
+                                          for r in resonance_context),
+                "normalized_impedance": tuple(np.asarray(r.impedance_per_acceleration).reshape(len(gate_frequencies), -1)
+                    * (-1j * 2 * np.pi * gate_frequencies[:, None]) / rho_c for r in resonance_context)}
+            if all(r.electrical_impedance_ohm is not None for r in resonance_context):
+                gate_arrays["electrical_impedance_ohm"] = tuple(np.asarray(r.electrical_impedance_ohm).reshape(len(gate_frequencies), -1)
+                                                               for r in resonance_context)
+        quantities = {"pressure_complex", "normalized_impedance", "electrical_impedance_ohm"}
+        for name in sorted(quantities & gate_arrays.keys()):
+            gate = resonance_gate(gate_frequencies, *gate_arrays[name], frequency_step_hz=frequency_step_hz,
                                   prominence_db=resonance_prominence_db,
-                                  expected_columns=(expected_resonance_columns or {}).get(name, ()))
+                                  expected_columns=(expected_resonance_columns or {}).get(name, ()), bounds=bounds)
             report.setdefault("resonances", {})[name] = gate
             report["failures"].extend(f"{name}: {failure}" for failure in gate["failures"])
-        if expected_resonance_columns and set(expected_resonance_columns) - {"pressure_complex", "normalized_impedance"}:
+        if expected_resonance_columns and set(expected_resonance_columns) - quantities:
             raise ValueError("Unknown expected resonance quantity")
         report["limitations"].append("Resonances use interior sampled extrema and predeclared prominence; endpoints must bracket features")
         if report["failures"]:

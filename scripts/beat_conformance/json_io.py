@@ -53,13 +53,17 @@ def json_value(value: Any, *, _path: str = "$") -> Any:
             if "__omitted_fields__" in result:
                 raise ValueError(f"Reserved omission metadata at {_path}")
             result["__omitted_fields__"] = omitted
+        # Wrap mappings that could be mistaken for tagged values. The wrapper
+        # itself is reserved too, so arbitrary user dictionaries round-trip.
+        if any(key in result for key in ("__array__", "__complex__", "__bytes__", "__float__", "__mapping__")):
+            return {"__mapping__": list(result.items())}
         return result
     if isinstance(value, (list, tuple)):
         return [json_value(item, _path=f"{_path}[{i}]") for i, item in enumerate(value)]
     if isinstance(value, np.generic):
         return json_value(value.item(), _path=_path)
     if isinstance(value, float) and not math.isfinite(value):
-        return None
+        return {"__float__": "nan" if math.isnan(value) else "+inf" if value > 0 else "-inf"}
     if isinstance(value, Path):
         return str(value)
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -68,6 +72,10 @@ def json_value(value: Any, *, _path: str = "$") -> Any:
 
 
 def _decode(value: dict) -> Any:
+    if set(value) == {"__mapping__"}:
+        return dict(value["__mapping__"])
+    if set(value) == {"__float__"}:
+        return float(value["__float__"])
     if "__complex__" in value:
         return complex(*(float("nan") if v is None else v for v in value["__complex__"]))
     if "__array__" in value:
