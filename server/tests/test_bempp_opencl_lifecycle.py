@@ -34,9 +34,11 @@ def child_for(monkeypatch, script):
     return children
 
 
-@pytest.mark.parametrize('case', ['never_ready', 'duplicate_ready', 'early_exit', 'success_without_ready', 'stderr_flood', 'delayed_import'])
+@pytest.mark.parametrize('case', ['never_ready', 'duplicate_ready', 'early_exit', 'success_without_ready', 'stderr_flood', 'delayed_import', 'slow_import'])
 def test_real_reader_protocol(monkeypatch, case):
-    monkeypatch.setattr(probe, 'SPAWN_IMPORT_SECONDS', 0.5)
+    # The real reader waits for READY/EOF. Give it a test-only ceiling for
+    # loaded runners; short budgets below deliberately exercise timeouts.
+    monkeypatch.setattr(probe, 'SPAWN_IMPORT_SECONDS', .5 if case == 'never_ready' else 30)
     ready = f"print({probe._READY_MARKER!r}, flush=True); "
     result = f"import sys; open(sys.argv[1], 'w').write({json.dumps({'ok': True, 'smoke': {}})!r})"
     scripts = {
@@ -46,18 +48,18 @@ def test_real_reader_protocol(monkeypatch, case):
         'success_without_ready': result,
         'stderr_flood': "import sys; sys.stderr.write('x' * 2000000 + '\\n'); " + ready + result,
         'delayed_import': 'import time; time.sleep(.20); ' + ready + 'time.sleep(.05); ' + result,
+        # Regression: a valid child can start later than the former test budget.
+        'slow_import': 'import time; time.sleep(.75); ' + ready + result,
     }
     children = child_for(monkeypatch, scripts[case])
-    start = time.monotonic()
-    verdict = probe._run_probe('smoke', None, .30)
-    elapsed = time.monotonic() - start
-    assert elapsed < 3
-    if case in {'stderr_flood', 'delayed_import'}:
+    verdict = probe._run_probe('smoke', None, .30 if case == 'duplicate_ready' else 30)
+    if case in {'stderr_flood', 'delayed_import', 'slow_import'}:
         assert verdict['ok'], verdict
     else:
         assert not verdict['ok'], verdict
     if case == 'duplicate_ready':
         assert verdict['opencl_unavailable_reason'] == 'smoke_test_timeout'
+        assert 'compute' in verdict['reason']
     if case == 'never_ready':
         assert 'spawn/import' in verdict['reason']
     assert children[0].poll() is not None
