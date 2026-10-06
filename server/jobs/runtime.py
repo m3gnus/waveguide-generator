@@ -3371,7 +3371,15 @@ class JobRuntime:
                         if press.get("approve_preparation_id") else None
                     ),
                 )
-                if await asyncio.to_thread(self.store.admit_cad_press, job_id, updated.to_config()):
+                press_sha256 = self._cad_solve_press_sha256(job_id, **{
+                    key: press[key] for key in (
+                        "setup_revision_id", "frame_axis", "approve_preparation_id",
+                        "approve_finding_ids", "submit",
+                    ) if key in press
+                })
+                if await asyncio.to_thread(
+                    self.store.admit_cad_press, job_id, updated.to_config(), press_sha256
+                ):
                     self.schedule_cad_solve(job_id)
             else:
                 self.schedule_cad_solve(job_id)
@@ -3398,8 +3406,14 @@ class JobRuntime:
     def recover_cad_solve_press(self, job_id: str, **press: Any) -> str | None:
         """Resolve an exact continuation replay before any admission checks."""
 
-        self._require_job(job_id)
+        row = self._require_job(job_id)
         digest = self._cad_solve_press_sha256(job_id, **press)
+        # The first press admitted on this very job (a waiting manual solve):
+        # while the job runs that press, a replay is that job. Once it was
+        # refused or stopped, the same settings again are a new Solve again.
+        if (cad_of(row).get("first_press_sha256") == digest
+                and row["status"] not in {"error", "cancelled"}):
+            return job_id
         seen = {job_id}
         child_id = self.store.job_for_submission_key(f"cad-solve-again:{job_id}")
         while child_id is not None and child_id not in seen:

@@ -1109,17 +1109,22 @@ class JobStore:
     # None and its caller stops having changed nothing. No attempt generation
     # is read anywhere: the job is the one lifecycle of a CAD solve.
 
-    def admit_cad_press(self, job_id: str, intent: Mapping[str, Any]) -> bool:
-        """Capture a manual press before the lane has claimed its waiting job."""
+    def admit_cad_press(self, job_id: str, intent: Mapping[str, Any], press_sha256: str | None = None) -> bool:
+        """Capture a manual press before the lane has claimed its waiting job.
+
+        The press's identity is recorded with it, so a replay of the same press
+        after a lost answer finds this job however far it has got.
+        """
 
         with self._lock, self._transaction() as conn:
             return conn.execute(
                 "UPDATE simulation_jobs SET config_json = ?, updated_at = ?, label = ?, "
-                "task_metadata_json = json_remove(task_metadata_json, '$.cad.manual_waiting') "
+                "task_metadata_json = json_set(json_remove(task_metadata_json, '$.cad.manual_waiting'), "
+                "'$.cad.first_press_sha256', ?) "
                 "WHERE id = ? AND status = 'preparing' AND started_at IS NULL "
                 "AND cancellation_requested = 0 "
                 "AND json_extract(task_metadata_json, '$.cad.manual_waiting') = 1",
-                (json.dumps(intent), _now_iso(), intent.get("label"), job_id),
+                (json.dumps(intent), _now_iso(), intent.get("label"), press_sha256, job_id),
             ).rowcount == 1
 
     def latest_cad_job(self, operation_id: str, job_id: str | None = None) -> dict[str, Any] | None:
@@ -1406,9 +1411,10 @@ class JobStore:
             ).fetchone()
             metadata = dict(task_metadata)
             previous_cad = json.loads(row["task_metadata_json"] or "{}").get("cad", {}) if row else {}
-            if previous_cad.get("solve_again_press_sha256"):
-                metadata["cad"] = {**(metadata.get("cad") or {}),
-                                   "solve_again_press_sha256": previous_cad["solve_again_press_sha256"]}
+            kept = {key: previous_cad[key] for key in ("solve_again_press_sha256", "first_press_sha256")
+                    if previous_cad.get(key)}
+            if kept:
+                metadata["cad"] = {**(metadata.get("cad") or {}), **kept}
             changed = conn.execute(
                 """UPDATE simulation_jobs
                    SET status = 'queued', queued_at = ?, updated_at = ?, started_at = NULL,

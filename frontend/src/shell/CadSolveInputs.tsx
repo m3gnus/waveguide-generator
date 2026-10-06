@@ -93,8 +93,9 @@ export function CadSolveInputs({
   const jobDocument = jobOperation?.snapshot?.documentName ?? job?.cad_source?.document_name ?? null;
   const jobPreparation = jobCad?.preparation?.preparation_id ?? jobOperation?.preparationId ?? null;
   const jobReceived = jobOperation?.createdAt || job?.created_at || null;
+  const jobSetupRevision = jobCad?.setup?.revision_id ?? jobOperation?.setupRevisionId ?? null;
   const needsOperation = !suppliedOperation && operationId !== 'not recorded'
-    && (!jobManifest || !jobDocument || !jobPreparation || !jobReceived || !jobOperation?.updatedAt);
+    && (!jobManifest || !jobDocument || !jobPreparation || !jobReceived || !jobOperation?.updatedAt || !jobSetupRevision);
   const [operationLoad, setOperationLoad] = useState<LoadState<CadOperationDetail>>(EMPTY_LOAD);
   useEffect(() => {
     if (!needsOperation) return undefined;

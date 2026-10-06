@@ -77,6 +77,19 @@ describe('CAD solve input identities', () => {
     expect(fetcher).toHaveBeenCalledOnce();
   });
 
+  it('fills a historical job\'s missing setup revision from the operation', async () => {
+    const fallback = operation({ setupRevisionId: 'op-setup', preparationId: 'op-prep',
+      snapshot: { manifestSha256: manifest, documentName: 'Historical speaker' } });
+    const fetcher = vi.fn(async () => json({ ...fallback, approvals: [], preparation: null }));
+    vi.stubGlobal('fetch', fetcher);
+    // Everything else is recorded on the job; only the setup revision is not.
+    const job = cadJobFixture(operation({ jobId: 'old-job', setupRevisionId: null }));
+    if (job.cad_provenance) delete job.cad_provenance.setup;
+    await act(async () => root.render(<CadSolveInputs operationId="op-1" job={job} resolvedEngine="metal" engineSource="job"/>));
+    await vi.waitFor(() => expect(host.textContent).toContain('Setup revisionop-setup'));
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it('reads a pending operation engine from its setup revision despite a different job engine', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       expect(String(input)).toBe('/api/cadlink/setup-revisions/wgs_1');
