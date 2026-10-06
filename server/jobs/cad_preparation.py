@@ -196,19 +196,27 @@ def job_operation_view(row: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _optional_operation_id(intent: Mapping[str, Any]) -> str | None:
+    value = intent.get("operation_id")
+    return value if isinstance(value, str) and value else None
+
+
 def job_cad_state(row: Mapping[str, Any]) -> dict[str, Any] | None:
     """The job-side CAD read model; no operation row participates."""
 
     metadata = row.get("task_metadata")
-    if not (isinstance(metadata, Mapping) and isinstance(metadata.get("cad"), Mapping)) and intent_of(row) is None:
+    config = row.get("config_json")
+    # Read the stored intent as it is: a serializer never refuses a historical
+    # row, even one whose intent lacks fields a new intent must have.
+    intent = config if isinstance(config, Mapping) and config.get("type") == "cad_intent" else None
+    if not (isinstance(metadata, Mapping) and isinstance(metadata.get("cad"), Mapping)) and intent is None:
         return None
     cad = cad_of(row)
     view = job_operation_view(row)
-    intent = intent_of(row)
     snapshot = cad.get("snapshot")
     preparation = cad.get("preparation")
     return {
-        "operation_id": view["operationId"] or (intent.operation_id if intent else None),
+        "operation_id": view["operationId"] or (_optional_operation_id(intent) if intent else None),
         **{key: view[key] for key in ("state", "stage", "reason", "message")},
         "job_id": view["jobId"],
         "snapshot": (
