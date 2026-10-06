@@ -523,7 +523,7 @@ describe('CadLinkPanel', () => {
     await act(async () => { engine.querySelector<HTMLButtonElement>('button')!.click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted).toEqual([
-      { path: '/api/jobs/op-engine', body: null },
+      { path: '/api/jobs/op-engine/dismiss', body: {} },
     ]);
     jobManager.snapshot = previousJobs;
     expect(useSolveOptionsStore.getState().engine).toBe(engineBefore);
@@ -649,7 +649,7 @@ describe('CadLinkPanel', () => {
     await vi.waitFor(() => expect(dismiss().disabled).toBe(false));
     await act(async () => { dismiss().click(); });
     await vi.waitFor(() => expect(posted).toHaveLength(1));
-    expect(posted[0]).toEqual({ path: '/api/jobs/op-ready', body: null });
+    expect(posted[0]).toEqual({ path: '/api/jobs/op-ready/dismiss', body: {} });
   });
 
   /** The design on screen as it was opened from its own project. */
