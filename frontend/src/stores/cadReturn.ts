@@ -200,9 +200,9 @@ interface CadReturnState {
   projectLineageId: string | null;
   beginIngestIntent: () => number;
   isCurrentIngestIntent: (generation: number) => boolean;
-  /** The intent now current, without advancing it: a reader that must not
-   * cancel an ingest in flight checks it is still current before acting. */
-  currentIngestIntent: () => number;
+  /** Whether the record held is the one the newest intent applied: no ingest,
+   * selection or edit has superseded it since, and none is in flight. */
+  isIngestSettled: () => boolean;
   selectBundle: (bundle: CadReturnBundle | null, projectLineageId?: string | null) => void;
   /** Select a newly arrived return. When it correlates with the current
    * selection — same source inventory by id, role, and required flag — the
@@ -840,6 +840,8 @@ function restoreSolveProfile(bundle: CadReturnBundle, projectLineageId: string |
 // reject a late network result without manufacturing a render by itself. Every
 // input that changes the bytes an ingest represents advances the same token.
 let ingestIntentGeneration = 0;
+/** The intent whose `applyIngest` put the held record in place. */
+let appliedIngestGeneration = -1;
 
 function supersedeIngestIntent(): number {
   ingestIntentGeneration += 1;
@@ -970,7 +972,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   ingestStaleReason: null,
   beginIngestIntent: supersedeIngestIntent,
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
-  currentIngestIntent: () => ingestIntentGeneration,
+  isIngestSettled: () => get().ingestRecord !== null && appliedIngestGeneration === ingestIntentGeneration,
   selectBundle: (selectedBundle, projectLineageId) => {
     supersedeIngestIntent();
     const project = resolvedProjectLineage(get(), projectLineageId);
@@ -1090,6 +1092,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   },
   applyIngest: (ingestRecord, generation) => {
     if (generation !== ingestIntentGeneration) return false;
+    appliedIngestGeneration = generation;
     const skipped = new Set(ingestRecord.skipped_source_ids);
     const current = get();
     // The ingestion is what finally states which project this geometry belongs

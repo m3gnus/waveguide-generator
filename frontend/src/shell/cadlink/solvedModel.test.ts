@@ -3,6 +3,7 @@ import type { CadReturnBundle, CadReturnIngestRecord } from '../../api/cadlink';
 import type { JobItem } from '../../api/jobsSocket';
 import { runContext, runContextMarker, runDisplayVerdict } from '../../results/runCoherence';
 import { resetCadReturnStore, useCadReturnStore } from '../../stores/cadReturn';
+import { useCadSolverFrameStore } from '../../stores/cadSolverFrame';
 import { resetDocumentStore } from '../../stores/document';
 import { resetSolveOptionsStore } from '../../stores/solveOptions';
 import { workspaceModeStore } from '../../stores/workspaceMode';
@@ -29,11 +30,12 @@ function ingestion(id: string, solveModel: string, manifest = MANIFEST): CadRetu
   } as unknown as CadReturnIngestRecord;
 }
 
-function run(id: string, prepared: CadReturnIngestRecord): JobItem {
+function run(id: string, prepared: CadReturnIngestRecord, axis = '-y'): JobItem {
   return {
     id,
     status: 'queued',
     config_summary: { geometry_type: 'imported' },
+    cad_provenance: { frame: { axis, provenance: 'confirmed', confirmed: true, requirement: null } },
     design_revision: 0,
     script_snapshot: null,
     cad_source: {
@@ -81,6 +83,7 @@ describe('the model a CAD solve prepared', () => {
     resetCadReturnStore();
     resetSolvedCadModelsForTests();
     importedMeshStore.clear();
+    useCadSolverFrameStore.setState({ frames: {} });
     workspaceModeStore.setMode('cad');
   });
 
@@ -155,6 +158,59 @@ describe('the model a CAD solve prepared', () => {
     await expect(adopting).resolves.toBe('declined');
     expect(useCadReturnStore.getState().isCurrentIngestIntent(rebuild)).toBe(true);
     expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(received.ingest_id);
+  });
+
+  it('leaves a rebuild already in flight to finish', async () => {
+    onScreen(received);
+    // Rebuild mesh pressed after Solve, its response not back yet.
+    const rebuild = useCadReturnStore.getState().beginIngestIntent();
+    const fetcher = serving(prepared);
+    await expect(adoptSolvedCadModel(run('job-solved', prepared), { manifestSha256: MANIFEST, sourceIngestId: null }, display, fetcher))
+      .resolves.toBe('declined');
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(useCadReturnStore.getState().isCurrentIngestIntent(rebuild)).toBe(true);
+  });
+
+  it('keeps an axis picked on the frame card after Solve', async () => {
+    onScreen(received);
+    useCadSolverFrameStore.setState({ frames: { [received.ingest_id]: {
+      ingestId: received.ingest_id, status: 'ready', frame: null, linked: false,
+      axis: '+x', picked: true, changedFrom: null, error: null,
+    } } });
+    await expect(adoptSolvedCadModel(run('job-solved', prepared, '-y'), { manifestSha256: MANIFEST, sourceIngestId: null }, display, serving(prepared)))
+      .resolves.toBe('declined');
+    expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(received.ingest_id);
+    // The axis the run was solved along is no pick to protect.
+    await expect(adoptSolvedCadModel(run('job-solved', prepared, '+x'), { manifestSha256: MANIFEST, sourceIngestId: null }, display, serving(prepared)))
+      .resolves.toBe('adopted');
+  });
+
+  it('tries a dropped read again on a later jobs message, and a missing record never', async () => {
+    onScreen(received);
+    let failures = 1;
+    const flaky = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (failures > 0) { failures -= 1; throw new TypeError('Failed to fetch'); }
+      return serving(prepared)(input, init);
+    }) as unknown as typeof fetch;
+    solvedCadModels.claim('job-solved', { manifestSha256: MANIFEST, sourceIngestId: null });
+    solvedCadModels.settle([run('job-solved', prepared)], display, flaky);
+    // Each later jobs message settles again; the second read succeeds.
+    await vi.waitFor(() => {
+      solvedCadModels.settle([run('job-solved', prepared)], display, flaky);
+      expect(useCadReturnStore.getState().ingestRecord?.ingest_id).toBe(prepared.ingest_id);
+    });
+    expect(flaky).toHaveBeenCalledTimes(2);
+
+    const gone = serving();
+    solvedCadModels.claim('job-gone', { manifestSha256: MANIFEST, sourceIngestId: null });
+    const missing = run('job-gone', ingestion('wgi_gone', 'sha256:x'));
+    solvedCadModels.settle([missing], display, gone);
+    await vi.waitFor(() => expect(gone).toHaveBeenCalledOnce());
+    for (let index = 0; index < 5; index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      solvedCadModels.settle([missing], display, gone);
+    }
+    expect(gone).toHaveBeenCalledOnce();
   });
 
   it('does nothing when the solve prepared exactly the model shown', async () => {

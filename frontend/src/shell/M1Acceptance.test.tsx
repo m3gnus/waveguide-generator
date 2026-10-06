@@ -367,9 +367,15 @@ describe('M1 acceptance: Solve to the revealed result, in CAD Link mode', () => 
       skipped_source_ids: [], sources: [],
       findings: [], evidence: { fem_air_volumes: [] }, polar_grid_derivation: {},
     } as unknown as CadReturnIngestRecord;
-    useCadReturnStore.setState((state) => ({
-      ingestRecord: { ...state.ingestRecord!, solve_model_sha256: 'sha256:39d46c-plus-z' },
-    }));
+    // On screen as an arrival puts it there: applied by its own ingest intent.
+    act(() => {
+      const store = useCadReturnStore.getState();
+      store.applyIngest({
+        ...store.ingestRecord!, solve_model_sha256: 'sha256:39d46c-plus-z',
+        mesh_sizes: { rigid_size_mm: 8, transition_mm: 12, source_size_mm: { 'source-hf': 4 } },
+        skipped_source_ids: [], sources: [],
+      } as CadReturnIngestRecord, store.beginIngestIntent());
+    });
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => (
       String(input).endsWith(`/api/cadlink/ingest/${prepared.ingest_id}`)
         ? new Response(JSON.stringify(prepared), { status: 200, headers: { 'Content-Type': 'application/json' } })
