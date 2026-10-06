@@ -519,13 +519,14 @@ def _beat_section(
     merged_tags: list[int] | None,
     result: Any,
     reversed_tags: list[int] | None = None,
+    precision: str = "single",
 ) -> dict[str, Any]:
     section: dict[str, Any] = {
         "native_symmetry_plane": native_plane,
         "formulation": "burton_miller",
         "backend": backend,
         "drive_convention": _DRIVE_CONVENTION,
-        "precision": "single",
+        "precision": precision,
         "solver_log": json_safe_native_value(
             response_solver_log(getattr(result, "solver_log", []))
         ),
@@ -656,6 +657,10 @@ def solve_imported_beat_from_msh_text(
     stage_callback: StageCallback | None = None,
     cancellation_callback: CancelCallback | None = None,
     result_callback: ResultCallback | None = None,
+    _official: bool | None = None, _worker_manager: Any = None,
+    _julia_executable: str | None = None, _precision: str = "float32",
+    _hbb_options: Mapping[str, Any] | None = None,
+    _native_result_callback: Any = None,
 ) -> dict[str, Any]:
     """Solve every imported drive channel on BEAT, one merged-tag solve each.
 
@@ -663,11 +668,16 @@ def solve_imported_beat_from_msh_text(
     contract-shaped channel per drive channel (plus a combined channel when the
     request has one), the channel-bases NPZ under ``_channel_bases_npz`` and
     the surface traces under ``_field_traces``.
+
+    Internal conformance hooks mirror the parametric selector/runtime overrides
+    and expose unrounded native channel fields; ordinary callers are unchanged.
     """
 
     from .beat_runtime.provider import official_selected
 
-    official = official_selected()
+    official = official_selected() if _official is None else _official
+    precision = ("double" if _precision == "float64" else "single") if official else (
+        (_hbb_options or {}).get("solve_precision", "single"))
     geometry = request.geometry
     if not isinstance(geometry, ImportedGeometrySource):
         raise ValueError("imported BEAT solve requires imported geometry")
@@ -934,6 +944,7 @@ def solve_imported_beat_from_msh_text(
                         msh_text, channel_context, record, [channel], frequencies_hz=frequencies,
                         engine_id=beat_engine_name(backend), backend=backend,
                         surface_traces=retain_traces,
+                        precision=_precision,
                     )
                 except ValueError as exc:
                     raise BeatUnavailable(str(exc)) from exc
@@ -952,7 +963,7 @@ def solve_imported_beat_from_msh_text(
                         native_symmetry_plane=native_plane,
                         mesh_scale=1.0,
                         beat_backend=backend,
-                        julia_threads=beat_julia_threads(backend),
+                        **({"julia_threads": beat_julia_threads(backend)} | dict(_hbb_options or {})),
                         **({"surface_traces": True} if retain_traces else {}),
                         progress_callback=progress,
                         on_frequency_result=(
@@ -1039,6 +1050,7 @@ def solve_imported_beat_from_msh_text(
                             def solve_batch(batch):
                                 return solve_compiled(
                                     batch_request(compiled, batch), channel_id=channel.id,
+                                    worker_manager=_worker_manager, julia_executable=_julia_executable,
                                     cancellation_callback=cancellation_callback,
                                     progress_callback=progress, status_callback=stage_status,
                                 )
@@ -1086,6 +1098,7 @@ def solve_imported_beat_from_msh_text(
                     elif official:
                         result = solve_compiled(
                             batch_request(compiled, frequencies), channel_id=channel.id,
+                            worker_manager=_worker_manager, julia_executable=_julia_executable,
                             cancellation_callback=cancellation_callback, progress_callback=progress,
                             on_frequency_result=on_frequency_result if result_callback else None,
                             status_callback=stage_status,
@@ -1152,6 +1165,8 @@ def solve_imported_beat_from_msh_text(
         channel_context = SolverContext.from_imported_request(
             request, quadrants=quadrants, source_motion=channel.motion
         )
+        if _native_result_callback is not None:
+            _native_result_callback(channel.id, result)
         channel_metadata = {
             "solver_backend": "beat",
             "solver_mode": "full_3d",
@@ -1183,6 +1198,7 @@ def solve_imported_beat_from_msh_text(
                 native_plane=native_plane,
                 merged_tags=sorted(channel_tags[channel.id]),
                 result=result,
+                precision=precision,
                 reversed_tags=sorted(
                     tag for sign, group in channel_groups[channel.id] if sign < 0.0 for tag in group
                 ),
@@ -1271,7 +1287,7 @@ def solve_imported_beat_from_msh_text(
             "package_version": status.get("version"),
             "device": backend,
             "formulation": "burton_miller",
-            "precision": "single",
+            "precision": precision,
         },
         "ingest_id": geometry.ingest_id,
         "manifest_sha256": geometry.manifest_sha256,

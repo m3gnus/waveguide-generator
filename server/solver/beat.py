@@ -591,6 +591,8 @@ def solve_beat_from_msh_text(
     _official: bool | None = None, _worker_manager: Any = None,
     _julia_executable: str | None = None, _precision: str = "float32",
     _mesh_scale_to_m: float = 1.0,
+    _hbb_options: Mapping[str, Any] | None = None,
+    _native_result_callback: Any = None,
 ) -> dict[str, Any]:
     """Solve one authoritative Gmsh artifact on a named BEAT Engine backend.
 
@@ -598,6 +600,9 @@ def solve_beat_from_msh_text(
     like ``beat-metal`` means. Omitting it keeps the pre-split behaviour: the
     package's own probe picks the backend, which is what the legacy ``beat``
     engine name still asks for.
+
+    Internal conformance hooks select HBB execution controls and capture native
+    fields before display packaging discards or rounds them; defaults are inert.
     """
 
     official = official_selected() if _official is None else _official
@@ -759,7 +764,7 @@ def solve_beat_from_msh_text(
                 native_symmetry_plane=native_symmetry_plane(context),
                 mesh_scale=1.0,
                 beat_backend=backend,
-                julia_threads=beat_julia_threads(backend),
+                **({"julia_threads": beat_julia_threads(backend)} | dict(_hbb_options or {})),
                 source_motion=context.source_motion,
                 **({"surface_traces": True} if retain_traces else {}),
                 progress_callback=progress,
@@ -876,6 +881,8 @@ def solve_beat_from_msh_text(
         cancellation_callback()
     if stage_callback:
         stage_callback("finalizing", 1.0, "Packaging BEAT Engine solver results")
+    if _native_result_callback is not None:
+        _native_result_callback("source", result)
 
     solver_log = [
         {
@@ -915,7 +922,8 @@ def solve_beat_from_msh_text(
                 "q=i*rho*omega*v_n on a 1 m/s velocity basis, rescaled to "
                 "unit normal acceleration by the package"
             ),
-            "precision": ("double" if _precision == "float64" else "single") if official else "single",
+            "precision": ("double" if _precision == "float64" else "single") if official else (
+                (_hbb_options or {}).get("solve_precision", "single")),
             "solver_log": json_safe_native_value(response_solver_log(solver_log)),
         },
     }

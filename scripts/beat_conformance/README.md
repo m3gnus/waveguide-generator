@@ -210,3 +210,146 @@ the runtime's isolation checks before launching, and receive that validated
 environment. Agreement runs require an empty output directory; retries must use
 a fresh directory so an earlier passed record cannot stand for a failed retry.
 Invalid `--threads` values are command-line errors.
+
+## Production-route corpus
+
+`corpus.py` declares nine small WG requests. `run_corpus.py` calls
+`solve_beat_from_msh_text` or `solve_imported_beat_from_msh_text`, explicitly
+with `_official=False` followed by `_official=True`. Each engine/part has a new
+Python process. HBB uses `persistent_worker=False` and its own runtime/project
+paths; official uses an owned `WorkerManager(mode="child")`, inheriting
+`WG2_BEAT_RUNTIME_DIR` and `WG2_BEAT_WORKER_DIR` unchanged. Every Julia and BLAS
+thread setting is explicitly 1. CPU accepts float32/float64; Metal accepts
+float32. Prepare the runtimes separately before running this tool.
+
+Run one case from the WG root, in the environment containing the current
+non-editable HBB pin and the official engine distribution (including the
+m3gnus fork while it is the installed candidate):
+
+```sh
+python -m scripts.beat_conformance.run_corpus \
+  --case osse-quarter --backend cpu --precision float64 \
+  --julia "$JULIA" --output-dir evidence/osse-quarter-coarse --phase coarse
+
+python -m scripts.beat_conformance.run_corpus \
+  --case osse-quarter --backend cpu --precision float64 \
+  --julia "$JULIA" --output-dir evidence/osse-quarter-part-1 --phase refine \
+  --coarse-dir evidence/osse-quarter-coarse --refine-part 1
+```
+
+`--phase both` meshes, runs coarse, and acquires refine part 1 in one invocation.
+A coarse-only invocation reports `coarse_complete`, with `passed=false`; its
+numerical score is retained in `coarse-score.json`. Output directories must be
+empty or absent, including retries. A refinement reuses the coarse directory's
+frozen bytes and ingestion record without meshing again. Backend, precision,
+settings, mesh hash, engine identities and thread settings must remain the same.
+
+`refine-plan.json` discovers peaks and inverted dips **only from HBB**, using
+`agreement.py`'s 1 dB topographic prominence on every pressure column and
+normalized acoustic impedance. Windows extend to the prominence bases, which
+also bracket broad features. Their dyadic frequency steps are at most 0.25%
+of the feature frequency, exactly representable on HBB's Float32 wire. Acquisition
+is bounded to 41/61/81 frequencies per invocation, depending on the case, with
+two-row overlaps at part boundaries. Larger windows are split into numbered
+parts; an incomplete window cannot pass by losing a peak at the boundary.
+
+For subsequent parts use another empty output directory and `--refine-part K`.
+On the last part, supply every earlier part using repeated `--refine-dir`:
+
+```sh
+python -m scripts.beat_conformance.run_corpus \
+  --case osse-quarter --backend cpu --precision float64 --julia "$JULIA" \
+  --output-dir evidence/osse-quarter-last --phase refine \
+  --coarse-dir evidence/osse-quarter-coarse --refine-part 3 \
+  --refine-dir evidence/osse-quarter-part-1 \
+  --refine-dir evidence/osse-quarter-part-2
+```
+
+The number 3 is illustrative; use the recorded plan's part count. Missing parts
+report `refine_incomplete`. Complete evidence joins acquired rows without
+interpolation, checks the full sweep, and additionally scores each complete
+local window against its own declared dense step and expected feature columns.
+This preserves the one-step location limit without increasing it to the coarse
+spacing. Norms run only after resonances. All PLAN §5 budgets and the reference
+30 dB mask remain unchanged; nulls stay separate in the report.
+
+The following CPU estimates include **both** engines, one thread, and cold
+starts. They are planning estimates, not measured solve timings. Refinement
+estimates are **per numbered part**; the total depends on HBB's detected features.
+There is a 650-vertex refusal budget, plus owned-child timeouts of 240 s per
+engine for coarse and 320 s per engine for refinement. No runtime, device or
+startup performance is qualified by these estimates.
+
+| Case | PLAN coverage / reused WG control | Coarse axis (Hz; count) | Estimated coarse | Estimated refine part |
+| --- | --- | --- | --- | --- |
+| `osse-full` | Real-pipeline OSSE, full mesh, no image copies | 500–3500 / 250; 13 | 2–5 min | 4–9 min |
+| `osse-quarter` | Same OSSE, x0/y0 quarter and real symmetry copies | 500–3500 / 250; 13 | 1–3 min | 2–6 min |
+| `rosse-half` | Mesh-child R-OSSE R=150/r0=12.7/a=60/a0=15.5, yz half | 500–2500 / 250; 9 | 2–6 min | 4–9 min |
+| `narrow-resonance` | Existing 300 mm straight throat extension before OSSE termination; low radiation loss gives longitudinal duct resonances | 200–1400 / 50; 25 | 2–6 min | 4–10 min |
+| `imported-two-sources` | Real CAD box fixture with two discs, independently driven channels and physical source IDs | 500–2500 / 250; 9 | 2–6 min | 4–10 min |
+| `imported-tilted-rear` | Real curved source-sheet fixture, rigidly rotated 45° about y: tilted net normal with a rear-facing component; normal motion | 500–2500 / 250; 9 | 2–6 min | 4–9 min |
+| `driver-loading` | Real CAD box with one 25 mm disc, existing driver-LEM spec, adapter `BoundaryLoading` and production driver coupling | 200–1400 / 100; 13 | 2–5 min | 4–9 min |
+| `non-45-cut` | Quarter OSSE; 30° diagonal inclination with horizontal/vertical controls | 500–3500 / 250; 13 | 1–3 min | 2–6 min |
+| `sphere-traces` | Quarter OSSE; full sphere plus retained P1 pressure / DP0 Neumann traces | 500–3500 / 250; 13 | 1–3 min | 2–6 min |
+
+R-OSSE uses the permitted half alternative: the original full mesh and then the
+initial half exceeded the CPU budget. Coarsening the regional resolutions to
+25/50/50 mm produces a 643-vertex half here. Other measured mesh sizes are
+429/133 vertices for full/quarter OSSE, 194 for the duct, 268 for two sources,
+642 for the curved tilted/rear source, and 295 for driver loading. These are
+small agreement controls, not spatial mesh-convergence studies. The narrow
+case declares expected pressure resonance column 0: a monotone or unresolved
+coarse reference fails and must be investigated, rather than qualifying an
+empty resonance test. It uses a real WG duct feature; no bespoke geometry
+format or chamber surrogate is introduced.
+
+Every case requests horizontal/vertical/diagonal cuts and a 9×16 full sphere at
+2 m. Only `sphere-traces` requests retained field traces. The CAD builders and
+bundle/ingestion helpers come from `server/tests/test_cadlink_domain_automatic.py`;
+therefore this developer tool needs WG's test dependencies as well as its mesher.
+The production mesher is called once per frozen artifact. The tests measured
+all nine builders below 5 s, compare two independent in-process meshes, and
+also retain tiny-fixture catalogue/runner tests for environments without the
+optional mesher. A changed mesher that breaks the size or time budget should
+be investigated and the declared geometry budget revised before qualification.
+
+No catalogue case is statically unsupported today: all nine mesh and the CAD
+cases pass WG's BEAT geometry preflight without either engine. A production
+refusal on both routes is recorded as `unsupported` with each exact refusal
+string, rather than dropping the case. A refusal on only one route or an engine
+identity failure remains a failed comparison. Arbitrary oblique **axial** motion
+is not covered by the normal-motion curved case; WG still refuses such axial
+motion on both BEAT routes. Ground and infinite-baffle combinations are outside
+these exterior cases and retain their existing refusals.
+
+Evidence includes `surface.msh`, its SHA-256, WG requests and ingestion records,
+compiled settings, each route's complete production response and unrounded
+native fields, distribution versions/direct_url/revisions, the HBB pin, WG
+commit/worktree, Julia path/version, thread/runtime environment, and raw
+`sysctl -n vm.loadavg` / `pmset -g batt` command output or an explicit unavailable
+reason. Complex and binary arrays round-trip through tagged JSON. Native source
+mean pressure feeds `ResultSet.impedance_per_acceleration`; electrical driver
+impedance is scored separately with the same 0.01 dB / 0.1° budget. Complex
+sphere and retained traces use production pressure budgets. DI and comparable
+power use the same full-sphere estimator as the existing agreement runner;
+native power remains raw and is labelled unavailable when absent. Missing
+required pressure, loading, sphere or requested traces cannot pass. No rounded
+SPL/balloon output is converted into fabricated complex samples.
+
+Imported HBB's native MeshInfo describes its production tag merge (rigid 1,
+active source 2). Counts and those raw facts remain recorded; original CAD tag
+areas remain declared rather than falsely presented as observed equality.
+
+The only production changes are optional internal seams in `beat.py` and
+`beat_imported.py`: capture native fields before display packaging discards
+precision, pass explicit HBB execution controls, and give imported calls the
+same selector/precision/Julia/manager overrides already supported parametrically.
+Defaults preserve existing production callers and HBB golden responses. These
+seams avoid replacing production functions with lower-level runner solves.
+
+`verdict.json` is written only at the end. A killed or incomplete invocation
+cannot leave a successful verdict. `passed` scores this sampled production
+agreement; `qualified` remains false because these captures do not replace the
+recorder's installed/device/terminal-event qualification evidence. Declared
+settings and installed VCS metadata remain labelled as such. No tolerances are
+widened, and this implementation/test run launches no Julia, engine solve or broker.
