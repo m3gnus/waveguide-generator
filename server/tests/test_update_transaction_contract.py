@@ -4980,3 +4980,308 @@ def test_an_outcome_detail_names_the_home_folder_as_a_problem_report_does(
     assert str(home) not in detail
     assert detail.startswith("The installed layer is missing: ~")
     assert detail.endswith("app")
+# Review round 3: contention retries and dependencies behind directory aliases.
+
+
+def _join_settlement_retry(settlement: healthy_start.HealthyStartSettlement) -> None:
+    thread = settlement._retry_thread
+    assert thread is not None and thread.daemon
+    thread.join(timeout=2.0)
+    assert not thread.is_alive(), "settlement retry exceeded its bounded window"
+
+
+@pytest.mark.parametrize("mode", ["desktop", "browser", "no-gui"])
+def test_healthy_start_retries_after_the_relaunch_helper_releases_its_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    installation, transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04, 0.08))
+    paths = tuple(installation[:3])
+    if mode == "no-gui":
+        start = serve._NoGuiHealthyStart(paths)
+        start._server = SimpleNamespace(started=True)
+        monkeypatch.setattr(serve, "_probe_healthy_start", lambda *_args: None)
+        settlement = start._settlement
+        observe = start._run
+    else:
+        controller = StatusController(
+            repo_root=installation.resources / "app",
+            server_args=("--data-dir", str(installation.data_dir)),
+            environ={**os.environ, "WG2_BUNDLE": "1"},
+            settle_on_ready=mode == "browser",
+        )
+        monkeypatch.setattr(controller, "bundle_paths", lambda: paths)
+        settlement = controller._healthy_start
+        snapshot = StatusSnapshot(
+            backend=LampStatus(ServiceState.OK, "ready"),
+            frontend=LampStatus(ServiceState.OK, "ready"),
+            url="http://127.0.0.1:3100", pid=123, exit_code=None,
+        )
+        observe = lambda: controller.settle_update_transaction(snapshot, report=lambda _m: None)
+    with apply_update_module._claim_update(installation.resources):
+        before = time.monotonic()
+        observe()
+        observe()  # repeated readiness must not spawn another worker
+        assert time.monotonic() - before < 0.5
+        worker = settlement._retry_thread
+        assert not settlement.settled
+        assert read_journal(installation.data_dir, installation.resources) is not None
+    _join_settlement_retry(settlement)
+    assert settlement._retry_thread is worker
+    assert settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) is None
+    assert not (installation.resources / "runtime.previous").exists()
+    record = _completion_record(installation.data_dir, installation.resources) or {}
+    assert record["transaction"] == transaction
+    assert record["rollbackMaterial"] == "reclaimed"
+
+
+@pytest.mark.parametrize("mode", ["desktop", "browser", "no-gui"])
+def test_quit_cancels_pending_settlement_retries_without_waiting_for_the_helper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (10.0, 20.0, 20.0))
+    paths = tuple(installation[:3])
+    if mode == "no-gui":
+        owner = serve._NoGuiHealthyStart(paths)
+        settlement = owner._settlement
+        quit_start = lambda: owner.finish("Quit")
+    else:
+        owner = StatusController(repo_root=installation.resources / "app")
+        settlement = owner._healthy_start
+        monkeypatch.setattr(owner, "bundle_paths", lambda: paths)
+        quit_start = owner.stop
+    before_journal = read_journal(installation.data_dir, installation.resources)
+    with apply_update_module._claim_update(installation.resources):
+        assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
+        before = time.monotonic()
+        quit_start()
+        assert time.monotonic() - before < 0.5
+        _join_settlement_retry(settlement)
+    assert not settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) == before_journal
+    assert (installation.resources / "runtime.previous").is_dir()
+    # A new start is the backstop, even after this session was cancelled.
+    assert healthy_start.HealthyStartSettlement(lambda: paths).settle(
+        ready=True, evidence="next healthy start", report=lambda _m: None
+    )
+
+
+def test_settlement_contention_retries_are_bounded_and_the_next_start_is_the_backstop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert 30 <= sum(healthy_start.SETTLEMENT_RETRY_DELAYS) <= 60
+    assert tuple(sorted(healthy_start.SETTLEMENT_RETRY_DELAYS)) == healthy_start.SETTLEMENT_RETRY_DELAYS
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.01, 0.02, 0.04))
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+    original = healthy_start.claim_update
+    attempts: list[float] = []
+
+    def claim(resources: Path) -> Any:
+        attempts.append(time.monotonic())
+        return original(resources)
+
+    monkeypatch.setattr(healthy_start, "claim_update", claim)
+    with apply_update_module._claim_update(installation.resources):
+        assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
+        _join_settlement_retry(settlement)
+    assert len(attempts) == 4
+    assert not settlement.settled
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="next healthy start", report=lambda _m: None
+    )
+
+
+@pytest.mark.parametrize("changed", ["build", "transaction"])
+def test_settlement_retry_never_reuses_readiness_for_a_different_build_or_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changed: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04))
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+    with apply_update_module._claim_update(installation.resources):
+        assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
+        if changed == "build":
+            _stamp_build(installation.resources / "app", "0.3.6", "d" * 40, "e" * 12)
+        else:
+            apply_update_module.begin_rollback_transaction(
+                data_dir=installation.data_dir, bundle=installation.bundle,
+                resources=installation.resources, platform_name="win32", reason="new rollback",
+            )
+            set_journal_state(installation.data_dir, installation.resources, "rolled-back")
+        before = read_journal(installation.data_dir, installation.resources)
+    _join_settlement_retry(settlement)
+    assert not settlement.settled
+    assert read_journal(installation.data_dir, installation.resources) == before
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert "changed before settlement retry" in _update_log(installation)
+
+
+@pytest.mark.parametrize("boundary", ["validation", "commit"])
+def test_quit_during_a_settlement_retry_leaves_cleanup_for_the_next_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    monkeypatch.setattr(healthy_start, "SETTLEMENT_RETRY_DELAYS", (0.02, 0.04))
+    paths = tuple(installation[:3])
+    settlement = healthy_start.HealthyStartSettlement(lambda: paths)
+    name = "running_build_uses_retained_material" if boundary == "validation" else "commit_transaction"
+    original = getattr(healthy_start, name)
+
+    def cancel_after(*args: Any, **kwargs: Any) -> Any:
+        result = original(*args, **kwargs)
+        settlement.cancel()
+        return result
+
+    monkeypatch.setattr(healthy_start, name, cancel_after)
+    with apply_update_module._claim_update(installation.resources):
+        assert not settlement.settle(ready=True, evidence="healthy", report=lambda _m: None)
+    _join_settlement_retry(settlement)
+    assert not settlement.settled
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert (installation.data_dir / "updates" / "9.9.9").is_dir()
+    journal = read_journal(installation.data_dir, installation.resources)
+    assert (journal is None) == (boundary == "commit")
+    if boundary == "commit":
+        assert (_completion_record(installation.data_dir, installation.resources) or {})["rollbackMaterial"] == "retained"
+    monkeypatch.setattr(healthy_start, name, original)
+    assert healthy_start.HealthyStartSettlement(lambda: paths).settle(
+        ready=True, evidence="next healthy start", report=lambda _m: None
+    )
+
+
+@pytest.mark.parametrize("reason", ["not-ready", "unavailable"])
+def test_settlement_never_retries_without_readiness_or_for_an_unavailable_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reason: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    settlement = healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3]))
+
+    def unavailable(_resources: Path) -> Any:
+        raise OSError("unavailable claim directory")
+
+    monkeypatch.setattr(healthy_start, "claim_update", unavailable)
+    assert not settlement.settle(ready=reason != "not-ready", evidence=reason, report=lambda _m: None)
+    assert settlement._retry_thread is None
+    assert (installation.resources / "runtime.previous").is_dir()
+
+
+def test_a_process_exiting_during_settlement_backoff_keeps_recovery_material(tmp_path: Path) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    script = """
+import sys
+from pathlib import Path
+from launchers.statusapp.healthy_start import HealthyStartSettlement
+from launchers.update_lock import claim_update
+paths = tuple(Path(p) for p in sys.argv[1:])
+with claim_update(paths[1]):
+    settlement = HealthyStartSettlement(lambda: paths)
+    assert not settlement.settle(ready=True, evidence='healthy', report=lambda _m: None)
+    assert settlement._retry_thread.daemon
+# Exit immediately; no quit hook or join.
+"""
+    before = read_journal(installation.data_dir, installation.resources)
+    child = subprocess.run(
+        [sys.executable, "-c", script, *map(str, installation[:3])],
+        cwd=REPOSITORY_ROOT, timeout=5.0, capture_output=True, text=True,
+    )
+    assert child.returncode == 0, child.stderr
+    assert read_journal(installation.data_dir, installation.resources) == before
+    assert (installation.resources / "runtime.previous").is_dir()
+    assert apply_update_module.read_transaction_open_marker(installation.resources) is not None
+    with apply_update_module._claim_update(installation.resources):
+        pass
+
+
+@pytest.mark.parametrize("retained", ["previous", "failed", "staging"])
+@pytest.mark.parametrize("junction", [False, True], ids=["symlink", "reparse-point"])
+def test_external_directory_aliases_cannot_hide_retained_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retained: str, junction: bool
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    resources, data = installation.resources, installation.data_dir
+    external = tmp_path / "shared" / "site-packages"
+    external.mkdir(parents=True)
+    target = data / "updates" / "9.9.9" if retained == "staging" else resources / f"runtime.{retained}"
+    target.mkdir(exist_ok=True)
+    (external / "bempp").symlink_to(target, target_is_directory=True)
+    link = resources / "runtime" / "site-packages"
+    link.symlink_to(external, target_is_directory=True)
+    if junction:
+        original_stat = os.DirEntry.stat
+
+        def junction_stat(entry: Any, **kwargs: Any) -> Any:
+            if Path(entry.path) == link:
+                return SimpleNamespace(st_mode=stat.S_IFDIR, st_file_attributes=0x400)
+            return original_stat(entry, **kwargs)
+
+        monkeypatch.setattr(os.DirEntry, "stat", junction_stat)
+    before = read_journal(data, resources)
+    assert apply_update_module.running_build_uses_retained_material(resources, before)
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy replacement", report=lambda _m: None
+    )
+    assert read_journal(data, resources) == before
+    assert target.is_dir()
+    assert (resources / "runtime.previous").is_dir()
+
+
+def test_a_bounded_walk_proves_a_benign_external_directory_alias_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    external = tmp_path / "shared"
+    external.mkdir()
+    (external / "module.py").write_text("live module")
+    # Cycles through directory aliases terminate, while every reachable tree
+    # is inspected once, including aliases back into the live install.
+    (external / "cycle").symlink_to(external, target_is_directory=True)
+    (external / "live").symlink_to(installation.resources / "app", target_is_directory=True)
+    (installation.resources / "runtime" / "site-packages").symlink_to(external, target_is_directory=True)
+    assert healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy replacement", report=lambda _m: None
+    )
+    assert (external / "module.py").read_text() == "live module"
+    assert not (installation.resources / "runtime.previous").exists()
+
+
+@pytest.mark.parametrize("problem", ["scan-error", "entry-limit", "directory-limit"])
+def test_external_alias_inspection_refuses_reclamation_on_error_or_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, problem: str
+) -> None:
+    installation, _transaction = _replacement_bridge_target(tmp_path)
+    monkeypatch.setattr(healthy_start.sys, "platform", "win32")
+    external = tmp_path / "shared"
+    external.mkdir()
+    (external / "nested").mkdir()
+    (external / "nested" / "module.py").write_text("module")
+    (installation.resources / "runtime" / "site-packages").symlink_to(external, target_is_directory=True)
+    if problem == "scan-error":
+        original = os.scandir
+
+        def unreadable(path: Any) -> Any:
+            if Path(path) == external:
+                raise PermissionError("unverified external directory")
+            return original(path)
+
+        monkeypatch.setattr(apply_update_module.os, "scandir", unreadable)
+    elif problem == "entry-limit":
+        monkeypatch.setattr(apply_update_module, "RETENTION_SCAN_MAX_ENTRIES", 1)
+    else:
+        monkeypatch.setattr(apply_update_module, "RETENTION_SCAN_MAX_DIRECTORIES", 1)
+    before = read_journal(installation.data_dir, installation.resources)
+    assert not healthy_start.HealthyStartSettlement(lambda: tuple(installation[:3])).settle(
+        ready=True, evidence="healthy replacement", report=lambda _m: None
+    )
+    assert read_journal(installation.data_dir, installation.resources) == before
+    assert (installation.resources / "runtime.previous").is_dir()

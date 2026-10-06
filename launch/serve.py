@@ -443,6 +443,9 @@ class _NoGuiHealthyStart:
         self._settling = False
         self._last_problem: str | None = None
         self._thread: threading.Thread | None = None
+        from launchers.statusapp.healthy_start import HealthyStartSettlement
+
+        self._settlement = HealthyStartSettlement(lambda: self._paths)
 
     def start(self, server: uvicorn.Server, port: int) -> None:
         self._server = server
@@ -477,9 +480,7 @@ class _NoGuiHealthyStart:
             self._settling = True
         log = logging.getLogger("wg.launch")
         try:
-            from launchers.statusapp.healthy_start import HealthyStartSettlement
-
-            HealthyStartSettlement(lambda: self._paths).settle(
+            self._settlement.settle(
                 ready=True,
                 evidence=f"this --no-gui server answered /health as {BUILD} and served the interface",
                 # --no-gui opens no window of its own, not even to report.
@@ -517,6 +518,7 @@ class _NoGuiHealthyStart:
         """
 
         self._stop.set()
+        self._settlement.cancel()
         thread = self._thread
         if thread is not None:
             thread.join(timeout=HEALTHY_START_PROBE_TIMEOUT + 3.0)

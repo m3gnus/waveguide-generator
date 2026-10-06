@@ -1045,6 +1045,12 @@ def journal_live_build(journal: Mapping[str, Any]) -> dict[str, str | None] | No
     return _journal_build(journal, "to" if restored_or_installed else "from")
 
 
+# Bound even trees reached through external directory aliases. Exhaustion is
+# uncertainty, so it retains recovery material just like a filesystem error.
+RETENTION_SCAN_MAX_ENTRIES = 100_000
+RETENTION_SCAN_MAX_DIRECTORIES = 10_000
+
+
 def running_build_uses_retained_material(
     resources: Path, record: Mapping[str, Any] | None
 ) -> bool:
@@ -1054,7 +1060,8 @@ def running_build_uses_retained_material(
     paths also catches a symlink or Windows junction into a retained layer.
     Walk inside the live layers too: a dependency can link into a backup even
     when both roots are ordinary directories. Stop at the first dependency or
-    filesystem error; do not follow directory links into unbounded trees.
+    filesystem error. Follow directory aliases with a bounded, cycle-safe walk:
+    an external directory can itself contain a link back into retained material.
     """
 
     try:
@@ -1079,10 +1086,22 @@ def running_build_uses_retained_material(
         if any(uses_retained(live) for live in live_paths):
             return True
         pending = [root / name for name in BUNDLE_LAYERS]
+        visited: set[Path] = set()
+        scanned_entries = 0
         while pending:
-            directory = pending.pop()
+            directory = resolved_path(pending.pop(), strict=True)
+            if uses_retained(directory):
+                return True
+            if directory in visited:
+                continue
+            visited.add(directory)
+            if len(visited) > RETENTION_SCAN_MAX_DIRECTORIES:
+                return True
             with os.scandir(directory) as entries:
                 for entry in entries:
+                    scanned_entries += 1
+                    if scanned_entries > RETENTION_SCAN_MAX_ENTRIES:
+                        return True
                     info = entry.stat(follow_symlinks=False)
                     # Junctions are directory reparse points on Windows and
                     # need not be reported as symbolic links.
@@ -1091,8 +1110,11 @@ def running_build_uses_retained_material(
                         & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
                     )
                     if linked:
-                        if uses_retained(resolved_path(entry.path, strict=True)):
+                        target = resolved_path(entry.path, strict=True)
+                        if uses_retained(target):
                             return True
+                        if stat.S_ISDIR(target.stat().st_mode):
+                            pending.append(target)
                     elif stat.S_ISDIR(info.st_mode):
                         pending.append(Path(entry.path))
     except (OSError, RuntimeError, ValueError):

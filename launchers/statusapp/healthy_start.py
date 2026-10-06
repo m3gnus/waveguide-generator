@@ -30,6 +30,7 @@ from pathlib import Path
 import shutil
 import sys
 import threading
+import time
 
 from launchers.apply_update import (
     ROLLBACK_MATERIAL_RETAINED,
@@ -59,6 +60,10 @@ from server.platform.instance import pid_is_running
 #: ``(bundle, resources, data directory)`` of an installed bundle.
 BundlePaths = tuple[Path, Path, Path]
 Report = Callable[[str], None]
+
+# Retry only a busy helper, over 47 seconds. A later launch remains the
+# backstop if that helper outlives this window or this process exits.
+SETTLEMENT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 8.0, 8.0, 8.0, 8.0)
 
 
 def resolve_bundle_paths(
@@ -252,6 +257,49 @@ class HealthyStartSettlement:
         self._requests = requests
         self._lock = threading.Lock()
         self._settled = False
+        self._retry_stop = threading.Event()
+        self._retry_thread: threading.Thread | None = None
+        self._retry_contended = False
+
+    def cancel(self) -> None:
+        """Cancel pending retries without waiting for a helper or filesystem work."""
+
+        self._retry_stop.set()
+
+    def _retry_after_contention(
+        self, paths: BundlePaths, evidence: str, report: Report | None
+    ) -> None:
+        # Called under _lock. Multiple readiness observations get one worker.
+        if self._retry_thread is not None or self._retry_stop.is_set():
+            return
+        build = read_build_identity(paths[1] / "app")
+        record = read_journal(paths[2], paths[1]) or read_completion_record(paths[2], paths[1])
+        transaction = (record or {}).get("transaction")
+        delays = SETTLEMENT_RETRY_DELAYS
+
+        def retry() -> None:
+            deadline = time.monotonic() + sum(delays)
+            for delay in delays:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self._retry_stop.wait(min(delay, remaining)):
+                    return
+                try:
+                    if self._settle(
+                        ready=True, evidence=evidence, report=report,
+                        retry_build=(paths, build, transaction),
+                    ):
+                        return
+                    # Once we can claim it, an unsafe/unconfirmed build is a
+                    # refusal, not a transient helper to keep polling.
+                    if not self._retry_contended:
+                        return
+                except Exception:  # noqa: BLE001 - retain recovery evidence on retry failure
+                    return
+
+        self._retry_thread = threading.Thread(
+            target=retry, name="wg2-update-settlement-retry", daemon=True
+        )
+        self._retry_thread.start()
 
     def _request_paths(self) -> list[Path]:
         if self._requests is None:
@@ -276,9 +324,19 @@ class HealthyStartSettlement:
         with nothing to search for.
         """
 
+        return self._settle(ready=ready, evidence=evidence, report=report)
+
+    def _settle(
+        self, *, ready: bool, evidence: str, report: Report | None,
+        retry_build: tuple[BundlePaths, Mapping[str, str | None], object] | None = None,
+    ) -> bool:
         with self._lock, ExitStack() as claims:
+            if retry_build is not None:
+                self._retry_contended = False
             if self._settled:
                 return True
+            if self._retry_stop.is_set():
+                return False
             paths = self._paths()
             if paths is None:
                 return False
@@ -296,11 +354,28 @@ class HealthyStartSettlement:
             # claim. Keep it through validation, closure and all reclamation.
             try:
                 claims.enter_context(claim_update(resources))
-            except (UpdateInProgress, OSError, RuntimeError, ValueError) as exc:
+            except UpdateInProgress as exc:
+                if retry_build is not None:
+                    self._retry_contended = True
                 log(f"Not reclaiming the previous layers: could not claim the update: {exc}.")
+                if retry_build is None:
+                    self._retry_after_contention(paths, evidence, report)
+                return False
+            except (OSError, RuntimeError, ValueError) as exc:
+                log(f"Not reclaiming the previous layers: could not claim the update: {exc}.")
+                return False
+            if self._retry_stop.is_set():
                 return False
             validated_journal = read_journal(data_dir, resources)
             retained_record = validated_journal or read_completion_record(data_dir, resources)
+            if retry_build is not None and (
+                paths != retry_build[0]
+                or read_build_identity(resources / "app") != retry_build[1]
+                or (retained_record or {}).get("transaction") != retry_build[2]
+            ):
+                log("Not reclaiming the previous layers: the healthy build or transaction changed before settlement retry.")
+                self._retry_stop.set()
+                return False
             if running_build_uses_retained_material(resources, retained_record):
                 line = unconfirmed_line(
                     data_dir, resources, "the running build still uses retained rollback or staging material"
@@ -321,6 +396,8 @@ class HealthyStartSettlement:
                 line = unconfirmed_line(data_dir, resources, mismatch)
                 if line is not None:
                     log(line)
+                return False
+            if self._retry_stop.is_set():
                 return False
             # A healthy interface is the only evidence that an update worked.
             # Close the transaction here, and refuse to reclaim anything while
@@ -355,6 +432,10 @@ class HealthyStartSettlement:
                 return False
             if commit_detail.startswith("update transaction"):
                 log(f"Healthy start: {commit_detail}.")
+            if self._retry_stop.is_set():
+                # Closure is durable, but cleanup has not begun. The retained
+                # completion record lets the next start finish it safely.
+                return False
             self._settled = True
             _reclaim(
                 bundle,

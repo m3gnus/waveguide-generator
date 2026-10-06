@@ -1461,6 +1461,7 @@ class StatusController:
     def stop(self) -> StatusSnapshot:
         """Request graceful shutdown, then guarantee the entire tree is gone."""
 
+        self._healthy_start.cancel()
         # Before anything else, and outside the branch below: the watcher is
         # parked in ``wait()`` on the very process this is about to end, and a
         # shutdown somebody asked for is not a backend loss to report.
