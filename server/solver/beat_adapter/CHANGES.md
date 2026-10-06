@@ -621,4 +621,5 @@ Two independent reviewers (Sonnet, Opus) approved 35b0ff58 with no P0-P2 finding
 Notes kept open:
 
 - `beat-engine` is not in `pins.json`, so official results are power-qualification "unknown" (missing `solver_pin`) until the 0.3.6 pin round.
+  Resolved by the 0.3.6 pin: `beat-engine` is pinned to m3gnus/BEAT_Engine d0d624a0, so official results resolve their `solver_pin`.
 - The official cancel monitor polls the store at 20 Hz, so a transient store error fails the job, as on HBB.
