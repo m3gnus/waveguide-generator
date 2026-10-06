@@ -1043,9 +1043,9 @@ class EngineRegistry:
             if target_revision <= applied_revision:
                 return
             try:
-                if official_selected():
-                    self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
                 selected = official_selected()
+                if selected:
+                    self.official_runtime_statuses = await asyncio.to_thread(_official_runtime_statuses)
                 package = None if selected else _load_api()
                 if selected or package is not None:
                     updates = ({f"beat-{backend}": (bool(status["available"]), str(status["reason"]))

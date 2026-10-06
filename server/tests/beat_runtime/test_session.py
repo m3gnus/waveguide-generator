@@ -76,7 +76,7 @@ def test_cooperative_cancel_keeps_partial_results_and_warm_worker(staging):
     assert list(staging.iterdir()) == []
 
 
-def test_backstop_interrupts_blocked_read_and_preserves_partial_results(staging):
+def test_backstop_interrupts_blocked_read_and_raises_the_callers_exception(staging):
     worker = Worker()
     cancel = threading.Event()
 

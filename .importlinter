@@ -82,9 +82,10 @@ ignore_imports =
     # solver -> jobs: existing upward dependency.
     # Legacy use: SolveRequest.
     server.solver.base -> server.jobs.models
-    # Production request/channel types, shared with the BEAT facade.
-    server.solver.beat_adapter.request -> server.jobs.models
+    # Legacy use: DriveChannel.
     server.solver.beat_adapter.capabilities -> server.jobs.models
+    # Legacy use: DriveChannel.
+    server.solver.beat_adapter.request -> server.jobs.models
     # Legacy use: ImportedGeometrySource, SolveRequest.
     server.solver.beat -> server.jobs.models
     # Legacy use: ImportedGeometrySource, SolveRequest.

@@ -608,3 +608,17 @@ edge checks, assets + bridge + warm-up + registry + startup-performance tests:
 contracts kept**) and `git diff --check` pass. The unchanged selector-OFF golden
 fixture test passes. No requested review finding remains unfinished; real Julia,
 installed-platform and numerical qualification were deliberately not run.
+
+### Slice 9 review round 2 (final)
+
+Two independent reviewers (Sonnet, Opus) approved 35b0ff58 with no P0-P2 findings. They checked the shared cancellation connection (every store use holds `self._lock`, so it is serialized; polling load is unchanged), exception propagation and selector-OFF parity. Last-round P3s were fixed directly:
+
+- Object to moving `request.py`'s `DriveChannel` import under `TYPE_CHECKING`: import-linter counts type-checking imports, so the edge stays either way. Both edges are pre-existing (broken on 0a1b901d); their `.importlinter` comments now follow the "Legacy use: DriveChannel." convention.
+- `test_backstop_interrupts_blocked_read_and_raises_the_callers_exception` is renamed after the behaviour it asserts.
+- A duplicate `frequency_range` assignment is removed from `test_cancelled_prefix_is_packaged`.
+- The registry refresh reads `official_selected()` once.
+
+Notes kept open:
+
+- `beat-engine` is not in `pins.json`, so official results are power-qualification "unknown" (missing `solver_pin`) until the 0.3.6 pin round.
+- The official cancel monitor polls the store at 20 Hz, so a transient store error fails the job, as on HBB.

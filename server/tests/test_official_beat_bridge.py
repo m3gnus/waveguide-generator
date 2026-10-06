@@ -263,7 +263,6 @@ def test_cancelled_prefix_is_packaged(runtime, imported, adaptive):
                                      "source_size_mm": {"source-c": 4.}})
         request.options.adaptive_frequency_sampling = adaptive
         if adaptive:
-            request.options.frequency_range = [100., 1000.]
             request.options.frequencies_hz = None
             request.options.frequency_range = [100., 1000.]
             request.options.num_frequencies = 24
