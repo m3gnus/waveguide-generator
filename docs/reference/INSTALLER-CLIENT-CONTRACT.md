@@ -79,10 +79,15 @@ installation survived. Malformed records remain on disk for diagnosis.
 ## Compiled key rotation
 
 `UPDATE_SIGNING_PUBLIC_KEYS_HEX` lists the compiled accepted keys.
-`UPDATE_SIGNING_PUBLIC_KEY_HEX` remains the active signing key constant for existing
+`UPDATE_SIGNING_PUBLIC_KEY_HEX` remains the active signing key constant for
 release tooling. A transition release carries both old and new public keys and is
-signed with the old secret, allowing already installed clients to accept it. A later
-release switches signing to the new secret; a subsequent release can remove the old
-public key. The signing workflow's active-key equality guard needs an explicit
-transition amendment before an old-signed rotation release is published. Supporting
-multiple verifier keys alone does not authorize or configure that workflow change.
+signed with the old secret, keeping the old key active and allowing already installed
+clients to accept it. A later release switches signing to the new secret; a subsequent release can remove the old
+public key. New signatures require the active key to be in the accepted tuple and
+to match the secret. Signing and publishing verify against the accepted tuple.
+
+Stable discovery tries `/releases/latest` first. If it is ineligible, including an
+untrusted signature, it searches at most five release-list pages of 100 entries.
+Every candidate passes the same eligibility and signature checks; the highest
+verified stable version at or above the installed version is selected across those
+pages. All pagination uses the existing trusted next-link checks and ETag cache.

@@ -1005,3 +1005,13 @@ def test_the_manifest_is_signed_only_in_the_environment_gated_job_and_publish_ne
     # An absent secret fails the job rather than shipping an unsigned release.
     step = next(s for s in jobs["sign"]["steps"] if "without the signing key" in s.get("name", ""))
     assert '-z "$UPDATE_SIGNING_KEY"' in step["run"] and "exit 1" in step["run"]
+
+
+def test_signing_requires_active_accepted_key_and_both_verifiers_use_compiled_trust() -> None:
+    jobs = yaml.safe_load(WORKFLOW)["jobs"]
+    signing = next(s["run"] for s in jobs["sign"]["steps"] if s.get("name") == "Write and sign SHA256SUMS, then verify it")
+    publishing = next(s["run"] for s in jobs["publish"]["steps"] if s.get("name") == "Verify the signed manifest against the staged installers")
+    assert signing.index('pubkey-matches "$pub"') < signing.index("openssl pkeyutl -sign")
+    for script in (signing, publishing):
+        assert "scripts/release_manifest.py verify" in script
+        assert "--public-key-hex" not in script

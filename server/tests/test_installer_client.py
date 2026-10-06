@@ -41,11 +41,11 @@ def release(monkeypatch):
     return make_release()
 
 
-def make_release(version="0.3.4", *, bad_signature=False):
+def make_release(version="0.3.4", *, bad_signature=False, seed=SEED):
     tag = "v" + version
     files = {name: ("payload:" + name).encode() for name in assets.user_download_names(version)}
     text = (f"# version {tag}\n" + "".join(f"{hashlib.sha256(data).hexdigest()}  {name}\n" for name, data in sorted(files.items()))).encode()
-    files["SHA256SUMS"], files["SHA256SUMS.sig"] = text, b"x" * 64 if bad_signature else _sign(SEED, text)
+    files["SHA256SUMS"], files["SHA256SUMS.sig"] = text, b"x" * 64 if bad_signature else _sign(seed, text)
     payload = {"tag_name": tag, "draft": False, "prerelease": "-" in version, "body": "Release notes", "assets": [
         {"name": name, "state": "uploaded", "size": len(data), "browser_download_url": f"{RELEASE_ROOT}/{tag}/{name}"}
         for name, data in files.items()]}
@@ -58,7 +58,7 @@ def make_release(version="0.3.4", *, bad_signature=False):
 
 def client(tmp_path, release, **kwargs):
     payload, _, opener = release
-    return InstallerClient(running_version="0.3.3", data_dir=tmp_path / "data", repo_root=tmp_path / "app",
+    return InstallerClient(running_version=kwargs.pop("running_version", "0.3.3"), data_dir=tmp_path / "data", repo_root=tmp_path / "app",
         platform_name=assets.WINDOWS_PLATFORM,
         fetcher=kwargs.pop("fetcher", lambda url, etag: ReleaseResponse(payload, '"one"')),
         opener=kwargs.pop("opener", opener), clock=kwargs.pop("clock", lambda: 1000.0),
@@ -125,6 +125,11 @@ def test_ineligible_releases_never_become_available(release, mutation):
         payload["assets"][0]["state"] = "new"
     opener = lambda request, **kwargs: Stream(files[request.full_url.rsplit("/", 1)[-1]], request.full_url)
     assert eligible_release(payload, channel="beta", platform_name=assets.WINDOWS_PLATFORM, opener=opener) is None
+    # Stable fallback must preserve every eligibility refusal too.
+    fetcher = lambda url, etag: ReleaseResponse(None if url.endswith("/latest") else [payload])
+    found, proof, _ = check_releases(channel="stable", platform_name=assets.WINDOWS_PLATFORM,
+        fetcher=fetcher, opener=opener, responses={}, running_version="0.3.3")
+    assert found is proof is None
 
 
 @pytest.mark.parametrize("version", ["v00.3.4", "v0.03.4", "v0.3.04", "v0.3.4-rc.01", "v0.3.4-updates", "../v0.3.4", "v0.3", "v0.3.4+local"])
@@ -164,6 +169,119 @@ def test_beta_stops_after_five_pages(release):
         return ReleaseResponse([], link=f'<{ROOT}?per_page=100&page={len(calls)+1}>; rel="next"')
     assert check_releases(channel="beta", platform_name=assets.MACOS_PLATFORM, fetcher=fetcher, opener=release[2], responses={})[0] is None
     assert len(calls) == 5
+
+
+def releases_opener(*releases):
+    by_tag = {release[0]["tag_name"]: release[2] for release in releases}
+    def opener(request, **kwargs):
+        tag = request.full_url.rsplit("/", 2)[-2]
+        return by_tag[tag](request, **kwargs)
+    return opener
+
+
+def test_stable_latest_fast_path_does_not_fetch_release_list(tmp_path, release):
+    calls = []
+    def fetcher(url, etag):
+        calls.append(url)
+        assert url == ROOT + "/latest"
+        return ReleaseResponse(release[0])
+    instance = client(tmp_path, release, fetcher=fetcher)
+    assert checked(instance)["release"]["version"] == "0.3.4"
+    assert calls == [ROOT + "/latest"]
+    instance.close()
+
+
+def test_stable_skipped_transition_finds_newest_trusted_bridge_across_pages_and_downloads(tmp_path, release):
+    # Latest is signed by a new key the old client has never received.
+    latest = make_release("0.5.0", seed=bytes(reversed(range(32))))
+    bridge = make_release("0.4.0")
+    beta = make_release("0.6.0-rc.1")
+    page1, page2 = ROOT + "?per_page=100&page=1", ROOT + "?per_page=100&page=2"
+    calls = []
+    def fetcher(url, etag):
+        calls.append((url, etag))
+        if url.endswith("/latest"):
+            return ReleaseResponse(latest[0])
+        if url == page1:
+            return ReleaseResponse([latest[0], release[0], beta[0]], link=f'<{page2}>; rel="next"')
+        assert url == page2
+        return ReleaseResponse([bridge[0]])
+    instance = client(tmp_path, release, fetcher=fetcher, opener=releases_opener(latest, bridge, beta, release))
+    status = checked(instance)
+    assert status["availability"] == "available" and status["release"]["version"] == "0.4.0"
+    assert calls == [(ROOT + "/latest", None), (page1, None), (page2, None)]
+    callbacks = []
+    assert downloaded(instance, callbacks.append)["installState"] == "ready"
+    assert len(callbacks) == 1 and instance.verified_installer().version == "0.4.0"
+    instance.close()
+
+
+@pytest.mark.parametrize("running,expected", [("0.3.3", "available"), ("0.3.4", "current"), ("0.3.5", "incomplete")])
+def test_stable_fallback_never_offers_a_release_below_installed(tmp_path, release, running, expected):
+    latest = make_release("0.5.0", bad_signature=True)
+    def fetcher(url, etag):
+        return ReleaseResponse(latest[0] if url.endswith("/latest") else [release[0]])
+    instance = client(tmp_path, release, running_version=running, fetcher=fetcher, opener=releases_opener(latest, release))
+    status = checked(instance)
+    assert status["availability"] == expected
+    assert status["canInstall"] is (expected == "available")
+    assert (status["release"] is None) is (expected == "incomplete")
+    instance.close()
+
+
+def test_stable_fallback_reverifies_cached_latest_and_pages_on_304(release):
+    latest = make_release("0.5.0", seed=bytes(reversed(range(32))))
+    page = ROOT + "?per_page=100&page=1"
+    calls = []
+    def fetcher(url, etag):
+        calls.append((url, etag))
+        if etag:
+            return ReleaseResponse(not_modified=True)
+        return ReleaseResponse(latest[0] if url.endswith("/latest") else [release[0]], etag='"cached"')
+    args = dict(channel="stable", platform_name=assets.MACOS_PLATFORM, fetcher=fetcher,
+                opener=releases_opener(latest, release), running_version="0.3.3")
+    found, _, responses = check_releases(**args, responses={})
+    assert found["version"] == "0.3.4"
+    found, _, _ = check_releases(**args, responses=responses)
+    assert found["version"] == "0.3.4"
+    assert calls == [(ROOT + "/latest", None), (page, None), (ROOT + "/latest", '"cached"'), (page, '"cached"')]
+    release[1]["SHA256SUMS.sig"] = b"x" * 64
+    assert check_releases(**args, responses=responses)[0] is None
+
+
+def test_stable_fallback_stops_after_five_list_pages_and_never_accepts_unknown_key(release):
+    unknown = make_release("0.5.0", seed=bytes(reversed(range(32))))
+    calls = []
+    def fetcher(url, etag):
+        calls.append(url)
+        if url.endswith("/latest"):
+            return ReleaseResponse(unknown[0])
+        page = len(calls) - 1
+        return ReleaseResponse([unknown[0]], link=f'<{ROOT}?per_page=100&page={page+1}>; rel="next"')
+    found, proof, _ = check_releases(channel="stable", platform_name=assets.MACOS_PLATFORM,
+        fetcher=fetcher, opener=unknown[2], responses={}, running_version="0.3.3")
+    assert found is proof is None
+    assert calls == [ROOT + "/latest", *[ROOT + f"?per_page=100&page={page}" for page in range(1, 6)]]
+
+
+@pytest.mark.parametrize("bad_page", [{}, [None] * 101])
+def test_stable_fallback_refuses_malformed_or_unbounded_lists(release, bad_page):
+    latest = make_release(bad_signature=True)
+    def fetcher(url, etag):
+        return ReleaseResponse(latest[0] if url.endswith("/latest") else bad_page)
+    with pytest.raises(InstallerClientError, match="malformed or unbounded"):
+        check_releases(channel="stable", platform_name=assets.MACOS_PLATFORM, fetcher=fetcher,
+                       opener=latest[2], responses={}, running_version="0.3.3")
+
+
+def test_stable_fallback_refuses_untrusted_pagination_even_after_a_valid_candidate(release):
+    latest = make_release("0.5.0", bad_signature=True)
+    def fetcher(url, etag):
+        return ReleaseResponse(latest[0]) if url.endswith("/latest") else ReleaseResponse(
+            [release[0]], link='<https://example.com/releases?per_page=100&page=2>; rel="next"')
+    with pytest.raises(InstallerClientError, match="escaped"):
+        check_releases(channel="stable", platform_name=assets.MACOS_PLATFORM, fetcher=fetcher,
+                       opener=releases_opener(latest, release), responses={}, running_version="0.3.3")
 
 
 def test_cache_etag_six_hours_and_current_version_recomparison(tmp_path, release):

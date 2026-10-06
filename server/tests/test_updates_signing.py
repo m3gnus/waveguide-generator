@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from server.updates import ed25519, manifest
+from scripts import release_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -164,9 +165,9 @@ def test_the_embedded_key_is_a_placeholder_until_the_owner_pastes_the_real_one(
         assert len(bytes.fromhex(manifest.UPDATE_SIGNING_PUBLIC_KEY_HEX)) == 32
 
 
-def _script(*args: object) -> subprocess.CompletedProcess[str]:
+def _script(*args: object, script: Path = ROOT / "scripts" / "release_manifest.py") -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "release_manifest.py"), *map(str, args)],
+        [sys.executable, str(script), *map(str, args)],
         capture_output=True,
         text=True,
         check=False,
@@ -174,17 +175,29 @@ def _script(*args: object) -> subprocess.CompletedProcess[str]:
 
 
 def test_the_release_script_writes_and_verifies_on_a_bare_runner(tmp_path: Path) -> None:
+    # Isolate a bare-runner checkout with synthetic compiled trust; never allow
+    # the CLI's optional key argument to introduce an unaccepted public key.
+    checkout = tmp_path / "checkout"
+    updates = checkout / "server" / "updates"
+    updates.mkdir(parents=True)
+    script = checkout / "scripts" / "release_manifest.py"
+    script.parent.mkdir()
+    script.write_bytes((ROOT / "scripts" / "release_manifest.py").read_bytes())
+    (updates / "ed25519.py").write_bytes((ROOT / "server" / "updates" / "ed25519.py").read_bytes())
+    (updates / "manifest.py").write_text(
+        (ROOT / "server" / "updates" / "manifest.py").read_text().replace(manifest.UPDATE_SIGNING_PUBLIC_KEY_HEX, PUBLIC_HEX)
+    )
     files = tmp_path / "files"
     files.mkdir()
     (files / "x.dmg").write_bytes(b"x")
     out = tmp_path / "SHA256SUMS"
-    assert _script("write", "--tag", TAG, "--out", out, files / "x.dmg").returncode == 0
+    assert _script("write", "--tag", TAG, "--out", out, files / "x.dmg", script=script).returncode == 0
     sig = tmp_path / "SHA256SUMS.sig"
     sig.write_bytes(_sign(SEED, out.read_bytes()))
-    ok = _script("verify", "--tag", TAG, "--manifest", out, "--sig", sig, "--dir", files, "--public-key-hex", PUBLIC_HEX)
+    ok = _script("verify", "--tag", TAG, "--manifest", out, "--sig", sig, "--dir", files, "--public-key-hex", PUBLIC_HEX, script=script)
     assert ok.returncode == 0, ok.stderr
     (files / "x.dmg").write_bytes(b"changed")
-    bad = _script("verify", "--tag", TAG, "--manifest", out, "--sig", sig, "--dir", files, "--public-key-hex", PUBLIC_HEX)
+    bad = _script("verify", "--tag", TAG, "--manifest", out, "--sig", sig, "--dir", files, "--public-key-hex", PUBLIC_HEX, script=script)
     assert bad.returncode == 1 and "does not match" in bad.stderr
 
 
@@ -192,3 +205,52 @@ def test_the_script_refuses_a_secret_whose_key_is_not_the_embedded_one() -> None
     result = _script("pubkey-matches", PUBLIC_HEX)
     assert result.returncode == 1
     assert result.stderr.strip()
+
+
+@pytest.mark.parametrize("active_seed", [SEED, bytes(reversed(range(32)))])
+def test_release_tooling_two_key_transition_requires_active_signer_but_publishes_either_key(
+    tmp_path, monkeypatch, active_seed,
+) -> None:
+    new_seed = bytes(reversed(range(32)))
+    new_key = _keypair(new_seed)[1].hex()
+    active_key = _keypair(active_seed)[1].hex()
+    monkeypatch.setattr(manifest, "UPDATE_SIGNING_PUBLIC_KEY_HEX", active_key)
+    monkeypatch.setattr(manifest, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", (PUBLIC_HEX, new_key))
+    monkeypatch.setattr(release_manifest, "_load", lambda: manifest)
+    assert release_manifest.main(["pubkey-matches", active_key.upper()]) == 0
+    inactive_key = new_key if active_key == PUBLIC_HEX else PUBLIC_HEX
+    assert release_manifest.main(["pubkey-matches", inactive_key]) == 1
+    assert release_manifest.main(["pubkey-matches", _keypair(b"x" * 32)[1].hex()]) == 1
+
+    data, _, files = _release(tmp_path)
+    out, signature = tmp_path / "SHA256SUMS", tmp_path / "SHA256SUMS.sig"
+    out.write_bytes(data)
+    args = ["verify", "--tag", TAG, "--manifest", str(out), "--sig", str(signature), "--dir", str(files)]
+    for seed in (SEED, new_seed):
+        signature.write_bytes(_sign(seed, data))
+        assert release_manifest.main(args) == 0
+        assert release_manifest.main([*args, "--public-key-hex", _keypair(seed)[1].hex()]) == 0
+    signature.write_bytes(_sign(b"x" * 32, data))
+    assert release_manifest.main(args) == 1
+    assert release_manifest.main([*args, "--public-key-hex", _keypair(b"x" * 32)[1].hex()]) == 1
+    signature.write_bytes(_sign(SEED, data))
+    assert release_manifest.main([*args, "--tag", "v9.9.8"]) == 1
+    (files / "b.dmg").write_bytes(b"swapped")
+    assert release_manifest.main(args) == 1
+    (files / "b.dmg").write_bytes(b"payload b.dmg")
+    monkeypatch.setattr(manifest, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", (new_key,))
+    assert release_manifest.main(args) == 1  # retiring a key still refuses it
+
+
+@pytest.mark.parametrize("active,accepted", [
+    (PUBLIC_HEX, ()),
+    (PUBLIC_HEX, (_keypair(bytes(reversed(range(32))))[1].hex(),)),
+    ("0" * 64, ("0" * 64, PUBLIC_HEX)),
+    ("z" * 64, ("z" * 64,)),
+    ("aa" * 31, ("aa" * 31,)),
+])
+def test_release_signing_refuses_invalid_or_unaccepted_active_key(monkeypatch, active, accepted):
+    monkeypatch.setattr(manifest, "UPDATE_SIGNING_PUBLIC_KEY_HEX", active)
+    monkeypatch.setattr(manifest, "UPDATE_SIGNING_PUBLIC_KEYS_HEX", accepted)
+    monkeypatch.setattr(release_manifest, "_load", lambda: manifest)
+    assert release_manifest.main(["pubkey-matches", active]) == 1

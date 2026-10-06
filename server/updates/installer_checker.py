@@ -138,11 +138,12 @@ def next_page(link: str | None, *, current: str, page: int) -> str | None:
     return url
 
 
-def check_releases(*, channel: str, platform_name: str | None, fetcher: Callable, opener: Callable, responses: dict) -> tuple[dict | None, dict | None, dict]:
+def check_releases(*, channel: str, platform_name: str | None, fetcher: Callable, opener: Callable, responses: dict,
+                   running_version: str | None = None) -> tuple[dict | None, dict | None, dict]:
     root = f"{updates_api_base()}/repos/{GITHUB_REPOSITORY}/releases"
-    url = root + ("/latest" if channel == "stable" else "?per_page=100&page=1")
     refreshed = {}
-    for page in range(1, MAX_RELEASE_PAGES + 1):
+
+    def read_response(url: str) -> tuple[Any, str | None]:
         old = responses.get(url, {})
         response = fetcher(url, old.get("etag"))
         if response.not_modified:
@@ -153,11 +154,27 @@ def check_releases(*, channel: str, platform_name: str | None, fetcher: Callable
         else:
             payload, link = response.payload, response.link
             refreshed[url] = {"payload": payload, "link": link, "etag": response.etag}
-        candidates = [payload] if channel == "stable" else payload
+        return payload, link
+
+    if channel == "stable":
+        payload, _ = read_response(root + "/latest")
+        result = eligible_release(payload, channel=channel, platform_name=platform_name, opener=opener)
+        if result is not None:
+            return *result, refreshed
+
+    # An old client may not trust latest's signing key. Find a signed bridge
+    # without relaxing eligibility or offering a version below its installation.
+    minimum = version_precedence(running_version) if running_version is not None else None
+    best = None
+    best_version = None
+    url = root + "?per_page=100&page=1"
+    for page in range(1, MAX_RELEASE_PAGES + 1):
+        candidates, link = read_response(url)
         if not isinstance(candidates, list) or len(candidates) > 100:
             raise InstallerClientError("Release list is malformed or unbounded.")
-        # Read the highest eligible version on the first page with a candidate.
-        # Sorting before signature fetches avoids reading every older manifest.
+        # GitHub pages are not guaranteed to be in SemVer order. Stable fallback
+        # takes the highest verified version across all bounded pages; beta keeps
+        # its existing first-eligible-page behavior.
         ordered = []
         for candidate in candidates:
             try:
@@ -165,14 +182,22 @@ def check_releases(*, channel: str, platform_name: str | None, fetcher: Callable
                     ordered.append((version_precedence(candidate["tag_name"]), candidate))
             except InstallerClientError:
                 continue
-        for _, candidate in sorted(ordered, key=lambda item: item[0], reverse=True):
+        for version, candidate in sorted(ordered, key=lambda item: item[0], reverse=True):
+            if channel == "stable" and ((minimum is not None and version < minimum)
+                                         or (best_version is not None and version <= best_version)):
+                continue
             result = eligible_release(candidate, channel=channel, platform_name=platform_name, opener=opener)
             if result is not None:
-                return *result, refreshed
-        if channel == "stable" or page == MAX_RELEASE_PAGES:
+                if channel != "stable":
+                    return *result, refreshed
+                best, best_version = result, version
+                break
+        if page == MAX_RELEASE_PAGES:
             break
         following = next_page(link, current=url, page=page)
         if following is None:
             break
         url = following
+    if best is not None:
+        return *best, refreshed
     return None, None, refreshed

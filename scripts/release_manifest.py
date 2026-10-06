@@ -6,7 +6,7 @@ by path instead of importing the ``server`` package (whose ``__init__`` chain pu
 in the web framework).
 
     write   --tag T --out FILE FILE...   manifest bytes with the version line
-    pubkey-matches HEX                   HEX must equal the embedded public key
+    pubkey-matches HEX                   HEX must be the active, accepted key
     verify  --tag T --manifest M --sig S --dir D [--public-key-hex HEX]
                                          signature, version == tag, and every
                                          listed file in D against its checksum
@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     verify.add_argument("--manifest", type=Path, required=True)
     verify.add_argument("--sig", type=Path, required=True)
     verify.add_argument("--dir", type=Path, required=True)
-    verify.add_argument("--public-key-hex", default=manifest.UPDATE_SIGNING_PUBLIC_KEY_HEX)
+    verify.add_argument("--public-key-hex", help="restrict verification to one compiled accepted key")
     args = parser.parse_args(argv)
 
     try:
@@ -58,17 +58,31 @@ def main(argv: list[str] | None = None) -> int:
                     "the embedded public key is still the placeholder; paste the "
                     "key from docs/reference/UPDATE-SIGNING.md step 3 and land it first"
                 )
+            try:
+                decoded = bytes.fromhex(embedded)
+            except ValueError as exc:
+                raise manifest.ManifestError("the active signing key is not hex") from exc
+            if len(decoded) != 32:
+                raise manifest.ManifestError("the active signing key has an invalid length")
+            if embedded not in manifest.UPDATE_SIGNING_PUBLIC_KEYS_HEX:
+                raise manifest.ManifestError("the active signing key is not in the compiled accepted keys")
             if args.public_key_hex.lower() != embedded:
                 raise manifest.ManifestError(
                     "the signing secret's public key is not the key embedded in this commit"
                 )
         else:
-            entries = manifest.verify_manifest(
-                args.manifest.read_bytes(),
-                args.sig.read_bytes(),
-                args.tag,
-                public_key_hex=args.public_key_hex,
-            )
+            if args.public_key_hex is not None:
+                args.public_key_hex = args.public_key_hex.lower()
+                if args.public_key_hex not in manifest.UPDATE_SIGNING_PUBLIC_KEYS_HEX:
+                    raise manifest.ManifestError("the verification key is not in the compiled accepted keys")
+            # Always apply compiled trust, including malformed-key refusals.
+            data, signature = args.manifest.read_bytes(), args.sig.read_bytes()
+            entries = manifest.verify_manifest(data, signature, args.tag)
+            if args.public_key_hex is not None:
+                manifest.verify_manifest(
+                    data, signature, args.tag,
+                    public_key_hex=args.public_key_hex,
+                )
             for name in entries:
                 manifest.verify_file(entries, name, args.dir / name)
     except (manifest.ManifestError, OSError) as exc:

@@ -224,7 +224,8 @@ class InstallerClient:
         error = None
         try:
             release, proof, refreshed = check_releases(channel=channel, platform_name=self.platform_name,
-                                                      fetcher=self.fetcher, opener=self.opener, responses=responses)
+                                                      fetcher=self.fetcher, opener=self.opener, responses=responses,
+                                                      running_version=self.running_version)
         except Exception as exc:  # remote failures are status, never startup failures
             release = proof = None
             refreshed = responses
