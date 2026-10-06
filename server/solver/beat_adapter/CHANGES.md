@@ -500,3 +500,111 @@ user/HBB-directory writes or commits. Real CAD-ingestion companion tests were
 identified but not run under the light-check constraint; imported solve tests
 use recorded geometry and fake workers. All requested code work is complete;
 real installed CPU/Metal and performance qualification remains a separate gate.
+
+## PLAN slice 9 — Review round 1 (f0af3ea6)
+
+- **P1-1 — fixed, because strict import-linter rejects stale ignores:** removed
+  the deleted `official_beat -> jobs.models` edge. Added exact declarations for
+  the existing request/capability adapters' job-model types; no wildcard rule.
+  `lint-imports --no-cache` checks all six contracts.
+- **P1-2 — fixed, because ephemeral monitor threads retained store connections:**
+  `JobStore.cancellation_state` shares one checkpoint connection under the
+  existing store lock, with `close()` owning its lifetime. This is smaller than
+  a global session scheduler or solver-to-jobs cleanup coupling and retains
+  cached write connections. Forty real-temp-store sessions assert stable
+  `_connections` and open FD counts (macOS/Linux).
+- **P2-a — fixed, because boot/legacy warm-up probed HBB when selected:** official
+  selection reads `production_statuses`, the readiness source for registry/AUTO
+  rows; OFF retains HBB probes. Tests cover CPU, Metal, unavailable and legacy
+  family selection without starting any engine; an unavailable official legacy
+  family skips warm-up while OFF retains its historical fallback.
+- **P2-b — fixed, because transport startup status was dropped:** thread the
+  solve's status callback through session admission/start/submit, preserving
+  setup-stage initialization, Julia compile lines and ready messages.
+- **P2-c — fixed, because callback failures could look like successful partial
+  cancellation:** propagate the original callback exception after direct checks
+  and monitor-driven interrupted reads, including terminal races. Production
+  final checkpoints also run on cancelled results. Tests cover the job's real
+  cancellation exception, SQLite OperationalError and KeyboardInterrupt, with
+  zero/one rows, parametric/imported/plain/adaptive paths. Engine cancellation
+  without a caller exception can still return an explicitly cancelled prefix.
+- **P2-d — fixed, because official metadata was credited to HBB's pin:** Python
+  and TypeScript recognize `engine="beat-engine"`; imported solver-engine blocks
+  remain authoritative. Regressions require the matching provider pin for both
+  result shapes and retain HBB pin resolution. Frontend test fixtures now use
+  module-relative URLs so the requested npm command works from the repo root.
+- **P3 symmetry wording — fixed, because official refusal named HBB:** use BEAT
+  wording on that branch; OFF messages remain unchanged.
+- **P3 request refusals — fixed, because request ValueErrors escaped:** official
+  parametric/imported build errors and parametric baffle refusal become
+  BeatUnavailable with the original message. Refusal tests pin type/message;
+  a missing source-tag-2 frame refuses before submission.
+- **P3 duplicate compilation — fixed, because response_config rebuilt topology:**
+  build once per parametric solve/imported channel and reuse the frame, mesh,
+  loading and observations; acquired batches replace only their frequency list.
+  Plain/adaptive tests count builds and compare submitted compiled systems.
+- **P3 ambient selector — fixed, because developer environment changed tests:**
+  clear WG2_BEAT_PROVIDER before collection and in a root autouse fixture;
+  tests needing official selection explicitly set it.
+- **P3 lost guards — fixed (restored coverage), because the production bridge
+  must preserve its boundary:** discovery/assets map to OfficialBeatUnavailable;
+  millimetre input scales frame origin/area while radius stays metres; blocked
+  zero-row cancellation rethrows the original callback exception. The first two
+  implementation guards were already present; regressions now protect them.
+- **P3 explicit mesh scale/precision — fixed, because retained traces used the
+  unscaled mesh:** scale the response artifact's node coordinates to metres
+  after building the request, retaining IDs/tags/order; precision metadata
+  follows the actual negotiated float32/float64 request.
+- **P3 cancelled channel lists — fixed, because missing channels were advertised:**
+  filter channel_order and basis metadata to acquired channel results; a
+  first-channel cancellation test includes an unacquired combined channel.
+- **P3 registry version — fixed, because selected rows discarded engine version:**
+  read lazy distribution metadata for beat-engine and retain it at detection and
+  live refresh, including provisioning rows, without importing either engine.
+  Regressions check detection, refresh and provisioning.
+- **P3 architecture doc — fixed, because it described the deleted prototype:**
+  document selected production routing, shared adapters, managed sessions and
+  remaining installed/numerical qualification gates.
+- **Notes — recorded, no change requested:** readiness remains recomputed per
+  solve. Monitors still poll at 20 Hz; after P1-2 these checks reuse a bounded
+  store connection rather than opening one per session. The pre-existing 0.25 s
+  cancel retirement grace remains. No objections to the requested findings.
+
+Files per PR / manifest row (shared files span the review slices):
+
+- **W2 / request, frame and provider selection:**
+  `server/solver/{beat,beat_imported,official_beat,warmup}.py`;
+  `server/solver/beat_adapter/mesh.py`; `server/engines/registry.py`;
+  `server/tests/beat_adapter/test_request.py`;
+  `server/tests/{test_official_beat_bridge,test_beat_warmup_selection}.py`.
+- **W3 / result provenance and artifact metadata:**
+  `server/solver/{beat,beat_imported,power_qualification}.py`;
+  `frontend/src/results/powerQualification{,.test}.ts`;
+  `server/tests/{test_power_qualification,test_official_beat_bridge}.py`.
+- **W5 / session, callback and sweep lifetime:**
+  `server/solver/{official_beat,beat,beat_imported}.py`;
+  `server/solver/beat_runtime/{session,manager}.py`; `server/jobs/store.py`;
+  `server/tests/beat_runtime/test_session.py`;
+  `server/tests/test_official_beat_bridge.py`.
+- **Shared W2/W3/W5:** `.importlinter`; `conftest.py`; this file;
+  `docs/architecture/OFFICIAL-BEAT-BRIDGE.md`.
+
+Design deviations: official JWSound remains the target. Callback-raised real
+job cancellation must reach the caller so the job transitions to cancelled;
+retaining partial rows is allowed only when that exception remains observable.
+The smallest resource fix is a store-owned checkpoint connection, not a new
+monitor scheduler. Batch reuse changes only WG-owned request construction.
+No engine-specific behaviour, pins, requirements, HBB files, CUDA/ROCm or
+numerical solves changed. Changes remain uncommitted as explicitly requested.
+
+Validation (requested interpreter, unpiped, every command below two minutes):
+required runtime/adapter/production/imported/adaptive/registry/CPU selection plus
+new warm-up and touched power-qualification files: **1827 passed, 1 skipped in
+113.30 s**. After the final provisioning-version and unavailable-legacy-warm-up
+edge checks, assets + bridge + warm-up + registry + startup-performance tests:
+**253 passed in 12.75 s** (overlaps the larger run). Node **20.20.2**, requested
+`npm --prefix frontend exec vitest run src/results/powerQualification.test.ts`:
+**16 passed**. `ruff check server conftest.py`, `lint-imports --no-cache` (**6
+contracts kept**) and `git diff --check` pass. The unchanged selector-OFF golden
+fixture test passes. No requested review finding remains unfinished; real Julia,
+installed-platform and numerical qualification were deliberately not run.

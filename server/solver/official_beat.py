@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from copy import copy
+from dataclasses import replace
+from importlib.metadata import PackageNotFoundError, version
 import importlib
 from types import SimpleNamespace
 from typing import Any
@@ -12,8 +14,7 @@ import numpy as np
 
 from .beat_adapter.request import CompiledRequest
 from .beat_adapter.results import ResultContractError, SweepResult, map_sweep
-from .beat_runtime.assets import AssetsUnavailable
-from .beat_runtime.discovery import JuliaDiscoveryError
+from .beat_runtime import assets, discovery
 from .beat_runtime.manager import WorkerManager, get_manager
 from .beat_runtime.session import SolveSession
 from .context import SolverContext
@@ -29,13 +30,27 @@ class OfficialBeatUnavailable(BeatUnavailable):
 OfficialBeatProtocolError = ResultContractError
 
 
+def engine_version() -> str | None:
+    """Read installed distribution metadata without importing either engine."""
+    try:
+        return version("beat-engine")
+    except PackageNotFoundError:
+        return None
+
+
+def batch_request(request: CompiledRequest, frequencies: Sequence[float]) -> CompiledRequest:
+    """Reuse compiled topology and its frame for each acquired batch."""
+    return replace(request, wire=dict(request.wire, frequencies_hz=list(frequencies)))
+
+
 def production_statuses() -> dict[str, dict[str, Any]]:
     """Read matching compiled proof; static engine capabilities are insufficient."""
     from .beat_runtime import readiness
 
     statuses = readiness.beat_backend_statuses()
+    installed_version = engine_version()
     for backend in ("cpu", "metal"):
-        statuses[backend] = dict(statuses[backend], surface_traces=True)
+        statuses[backend] = dict(statuses[backend], surface_traces=True, version=installed_version)
     return statuses
 
 
@@ -104,8 +119,9 @@ def solve_compiled(
             client = (worker_manager or get_manager()).get_worker(
                 options["bem_backend"], julia_executable=julia_executable,
             )
-            session.submit(client, wire, negotiate=contract.negotiate_submission)
-        except (JuliaDiscoveryError, AssetsUnavailable) as exc:
+            session.submit(client, wire, negotiate=contract.negotiate_submission,
+                           status_callback=status_callback)
+        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable) as exc:
             raise OfficialBeatUnavailable(str(exc)) from exc
         events = session.events()
 
@@ -121,6 +137,7 @@ def solve_compiled(
                             cancellation_callback()
                         except BaseException:
                             session.request_cancel()
+                            raise
             finally:
                 events.close()
 
@@ -137,6 +154,8 @@ def solve_compiled(
             progress_callback=progress_callback, on_frequency_result=on_frequency_result,
             request_cancel=session.request_cancel,
         )
+        session.close()
+        session.raise_callback_error()
         if native.cancelled and not len(native.frequencies_hz):
             raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
         return native

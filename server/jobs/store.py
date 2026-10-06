@@ -523,6 +523,7 @@ class JobStore:
         self._local = threading.local()
         self._connections: set[sqlite3.Connection] = set()
         self._connections_lock = threading.Lock()
+        self._cancellation_connection: sqlite3.Connection | None = None
         self._closed = False
         # Set on the first connection; the mode SQLite granted, not the one asked for.
         self.journal_mode_status: JournalModeStatus | None = None
@@ -2048,8 +2049,14 @@ class JobStore:
         question that is two booleans wide.
         """
 
-        with self._lock, self._connection() as conn:
-            row = conn.execute(
+        # Short-lived solve monitors share one checkpoint connection. The store
+        # lock serializes its use, and close() owns it like every other connection.
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("JobStore is closed")
+            if self._cancellation_connection is None:
+                self._cancellation_connection = self._connect()
+            row = self._cancellation_connection.execute(
                 "SELECT status, cancellation_requested FROM simulation_jobs WHERE id = ?",
                 (job_id,),
             ).fetchone()
@@ -3400,6 +3407,7 @@ class JobStore:
                 except sqlite3.Error:  # pragma: no cover - closing twice is harmless
                     pass
             self._local = threading.local()
+            self._cancellation_connection = None
 
     def make_durable(self) -> None:
         """Flush accepted jobs before the ledger/acknowledgement names them."""

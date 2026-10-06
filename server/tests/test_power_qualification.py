@@ -729,3 +729,25 @@ def test_reopening_an_archived_record_reuses_its_read_time_flags(
     assert len(calls) == 1
     assert json.loads(first[0])["metadata"]["power_qualification"]["status"] == "unqualified"
     store.close()
+
+
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("official", [False, True])
+@pytest.mark.parametrize("available_pin", ["beat-engine", "hornlab-beat-bem"])
+def test_beat_provenance_requires_its_own_provider_pin(imported, official, available_pin):
+    payload = _channel([.1], formulation="burton_miller")
+    package = "beat-engine" if official else "hornlab-beat-bem"
+    payload["metadata"].update(engine=package, solver_backend="beat")
+    payload["metadata"].pop("metal")
+    payload["metadata"]["beat"] = {"formulation": "burton_miller"}
+    wrapper = None
+    if imported:
+        wrapper = {"metadata": {"solver_engine": {"package": package}},
+                   "provenance": {"dependency_shas": {available_pin: PIN}}}
+        payload.pop("provenance")
+    else:
+        payload["provenance"] = {"dependency_shas": {available_pin: PIN}}
+    flags = qualify_channel(payload, wrapper)
+    assert flags["provenance"]["package"] == package
+    assert flags["provenance"]["solver_pin"] == (PIN if package == available_pin else None)
+    assert flags["status"] == ("qualified" if package == available_pin else "unknown")

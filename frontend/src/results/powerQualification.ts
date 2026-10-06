@@ -146,7 +146,7 @@ function clientProvenance(result: ResultPayload, wrapper: ResultPayload): { form
   const engine = typeof metadata.engine === 'string' ? metadata.engine : null;
   const pkg = typeof engineBlock.package === 'string'
     ? engineBlock.package
-    : engine?.startsWith('hornlab-') ? engine
+    : (engine?.startsWith('hornlab-') || engine === 'beat-engine') ? engine
       : typeof backend === 'string' ? ENGINE_PACKAGES[backend] ?? null : null;
   const provenance = record((wrapper as { provenance?: unknown }).provenance) ?? record((result as { provenance?: unknown }).provenance) ?? {};
   const pins = record(provenance.installed_dependency_shas) ?? record(provenance.dependency_shas) ?? {};

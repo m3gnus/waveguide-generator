@@ -195,7 +195,7 @@ def _provenance(
         engine_block.get("package")
         if isinstance(engine_block.get("package"), str)
         else engine
-        if engine and engine.startswith("hornlab-")
+        if engine and (engine.startswith("hornlab-") or engine == "beat-engine")
         else _ENGINE_PACKAGES.get(str(backend)) if backend else None
     )
     device = _mapping(metadata.get("device_interface"))

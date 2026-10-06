@@ -609,7 +609,12 @@ def solve_beat_from_msh_text(
             "The HornLab BEAT adapter cannot apply a rigid ground plane; "
             "select a ground-plane-capable engine."
         )
-    reject_beat_infinite_baffle(context)
+    try:
+        reject_beat_infinite_baffle(context)
+    except ValueError as exc:
+        if official:
+            raise BeatUnavailable(str(exc)) from exc
+        raise
     if official:
         from .official_beat import production_statuses
 
@@ -660,21 +665,26 @@ def solve_beat_from_msh_text(
         plane = native_symmetry_plane(context)
         if plane in {"xz", "xy"}:
             raise BeatUnavailable(
-                "hornlab-beat-bem native symmetry supports 'yz' half and 'yz+xz' "
+                "BEAT native symmetry supports 'yz' half and 'yz+xz' "
                 f"quarter domains; {plane!r} is not "
                 "representable by the BEAT Engine solver"
             )
         from .beat_adapter.request import build_parametric_request
-        from .official_beat import response_config, solve_compiled, sort_official_result
+        from .official_beat import batch_request, response_config, solve_compiled, sort_official_result
 
-        def compiled_request(frequencies):
-            return build_parametric_request(
-                msh_text, context, frequencies_hz=frequencies, backend=backend,
+        try:
+            compiled = build_parametric_request(
+                msh_text, context, frequencies_hz=live_execution_frequencies(context), backend=backend,
                 engine_id=beat_engine_name(backend), surface_traces=retain_traces,
                 precision=_precision, mesh_scale_to_m=_mesh_scale_to_m,
             )
+        except ValueError as exc:
+            raise BeatUnavailable(str(exc)) from exc
+        config = response_config(compiled, context)
+        if _mesh_scale_to_m != 1.0:
+            from .beat_adapter.mesh import scale_msh_text
 
-        config = response_config(compiled_request(live_execution_frequencies(context)), context)
+            msh_text = scale_msh_text(msh_text, _mesh_scale_to_m)
     else:
         observation = observation_config(
             context,
@@ -770,7 +780,7 @@ def solve_beat_from_msh_text(
     if official:
         def solve_batch(frequencies):
             return solve_compiled(
-                compiled_request(frequencies), channel_id="source", worker_manager=_worker_manager,
+                batch_request(compiled, frequencies), channel_id="source", worker_manager=_worker_manager,
                 julia_executable=_julia_executable, cancellation_callback=cancellation_callback,
                 progress_callback=progress,
                 on_frequency_result=None if adaptive else on_frequency_result,
@@ -862,7 +872,7 @@ def solve_beat_from_msh_text(
                     path.unlink(missing_ok=True)
                 except OSError as exc:
                     logger.warning("Could not remove temporary BEAT mesh %s: %s", path, exc)
-    if cancellation_callback and not (official and getattr(result, "cancelled", False)):
+    if cancellation_callback:
         cancellation_callback()
     if stage_callback:
         stage_callback("finalizing", 1.0, "Packaging BEAT Engine solver results")
@@ -905,7 +915,7 @@ def solve_beat_from_msh_text(
                 "q=i*rho*omega*v_n on a 1 m/s velocity basis, rescaled to "
                 "unit normal acceleration by the package"
             ),
-            "precision": "single",
+            "precision": ("double" if _precision == "float64" else "single") if official else "single",
             "solver_log": json_safe_native_value(response_solver_log(solver_log)),
         },
     }

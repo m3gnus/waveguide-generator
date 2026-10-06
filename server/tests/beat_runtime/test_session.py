@@ -89,7 +89,8 @@ def test_backstop_interrupts_blocked_read_and_preserves_partial_results(staging)
         events = session.events()
         assert next(events)["type"] == "result"
         cancel.set()
-        assert next(events) == {"type": "cancelled", "solved_count": 1}
+        with pytest.raises(RuntimeError, match="job cancelled"):
+            next(events)
     assert worker.retirements == 1
     assert list(staging.iterdir()) == []
 
@@ -346,3 +347,49 @@ def test_windows_open_mesh_cleanup_error_does_not_mask_cancelled_result(staging,
         for cleanup in temporaries:
             cleanup()
     assert list(staging.iterdir()) == []
+
+
+def test_many_monitors_share_one_store_connection(staging):
+    import os
+    import sys
+    from server.jobs.store import JobStore
+
+    store = JobStore(staging / "jobs.sqlite")
+    store.initialize()
+    counts = []
+
+    def fd_count():
+        if sys.platform.startswith("linux"):
+            return len(os.listdir("/proc/self/fd"))
+        if sys.platform == "darwin":
+            import resource
+            maximum = min(resource.getrlimit(resource.RLIMIT_NOFILE)[0], 4096)
+            count = 0
+            for fd in range(maximum):
+                try:
+                    os.fstat(fd)
+                    count += 1
+                except OSError:
+                    pass
+            return count
+        return 0
+
+    try:
+        for _ in range(40):
+            checked = threading.Event()
+
+            def check():
+                store.cancellation_state("missing")
+                if threading.current_thread().name == "beat-solve-cancel":
+                    checked.set()
+
+            with SolveSession(cancellation_callback=check) as session:
+                session.submit(ManagedWorker(Worker(), "child"), {})
+                assert checked.wait(1)
+                assert list(session.events())[-1]["type"] == "completed"
+            counts.append((len(store._connections), fd_count()))
+        assert len(set(counts)) == 1
+        assert counts[0][0] <= 2
+    finally:
+        store.close()
+    assert not store._connections

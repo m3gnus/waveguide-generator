@@ -679,7 +679,7 @@ def solve_imported_beat_from_msh_text(
         raise BeatUnavailable(PASSIVE_CARDIOID_REFUSAL)
     if official:
         from .official_beat import (
-            production_statuses, response_config, solve_compiled, sort_official_result,
+            batch_request, production_statuses, response_config, solve_compiled, sort_official_result,
             common_artifact_results,
         )
         from .beat_adapter.request import build_imported_request
@@ -929,14 +929,15 @@ def solve_imported_beat_from_msh_text(
                 return True
 
             if official:
-                def compiled_request(batch):
-                    return build_imported_request(
-                        msh_text, channel_context, record, [channel], frequencies_hz=batch,
+                try:
+                    compiled = build_imported_request(
+                        msh_text, channel_context, record, [channel], frequencies_hz=frequencies,
                         engine_id=beat_engine_name(backend), backend=backend,
                         surface_traces=retain_traces,
                     )
-
-                config = response_config(compiled_request(frequencies), channel_context)
+                except ValueError as exc:
+                    raise BeatUnavailable(str(exc)) from exc
+                config = response_config(compiled, channel_context)
             else:
                 try:
                     config = package.SolveConfig(
@@ -1037,7 +1038,7 @@ def solve_imported_beat_from_msh_text(
                         if official:
                             def solve_batch(batch):
                                 return solve_compiled(
-                                    compiled_request(batch), channel_id=channel.id,
+                                    batch_request(compiled, batch), channel_id=channel.id,
                                     cancellation_callback=cancellation_callback,
                                     progress_callback=progress, status_callback=stage_status,
                                 )
@@ -1084,7 +1085,7 @@ def solve_imported_beat_from_msh_text(
                                 )
                     elif official:
                         result = solve_compiled(
-                            compiled_request(frequencies), channel_id=channel.id,
+                            batch_request(compiled, frequencies), channel_id=channel.id,
                             cancellation_callback=cancellation_callback, progress_callback=progress,
                             on_frequency_result=on_frequency_result if result_callback else None,
                             status_callback=stage_status,
@@ -1114,7 +1115,7 @@ def solve_imported_beat_from_msh_text(
             break
 
     cancelled = official and any(getattr(r, "cancelled", False) for r in sorted_results.values())
-    if cancellation_callback and not cancelled:
+    if cancellation_callback:
         cancellation_callback()
     if stage_callback:
         stage_callback("finalizing", 1.0, "Packaging imported drive-channel bases")
@@ -1225,11 +1226,14 @@ def solve_imported_beat_from_msh_text(
 
     per_source_validity = imported_validity_metadata(record)
     artifact_results = common_artifact_results(sorted_results) if cancelled else sorted_results
+    if cancelled:
+        channel_order = [name for name in channel_order if name in channels]
+    basis_metadata = channel_basis_metadata(
+        geometry, record, source_tags, driver_payloads, axial_identity)
+    basis_metadata = {name: value for name, value in basis_metadata.items() if name in artifact_results}
     channel_bases_npz = serialize_channel_bases(
         artifact_results,
-        metadata_by_id=channel_basis_metadata(
-            geometry, record, source_tags, driver_payloads, axial_identity
-        ),
+        metadata_by_id=basis_metadata,
     )
     first_config = configs[geometry.drive_channels[0].id]
     if geometry.combine is not None and not cancelled:

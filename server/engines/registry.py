@@ -392,16 +392,15 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
 
 def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
     from server.solver import beat_cpu_runtime
+    from server.solver.official_beat import engine_version, production_statuses
 
     if beat_cpu_runtime.cpu_preparation_in_flight():
         cpu = beat_cpu_runtime.cpu_runtime_readiness(None)
         return {backend: {"available": False, "state": "provisioning", "backend": backend,
-                          "reason": cpu.reason if backend == "cpu" else (
+                          "version": engine_version(), "reason": cpu.reason if backend == "cpu" else (
                               beat_cpu_runtime.gpu_preparation_reason(backend) or "Waiting for BEAT CPU preparation.")}
                 for backend in ("cpu", "metal")}
-    from server.solver.beat_runtime import readiness
-
-    return readiness.beat_backend_statuses()
+    return production_statuses()
 
 
 def _beat_row_updates(
@@ -1059,7 +1058,8 @@ class EngineRegistry:
                                 _beat_engine_info(beat_engine_backend(item.name), {
                                     "available": updates[item.name][0],
                                     "reason": updates[item.name][1],
-                                    "version": None if selected else getattr(package, "__version__", item.version),
+                                    "version": self.official_runtime_statuses[beat_engine_backend(item.name)].get("version")
+                                    if selected else getattr(package, "__version__", item.version),
                                     "surface_traces": True if selected else _package_retains_surface_traces(package),
                                 })
                                 if item.name in updates

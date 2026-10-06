@@ -389,3 +389,17 @@ def test_pure_request_parity_runs_without_optional_checkout_or_packages(build, m
 
 def test_ground_clearance_is_sent_only_with_a_ground_plane(build):
     assert "ground_plane_min_clearance_m" not in build(ground_plane_min_clearance_m=.4).wire["solver_options"]
+
+
+def test_parametric_millimetres_scale_frame_area_but_not_polar_radius():
+    from pathlib import Path
+
+    text = (Path(__file__).parents[2] / "solver" / "warmup_mesh.msh").read_text()
+    context = SolverContext(design=None, frequency_range=(500., 2000.), num_frequencies=3)
+    metre = adapter.build_parametric_request(text, context, precision="float64")
+    scaled = adapter.build_parametric_request(text, context, precision="float64", mesh_scale_to_m=.001)
+    for name in ("origin", "mouth_center", "source_center"):
+        np.testing.assert_allclose(scaled.frame[name], np.asarray(metre.frame[name]) * .001)
+    assert scaled.channel_loading["source"].area_m2 == pytest.approx(metre.channel_loading["source"].area_m2 * 1e-6)
+    for points in scaled.layout.points_m.values():
+        np.testing.assert_allclose(np.linalg.norm(points - scaled.frame["origin"], axis=1), 2.)

@@ -92,7 +92,8 @@ class SolveSession:
                 return
 
     def submit(self, client: ManagedWorker, payload: Mapping[str, Any], *,
-               negotiate: Callable[[dict | None, dict, str], Any] | None = None) -> None:
+               negotiate: Callable[[dict | None, dict, str], Any] | None = None,
+               status_callback: Callable[[str], None] | None = None) -> None:
         if self.request_path is None or self._submitted or self._closed:
             raise RuntimeError("Session must be entered and submitted only once")
         self._submitted = True
@@ -107,12 +108,13 @@ class SolveSession:
             with self._lock:
                 self._lease = lease
             self._check()
-            lease.start()
+            lease.start(status_callback=status_callback)
             self._check()
             if negotiate is not None:
                 negotiate(lease.client.worker_info, request, "solve")
             self._check()
-            self._stream = lease.submit(self.request_path)
+            self._stream = lease.submit(self.request_path, **(
+                {"status_callback": status_callback} if status_callback is not None else {}))
         except BaseException:
             with contextlib.suppress(BaseException):
                 self.close()
@@ -130,6 +132,8 @@ class SolveSession:
                 try:
                     event = next(self._stream)
                 except BaseException as exc:
+                    if self._error is not None:
+                        raise self._error
                     if self._cancel.is_set():
                         if not self._results:
                             raise self._error or SessionCancelled("BEAT solve cancelled")
@@ -143,7 +147,7 @@ class SolveSession:
                     self._results += 1
                 if kind in {"completed", "cancelled", "failed"}:
                     self._lease.finish(kind)
-                    if kind == "cancelled" and not self._results and self._error is not None:
+                    if self._error is not None:
                         raise self._error
                     yield event
                     return
@@ -154,6 +158,11 @@ class SolveSession:
             raise
         finally:
             self.close()
+
+    def raise_callback_error(self) -> None:
+        """Re-raise the caller exception, including after a terminal race."""
+        if self._error is not None:
+            raise self._error
 
     def close(self) -> None:
         with self._lock:

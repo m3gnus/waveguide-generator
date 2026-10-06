@@ -73,7 +73,7 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Iterator, Mapping
+from typing import Any, Iterator, Mapping
 
 
 log = logging.getLogger("wg.solver.warmup")
@@ -307,6 +307,23 @@ def _warm_bempp(status: Mapping[str, object]) -> None:
     prewarm_bempp_process()
 
 
+def _warmup_beat_status() -> dict[str, Any]:
+    """Select from the same official readiness rows AUTO uses."""
+    from .beat_runtime.provider import official_selected
+    from . import beat
+
+    if not official_selected():
+        return beat.beat_status()
+    from .official_beat import production_statuses
+
+    statuses = production_statuses()
+    for backend in ("metal", "cpu"):
+        if statuses[backend].get("available"):
+            return statuses[backend]
+    return {"available": False, "reason": "; ".join(
+        str(statuses[backend].get("reason", "")) for backend in ("metal", "cpu"))}
+
+
 def _beat_cpu_leads_bempp() -> bool:
     """Whether AUTO would reach a provisioned BEAT CPU runtime before BEMPP.
 
@@ -325,7 +342,14 @@ def _beat_cpu_leads_bempp() -> bool:
     cpu_engine = beat_adapter.beat_engine_name(beat_adapter.BEAT_CPU_BACKEND)
     if order.index(cpu_engine) > order.index("bempp"):
         return False
-    statuses = beat_adapter.beat_backend_statuses()
+    from .beat_runtime.provider import official_selected
+
+    if official_selected():
+        from .official_beat import production_statuses
+
+        statuses = production_statuses()
+    else:
+        statuses = beat_adapter.beat_backend_statuses()
     return bool(statuses.get(beat_adapter.BEAT_CPU_BACKEND, {}).get("available"))
 
 
@@ -354,7 +378,7 @@ def _run_warmup() -> None:
             # half, which is the half that outranks BEMPP everywhere.
             from server.solver import beat as beat_adapter
 
-            beat_status = beat_adapter.beat_status()
+            beat_status = _warmup_beat_status()
             beat_backend = (
                 beat_adapter.resolve_beat_backend(beat_status)
                 if beat_status.get("available")
@@ -524,7 +548,13 @@ def prewarm_beat_worker_for_engine(engine: str | None) -> bool:
             # selectable, which the registry could not map to an available
             # variant. Letting the package's own probe choose is what this hook
             # did for that name before the split, and it beats warming nothing.
-            backend = beat_adapter.resolve_beat_backend(beat_adapter.beat_status())
+            status = _warmup_beat_status()
+            from .beat_runtime.provider import official_selected
+
+            if official_selected() and not status.get("available"):
+                log.info("BEAT worker prewarm skipped: %s", status.get("reason"))
+                return False
+            backend = beat_adapter.resolve_beat_backend(status)
         log.info("BEAT worker prewarm starting on the %s backend", backend)
         _warm_beat(backend)
     except Exception as exc:  # noqa: BLE001 - a prewarm is an optimisation

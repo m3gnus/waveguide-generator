@@ -77,7 +77,8 @@ def runtime(monkeypatch, tmp_path):
         "environment": {"JULIA_NUM_THREADS": "2"},
     }))
     state = SimpleNamespace(requests=[], paths=[], streams=[], workers=[], calls=[],
-                            cancel_after=None, cancel_submission=None, mutate=None, result_count=0, fail=False)
+                            cancel_after=None, cancel_submission=None, mutate=None, result_count=0, fail=False,
+                            block_after=None, blocking=False)
 
     class Worker:
         worker_info = {"type": "ready"}
@@ -85,11 +86,16 @@ def runtime(monkeypatch, tmp_path):
         def __init__(self, *args, **kwargs):
             state.workers.append(self)
 
-        def ensure_started(self):
+        def ensure_started(self, *, status_callback=None):
             state.calls.append("start")
+            if status_callback:
+                for message in ("Initializing BEAT Engine", "Julia: precompiling", "BEAT Engine ready"):
+                    status_callback(message)
 
         def submit(self, path, **kwargs):
             state.calls.append("submit")
+            if kwargs.get("status_callback"):
+                kwargs["status_callback"]("Julia: compiling solve")
             state.paths.append(path)
             request = json.loads(path.read_text())
             state.requests.append(request)
@@ -100,6 +106,13 @@ def runtime(monkeypatch, tmp_path):
                     yield {"type": "failed", "error": "assembly failed"}
                     return
                 for frequency in request["frequencies_hz"]:
+                    if solved == state.block_after:
+                        import time
+                        state.blocking = True
+                        deadline = time.monotonic() + 1
+                        while not Path(request["cancel_path"]).exists() and time.monotonic() < deadline:
+                            time.sleep(.005)
+                        raise OSError("blocked read interrupted")
                     if ((state.cancel_after is not None and solved == state.cancel_after
                          and (state.cancel_submission is None
                               or state.cancel_submission == len(state.requests)))
@@ -188,6 +201,7 @@ def test_parametric_production(runtime, backend, motion, adaptive):
         result_callback=lambda i, frame: frames.append((i, frame)), progress_callback=progress.append,
     )
     assert response["metadata"]["engine"] == "beat-engine"
+    assert response["metadata"]["beat"]["precision"] == "single"
     assert response["frequencies"] == sorted(response["frequencies"])
     assert len(response["frequencies"]) == context.num_frequencies
     assert response["_field_traces"] is not None
@@ -251,6 +265,7 @@ def test_cancelled_prefix_is_packaged(runtime, imported, adaptive):
         if adaptive:
             request.options.frequency_range = [100., 1000.]
             request.options.frequencies_hz = None
+            request.options.frequency_range = [100., 1000.]
             request.options.num_frequencies = 24
         result = beat_imported.solve_imported_beat_from_msh_text(
             cad.MESH, request, cad._record(), backend="cpu")
@@ -409,7 +424,9 @@ def test_production_refusals_precede_worker(runtime, mode):
     context = _context(ground_plane=GroundPlane("y", 1.) if mode == "ground" else None,
                        sim_type=1 if mode == "baffle" else 2,
                        quadrants=12 if mode == "y-half" else 1234)
-    with pytest.raises((beat.BeatUnavailable, ValueError)):
+    message = {"ground": "cannot apply a rigid ground plane",
+               "baffle": "infinite-baffle", "y-half": "BEAT native symmetry"}[mode]
+    with pytest.raises(beat.BeatUnavailable, match=message):
         beat.solve_beat_from_msh_text(MESH.read_text(), context, backend="cpu")
     assert not runtime.requests
 
@@ -425,24 +442,24 @@ def test_worker_warmup_and_production_share_the_manager(runtime):
 
 
 @pytest.mark.parametrize("imported", [False, True])
-def test_callback_cancellation_retains_emitted_rows(runtime, imported):
+def test_callback_cancellation_reaches_caller_after_emitted_rows(runtime, imported):
     cancelled = []
     def cancel():
         if cancelled:
             raise RuntimeError("requested cancellation")
     def publish(*args):
         cancelled.append(True)
-    if imported:
-        request = cad._request()
-        result = beat_imported.solve_imported_beat_from_msh_text(
-            cad.MESH, request, cad._record(), backend="cpu",
-            cancellation_callback=cancel, result_callback=publish)
-    else:
-        result = beat.solve_beat_from_msh_text(
-            MESH.read_text(), _context(), backend="cpu", cancellation_callback=cancel,
-            result_callback=publish)
-    assert result["frequencies"] == [100.] if imported else result["frequencies"] == [500.]
-    assert result["metadata"]["cancelled"]
+    with pytest.raises(RuntimeError, match="requested cancellation"):
+        if imported:
+            request = cad._request()
+            beat_imported.solve_imported_beat_from_msh_text(
+                cad.MESH, request, cad._record(), backend="cpu",
+                cancellation_callback=cancel, result_callback=publish)
+        else:
+            beat.solve_beat_from_msh_text(
+                MESH.read_text(), _context(), backend="cpu", cancellation_callback=cancel,
+                result_callback=publish)
+    assert cancelled
 
 
 def test_registry_official_readiness_without_hbb(runtime, monkeypatch):
@@ -522,3 +539,227 @@ def test_official_imported_combined_channel(runtime):
     assert result["channels"][name]["metadata"]["engine"] == "beat-engine"
     assert "impedance" not in result["channels"][name]
     assert result["channels"][name]["frequencies"] == result["frequencies"]
+
+
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("adaptive", [False, True])
+@pytest.mark.parametrize("rows", [0, 1])
+@pytest.mark.parametrize("error_kind", ["cancel", "sqlite", "interrupt"])
+def test_callback_errors_reach_production_caller(runtime, imported, adaptive, rows, error_kind):
+    import sqlite3
+    from server.jobs.runtime import _CancelledAtCheckpoint
+
+    original = {"cancel": _CancelledAtCheckpoint("job cancelled"),
+                "sqlite": sqlite3.OperationalError("database busy"),
+                "interrupt": KeyboardInterrupt("interrupted")}[error_kind]
+
+    def cancel():
+        if runtime.result_count >= rows:
+            raise original
+
+    with pytest.raises(type(original)) as caught:
+        if imported:
+            request = cad._request()
+            request.options.adaptive_frequency_sampling = adaptive
+            if adaptive:
+                request.options.frequencies_hz = None
+                request.options.frequency_range = [100., 1000.]
+                request.options.num_frequencies = 24
+            beat_imported.solve_imported_beat_from_msh_text(
+                cad.MESH, request, cad._record(), backend="cpu", cancellation_callback=cancel)
+        else:
+            context = _context(adaptive_frequency_sampling=adaptive,
+                               num_frequencies=24 if adaptive else 3)
+            beat.solve_beat_from_msh_text(MESH.read_text(), context, backend="cpu",
+                                         cancellation_callback=cancel)
+    assert caught.value is original
+    assert runtime.result_count == rows
+
+
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("rows", [0, 1])
+@pytest.mark.parametrize("error_kind", ["cancel", "sqlite", "interrupt"])
+def test_blocked_production_read_preserves_monitor_error(runtime, imported, rows, error_kind):
+    import sqlite3
+    from server.jobs.runtime import _CancelledAtCheckpoint
+
+    runtime.block_after = rows
+    original = {"cancel": _CancelledAtCheckpoint("job cancelled"),
+                "sqlite": sqlite3.OperationalError("database busy"),
+                "interrupt": KeyboardInterrupt("interrupted")}[error_kind]
+
+    def cancel():
+        if runtime.blocking:
+            raise original
+
+    with pytest.raises(type(original)) as caught:
+        if imported:
+            beat_imported.solve_imported_beat_from_msh_text(
+                cad.MESH, cad._request(), cad._record(), backend="cpu", cancellation_callback=cancel)
+        else:
+            beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu",
+                                         cancellation_callback=cancel)
+    assert caught.value is original
+    assert runtime.result_count == rows
+
+
+@pytest.mark.parametrize("imported", [False, True])
+def test_startup_compile_status_reaches_stages(runtime, imported):
+    stages = []
+    if imported:
+        beat_imported.solve_imported_beat_from_msh_text(
+            cad.MESH, cad._request(), cad._record(), backend="cpu",
+            stage_callback=lambda *args: stages.append(args))
+    else:
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu",
+                                     stage_callback=lambda *args: stages.append(args))
+    for message in ("Initializing BEAT Engine", "Julia: precompiling", "BEAT Engine ready",
+                    "Julia: compiling solve"):
+        assert any(stage == "setup" and text == message for stage, _, text in stages)
+
+
+@pytest.mark.parametrize("imported", [False, True])
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_compiled_topology_built_once_per_channel(runtime, monkeypatch, imported, adaptive):
+    from server.solver.beat_adapter import request as adapter
+
+    name = "build_imported_request" if imported else "build_parametric_request"
+    original = getattr(adapter, name)
+    builds = []
+
+    def build(*args, **kwargs):
+        result = original(*args, **kwargs)
+        builds.append(result)
+        return result
+
+    monkeypatch.setattr(adapter, name, build)
+    if imported:
+        request = cad._request()
+        request.options.adaptive_frequency_sampling = adaptive
+        if adaptive:
+            request.options.frequencies_hz = None
+            request.options.frequency_range = [100., 1000.]
+            request.options.num_frequencies = 24
+        beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, cad._record(), backend="cpu")
+    else:
+        beat.solve_beat_from_msh_text(
+            MESH.read_text(), _context(adaptive_frequency_sampling=adaptive,
+                                      num_frequencies=24 if adaptive else 3), backend="cpu")
+    assert len(builds) == (2 if imported else 1)
+    assert all(request["compiled_system"] in [built.wire["compiled_system"] for built in builds]
+               for request in runtime.requests)
+
+
+def test_missing_source_frame_refuses_before_worker(runtime):
+    text = MESH.read_text().replace("2 2 2 2 ", "2 2 9 9 ")
+    with pytest.raises(beat.BeatUnavailable, match="authoritative source-tag-2 frame"):
+        beat.solve_beat_from_msh_text(text, _context(), backend="cpu")
+    assert not runtime.requests
+
+
+@pytest.mark.parametrize("error_type", ["assets", "julia"])
+def test_runtime_discovery_errors_map_to_unavailable(runtime, monkeypatch, error_type):
+    from server.solver.beat_adapter.request import build_parametric_request
+    from server.solver.beat_runtime.assets import AssetsUnavailable
+    from server.solver.beat_runtime.discovery import JuliaDiscoveryError
+
+    request = build_parametric_request(MESH.read_text(), _context())
+    error = (AssetsUnavailable if error_type == "assets" else JuliaDiscoveryError)("runtime missing")
+
+    def unavailable(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(runtime.manager, "get_worker", unavailable)
+    with pytest.raises(bridge.OfficialBeatUnavailable, match="runtime missing"):
+        bridge.solve_compiled(request, channel_id="source")
+    assert not runtime.requests
+
+
+def test_explicit_scaled_mesh_and_precision_reach_response_artifacts(runtime, monkeypatch):
+    from server.solver.beat_adapter.mesh import read_surface, scale_msh_text
+
+    context = _context()
+    text = scale_msh_text(MESH.read_text(), 1000.)
+    # Fake outputs must use the negotiated precision too.
+    real_wire = _wire
+
+    def double_wire(values):
+        data = np.asarray(values, dtype="<c16")
+        return dict(encoding="base64", dtype="complex128", shape=list(data.shape),
+                    order="C", byte_order="little",
+                    content_base64=base64.b64encode(data.tobytes()).decode("ascii"))
+
+    monkeypatch.setitem(globals(), "_wire", double_wire)
+    response = bridge.solve_official_beat_from_msh_text(
+        text, context, mesh_scale_to_m=.001, precision="float64")
+    monkeypatch.setitem(globals(), "_wire", real_wire)
+    artifact = response["_field_traces"]
+    np.testing.assert_allclose(read_surface(artifact.mesh_text).points_m,
+                               read_surface(MESH.read_text()).points_m)
+    assert response["metadata"]["beat"]["precision"] == "double"
+    wire = runtime.requests[0]
+    points = np.asarray(wire["outputs"][0]["options"]["points_m"])
+    from server.solver.beat_adapter.request import build_parametric_request
+    built = build_parametric_request(text, context, mesh_scale_to_m=.001, precision="float64")
+    np.testing.assert_allclose(np.linalg.norm(points - built.frame["origin"], axis=1), 2.)
+
+
+def test_cancelled_first_channel_does_not_advertise_missing_channels(runtime, monkeypatch):
+    runtime.cancel_after, runtime.cancel_submission = 1, 1
+    metadata_names = []
+    serialize = beat_imported.serialize_channel_bases
+
+    def record(results, *, metadata_by_id):
+        metadata_names.extend(metadata_by_id)
+        return serialize(results, metadata_by_id=metadata_by_id)
+
+    monkeypatch.setattr(beat_imported, "serialize_channel_bases", record)
+    request = cad._request(combine={"members": ["left", "right"], "crossovers_hz": [500.]})
+    result = beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, cad._record(), backend="cpu")
+    assert result["channel_order"] == list(result["channels"]) == ["left"]
+    assert metadata_names == ["left"]
+
+
+def test_selected_registry_reports_official_version(runtime, monkeypatch):
+    import asyncio
+    from server.engines.registry import EngineRegistry, detect_engines
+
+    monkeypatch.setattr(bridge, "version", lambda distribution: "1.2.3" if distribution == "beat-engine" else None)
+
+    async def scenario():
+        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")))
+        try:
+            assert all(row.version == "1.2.3" for row in await engines.capabilities())
+            await engines._refresh_cpu_backend()
+            assert all(row.version == "1.2.3" for row in await engines.capabilities())
+        finally:
+            await engines.shutdown_prewarm()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("imported", [False, True])
+def test_request_builder_value_errors_map_to_production_refusals(runtime, monkeypatch, imported):
+    from server.solver.beat_adapter import request as adapter
+
+    def refuse(*args, **kwargs):
+        raise ValueError("unrepresentable source frame")
+
+    monkeypatch.setattr(adapter, "build_imported_request" if imported else "build_parametric_request", refuse)
+    with pytest.raises(beat.BeatUnavailable, match="^unrepresentable source frame$"):
+        if imported:
+            beat_imported.solve_imported_beat_from_msh_text(cad.MESH, cad._request(), cad._record(), backend="cpu")
+        else:
+            beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert not runtime.requests
+
+
+def test_selected_registry_keeps_version_while_provisioning(runtime, monkeypatch):
+    from server.engines.registry import _official_runtime_statuses
+    from server.solver import beat_cpu_runtime
+
+    monkeypatch.setattr(bridge, "version", lambda distribution: "1.2.3")
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: True)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_runtime_readiness", lambda package: SimpleNamespace(reason="preparing"))
+    monkeypatch.setattr(beat_cpu_runtime, "gpu_preparation_reason", lambda backend: "preparing")
+    statuses = _official_runtime_statuses()
+    assert all(not status["available"] and status["version"] == "1.2.3" for status in statuses.values())

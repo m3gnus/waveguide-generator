@@ -83,3 +83,13 @@ def read_surface(msh_text: str, *, scale_to_m: float = 1.0) -> SurfaceMesh:
         return mesh
     except (IndexError, KeyError, OverflowError) as exc:
         raise ValueError("Invalid ASCII Gmsh 2.2 surface") from exc
+
+
+def scale_msh_text(msh_text: str, scale_to_m: float) -> str:
+    """Scale node coordinates while preserving tags, IDs and element rows."""
+    mesh = read_surface(msh_text, scale_to_m=scale_to_m)
+    lines = msh_text.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip() == "$Nodes") + 2
+    for index, (node_id, point) in enumerate(zip(mesh.node_ids, mesh.points_m, strict=True)):
+        lines[start + index] = f"{node_id} " + " ".join(format(float(value), ".17g") for value in point)
+    return "\n".join(lines) + "\n"

@@ -62,6 +62,8 @@ from server.platform.paths import DATA_DIR_ENV  # noqa: E402 - bound native pool
 # two apart.
 SANDBOX_DATA_DIR = Path(tempfile.mkdtemp(prefix="wg-test-data-"))
 os.environ[DATA_DIR_ENV] = str(SANDBOX_DATA_DIR)
+# Selector-dependent tests opt in explicitly, including during collection.
+os.environ.pop("WG2_BEAT_PROVIDER", None)
 # Server startup brings Fusion's WGLink up to this build and installs it where
 # it is missing (server/cadlink/addin_update.py). A test run must never touch
 # the add-in of the person running it, so the startup refresh is off here;
@@ -384,3 +386,11 @@ def _no_test_leaks_application_environment(
         "monkeypatch.delenv before calling code that writes os.environ.",
         pytrace=False,
     )
+
+
+@pytest.fixture(autouse=True)
+def _beat_provider_is_explicit() -> Iterator[None]:
+    """Every test selects the official provider explicitly when needed."""
+    with pytest.MonkeyPatch.context() as patcher:
+        patcher.delenv("WG2_BEAT_PROVIDER", raising=False)
+        yield

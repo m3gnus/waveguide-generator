@@ -75,13 +75,16 @@ class WorkerLease:
         self.busy = False
         self._lock = threading.RLock()
 
-    def start(self) -> None:
+    def start(self, *, status_callback: Callable[[str], None] | None = None) -> None:
         with self._lock:
             if self.cancelled:
                 raise OwnershipClosed("BEAT session cancelled before startup")
             self.busy = True
         try:
-            self.client.worker.ensure_started()
+            if status_callback is None:
+                self.client.worker.ensure_started()
+            else:
+                self.client.worker.ensure_started(status_callback=status_callback)
         finally:
             with self._lock:
                 self.busy = False
