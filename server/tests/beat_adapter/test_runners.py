@@ -415,7 +415,17 @@ def test_official_observation_layout_is_declared_not_observed(inputs):
     from scripts.beat_conformance import settings
     mapped = native(inputs)
     _, evidence = settings.observed_settings(inputs.settings(), mapped, official=True, native_symmetry="off")
+    official_values, _ = settings.observed_settings(inputs.settings(), mapped, official=True, native_symmetry="off")
     for name in ("observation_angles_deg", "observation_planes"):
-        assert evidence.get(name, {}).get("status") != "observed"
+        assert evidence[name]["status"] == "declared" and name in official_values
     _, hbb = settings.observed_settings(inputs.settings(), mapped, official=False, native_symmetry="off")
     assert hbb["observation_angles_deg"]["status"] == "observed"
+
+
+def test_official_and_hbb_settings_share_keys_for_frozen_comparison(inputs):
+    """A key present on one side only made the real rerun refuse to compare (job f140)."""
+    from scripts.beat_conformance import settings
+    mapped = native(inputs)
+    official, _ = settings.observed_settings(inputs.settings(), mapped, official=True, native_symmetry="off")
+    hbb, _ = settings.observed_settings(inputs.settings(), mapped, official=False, native_symmetry="off")
+    assert {"observation_angles_deg", "observation_planes"} <= official.keys() & hbb.keys()
