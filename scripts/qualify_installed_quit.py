@@ -28,8 +28,9 @@ mesh is parked. Quit deliberately detaches that idle host and its Julia
 worker for relaunch (``WorkerManager.detach``), so precisely that authenticated
 process tree may survive. Restart must reuse it. The gate then stops its host
 through authenticated cleanup and requires no surviving process or registry
-record. This drives the stop file, not the Windows status window's Job Object
-backstop, which may additionally kill detached hosts when the window closes.
+record. On Windows this qualifies the server-detach path only: status-window
+Quit always closes its kill-on-close Job Object and kills the host and Julia.
+The next start's pruning of that stale record and fresh spawn is not qualified.
 
 Everything runs in this gate's private tree: data, temporary directory, a
 sandboxed Fusion AddIns directory and every cache ``isolated_environment``
@@ -75,6 +76,8 @@ BLOCK_TIMEOUT_S = 180.0
 #: reaping them after their parent went away.
 CHILD_REAP_S = 2.0
 PROCESS_COMMAND_TIMEOUT_S = 5.0
+HOST_TREE_SETTLE_S = 5.0
+HOST_TREE_POLL_S = 0.1
 PARKED_OPERATION_SUFFIX = "_build_sync"
 
 #: The probe each platform is expected to answer with (``server/platform/memory.py``).
@@ -168,6 +171,12 @@ def warm_beat_host(
         )
         if "BEAT worker prewarm failed after " in log:
             raise QualificationError(f"official BEAT CPU prewarm failed: {log[-2000:]}")
+        if any(message in log for message in (
+            "BEAT worker prewarm skipped:",
+            "BEAT worker prewarm disabled by WG2_SOLVER_WARMUP=0",
+            "beat worker prewarm could not resolve an engine:",
+        )):
+            raise QualificationError(f"official BEAT CPU prewarm unavailable: {log[-2000:]}")
         return "BEAT worker prewarm finished in " in log
 
     wait_for(warmed, CAPABILITY_TIMEOUT_S, "official BEAT CPU prewarm to finish", interval=0.5)
@@ -182,16 +191,36 @@ def warm_beat_host(
 
 def require_detached_host(
     interpreter: Path, app: Path, environment: dict[str, str],
-    expected: dict[str, Any], processes: set[int],
+    expected: dict[str, Any], processes: set[int], launcher_pid: int | None = None,
 ) -> dict[str, Any]:
     """Only the unchanged, authenticated idle host tree may outlive Quit."""
     answer = inspect_beat_hosts(interpreter, app, environment)
     if answer["verified"] != expected["verified"] or answer["records"] != expected["records"]:
         raise QualificationError(f"Quit/restart did not retain the same BEAT host: {answer}")
     pid = answer["verified"][0]["host_pid"]
-    if still_running(processes) != processes or {pid} | descendants(pid) != processes:
+    if stable_beat_tree(pid, launcher_pid) != processes or still_running(processes) != processes:
         raise QualificationError("Quit/restart changed the detached BEAT host/Julia process tree")
     return answer
+
+
+def stable_beat_tree(host_pid: int, launcher_pid: int | None = None) -> set[int]:
+    """Wait for two identical snapshots so short-lived helper children can leave."""
+    previous: set[int] | None = None
+
+    def settled() -> set[int] | None:
+        nonlocal previous
+        table = process_table()
+        current = {host_pid} | descendants(host_pid, table)
+        # A launcher stub is the host's parent, rather than its descendant.
+        if launcher_pid is not None and table.get(host_pid, (None, False))[0] == launcher_pid:
+            current.add(launcher_pid)
+        if current == previous:
+            return current
+        previous = current
+        return None
+
+    return wait_for(settled, HOST_TREE_SETTLE_S, "a stable BEAT host process tree",
+                    interval=HOST_TREE_POLL_S)
 
 
 def sweep_in_runtime(
@@ -600,8 +629,14 @@ def run_gate(
     if beat:
         base_environment["WG2_BEAT_PROVIDER"] = "official"
         base_environment.pop("WG2_SKIP_BEAT_CPU_PROVISION", None)
-        base_environment["WG2_SOLVER_WARMUP"] = "1"
-        report["beat_host_policy"] = "detach completed-prewarm host/Julia for relaunch (1800 s idle timeout)"
+        # Qualify the release's default worker prewarm, without the diagnostic
+        # in-process warmup or an inherited setting disabling worker prewarm.
+        base_environment.pop("WG2_SOLVER_WARMUP", None)
+        report["beat_host_policy"] = (
+            "server-detach path only (status-window Quit kills the host via the Job Object)"
+            if platform.system() == "Windows" else
+            "detach completed-prewarm host/Julia for relaunch (1800 s idle timeout)"
+        )
     else:
         base_environment["WG2_SKIP_BEAT_CPU_PROVISION"] = "1"
     for name in ("TMPDIR", "TEMP", "TMP"):
@@ -625,13 +660,26 @@ def run_gate(
                 first, interpreter, app, base_environment
             )
             host_pid = host["verified"][0]["host_pid"]
-            if host_pid not in descendants(first.pid):
-                raise QualificationError("official BEAT host was not started by this server")
             beat_processes = {host_pid} | descendants(host_pid)
+            table = process_table()
+            if host_pid not in descendants(first.pid, table):
+                raise QualificationError("official BEAT host was not started by this server")
+            parent = table[host_pid][0]
+            launcher_pid = host["verified"][0].get("launcher_pid", parent)
+            if (type(launcher_pid) is not int or launcher_pid != parent
+                    or launcher_pid in {first.pid, first.server_pid}
+                    or table.get(launcher_pid, (None, False))[0] not in {first.pid, first.server_pid}):
+                launcher_pid = None
+            if launcher_pid is not None:
+                beat_processes.add(launcher_pid)
+                report["beat_launcher_pid"] = launcher_pid
+            stable_processes = stable_beat_tree(host_pid, launcher_pid)
             # The official engine exposes no Julia PID. Enumerate its owned
             # tree rather than treating engine_pid=None as no live worker.
-            if len(beat_processes) < 2 or still_running(beat_processes) != beat_processes:
+            if (len(stable_processes - {launcher_pid}) < 2
+                    or still_running(stable_processes) != stable_processes):
                 raise QualificationError("BEAT host prewarm left no live Julia/worker child")
+            beat_processes = stable_processes
             report["beat_processes"] = sorted(beat_processes)
         options = {"engine": "beat-cpu"} if beat else {}
         job = http(first.base, "/api/solve", {"design": DESIGN, "options": options})["job_id"]
@@ -653,7 +701,7 @@ def run_gate(
         report["children_seen_while_stopping"] = len(first.children)
         if beat:
             report["beat_host_after_quit"] = require_detached_host(
-                interpreter, app, base_environment, host, beat_processes
+                interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
             first.children -= beat_processes
         deadline = time.monotonic() + CHILD_REAP_S
@@ -686,14 +734,14 @@ def run_gate(
         if beat:
             warm_beat_host(second, interpreter, app, base_environment)
             report["beat_host_after_restart"] = require_detached_host(
-                interpreter, app, base_environment, host, beat_processes
+                interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
             second.children = descendants(second.pid)
 
         report["clean_stop_seconds"] = round(second.stop_and_time(grace), 2)
         if beat:
             report["beat_host_after_clean_stop"] = require_detached_host(
-                interpreter, app, base_environment, host, beat_processes
+                interpreter, app, base_environment, host, beat_processes, launcher_pid
             )
             deadline = time.monotonic() + CHILD_REAP_S
             while still_running(second.children - beat_processes) and time.monotonic() < deadline:
@@ -799,9 +847,9 @@ def main(argv: list[str] | None = None) -> int:
             environment = isolated_environment(app, work)
         run_gate(app, interpreter, environment, work, output, report, engine=arguments.engine)
     except QualificationError as exc:
-        failure = str(exc)
+        failure = "\n".join([str(exc), *getattr(exc, "__notes__", [])])
     except Exception as exc:  # noqa: BLE001 - an unexpected failure is still a failure
-        failure = f"{type(exc).__name__}: {exc}"
+        failure = "\n".join([f"{type(exc).__name__}: {exc}", *getattr(exc, "__notes__", [])])
         report["traceback"] = traceback.format_exc()
     report["qualified"] = failure is None
     if failure is not None:

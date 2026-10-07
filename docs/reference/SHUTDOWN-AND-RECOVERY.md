@@ -127,10 +127,15 @@ Quit during an active solve or aborted prewarm retires the engine; the Python
 host remains until idle exit. Child mode terminates. This is intentional, as
 recorded in `server/solver/beat_runtime/CHANGES.md`, PR 21 review round 1,
 “P3 Quit documentation”. The host's registry lives outside swept WG sessions.
-On Windows the host stays in the status window's Job Object
-(`server/solver/beat_runtime/spawn.py`, `detached_options`), so closing that
-object may additionally kill it. The stop-file qualifier below does not launch
-the status window and therefore qualifies the server's detach path.
+On packaged Windows the host stays in the status window's kill-on-close Job
+Object (`server/solver/beat_runtime/spawn.py`, `detached_options`). The status
+window's `stop()` always closes that object after the server exits, so
+status-window Quit always kills the BEAT host and Julia, even after clean
+server detachment. The stop-file qualifier below does not launch the status
+window and therefore qualifies the server-detach path only on Windows.
+Follow-up qualification is needed for the packaged Windows path: job close
+kills the host, leaves a stale registry record, and the next start prunes that
+record and spawns a fresh host and Julia worker.
 
 ## How this is qualified
 
@@ -163,6 +168,9 @@ the status window and therefore qualifies the server's detach path.
   CPU gate's provisioned official runtime and Julia depot, while keeping the
   Quit gate's registry and other directories isolated. Without it, provisioning
   uses the Quit gate's private work tree; it is never skipped in BEAT mode.
+  The gate removes inherited `WG2_SOLVER_WARMUP` settings and uses the product's
+  default worker prewarm. On Windows its BEAT report explicitly labels this as
+  “server-detach path only (status-window Quit kills the host via the Job Object)”.
 
 ### Still to check by hand on a packaged machine
 
