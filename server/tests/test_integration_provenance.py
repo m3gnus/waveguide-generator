@@ -115,6 +115,34 @@ def test_bundle_provenance_uses_the_shipped_generated_pin_requirements(
     assert pins == {"hornlab-metal-bem": "a" * 40}
 
 
+def test_bundle_provenance_from_the_real_pin_requirements_matches_pins_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Packaged apps ship requirements-pins.txt but not pins.json.
+
+    Every pinned module must survive the fallback, including one whose
+    repository name differs from its distribution (beat-engine in
+    m3gnus/BEAT_Engine); otherwise official results lose their solver pin.
+    """
+    root = Path(__file__).resolve().parents[2]
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "server").mkdir()
+    (tmp_path / "shared" / "version.json").write_text('{"version":"1.2.3"}\n', encoding="utf-8")
+    (tmp_path / "server" / "requirements-pins.txt").write_bytes(
+        (root / "server" / "requirements-pins.txt").read_bytes()
+    )
+    monkeypatch.setattr(provenance_module, "_REPOSITORY_ROOT", tmp_path)
+    provenance_module._release_identity.cache_clear()
+    try:
+        _, pins = provenance_module._release_identity()
+    finally:
+        provenance_module._release_identity.cache_clear()
+
+    declared = json.loads((root / "pins.json").read_text(encoding="utf-8"))["modules"]
+    assert pins == {name: entry["sha"] for name, entry in declared.items()}
+    assert "beat-engine" in pins
+
+
 @pytest.mark.parametrize(
     "metadata",
     [

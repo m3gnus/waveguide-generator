@@ -19,9 +19,12 @@ from .installed import measure_installed_stack
 
 
 _REPOSITORY_ROOT = app_root()
+# The distribution name comes from ``#egg=``: a pin's repository name may differ
+# (beat-engine lives in m3gnus/BEAT_Engine; see scripts/gen_requirements.py).
+# Packaged apps carry no pins.json, so this fallback is their only source.
 _PIN_REQUIREMENT_RE = re.compile(
-    r"^git\+https://github\.com/m3gnus/(?P<name>[^/]+)\.git@"
-    r"(?P<sha>[0-9a-f]{40})#egg=(?P=name)$"
+    r"^git\+https://github\.com/m3gnus/[A-Za-z0-9._-]+\.git@"
+    r"(?P<sha>[0-9a-f]{40})#egg=(?P<name>[A-Za-z0-9._-]+)$"
 )
 
 
