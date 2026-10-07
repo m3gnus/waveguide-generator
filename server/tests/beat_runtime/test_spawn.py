@@ -138,8 +138,12 @@ def test_failed_start_reaps_child_and_allows_retry(launch, failure):
     assert spawn.start_host(key, directory).pid != children[0].pid
 
 
-def test_engine_import_optional_in_parent(launch):
+def test_engine_import_optional_in_parent(launch, monkeypatch):
     key, directory, _ = launch
+    # Other tests may legitimately import the installed engine; prove that this
+    # spawn path does not, independent of test order.
+    for name in [name for name in sys.modules if name == "beat_engine" or name.startswith("beat_engine.")]:
+        monkeypatch.delitem(sys.modules, name)
     assert "beat_engine" not in sys.modules
     spawn.start_host(key, directory)
     assert "beat_engine" not in sys.modules
