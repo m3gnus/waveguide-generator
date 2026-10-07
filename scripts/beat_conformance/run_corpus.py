@@ -72,7 +72,8 @@ def depot_entries(chain: str, option: str) -> tuple[Path, ...]:
     return tuple(external_path(Path(entry), option) for entry in chain.split(os.pathsep))
 
 
-def child_environment(*, official: bool, julia: str, hbb_depot: str) -> dict:
+def child_environment(*, official: bool, julia: str, hbb_depot: str,
+                      single_thread: bool = True) -> dict:
     from server.solver.beat_runtime import paths
 
     hbb_entries = depot_entries(hbb_depot, "--hbb-depot")
@@ -90,7 +91,16 @@ def child_environment(*, official: bool, julia: str, hbb_depot: str) -> dict:
         env = {k: v for k, v in os.environ.items()
                if not k.startswith(("JULIA_", "WG2_BEAT_", "BLAB_"))}
         env.update(JULIA_DEPOT_PATH=os.pathsep.join(map(str, hbb_entries)), HORNLAB_BEAT_JULIA=julia)
-    env.update({k: "1" for k in THREAD_ENV})
+    if single_thread:
+        env.update({k: "1" for k in THREAD_ENV})
+    else:
+        # Performance acquisition keeps the production policy and ambient BLAS
+        # controls, including JULIA_NUM_THREADS stripped with HBB's JULIA_* env.
+        for key in THREAD_ENV:
+            if key in os.environ:
+                env[key] = os.environ[key]
+            else:
+                env.pop(key, None)
     return env
 
 
@@ -307,6 +317,24 @@ def require_official_ready(backend: str, julia: str) -> None:
         )
 
 
+def launch_child(command: list[str], env: dict, log_path: Path, timeout_seconds: float) -> int:
+    """Fresh engine process; only its recorded process group is stopped."""
+    with log_path.open("w") as log:
+        process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log,
+                                   stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            return process.wait(timeout=timeout_seconds)
+        except BaseException:
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+            raise
+
+
 def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory: Path, *,
                   backend: str, precision: str, julia: str, hbb_depot: str,
                   timeout_seconds: float | None = None) -> tuple[dict, dict]:
@@ -325,20 +353,8 @@ def isolated_pair(frozen: FrozenCase, frequencies: tuple[float, ...], directory:
                    "--engine-output", str(target), "--official-child", str(int(official)),
                    "--backend", backend, "--precision", precision, "--julia", julia, "--hbb-depot", hbb_depot]
         started = time.monotonic()
-        with (directory / f"{name}.log").open("w") as log:
-            process = subprocess.Popen(command, cwd=ROOT, env=env, stdout=log,
-                                       stderr=subprocess.STDOUT, start_new_session=True)
-            try:
-                process.wait(timeout=timeout_seconds if timeout_seconds is not None else frozen.case.coarse_minutes[1] * 60)
-            except BaseException:
-                # Only the recorded process group belongs to this invocation.
-                os.killpg(process.pid, signal.SIGTERM)
-                try:
-                    process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
-                raise
+        launch_child(command, env, directory / f"{name}.log",
+                     timeout_seconds if timeout_seconds is not None else frozen.case.coarse_minutes[1] * 60)
         if not target.exists():
             raise ValueError(f"{name} child produced no raw result; inspect {name}.log")
         elapsed = time.monotonic() - started

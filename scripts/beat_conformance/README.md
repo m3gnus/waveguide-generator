@@ -589,3 +589,152 @@ The owner accepted this drift as a known limitation. The gate is **not** widened
 `narrow-resonance` verdict stays a recorded failure under the PLAN §5 budgets, and engine
 agreement is established by the Float64 run. Revisit if the official Float32 exterior path
 gains mixed-precision refinement.
+
+## PLAN slice-8 production performance gate
+
+`run_perf` acquires **one case × backend × route × repetition per invocation**,
+with a fresh Python child. The orchestrator submits these invocations as separate
+sequential compute-broker jobs, following the generated `hbb, official, hbb,
+official, …` plan. It never runs both routes inside one job. Use at least three
+repetitions **per route per case**, keep the same machine, interpreter, environment,
+provisioned runtimes and frozen input directories, and avoid concurrent compute
+jobs. CPU is the primary pass; generate another plan for optional Metal, keeping
+its sequence numbers after the CPU plan if reporting both together.
+
+Both engine distributions must be non-editable installs at the exact `pins.json`
+commits (official `d0d624a0`, HBB `df45239` on this branch). WG must have an
+observed clean tree; these deliberately uncommitted harness changes therefore
+need orchestrator landing before acquisition. The specified test venv currently
+has HBB but no `beat-engine` distribution; the orchestrator must use a runtime
+venv containing both pinned packages. There is no provisioning, compilation,
+meshing, broker submission or GitHub access in the harness. Reuse read-only
+`frozen.json` and `surface.msh` from the existing dense corpus directories; they
+bind the exact request, ingestion record and mesh hash. Official readiness must
+already attest a provisioned compiled runtime, and the ordinary HBB production
+readiness check must succeed. Set the official runtime/depot selection exactly as
+for the corpus and give `--hbb-depot` a distinct explicit external depot chain.
+
+Example commands **for the orchestrator to execute through the broker** (replace
+`$JULIA`, `$PY`, `$HBB_DEPOT` and runtime environment with its provisioned selections):
+
+```bash
+EVIDENCE=/private/tmp/wg-beat-perf
+CORPUS=/private/tmp/wg-beat-corpus-261006/corpus-tb
+$PY -m scripts.beat_conformance.run_perf --plan --repetitions 3 \
+  --backend cpu --output "$EVIDENCE/plan.json"
+
+# Plan positions 1 and 2; continue 3,4,...,18 one broker job at a time.
+$PY -m scripts.beat_conformance.run_perf --case osse-quarter --backend cpu \
+  --route hbb --repetition 1 --sequence 1 \
+  --frozen "$CORPUS/osse-quarter-float32-dense" \
+  --output "$EVIDENCE/001" --julia "$JULIA" --hbb-depot "$HBB_DEPOT"
+$PY -m scripts.beat_conformance.run_perf --case osse-quarter --backend cpu \
+  --route official --repetition 1 --sequence 2 \
+  --frozen "$CORPUS/osse-quarter-float32-dense" \
+  --output "$EVIDENCE/002" --julia "$JULIA" --hbb-depot "$HBB_DEPOT"
+
+$PY -m scripts.beat_conformance.perf_report "$EVIDENCE"/[0-9]*/perf.json \
+  --output "$EVIDENCE/report"
+```
+
+Every acquisition output directory must be external and empty/absent. A fresh
+private registry is supplied to **both** engines, including HBB's default detached
+host; no existing worker is adopted or stopped. Official uses the production
+`WorkerManager(mode="host")`, rather than the corpus's one-shot child manager.
+HBB keeps production `persistent_worker=True` and its default persistent host.
+`HORNLAB_BEAT_PERSISTENT_HOST=0` is refused. The same host PID/key must survive
+both sweeps; teardown occurs after measurements. Recorded-process cleanup and the
+private host registries limit failure cleanup to this invocation's owned processes.
+The child timeout is 180 seconds (may be lowered, never raised by this CLI).
+A timeout, missing callback, incomplete channel/frequency results, bad identity,
+missing/changing thread diagnostics or RSS sampling error cannot leave a pass.
+
+For parametric `osse-quarter` and `osse-full`, the timer begins immediately before
+`server.solver.beat.solve_beat_from_msh_text` with `_official=False` or `True`.
+For `imported-two-sources`, it begins immediately before
+`server.solver.beat_imported.solve_imported_beat_from_msh_text` with the same route
+selector. **`first_result_s` ends on entry to the first production
+`result_callback`**, which production invokes from its `on_frequency_result`.
+This includes cold host/Julia-worker startup, production setup, first-frequency
+work and provisional response packaging. For imported sources it is the first
+published production frequency frame, which can precede completion of all drive
+channels at that frequency. It is neither a progress event nor a native completion
+hook. Runtime provisioning/compilation on disk, Python imports, identity/version
+capture and frozen input loading occur before the solve timer; no live host exists
+before that first solve. The timer includes any production availability probes
+performed by the solve call itself.
+
+`first_sweep_s` is first call-to-return, including all imported channels and final
+response packaging. After it completes, the second identical call on the same
+host is timed call-to-return as `warm_sweep_s`. Production precision is Float32
+(`_precision="float32"`, HBB's default `solve_precision="single"`). Production
+thread policy resolves CPU AUTO to performance cores and applies WG's Metal
+headroom; no one-thread overrides are introduced. Record ambient thread env,
+resolved Julia launch count (HBB worker key/resolver; official also native runtime
+provenance), and observed BLAS count on **every** channel/frequency row. The report
+requires both counts to match across both routes and repetitions. Raw environments
+and their corpus hashes are retained; the comparison hash excludes only the two
+per-job private registry paths in addition to corpus volatile exclusions.
+
+Whole-tree RSS is sampled at a requested **100 ms** interval throughout the child
+invocation, using `psutil` if installed and otherwise one `ps` process table per
+sample (the supplied test venv has no psutil). The sum includes the harness parent,
+engine child, private detached host and Julia descendants, tracking known birth
+identities across reparenting and rejecting reused PIDs. Peak is the largest
+simultaneous sum, not the sum of independent process peaks. `perf.json` retains
+sample times/PIDs, method, interval, errors, peak bytes, before/after load averages
+and `pmset -g batt` output. Sampling can miss spikes shorter than 100 ms and has
+measurement overhead; compare routes using the same sampler. Installation of
+psutil, if desired, is an orchestrator environment choice.
+
+### Performance sweep sizing from existing timings
+
+Read-only historical input is
+`/private/tmp/wg-beat-corpus-261006/corpus-tb/*-float32-dense/coarse/{hbb,official}.json`,
+using `timing.wall_seconds` (`W`) and `timing.frequency_count` (`D`). Each case
+uses **31** existing catalogue frequencies: OSSE 500–3500 Hz in 100 Hz steps;
+two-source import 500–2300 Hz in 60 Hz steps (a subset of its 10 Hz dense axis).
+No mesh or observation grid changes are made. For each route estimate the two
+sweeps conservatively as **`T = W + 2 × 31 × (W / D)`** seconds: a whole dense
+cold run is reserved for startup, plus two sweeps at the already startup-amortized
+rate. This deliberately double-counts startup; it is planning arithmetic, not a
+measured production-thread warm/cold benchmark.
+
+| Case | Dense D | HBB W (s) | Official W (s) | HBB W/D (s/f) | Official W/D (s/f) | Two-sweep HBB estimate (min) | Official estimate (min) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| osse-quarter | 301 | 14.922 | 13.815 | 0.049574 | 0.045897 | 0.300 | 0.278 |
+| osse-full | 121 | 18.703 | 17.477 | 0.154568 | 0.144436 | 0.472 | 0.441 |
+| imported-two-sources | 201 | 30.723 | 27.537 | 0.152850 | 0.137000 | 0.670 | 0.601 |
+
+All estimates are far below three minutes for **one route invocation containing
+both sweeps**. Broker scheduling, identity collection, process cleanup and memory
+sampling add overhead outside the two solve timers. Historical runs used corpus
+one-thread/one-shot controls and an earlier official revision; new production
+policy timings must be measured by the orchestrator, not inferred from this table.
+
+`perf_report` writes `verdict.md` and strict `verdict.json`, recording medians,
+min–max ranges, N, both median ratios (official/HBB), peak-memory summaries,
+matched repetition/sequence pairs, thread counts, identities and source files.
+It requires all three cases for every supplied backend, N≥3 equal repetitions,
+strict route alternation, matched adjacent repetition numbers, observed ordered
+nonoverlapping execution intervals, unique child PIDs/sequence numbers, identical
+frozen inputs and WG/engine/Julia identities, and stable per-route environments.
+CPU and Metal are scored separately. Missing, duplicate, dirty, mismatched,
+interrupted or incomplete evidence produces `invalid` and exit 1.
+
+The gates are fixed: median `first_result_s` ratio **≤1.20**, median
+`warm_sweep_s` ratio **≤1.10**. Equality passes. Nothing widens these limits.
+Overlapping route min–max ranges flag a noisy comparison; each matched repetition
+is also flagged if before/after one-minute load divided by logical CPUs exceeds
+**0.5** (configurable annotation with `--load-threshold`). Power changes or missing
+power observations are annotated. Noise annotations accompany the literal
+measured pass/fail; they do not change the numerical verdict or qualify stability.
+The orchestrator should inspect noisy evidence and repeat sequential acquisition
+under steadier load before relying on the gate.
+
+Fake-only validation (no Julia, broker or numerical solves):
+
+```bash
+$PY -m pytest -q -p no:cacheprovider scripts/tests/test_beat_perf.py scripts/tests/test_beat_corpus.py
+$PY -m ruff check scripts
+```
