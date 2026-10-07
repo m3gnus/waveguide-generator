@@ -480,7 +480,12 @@ def test_window_probe_and_inventory_reject_mutations(old: str, new: str) -> None
 ENTRYPOINTS = ('build_bundle.py', 'gates.ps1', 'qualify_installed_cpu.py', 'qualify_installed_quit.py')
 
 
-@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 3, 3)), ('release', (3, 1, 0, 0))])
+# rc-build runs qualify_installed_cpu.py six times: per OS the default-route CPU
+# gate and, reviewed for the 0.3.6 BEAT switch, an official-engine gate on the
+# same installed payload. The second run is the same entrypoint and argument
+# shape with WG2_BEAT_PROVIDER=official scoped to its step; the qualifier's own
+# isolated_environment sandboxes every launch exactly as on the default route.
+@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 6, 3)), ('release', (3, 1, 0, 0))])
 def test_workflow_execution_inventory(workflow_name: str, counts: tuple[int, ...]) -> None:
     workflow = yaml.safe_load((ROOT / f'.github/workflows/{workflow_name}.yml').read_text())
     found = dict.fromkeys(ENTRYPOINTS, 0)
@@ -648,6 +653,10 @@ def test_python_app_launch_inventory() -> None:
         'scripts/qualify_installed_cpu.py': {
             ('__init__', 'subprocess.Popen'): 1,
             ('check_pins', 'subprocess.run'): 1,
+            # Reviewed with the official-engine gate: like check_pins, the packaged
+            # interpreter runs a fixed read-only -c program (_READ_OFFICIAL_RUNTIME)
+            # with env=isolated_environment and cwd=app; it starts no WG process.
+            ('check_official_runtime', 'subprocess.run'): 1,
             ('diagnose_preparation', 'subprocess.run'): 1,
             ('stop_our_workers', 'subprocess.run'): 1,
             ('qualify_imported_return', 'Server'): 2,
