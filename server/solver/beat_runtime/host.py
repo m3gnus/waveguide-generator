@@ -22,6 +22,7 @@ from server.platform.paths import app_root
 
 from . import paths, registry as r
 from .cleanup import sweep_orphan_socket
+from .clock import suspend_aware_monotonic
 from .ipc import endpoint_for, receive_frame, send_frame
 from .ownership import OwnedStream, StreamOwnership
 
@@ -229,7 +230,10 @@ class WorkerHost:
         self._engine_factory = engine_factory if engine_factory is not None else official_engine_factory
         self._logging = threading.Lock()
         self._clients = 0
-        self._last_activity = time.monotonic()
+        # Idle age must include suspend. Keep control/IPC, heartbeat and
+        # retirement deadlines on time.monotonic() so they retain their existing
+        # behavior on resume (in particular, sleep exclusion on macOS/Linux).
+        self._last_activity = suspend_aware_monotonic()
         self._stopping = threading.Event()
         self._jobs = threading.Condition()
         self._queue: deque[_Job] = deque()
@@ -449,7 +453,7 @@ class WorkerHost:
             with contextlib.suppress(ValueError, OSError):
                 signal.signal(value, stop)
         self._server.settimeout(min(0.1, self.idle_timeout))
-        self._last_activity = time.monotonic()
+        self._last_activity = suspend_aware_monotonic()
         self._log(f"serving {self.identifier} (idle {self.idle_timeout:g}s)")
         accept_errors = 0
         retrying_accept = False
@@ -458,7 +462,7 @@ class WorkerHost:
                 # Finish an active, bounded accept-error sequence even if log
                 # writes or scheduling take it past the ordinary idle deadline.
                 if (not retrying_accept and self._clients == 0
-                        and time.monotonic() - self._last_activity >= self.idle_timeout):
+                        and suspend_aware_monotonic() - self._last_activity >= self.idle_timeout):
                     self._log("idle exit")
                     self._stopping.set()
                     break
@@ -481,7 +485,7 @@ class WorkerHost:
             accept_errors = 0
             retrying_accept = False
             with self._state:
-                self._last_activity = time.monotonic()
+                self._last_activity = suspend_aware_monotonic()
                 # Pending peers have their own small budget. Evict the oldest
                 # so silent peers cannot reserve every authenticated client slot.
                 if len(self._pending) >= MAX_PENDING:
@@ -490,7 +494,7 @@ class WorkerHost:
                     with contextlib.suppress(OSError):
                         oldest.shutdown(socket.SHUT_RDWR)
                     oldest.close()
-                self._pending[connection] = self._last_activity + PREAUTH_TIMEOUT
+                self._pending[connection] = time.monotonic() + PREAUTH_TIMEOUT
                 self._connections.add(connection)
             threading.Thread(target=self._serve_connection, args=(connection,), daemon=True).start()
 
@@ -592,7 +596,7 @@ class WorkerHost:
                 self._connections.discard(connection)
                 if admitted:
                     self._clients -= 1
-                    self._last_activity = time.monotonic()
+                    self._last_activity = suspend_aware_monotonic()
             connection.close()
 
     def close(self) -> None:

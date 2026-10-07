@@ -3,6 +3,29 @@
 All paths are relative to the WG repository root. Changes are additive; no
 production caller adopts beat-engine, no pins change, and HBB state is untouched.
 
+- **Host fix — suspend-aware idle expiry (2026-10-07):**
+  `clock.py`, `host.py`; `server/tests/beat_runtime/test_{clock,host_clock}.py`.
+  Measure idle age with Linux `CLOCK_BOOTTIME`, Darwin
+  `clock_gettime(CLOCK_MONOTONIC)` or Windows `GetTickCount64` (milliseconds
+  converted to seconds). Platform references and exact semantics are recorded
+  in `clock.py`. Native failures, missing APIs, invalid readings and backwards
+  jumps log once and permanently fall back to `time.monotonic()`, rebased to
+  preserve the last good idle timestamp and avoid mixing clock epochs.
+  Constructor/serve baselines, accepts, authenticated disconnects and the idle
+  comparison use the helper. Pre-auth deadlines now have their own ordinary
+  monotonic timestamp; control/IPC, heartbeat, startup and retirement deadlines
+  retain their existing clocks. A simulated suspend expires an idle host on
+  its next poll while pre-auth/auth/control budgets remain unaffected.
+  Audit of `server/` found no additional BEAT idle-expiry timers: manager and
+  warmup delegate host lifetime, registry's timer bounds spawn-lock acquisition,
+  and `server/solver/warmup.py` records warmup status/duration only. HBB's
+  `worker_host.py` still uses ordinary monotonic time for all idle bookkeeping.
+  Semantics verified against primary sources: Darwin `CLOCK_MONOTONIC_RAW`
+  also includes sleep (via `mach_continuous_time`), whereas Python uses
+  `mach_absolute_time`; Windows Python 3.13 uses QPC, which already includes
+  sleep. Keeping short deadlines on `time.monotonic()` preserves platform
+  behavior, not universal suspend exclusion.
+
 - **Production fix — provisioned explicit external Julia rediscovery (2026-10-06):**
   `discovery.py`; `server/tests/beat_runtime/test_{cli,readiness}.py`.
   Discovery used to discard every saved `selection="explicit"` executable,
