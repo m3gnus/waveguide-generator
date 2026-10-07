@@ -33,9 +33,12 @@ CUDA (NVIDIA) and ROCm (AMD) are offered on Linux and Windows, never macOS.
 Hardware detection follows HBB: CUDA, then ROCm, then Metal. NVIDIA detection
 uses `nvidia-smi -L` with a 15 s timeout; ROCm detection checks the configured
 runtime directories or `rocminfo`/`hipinfo`/`hipInfo` on PATH. Launch-time checks
-use only PATH/directory hints; the preparation worker runs the NVIDIA check.
+use only PATH/directory hints; the preparation worker runs the NVIDIA check
+after the CPU stage. Positive detection is cached until refresh or exit;
+negative results expire after 30 s.
 Setup instantiates and precompiles `julia_cuda` or `julia_rocm`, then runs the
 matching package's `versioninfo()` and `functional()` to resolve device artifacts.
+CUDA setup also imports CUDSS to fetch coupled-solve artifacts.
 Each backend has its own locked state and a matching 1 kHz solve proof. The
 worker handshake must report that backend available. The probe uses Float32,
 as production does by default; the adapter also accepts Float64 on CUDA/ROCm.
@@ -47,3 +50,10 @@ bundle. These backends are **not hardware-qualified**. Mocked unit/integration
 tests and existing CI qualify this routing change; real-GPU qualification is
 not a gate for enabling it. CAD solves on CUDA/ROCm still require Accurate;
 explicit BEAT Metal also accepts Fast. HBB remains the default provider.
+
+The conformance and agreement tools in `scripts/beat_conformance` cover CPU
+and Metal only. There is no CUDA/ROCm corpus.
+
+Known risk: source-driver startup and `import CUDA` run under the engine's
+default 300 s worker startup timeout. This has not been tested on slow Windows
+hardware.

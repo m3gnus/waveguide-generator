@@ -67,8 +67,8 @@ distributions in a fresh venv (not any checkout's editable install).
 | mesher ATH parity, `HORNLAB_ATH_PARITY=required`, local reference archive | PASSED | 33 passed, 12 s |
 | bempp-bem module suite at pin 5c13ac45, including `test_native_symmetry_validation.py`; `hornlab_bempp_bem.validation` imports from site-packages | PASSED | 476 passed, 20 skipped, 0 failed, 42 s (first pass at 57b1260: 1 failed, see Headline) |
 | BEMPP on OpenCL | NOT RUN | Apple Silicon has no CPU OpenCL device, which is the one bempp-cl assembles on; WG falls back to numba, which is not a qualified route. BEMPP is WG's CPU engine and has no GPU assembly path. The BEMPP OpenCL tests skip for this reason. |
-| BEAT-CUDA | NOT RUN | No NVIDIA hardware; HBB and fork route are **not hardware-qualified** |
-| BEAT-ROCm | NOT RUN | No ROCm hardware; HBB and fork route are **not hardware-qualified** |
+| BEAT-CUDA | NOT RUN | No NVIDIA hardware |
+| BEAT-ROCm | NOT RUN | No ROCm hardware |
 | Windows and Linux owned runners | NOT RUN | Hardware not available here |
 | Installed-payload gates (`qualify_installed_cpu.py`, `qualify_installed_quit.py`; persisted BEAT startup, restart/adoption, cancel-then-solve and explicit-Metal-starts-no-BEAT-worker against an installed candidate) | NOT RUN | No packaged release candidate exists yet. Source-level equivalents ran and passed (beat-bem lifecycle, ownership and persistence suites; WG server suite), but they do not close the installed-app gate. |
 

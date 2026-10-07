@@ -165,6 +165,12 @@ def _provision_backend(
             record.update(julia_executable=julia,
                           julia_identity=discovery.executable_identity(Path(julia)),
                           julia_version=julia_record["version"] if julia_record and julia_record["executable"] == julia else None)
+            if backend != "cpu":
+                # ensure_julia returns early for an existing install. GPU artifacts
+                # still need space in the first depot, including an external one.
+                record["step"] = "check_disk_space"
+                installer.check_disk_space(Path(env["JULIA_DEPOT_PATH"].split(os.pathsep)[0]),
+                                           installer.GPU_REQUIRED_FREE_BYTES)
             step = run_step or julia_steps.run_julia_step
             for name, code, step_label in (
                 ("instantiate", "using Pkg; Pkg.instantiate()", f"Instantiating the Julia {label} environment"),

@@ -44,14 +44,16 @@ def main(argv: list[str] | None = None) -> int:
                     else {args.backend: readiness.backend_status(args.backend, args.dir, **options)})
         print(json.dumps(statuses, sort_keys=True))
         return 0
-    if args.if_nvidia_gpu and not hardware.gpu_hardware()["cuda"]["available"]:
+    only = None if args.backend == "auto" or args.if_nvidia_gpu else args.backend
+    inventory = hardware.gpu_hardware(only=only) if args.backend != "cpu" else {}
+    if args.if_nvidia_gpu and not inventory["cuda"]["available"]:
         return 0
-    backend = hardware.detect_gpu_backend() if args.backend == "auto" else args.backend
+    backend = hardware.detect_gpu_backend(inventory=inventory) if args.backend == "auto" else args.backend
     if backend is None:
         if not args.if_gpu and not args.if_nvidia_gpu:
             print("No supported GPU detected; nothing to provision.")
         return 0
-    if backend in hardware.GPU_BACKENDS and not hardware.gpu_hardware()[backend]["available"]:
+    if backend in hardware.GPU_BACKENDS and not inventory[backend]["available"]:
         if not args.if_gpu and not args.if_nvidia_gpu:
             print(f"BEAT {backend}: no eligible hardware; nothing to provision.")
         return 0
@@ -59,6 +61,8 @@ def main(argv: list[str] | None = None) -> int:
         # An optional missing engine must not create state or fetch Julia.
         assets.engine_assets(backend)
         action = getattr(readiness, f"provision_{backend}")
+        if backend in hardware.GPU_BACKENDS:
+            options["hardware_facts"] = inventory[backend]
         record = action(args.dir, force=args.force, retry=args.retry, **options)
         return 0 if record.get("status") in {"ready", "skipped"} else 1
     except Exception as exc:

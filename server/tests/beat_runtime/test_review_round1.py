@@ -24,7 +24,7 @@ def selected(monkeypatch, tmp_path):
     monkeypatch.setenv(provider.PROVIDER_ENV, "official")
     monkeypatch.setenv(paths.RUNTIME_DIR_ENV, str(tmp_path / "data"))
     for name, value in (("_provision_thread", None), ("_provision_step", None),
-                        ("_preparation_in_flight", False), ("_gpu_stage_backend", None),
+                        ("_preparation_in_flight", False), ("_official_cpu_stage_pending", False), ("_gpu_stage_backend", None),
                         ("_gpu_stage_step", None), ("_runtimes_prepared", False)):
         monkeypatch.setattr(facade, name, value)
     yield
@@ -97,6 +97,7 @@ def test_stdout_burst_coalesces_notifications_and_readiness_computations(selecte
     facade.add_readiness_listener(listener)
     try:
         monkeypatch.setattr(facade, "_preparation_in_flight", True)
+        monkeypatch.setattr(facade, "_official_cpu_stage_pending", True)
         facade._record_step("instantiate")
         for line in range(1000):
             facade._provision_status(f"Pkg stdout {line}")
@@ -104,6 +105,7 @@ def test_stdout_burst_coalesces_notifications_and_readiness_computations(selecte
         facade._record_step("precompile")
         facade._record_step("precompile")
         monkeypatch.setattr(facade, "_preparation_in_flight", False)
+        monkeypatch.setattr(facade, "_official_cpu_stage_pending", False)
         facade._notify_readiness_listeners()
         assert len(notices) <= 3
         assert calls == list(readiness.BACKENDS)  # Exactly one CPU identity computation.

@@ -202,7 +202,8 @@ def test_source_gpu_provision_readiness_and_launch_identity(cpu_provisioning, mo
     assert saved["status"] == "ready", saved
     assert budgets == [installer.GPU_REQUIRED_FREE_BYTES]
     assert [code for code, _ in calls] == ["using Pkg; Pkg.instantiate()", "using Pkg; Pkg.precompile()",
-                                          f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)"]
+                                          f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)"] + (
+                                              ["import CUDSS"] if backend == "cuda" else [])
     assert all(call["project"] == project for _, call in calls)
     assert (root / "state-cpu.json").read_bytes() == before
     assert workers[0].terminated and workers[0].stream.closed
@@ -239,4 +240,27 @@ def test_gpu_artifact_failure_preserves_cpu_and_records_backend(cpu_provisioning
     assert failed["status"] == "failed" and failed["backend"] == backend
     assert "offline" in failed["error"]
     assert state.read_state(root, backend=backend) == failed
+    assert (root / "state-cpu.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("backend", hardware.GPU_BACKENDS)
+def test_low_depot_space_blocks_artifacts_with_existing_julia(cpu_provisioning, monkeypatch, tmp_path, backend):
+    from types import SimpleNamespace
+
+    root, _, julia, calls, options = cpu_provisioning
+    provision.provision_cpu(root, **options)
+    before = (root / "state-cpu.json").read_bytes()
+    calls.clear()
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {backend: {"available": True}})
+    checked = []
+    depot = tmp_path / "external-depot"
+    depot.mkdir()
+    monkeypatch.setattr(installer.shutil, "disk_usage", lambda path:
+                        checked.append(path) or SimpleNamespace(free=installer.GPU_REQUIRED_FREE_BYTES - 1))
+    assert julia.exists()
+    failed = gpu.provision_gpu(root, backend=backend, **dict(options, depot=depot))
+    assert failed["status"] == "failed" and failed["step"] == "check_disk_space"
+    assert "Not enough free disk space" in failed["error"]
+    assert checked == [depot]
+    assert not calls
     assert (root / "state-cpu.json").read_bytes() == before

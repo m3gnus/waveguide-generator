@@ -139,6 +139,7 @@ _provision_lock = threading.Lock()
 _provision_thread: threading.Thread | None = None
 _provision_step: str | None = None
 _preparation_in_flight = False
+_official_cpu_stage_pending = False
 _prepare_cpu = True
 _prepare_gpu = False
 _gpu_stage_backend: str | None = None
@@ -422,7 +423,9 @@ def cpu_runtime_readiness(package: Any, *, production: bool = False) -> CpuRunti
     """
 
     if official_selected() and not production:
-        if cpu_preparation_in_flight():
+        with _provision_lock:
+            preparing_cpu = _official_cpu_stage_pending
+        if preparing_cpu:
             step = cpu_provisioning_step() or "starting"
             return CpuRuntimeReadiness(False, "provisioning", f"WG is preparing the BEAT CPU runtime (step: {step}).")
         from .beat_runtime.readiness import backend_readiness
@@ -779,7 +782,7 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
     """Prepare WG-owned CPU/GPU records using the existing launcher lifecycle."""
     from .beat_runtime import hardware, readiness
 
-    global _preparation_in_flight, _provision_thread
+    global _preparation_in_flight, _provision_thread, _official_cpu_stage_pending
     verdict = readiness.backend_readiness(CPU_BACKEND, environ=env)
     if verdict.state == "package-unusable":
         return None
@@ -798,12 +801,8 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
 
     def worker() -> None:
         global _preparation_in_flight, _provision_step, _gpu_stage_backend, _gpu_stage_step
+        global _official_cpu_stage_pending
         try:
-            try:
-                gpu_backend = hardware.detect_gpu_backend(environ=snapshot) if prepare_gpu else None
-            except Exception:
-                log.info("BEAT GPU hardware inventory failed; assuming none", exc_info=True)
-                gpu_backend = None
             if prepare_cpu:
                 _mark_runtimes_prepared()
                 _record_step("starting")
@@ -812,9 +811,18 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                 except Exception:
                     log.warning("WG-owned BEAT CPU preparation could not run", exc_info=True)
                 finally:
+                    with _provision_lock:
+                        _official_cpu_stage_pending = False
                     _record_step(None)
+            try:
+                inventory = hardware.gpu_hardware(environ=snapshot) if prepare_gpu else {}
+                gpu_backend = hardware.detect_gpu_backend(inventory=inventory) if prepare_gpu else None
+            except Exception:
+                log.info("BEAT GPU hardware inventory failed; assuming none", exc_info=True)
+                gpu_backend = None
             if gpu_backend is not None:
-                verdict = readiness.backend_readiness(gpu_backend, environ=snapshot)
+                facts = inventory[gpu_backend]
+                verdict = readiness.backend_readiness(gpu_backend, environ=snapshot, hardware_facts=facts)
                 if verdict.ready or verdict.state in {"failed", "no-device", "package-unusable"}:
                     return
                 _mark_runtimes_prepared()
@@ -837,12 +845,12 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                         _notify_readiness_listeners()
 
                 getattr(readiness, f"provision_{gpu_backend}")(
-                    environ=snapshot, status_cb=status, step_cb=step_changed)
+                    environ=snapshot, status_cb=status, step_cb=step_changed, hardware_facts=facts)
         except Exception:
             log.warning("WG-owned BEAT preparation could not run", exc_info=True)
         finally:
             with _provision_lock:
-                _preparation_in_flight = False
+                _preparation_in_flight = _official_cpu_stage_pending = False
                 _provision_step = _gpu_stage_backend = _gpu_stage_step = None
             _notify_readiness_listeners()
 
@@ -850,6 +858,7 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
         if _provision_thread is not None and _provision_thread.is_alive():
             return _provision_thread
         _preparation_in_flight = True
+        _official_cpu_stage_pending = prepare_cpu
         _provision_thread = threading.Thread(target=worker, name=PROVISION_THREAD_NAME, daemon=True)
         _provision_thread.start()
         started = _provision_thread

@@ -20,13 +20,17 @@ provider uses beat-engine; pins and HBB state are unchanged.
   **not hardware-qualified**; mocked unit/integration tests and existing CI
   qualify enablement, with no real-GPU qualification gate. Earlier entries
   below describe the superseded decision.
-  Validation with the pinned Python via `scripts/run_tests.py`, in focused
-  batches below two minutes each: 2,099 passed, 7 skipped, 0 failed. Runtime
-  tests excluding warm-up: 1,126 passed, 7 skipped; warm-up, all adapter tests,
-  official bridge, provider warm-up selection and targeted CAD routing: 671
-  passed; required CPU-runtime, solver, registry, bootstrap and Windows
-  sandbox/installer tests: 302 passed. The seven skips require native Windows
-  APIs. No Julia runtime, real solve, GPU qualification or provisioning ran.
+  Adding `BLAB_BEAT_ENGINE_GPU_BACKEND` and a per-backend engine fingerprint
+  to the worker key changes every CPU/Metal key once; the first start after
+  upgrading is cold. A CPU-stage failure no longer stops GPU preparation,
+  including Metal.
+  Round-1 review fixes: per-family detection caches positive results until
+  refresh/exit and negative results for 30 s, keyed on PATH and ROCm roots.
+  NVIDIA probes hide Windows consoles. CPU readiness is published before GPU
+  detection/preparation; only the active GPU row reports preparation. GPU
+  setup checks depot free space even with Julia installed, and CUDA imports
+  CUDSS before the proof solve. Released qualification evidence is restored.
+  CUDA/ROCm remain not hardware-qualified.
 
 - **Design PR 22 — the host survives a packaged Windows Quit (2026-10-07):**
   `spawn.py`, `host.py`, `retire.py` (new); `launchers/statusapp/controller.py`

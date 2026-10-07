@@ -13,10 +13,10 @@ from server.solver.beat_runtime import hardware, provider, readiness
 @pytest.fixture
 def official(monkeypatch, tmp_path):
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": name == "metal"} for name in hardware.GPU_BACKENDS})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": name == "metal", "reason": "mock hardware"} for name in hardware.GPU_BACKENDS})
     monkeypatch.setenv(provider.PROVIDER_ENV, "official")
     for name, value in (("_provision_thread", None), ("_provision_step", None),
-                        ("_preparation_in_flight", False), ("_runtimes_prepared", False),
+                        ("_preparation_in_flight", False), ("_official_cpu_stage_pending", False), ("_runtimes_prepared", False),
                         ("_gpu_stage_backend", None), ("_gpu_stage_step", None)):
         monkeypatch.setattr(facade, name, value)
     yield
@@ -51,7 +51,7 @@ def test_alternative_does_not_change_solve_api(official, monkeypatch):
 @pytest.mark.parametrize("backend,system", [("metal", "Darwin"), ("cuda", "Windows"), ("rocm", "Linux")])
 def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypatch, tmp_path, backend, system):
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
-                        {name: {"available": name == backend} for name in hardware.GPU_BACKENDS})
+                        {name: {"available": name == backend, "reason": "mock hardware"} for name in hardware.GPU_BACKENDS})
     begun, finish = threading.Event(), threading.Event()
     ready = set()
     observed = []
@@ -73,7 +73,11 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
         calls.append((backend, kwargs["environ"], threading.current_thread().name))
         kwargs["step_cb"]("offline")
         kwargs["status_cb"]("offline")
-        status = _official_runtime_statuses()[backend]
+        statuses = _official_runtime_statuses()
+        assert statuses["cpu"]["available"] and statuses["cpu"]["state"] == "ready"
+        assert facade.cpu_runtime_readiness(None).ready
+        assert all(statuses[name]["state"] != "provisioning" for name in hardware.GPU_BACKENDS if name != backend)
+        status = statuses[backend]
         assert not status["available"] and status["state"] == "provisioning"
         assert "offline" in status["reason"]
         return {"status": "failed"}
@@ -109,11 +113,12 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
 def test_background_failure_does_not_hide_other_stage(official, monkeypatch, failure):
     calls = []
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
-                        {name: {"available": name == "cuda"} for name in hardware.GPU_BACKENDS})
+                        {name: {"available": name == "cuda", "reason": "mock hardware"} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k:
                         readiness.BackendReadiness(False, "unprovisioned", "mock"))
 
     def detect(**kwargs):
+        assert calls == ["cpu"]
         assert threading.current_thread().name == facade.PROVISION_THREAD_NAME
         if failure == "detection":
             raise OSError("inventory failed")
@@ -180,3 +185,67 @@ def test_invalidation_updates_live_registry_without_hbb(official, monkeypatch):
         assert registry._refresh_revision == revision
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cpu_pending", [True, False])
+def test_macos_platform_reasons_survive_preparation(monkeypatch, tmp_path, cpu_pending):
+    from server.solver.beat_runtime import assets
+
+    monkeypatch.setenv(provider.PROVIDER_ENV, "official")
+    monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
+    monkeypatch.setattr(facade, "_preparation_in_flight", True)
+    monkeypatch.setattr(facade, "_official_cpu_stage_pending", cpu_pending)
+    monkeypatch.setattr(facade, "_gpu_stage_backend", None if cpu_pending else "metal")
+    monkeypatch.setattr(facade, "_gpu_stage_step", "instantiate")
+    monkeypatch.setattr(hardware.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(hardware.platform, "machine", lambda: "arm64")
+    monkeypatch.setattr(hardware.platform, "mac_ver", lambda: ("14", (), ""))
+    monkeypatch.setattr(hardware.shutil, "which", lambda *a, **k: pytest.fail("macOS must not inspect NVIDIA/ROCm"))
+
+    def absent(*a, **k):
+        raise assets.AssetsUnavailable("optional package absent")
+
+    monkeypatch.setattr(readiness, "expected_identity", absent)
+    statuses = _official_runtime_statuses()
+    for backend, label in (("cuda", "CUDA"), ("rocm", "ROCm")):
+        assert statuses[backend]["state"] == "no-device"
+        assert statuses[backend]["reason"] == f"{label} requires Linux or Windows"
+
+
+def test_launcher_reuses_verified_inventory_after_cpu_finishes(official, monkeypatch):
+    calls = []
+    facts = {name: {"available": name == "cuda", "reason": "mock hardware"} for name in hardware.GPU_BACKENDS}
+    ready = set()
+
+    def inventory(**kwargs):
+        if not kwargs.get("probe_nvidia", True):
+            return facts
+        assert "cpu" in ready
+        assert facade.cpu_runtime_readiness(None).ready
+        calls.append("detect")
+        return facts
+
+    def verdict(backend, **kwargs):
+        if backend == "cuda":
+            assert kwargs["hardware_facts"] is facts[backend]
+        return readiness.BackendReadiness(backend in ready, "ready" if backend in ready else "unprovisioned", "mock")
+
+    def cpu(**kwargs):
+        ready.add("cpu")
+        calls.append("cpu")
+        return {"status": "ready"}
+
+    def cuda(**kwargs):
+        assert kwargs["hardware_facts"] is facts["cuda"]
+        calls.append("cuda")
+        return {"status": "ready"}
+
+    monkeypatch.setattr(hardware, "gpu_hardware", inventory)
+    monkeypatch.setattr(readiness, "backend_readiness", verdict)
+    monkeypatch.setattr(readiness, "provision_cpu", cpu)
+    monkeypatch.setattr(readiness, "provision_cuda", cuda)
+    thread = facade.start_cpu_provisioning(environ={provider.PROVIDER_ENV: "official"})
+    assert thread is not None
+    thread.join(2)
+    assert not thread.is_alive()
+    assert calls == ["cpu", "detect", "cuda"]

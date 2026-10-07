@@ -103,7 +103,7 @@ def test_nvidia_inventory_is_bounded_and_fail_closed(monkeypatch, system, outcom
     monkeypatch.setattr(hardware.subprocess, "run", run)
     assert hardware.gpu_hardware(system=system, environ=env)["cuda"]["available"] is available
     assert calls == [(["nvidia-smi", "-L"], dict(capture_output=True, timeout=15.0,
-                      check=False, stdin=subprocess.DEVNULL, env=env))]
+                      check=False, stdin=subprocess.DEVNULL, env=env, **hardware.background_process_kwargs()))]
 
 
 @pytest.mark.parametrize("system", ["Linux", "Windows"])
@@ -143,3 +143,118 @@ def test_launcher_hint_does_not_wait_for_nvidia_smi(monkeypatch):
     monkeypatch.setattr(hardware.shutil, "which", lambda name, **kwargs: name if name == "nvidia-smi" else None)
     monkeypatch.setattr(hardware.subprocess, "run", lambda *a, **k: pytest.fail("launcher must not wait"))
     assert hardware.gpu_hardware(system="Windows", environ={"PATH": ""}, probe_nvidia=False)["cuda"]["available"]
+
+
+@pytest.mark.parametrize("backend", hardware.GPU_BACKENDS)
+def test_only_requested_family_is_detected(monkeypatch, backend):
+    calls = []
+    monkeypatch.setattr(hardware, "_nvidia_gpu_present", lambda **kwargs: calls.append("cuda") or True)
+    monkeypatch.setattr(hardware, "_rocm_present", lambda **kwargs: calls.append("rocm") or True)
+    monkeypatch.setattr(hardware, "_metal_hardware", lambda *args: (calls.append("metal") or True, "mock"))
+    assert list(hardware.gpu_hardware(only=backend, system="Linux")) == [backend]
+    assert calls == [backend]
+
+
+@pytest.mark.parametrize("outcome", [True, False, "timeout"])
+def test_detection_cache_lifetime_and_explicit_refresh(monkeypatch, outcome):
+    from types import SimpleNamespace
+    from server.solver.beat_runtime import readiness
+
+    now, calls = [0.0], []
+    monkeypatch.setattr(hardware.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(hardware.shutil, "which", lambda *a, **k: "nvidia-smi")
+
+    def run(*args, **kwargs):
+        calls.append(True)
+        if outcome == "timeout":
+            raise subprocess.TimeoutExpired("nvidia-smi", 15)
+        return SimpleNamespace(returncode=0 if outcome else 1)
+
+    monkeypatch.setattr(hardware.subprocess, "run", run)
+    query = dict(only="cuda", system="Windows", environ={"PATH": "driver"})
+    first = hardware.gpu_hardware(**query)
+    assert first["cuda"]["available"] is (outcome is True)
+    first["cuda"]["available"] = "mutated by caller"
+    now[0] = 29.9
+    readiness.probe_cache_clear(notify=False, refresh_hardware=False)
+    assert hardware.gpu_hardware(**query)["cuda"]["available"] is (outcome is True)
+    assert len(calls) == 1
+    now[0] = 30.0
+    hardware.gpu_hardware(**query)
+    assert len(calls) == (1 if outcome is True else 2)
+    now[0] = 1_000_000.0
+    hardware.gpu_hardware(**query)
+    assert len(calls) == (1 if outcome is True else 3)
+    readiness.probe_cache_clear(notify=False)
+    hardware.gpu_hardware(**query)
+    assert len(calls) == (2 if outcome is True else 4)
+
+
+@pytest.mark.parametrize("key", ["PATH", *hardware._ROCM_ENV_VARS])
+def test_detection_cache_keys_path_and_every_rocm_root(monkeypatch, key):
+    calls = []
+    monkeypatch.setattr(hardware, "_rocm_present", lambda **k: calls.append(k["environ"]) or True)
+    env = {"PATH": "tools"}
+    for _ in range(2):
+        hardware.gpu_hardware(only="rocm", system="Linux", environ=env)
+    assert len(calls) == 1
+    hardware.gpu_hardware(only="rocm", system="Linux", environ=dict(env, **{key: "changed"}))
+    assert len(calls) == 2
+
+
+def test_nvidia_hint_cannot_replace_verified_result(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(hardware.shutil, "which", lambda *a, **k: "nvidia-smi")
+    calls = []
+    monkeypatch.setattr(hardware.subprocess, "run", lambda *a, **k: calls.append(k) or SimpleNamespace(returncode=1))
+    query = dict(only="cuda", system="Windows", environ={"PATH": "tools"})
+    assert hardware.gpu_hardware(**query, probe_nvidia=False)["cuda"]["available"]
+    assert not calls
+    assert not hardware.gpu_hardware(**query)["cuda"]["available"]
+    assert len(calls) == 1
+
+
+def test_nvidia_probe_hides_windows_console(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr(hardware.shutil, "which", lambda *a, **k: "nvidia-smi")
+    monkeypatch.setattr(hardware, "background_process_kwargs", lambda: {"creationflags": 0x08000000})
+    monkeypatch.setattr(hardware.subprocess, "run", lambda *a, **k: calls.append(k) or SimpleNamespace(returncode=0))
+    hardware.gpu_hardware(only="cuda", system="Windows", environ={"PATH": "tools"})
+    assert calls[0]["creationflags"] == 0x08000000
+
+
+@pytest.mark.parametrize("refresh_during_probe", [False, True])
+def test_slow_cuda_probe_does_not_block_rocm_or_hints(monkeypatch, refresh_during_probe):
+    import threading
+
+    entered, release = threading.Event(), threading.Event()
+    calls, results = [], []
+
+    def nvidia(**kwargs):
+        if not kwargs["probe"]:
+            return True
+        calls.append("cuda")
+        entered.set()
+        assert release.wait(2)
+        return True
+
+    monkeypatch.setattr(hardware, "_nvidia_gpu_present", nvidia)
+    monkeypatch.setattr(hardware, "_rocm_present", lambda **kwargs: True)
+    query = dict(system="Linux", environ={"PATH": "driver"})
+    thread = threading.Thread(target=lambda: results.append(hardware.gpu_hardware(only="cuda", **query)))
+    thread.start()
+    try:
+        assert entered.wait(2)
+        assert hardware.gpu_hardware(only="rocm", **query)["rocm"]["available"]
+        assert hardware.gpu_hardware(only="cuda", probe_nvidia=False, **query)["cuda"]["available"]
+        if refresh_during_probe:
+            hardware.clear_hardware_cache()
+    finally:
+        release.set()
+        thread.join(2)
+    assert not thread.is_alive() and results[0]["cuda"]["available"]
+    hardware.gpu_hardware(only="cuda", **query)
+    assert calls == (["cuda", "cuda"] if refresh_during_probe else ["cuda"])

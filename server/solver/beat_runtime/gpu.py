@@ -24,6 +24,7 @@ def provision_gpu(
     status_cb: julia_steps.StatusCallback = print,
     worker_factory: Callable[..., Any] | None = None,
     probe: Callable[..., Mapping[str, Any]] | None = None,
+    hardware_facts: Mapping[str, bool | str] | None = None,
     **options: Any,
 ) -> dict[str, Any]:
     """Provision the selected GPU only when matching hardware is present.
@@ -35,8 +36,8 @@ def provision_gpu(
     if backend not in {None, "metal", "cuda", "rocm"}:
         raise ValueError(f"Unknown GPU backend: {backend!r}")
     report = julia_steps.guarded_status(status_cb)
-    inventory = (hardware.gpu_hardware() if options.get("environ") is None
-                 else hardware.gpu_hardware(environ=options["environ"]))
+    inventory = ({backend: hardware_facts} if backend is not None and hardware_facts is not None
+                 else hardware.gpu_hardware(only=backend, environ=options.get("environ")))
     selected = backend or next((name for name in hardware.GPU_BACKENDS
                                 if inventory[name]["available"]), None)
     facts = inventory[selected] if selected else {"available": False, "reason": "no device"}
@@ -74,9 +75,12 @@ def provision_gpu(
         options.setdefault("probe_fixture_identity", compiled.fixture_identity())
     elif options.get("probe_contract"):
         options["probe_contract"] = f"custom:{options['probe_contract']}"
+    setup_steps = ((f"{selected}_device",
+                    f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)",
+                    f"Resolving {label} artifacts and checking the device"),)
+    if selected == "cuda":
+        setup_steps += (("cuda_cudss", "import CUDSS", "Resolving CUDA coupled-solve artifacts"),)
     return provision._provision_backend(
         directory, backend=selected, status_cb=report, probe=solve_probe if probe is None else probe,
-        setup_steps=((f"{selected}_device",
-                      f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)",
-                      f"Resolving {label} artifacts and checking the device"),), **options,
+        setup_steps=setup_steps, **options,
     )

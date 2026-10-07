@@ -23,15 +23,18 @@ def test_provision_flags_and_exit_codes(tmp_path, monkeypatch, backend, status, 
     assert cli.main(["provision", "--backend", backend, "--force", "--retry", "--dir", str(root),
                      "--julia", "explicit", "--project", str(tmp_path / "project"),
                      "--threads", "2", "--depot", str(tmp_path / "depot")]) == code
-    assert calls == [(root, dict(force=True, retry=True, julia_executable="explicit",
-                                julia_project=tmp_path / "project", julia_threads=2, depot=tmp_path / "depot"))]
+    expected = dict(force=True, retry=True, julia_executable="explicit",
+                    julia_project=tmp_path / "project", julia_threads=2, depot=tmp_path / "depot")
+    if backend in hardware.GPU_BACKENDS:
+        expected["hardware_facts"] = {"available": True}
+    assert calls == [(root, expected)]
     assert not root.exists()
 
 
 @pytest.mark.parametrize("args", [["--if-gpu"], ["--if-nvidia-gpu"], ["--backend", "metal", "--if-gpu"],
                                   ["--backend", "cuda", "--if-gpu"], ["--backend", "rocm", "--if-gpu"]])
 def test_hardware_gate_is_quiet_noop_without_engine(monkeypatch, capsys, args):
-    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda: None)
+    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda **kwargs: None)
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": False} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(assets, "engine_assets", lambda *args: pytest.fail("hardware gate bypassed"))
     assert cli.main(args) == 0
@@ -80,14 +83,15 @@ def test_status_without_engine_and_cache_clear_are_read_only(tmp_path, monkeypat
 
 
 def test_default_auto_never_provisions_cpu(monkeypatch):
-    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda: None)
+    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda **kwargs: None)
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": False} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(readiness, "provision_cpu", lambda *args, **kwargs: pytest.fail("CPU needs opt-in"))
     assert cli.main([]) == 0
 
 
 @pytest.mark.parametrize("backend", hardware.GPU_BACKENDS)
 def test_auto_gpu_dispatches_detected_backend(monkeypatch, backend):
-    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda: backend)
+    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda **kwargs: backend)
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": True} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(assets, "engine_assets", lambda backend: None)
     calls = []
@@ -164,3 +168,17 @@ def test_provision_explicit_external_julia_then_status_without_julia(
     # Do not execute, download or version-probe Julia even for later queries.
     julia.write_bytes(b"changed executable")
     assert not readiness.backend_readiness("cpu", root, depot=depot).ready
+
+
+@pytest.mark.parametrize("args,backend", [(["--if-gpu"], "cuda"), (["--if-nvidia-gpu"], "cuda"),
+                                         (["--backend", "rocm"], "rocm")])
+def test_cli_reuses_single_inventory(monkeypatch, args, backend):
+    calls = []
+    inventory = {name: {"available": True, "reason": "mock"} for name in hardware.GPU_BACKENDS}
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: calls.append(kwargs) or inventory)
+    monkeypatch.setattr(assets, "engine_assets", lambda _: None)
+    prepared = []
+    monkeypatch.setattr(readiness, f"provision_{backend}", lambda *a, **k: prepared.append(k) or {"status": "ready"})
+    assert cli.main(args) == 0
+    assert len(calls) == len(prepared) == 1
+    assert prepared[0]["hardware_facts"] is inventory[backend]

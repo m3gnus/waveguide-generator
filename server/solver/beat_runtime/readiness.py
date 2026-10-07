@@ -37,13 +37,19 @@ def remove_readiness_listener(listener: Callable[[], None]) -> None:
             _listeners.remove(listener)
 
 
-def probe_cache_clear(*, notify: bool = True, directory: Path | None = None, persist: bool = False) -> None:
-    """Publish invalidation; verdicts themselves are deliberately never cached.
+def probe_cache_clear(
+    *, notify: bool = True, directory: Path | None = None, persist: bool = False,
+    refresh_hardware: bool = True,
+) -> None:
+    """Publish invalidation and explicitly refresh hardware by default.
 
     Each query re-reads records and hashes source/executable bytes, so in-place
     changes and another process's provisioning cannot retain a stale success.
+    Provisioning invalidates readiness without repeating hardware detection.
     Listeners run outside the lock and cannot break provisioning or each other.
     """
+    if refresh_hardware:
+        hardware.clear_hardware_cache()
     if persist:
         root = paths.runtime_dir() if directory is None else paths.checked_root(directory)
         for name in ("state-cpu.json", "state-metal.json", "state-cuda.json", "state-rocm.json", "julia.json"):
@@ -95,15 +101,16 @@ def expected_identity(
 
 
 def backend_readiness(
-    backend: str, directory: Path | None = None, **options: Any,
+    backend: str, directory: Path | None = None, *,
+    hardware_facts: Mapping[str, bool | str] | None = None, **options: Any,
 ) -> BackendReadiness:
     """Static engine catalogs and hardware eligibility never establish ready."""
     if backend not in BACKENDS:
         raise ValueError(f"Unknown BEAT backend: {backend!r}")
     if backend in hardware.GPU_BACKENDS:
         try:
-            facts = (hardware.gpu_hardware() if options.get("environ") is None
-                     else hardware.gpu_hardware(environ=options["environ"]))[backend]
+            facts = (hardware.gpu_hardware(only=backend, environ=options.get("environ"))[backend]
+                     if hardware_facts is None else hardware_facts)
         except Exception as exc:
             return BackendReadiness(False, "detection-failed", f"BEAT {backend} hardware detection failed: {exc}")
         if not facts["available"]:
@@ -135,8 +142,10 @@ def backend_readiness(
             return BackendReadiness(False, "stale", "WG's portable Julia needs an upgrade; provision again.")
     if provision._ready(record, expected):
         return BackendReadiness(True, "ready", f"BEAT {backend} runtime proved by a matching compiled-system 1 kHz solve.")
+    remedy = (f" Run: python -m server.solver.beat_runtime.cli provision --backend {backend}"
+              if backend in hardware.GPU_BACKENDS else "")
     reason = "Stored identity or compiled proof is stale; provision again." if record else "Runtime has not been provisioned and proved."
-    return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}")
+    return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}{remedy}")
 
 
 def backend_status(backend: str, directory: Path | None = None, **options: Any) -> dict[str, Any]:
@@ -192,25 +201,25 @@ def provision_cpu(
     try:
         return provision.provision_cpu(directory, status_cb=status_cb, **options)
     finally:
-        probe_cache_clear()
+        probe_cache_clear(refresh_hardware=False)
 
 
 def provision_metal(directory: Path | None = None, **options: Any) -> dict[str, Any]:
     try:
         return gpu.provision_gpu(directory, backend="metal", **options)
     finally:
-        probe_cache_clear()
+        probe_cache_clear(refresh_hardware=False)
 
 
 def provision_cuda(directory: Path | None = None, **options: Any) -> dict[str, Any]:
     try:
         return gpu.provision_gpu(directory, backend="cuda", **options)
     finally:
-        probe_cache_clear()
+        probe_cache_clear(refresh_hardware=False)
 
 
 def provision_rocm(directory: Path | None = None, **options: Any) -> dict[str, Any]:
     try:
         return gpu.provision_gpu(directory, backend="rocm", **options)
     finally:
-        probe_cache_clear()
+        probe_cache_clear(refresh_hardware=False)

@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
-from server.solver.beat_runtime import assets, cleanup, installer, paths, provision, registry as r, spawn
+from server.solver.beat_runtime import assets, cleanup, hardware, installer, paths, provision, registry as r, spawn
+
+
+@pytest.fixture(autouse=True)
+def isolated_hardware_detection():
+    hardware.clear_hardware_cache()
+    yield
+    hardware.clear_hardware_cache()
 
 
 @pytest.fixture
@@ -36,6 +44,7 @@ def cpu_provisioning(tmp_path, monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("real Julia or download forbidden")
 
+    monkeypatch.setattr(installer.shutil, "disk_usage", lambda _: SimpleNamespace(free=10 * installer.GPU_REQUIRED_FREE_BYTES))
     monkeypatch.setattr(installer, "download_archive", forbidden)
     monkeypatch.setattr(provision.julia_steps.subprocess, "Popen", forbidden)
     options = dict(

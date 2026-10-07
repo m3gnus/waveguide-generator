@@ -394,13 +394,27 @@ def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
     from server.solver import beat_cpu_runtime
     from server.solver.official_beat import engine_version, production_statuses
 
-    if beat_cpu_runtime.cpu_preparation_in_flight():
-        cpu = beat_cpu_runtime.cpu_runtime_readiness(None)
-        return {backend: {"available": False, "state": "provisioning", "backend": backend,
-                          "version": engine_version(), "reason": cpu.reason if backend == "cpu" else (
-                              beat_cpu_runtime.gpu_preparation_reason(backend) or "Waiting for BEAT CPU preparation.")}
-                for backend in ("cpu", "metal", "cuda", "rocm")}
-    return production_statuses()
+    if not beat_cpu_runtime.cpu_preparation_in_flight():
+        return production_statuses()
+    cpu = beat_cpu_runtime.cpu_runtime_readiness(None)
+    if cpu.state == "provisioning":
+        from server.solver.beat_runtime import hardware
+
+        # CPU readiness is published before any slow verified NVIDIA probe.
+        inventory = hardware.gpu_hardware(probe_nvidia=False)
+        statuses = {backend: {"available": False, "state": "pending" if facts["available"] else "no-device",
+                              "backend": backend, "version": engine_version(),
+                              "reason": f"BEAT {backend} readiness is pending CPU preparation." if facts["available"] else facts["reason"]}
+                    for backend, facts in inventory.items()}
+        statuses["cpu"] = {"available": cpu.ready, "state": cpu.state, "backend": "cpu",
+                           "version": engine_version(), "reason": cpu.reason}
+    else:
+        statuses = production_statuses()
+    for backend in beat_cpu_runtime.GPU_BACKENDS:
+        reason = beat_cpu_runtime.gpu_preparation_reason(backend)
+        if reason is not None:
+            statuses[backend].update(available=False, state="provisioning", reason=reason)
+    return statuses
 
 
 def _beat_row_updates(

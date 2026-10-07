@@ -252,3 +252,24 @@ def test_explicit_provisioned_choice_is_rediscovered_and_changed_binary_revokes(
     assert readiness.backend_readiness("cpu", root, **query).state == "stale"
     julia.write_bytes(b"changed Julia")
     assert readiness.backend_readiness("cpu", root, **query).state == "no-julia"
+
+
+@pytest.mark.parametrize("backend", hardware.GPU_BACKENDS)
+def test_backend_readiness_probes_only_requested_gpu(tmp_path, monkeypatch, backend):
+    calls = []
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        calls.append(kwargs) or {backend: {"available": False, "reason": "no device"}})
+    assert readiness.backend_readiness(backend, tmp_path, environ={"PATH": "driver"}).state == "no-device"
+    assert calls == [{"only": backend, "environ": {"PATH": "driver"}}]
+    calls.clear()
+    assert readiness.backend_readiness(backend, tmp_path, hardware_facts={"available": False, "reason": "no device"}).state == "no-device"
+    assert not calls
+
+
+def test_unprovisioned_rocm_reason_names_real_cli(proved_cpu, monkeypatch):
+    root, _, _, _, query, _, _ = proved_cpu
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {"rocm": {"available": True, "reason": "ROCm runtime detected"}})
+    verdict = readiness.backend_readiness("rocm", root, **query)
+    assert verdict.state == "unprovisioned"
+    assert "python -m server.solver.beat_runtime.cli provision --backend rocm" in verdict.reason

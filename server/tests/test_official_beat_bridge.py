@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import importlib
 import json
@@ -769,7 +770,26 @@ def test_selected_registry_keeps_version_while_provisioning(runtime, monkeypatch
 
     monkeypatch.setattr(bridge, "version", lambda distribution: "1.2.3")
     monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: True)
-    monkeypatch.setattr(beat_cpu_runtime, "cpu_runtime_readiness", lambda package: SimpleNamespace(reason="preparing"))
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_runtime_readiness", lambda package: SimpleNamespace(ready=False, state="provisioning", reason="preparing"))
     monkeypatch.setattr(beat_cpu_runtime, "gpu_preparation_reason", lambda backend: "preparing")
     statuses = _official_runtime_statuses()
     assert all(not status["available"] and status["version"] == "1.2.3" for status in statuses.values())
+
+
+@pytest.mark.parametrize("backend", ["cuda", "rocm"])
+def test_fork_cad_gpu_requires_accurate(runtime, monkeypatch, backend):
+    monkeypatch.setattr(beat, "_load_api", lambda: pytest.fail("fork CAD used HBB"))
+    monkeypatch.setattr(beat_imported, "_load_api", lambda: pytest.fail("fork CAD used HBB"))
+    request = cad._request()
+    request.options.accuracy = "fast"
+    engine = beat.BeatEngine(backend)
+    with pytest.raises(beat.BeatUnavailable, match="only in Accurate"):
+        asyncio.run(engine.run(request, cancel_cb=lambda: None, stage_cb=lambda *_: None,
+                               imported_record=cad._record()))
+    assert not runtime.requests
+    request.options.accuracy = "accurate"
+    result = asyncio.run(engine.run(request, cancel_cb=lambda: None, stage_cb=lambda *_: None,
+                                   imported_record=cad._record()))
+    assert runtime.requests
+    assert {wire["solver_options"]["bem_backend"] for wire in runtime.requests} == {backend}
+    assert result.results["metadata"]["solver_engine"]["device"] == backend
