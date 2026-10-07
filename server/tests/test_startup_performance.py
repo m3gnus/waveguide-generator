@@ -11,6 +11,7 @@ Two independent findings from the 2026-08-06 load review:
 from __future__ import annotations
 
 import asyncio
+import builtins
 import contextlib
 import gzip
 import json
@@ -737,6 +738,128 @@ def test_the_bempp_worker_prewarm_never_blocks_startup(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("blocked_work", [
+    "bempp-import", "beat-import", "solver-import", "bempp-spawn", "beat-preparation-lock",
+])
+def test_jobs_answer_while_solver_prewarm_is_synchronously_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, blocked_work: str,
+) -> None:
+    """A scheduled coroutine can still freeze Uvicorn's startup event loop.
+
+    Use a real lifespan and HTTP request, with an independent thread releasing
+    the stall as a backstop: an asyncio timeout cannot fire on a blocked loop.
+    """
+    from server import app as app_module
+    from server.solver import beat_cpu_runtime, bempp_process, warmup as solver_warmup
+    from server.tests.test_app_batch_e import TestClient
+
+    monkeypatch.setenv("WG2_SOLVER_WARMUP", "1")
+    saved = "beat-cpu" if blocked_work.startswith("beat") else "bempp"
+    monkeypatch.setattr(app_module, "detect_engines", lambda: [
+        EngineInfo(saved, True, "test", "0.1.0"),
+    ])
+    monkeypatch.setattr(solver_warmup, "persisted_engine_preference", lambda _settings: saved)
+    monkeypatch.setattr(solver_warmup, "prewarm_beat_worker_for_engine", lambda _engine: True)
+    monkeypatch.setattr(solver_warmup, "start_solver_warmup", lambda: None)
+    monkeypatch.setattr(bempp_process, "prewarm_bempp_process", lambda: None)
+    monkeypatch.setattr(bempp_process, "shutdown_bempp_process", lambda: None)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: False)
+
+    async def unrelated_warmup(*_args, **_kwargs):
+        pass
+
+    for name in ("prewarm_gmsh_worker", "shutdown_gmsh_worker", "prewarm_mesher",
+                 "shutdown_mesher_prewarm", "start_addin_refresh", "shutdown_addin_refresh"):
+        monkeypatch.setattr(app_module, name, unrelated_warmup)
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    def hang():
+        entered.set()
+        try:
+            assert release.wait(10), "test backstop must release blocked prewarm"
+        finally:
+            finished.set()
+
+    if blocked_work.endswith("import"):
+        real_import = builtins.__import__
+        symbol = {
+            "bempp-import": "prewarm_bempp_worker_for_engine",
+            "beat-import": "is_beat_engine",
+            "solver-import": "start_solver_warmup",
+        }[blocked_work]
+
+        def blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if (globals or {}).get("__name__") == "server.app" and symbol in (fromlist or ()):
+                hang()
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr(builtins, "__import__", blocked_import)
+    elif blocked_work == "bempp-spawn":
+        monkeypatch.setattr(bempp_process, "prewarm_bempp_process", hang)
+    else:
+        def blocked_preparation():
+            hang()
+            return False
+        monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", blocked_preparation)
+
+    application = create_app(data_dir=tmp_path, solver_warmup=blocked_work == "solver-import")
+    client = TestClient(application)
+    backstop = threading.Timer(6, release.set)
+    backstop.daemon = True
+    backstop.start()
+
+    async def exercise():
+        began = time.monotonic()
+        async with application.router.lifespan_context(application):
+            try:
+                async with asyncio.timeout(3):
+                    while not entered.is_set():
+                        await asyncio.sleep(0.01)
+                    response = await client.request_async("GET", "/api/jobs")
+                assert response.status_code == 200
+                assert response.json()["items"] == []
+                assert time.monotonic() - began < 3
+                assert not release.is_set(), "startup and HTTP must finish during the stall"
+            finally:
+                release.set()
+                assert await asyncio.to_thread(finished.wait, 3)
+
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()
+        backstop.cancel()
+        backstop.join(timeout=3)
+
+
+@pytest.mark.parametrize("engine", ["bempp", "beat"])
+def test_worker_prewarm_setup_failures_are_logged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture, engine: str,
+) -> None:
+    async def failed_setup(*_args):
+        raise ImportError("optional solver import failed")
+
+    monkeypatch.setattr(f"server.app.{engine}_worker_prewarm", failed_setup)
+    application = create_app(data_dir=tmp_path)
+    handler = next(
+        item for item in application.router.on_startup
+        if item.__name__ == f"prewarm_{engine}_worker"
+    )
+
+    async def exercise():
+        await handler()
+        task = getattr(application.state, f"{engine}_prewarm_task")
+        await task
+        assert task.exception() is None
+
+    with caplog.at_level(logging.WARNING, logger="wg.solver.warmup"):
+        asyncio.run(exercise())
+    assert "prewarm failed; continuing without prewarm" in caplog.text
+    assert "optional solver import failed" in caplog.text
+
+
 def test_the_bempp_warmup_targets_the_process_that_actually_solves(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -786,15 +909,21 @@ def test_the_solver_warmup_handler_never_blocks_startup(
     from server.solver import warmup as solver_warmup
 
     started = 0
+    finished = threading.Event()
 
     def fake_start() -> None:
         nonlocal started
         started += 1
+        finished.set()
 
     monkeypatch.setattr(solver_warmup, "start_solver_warmup", fake_start)
     from server.app import prewarm_solver
 
-    asyncio.run(prewarm_solver())
+    async def exercise():
+        await prewarm_solver()
+        assert await asyncio.to_thread(finished.wait, 5)
+
+    asyncio.run(exercise())
     assert started == 1
 
 

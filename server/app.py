@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import threading
 import time
-from typing import Callable
+from typing import Awaitable, Callable
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -231,12 +231,33 @@ class _RequestBodyLimitMiddleware:
         await JSONResponse(status_code=413, content=content)(scope, receive, send)
 
 
+async def _run_solver_prewarm(name: str, work: Callable[[], Awaitable[object]]) -> None:
+    """Keep background setup/import failures out of the application lifespan."""
+
+    try:
+        await work()
+    except Exception:
+        logging.getLogger("wg.solver.warmup").warning(
+            "%s prewarm failed; continuing without prewarm", name, exc_info=True
+        )
+
+
+_SOLVER_PREWARM_TASKS: set[asyncio.Task[None]] = set()
+
+
 async def prewarm_solver() -> None:
     """Start the solver warmup. Deliberately imported late and never awaited."""
 
-    from server.solver.warmup import start_solver_warmup
+    def start() -> None:
+        from server.solver.warmup import start_solver_warmup
 
-    start_solver_warmup()
+        start_solver_warmup()
+
+    # Keep a reference: the event loop holds tasks only weakly, so an
+    # unreferenced task can be collected before it finishes.
+    task = asyncio.create_task(_run_solver_prewarm("Solver", lambda: asyncio.to_thread(start)))
+    _SOLVER_PREWARM_TASKS.add(task)
+    task.add_done_callback(_SOLVER_PREWARM_TASKS.discard)
 
 
 async def resolve_prewarm_engine(
@@ -311,11 +332,14 @@ async def worker_prewarm(
     logged, never a missing one.
     """
 
-    from server.solver.warmup import persisted_engine_preference
+    def read_preference() -> str | None:
+        from server.solver.warmup import persisted_engine_preference
+
+        return persisted_engine_preference(settings)
 
     log = logging.getLogger("wg.solver.warmup")
     claims = owns if owns is not None else (lambda name: name == engine)
-    requested = await asyncio.to_thread(persisted_engine_preference, settings)
+    requested = await asyncio.to_thread(read_preference)
     head_start: asyncio.Task[bool] | None = None
     if requested is not None and claims(requested):
         log.info(
@@ -364,10 +388,16 @@ async def bempp_worker_prewarm(
     joins the one probe instead of racing it.
     """
 
-    from server.solver.warmup import prewarm_bempp_worker_for_engine
+    def load_warmup() -> Callable[[str | None], bool]:
+        # create_task does not isolate synchronous imports: an import lock or
+        # native module initialization here would freeze the startup/HTTP loop.
+        from server.solver.warmup import prewarm_bempp_worker_for_engine
 
+        return prewarm_bempp_worker_for_engine
+
+    warm = await asyncio.to_thread(load_warmup)
     await worker_prewarm(
-        engine_registry, settings, engine="bempp", warm=prewarm_bempp_worker_for_engine
+        engine_registry, settings, engine="bempp", warm=warm
     )
 
 
@@ -399,17 +429,25 @@ async def beat_worker_prewarm(
     background work, and the async wait is cancelled promptly on shutdown.
     """
 
-    from server.solver.beat import is_beat_engine
-    from server.solver.beat_cpu_runtime import cpu_preparation_in_flight
-    from server.solver.warmup import prewarm_beat_worker_for_engine
+    def load_warmup():
+        from server.solver.beat import is_beat_engine
+        from server.solver.beat_cpu_runtime import cpu_preparation_in_flight
+        from server.solver.warmup import prewarm_beat_worker_for_engine
 
-    if os.environ.get("WG2_SOLVER_WARMUP") != "0" and (
-        cpu_preparation_in_flight() or engine_registry.cpu_preparation_in_flight()
-    ):
+        def preparation_in_flight() -> bool:
+            # These checks take threading locks shared with provisioning and
+            # capability publication. They must not block the event loop either.
+            return cpu_preparation_in_flight() or engine_registry.cpu_preparation_in_flight()
+
+        return is_beat_engine, preparation_in_flight, prewarm_beat_worker_for_engine
+
+    is_beat_engine, preparation_in_flight, warm = await asyncio.to_thread(load_warmup)
+
+    if os.environ.get("WG2_SOLVER_WARMUP") != "0" and await asyncio.to_thread(preparation_in_flight):
         logging.getLogger("wg.solver.warmup").info(
             "BEAT worker prewarm deferred until runtime preparation finishes"
         )
-        while cpu_preparation_in_flight() or engine_registry.cpu_preparation_in_flight():
+        while await asyncio.to_thread(preparation_in_flight):
             # Start/join detection so readiness notifications have a snapshot
             # to refresh. capabilities() schedules that refresh without waiting
             # for it, so keep waiting until its revision has been published too.
@@ -420,7 +458,7 @@ async def beat_worker_prewarm(
         engine_registry,
         settings,
         engine="beat",
-        warm=prewarm_beat_worker_for_engine,
+        warm=warm,
         # Every ``beat-*`` variant, plus the legacy bare name: each backend is
         # its own engine and its own Julia worker, and all of them are this
         # hook's to warm.
@@ -628,8 +666,11 @@ def create_app(
         """
 
         application.state.bempp_prewarm_task = asyncio.create_task(
-            bempp_worker_prewarm(
-                engine_registry, getattr(application.state, "settings", None)
+            _run_solver_prewarm(
+                "BEMPP worker",
+                lambda: bempp_worker_prewarm(
+                    engine_registry, getattr(application.state, "settings", None)
+                ),
             )
         )
 
@@ -642,8 +683,11 @@ def create_app(
         """
 
         application.state.beat_prewarm_task = asyncio.create_task(
-            beat_worker_prewarm(
-                engine_registry, getattr(application.state, "settings", None)
+            _run_solver_prewarm(
+                "BEAT worker",
+                lambda: beat_worker_prewarm(
+                    engine_registry, getattr(application.state, "settings", None)
+                ),
             )
         )
 
