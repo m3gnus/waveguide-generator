@@ -25,6 +25,14 @@ production caller adopts beat-engine, no pins change, and HBB state is untouched
   `mach_absolute_time`; Windows Python 3.13 uses QPC, which already includes
   sleep. Keeping short deadlines on `time.monotonic()` preserves platform
   behavior, not universal suspend exclusion.
+  Review (Sonnet, Opus: APPROVE) notes fixed directly: macOS now reads
+  `CLOCK_MONOTONIC_RAW` (sleep-inclusive and never adjusted; `CLOCK_MONOTONIC`
+  follows the adjustable wall clock and can step); a small backward step is held
+  at the last reading instead of permanently falling back; the idle exit also
+  waits for peers mid-handshake (`_pending`), since after a long sleep the idle
+  clock can be past its deadline while a handshake is not. Tests add a real
+  native-clock smoke test and a host test where a handshake or an admitted
+  client survives a long sleep.
 
 - **Production fix — provisioned explicit external Julia rediscovery (2026-10-06):**
   `discovery.py`; `server/tests/beat_runtime/test_{cli,readiness}.py`.

@@ -3,9 +3,10 @@
 Linux CLOCK_BOOTTIME includes suspend, unlike CLOCK_MONOTONIC:
 https://man7.org/linux/man-pages/man2/clock_gettime.2.html
 
-Darwin clock_gettime(CLOCK_MONOTONIC) includes sleep. Apple's implementation
-uses boot-relative time; CLOCK_MONOTONIC_RAW also includes sleep and uses
-mach_continuous_time. CLOCK_UPTIME_RAW/mach_absolute_time excludes sleep:
+Darwin clock_gettime(CLOCK_MONOTONIC_RAW) includes sleep, uses
+mach_continuous_time and is never adjusted (CLOCK_MONOTONIC also includes sleep
+but is derived from the adjustable wall clock, so it can step).
+CLOCK_UPTIME_RAW/mach_absolute_time, Python's time.monotonic, excludes sleep:
 https://github.com/apple-oss-distributions/Libc/blob/main/gen/clock_gettime.3
 https://github.com/apple-oss-distributions/Libc/blob/main/gen/clock_gettime.c
 
@@ -36,7 +37,7 @@ def _idle_source() -> Callable[[], float]:
         clock_id = time.CLOCK_BOOTTIME
         return lambda: time.clock_gettime(clock_id)
     if sys.platform == "darwin":
-        clock_id = time.CLOCK_MONOTONIC
+        clock_id = time.CLOCK_MONOTONIC_RAW
         return lambda: time.clock_gettime(clock_id)
     if sys.platform == "win32":
         ticks = ctypes.WinDLL("kernel32", use_last_error=True).GetTickCount64
@@ -68,7 +69,9 @@ class _IdleClock:
                     if not math.isfinite(now) or now < 0:
                         raise ValueError(f"Invalid idle clock reading: {now}")
                     if self._last is not None and now < self._last:
-                        raise ValueError("Idle clock moved backwards")
+                        # A tiny step back must not cost suspend awareness for the
+                        # rest of the process: hold the last reading instead.
+                        now = self._last
                 except Exception as exc:
                     monotonic = time.monotonic()
                     now = self._last if self._last is not None else monotonic
@@ -84,7 +87,7 @@ _clock = _IdleClock()
 
 
 def suspend_aware_monotonic() -> float:
-    """Include suspend in idle age; permanently fall back on failure/regression.
+    """Include suspend in idle age; permanently fall back only if the native clock fails.
 
     Fallback logs once and rebases at the last good reading so idle age never
     goes backwards or spuriously expires because the clocks have different epochs.

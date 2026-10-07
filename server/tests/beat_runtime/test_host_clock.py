@@ -104,3 +104,40 @@ def test_accept_auth_control_and_disconnect_keep_separate_clocks(launch, monkeyp
         assert owner._clients == 0
     finally:
         owner.close()
+
+
+def test_peer_mid_handshake_or_admitted_client_survives_a_long_sleep(launch, monkeypatch):
+    key, directory, _ = launch
+    idle_now = [100.0]
+    monkeypatch.setattr(host, "suspend_aware_monotonic", lambda: idle_now[0])
+    monkeypatch.setattr(host.time, "monotonic", lambda: 10.0)
+    owner = host.WorkerHost(key, directory, idle_timeout=1800, engine_factory=EngineWorker)
+    handshaking = object()
+
+    class SleepListener:
+        calls = 0
+
+        def settimeout(self, value):
+            pass
+
+        def accept(self):
+            self.calls += 1
+            if self.calls == 1:
+                # Sleep far past the idle deadline while a peer is mid-handshake.
+                idle_now[0] += 10 * owner.idle_timeout
+                owner._pending[handshaking] = 10.0 + host.PREAUTH_TIMEOUT
+            elif self.calls == 2:
+                assert not owner._stopping.is_set()
+                owner._pending.pop(handshaking)
+                owner._clients = 1  # now an admitted client holds the host
+            elif self.calls == 3:
+                assert not owner._stopping.is_set()
+                owner._clients = 0  # both gone: the next idle check may exit
+            else:
+                raise AssertionError("Host should exit once nothing holds it")
+            raise TimeoutError("poll")
+
+    owner._server = listener = SleepListener()
+    owner.serve()
+    assert listener.calls == 3
+    assert owner._stopping.is_set()

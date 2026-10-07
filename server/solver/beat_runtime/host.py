@@ -461,7 +461,9 @@ class WorkerHost:
             with self._state:
                 # Finish an active, bounded accept-error sequence even if log
                 # writes or scheduling take it past the ordinary idle deadline.
-                if (not retrying_accept and self._clients == 0
+                # A peer mid-handshake keeps the host: after a long sleep the idle
+                # clock can be far past its deadline while the handshake is not.
+                if (not retrying_accept and self._clients == 0 and not self._pending
                         and suspend_aware_monotonic() - self._last_activity >= self.idle_timeout):
                     self._log("idle exit")
                     self._stopping.set()

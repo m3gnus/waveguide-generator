@@ -3,6 +3,8 @@ from unittest.mock import Mock
 
 import ctypes
 import logging
+import time
+import sys
 
 import pytest
 
@@ -17,7 +19,7 @@ def idle_clock(monkeypatch):
 
 
 @pytest.mark.parametrize("platform,constant", [
-    ("linux", "CLOCK_BOOTTIME"), ("darwin", "CLOCK_MONOTONIC"),
+    ("linux", "CLOCK_BOOTTIME"), ("darwin", "CLOCK_MONOTONIC_RAW"),
 ])
 def test_posix_clock_includes_simulated_suspend(idle_clock, monkeypatch, platform, constant):
     monkeypatch.setattr(clock.sys, "platform", platform)
@@ -52,7 +54,7 @@ def test_unavailable_native_clock_logs_and_falls_back(
 ):
     monkeypatch.setattr(clock.sys, "platform", platform)
     if platform in {"linux", "darwin"}:
-        constant = "CLOCK_BOOTTIME" if platform == "linux" else "CLOCK_MONOTONIC"
+        constant = "CLOCK_BOOTTIME" if platform == "linux" else "CLOCK_MONOTONIC_RAW"
         if failure == "missing":
             monkeypatch.delattr(clock.time, constant, raising=False)
         else:
@@ -74,7 +76,7 @@ def test_unavailable_native_clock_logs_and_falls_back(
     assert "falling back to time.monotonic()" in caplog.text
 
 
-@pytest.mark.parametrize("bad_reading", [OSError("failed"), 1999.0, float("nan"),
+@pytest.mark.parametrize("bad_reading", [OSError("failed"), float("nan"),
                                        float("inf"), float("-inf"), -1.0])
 def test_failure_after_suspend_preserves_epoch_and_elapsed_idle_age(
     idle_clock, monkeypatch, caplog, bad_reading,
@@ -94,3 +96,26 @@ def test_failure_after_suspend_preserves_epoch_and_elapsed_idle_age(
         assert idle_clock() == 2005.0
     assert native.call_count == 3  # Stay on fallback rather than mixing epochs.
     assert len(caplog.records) == 1
+
+
+def test_small_backward_step_is_held_without_losing_suspend_awareness(idle_clock, monkeypatch, caplog):
+    native = Mock(side_effect=[100.0, 99.999, 5000.0])
+    monkeypatch.setattr(clock, "_idle_source", lambda: native)
+    with caplog.at_level(logging.WARNING):
+        assert idle_clock() == 100.0
+        assert idle_clock() == 100.0  # held, not a fallback
+        assert idle_clock() == 5000.0  # still the native, suspend-inclusive clock
+    assert native.call_count == 3
+    assert not caplog.records
+
+
+@pytest.mark.skipif(sys.platform not in {"linux", "darwin"}, reason="native clock smoke test")
+def test_real_native_idle_clock_reads_without_fallback(caplog):
+    idle_clock = clock._IdleClock()  # real native and monotonic clocks, unpatched
+    with caplog.at_level(logging.WARNING):
+        first = idle_clock()
+        second = idle_clock()
+    assert second >= first and first > 0
+    assert not caplog.records
+    # It includes suspend, so it is never behind the sleep-excluding monotonic clock.
+    assert first >= time.monotonic() - 1.0
