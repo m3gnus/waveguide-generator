@@ -174,6 +174,9 @@ def test_detach_polls_cancellation_during_handshake_control_and_admission(launch
             self.closed = False
             connections.append(self)
 
+        def setsockopt(self, *args):
+            pass
+
         def sendall(self, data):
             self.message = json.loads(data[4:])
 
@@ -268,3 +271,65 @@ def test_startup_eof_recovery_is_bounded_and_does_not_retry_host_failures(launch
     monkeypatch.setattr(worker, "_request", failed)
     with pytest.raises(client.HostError, match="engine refused startup"):
         worker.ensure_started()
+
+
+@pytest.mark.parametrize("transport", ["unix", "tcp"])
+def test_connect_client_configures_stream_before_hello(launch, monkeypatch, transport):
+    if transport == "unix" and os.name != "posix":
+        pytest.skip("Unix sockets unavailable")
+    # Use TCP for its endpoint flag independently of Windows availability.
+    key, directory, _ = launch
+    requested = []
+    from server.solver.beat_runtime import host
+    from server.tests.beat_runtime.fake_host_worker import EngineWorker
+    original_endpoint = host.endpoint_for
+    monkeypatch.setattr(host, "endpoint_for", lambda identifier, root:
+                        ipc.Endpoint("unix", path=root.absolute() / f"{identifier}.sock") if transport == "unix"
+                        else original_endpoint(identifier, root, transport="tcp"))
+    if transport == "unix":
+        # Keep the kernel address short while retaining the absolute registry
+        # identity on deep CI/worktree paths.
+        directory.mkdir(parents=True, exist_ok=True)
+        monkeypatch.chdir(directory)
+        address = ipc.Endpoint._address
+        monkeypatch.setattr(ipc.Endpoint, "_address", lambda self: self.path.name if self.kind == "unix" else address(self))
+    owner = host.WorkerHost(key, directory, engine_factory=EngineWorker)
+    record = owner.bind()
+    thread = threading.Thread(target=owner.serve)
+    thread.start()
+    original = client.configure_stream_socket
+    monkeypatch.setattr(client, "configure_stream_socket", lambda peer, **kw: (requested.append(kw), original(peer, **kw))[1])
+    try:
+        with client.connect_client(record, directory) as peer:
+            assert peer.fileno() >= 0
+        assert requested == [{"tcp": transport == "tcp"}]
+    finally:
+        owner._stopping.set()
+        thread.join(timeout=2)
+        assert not thread.is_alive()
+        owner.close()
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError, r.RecordRefused, ipc.FrameError])
+def test_host_launch_errors_revoke_readiness_before_submission(launch, monkeypatch, error_type):
+    from server.solver.beat_runtime import manager, warm_cache
+    from server.solver.beat_runtime.session import SolveSession
+
+    key, directory, _ = launch
+    worker = client.HostedWorker(key, directory=directory)
+    def fail(*a, **kw):
+        raise error_type("host launch failed")
+    monkeypatch.setattr(client, "start_host", fail)
+    before = warm_cache.generation()
+    with pytest.raises(client.HostError, match="host launch failed"):
+        with SolveSession() as session:
+            session.submit(manager.ManagedWorker(worker, "host"), {})
+    assert warm_cache.generation() > before
+
+
+def test_malformed_host_frame_is_a_connection_error(monkeypatch):
+    def fail(*a, **kw):
+        raise ipc.FrameError("invalid host frame")
+    monkeypatch.setattr(client, "receive_frame", fail)
+    with pytest.raises(client.HostError, match="invalid host frame"):
+        client._receive_frame(None)

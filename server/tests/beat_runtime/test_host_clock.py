@@ -43,9 +43,12 @@ def test_accept_auth_control_and_disconnect_keep_separate_clocks(launch, monkeyp
     owner.bind()
     original_listener = owner._server
     monkeypatch.setattr(r, "new_token", lambda: "c" * 64)
-    deadlines, replies = [], []
+    deadlines, replies, socket_options = [], [], []
 
     class Peer:
+        def setsockopt(self, *args):
+            socket_options.append(args)
+
         def settimeout(self, timeout):
             assert timeout == host.CONTROL_TIMEOUT
 
@@ -97,6 +100,11 @@ def test_accept_auth_control_and_disconnect_keep_separate_clocks(launch, monkeyp
     owner._server = SleepListener()
     try:
         owner.serve()
+        assert socket_options[:2] == [
+            (ipc.socket.SOL_SOCKET, ipc.socket.SO_SNDBUF, 4 * 1024 * 1024),
+            (ipc.socket.SOL_SOCKET, ipc.socket.SO_RCVBUF, 4 * 1024 * 1024)]
+        if owner.record.endpoint.kind == "tcp":
+            assert socket_options[-1] == (ipc.socket.IPPROTO_TCP, ipc.socket.TCP_NODELAY, 1)
         assert deadlines == [10.0 + host.PREAUTH_TIMEOUT, 10.0 + host.AUTH_TIMEOUT,
                              10.0 + host.CONTROL_TIMEOUT]
         assert [reply["type"] for reply in replies] == ["hello_ok", "authenticated"]

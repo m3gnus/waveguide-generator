@@ -54,7 +54,7 @@ def _file_digest(path: Path) -> bytes:
 
 
 @lru_cache(maxsize=4096)
-def _cached_digest(path: Path, mtime_ns: int, size: int) -> bytes:
+def _cached_digest(path: Path, mtime_ns: int, size: int, inode: int) -> bytes:
     return _file_digest(path)
 
 
@@ -64,7 +64,7 @@ def file_digest(path: Path, *, cache: bool = False) -> bytes:
         path = path.resolve()
         if cache:
             stat = path.stat()
-            return _cached_digest(path, stat.st_mtime_ns, stat.st_size)
+            return _cached_digest(path, stat.st_mtime_ns, stat.st_size, stat.st_ino)
         return _file_digest(path)
     except OSError as exc:
         raise IdentityUnavailable(f"Cannot read identity input: {path}") from exc

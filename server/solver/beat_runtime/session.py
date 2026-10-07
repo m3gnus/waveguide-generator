@@ -14,6 +14,7 @@ from typing import Any
 from server.platform.temp_session import temporary_directory_root
 
 from . import paths
+from .client import HostError
 from .manager import ManagedWorker, WorkerLease
 
 
@@ -65,6 +66,7 @@ class SolveSession:
             if not self._cancel.is_set():
                 self._cancel_at = time.monotonic()
                 self._cancel.set()
+                self._start_monitor()
             if self.cancel_path is not None:
                 with contextlib.suppress(OSError):
                     self.cancel_path.touch()
@@ -74,6 +76,12 @@ class SolveSession:
             raise self._error or SessionCancelled("BEAT solve cancelled")
         if self.cancellation_callback is not None:
             self.cancellation_callback()
+
+    def _start_monitor(self) -> None:
+        with self._lock:
+            if self._monitor is None and not self._closed:
+                self._monitor = threading.Thread(target=self._watch, name="beat-solve-cancel", daemon=True)
+                self._monitor.start()
 
     def _watch(self) -> None:
         while not self._stop.wait(0.05):
@@ -97,12 +105,15 @@ class SolveSession:
         if self.request_path is None or self._submitted or self._closed:
             raise RuntimeError("Session must be entered and submitted only once")
         self._submitted = True
-        request = dict(payload, cancel_path=str(self.cancel_path.resolve()))
+        cancel_path = str(self.cancel_path.resolve())
+        # Preserve a just-validated request's identity for negotiation. A
+        # different cancellation path still gets ordinary revalidation.
+        request = payload if isinstance(payload, dict) and payload.get("cancel_path") == cancel_path else dict(payload, cancel_path=cancel_path)
         # Serialize before admission: bad requests cannot disturb a warm worker.
         self.request_path.write_text(json.dumps(request, allow_nan=False), encoding="utf-8")
         self._check()
-        self._monitor = threading.Thread(target=self._watch, name="beat-solve-cancel", daemon=True)
-        self._monitor.start()
+        if self.cancellation_callback is not None:
+            self._start_monitor()
         try:
             lease = client.acquire(self._check)
             with self._lock:
@@ -115,7 +126,11 @@ class SolveSession:
             self._check()
             self._stream = lease.submit(self.request_path, **(
                 {"status_callback": status_callback} if status_callback is not None else {}))
-        except BaseException:
+        except BaseException as exc:
+            if not self._cancel.is_set() and isinstance(exc, (HostError, OSError)):
+                from .readiness import probe_cache_clear
+
+                probe_cache_clear()
             with contextlib.suppress(BaseException):
                 self.close()
             if self._error is not None:
@@ -141,6 +156,10 @@ class SolveSession:
                         return
                     if isinstance(exc, StopIteration):
                         return
+                    if isinstance(exc, (HostError, OSError)):
+                        from .readiness import probe_cache_clear
+
+                        probe_cache_clear()
                     raise
                 kind = event.get("type") if isinstance(event, dict) else None
                 if kind == "result":

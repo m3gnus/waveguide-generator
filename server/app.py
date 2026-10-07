@@ -905,7 +905,9 @@ def create_app(
         }
 
     @application.get("/api/capabilities")
-    async def capabilities() -> dict[str, object]:
+    async def capabilities(refresh: bool = False) -> dict[str, object]:
+        if refresh:
+            await engine_registry.refresh_official_readiness()
         # One definition, shared with the problem report
         # (``server/diagnostics/capabilities.py``). Two copies of this would
         # drift, and the copy that drifted would be the one in the bug report.

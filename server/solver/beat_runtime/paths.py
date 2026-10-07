@@ -16,7 +16,7 @@ import stat
 PROVIDER_ID = "wg-beat-engine"
 STATE_SCHEMA = 1
 HOST_PROTOCOL = "wg-beat-host"
-HOST_PROTOCOL_VERSION = 1
+HOST_PROTOCOL_VERSION = 2
 RUNTIME_DIR_ENV = "WG2_BEAT_RUNTIME_DIR"
 WORKER_DIR_ENV = "WG2_BEAT_WORKER_DIR"
 # HBB's root overrides. Without them HBB uses the defaults in _hbb_roots.

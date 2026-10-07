@@ -60,7 +60,7 @@ def test_failed_atomic_publish_preserves_old_record(tmp_path, record, monkeypatc
 
 @pytest.mark.parametrize(("field", "value"), [
     ("provider", "hornlab-beat-bem"), ("protocol", "beat-worker"),
-    ("protocol_version", 2), ("protocol_version", True), ("pid", "123"),
+    ("protocol_version", 1), ("protocol_version", True), ("pid", "123"),
     ("pid", -1), ("token", ""), ("key_id", "0123456789abcdef"),
     ("key", {"provider": "other"}),
 ])
@@ -443,7 +443,7 @@ def test_nonce_hmac_wire_contract_and_shutdown_request_authentication(record):
 
     hello = r.hello_message(record)
     expected = hmac.new(record.token.encode(),
-                        f'{hello["nonce"]}{record.identifier}{record.pid}wg-beat-host:1:hello'.encode(),
+                        f'{hello["nonce"]}{record.identifier}{record.pid}wg-beat-host:2:hello'.encode(),
                         hashlib.sha256).hexdigest()
     reply = r.auth_reply(record, hello)
     assert reply["proof"] == expected

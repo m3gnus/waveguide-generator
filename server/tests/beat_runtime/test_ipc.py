@@ -302,3 +302,24 @@ def test_unix_connect_retries_full_accept_queue_with_one_deadline(monkeypatch, t
         with pytest.raises(BlockingIOError):
             endpoint.connect(.025)
         assert len(calls) == 1 and closed == [True] and now[0] == 0
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-16-le", "utf-16-be", "utf-32", "utf-32-le", "utf-32-be", "utf-8-sig"])
+def test_only_utf8_without_bom_is_accepted(encoding):
+    with pytest.raises(ipc.FrameError):
+        ipc.receive_frame(FragmentedPeer(frame('{"message":"hello"}'.encode(encoding))))
+
+
+@pytest.mark.parametrize("tcp", [False, True])
+@pytest.mark.parametrize("fails", [False, True])
+def test_stream_socket_requests_large_buffers_and_tcp_nodelay(tcp, fails):
+    requested = []
+    class Peer:
+        def setsockopt(self, *option):
+            requested.append(option)
+            if fails:
+                raise OSError("platform buffer cap")
+    ipc.configure_stream_socket(Peer(), tcp=tcp)
+    assert requested[:2] == [(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024),
+                             (socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)]
+    assert requested[2:] == ([(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)] if tcp else [])

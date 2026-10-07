@@ -972,6 +972,19 @@ class EngineRegistry:
         self._schedule_opencl_retry()
         return self._cache
 
+    async def refresh_official_readiness(self) -> None:
+        """Explicit UI refresh waits for a full proof instead of a warm verdict."""
+        from server.solver.beat_runtime import readiness
+        from server.solver.beat_runtime.provider import official_selected
+
+        if not official_selected():
+            return
+        await asyncio.to_thread(readiness.probe_cache_clear, notify=False)
+        self._cpu_readiness_changed()
+        await self.capabilities()
+        if self._refresh_task is not None:
+            await asyncio.shield(self._refresh_task)
+
     async def wait_for_bempp(self) -> tuple[EngineInfo, ...]:
         """Submission-only wait, shielded from caller cancellation.
 

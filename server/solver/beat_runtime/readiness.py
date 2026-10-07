@@ -8,14 +8,20 @@ import logging
 import os
 from pathlib import Path
 import threading
+import time
 from typing import Any
 
-from . import assets, discovery, gpu, hardware, identity, julia_steps, locks, paths, probe, provision, state, threads
+from . import assets, discovery, gpu, hardware, identity, julia_steps, locks, paths, probe, provision, state, threads, warm_cache
 
 BACKENDS = ("cpu", "metal", "cuda", "rocm")
 log = logging.getLogger(__name__)
 _listener_lock = threading.Lock()
 _listeners: list[Callable[[], None]] = []
+_verdict_lock = threading.RLock()
+_verdicts: dict[tuple, BackendReadiness] = {}
+_negative_verdicts: dict[tuple, tuple[BackendReadiness, float]] = {}
+_NEGATIVE_TTL = 30.0
+_TRANSIENT_NEGATIVES = {"no-device", "detection-failed", "unsupported"}
 
 
 @dataclass(frozen=True)
@@ -41,15 +47,18 @@ def probe_cache_clear(
     *, notify: bool = True, directory: Path | None = None, persist: bool = False,
     refresh_hardware: bool = True,
 ) -> None:
-    """Publish invalidation and explicitly refresh hardware by default.
+    """Invalidate warm verdicts and host keys, then notify presentation owners.
 
-    Each query re-reads records and hashes source/executable bytes, so in-place
-    changes and another process's provisioning cannot retain a stale success.
-    Provisioning invalidates readiness without repeating hardware detection.
-    Listeners run outside the lock and cannot break provisioning or each other.
+    Warm sweeps reuse full proofs only while the metadata signature is unchanged.
+    Hardware refresh is explicit; provisioning can invalidate without detecting
+    hardware again. Listeners run outside locks and cannot break provisioning.
     """
     if refresh_hardware:
         hardware.clear_hardware_cache()
+    warm_cache.invalidate()
+    with _verdict_lock:
+        _verdicts.clear()
+        _negative_verdicts.clear()
     if persist:
         root = paths.runtime_dir() if directory is None else paths.checked_root(directory)
         for name in ("state-cpu.json", "state-metal.json", "state-cuda.json", "state-rocm.json", "julia.json"):
@@ -62,6 +71,11 @@ def probe_cache_clear(
                 pass
     if not notify:
         return
+    notify_readiness_listeners()
+
+
+def notify_readiness_listeners() -> None:
+    """Publish a cleared verdict after the caller has released ownership locks."""
     with _listener_lock:
         listeners = tuple(_listeners)
     for listener in listeners:
@@ -100,7 +114,7 @@ def expected_identity(
     return expected
 
 
-def backend_readiness(
+def _prove_backend_readiness(
     backend: str, directory: Path | None = None, *,
     hardware_facts: Mapping[str, bool | str] | None = None, **options: Any,
 ) -> BackendReadiness:
@@ -146,6 +160,48 @@ def backend_readiness(
     return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}")
 
 
+def backend_readiness(
+    backend: str, directory: Path | None = None, *, force_refresh: bool = False,
+    hardware_facts: Mapping[str, bool | str] | None = None, **options: Any,
+) -> BackendReadiness:
+    """Reuse a full proof under the cheap launch signature; refresh is explicit."""
+    if force_refresh:
+        probe_cache_clear(notify=False)
+    if hardware_facts is not None:
+        return _prove_backend_readiness(backend, directory, hardware_facts=hardware_facts, **options)
+    # Hardware-only negatives do not depend on a source/depot proof, and may
+    # precede asset discovery entirely. Keep their cache independent of it.
+    negative_key = (warm_cache.generation(), hardware.cache_generation(), backend, str(directory), str(Path.cwd()),
+                    warm_cache._freeze(dict(os.environ)), warm_cache._freeze(options))
+    with _verdict_lock:
+        cached = _negative_verdicts.get(negative_key)
+        if cached is not None and time.monotonic() < cached[1]:
+            return cached[0]
+    try:
+        signature = warm_cache.runtime_signature(backend, directory, **options)
+    except Exception:
+        # Let the full proof retain its precise unavailable/error semantics.
+        signature = None
+    with _verdict_lock:
+        if signature is not None and signature in _verdicts:
+            return _verdicts[signature]
+        verdict = _prove_backend_readiness(backend, directory, **options)
+        if verdict.state in _TRANSIENT_NEGATIVES:
+            if len(_negative_verdicts) >= 32:
+                _negative_verdicts.clear()
+            _negative_verdicts[negative_key] = verdict, time.monotonic() + _NEGATIVE_TTL
+        elif signature is not None and verdict.state not in {"provisioning", "interrupted"}:
+            try:
+                unchanged = signature == warm_cache.runtime_signature(backend, directory, **options)
+            except Exception:
+                unchanged = False
+            if unchanged:
+                if len(_verdicts) >= 32:
+                    _verdicts.clear()
+                _verdicts[signature] = verdict
+        return verdict
+
+
 def backend_status(backend: str, directory: Path | None = None, **options: Any) -> dict[str, Any]:
     verdict = backend_readiness(backend, directory, **options)
     return dict(available=verdict.ready, state=verdict.state, reason=verdict.reason,
@@ -153,6 +209,8 @@ def backend_status(backend: str, directory: Path | None = None, **options: Any) 
 
 
 def beat_backend_statuses(directory: Path | None = None, **options: Any) -> dict[str, dict[str, Any]]:
+    if options.pop("force_refresh", False):
+        probe_cache_clear(notify=False)
     return {backend: backend_status(backend, directory, **options) for backend in BACKENDS}
 
 

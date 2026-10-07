@@ -393,3 +393,60 @@ def test_many_monitors_share_one_store_connection(staging):
     finally:
         store.close()
     assert not store._connections
+
+
+@pytest.mark.parametrize("phase", ["start", "submit", "read", "negotiate"])
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError, OSError])
+def test_only_transport_errors_clear_readiness(staging, monkeypatch, phase, error_type):
+    from server.solver.beat_runtime import readiness, warm_cache
+
+    before = warm_cache.generation()
+    def fail(*args, **kwargs):
+        raise error_type("fixture failure")
+    worker = Worker()
+    if phase == "start":
+        monkeypatch.setattr(worker, "ensure_started", fail)
+    elif phase == "submit":
+        monkeypatch.setattr(worker, "submit", fail)
+    with pytest.raises(error_type, match="fixture failure"):
+        with SolveSession() as session:
+            session.submit(ManagedWorker(worker, "child"), {}, negotiate=fail if phase == "negotiate" else None)
+            if phase == "read":
+                monkeypatch.setattr(Stream, "__next__", fail)
+                list(session.events())
+    assert (warm_cache.generation() > before) == (error_type is OSError)
+    readiness.probe_cache_clear(notify=False)
+
+
+@pytest.mark.parametrize("retirement_fails", [False, True])
+def test_failed_lease_notifies_without_holding_lock(staging, retirement_fails):
+    from server.solver.beat_runtime import readiness
+    from server.solver.beat_runtime.manager import WorkerLease
+
+    worker = Worker()
+    if retirement_fails:
+        def terminate():
+            raise OSError("retirement failed")
+        worker.terminate = terminate
+    lease = WorkerLease(ManagedWorker(worker, "child"))
+    available = []
+    def listener():
+        def acquire():
+            held = lease._lock.acquire(timeout=.5)
+            available.append(held)
+            if held:
+                lease._lock.release()
+        thread = threading.Thread(target=acquire)
+        thread.start()
+        thread.join(timeout=1)
+        assert not thread.is_alive()
+    readiness.add_readiness_listener(listener)
+    try:
+        if retirement_fails:
+            with pytest.raises(OSError, match="retirement"):
+                lease.finish("failed")
+        else:
+            lease.finish("failed")
+        assert available == [True]
+    finally:
+        readiness.remove_readiness_listener(listener)

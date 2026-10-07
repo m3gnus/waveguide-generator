@@ -7,6 +7,7 @@ from copy import copy
 from dataclasses import replace
 from importlib.metadata import PackageNotFoundError, version
 import importlib
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -14,9 +15,12 @@ import numpy as np
 
 from .beat_adapter.request import CompiledRequest
 from .beat_adapter.results import ResultContractError, SweepResult, map_sweep
-from .beat_runtime import assets, discovery
+from .beat_runtime import assets, discovery, paths, readiness, registry
+from .beat_runtime.client import HostError
 from .beat_runtime.manager import WorkerManager, get_manager
 from .beat_runtime.session import SolveSession
+from .beat_runtime.negotiation import validated_negotiator
+from .beat_runtime.profile import start_profile, SweepProfile
 from .context import SolverContext
 from .frequency_sweep import sort_native_result_frequencies
 from .beat import BeatUnavailable
@@ -43,14 +47,15 @@ def batch_request(request: CompiledRequest, frequencies: Sequence[float]) -> Com
     return replace(request, wire=dict(request.wire, frequencies_hz=list(frequencies)))
 
 
-def production_statuses() -> dict[str, dict[str, Any]]:
+def production_statuses(*, force_refresh: bool = False, backend: str | None = None) -> dict[str, dict[str, Any]]:
     """Read matching compiled proof; static engine capabilities are insufficient."""
-    from .beat_runtime import readiness
-
-    statuses = readiness.beat_backend_statuses()
+    refresh = {"force_refresh": True} if force_refresh else {}
+    statuses = ({backend: readiness.backend_status(backend, **refresh)} if backend in readiness.BACKENDS
+                else readiness.beat_backend_statuses(**refresh))
     installed_version = engine_version()
-    for backend in ("cpu", "metal", "cuda", "rocm"):
-        statuses[backend] = dict(statuses[backend], surface_traces=True, version=installed_version)
+    for name in readiness.BACKENDS:
+        if name in statuses:
+            statuses[name] = dict(statuses[name], surface_traces=True, version=installed_version)
     return statuses
 
 
@@ -105,8 +110,14 @@ def solve_compiled(
     progress_callback: Callable[[int, int, float], None] | None = None,
     on_frequency_result: Callable[[int, float, dict[str, Any]], bool | None] | None = None,
     status_callback: Callable[[str], None] | None = None,
+    _profile: SweepProfile | None = None,
 ) -> SweepResult:
     """Negotiate and map one acquired batch, retaining the manager for reuse."""
+    profile = _profile or start_profile(logging.getLogger(__name__).info, "wg")
+    if profile is not None and _profile is None:
+        # Direct compiled callers have already selected their runtime.
+        profile.mark("statuses done")
+        profile.mark("request built")
     try:
         contract = importlib.import_module("beat_engine.beat_contract.worker")
     except ImportError as exc:
@@ -114,20 +125,37 @@ def solve_compiled(
     options = request.wire["solver_options"]
     with SolveSession(cancellation_callback=cancellation_callback) as session:
         wire = dict(request.wire, cancel_path=str(session.cancel_path.resolve()))
-        contract.validate_solve_request(wire)
+        negotiate = validated_negotiator(contract, wire)
         try:
-            client = (worker_manager or get_manager()).get_worker(
-                options["bem_backend"], julia_executable=julia_executable,
-            )
-            session.submit(client, wire, negotiate=contract.negotiate_submission,
+            try:
+                client = (worker_manager or get_manager()).get_worker(
+                    options["bem_backend"], julia_executable=julia_executable,
+                )
+            except (ValueError, RuntimeError, OSError) as exc:
+                # This phase has no request or compatibility validation: even
+                # plain ValueError from discovery/host launch revokes the proof.
+                readiness.probe_cache_clear()
+                raise OfficialBeatUnavailable(str(exc)) from exc
+            if profile is not None:
+                profile.mark("worker acquired")
+            session.submit(client, wire, negotiate=negotiate,
                            status_callback=status_callback)
-        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable) as exc:
+            if profile is not None:
+                profile.mark("submitted")
+        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable, paths.RootConflict,
+                registry.RecordRefused) as exc:
+            readiness.probe_cache_clear()
+            raise OfficialBeatUnavailable(str(exc)) from exc
+        except (HostError, OSError) as exc:
+            # Session admission/transport failures already revoked the proof.
             raise OfficialBeatUnavailable(str(exc)) from exc
         events = session.events()
 
         def reported_events():
             try:
                 for event in events:
+                    if profile is not None:
+                        profile.event(event)
                     if isinstance(event, dict) and event.get("type") == "status" and status_callback:
                         status_callback(str(event.get("message") or ""))
                     yield event
@@ -154,7 +182,11 @@ def solve_compiled(
             progress_callback=progress_callback, on_frequency_result=on_frequency_result,
             request_cancel=session.request_cancel,
         )
+        if profile is not None:
+            profile.mark("mapped")
         session.close()
+        if profile is not None:
+            profile.mark("closed")
         session.raise_callback_error()
         if native.cancelled and not len(native.frequencies_hz):
             raise OfficialBeatUnavailable("BEAT solve cancelled before any results")

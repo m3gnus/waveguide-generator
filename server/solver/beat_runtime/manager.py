@@ -10,13 +10,13 @@ from pathlib import Path
 import threading
 from typing import Any
 
-from . import assets, discovery, identity, julia_steps, registry, threads
+from . import assets, discovery, identity, julia_steps, registry, threads, warm_cache
 from .client import HostedWorker
 from .host import bounded_call, official_engine_factory
 from .ownership import OwnershipClosed, StreamOwnership
 
 
-def resolve_key(backend: str, *, julia_executable: str | None = None,
+def _resolve_key(backend: str, *, julia_executable: str | None = None,
                 julia_threads: int | str = "auto", julia_project: Path | None = None,
                 julia_sysimage: Path | None = None, solver_script: Path | None = None,
                 environment: Mapping[str, str] | None = None,
@@ -63,6 +63,32 @@ def resolve_key(backend: str, *, julia_executable: str | None = None,
             compiled_request_policy=policy, cache=True),
         "environment": keyed, "depots": depots,
     })
+
+
+_key_lock = threading.RLock()
+_keys: dict[tuple, dict[str, Any]] = {}
+
+
+def resolve_key(backend: str, **options: Any) -> dict[str, Any]:
+    """Reuse the host identity under the same signature as readiness."""
+    try:
+        signature = warm_cache.runtime_signature(backend, **options)
+    except Exception:
+        # Preserve uncached discovery/launch errors for the production bridge.
+        return _resolve_key(backend, **options)
+    with _key_lock:
+        key = _keys.get(signature)
+        if key is None:
+            key = _resolve_key(backend, **options)
+            try:
+                unchanged = signature == warm_cache.runtime_signature(backend, **options)
+            except Exception:
+                unchanged = False
+            if unchanged:
+                if len(_keys) >= 32:
+                    _keys.clear()
+                _keys[signature] = key
+        return copy.deepcopy(key)
 
 
 class WorkerLease:
@@ -154,21 +180,29 @@ class WorkerLease:
                     self.client.worker.detach()
 
     def finish(self, kind: str) -> None:
-        with self._lock:
-            self.finished = True
-            if kind == "failed":
-                # This outer lease still excludes every subsequent session.
-                try:
-                    bounded_call(self.client.worker.terminate)
-                except BaseException:
-                    self.client.unusable = True
-                    raise
+        from .readiness import notify_readiness_listeners, probe_cache_clear
+
+        failed = kind == "failed"
+        try:
+            with self._lock:
+                self.finished = True
+                if failed:
+                    probe_cache_clear(notify=False)
+                    # This outer lease still excludes every subsequent session.
+                    try:
+                        bounded_call(self.client.worker.terminate)
+                    except BaseException:
+                        self.client.unusable = True
+                        raise
+        finally:
+            if failed:
+                notify_readiness_listeners()
 
     def close(self) -> None:
         try:
             if not self.finished and (self.busy or self.stream is not None):
                 self.cancel()
-            if self.stream is not None:
+            if self.stream is not None and not self.finished:
                 bounded_call(self.stream.close)
         except BaseException:
             self.client.unusable = True

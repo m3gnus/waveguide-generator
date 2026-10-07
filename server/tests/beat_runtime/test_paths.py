@@ -58,7 +58,7 @@ def test_hbb_roots_are_ignored_and_untouched(tmp_path):
     assert record.read_text() == '{"status":"ready"}'
     assert list(legacy.iterdir()) == [record]
     assert (paths.PROVIDER_ID, paths.HOST_PROTOCOL, paths.HOST_PROTOCOL_VERSION, paths.STATE_SCHEMA) == (
-        "wg-beat-engine", "wg-beat-host", 1, 1,
+        "wg-beat-engine", "wg-beat-host", 2, 1,
     )
 
 

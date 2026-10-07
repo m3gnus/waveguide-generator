@@ -23,9 +23,11 @@ from server.platform.paths import app_root
 from . import paths, registry as r
 from .cleanup import sweep_orphan_socket
 from .clock import suspend_aware_monotonic
-from .ipc import endpoint_for, receive_frame, send_frame
+from .ipc import configure_stream_socket, endpoint_for, receive_frame, send_frame
 from .ownership import OwnedStream, StreamOwnership
 from .retire import RetireSignal
+from .relay import EventRelay
+from .profile import start_profile
 
 DEFAULT_IDLE_TIMEOUT = 1800.0
 CONTROL_TIMEOUT = 2.0
@@ -300,6 +302,7 @@ class WorkerHost:
             raise
 
     def _run_job(self, job: _Job) -> None:
+        profile = start_profile(self._log, "host") if job.message["op"] == "submit" else None
         reply: dict | None = None
         try:
             with self._jobs:
@@ -323,17 +326,27 @@ class WorkerHost:
                     return
                 reply = {"type": "ready", **self._engine_report()}
                 return
+            if profile is not None:
+                profile.mark("statuses done")
+                profile.mark("worker acquired")
             request = job.message["request"]
+            if profile is not None:
+                profile.mark("request built")
             stream = self._ownership.submit(Path(request) if isinstance(request, str) else request,
                                             operation=job.message.get("operation", "solve"),
                                             status_callback=status)
             job.stream = stream
+            if profile is not None:
+                profile.mark("submitted")
             if job.cancelled.is_set():
                 stream.close()
                 return
             job.send({"type": "worker_info", **self._engine_report()})
             terminal = False
+            relay = EventRelay()
             for event in stream:
+                if profile is not None:
+                    profile.event(event)
                 if job.cancelled.is_set():
                     break
                 if event.get("type") in {"completed", "cancelled", "failed"}:
@@ -345,10 +358,13 @@ class WorkerHost:
                         except BaseException:
                             self._fail_stop()
                             raise
-                    reply = {"type": "event", "event": event}
+                    reply = relay.envelope(event)
                     terminal = True
                     break
-                job.send({"type": "event", "event": event})
+                frame = relay.envelope(event)
+                if profile is not None:
+                    profile.relay_frame(frame)
+                job.send(frame)
             if not terminal and not job.cancelled.is_set():
                 raise RuntimeError("BEAT engine stream ended without a terminal event")
         except (OSError, ValueError, RuntimeError) as exc:
@@ -372,7 +388,13 @@ class WorkerHost:
                 with self._jobs:
                     self._queue.remove(job)
                     self._jobs.notify_all()
+                if profile is not None:
+                    profile.mark("mapped")  # Host event packaging finished.
+                if profile is not None and reply is not None:
+                    profile.relay_frame(reply)
                 job.finish(reply)
+                if profile is not None:
+                    profile.mark("closed")
 
     def _cancel_job(self, job: _Job, *, client_cancelled: bool = False,
                     retire_startup: bool = False) -> None:
@@ -494,6 +516,7 @@ class WorkerHost:
                     break
                 self._stopping.wait(0.02)
                 continue
+            configure_stream_socket(connection, tcp=self.record.endpoint.kind == "tcp")
             accept_errors = 0
             retrying_accept = False
             with self._state:

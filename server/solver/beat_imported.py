@@ -676,6 +676,11 @@ def solve_imported_beat_from_msh_text(
     from .beat_runtime.provider import official_selected
 
     official = official_selected() if _official is None else _official
+    profile = None
+    if official:
+        from .beat_runtime.profile import start_profile
+
+        profile = start_profile(logging.getLogger(__name__).info, "wg")
     precision = ("double" if _precision == "float64" else "single") if official else (
         (_hbb_options or {}).get("solve_precision", "single"))
     geometry = request.geometry
@@ -695,7 +700,9 @@ def solve_imported_beat_from_msh_text(
         from .beat_adapter.request import build_imported_request
 
         package = None
-        status = production_statuses().get(backend)
+        status = production_statuses(backend=backend).get(backend)
+        if profile is not None:
+            profile.mark("statuses done")
     else:
         package = _load_api()
         if package is None:
@@ -948,6 +955,8 @@ def solve_imported_beat_from_msh_text(
                     )
                 except ValueError as exc:
                     raise BeatUnavailable(str(exc)) from exc
+                if profile is not None:
+                    profile.mark("request built")
                 config = response_config(compiled, channel_context)
             else:
                 try:
@@ -1055,6 +1064,7 @@ def solve_imported_beat_from_msh_text(
                                 return solve_compiled(
                                     batch_request(compiled, batch), channel_id=channel.id,
                                     worker_manager=_worker_manager, julia_executable=_julia_executable,
+                                    _profile=profile,
                                     cancellation_callback=cancellation_callback,
                                     progress_callback=progress, status_callback=stage_status,
                                 )
@@ -1103,6 +1113,7 @@ def solve_imported_beat_from_msh_text(
                         result = solve_compiled(
                             batch_request(compiled, frequencies), channel_id=channel.id,
                             worker_manager=_worker_manager, julia_executable=_julia_executable,
+                            _profile=profile,
                             cancellation_callback=cancellation_callback, progress_callback=progress,
                             on_frequency_result=on_frequency_result if result_callback else None,
                             status_callback=stage_status,

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from server.solver.beat_runtime import assets, gpu, hardware, identity, probe, readiness, state
+from server.solver.beat_runtime import assets, gpu, hardware, identity, probe, readiness, state, warm_cache
 from server.tests.beat_runtime.test_probe import COMPLETED, FakeWorker, result
 
 
@@ -68,8 +68,14 @@ def test_incomplete_or_vacuous_saved_proof_is_unavailable(proved_cpu, field, val
 
 
 @pytest.mark.parametrize("changed", ["source", "project", "julia", "runtime", "fixture", "threads", "environment", "removed"])
-def test_success_is_not_stale_cached(proved_cpu, monkeypatch, changed):
+def test_observed_changes_or_explicit_refresh_revoke_success(proved_cpu, monkeypatch, changed):
     root, engine, julia, _, query, _, _ = proved_cpu
+    runtime = root.parent / "runtime-source"
+    if changed == "runtime":
+        runtime.mkdir()
+        (runtime / "nested").mkdir()
+        (runtime / "nested" / "policy.py").write_text("original")
+        monkeypatch.setattr(warm_cache, "__file__", str(runtime / "warm_cache.py"))
     assert readiness.backend_readiness("cpu", root, **query).ready
     if changed in {"source", "project"}:
         path = engine.root / "__init__.py" if changed == "source" else engine.project / "Project.toml"
@@ -79,9 +85,12 @@ def test_success_is_not_stale_cached(proved_cpu, monkeypatch, changed):
     elif changed == "removed":
         julia.unlink()
     elif changed == "runtime":
+        (runtime / "nested" / "policy.py").write_text("changed runtime")
         monkeypatch.setattr(identity, "runtime_fingerprint", lambda: "new-runtime")
     elif changed == "fixture":
-        monkeypatch.setattr(probe, "fixture_identity", lambda: "new-fixture")
+        fixture = root.parent / "probe.msh"
+        fixture.write_text("changed probe fixture")
+        monkeypatch.setattr(probe, "_FIXTURE", fixture)
     elif changed == "threads":
         query["julia_threads"] = 4
     else:

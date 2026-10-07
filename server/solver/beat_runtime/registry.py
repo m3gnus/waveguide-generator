@@ -387,7 +387,7 @@ def auth_proof(record: HostRecord, nonce: str, operation: str) -> str:
     """HMAC over nonce || key_id || host_pid || protocol, domain-separated by op.
 
     Nonce and key ID are fixed-length ASCII hex; PID is decimal; protocol is
-    'wg-beat-host:1:<operation>'. The secret is UTF-8, never a wire field.
+    'wg-beat-host:<version>:<operation>'. The secret is UTF-8, never a wire field.
     """
     if not isinstance(nonce, str) or not re.fullmatch(r"[0-9a-f]{64}", nonce):
         raise RecordRefused("Invalid authentication nonce")

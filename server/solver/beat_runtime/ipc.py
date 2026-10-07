@@ -7,6 +7,8 @@ from dataclasses import dataclass
 import errno
 import json
 import math
+
+import numpy as np
 import os
 from pathlib import Path
 import re
@@ -80,11 +82,25 @@ def _invalid_constant(value: str) -> None:
     raise FrameError(f"Invalid JSON constant: {value}")
 
 
-def _finite_float(value: str) -> float:
-    result = float(value)
-    if not math.isfinite(result):
+def _check_finite(value: Any) -> None:
+    """Walk JSON containers; vectorize only long, homogeneous numeric lists."""
+    if isinstance(value, dict):
+        for member in value.values():
+            _check_finite(member)
+    elif isinstance(value, list):
+        if len(value) > 64 and all(isinstance(member, (int, float)) for member in value):
+            try:
+                array = np.asarray(value)
+            except (OverflowError, ValueError):
+                array = None
+            if array is not None and array.dtype.kind in "biuf":
+                if not np.isfinite(array).all():
+                    raise FrameError("Nonfinite JSON number")
+                return
+        for member in value:
+            _check_finite(member)
+    elif isinstance(value, float) and not math.isfinite(value):
         raise FrameError("Nonfinite JSON number")
-    return result
 
 
 def receive_frame(
@@ -107,7 +123,8 @@ def receive_frame(
         raise FrameError("Invalid host frame length")
     body = _receive_exactly(connection, length, deadline=deadline, cancelled=cancelled)
     try:
-        decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant, parse_float=_finite_float)
+        decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant)
+        _check_finite(decoded)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise FrameError("Malformed host JSON frame") from exc
     if not isinstance(decoded, dict):
@@ -207,6 +224,19 @@ class Endpoint:
             client.close()
             raise
         return client
+
+
+def configure_stream_socket(connection: socket.socket, *, tcp: bool = False) -> None:
+    """Reduce relay backpressure; platform buffer caps need not accept 4 MiB."""
+    options = [(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024),
+               (socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)]
+    if tcp:
+        options.append((socket.IPPROTO_TCP, socket.TCP_NODELAY, 1))
+    for level, option, value in options:
+        try:
+            connection.setsockopt(level, option, value)
+        except OSError:
+            pass
 
 
 def endpoint_for(identifier: str, directory: Path | None = None, *, transport: str | None = None) -> Endpoint:

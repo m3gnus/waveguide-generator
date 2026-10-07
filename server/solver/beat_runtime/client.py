@@ -8,6 +8,8 @@ import copy
 import hmac
 import json
 import math
+import logging
+import os
 from pathlib import Path
 import socket
 import threading
@@ -17,9 +19,11 @@ from typing import Any
 from . import paths, registry as r
 from .cleanup import cleanup_host
 from .host import CONTROL_TIMEOUT, DEFAULT_IDLE_TIMEOUT, RETIREMENT_TIMEOUT, validate_key
-from .ipc import CONTROL_FRAME_BYTES, MAX_FRAME_BYTES, receive_frame, remaining_time, send_frame
+from .ipc import configure_stream_socket, FrameError, CONTROL_FRAME_BYTES, MAX_FRAME_BYTES, receive_frame, remaining_time, send_frame
 from .ownership import OwnedStream, StreamOwnership
 from .spawn import start_host
+from .relay import EventRelay
+from .profile import RelayLatency
 
 HEARTBEAT_TIMEOUT = 10.0
 
@@ -36,6 +40,8 @@ def _receive_frame(connection: socket.socket, *, cancelled: Callable[[], bool] |
                    **options: Any) -> dict | None:
     try:
         return receive_frame(connection, cancelled=cancelled, **options)
+    except FrameError as exc:
+        raise HostError(str(exc)) from exc
     except OSError as exc:
         if isinstance(exc, ConnectionAbortedError) or (cancelled is not None and cancelled()):
             raise HostError("BEAT host receive cancelled") from exc
@@ -49,6 +55,7 @@ def connect_client(record: r.HostRecord, directory: Path, *, timeout: float = CO
     deadline = time.monotonic() + timeout
     connection = record.endpoint.connect(remaining_time(deadline))
     try:
+        configure_stream_socket(connection, tcp=record.endpoint.kind == "tcp")
         hello = r.hello_message(record)
         send_frame(connection, hello)
         reply = _receive_frame(connection, deadline=deadline, cancelled=cancelled)
@@ -81,6 +88,8 @@ class _RemoteStream:
         self.client, self.connection, self.status_callback = client, connection, status_callback
         self.closed = False
         self.terminal = False
+        self._relay = EventRelay()
+        self._latency = RelayLatency(logging.getLogger(__name__).info) if os.environ.get("WG2_BEAT_PROFILE") == "1" else None
 
     def __next__(self) -> dict:
         if self.closed:
@@ -94,6 +103,8 @@ class _RemoteStream:
                                        cancelled=lambda: self.closed or self.client._closed.is_set())
                 if frame is None:
                     raise HostError("BEAT host disconnected before job completion")
+                if self._latency is not None:
+                    self._latency.observe(frame)
                 kind = frame.get("type")
                 if kind == "worker_info":
                     self.client._report(frame)
@@ -101,9 +112,10 @@ class _RemoteStream:
                     if self.status_callback is not None:
                         self.status_callback(str(frame.get("message", "")))
                 elif kind == "event":
-                    event = frame.get("event")
-                    if not isinstance(event, dict):
-                        raise HostError("Invalid BEAT event envelope")
+                    try:
+                        event = self._relay.accept(frame)
+                    except ValueError as exc:
+                        raise HostError(str(exc)) from exc
                     self.terminal = event.get("type") in {"completed", "cancelled", "failed"}
                     return event
                 elif kind in {"failed", "cancelled"}:
@@ -119,6 +131,8 @@ class _RemoteStream:
         if self.closed:
             return
         self.closed = True
+        if self._latency is not None:
+            self._latency.finish()
         try:
             if not self.terminal:
                 # This connection carries exactly one submission. Its cancel
@@ -218,8 +232,13 @@ class HostedWorker:
             while True:
                 if self._closed.is_set():
                     raise HostError("BEAT client admission is closed")
-                self._record = start_host(self.key, self.directory, timeout=remaining_time(deadline),
-                                          idle_timeout=self.idle_timeout, **options)
+                try:
+                    self._record = start_host(self.key, self.directory, timeout=remaining_time(deadline),
+                                              idle_timeout=self.idle_timeout, **options)
+                except (ValueError, RuntimeError) as exc:
+                    # Launch has no solve-request validation. Normalize plain
+                    # launch/config errors so sessions revoke stale proofs too.
+                    raise HostError(str(exc)) from exc
                 try:
                     connection = connect_client(self._record, self.directory,
                                                 timeout=min(CONTROL_TIMEOUT, remaining_time(deadline)),

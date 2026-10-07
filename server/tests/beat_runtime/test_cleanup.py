@@ -72,7 +72,7 @@ def test_authenticated_shutdown_and_dead_record_cleanup(tmp_path, host):
 
 @pytest.mark.parametrize(("field", "value"), [
     ("provider", "hornlab-beat-bem"), ("protocol", "beat-worker"),
-    ("protocol_version", 2), ("proof", "foreign"), ("key", {}),
+    ("protocol_version", 1), ("proof", "foreign"), ("key", {}),
     ("key_id", "foreign"), ("host_pid", 999999), ("host_pid", True),
     ("type", "hello_refused"),
 ])

@@ -1855,3 +1855,59 @@ PRs 13-14 review round 2, fixed directly:
   `docs/reference/adaptive-frequency-sampling.md` and the adapter fixtures
   README. Float tolerance applies only to adaptive numerical roundoff; plain
   cases remain exact and the ZIP creator-OS field is canonicalized for hashes.
+
+
+## Warm sweep overhead (current policy)
+
+Audience: runtime maintainers. Readiness now caches full per-backend verdicts
+under an in-process metadata signature. It observes backend state, Julia
+identity, provisioning holder/lock files, executable candidates, engine/runtime
+root directories and recursive `.py`/`.jl`/`.toml`/`.json` source stats, required
+entry points, selected manifests, probe fixture and relevant environment/settings. First use, a changed signature, explicit
+refresh, provisioning completion and solve/runtime failure require the same
+full content/depot proof as before. Active provisioning and interrupted setup
+remain uncached. No-device, detection-failed and unsupported verdicts expire
+after 30 seconds or explicit invalidation. Host key resolution shares this
+invalidation generation and metadata policy, and returns isolated key copies.
+
+This supersedes the earlier uncached-by-design policy: provisioning publishes
+records atomically, and a cheap `os.scandir` walk observes nested developer
+edits, additions and removals without hashing file contents. Metadata revokes
+a cached proof; it does not replace the full content proof on a miss.
+`production_statuses` and backend status APIs accept `force_refresh=True`; official package reprobe does
+this automatically. `/api/capabilities?refresh=true` waits for a fresh official
+proof and updated capability rows, including juliaup channel switches whose
+selected executable can change without a watched path changing. The proof
+never starts Julia. Explicit solve backends prove only their selected backend;
+UI capability responses still include all four. After an update, an old v1
+host may linger harmlessly until its idle timeout; protocol v2 cannot adopt it.
+
+WG validates a compiled request once, then binds the pinned Python negotiation
+function to a request-specific validation receipt in an isolated globals map.
+Every version/capability check remains engine-owned; different request objects
+and unknown API shapes retain ordinary negotiation. Installed module globals,
+host request-file validation and engine-side validation remain untouched.
+
+Host protocol v2 relays unchanged result provenance once per submission and
+restores it by shared reference at the client; changed provenance is sent again.
+The engine public API exposes parsed dictionaries only. Its Julia stdout JSON
+and Julia-side provenance copies therefore remain outside WG's control. Frame
+decoding accepts only UTF-8 without a BOM and uses the native JSON float
+decoder. A Python walk checks floats, using numpy only for long homogeneous
+numeric lists; exponent overflow, nested/ragged lists and nonstandard constants
+remain rejected. Both stream ends request 4 MiB send/receive buffers
+best-effort, plus TCP_NODELAY on loopback TCP, to reduce per-event backpressure.
+
+Completed sessions skip a redundant bounded close thread. Cancellation monitors
+start only for a callback or an explicit cancellation and wake on the stop event;
+abandoned/failed retirement stays bounded. `WG2_BEAT_PROFILE=1` emits elapsed
+`perf_counter` marks for solve start, statuses done, request built, worker
+acquired, submitted, first event/result, last result, completed, mapped and closed
+in WG logs, with matching submission/relay marks in the host log. Host statuses
+and request marks denote receipt of WG's admission and staged request, rather
+than an additional host readiness proof. Profiled relayed events carry a host
+monotonic timestamp; WG logs each host-to-WG event latency and a count, median,
+p90 and maximum summary at sweep close. Disabled profiling reads no timing
+clock and stamps no frames. Request/compatibility exceptions preserve cached
+proofs; host/startup/connection failures revoke them even before lease creation.
+Failure listeners run after the lease lock is released.

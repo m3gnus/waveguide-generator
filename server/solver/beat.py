@@ -391,6 +391,11 @@ def reprobe_package_backend_statuses() -> dict[str, Any] | None:
     finishes first and its answer is discarded rather than read.
     """
 
+    if official_selected():
+        from .official_beat import production_statuses
+
+        return production_statuses(force_refresh=True)
+
     with _status_probe_lock:
         try:
             from hornlab_beat_bem import runtime as beat_runtime
@@ -606,6 +611,11 @@ def solve_beat_from_msh_text(
     """
 
     official = official_selected() if _official is None else _official
+    profile = None
+    if official:
+        from .beat_runtime.profile import start_profile
+
+        profile = start_profile(logging.getLogger(__name__).info, "wg")
     context.validate()
     del mesh_metadata
     # TODO: qualify official rigid-ground mesh/frame/field evaluation before enabling it.
@@ -623,7 +633,9 @@ def solve_beat_from_msh_text(
     if official:
         from .official_beat import production_statuses
 
-        statuses = production_statuses()
+        statuses = production_statuses(backend=backend)
+        if profile is not None:
+            profile.mark("statuses done")
         package = None
     else:
         package = _load_api()
@@ -685,6 +697,8 @@ def solve_beat_from_msh_text(
             )
         except ValueError as exc:
             raise BeatUnavailable(str(exc)) from exc
+        if profile is not None:
+            profile.mark("request built")
         config = response_config(compiled, context)
         if _mesh_scale_to_m != 1.0:
             from .beat_adapter.mesh import scale_msh_text
@@ -790,6 +804,7 @@ def solve_beat_from_msh_text(
         def solve_batch(frequencies):
             return solve_compiled(
                 batch_request(compiled, frequencies), channel_id="source", worker_manager=_worker_manager,
+                _profile=profile,
                 julia_executable=_julia_executable, cancellation_callback=cancellation_callback,
                 progress_callback=progress,
                 on_frequency_result=None if adaptive else on_frequency_result,

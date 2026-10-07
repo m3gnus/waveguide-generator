@@ -793,3 +793,103 @@ def test_fork_cad_gpu_requires_accurate(runtime, monkeypatch, backend):
     assert runtime.requests
     assert {wire["solver_options"]["bem_backend"] for wire in runtime.requests} == {backend}
     assert result.results["metadata"]["solver_engine"]["device"] == backend
+
+
+def test_profile_logs_complete_wg_timing_sequence(runtime, monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setenv("WG2_BEAT_PROFILE", "1")
+    caplog.set_level(logging.INFO)
+    beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    marks = [record.message.split(": ")[1].split(" elapsed_s=")[0]
+             for record in caplog.records if record.message.startswith("BEAT profile wg:")]
+    assert marks == ["solve start", "statuses done", "request built", "worker acquired", "submitted",
+                     "first event", "first result", "last result", "completed", "mapped", "closed"]
+
+
+def test_ui_refresh_and_reprobe_request_full_proof(runtime, monkeypatch):
+    import asyncio
+    from server.engines.registry import EngineRegistry, detect_engines
+    from server.solver.beat_runtime import warm_cache
+
+    observed = []
+    original = bridge.production_statuses
+    monkeypatch.setattr(bridge, "production_statuses", lambda **kwargs: (observed.append(kwargs), original(**kwargs))[1])
+
+    async def scenario():
+        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")))
+        try:
+            await engines.capabilities()
+            before = warm_cache.generation()
+            await engines.refresh_official_readiness()
+            assert warm_cache.generation() > before
+            assert all(row.available for row in await engines.capabilities())
+        finally:
+            await engines.shutdown_prewarm()
+    asyncio.run(scenario())
+    beat.reprobe_package_backend_statuses()
+    assert observed[-1] == {"force_refresh": True}
+
+
+@pytest.mark.parametrize("backend", ["cpu", "metal"])
+def test_explicit_solve_proves_only_selected_backend(runtime, monkeypatch, backend):
+    observed = []
+    original = readiness.backend_readiness
+    monkeypatch.setattr(readiness, "backend_readiness", lambda name, *a, **kw:
+                        (observed.append(name), original(name, *a, **kw))[1])
+    beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend=backend)
+    assert observed == [backend]
+    observed.clear()
+    assert set(bridge.production_statuses()) == set(readiness.BACKENDS)
+    assert observed == list(readiness.BACKENDS)
+
+
+@pytest.mark.parametrize("phase", ["get_worker", "acquire", "ensure_started", "submit"])
+@pytest.mark.parametrize("error_name", ["discovery", "record", "host", "os"])
+def test_prelease_runtime_failure_revokes_proof(runtime, monkeypatch, phase, error_name):
+    from server.solver.beat_runtime import discovery, warm_cache
+    from server.solver.beat_runtime.client import HostError
+
+    error_type = {"discovery": discovery.JuliaDiscoveryError, "record": registry.RecordRefused,
+                  "host": HostError, "os": OSError}[error_name]
+    def fail(*a, **kw):
+        raise error_type("runtime launch failed")
+    if phase == "get_worker":
+        monkeypatch.setattr(runtime.manager, "get_worker", fail)
+    else:
+        managed = runtime.manager.get_worker("cpu")
+        if phase == "acquire":
+            monkeypatch.setattr(managed, "acquire", fail)
+        else:
+            monkeypatch.setattr(managed.worker, phase, fail)
+    before = warm_cache.generation()
+    with pytest.raises(bridge.OfficialBeatUnavailable, match="runtime launch failed"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert warm_cache.generation() > before
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError])
+def test_plain_host_launch_errors_are_unavailable_and_revoke_proof(runtime, monkeypatch, error_type):
+    from server.solver.beat_runtime import warm_cache
+
+    def fail(*a, **kw):
+        raise error_type("host launch failed")
+    monkeypatch.setattr(runtime.manager, "get_worker", fail)
+    before = warm_cache.generation()
+    with pytest.raises(bridge.OfficialBeatUnavailable, match="host launch failed"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert warm_cache.generation() > before
+
+
+@pytest.mark.parametrize("error_type", [ValueError, RuntimeError])
+def test_request_or_compatibility_failure_keeps_cached_proof(runtime, monkeypatch, error_type):
+    from server.solver.beat_runtime import warm_cache
+
+    original = bridge.validated_negotiator
+    def refuse(*a, **kw):
+        raise error_type("request incompatible")
+    monkeypatch.setattr(bridge, "validated_negotiator", lambda *a: (original(*a), refuse)[1])
+    before = warm_cache.generation()
+    with pytest.raises(error_type, match="request incompatible"):
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    assert warm_cache.generation() == before

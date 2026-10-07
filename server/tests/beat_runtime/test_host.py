@@ -26,7 +26,7 @@ def authenticated(record):
 
 
 @pytest.mark.parametrize(("field", "value"), [
-    ("provider", "foreign"), ("protocol", "beat-worker"), ("protocol_version", 2),
+    ("provider", "foreign"), ("protocol", "beat-worker"), ("protocol_version", 1),
     ("protocol_version", True), ("key_id", "0" * 16), ("key", {}),
     ("key", "engine"),
 ])

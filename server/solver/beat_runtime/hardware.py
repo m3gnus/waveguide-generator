@@ -31,6 +31,12 @@ def clear_hardware_cache() -> None:
         _cache_generation += 1
 
 
+def cache_generation() -> int:
+    """Version hardware facts so dependent verdict caches observe refreshes."""
+    with _cache_lock:
+        return _cache_generation
+
+
 def _nvidia_gpu_present(*, environ: Mapping[str, str], probe: bool = True) -> bool:
     executable = shutil.which("nvidia-smi", path=environ.get("PATH", os.defpath))
     if executable is None:
