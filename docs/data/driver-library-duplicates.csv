@@ -1,0 +1,6 @@
+row_id,input_row,kept_input_row,Brand,Model,Z_ohm,Size_in,Throat_in,Diameter_mm,Sd_cm2,Bl_Tm,Re_ohm,Le_mH,Le2_mH,Re2_ohm,Mms_g,Mmd_g,Fs_Hz,Vas_L,Qms,Qes,Qts,Cms_mm_per_N,Rms_kg_per_s,Xmax_mm,Sensitivity_dB,Power_W,XO_min_Hz,Freq_low_Hz
+b2019ad860a4bc771f1235da,434,432,ATC,SB75-234 SC,8,10,,,340,10.3,5.4,,,,49.6,,30,92,2,0.48,0.387,,,5,90.8,75,,
+5f62c7a00b6351fba107a9ef,637,636,Aurum Cantus,AC250SW,4,10,,,330,10.3,3.6,,,,75.2,,35,42,2.35,0.56,0.452,,,5.9,90.5,180,,
+d410ff4d62d45497094e9012,2629,2628,Focal,13W 8711,4,12,,,551.5,16.7,3.5,,,,149.5,,28.8,87.1,9.13,0.34,0.328,,,7.9,93.4,400,,
+6aecb89c4aa31240b68aab91,2652,2651,Focal,30A4,8,12,,,510.7,11.9,4.01,,,,174.7,,24.7,86.9,5.49,0.764,0.671,,,8.5,87.3,250,,
+6903be66c409db5c2bbf0729,5364,5363,Supravox,285 GMF,8,12,,,471,12,6,,,,42.9,,35,150,8,0.39,0.372,,,4,95.4,70,,

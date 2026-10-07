@@ -47,7 +47,9 @@ def _routes(router):
 
 @pytest.mark.parametrize(
     "raw,expected",
-    [("8", 8.0), ("8.0", 8.0), ("8 Ohm", 8.0), ("  8  ", 8.0), ("", None), ("   ", None), (None, None)],
+    [("8", 8.0), ("8.0", 8.0), ("8 Ohm", 8.0), ("  8  ", 8.0),
+     (".298", 0.298), ("-.298", -0.298), (".298e-2", 0.00298),
+     ("", None), ("   ", None), (None, None)],
 )
 def test_parse_numeric_tolerates_units_and_blanks(raw: str | None, expected: float | None) -> None:
     assert parse_numeric(raw) == expected
@@ -146,6 +148,43 @@ def test_row_missing_brand_or_model_is_dropped(tmp_path: Path) -> None:
     library.rescan()
     hits = library.search(q="", kind="all", z=None, limit=100)
     assert [h["model"] for h in hits] == ["OK1"]
+
+
+def test_malformed_rows_are_skipped_without_losing_valid_rows(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "bad.csv",
+        ["Brand", "Model", "Z_ohm", "Sd_cm2"],
+        [
+            ["Acme", "Before", "8", "300"],
+            ["Acme", "TooShort", "8"],
+            ["Acme", "TooLong", "8", "300", "extra"],
+            ["Acme", "OverflowZ", "1e999", "300"],
+            ["Acme", "OverflowSd", "8", "1e999"],
+            ["Acme", "After", "8", "300"],
+        ],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    library.rescan()
+    hits = library.search(q="", kind="all", z=None, limit=100)
+    assert {hit["model"] for hit in hits} == {"Before", "After"}
+
+
+def test_reliability_columns_are_ignored(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "info.csv",
+        ["Brand", "Model", "Sd_cm2", "reliability", "reliability_reasons"],
+        [["Acme", "Cone1", "300", "unreliable", "an informational note"]],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    hit = library.search(q="Acme Cone1", kind="all", z=None, limit=5)[0]
+    detail = library.get(hit["id"])
+    assert detail is not None
+    assert detail["spec"]["sd_cm2"] == 300.0
+    assert "reliability" not in detail["fields"]
+    assert "reliability_reasons" not in detail["fields"]
+    assert detail["extras"] == {}
 
 
 # --- kind classification ----------------------------------------------------
@@ -1005,7 +1044,7 @@ def test_the_shipped_library_reports_its_one_compression_driver(tmp_path: Path) 
     """The fact behind the reported bug, pinned.
 
     A user searched the shipped library for a compression driver, found nothing,
-    and concluded it was empty. It is not: it is 1,045 cone drivers and one
+    and concluded it was empty. It is not: it contains cone drivers and one
     compression driver, and the breakdown is what lets the picker say so.
     """
 
@@ -1033,7 +1072,10 @@ def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> No
     assert folder is not None, "server/drivers/bundled is missing from this checkout"
     library = DriverLibrary(folder / "does-not-exist", bundled=folder)
     info = library.rescan()
-    assert info["total_drivers"] > 900
+    assert info["total_drivers"] == 5197
+    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 5709, "bundled": True}]
+    hits = library.search(q="", kind="all", z=None, limit=info["total_drivers"])
+    assert sum(len(hit["variants"]) for hit in hits) == 5709
     # Everything shipped is a driver a channel can actually be driven by: the
     # export withholds catalogue rows, so the library's own count is not a
     # promise the Drivers rail has to break.
@@ -1047,6 +1089,7 @@ def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> No
     assert detail is not None
     assert detail["spec"]["power_w"] == 55.0
     assert detail["spec"]["z_nom_ohm"] == 8.0
+    assert detail["spec"]["mms_g"] == 0.29
     # Nothing commercial travels with a public file.
     assert detail["source"]["price_eur"] is None
     assert not any(key.lower().startswith("price") for key in detail["extras"])

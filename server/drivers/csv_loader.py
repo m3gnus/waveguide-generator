@@ -9,6 +9,7 @@ is required by the ``kind`` classifier below it, so it is carried here too.
 
 from __future__ import annotations
 
+import math
 import re
 
 
@@ -94,7 +95,7 @@ _ALIAS_LOOKUP: dict[str, str] = {
     for alias in aliases
 }
 
-_NUMERIC_PREFIX = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+_NUMERIC_PREFIX = re.compile(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?")
 
 
 def parse_numeric(raw: str | None) -> float | None:
@@ -119,7 +120,12 @@ def parse_numeric(raw: str | None) -> float | None:
 
 
 def parse_row(row: dict[str | None, str | None]) -> tuple[dict[str, float | str | None], dict[str, str]]:
-    """Map one CSV row's cells onto canonical fields plus opaque extras."""
+    """Map cells to fields and extras; malformed rows return no identity."""
+
+    # DictReader uses a None key for excess cells and None values for missing
+    # cells. Return no identity so the index skips the row, not the library.
+    if None in row or any(value is None for value in row.values()):
+        return {}, {}
 
     fields: dict[str, float | str | None] = {}
     extras: dict[str, str] = {}
@@ -128,6 +134,8 @@ def parse_row(row: dict[str | None, str | None]) -> tuple[dict[str, float | str 
             continue
         header = raw_header.strip()
         if not header:
+            continue
+        if header.lower() in {"reliability", "reliability_reasons"}:
             continue
         value = (raw_value or "").strip() if isinstance(raw_value, str) else ""
         canonical = _ALIAS_LOOKUP.get(header.lower())
@@ -138,7 +146,10 @@ def parse_row(row: dict[str | None, str | None]) -> tuple[dict[str, float | str 
         if canonical in TEXT_FIELDS:
             fields[canonical] = value or None
         else:
-            fields[canonical] = parse_numeric(value)
+            number = parse_numeric(value)
+            if number is not None and not math.isfinite(number):
+                return {}, {}
+            fields[canonical] = number
     return fields, extras
 
 
