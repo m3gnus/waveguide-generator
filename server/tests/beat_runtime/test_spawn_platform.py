@@ -94,8 +94,26 @@ def _launch_attempts(launch, monkeypatch, refuse):
     return key, directory, attempts
 
 
+def _breakaway_permitted() -> bool:
+    """Whether this test process's own job, if any, lets a child break away.
+
+    A hosted Windows runner's job does not, and no job a test makes can undo
+    that, so "granted" is only provable where the environment allows it.
+    """
+    try:
+        probe = subprocess.Popen([sys.executable, "-c", "pass"], creationflags=0x01000208)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == spawn.ERROR_ACCESS_DENIED:
+            return False
+        raise
+    probe.wait(timeout=30)
+    return True
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows job breakaway")
 def test_windows_breakaway_granted_is_recorded_by_the_host(launch, monkeypatch):
+    if not _breakaway_permitted():
+        pytest.skip("this runner's job forbids breakaway; the refused tests cover it")
     key, directory, attempts = _launch_attempts(launch, monkeypatch, lambda flags: None)
     record = spawn.start_host(key, directory)
     assert [(command[-2:], flags) for command, flags in attempts] == [
@@ -151,7 +169,9 @@ def test_the_host_puts_its_breakaway_outcome_in_its_bootstrap_record(launch, mon
     spawn.start_host(key, directory)
     assert bootstraps
     if os.name == "nt":
-        assert bootstraps[-1]["job_breakaway"] == "granted"
+        # Truthful either way: what this environment's job really allowed.
+        expected = "granted" if _breakaway_permitted() else "refused"
+        assert bootstraps[-1]["job_breakaway"] == expected
     else:
         assert "job_breakaway" not in bootstraps[-1]  # POSIX passes no outcome.
 
