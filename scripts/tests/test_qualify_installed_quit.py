@@ -10,11 +10,13 @@ parked mesh build, a real stop and a real restart.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
 import sys
 import subprocess
-from types import ModuleType
+import time
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -64,6 +66,76 @@ def test_the_process_table_sees_this_process_and_its_parent() -> None:
     assert os.getpid() in table
     assert table[os.getpid()][1] is True
     assert os.getpid() in gate.descendants(os.getppid(), table)
+
+
+def test_a_hung_process_table_fails_the_gate_within_its_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    gate = _gate()
+    timeout = 0.1
+    monkeypatch.setattr(gate, "PROCESS_COMMAND_TIMEOUT_S", timeout)
+    # Exercise the subprocess path on every platform without changing os globally.
+    monkeypatch.setattr(gate, "os", SimpleNamespace(name="posix"))
+    original_run = subprocess.run
+    calls = []
+
+    def hung_process_table(command, **kwargs):
+        assert command[0] == "ps"
+        assert kwargs.get("timeout") == timeout  # Fail promptly if the bound is removed.
+        calls.append(command)
+        return original_run([sys.executable, "-c", "import time; time.sleep(60)"], **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", hung_process_table)
+    monkeypatch.setattr(gate, "resolve_payload", lambda payload: (tmp_path, REPO_ROOT, Path(sys.executable)))
+    monkeypatch.setattr(gate, "isolated_environment", lambda app, work: {})
+    monkeypatch.setattr(gate, "launcher_grace", lambda app: 10.0)
+    monkeypatch.setattr(gate, "memory_ceiling", lambda *args: {})
+    monkeypatch.setattr(gate, "http", lambda *args: {"job_id": "parked-job"})
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "gmsh-parked").write_text("_build_sync", encoding="utf-8")
+    output = tmp_path / "server.out"
+    output.write_bytes(b"")
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    run = gate.Run(process, work / "stop", output)
+    monkeypatch.setattr(gate.Run, "start", lambda *args: run)
+
+    started = time.monotonic()
+    try:
+        result = gate.main([
+            "--payload", str(tmp_path), "--work", str(work), "--output", str(tmp_path / "out")
+        ])
+        elapsed = time.monotonic() - started
+        assert result == 1
+        # Two bounded listings: the gate's check, then its cleanup. Allow scheduling overhead.
+        assert elapsed < 2 * timeout + 2.0
+        assert len(calls) == 2
+        assert process.poll() is not None
+        report = json.loads((tmp_path / "out" / "quit-qualification.json").read_text())
+        assert report["qualified"] is False
+        assert report["error"] == "the process-table command (ps) timed out after 0.1 s"
+        assert "Quit qualification FAILED: " + report["error"] in capsys.readouterr().err
+    finally:
+        if process.poll() is None:
+            process.kill()
+        process.wait(timeout=5)
+
+
+def test_the_windows_cleanup_command_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    gate = _gate()
+    monkeypatch.setattr(gate, "os", SimpleNamespace(name="nt"))
+    calls = []
+
+    def hung_taskkill(command, **kwargs):
+        assert command == ["taskkill", "/F", "/PID", "4242"]
+        assert kwargs["timeout"] == gate.PROCESS_COMMAND_TIMEOUT_S
+        calls.append(command)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", hung_taskkill)
+    with pytest.raises(subprocess.TimeoutExpired, match="timed out"):
+        gate._kill(4242)
+    assert len(calls) == 1
 
 
 def test_the_servers_own_session_is_named_by_its_lock_not_the_launched_process(tmp_path: Path) -> None:

@@ -63,6 +63,7 @@ BLOCK_TIMEOUT_S = 180.0
 #: The server's owned children leave with it; this only covers the kernel
 #: reaping them after their parent went away.
 CHILD_REAP_S = 2.0
+PROCESS_COMMAND_TIMEOUT_S = 5.0
 PARKED_OPERATION_SUFFIX = "_build_sync"
 
 #: The probe each platform is expected to answer with (``server/platform/memory.py``).
@@ -230,12 +231,18 @@ def process_table() -> dict[int, tuple[int, bool]]:
 
     if os.name == "nt":
         return _windows_process_table()
-    listing = subprocess.run(
-        ["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "stat="],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
+    try:
+        listing = subprocess.run(
+            ["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "stat="],
+            capture_output=True,
+            text=True,
+            timeout=PROCESS_COMMAND_TIMEOUT_S,
+            check=True,
+        ).stdout
+    except subprocess.TimeoutExpired as exc:
+        raise QualificationError(
+            f"the process-table command (ps) timed out after {exc.timeout} s"
+        ) from exc
     table: dict[int, tuple[int, bool]] = {}
     for line in listing.splitlines():
         fields = line.split()
@@ -265,7 +272,10 @@ def still_running(pids: set[int]) -> set[int]:
 def _kill(pid: int) -> None:
     if os.name == "nt":
         subprocess.run(
-            ["taskkill", "/F", "/PID", str(pid)], capture_output=True, check=False
+            ["taskkill", "/F", "/PID", str(pid)],
+            capture_output=True,
+            timeout=PROCESS_COMMAND_TIMEOUT_S,
+            check=False,
         )
     else:
         import signal
@@ -395,13 +405,20 @@ class Run:
     def kill_if_alive(self) -> None:
         if self.process.poll() is not None:
             return
-        for pid in descendants(self.pid) | self.children:
-            _kill(pid)
-        self.process.kill()
         try:
-            self.process.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            pass
+            children = descendants(self.pid)
+        except (QualificationError, OSError, subprocess.SubprocessError):
+            # A failed listing must not prevent cleanup of the owned processes.
+            children = set()
+        try:
+            for pid in children | self.children:
+                _kill(pid)
+        finally:
+            self.process.kill()
+            try:
+                self.process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 def server_pid(data_dir: Path) -> int:
