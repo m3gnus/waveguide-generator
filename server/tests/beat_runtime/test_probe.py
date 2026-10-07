@@ -87,6 +87,8 @@ def test_compiled_probe_stages_tiny_request_and_completion(tmp_path, backend, dt
     assert request["schema_version"] == request["compiled_system"]["contract_version"] == 1
     assert request["frequencies_hz"] == [1000.0]
     assert request["solver_options"]["bem_backend"] == backend
+    assert request["solver_options"]["regular_quadrature_mode"] == "fixed"
+    assert request["solver_options"]["quadrature_order"] == request["solver_options"]["singular_order"] == 4
     assert Path(request["compiled_system"]["meshes"][0]["file"]).is_absolute()
     assert b"$Nodes\n4\n" in worker.mesh and b"$Elements\n4\n" in worker.mesh
     assert all(line.split()[3] == "2" for line in worker.mesh.decode().split("$Elements\n4\n")[1].splitlines()[:4])

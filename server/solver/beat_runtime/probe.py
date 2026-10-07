@@ -77,8 +77,12 @@ def build_request(mesh: Path, *, backend: str = "cpu") -> dict:
         "frequencies_hz": [1000.0], "excitation_port_ids": [_PORT],
         "outputs": [{"id": "pressure", "quantity": "exterior_pressure", "target_ids": [],
                      "options": {"points_m": [[0, 0, 1]]}}],
+        # The same regular quadrature production solves request, so the probe
+        # warms the code path they run (BEAT's CPU default would be "wavelength").
         "solver_options": {"precision": "float32", "bem_backend": backend, "symmetry": "off",
-                           "phasor_convention": "exp(-i omega t)"},
+                           "phasor_convention": "exp(-i omega t)",
+                           "regular_quadrature_mode": "fixed", "quadrature_order": 4,
+                           "singular_order": 4},
     }
 
 

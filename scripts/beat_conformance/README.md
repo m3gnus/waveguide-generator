@@ -180,8 +180,8 @@ scaling. This diagnostic never changes gate inputs or tolerances. Float64
 comparison against HBB is capped near 6e-8 by HBB's Float32 wire output.
 
 Same-mesh `run_agreement` accepts `--backend cpu|metal` (default CPU). CPU keeps
-its existing precision choices, one-thread default and wavelength quadrature.
-Metal requires `--precision float32`, uses fixed q4/s4 and defaults to WG's
+its existing precision choices and one-thread default; both backends use fixed
+q4/s4 quadrature. Metal requires `--precision float32` and defaults to WG's
 performance-core thread budget with Metal headroom. `--threads auto` or a
 positive explicit count resolves once for both engines. Metal records use a
 `metal-` case prefix to distinguish them from existing CPU artifacts.

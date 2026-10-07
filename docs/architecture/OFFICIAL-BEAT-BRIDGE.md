@@ -10,7 +10,8 @@ unit-acceleration conversion, historical pressure loading and result mapping.
 Parametric and imported channel solves support normal/axial motion, cuts,
 spheres, retained traces and adaptive frequency batches. Production refuses
 rigid ground, infinite baffles and unsupported native symmetry explicitly.
-CPU retains wavelength quadrature; Metal retains fixed quadrature.
+Every backend uses fixed order-4 regular quadrature; BEAT's CPU "wavelength" mode is
+never requested, because one global rule is 3-4 dB wrong on graded meshes.
 
 `beat_runtime` owns readiness proof, provider-scoped state, authenticated hosts,
 worker admission/reuse and solve staging. Warm-up and production use the same

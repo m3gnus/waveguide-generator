@@ -814,6 +814,23 @@ def test_parametric_beat_uses_fixed_quadrature_and_shared_phase_tag(
     assert response["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
 
 
+def test_hbb_options_can_still_override_the_quadrature_mode(recording_beat, monkeypatch) -> None:
+    from server.solver import beat
+    from server.solver.context import SolverContext
+
+    monkeypatch.setattr(beat, "_load_api", lambda: recording_beat)
+    monkeypatch.setattr(
+        beat, "beat_backend_statuses",
+        lambda: {"cpu": {"available": True, "reason": "ok", "backend": "cpu"}},
+    )
+    context = SolverContext(design=None, frequency_range=(100.0, 1000.0), num_frequencies=3)
+    msh = Path(beat.__file__).with_name("warmup_mesh.msh").read_text()
+    beat.solve_beat_from_msh_text(
+        msh, context, backend="cpu", _hbb_options={"regular_quadrature_mode": "wavelength"}
+    )
+    assert {solve["config"].regular_quadrature_mode for solve in recording_beat.solves} == {"wavelength"}
+
+
 def test_adaptive_off_keeps_the_original_single_batch_and_stream(recording_beat, monkeypatch):
     from server.solver.frequency_sweep import live_execution_frequencies
 
