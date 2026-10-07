@@ -660,3 +660,27 @@ def test_beat_probe_reads_only_its_empty_registry_without_starting_julia(tmp_pat
     answer = gate.inspect_beat_hosts(Path(sys.executable), REPO_ROOT, environment)
     assert answer["contained"] and answer["records"] == answer["verified"] == []
     assert not Path(environment["WG2_BEAT_WORKER_DIR"]).exists()
+
+
+def test_rc_build_runs_the_beat_quit_gate_on_every_installed_candidate():
+    import yaml
+
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[2] / ".github/workflows/rc-build.yml").read_text())
+    for job in ("macos-bundle", "windows-bundle", "linux-bundle"):
+        steps = workflow["jobs"][job]["steps"]
+        names = [step.get("name", "") for step in steps]
+        default = next(i for i, name in enumerate(names) if name.startswith("Qualify Quit during a blocked mesh build"))
+        beat = next(i for i, name in enumerate(names) if name.startswith("Qualify Quit with a live official BEAT host"))
+        assert beat > default
+        step, default_step = steps[beat], steps[default]
+        assert step["if"] == "${{ !cancelled() }}"
+        assert "env" not in step or "WG2_BEAT_PROVIDER" not in step["env"]  # the gate selects official itself
+        run = step["run"]
+        assert "--engine beat" in run and "official-work" in run
+        assert "beat-quit-work" in run and "beat-quit-qualification" in run
+        payload = [line for line in default_step["run"].splitlines() if "--payload " in line]
+        assert payload and all(line.strip() in run for line in payload)
+        if job == "windows-bundle":
+            assert step["shell"] == "pwsh" and "$LASTEXITCODE" in run
+        assert names[beat + 1] == "Preserve the BEAT Quit qualification logs"
+        assert steps[beat + 1]["if"] == "always()"

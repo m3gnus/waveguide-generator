@@ -335,6 +335,42 @@ jobs:
             echo
           done
 
+      - name: Qualify Quit with a live official BEAT host on the same candidate
+        # The same Quit, with the official BEAT engine and a live, warm BEAT
+        # host (docs/reference/SHUTDOWN-AND-RECOVERY.md). Quit detaches that
+        # host for relaunch by design, so the gate requires the same verified
+        # host across Quit and restart and an authenticated cleanup that leaves
+        # no BEAT process or record. It reuses the official CPU gate's runtime
+        # and Julia depot; if those are incomplete the app prepares its own.
+        # Runs even when an earlier gate failed, so every verdict is on record.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py \
+            --payload "$root/Waveguide Generator.app" \
+            --payload-kind dmg-ditto \
+            --engine beat \
+            --official-runtime-work "$root/official-work" \
+            --work "$root/beat-quit-work" \
+            --output "$root/beat-quit-qualification"
+
+      - name: Preserve the BEAT Quit qualification logs
+        if: always()
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/beat-quit-qualification" ]; then
+            echo "No BEAT Quit qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/beat-quit-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
       - name: Preserve the CPU qualification logs
         if: always()
         # Into the job log rather than a new artifact: this workflow's artifact
@@ -589,6 +625,47 @@ jobs:
             Write-Host ""
           }
 
+      - name: Qualify Quit with a live official BEAT host on the installed candidate
+        # See the macOS job. On packaged Windows the status window closes its
+        # kill-on-close Job Object after the server exits, which kills the
+        # BEAT host; this gate stops the server without the status window, so
+        # its BEAT result covers the server-detach path only (the report says
+        # so in beat_host_policy). Qualifying the Job Object path is a
+        # documented follow-up.
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root) {
+            throw "The CPU gate did not prepare the installed candidate."
+          }
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py `
+            --payload (Join-Path $root "app") `
+            --payload-kind windows-installer `
+            --engine beat `
+            --official-runtime-work (Join-Path $root "official-work") `
+            --work (Join-Path $root "beat-quit-work") `
+            --output (Join-Path $root "beat-quit-qualification")
+          if ($LASTEXITCODE -ne 0) {
+            throw "The BEAT Quit qualification exited $LASTEXITCODE"
+          }
+
+      - name: Preserve the BEAT Quit qualification logs
+        if: always()
+        shell: pwsh
+        run: |
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "beat-quit-qualification"))) {
+            Write-Host "No BEAT Quit qualification output was produced."
+            exit 0
+          }
+          Get-ChildItem -File (Join-Path $root "beat-quit-qualification") | ForEach-Object {
+            Write-Host "===== $($_.Name) ====="
+            Get-Content -Tail 4000 -LiteralPath $_.FullName
+            Write-Host ""
+          }
+
       - name: Preserve the CPU qualification logs
         if: always()
         shell: pwsh
@@ -779,6 +856,36 @@ jobs:
             exit 0
           fi
           for file in "$root/quit-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
+      - name: Qualify Quit with a live official BEAT host on the same candidate
+        # See the macOS job.
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py \
+            --payload "$root/prefix/waveguide-generator" \
+            --payload-kind linux-install-sh \
+            --engine beat \
+            --official-runtime-work "$root/official-work" \
+            --work "$root/beat-quit-work" \
+            --output "$root/beat-quit-qualification"
+
+      - name: Preserve the BEAT Quit qualification logs
+        if: always()
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/beat-quit-qualification" ]; then
+            echo "No BEAT Quit qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/beat-quit-qualification"/*; do
             [ -f "$file" ] || continue
             echo "===== $(basename "$file") ====="
             tail -c 200000 "$file"
