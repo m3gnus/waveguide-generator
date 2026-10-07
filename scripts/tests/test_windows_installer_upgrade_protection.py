@@ -298,12 +298,22 @@ def test_waitpid_waits_pump_the_wizard_message_queue(code: str) -> None:
         running,
     )
     assert re.search(
-        r"CloseHandle\(Handle\);\s+if not WaitRequested then\s+begin\s+WgLog\(\);\s+exit;\s+end;\s+"
-        r"Elapsed := GetTickCount\(\) - Start;\s+if Elapsed >= WaitForProcessLimitMs then\s+break;\s+"
-        r"Slice := WaitForProcessLimitMs - Elapsed;\s+if Slice > WaitSliceMs then\s+Slice := WaitSliceMs;\s+"
-        r"Sleep\(Slice\);\s+PumpMessages\(\);\s+end;\s+WgLog\(\);",
+        r"CloseHandle\(Handle\);\s+"
+        r"Elapsed := GetTickCount\(\) - Start;\s+if Elapsed >= Limit then\s+break;\s+"
+        r"Slice := Limit - Elapsed;\s+if Slice > WaitSliceMs then\s+Slice := WaitSliceMs;\s+"
+        r"Sleep\(Slice\);\s+PumpMessages\(\);\s+end;\s+"
+        r"if WaitRequested then\s+WgLog\(\)\s+else\s+WgLog\(\);",
         running,
     )
+    # /WAITPID keeps the 120 s cap. Without it the wait is a single look (the
+    # old immediate refusal) unless idle BEAT hosts were asked to retire, which
+    # get a short grace (server/solver/beat_runtime/retire.py).
+    assert re.search(
+        r"if WaitRequested then\s+Limit := WaitForProcessLimitMs\s+"
+        r"else if Retire <> 0 then\s+Limit := RetireIdleGraceMs\s+else\s+Limit := 0;",
+        running,
+    )
+    assert re.search(r"finally\s+if Retire <> 0 then\s+begin\s+ResetEvent\(Retire\);\s+CloseHandle\(Retire\);", running)
     # The pump is defined before either wait uses it.
     assert code.index("procedure PumpMessages();") < code.index("function WaitForApplicationExit(): Boolean;")
 

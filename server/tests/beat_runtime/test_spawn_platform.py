@@ -108,7 +108,9 @@ def test_windows_breakaway_granted_is_recorded_by_the_host(launch, monkeypatch):
 def test_windows_breakaway_refused_by_an_enclosing_job_retries_once_inside_it(launch, monkeypatch):
     denied = lambda flags: OSError(13, "Access is denied", None, 5) if flags & 0x01000000 else None  # noqa: E731
     key, directory, attempts = _launch_attempts(launch, monkeypatch, denied)
+    bootstraps = _capture_bootstraps(monkeypatch)
     record = spawn.start_host(key, directory)
+    assert bootstraps and bootstraps[-1]["job_breakaway"] == "refused"
     assert [(command[-2:], flags) for command, flags in attempts] == [
         (["--job-breakaway", "granted"], 0x01000208), (["--job-breakaway", "refused"], 0x208)]
     log = r.log_path(record.identifier, r.private_directory(directory)).read_text()
@@ -126,8 +128,8 @@ def test_windows_other_launch_failures_are_not_retried_as_a_refusal(launch, monk
     assert len(attempts) == (2 if error.winerror == 5 else 1)
 
 
-def test_the_host_puts_its_breakaway_outcome_in_its_bootstrap_record(launch, monkeypatch):
-    key, directory, _ = launch
+def _capture_bootstraps(monkeypatch):
+    """Record every bootstrap (ready) record start_host reads, unchanged."""
     original = spawn.read_private_json
     bootstraps = []
 
@@ -138,26 +140,20 @@ def test_the_host_puts_its_breakaway_outcome_in_its_bootstrap_record(launch, mon
         return value
 
     monkeypatch.setattr(spawn, "read_private_json", read)
-    original_launch = spawn._launch
-    command_tail = []
+    return bootstraps
 
-    def launch_with_outcome(*args, **kwargs):
-        # Force the Windows argument on every platform; the host only echoes it.
-        original_popen = spawn.subprocess.Popen
 
-        def popen(command, **options):
-            if "--job-breakaway" not in command:
-                command = [*command, "--job-breakaway", "refused"]
-            command_tail.append(command[-2:])
-            return original_popen(command, **options)
-
-        monkeypatch.setattr(spawn.subprocess, "Popen", popen)
-        return original_launch(*args, **kwargs)
-
-    monkeypatch.setattr(spawn, "_launch", launch_with_outcome)
+def test_the_host_puts_its_breakaway_outcome_in_its_bootstrap_record(launch, monkeypatch):
+    # Never patch subprocess.Popen module-wide here: on macOS the process
+    # identity check itself shells out to ps through it.
+    key, directory, _ = launch
+    bootstraps = _capture_bootstraps(monkeypatch)
     spawn.start_host(key, directory)
-    assert bootstraps and bootstraps[-1]["job_breakaway"] == command_tail[0][1]
-
+    assert bootstraps
+    if os.name == "nt":
+        assert bootstraps[-1]["job_breakaway"] == "granted"
+    else:
+        assert "job_breakaway" not in bootstraps[-1]  # POSIX passes no outcome.
 
 
 def test_windows_native_bootstrap_accepts_only_verified_interpreter_child(launch, monkeypatch):
