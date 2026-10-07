@@ -212,7 +212,7 @@ def test_parametric_production(runtime, backend, motion, adaptive):
     assert runtime.calls.index("negotiate") < runtime.calls.index("submit")
     wire = runtime.requests[0]
     assert wire["compiled_system"]["contract_version"] == (2 if motion == "axial" else 1)
-    assert wire["solver_options"]["regular_quadrature_mode"] == ("wavelength" if backend == "cpu" else "fixed")
+    assert wire["solver_options"]["regular_quadrature_mode"] == "fixed"
     assert [output["id"] for output in wire["outputs"]][:3] == [
         "pressure:vertical", "pressure:diagonal", "pressure:horizontal"]
     assert adaptive or wire["frequencies_hz"][:2] == [500., 2000.]

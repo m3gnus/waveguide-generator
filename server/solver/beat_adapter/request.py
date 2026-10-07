@@ -221,10 +221,10 @@ def build_request(
                    "parameters": {}} for tag in np.unique(mesh.tags)]
     options = {"precision": precision, "bem_backend": backend, "symmetry": mode,
                "phasor_convention": SOLVER_TIME_CONVENTION,
-               "regular_quadrature_mode": "wavelength" if backend == "cpu" else "fixed",
-               "quadrature_order": quadrature_order, "singular_order": singular_order,
-               "wavelength_mesh_stat": "p90", "wavelength_kh_q1_max": 0.,
-               "wavelength_kh_q2_max": 2.}
+               # Fixed order 4 on every backend: BEAT's CPU "wavelength" mode picks one
+               # 3-point rule from a mesh percentile, 3-4 dB wrong on graded meshes.
+               "regular_quadrature_mode": "fixed",
+               "quadrature_order": quadrature_order, "singular_order": singular_order}
     if mode == "ground":  # HBB sent the clearance only with a ground plane
         options["ground_plane_min_clearance_m"] = ground_plane_min_clearance_m
     system = {"id": "system:waveguide-generator", "name": "WG exterior radiation",

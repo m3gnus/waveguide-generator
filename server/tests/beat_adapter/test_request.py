@@ -60,23 +60,15 @@ def test_packed_mesh_preserves_original_identity_scale_order_and_winding(build):
 @pytest.mark.parametrize("engine,backend,precision", [
     ("beat-cpu", None, "float64"), ("beat-metal", None, "float32"),
     ("beat", "cpu", "float32"), ("beat", "metal", "float32")])
-def test_stored_engine_ids_survive_and_cpu_wavelength_policy_is_explicit(build, engine, backend, precision):
+def test_stored_engine_ids_survive_and_quadrature_is_fixed_order_4(build, engine, backend, precision):
     built = build(engine_id=engine, backend=backend, precision=precision)
     options = built.wire["solver_options"]
     assert built.engine_id == engine
-    assert options["regular_quadrature_mode"] == ("wavelength" if options["bem_backend"] == "cpu" else "fixed")
+    # One global "wavelength" rule is 3-4 dB wrong on graded meshes, so every
+    # backend, CPU included, gets fixed order 4 and no wavelength options.
+    assert options["regular_quadrature_mode"] == "fixed"
+    assert not any(key.startswith("wavelength_") for key in options)
     assert options["quadrature_order"] == options["singular_order"] == 4
-    assert options["wavelength_mesh_stat"] == "p90"
-    assert options["wavelength_kh_q1_max"] == 0
-    assert options["wavelength_kh_q2_max"] == 2
-    # An independent scalar transcription of HBB's selection around the cutoff.
-    h = float(np.sqrt(np.quantile(built.mesh.areas_m2.astype(float), .9)))
-    f_cut = 343 / (np.pi * h)
-    def order(f):
-        kh = 2 * np.pi * f / 343 * h
-        return 1 if kh <= options["wavelength_kh_q1_max"] else 2 if kh <= options["wavelength_kh_q2_max"] else options["quadrature_order"]
-    assert order(f_cut * (1 - 1e-10)) == 2
-    assert order(f_cut * (1 + 1e-10)) == 4
 
 
 @pytest.mark.parametrize("symmetry,mode", [("full", "off"), ("yz", "x"), ("yz+xz", "xy"), ("xz", "x")])
@@ -382,7 +374,7 @@ def test_pure_request_parity_runs_without_optional_checkout_or_packages(build, m
     monkeypatch.setattr(builtins, "__import__", guarded)
     built = build(sources=[adapter.SourceBasis("source", 2, "axial", [0, 0, -1], "p")],
                   channel_ports={"ch": ["p"]}, frequencies_hz=[500.])
-    assert built.wire["solver_options"]["wavelength_kh_q2_max"] == 2.
+    assert built.wire["solver_options"]["regular_quadrature_mode"] == "fixed"
     assert built.wire["compiled_system"]["components"][0]["parameters"]["motion_axis"] == [0., 0., -1.]
     row = parse_compiled_frequency(compiled_result(built, boundary_pressure=[[3 + 2j] * 4]),
                                     built, frequency_hz=500.)["ch"]

@@ -719,6 +719,7 @@ def test_imported_adapter_passes_selected_backend_to_beat(
 
     assert recording_beat.solves
     assert {solve["config"].beat_backend for solve in recording_beat.solves} == {backend}
+    assert {solve["config"].regular_quadrature_mode for solve in recording_beat.solves} == {"fixed"}
     # The same thread count as the parametric solve and the warmup: the package
     # keys workers by it, so a mismatch boots a second Julia worker.
     from server.solver.beat_threads import beat_julia_threads
@@ -791,15 +792,25 @@ def test_the_registry_declares_imported_geometry_for_every_beat_backend(
     assert engines["beat-cpu"].imported_features == ()
 
 
-def test_parametric_beat_envelope_uses_the_shared_phase_tag(recording_beat, monkeypatch) -> None:
+@pytest.mark.parametrize("backend", beat.BEAT_BACKENDS)
+def test_parametric_beat_uses_fixed_quadrature_and_shared_phase_tag(
+    backend, recording_beat, monkeypatch
+) -> None:
     from server.solver import beat
     from server.solver.context import SolverContext
 
     monkeypatch.setattr(beat, "_load_api", lambda: recording_beat)
-    monkeypatch.setattr(beat, "beat_backend_statuses", beat_imported.beat_backend_statuses)
+    monkeypatch.setattr(
+        beat,
+        "beat_backend_statuses",
+        lambda: {backend: {"available": True, "reason": "ok", "backend": backend}},
+    )
     context = SolverContext(design=None, frequency_range=(100.0, 1000.0), num_frequencies=3)
     msh = Path(beat.__file__).with_name("warmup_mesh.msh").read_text()
-    response = beat.solve_beat_from_msh_text(msh, context, backend="cpu")
+    response = beat.solve_beat_from_msh_text(msh, context, backend=backend)
+    assert recording_beat.solves
+    assert {solve["config"].beat_backend for solve in recording_beat.solves} == {backend}
+    assert {solve["config"].regular_quadrature_mode for solve in recording_beat.solves} == {"fixed"}
     assert response["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
 
 

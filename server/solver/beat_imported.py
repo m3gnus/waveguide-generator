@@ -963,7 +963,11 @@ def solve_imported_beat_from_msh_text(
                         native_symmetry_plane=native_plane,
                         mesh_scale=1.0,
                         beat_backend=backend,
-                        **({"julia_threads": beat_julia_threads(backend)} | dict(_hbb_options or {})),
+                        # The CPU default of the pinned package ("wavelength") picks one 3-point rule from a
+                        # mesh percentile; on graded meshes that is 3-4 dB wrong at high frequency.
+                        # Fixed order 4 is what every accelerator already uses.
+                        **({"regular_quadrature_mode": "fixed", "julia_threads": beat_julia_threads(backend)}
+                           | dict(_hbb_options or {})),
                         **({"surface_traces": True} if retain_traces else {}),
                         progress_callback=progress,
                         on_frequency_result=(

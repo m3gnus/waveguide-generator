@@ -259,7 +259,7 @@ def hbb_runner(inputs: FrozenExterior, *, julia_executable: str,
         observation=observation, native_symmetry_plane=None if inputs.symmetry == "full" else inputs.symmetry,
         mesh_scale=1., air_density=inputs.density, sound_speed=inputs.sound_speed,
         quadrature_order=inputs.quadrature_order, singular_order=inputs.singular_order,
-        regular_quadrature_mode="wavelength" if inputs.backend == "cpu" else "fixed",
+        regular_quadrature_mode="fixed",
         solve_precision="double" if inputs.precision == "float64" else "single",
         beat_backend=inputs.backend, julia_executable=julia_executable, julia_threads=inputs.threads,
         persistent_worker=False)

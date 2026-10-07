@@ -36,8 +36,8 @@ def native(inputs):
                                "symmetry": compiled.wire["solver_options"]["symmetry"],
                                "blas_threads": inputs.threads,
                                "regular_assembly_mode": inputs.backend + "_fused_burton_miller",
-                               "regular_quadrature_mode": "wavelength" if inputs.backend == "cpu" else "fixed",
-                               "regular_quadrature_order": 2 if inputs.backend == "cpu" else 4, "dense_solve_method": "lu",
+                               "regular_quadrature_mode": "fixed",
+                               "regular_quadrature_order": 4, "dense_solve_method": "lu",
                                "engine_provenance": {"runtime": {"julia_threads": inputs.threads},
                                                      "execution": {"backend": inputs.backend,
                                                                    "device": "Test GPU" if inputs.backend == "metal" else "Test CPU"}}}}
@@ -51,7 +51,7 @@ def test_inputs_freeze_actual_coordinates_normals_and_options(inputs, precision,
     compiled = inputs.compiled()
     assert compiled.wire["frequencies_hz"] == [500., 300., 450.]
     assert compiled.wire["solver_options"]["precision"] == precision
-    assert compiled.wire["solver_options"]["regular_quadrature_mode"] == "wavelength"
+    assert compiled.wire["solver_options"]["regular_quadrature_mode"] == "fixed"
     settings = inputs.settings()
     assert settings["threads"] == 1 and settings["source_motion"] == "normal"
     assert np.allclose(np.linalg.norm(settings["normals"], axis=1), 1.)
@@ -99,7 +99,7 @@ def test_hbb_receives_same_bytes_order_precision_quadrature_and_threads(inputs, 
     assert frequencies == inputs.frequencies_hz
     assert config.solve_precision == "double" and config.julia_threads == 1
     assert config.air_density == inputs.density and config.sound_speed == inputs.sound_speed
-    assert config.regular_quadrature_mode == "wavelength" and config.quadrature_order == 4 and config.singular_order == 4
+    assert config.regular_quadrature_mode == "fixed" and config.quadrature_order == 4 and config.singular_order == 4
     assert config.observation.sphere_grid == (3, 4)
     assert not list(tmp_path.glob("hbb-reference-*"))
 
