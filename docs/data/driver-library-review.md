@@ -1,78 +1,83 @@
 # Driver library review
 
-Owner decision: Magnus, 2026-10-06. Keep all original and imported measurements.
-The bundled library contains 5,709 windings: 4,334 reliable and 1,375 unreliable.
-Failures overlap: coupling_failed 1,295, fs_inconsistent 12, qes_inconsistent 51,
-vas_inconsistent 26. Five exact duplicates after model-name cleanup are listed
-in `driver-library-duplicates.csv`; conflicting measurements remain distinct.
-`driver-library-master.csv` preserves all 5,714 original/import rows as a local,
-physical-data master for reproducible regeneration and correction.
+The driver library is a document of driver data. The app reads
+`server/drivers/bundled/hornlab-drivers.csv`. It skips rows it cannot parse, and it
+never refuses a driver because of its reliability columns. Those columns are
+information for the person choosing a driver.
 
-## Task for the reviewing AI
+## Contents
 
-Research each unreliable winding against the manufacturer's technical document
-or independently measured T/S data. Fill only `corrected_<param>`,
-`correction_source`, and `notes`. Do not guess values merely to satisfy equations.
-Keep uncertain rows unchanged and explain uncertainty in notes. Keep manufacturer,
-model, original cells and row_id unchanged. Rows may be sorted or omitted, and a
-partially completed review can be applied. A corrected row must pass every screen.
-Use a plain document title/revision and page/table in correction_source.
-Do not include licensing text, attribution, or retailer links.
+`driver-library-master.csv` is the physical-data master. It holds 5,794 rows: the
+5,714 original imports, plus 80 STX manufacturer-catalogue rows added on
+2026-10-06, with 17 rows corrected by research batch 01. The bundled library
+holds those rows minus the 5 exact duplicates listed in
+`driver-library-duplicates.csv`: **5,789 windings, 5,558 marked reliable and 231
+marked unreliable**. Conflicting measurements of the same model stay as separate
+rows.
+
+## What "unreliable" means
+
+The reliability columns were computed on 2026-10-06 and are not recomputed by
+the app. A winding is marked unreliable, with the reason, when:
+
+| Reason | Rows | Meaning |
+|---|---:|---|
+| `coupling_failed` | 130 | The estimated air mass, 2·(8/3)·ρ·a³ = 1.149·Sd^1.5, is more than 50% of the stated Mms, or Mms is missing or too small to subtract it. This matches Klippel's convention Mmd = Mms − 1.13·Sd^1.5 within 1.7%. hornlab-sim refuses such a driver when a solve runs. |
+| `qes_inconsistent` | 46 | Qes recomputed from Fs, Mms, Re and Bl differs from the stated value by more than 20%. |
+| `vas_inconsistent` | 23 | Vas recomputed from Cms and Sd differs by more than 20%. |
+| `driver_spec_invalid` | 20 | Sd, Bl or a moving mass is not published. These are STX tweeters, compression drivers and a ceiling assembly, kept as catalogue entries. |
+| `fs_inconsistent` | 10 | Fs recomputed from Mms and Cms differs by more than 20%. |
+| `source_hold` | 7 | The manufacturer's own page contradicts itself on impedance, revision, power or parameters. The reason names the conflict. |
+| `qts_inconsistent` | 2 | The stated Qts differs from Qms·Qes/(Qms+Qes) by more than 20%. |
+
+A row can have more than one reason. `driver-library-review.csv` lists the 231
+unreliable windings with their stated and recomputed values. Its `corrected_*`,
+`correction_source`, `notes` and `hold_resolution` columns are blank and kept
+for any later manual review.
+
+## Known misclassified rows
+
+The app decides a row's picker group from its fields. A throat size, a diameter
+without Sd, or a recommended crossover makes a row a compression driver. These
+16 STX products publish a panel or horn diameter and a recommended crossover,
+so they appear as compression drivers. They are not bare compression drivers.
+Their published values are kept unchanged.
+
+| Model | Product type |
+|---|---|
+| T.9.100.4.MS, T.9.100.8.MS, T.9.200.8.PC, T.10.100.8.PC, T.10.150.4.MS, T.10.150.8.MS, T.10.150.8.MSX, T.10.200.8.PC, T.10.200.8.PCX, T.10.200.8.MSX, T.10.250.8.PCX, T.10.200.8.ALX | dome tweeter |
+| T.10.250.8.PC | waveguide dome tweeter |
+| T.10.800.8.AL, T.9.250.8.PH, T.18.250.8.PH | tweeter with an integral horn |
+
+The bare STX compression drivers D.9.500.8.TI, D.12.800.8.TI and D.14.1000.8.TI
+are correctly classified.
+
+## Provenance and research
+
+`driver-library-provenance.csv` names the source of every measurement that has
+been checked against one. Each entry gives the row_id (a hash of the identity and
+every physical cell), the source type, the document, the manufacturer URL, the
+access date, and the evidence folder. It has 120 entries; rows not listed have no
+recorded source. The evidence is archived in `driver-research/`:
+
+- `stx-import/`: the report, sources and QA sheet for the 80 STX rows. Its
+  counts predate the final screen.
+- `batch-01/`: 40 consistency failures researched against manufacturer data.
+  17 rows were corrected and are applied in the master. 20 were left unchanged
+  because the source contradicts itself, 2 sources were not found, and for 1
+  the manufacturer publishes no data for that variant. The folder also holds a
+  cell-by-cell comparison, per-row sources and a note on the air-mass
+  convention.
+
+Source research is closed. The remaining unreliable rows are accepted as
+documented.
 
 ## Columns and units
 
-- `row_id`: hash of the cleaned identity and every original physical cell. It
-  distinguishes conflicting measurements even with the same model/impedance.
-- `manufacturer`, `model`: cleaned manufacturer identity.
-- Original physical columns: `Size_in`, `Throat_in` in inches; `Diameter_mm`,
-  `Xmax_mm` in mm; `Z_ohm`, `Re_ohm`, `Re2_ohm` in ohms; `Le_mH`, `Le2_mH` in mH;
-  `Bl_Tm` in T m; `Sd_cm2` in cm²; `Mms_g`, `Mmd_g` in grams;
-  `Cms_mm_per_N` in mm/N (**not m/N**); `Vas_L` in litres; `Fs_Hz`, `XO_min_Hz`,
-  `Freq_low_Hz` in Hz; `Qms`, `Qes`, `Qts` dimensionless; `Rms_kg_per_s` in kg/s;
-  `Power_W` in W; `Sensitivity_dB` in dB. Empty means not stated.
-- `failing_checks`: semicolon-separated reason codes.
-- `reliability_reasons`: human-readable failures, stated/computed values and %
-  difference where computation is available. Additional import failures may
-  be `driver_spec_invalid` or `derivation_failed`.
-- `fs_*`, `qes_*`, `vas_*`: stated and computed values in Hz, dimensionless and
-  L respectively, plus absolute percentage difference relative to stated.
-  The tolerance remains 20%. Compliance follows Cms, then Vas, then Fs, using
-  the app solver's air constants. Qes uses the solver's Fs.
-- `mass_correction_*`: stated Mms and computed dry Mmd in grams; difference_pct
-  is the free-air radiation-mass correction as % of Mms (coupling limit 30%).
-  Blank computed cells mean the inputs could not be derived, not zero.
-- `corrected_<param>`: blank means keep the original. Enter a bare decimal or
-  scientific-notation number in the original column's units. `CLEAR` removes
-  an optional value; removing a required value fails validation.
-- `correction_source`, `notes`: evidence document/page and explanation.
-
-## Validate and apply
-
-From the repository root, with the pinned server Python environment:
-
-```sh
-python scripts/apply_driver_corrections.py docs/data/driver-library-review.csv
-python scripts/apply_driver_corrections.py docs/data/driver-library-review.csv --apply --review-out docs/data/driver-library-review.csv
-```
-
-The first command validates without writing. The second validates all filled
-corrections, updates the local master and bundle, recomputes reliability on every
-row, and regenerates the outstanding review. Blank corrections are skipped.
-Bad numbers, unit-suffixed cells, invalid physics, altered original values,
-duplicate corrections, and stale/unmatched rows are refused before any write.
-The correction source and notes stay in the completed review; archive that filled
-file separately before replacing it with an outstanding review.
-For other local masters, repeat `--master path.csv`; `--bundled path.csv` selects
-another bundle. Every correction must match the bundle and at least one master by the same
-original physical values. Differing
-measurements with the same identity are never overwritten by identity alone.
-
-Regenerate from the local master with:
-
-```sh
-python scripts/screen_driver_library.py docs/data/driver-library-master.csv --out server/drivers/bundled/hornlab-drivers.csv --duplicates-out docs/data/driver-library-duplicates.csv --review-out docs/data/driver-library-review.csv
-```
-
-Reliability does not imply every redundant value was independently verified.
-Missing quantities are never invented. Unreliable rows remain browsable with
-reasons and are refused before solving until corrected and re-screened.
+`Size_in` and `Throat_in` are in inches. `Diameter_mm` and `Xmax_mm` (one-way)
+are in mm. `Z_ohm`, `Re_ohm` and `Re2_ohm` are in ohms; `Le_mH` and `Le2_mH` in
+mH. `Bl_Tm` is in T·m and `Sd_cm2` in cm². `Mms_g` and `Mmd_g` are in grams.
+`Cms_mm_per_N` is in mm/N (**not m/N**). `Vas_L` is in litres. `Fs_Hz`,
+`XO_min_Hz` and `Freq_low_Hz` are in Hz. `Qms`, `Qes` and `Qts` are
+dimensionless. `Rms_kg_per_s` is in kg/s, `Power_W` in W and `Sensitivity_dB` in
+dB. An empty cell means the value is not stated; no missing value is invented.

@@ -1054,9 +1054,10 @@ def test_the_shipped_library_reports_its_one_compression_driver(tmp_path: Path) 
     kinds = _kinds(library.rescan())
     assert kinds["cd"][0] >= 1
     assert kinds["lf"][0] > 900
-    # Every shipped driver is drivable, so the count the picker offers is the
-    # count it holds -- for both types.
-    assert all(total == complete for total, complete in kinds.values())
+    # Every shipped driver has a complete parameter set except the 20 STX
+    # catalogue entries (tweeters, compression drivers, a ceiling assembly)
+    # whose manufacturer publishes no Sd, Bl or moving mass.
+    assert sum(total - complete for total, complete in kinds.values()) == 20
 
     # And the query that started this reports zero of its own type while the
     # library plainly holds another thousand.
@@ -1072,14 +1073,13 @@ def test_the_library_that_actually_ships_is_readable_and_carries_ratings() -> No
     assert folder is not None, "server/drivers/bundled is missing from this checkout"
     library = DriverLibrary(folder / "does-not-exist", bundled=folder)
     info = library.rescan()
-    assert info["total_drivers"] == 5197
-    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 5709, "bundled": True}]
+    assert info["total_drivers"] == 5269
+    assert info["files"] == [{"name": "hornlab-drivers.csv", "rows": 5789, "bundled": True}]
     hits = library.search(q="", kind="all", z=None, limit=info["total_drivers"])
-    assert sum(len(hit["variants"]) for hit in hits) == 5709
-    # Everything shipped is a driver a channel can actually be driven by: the
-    # export withholds catalogue rows, so the library's own count is not a
-    # promise the Drivers rail has to break.
-    assert info["complete_drivers"] == info["total_drivers"]
+    assert sum(len(hit["variants"]) for hit in hits) == 5789
+    # Everything shipped has a complete parameter set except the 20 STX
+    # catalogue entries, which publish no Sd, Bl or moving mass.
+    assert info["total_drivers"] - info["complete_drivers"] == 20
     assert all(entry["bundled"] for entry in info["files"])
 
     # The compression driver whose AES rating this work was built around.
