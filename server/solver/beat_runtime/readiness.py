@@ -142,10 +142,8 @@ def backend_readiness(
             return BackendReadiness(False, "stale", "WG's portable Julia needs an upgrade; provision again.")
     if provision._ready(record, expected):
         return BackendReadiness(True, "ready", f"BEAT {backend} runtime proved by a matching compiled-system 1 kHz solve.")
-    remedy = (f" Run: python -m server.solver.beat_runtime.cli provision --backend {backend}"
-              if backend in hardware.GPU_BACKENDS else "")
     reason = "Stored identity or compiled proof is stale; provision again." if record else "Runtime has not been provisioned and proved."
-    return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}{remedy}")
+    return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}")
 
 
 def backend_status(backend: str, directory: Path | None = None, **options: Any) -> dict[str, Any]:

@@ -13,6 +13,12 @@ _GPU_MODULES = {"metal": "Metal", "cuda": "CUDA", "rocm": "AMDGPU"}
 _GPU_LABELS = {"metal": "Metal", "cuda": "CUDA", "rocm": "ROCm"}
 
 
+# The engine loads CUDSS optionally (only coupled FEM condensation needs it), so a
+# machine where it cannot load must still provision CUDA for exterior solves.
+CUDSS_STEP = ('try; import CUDSS; catch err; '
+              '@warn "CUDSS unavailable; coupled CUDA solves will be refused" exception=err; end')
+
+
 def _engine_worker(**kwargs: Any) -> Any:
     from beat_engine import EngineWorker
 
@@ -79,7 +85,7 @@ def provision_gpu(
                     f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)",
                     f"Resolving {label} artifacts and checking the device"),)
     if selected == "cuda":
-        setup_steps += (("cuda_cudss", "import CUDSS", "Resolving CUDA coupled-solve artifacts"),)
+        setup_steps += (("cuda_cudss", CUDSS_STEP, "Resolving CUDA coupled-solve artifacts"),)
     return provision._provision_backend(
         directory, backend=selected, status_cb=report, probe=solve_probe if probe is None else probe,
         setup_steps=setup_steps, **options,

@@ -266,10 +266,12 @@ def test_backend_readiness_probes_only_requested_gpu(tmp_path, monkeypatch, back
     assert not calls
 
 
-def test_unprovisioned_rocm_reason_names_real_cli(proved_cpu, monkeypatch):
+def test_unprovisioned_rocm_reason_names_no_shell_command(proved_cpu, monkeypatch):
     root, _, _, _, query, _, _ = proved_cpu
     monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
                         {"rocm": {"available": True, "reason": "ROCm runtime detected"}})
     verdict = readiness.backend_readiness("rocm", root, **query)
     assert verdict.state == "unprovisioned"
-    assert "python -m server.solver.beat_runtime.cli provision --backend rocm" in verdict.reason
+    # The packaged-safe command is added by the registry (provision_command);
+    # a bare ``python -m server...`` cannot run in the packaged application.
+    assert "Run:" not in verdict.reason and verdict.reason.startswith("BEAT rocm:")

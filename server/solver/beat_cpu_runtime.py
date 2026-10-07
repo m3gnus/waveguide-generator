@@ -168,8 +168,8 @@ def _import(name: str) -> Any | None:
         return None
 
 
-def provision_command(*, production: bool = False) -> str:
-    """The exact command that provisions the CPU runtime on this install.
+def provision_command(*, production: bool = False, backend: str = "cpu") -> str:
+    """The exact command that provisions a BEAT runtime (CPU by default) on this install.
 
     The interpreter is named rather than assumed: the packaged application's
     Python is not on PATH, so a bare ``python -m ...`` in a capability reason
@@ -183,11 +183,11 @@ def provision_command(*, production: bool = False) -> str:
 
         code = (f"import sys, runpy; sys.path.insert(0, {str(app_root())!r}); "
                 "runpy.run_module('server.solver.beat_runtime.cli', run_name='__main__')")
-        command = [executable, "-c", code, "--backend", "cpu"]
+        command = [executable, "-c", code, "--backend", backend]
         return subprocess.list2cmdline(command) if platform.system() == "Windows" else shlex.join(command)
     if " " in executable:
         executable = f'"{executable}"'
-    return f"{executable} -m hornlab_beat_bem.provision --backend cpu"
+    return f"{executable} -m hornlab_beat_bem.provision --backend {backend}"
 
 
 def cpu_provisioning_step() -> str | None:

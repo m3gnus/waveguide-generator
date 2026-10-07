@@ -156,6 +156,8 @@ def _provision_backend(
                 assert previous is not None
                 return previous
             state.write_state(record, directory)
+            managed = Path(directory).expanduser().absolute() / "julia"
+            installs_before = set(managed.iterdir()) if managed.is_dir() else set()
             julia = (ensure_julia or installer.ensure_julia)(
                 directory, explicit=julia_executable, environ=env, status_cb=report,
                 required_bytes=installer.CPU_REQUIRED_FREE_BYTES if backend == "cpu" else installer.GPU_REQUIRED_FREE_BYTES,
@@ -165,9 +167,13 @@ def _provision_backend(
             record.update(julia_executable=julia,
                           julia_identity=discovery.executable_identity(Path(julia)),
                           julia_version=julia_record["version"] if julia_record and julia_record["executable"] == julia else None)
-            if backend != "cpu":
+            fresh_install = any(parent.parent == managed and parent not in installs_before
+                                for parent in Path(julia).parents)
+            if backend != "cpu" and not fresh_install:
                 # ensure_julia returns early for an existing install. GPU artifacts
                 # still need space in the first depot, including an external one.
+                # A fresh install already checked the GPU budget; checking again
+                # after it would count the new Julia against the artifacts.
                 record["step"] = "check_disk_space"
                 installer.check_disk_space(Path(env["JULIA_DEPOT_PATH"].split(os.pathsep)[0]),
                                            installer.GPU_REQUIRED_FREE_BYTES)

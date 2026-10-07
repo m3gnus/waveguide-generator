@@ -28,8 +28,10 @@ provider uses beat-engine; pins and HBB state are unchanged.
   refresh/exit and negative results for 30 s, keyed on PATH and ROCm roots.
   NVIDIA probes hide Windows consoles. CPU readiness is published before GPU
   detection/preparation; only the active GPU row reports preparation. GPU
-  setup checks depot free space even with Julia installed, and CUDA imports
-  CUDSS before the proof solve. Released qualification evidence is restored.
+  setup checks depot free space even with Julia installed, and CUDA tries to
+  import CUDSS (non-fatal) before the proof solve. A fresh Julia install is
+  not counted twice against the GPU disk budget. Unprovisioned GPU rows name
+  the packaged-safe provisioning command; Julia setup steps hide Windows consoles. Released qualification evidence is restored.
   CUDA/ROCm remain not hardware-qualified.
 
 - **Design PR 22 — the host survives a packaged Windows Quit (2026-10-07):**

@@ -1822,3 +1822,30 @@ def test_bempp_assembly_backend_reaches_capabilities(monkeypatch, backend) -> No
     assert rows["metal"]["assembly_device"] is None
     assert rows["bempp"]["opencl_unavailable_reason"] == (None if backend == "opencl" else "no_device")
     assert rows["metal"]["opencl_unavailable_reason"] is None
+
+
+def test_official_unprovisioned_gpu_row_names_packaged_command(monkeypatch):
+    from server.engines import registry
+    from server.solver import beat_cpu_runtime
+
+    monkeypatch.setattr(beat_cpu_runtime, "provision_command",
+                        lambda *, production=False, backend="cpu": f"<app python> provision --backend {backend}")
+    rows = {"cpu": {"state": "ready", "reason": "ok"},
+            "cuda": {"state": "unprovisioned", "reason": "BEAT cuda: Runtime has not been provisioned and proved."},
+            "rocm": {"state": "no-device", "reason": "No ROCm runtime detected"},
+            "metal": {"state": "stale", "reason": "BEAT metal: stale"}}
+    out = registry._with_gpu_remedies({k: dict(v) for k, v in rows.items()}, in_flight=False)
+    assert out["cuda"]["reason"].endswith("Run: <app python> provision --backend cuda")
+    assert out["metal"]["reason"].endswith("Run: <app python> provision --backend metal")
+    assert out["rocm"]["reason"] == "No ROCm runtime detected"
+    pending = registry._with_gpu_remedies({k: dict(v) for k, v in rows.items()}, in_flight=True)
+    assert pending["cuda"]["state"] == "pending" and "pending GPU detection" in pending["cuda"]["reason"]
+    assert pending["cpu"] == rows["cpu"]
+
+
+def test_provision_command_names_the_backend(monkeypatch):
+    from server.solver import beat_cpu_runtime
+
+    monkeypatch.setattr(beat_cpu_runtime, "official_selected", lambda: False)
+    assert beat_cpu_runtime.provision_command().endswith("--backend cpu")
+    assert beat_cpu_runtime.provision_command(backend="cuda").endswith("--backend cuda")

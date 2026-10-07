@@ -9,6 +9,8 @@ from pathlib import Path
 import subprocess
 import sys
 
+from server.platform.process import background_process_kwargs
+
 from . import paths
 
 StatusCallback = Callable[[str], None]
@@ -73,7 +75,7 @@ def run_julia_step(
     process = (popen or subprocess.Popen)(
         [julia, f"--project={project}", "--startup-file=no", "-e", code],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-        encoding="utf-8", errors="replace", env=env, cwd=cwd,
+        encoding="utf-8", errors="replace", env=env, cwd=cwd, **background_process_kwargs(),
     )
     tail: list[str] = []
     try:

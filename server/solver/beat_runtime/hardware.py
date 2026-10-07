@@ -27,6 +27,7 @@ def clear_hardware_cache() -> None:
     global _cache_generation
     with _cache_lock:
         _detection_cache.clear()
+        _probe_locks.clear()
         _cache_generation += 1
 
 

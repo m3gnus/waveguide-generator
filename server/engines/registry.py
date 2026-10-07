@@ -390,12 +390,39 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
     )
 
 
+def _hint_statuses(readiness: Any, hardware: Any, engine_version: Callable[[], Any]
+                                  ) -> dict[str, dict[str, Any]]:
+    statuses = {}
+    for backend in ("cpu", "metal", "cuda", "rocm"):
+        options = ({} if backend == "cpu" else
+                   {"hardware_facts": hardware.gpu_hardware(only=backend, probe_nvidia=False)[backend]})
+        statuses[backend] = dict(readiness.backend_status(backend, **options),
+                                 surface_traces=True, version=engine_version())
+    return statuses
+
+
+def _with_gpu_remedies(statuses: dict[str, dict[str, Any]], *, in_flight: bool) -> dict[str, dict[str, Any]]:
+    """Name the packaged-safe provisioning command on an unprovisioned GPU row."""
+    from server.solver import beat_cpu_runtime
+
+    for backend in beat_cpu_runtime.GPU_BACKENDS:
+        row = statuses.get(backend)
+        if not row or row.get("state") not in {"unprovisioned", "stale"}:
+            continue
+        if in_flight:
+            row.update(state="pending", reason=f"BEAT {backend} readiness is pending GPU detection.")
+        else:
+            row["reason"] = f"{row['reason']} Run: {beat_cpu_runtime.provision_command(backend=backend)}"
+    return statuses
+
+
 def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
     from server.solver import beat_cpu_runtime
     from server.solver.official_beat import engine_version, production_statuses
 
-    if not beat_cpu_runtime.cpu_preparation_in_flight():
-        return production_statuses()
+    in_flight = beat_cpu_runtime.cpu_preparation_in_flight()
+    if not in_flight:
+        return _with_gpu_remedies(production_statuses(), in_flight=False)
     cpu = beat_cpu_runtime.cpu_runtime_readiness(None)
     if cpu.state == "provisioning":
         from server.solver.beat_runtime import hardware
@@ -409,7 +436,12 @@ def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
         statuses["cpu"] = {"available": cpu.ready, "state": cpu.state, "backend": "cpu",
                            "version": engine_version(), "reason": cpu.reason}
     else:
-        statuses = production_statuses()
+        from server.solver.beat_runtime import hardware, readiness
+
+        # Publish CPU as soon as its stage ends: GPU rows read the launch hint,
+        # not a verified NVIDIA probe that may take seconds.
+        statuses = _hint_statuses(readiness, hardware, engine_version)
+    statuses = _with_gpu_remedies(statuses, in_flight=True)
     for backend in beat_cpu_runtime.GPU_BACKENDS:
         reason = beat_cpu_runtime.gpu_preparation_reason(backend)
         if reason is not None:

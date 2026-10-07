@@ -203,7 +203,7 @@ def test_source_gpu_provision_readiness_and_launch_identity(cpu_provisioning, mo
     assert budgets == [installer.GPU_REQUIRED_FREE_BYTES]
     assert [code for code, _ in calls] == ["using Pkg; Pkg.instantiate()", "using Pkg; Pkg.precompile()",
                                           f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)"] + (
-                                              ["import CUDSS"] if backend == "cuda" else [])
+                                              [gpu.CUDSS_STEP] if backend == "cuda" else [])
     assert all(call["project"] == project for _, call in calls)
     assert (root / "state-cpu.json").read_bytes() == before
     assert workers[0].terminated and workers[0].stream.closed
@@ -264,3 +264,33 @@ def test_low_depot_space_blocks_artifacts_with_existing_julia(cpu_provisioning, 
     assert checked == [depot]
     assert not calls
     assert (root / "state-cpu.json").read_bytes() == before
+
+
+def test_cudss_step_is_optional_like_the_engine():
+    # The engine loads CUDSS in a try; a machine without it still solves exterior CUDA.
+    assert gpu.CUDSS_STEP.startswith("try; import CUDSS; catch")
+    assert "@warn" in gpu.CUDSS_STEP and gpu.CUDSS_STEP.endswith("end")
+
+
+@pytest.mark.parametrize("backend", hardware.GPU_BACKENDS)
+def test_fresh_julia_install_is_not_checked_twice(cpu_provisioning, monkeypatch, tmp_path, backend):
+    from types import SimpleNamespace
+
+    root, _, julia, calls, options = cpu_provisioning
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {backend: {"available": True}})
+    checked = []
+    monkeypatch.setattr(installer.shutil, "disk_usage", lambda path:
+                        checked.append(path) or SimpleNamespace(free=installer.GPU_REQUIRED_FREE_BYTES - 1))
+
+    def fresh(directory, **kwargs):
+        # ensure_julia's own budget check already ran for this download.
+        executable = root.absolute() / "julia" / "julia-fresh" / "bin" / "julia"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(julia.read_bytes())
+        executable.chmod(0o755)
+        return str(executable)
+
+    saved = gpu.provision_gpu(root, backend=backend, **dict(options, ensure_julia=fresh))
+    assert checked == []
+    # Setup ran past the budget check (the probe itself is not under test here).
+    assert saved["step"] == f"{backend}_probe", saved

@@ -34,11 +34,12 @@ Hardware detection follows HBB: CUDA, then ROCm, then Metal. NVIDIA detection
 uses `nvidia-smi -L` with a 15 s timeout; ROCm detection checks the configured
 runtime directories or `rocminfo`/`hipinfo`/`hipInfo` on PATH. Launch-time checks
 use only PATH/directory hints; the preparation worker runs the NVIDIA check
-after the CPU stage. Positive detection is cached until refresh or exit;
-negative results expire after 30 s.
+after the CPU stage. A positive detection lasts until WG restarts, so install a GPU driver and then
+restart WG; negative results expire after 30 s.
 Setup instantiates and precompiles `julia_cuda` or `julia_rocm`, then runs the
 matching package's `versioninfo()` and `functional()` to resolve device artifacts.
-CUDA setup also imports CUDSS to fetch coupled-solve artifacts.
+CUDA setup also tries to import CUDSS to fetch coupled-solve artifacts. If CUDSS
+cannot load, setup continues and only coupled CUDA solves are refused, as in the engine.
 Each backend has its own locked state and a matching 1 kHz solve proof. The
 worker handshake must report that backend available. The probe uses Float32,
 as production does by default; the adapter also accepts Float64 on CUDA/ROCm.
