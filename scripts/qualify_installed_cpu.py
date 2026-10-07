@@ -369,7 +369,10 @@ def isolated_user_directories(work: Path) -> dict[str, str]:
     return redirected
 
 
-def isolated_environment(app: Path, work: Path) -> dict[str, str]:
+def isolated_environment(
+    app: Path, work: Path, *, beat_provider: str | None = None,
+    official_runtime_work: Path | None = None,
+) -> dict[str, str]:
     """The environment the packaged launchers build, pointed at this run's tree.
 
     ``WG2_BUNDLE`` and ``WG2_APP_ROOT`` are what the native launchers set, so
@@ -386,6 +389,11 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
     ``USERPROFILE`` moves Documents on Windows; ``XDG_DOCUMENTS_DIR`` and
     ``HOME`` do so elsewhere. Set these before startup: older payloads may
     create or repair ACLs on their Documents workspace despite ``--data-dir``.
+
+    A sibling gate can explicitly select ``beat_provider`` without changing
+    its caller's environment. ``official_runtime_work`` reuses the official
+    CPU gate's runtime and depot together (readiness keys both paths); its
+    registry, user directories and other caches remain in the new work tree.
     """
 
     caches = work / "caches"
@@ -399,6 +407,8 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
         directory.mkdir(parents=True, exist_ok=True)
 
     environment = os.environ.copy()
+    if beat_provider is not None:
+        environment["WG2_BEAT_PROVIDER"] = beat_provider
     for name in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "WG2_BEAT_JULIA"):
         environment.pop(name, None)
     environment.update(
@@ -431,8 +441,12 @@ def isolated_environment(app: Path, work: Path) -> dict[str, str]:
     )
     environment.update(isolated_user_directories(work))
     if provider.official_selected(environment):
-        environment.update(WG2_BEAT_RUNTIME_DIR=str(work / "official-beat-runtime"),
+        runtime_work = official_runtime_work or work
+        environment.update(WG2_BEAT_RUNTIME_DIR=str(runtime_work / "official-beat-runtime"),
                            WG2_BEAT_WORKER_DIR=str(work / "official-beat-registry"))
+        environment["JULIA_DEPOT_PATH"] = str(runtime_work / "julia-depot")
+    elif official_runtime_work is not None:
+        raise QualificationError("official runtime reuse requires the official provider")
     return environment
 
 

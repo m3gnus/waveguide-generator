@@ -32,9 +32,10 @@ Within the budget, in this order:
    and waits for their next checkpoint only as long as the budget allows.
 4. The gmsh worker drops queued work and stops waiting for a running OCC call
    once the budget says so.
-5. The BEMPP worker is closed and this server's BEAT workers are stopped,
-   including persistent hosts. BEAT cleanup waits at most 5 s, logs failures
-   or timeouts, and lets shutdown continue.
+5. The BEMPP worker is closed. Legacy HBB BEAT workers and persistent hosts
+   are stopped; the official BEAT manager detaches idle hosts as described
+   below. BEAT cleanup waits at most 5 s, logs failures or timeouts, and lets
+   shutdown continue.
 6. The instance lock is released and the logs are flushed.
 
 If a non-daemon thread is still running when cleanup is done -- a gmsh or
@@ -97,7 +98,8 @@ skips is crash-safe by construction:
 
 ## BEAT's persistent host on Windows
 
-BEAT keeps its Julia worker in a *persistent host* process. WG's clean server
+BEAT keeps its Julia worker in a *persistent host* process. With the legacy HBB
+provider, WG's clean server
 shutdown calls `shutdown_workers()` to stop the workers in this server's
 registry, including these hosts, rather than leaving them until the 30-minute
 idle timeout. This applies on macOS, Linux and Windows, including a server
@@ -116,6 +118,20 @@ run directly outside the status window.
 Windows with the launcher's real job and the package's exact flags, and checks
 that clean exit requests host shutdown through the pinned package's registry.
 
+With `WG2_BEAT_PROVIDER=official`, the Quit hook instead calls
+`get_manager().detach()` (`server/app.py`, `shutdown_beat_worker`;
+`server/solver/beat_runtime/manager.py`, `WorkerManager.detach`). Idle hosts,
+including those whose prewarm has completed, retain their Julia worker and
+authenticated registry record for relaunch until the host's 1800 s idle timeout.
+Quit during an active solve or aborted prewarm retires the engine; the Python
+host remains until idle exit. Child mode terminates. This is intentional, as
+recorded in `server/solver/beat_runtime/CHANGES.md`, PR 21 review round 1,
+“P3 Quit documentation”. The host's registry lives outside swept WG sessions.
+On Windows the host stays in the status window's Job Object
+(`server/solver/beat_runtime/spawn.py`, `detached_options`), so closing that
+object may additionally kill it. The stop-file qualifier below does not launch
+the status window and therefore qualifies the server's detach path.
+
 ## How this is qualified
 
 - **Every CI platform**, against a real `launch/serve.py`
@@ -129,10 +145,24 @@ that clean exit requests host shutdown through the pinned package's registry.
 - **The installed release candidate** (`.github/workflows/rc-build.yml`, all
   three platforms, `scripts/qualify_installed_quit.py`): the packaged server is
   stopped during a blocked mesh build, must exit on its own inside the
-  launcher's grace, must leave no child process running and, after the next
+  launcher's grace, must leave no child process running in the default
+  `--engine bempp` mode and, after the next
   start, no stale temporary directory; the next start must show the job as
   interrupted by Quit; and the dense-solver memory ceiling is reported with the
   probe that measured physical memory.
+- **Official BEAT host mode** (`--engine beat`): the same gate waits for the
+  installed app's own CPU provisioning and successful prewarm of `beat-cpu`,
+  then authenticates exactly one host in its private official registry and
+  records its live worker/Julia descendants. After Quit, restart and the second
+  clean stop, exactly that same host, worker identity, process tree and live
+  registry record must remain; every other observed child must exit. Missing,
+  refused or stale records fail. The interrupted job and temporary-directory
+  assertions still apply. Finally, the qualifier stops its detached host with
+  authenticated cleanup and requires no host/worker/Julia process or canonical
+  registry record left. `--official-runtime-work <CPU-gate-work>` can reuse the
+  CPU gate's provisioned official runtime and Julia depot, while keeping the
+  Quit gate's registry and other directories isolated. Without it, provisioning
+  uses the Quit gate's private work tree; it is never skipped in BEAT mode.
 
 ### Still to check by hand on a packaged machine
 

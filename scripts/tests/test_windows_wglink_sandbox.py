@@ -666,6 +666,8 @@ def test_python_app_launch_inventory() -> None:
             ('start', 'subprocess.Popen'): 1,
             ('sweep_in_runtime', 'subprocess.run'): 1,
             ('memory_ceiling', 'subprocess.run'): 1,
+            # Fixed official inspection program uses the same isolated environment and app cwd.
+            ('inspect_beat_hosts', 'subprocess.run'): 1,
             ('process_table', 'subprocess.run'): 1,
             ('_kill', 'subprocess.run'): 1,
             ('run_gate', 'Run.start'): 2,

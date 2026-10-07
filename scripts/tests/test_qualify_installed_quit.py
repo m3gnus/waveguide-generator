@@ -252,3 +252,262 @@ def test_the_sweep_the_gate_runs_removes_a_dead_session(tmp_path: Path) -> None:
 
     assert removed == [left]
     assert list(temporary.iterdir()) == []
+
+
+@pytest.fixture
+def fake_quit_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Installed launches, registry authentication and process trees without Julia."""
+    gate = _gate()
+    state = SimpleNamespace(
+        damage=None, runs=[], launches=[], inspections=[], cleaned=False, solves=[],
+    )
+    work = tmp_path / "work"
+    monkeypatch.setattr(gate, "launcher_grace", lambda app: 8.0)
+    monkeypatch.setattr(gate, "memory_ceiling", lambda *args: {"physical": {"known": True}})
+    monkeypatch.setattr(gate, "CHILD_REAP_S", 0)
+
+    class FakeRun:
+        def __init__(self, environment, root):
+            self.pid = 101 + len(state.runs)
+            self.server_pid = self.pid
+            self.base = f"fake-{self.pid}"
+            self.children = set()
+            self.process = SimpleNamespace(returncode=None)
+            self.stopped = False
+            root.mkdir(parents=True)
+            self.output = root / "server.out"
+            self.output.write_text("BEAT worker prewarm failed after 0.1 s: failed\n"
+                                   if state.damage == "prewarm-failed" else
+                                   "BEAT worker prewarm finished in 0.1 s\n")
+            state.runs.append(self)
+            state.launches.append(environment)
+        def capabilities(self):
+            return {"engines": [{"name": "beat-cpu", "available": True}]}
+        def fail_if_exited(self, doing):
+            assert not self.stopped
+        def stop_and_time(self, grace):
+            assert grace == 8.0
+            self.stopped = True
+            self.process.returncode = 0
+            return 0.25
+        def kill_if_alive(self):
+            self.stopped = True
+
+    monkeypatch.setattr(gate.Run, "start", lambda interpreter, app, env, data, root: FakeRun(env, root))
+
+    def http(base, path, body=None, **kwargs):
+        if path == "/api/solve":
+            state.solves.append(body)
+            (work / "gmsh-parked").write_text("_build_sync\n")
+            return {"job_id": "parked-job"}
+        assert path == "/api/status/parked-job"
+        return {"status": "cancelled", "stage_message": "Interrupted by Quit"}
+
+    monkeypatch.setattr(gate, "http", http)
+
+    def table():
+        answer = {}
+        for run in state.runs:
+            if not run.stopped:
+                answer[run.pid] = (1, True)
+                answer[run.pid + 10] = (run.pid, True)  # owned mesher
+            elif state.damage == "stray-child":
+                answer[run.pid + 10] = (1, True)
+        if state.runs and not state.cleaned and state.launches[0].get("WG2_BEAT_PROVIDER") == "official":
+            if state.damage != "no-host":
+                parent = (state.runs[0].pid if not state.runs[0].stopped
+                          and state.damage != "unowned-host" else 1)
+                answer[201] = (parent, True)
+                if state.damage != "no-worker":
+                    answer[301] = (201, True)  # official API exposes no engine_pid
+                if state.runs[0].stopped and state.damage == "lost-julia":
+                    answer.pop(301, None)
+        if state.cleaned and state.damage == "cleanup-live-julia":
+            answer[301] = (1, True)
+        return answer
+
+    monkeypatch.setattr(gate, "process_table", table)
+
+    def probe(command, **kwargs):
+        env = kwargs["env"]
+        assert env["WG2_BEAT_PROVIDER"] == "official"
+        assert env["WG2_BEAT_WORKER_DIR"] == str(work / "official-beat-registry")
+        assert "WG2_SKIP_BEAT_CPU_PROVISION" not in env
+        if command[2] == gate._INSPECT_BEAT_HOSTS:
+            assert kwargs["cwd"] == str(REPO_ROOT)
+            state.inspections.append(len(state.runs))
+            present = bool(state.runs) and not state.cleaned and state.damage != "no-host"
+            changed = bool(state.runs) and state.runs[0].stopped
+            if changed and state.damage == "lost-host":
+                present = False
+            verified = [{"host_pid": 201, "engine_pid": None,
+                         "worker_instance": "changed" if changed and state.damage == "changed-worker" else "warm"}] if present else []
+            records = ["host.json"] if present else []
+            if changed and state.damage == "stale-record":
+                records.append("stale.json")
+            if state.cleaned and state.damage == "cleanup-record":
+                records.append("stale.json")
+            answer = {"contained": state.damage != "uncontained", "refused": [],
+                      "records": records, "verified": verified}
+            if changed and state.damage == "refused-record":
+                answer["refused"] = [{"reason": "bad HMAC"}]
+        else:
+            assert command[-1] == "stop"
+            state.cleaned = True
+            answer = {"contained": True, "refused": [], "verified": []}
+            if state.damage == "cleanup-failure":
+                answer["refused"] = [{"reason": "cannot authenticate"}]
+        return subprocess.CompletedProcess(command, 0, json.dumps(answer), "")
+
+    monkeypatch.setattr(subprocess, "run", probe)
+    state.work = work
+    state.gate = gate
+    return state
+
+
+def test_beat_gate_retains_only_its_authenticated_warm_host_and_cleans_it(fake_quit_gate):
+    state = fake_quit_gate
+    gate = state.gate
+    report = {}
+    environment = gate.isolated_environment(REPO_ROOT, state.work, beat_provider="official")
+    environment["WG2_SKIP_BEAT_CPU_PROVISION"] = "1"  # inherited skip must be removed
+    gate.run_gate(REPO_ROOT, Path(sys.executable), environment, state.work,
+                  state.work / "out", report, engine="beat")
+
+    assert state.cleaned and len(state.runs) == 2
+    for env in state.launches:
+        assert env["WG2_BEAT_PROVIDER"] == "official"
+        assert "WG2_SKIP_BEAT_CPU_PROVISION" not in env
+        assert env["WG2_SOLVER_WARMUP"] == "1"
+    settings = json.loads((state.work / "data" / "ui_settings.json").read_text())
+    assert settings["namespaces"]["solveOptions"]["state"]["engine"] == "beat-cpu"
+    assert state.solves[0]["options"] == {"engine": "beat-cpu"}
+    for phase in ("after_quit", "after_restart", "after_clean_stop"):
+        assert report[f"beat_host_{phase}"] == report["beat_host_before_quit"]
+    assert report["beat_processes"] == [201, 301]
+    assert report["beat_registry_after_cleanup"]["records"] == []
+    assert report["next_start_job"]["stage_message"] == "Interrupted by Quit"
+    assert report["left_behind_after_restart"] == report["left_by_clean_stop"] == []
+    assert report["quit"] == {"seconds": 0.25, "exit_code": 0}
+
+
+@pytest.mark.parametrize(("damage", "message"), [
+    ("no-host", "never started"),
+    ("no-worker", "no live Julia/worker"),
+    ("prewarm-failed", "CPU prewarm failed"),
+    ("unowned-host", "not started by this server"),
+    ("lost-host", "retain the same BEAT host"),
+    ("changed-worker", "retain the same BEAT host"),
+    ("lost-julia", "process tree"),
+    ("stale-record", "stale BEAT host registry"),
+    ("refused-record", "uncontained or refused"),
+    ("stray-child", "outlived the server"),
+    ("cleanup-record", "stale BEAT host registry"),
+    ("cleanup-live-julia", "survived authenticated cleanup"),
+    ("cleanup-failure", "refused records"),
+])
+def test_beat_gate_rejects_missing_hosts_and_wrong_detach_or_cleanup(fake_quit_gate, damage, message):
+    state = fake_quit_gate
+    state.damage = damage
+    gate = state.gate
+    environment = gate.isolated_environment(REPO_ROOT, state.work, beat_provider="official")
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.run_gate(REPO_ROOT, Path(sys.executable), environment, state.work,
+                      state.work / "out", {}, engine="beat")
+    assert state.cleaned
+
+
+def test_default_gate_still_prefers_bempp_and_skips_beat_without_inspecting_hosts(fake_quit_gate):
+    state = fake_quit_gate
+    gate = state.gate
+    gate.run_gate(REPO_ROOT, Path(sys.executable), {}, state.work, state.work / "out", {})
+    assert not state.inspections and not state.cleaned
+    assert all(env["WG2_SKIP_BEAT_CPU_PROVISION"] == "1" for env in state.launches)
+    assert state.solves[0]["options"] == {}
+    settings = json.loads((state.work / "data" / "ui_settings.json").read_text())
+    assert settings["namespaces"]["solveOptions"]["state"]["engine"] == "bempp"
+
+
+def test_beat_main_selects_official_and_reuses_cpu_work_with_a_private_registry(
+    tmp_path, monkeypatch,
+):
+    gate = _gate()
+    work, cpu_work, output = (tmp_path / name for name in ("quit", "cpu", "out"))
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
+    monkeypatch.setattr(gate, "resolve_payload", lambda payload: (REPO_ROOT, REPO_ROOT, Path(sys.executable)))
+    seen = []
+    def run(app, interpreter, env, scratch, out, report, *, engine):
+        seen.append(env)
+        assert engine == "beat" and scratch == work
+        assert env["WG2_BEAT_PROVIDER"] == "official"
+        assert env["WG2_BEAT_RUNTIME_DIR"] == str(cpu_work / "official-beat-runtime")
+        assert env["JULIA_DEPOT_PATH"] == str(cpu_work / "julia-depot")
+        assert env["WG2_BEAT_WORKER_DIR"] == str(work / "official-beat-registry")
+        assert env["HOME"].startswith(str(work))
+    monkeypatch.setattr(gate, "run_gate", run)
+    assert gate.main(["--payload", str(REPO_ROOT), "--work", str(work), "--output", str(output),
+                      "--engine", "beat", "--official-runtime-work", str(cpu_work)]) == 0
+    assert len(seen) == 1 and os.environ["WG2_BEAT_PROVIDER"] == "hbb"
+    assert not (cpu_work / "official-beat-registry").exists()
+
+
+def test_parser_defaults_to_bempp_and_rejects_runtime_reuse_without_beat(tmp_path):
+    gate = _gate()
+    args = ["--payload", str(tmp_path), "--work", str(tmp_path), "--output", str(tmp_path)]
+    assert gate.build_parser().parse_args(args).engine == "bempp"
+    with pytest.raises(SystemExit) as exc:
+        gate.main([*args, "--official-runtime-work", str(tmp_path)])
+    assert exc.value.code == 2
+
+
+def test_beat_main_reports_a_host_that_never_started_as_unqualified(fake_quit_gate, monkeypatch):
+    state = fake_quit_gate
+    state.damage = "no-host"
+    gate = state.gate
+    monkeypatch.setattr(gate, "resolve_payload", lambda payload: (REPO_ROOT, REPO_ROOT, Path(sys.executable)))
+    output = state.work / "out"
+    assert gate.main(["--payload", str(REPO_ROOT), "--work", str(state.work),
+                      "--output", str(output), "--engine", "beat"]) == 1
+    report = json.loads((output / "quit-qualification.json").read_text())
+    assert report["qualified"] is False
+    assert "never started" in report["error"]
+    assert state.cleaned
+
+
+def test_cleanup_failure_preserves_the_primary_beat_gate_failure(fake_quit_gate, monkeypatch):
+    state = fake_quit_gate
+    state.damage = "no-host"
+    gate = state.gate
+    def failed_cleanup(*args):
+        raise gate.QualificationError("cleanup failed")
+    monkeypatch.setattr(gate, "stop_our_workers", failed_cleanup)
+    report = {}
+    with pytest.raises(gate.QualificationError, match="never started") as caught:
+        gate.run_gate(REPO_ROOT, Path(sys.executable),
+                      gate.isolated_environment(REPO_ROOT, state.work, beat_provider="official"),
+                      state.work, state.work / "out", report, engine="beat")
+    assert report["beat_cleanup_error"] == "cleanup failed"
+    assert caught.value.__notes__ == ["BEAT cleanup also failed: cleanup failed"]
+
+
+@pytest.mark.parametrize(("answer", "code", "message"), [
+    ("not json", 0, "unreadable BEAT host inspection"),
+    ("{}", 1, "BEAT host inspection failed"),
+    ('{"contained": false}', 0, "uncontained or refused"),
+    ('{"contained": true, "refused": [{"reason": "HMAC"}]}', 0, "uncontained or refused"),
+    ('{"contained": true, "records": ["dead.json"], "verified": []}', 0, "stale BEAT host registry"),
+])
+def test_beat_host_inspection_refuses_failed_or_unverifiable_probes(monkeypatch, answer, code, message):
+    gate = _gate()
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs:
+                        subprocess.CompletedProcess(command, code, answer, "failed"))
+    with pytest.raises(gate.QualificationError, match=message):
+        gate.inspect_beat_hosts(Path(sys.executable), REPO_ROOT, {})
+
+
+def test_beat_probe_reads_only_its_empty_registry_without_starting_julia(tmp_path):
+    gate = _gate()
+    environment = gate.isolated_environment(REPO_ROOT, tmp_path, beat_provider="official")
+    answer = gate.inspect_beat_hosts(Path(sys.executable), REPO_ROOT, environment)
+    assert answer["contained"] and answer["records"] == answer["verified"] == []
+    assert not Path(environment["WG2_BEAT_WORKER_DIR"]).exists()

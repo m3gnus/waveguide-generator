@@ -23,6 +23,14 @@ platform's packaged runtime (``docs/reference/SHUTDOWN-AND-RECOVERY.md``):
    directories must read the job as interrupted by Quit and leave no ``wg2-*``
    temporary directory but its own; after its own clean stop, none at all.
 
+With ``--engine beat``, the official CPU host finishes prewarm before the
+mesh is parked. Quit deliberately detaches that idle host and its Julia
+worker for relaunch (``WorkerManager.detach``), so precisely that authenticated
+process tree may survive. Restart must reuse it. The gate then stops its host
+through authenticated cleanup and requires no surviving process or registry
+record. This drives the stop file, not the Windows status window's Job Object
+backstop, which may additionally kill detached hosts when the window closes.
+
 Everything runs in this gate's private tree: data, temporary directory, a
 sandboxed Fusion AddIns directory and every cache ``isolated_environment``
 redirects. Only processes this gate started are ever signalled.
@@ -46,12 +54,15 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from qualify_installed_cpu import (  # noqa: E402 - a sibling script, not a package
+    CAPABILITY_TIMEOUT_S,
     DESIGN,
     QualificationError,
+    await_cpu_row,
     http,
     isolated_environment,
     isolated_user_directories,
     resolve_payload,
+    stop_our_workers,
     wait_for,
 )
 
@@ -96,6 +107,91 @@ sys.path.insert(0, sys.argv[1])
 from server.platform.temp_session import sweep_stale_temporary_directories
 print(json.dumps([path.name for path in sweep_stale_temporary_directories(Path(sys.argv[2]))]))
 """
+
+# Count canonical records before inspection: inspect_hosts can prune dead
+# records, and such pruning must not hide a stale registry from this gate.
+_INSPECT_BEAT_HOSTS = r"""
+import json, os, sys
+from pathlib import Path
+sys.path.insert(0, os.environ["WG2_APP_ROOT"])
+from server.solver.beat_runtime import paths, registry
+from server.solver.beat_runtime.inspection import inspect_hosts
+from server.solver.beat_runtime.provider import official_selected
+if not official_selected():
+    raise RuntimeError("Quit host inspection requires the official provider")
+directory = Path(os.environ["WG2_BEAT_WORKER_DIR"]) / paths.PROVIDER_ID
+if paths.worker_dir().resolve() != directory.resolve():
+    raise RuntimeError("Quit host registry escaped isolation")
+records = []
+for path in sorted(directory.glob("*.json")):
+    try:
+        registry.record_path(path.stem, directory)
+    except ValueError:
+        continue
+    records.append(path.name)
+answer = inspect_hosts(directory)
+answer["records"] = records
+print(json.dumps(answer))
+"""
+
+
+def inspect_beat_hosts(
+    interpreter: Path, app: Path, environment: dict[str, str],
+) -> dict[str, Any]:
+    """Authenticate only this gate's official hosts; never start an engine."""
+    completed = subprocess.run(  # noqa: S603 - packaged interpreter, fixed program
+        [str(interpreter), "-c", _INSPECT_BEAT_HOSTS],
+        env=environment, cwd=str(app), capture_output=True, text=True,
+        timeout=30, check=False,
+    )
+    if completed.returncode != 0:
+        raise QualificationError(f"BEAT host inspection failed: {completed.stderr[-1500:]}")
+    try:
+        answer = json.loads(completed.stdout.strip().splitlines()[-1])
+    except (IndexError, ValueError) as exc:
+        raise QualificationError(f"unreadable BEAT host inspection: {exc}") from exc
+    if answer.get("contained") is not True or answer.get("refused"):
+        raise QualificationError(f"BEAT host registry was uncontained or refused: {answer}")
+    if len(answer["records"]) != len(answer["verified"]):
+        raise QualificationError(f"stale BEAT host registry records: {answer}")
+    return answer
+
+
+def warm_beat_host(
+    run: Run, interpreter: Path, app: Path, environment: dict[str, str],
+) -> dict[str, Any]:
+    """Wait for product prewarm, then prove there is one live official host."""
+    def warmed() -> bool:
+        run.fail_if_exited("warming the official BEAT host")
+        log = run.output.read_text(
+            encoding="utf-8", errors="replace"
+        )
+        if "BEAT worker prewarm failed after " in log:
+            raise QualificationError(f"official BEAT CPU prewarm failed: {log[-2000:]}")
+        return "BEAT worker prewarm finished in " in log
+
+    wait_for(warmed, CAPABILITY_TIMEOUT_S, "official BEAT CPU prewarm to finish", interval=0.5)
+    answer = inspect_beat_hosts(interpreter, app, environment)
+    if len(answer["verified"]) != 1:
+        raise QualificationError(f"BEAT prewarm never started exactly one official host: {answer}")
+    host = answer["verified"][0]
+    if type(host.get("host_pid")) is not int or not host.get("worker_instance"):
+        raise QualificationError(f"BEAT host has no process/worker identity: {answer}")
+    return answer
+
+
+def require_detached_host(
+    interpreter: Path, app: Path, environment: dict[str, str],
+    expected: dict[str, Any], processes: set[int],
+) -> dict[str, Any]:
+    """Only the unchanged, authenticated idle host tree may outlive Quit."""
+    answer = inspect_beat_hosts(interpreter, app, environment)
+    if answer["verified"] != expected["verified"] or answer["records"] != expected["records"]:
+        raise QualificationError(f"Quit/restart did not retain the same BEAT host: {answer}")
+    pid = answer["verified"][0]["host_pid"]
+    if still_running(processes) != processes or {pid} | descendants(pid) != processes:
+        raise QualificationError("Quit/restart changed the detached BEAT host/Julia process tree")
+    return answer
 
 
 def sweep_in_runtime(
@@ -377,6 +473,10 @@ class Run:
                 f"the server exited {self.process.returncode} while {doing}:\n{tail}"
             )
 
+    def capabilities(self) -> dict[str, Any]:
+        self.fail_if_exited("preparing BEAT CPU")
+        return http(self.base, "/api/capabilities", timeout=180.0)
+
     def stop_and_time(self, grace: float) -> float:
         """Request a stop through the control file and time the exit against ``grace``."""
 
@@ -440,12 +540,12 @@ def server_pid(data_dir: Path) -> int:
     return pid
 
 
-def _prefer_bempp(data_dir: Path) -> None:
-    """Let the start's worker prewarm start a BEMPP child, so there is one to reap."""
+def _prefer_engine(data_dir: Path, engine: str) -> None:
+    """Let startup prewarm the worker this gate needs to qualify."""
 
     (data_dir / "ui_settings.json").write_text(
         json.dumps(
-            {"schema_version": 1, "namespaces": {"solveOptions": {"state": {"engine": "bempp"}}}}
+            {"schema_version": 1, "namespaces": {"solveOptions": {"state": {"engine": engine}}}}
         ),
         encoding="utf-8",
     )
@@ -467,11 +567,17 @@ def run_gate(
     work: Path,
     output: Path,
     report: dict[str, Any],
+    *,
+    engine: str = "bempp",
 ) -> None:
     """Fill ``report`` in place, so a failure keeps everything established before it."""
 
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
+    if engine not in {"bempp", "beat"}:
+        raise QualificationError(f"unknown Quit gate engine: {engine!r}")
+    beat = engine == "beat"
+    report["engine"] = engine
     environment = dict(environment, **isolated_user_directories(work))
     grace = launcher_grace(app)
     report["launcher_grace_seconds"] = grace
@@ -483,25 +589,52 @@ def run_gate(
     marker = work / "gmsh-parked"
     for directory in (data_dir, temporary, addins):
         directory.mkdir(parents=True, exist_ok=True)
-    _prefer_bempp(data_dir)
+    _prefer_engine(data_dir, "beat-cpu" if beat else "bempp")
     base_environment = dict(environment)
     base_environment.update(
         WG2_NO_BROWSER="1",
-        # This gate needs no BEAT runtime; the CPU gate prepares and tests one.
-        WG2_SKIP_BEAT_CPU_PROVISION="1",
         # Never the add-in of whatever machine runs this.
         WG2_FUSION_ADDINS_DIR=str(addins),
         PYTHONUNBUFFERED="1",
     )
+    if beat:
+        base_environment["WG2_BEAT_PROVIDER"] = "official"
+        base_environment.pop("WG2_SKIP_BEAT_CPU_PROVISION", None)
+        base_environment["WG2_SOLVER_WARMUP"] = "1"
+        report["beat_host_policy"] = "detach completed-prewarm host/Julia for relaunch (1800 s idle timeout)"
+    else:
+        base_environment["WG2_SKIP_BEAT_CPU_PROVISION"] = "1"
     for name in ("TMPDIR", "TEMP", "TMP"):
         base_environment[name] = str(temporary)
     parked_environment = dict(base_environment, WG2_TEST_GMSH_BLOCK_FILE=str(marker))
 
     runs: list[Run] = []
+    beat_processes: set[int] = set()
     try:
+        if beat:
+            initial = inspect_beat_hosts(interpreter, app, base_environment)
+            if initial["records"]:
+                raise QualificationError("BEAT Quit gate requires a fresh isolated host registry")
         first = Run.start(interpreter, app, parked_environment, data_dir, work / "first")
         runs.append(first)
-        job = http(first.base, "/api/solve", {"design": DESIGN, "options": {}})["job_id"]
+        if beat:
+            report["cpu_preparation"] = preparation = await_cpu_row(first, output)
+            if preparation["settled"] != "available":
+                raise QualificationError(f"the app did not offer official BEAT CPU: {preparation}")
+            report["beat_host_before_quit"] = host = warm_beat_host(
+                first, interpreter, app, base_environment
+            )
+            host_pid = host["verified"][0]["host_pid"]
+            if host_pid not in descendants(first.pid):
+                raise QualificationError("official BEAT host was not started by this server")
+            beat_processes = {host_pid} | descendants(host_pid)
+            # The official engine exposes no Julia PID. Enumerate its owned
+            # tree rather than treating engine_pid=None as no live worker.
+            if len(beat_processes) < 2 or still_running(beat_processes) != beat_processes:
+                raise QualificationError("BEAT host prewarm left no live Julia/worker child")
+            report["beat_processes"] = sorted(beat_processes)
+        options = {"engine": "beat-cpu"} if beat else {}
+        job = http(first.base, "/api/solve", {"design": DESIGN, "options": options})["job_id"]
         report["job_id"] = job
 
         def parked() -> bool:
@@ -518,6 +651,11 @@ def run_gate(
         elapsed = first.stop_and_time(grace)
         report["quit"] = {"seconds": round(elapsed, 2), "exit_code": first.process.returncode}
         report["children_seen_while_stopping"] = len(first.children)
+        if beat:
+            report["beat_host_after_quit"] = require_detached_host(
+                interpreter, app, base_environment, host, beat_processes
+            )
+            first.children -= beat_processes
         deadline = time.monotonic() + CHILD_REAP_S
         while still_running(first.children) and time.monotonic() < deadline:
             time.sleep(0.1)
@@ -545,7 +683,24 @@ def run_gate(
         if leftovers:
             raise QualificationError(f"the next start left stale temporary directories: {leftovers}")
 
+        if beat:
+            warm_beat_host(second, interpreter, app, base_environment)
+            report["beat_host_after_restart"] = require_detached_host(
+                interpreter, app, base_environment, host, beat_processes
+            )
+            second.children = descendants(second.pid)
+
         report["clean_stop_seconds"] = round(second.stop_and_time(grace), 2)
+        if beat:
+            report["beat_host_after_clean_stop"] = require_detached_host(
+                interpreter, app, base_environment, host, beat_processes
+            )
+            deadline = time.monotonic() + CHILD_REAP_S
+            while still_running(second.children - beat_processes) and time.monotonic() < deadline:
+                time.sleep(0.1)
+            stray = still_running(second.children - beat_processes)
+            if stray:
+                raise QualificationError(f"child processes {sorted(stray)} outlived the second server")
         remaining = _temporary_leftovers(temporary)
         report["left_by_clean_stop"] = remaining
         own = f"wg2-run-{second.server_pid}-"
@@ -575,6 +730,25 @@ def run_gate(
             (output / "server.log").write_bytes((data_dir / "logs" / "server.log").read_bytes())
         except OSError:
             pass
+        if beat and runs:
+            failure = sys.exc_info()[1]
+            try:
+                report["beat_host_cleanup"] = stop_our_workers(interpreter, base_environment, output)
+                report["beat_registry_after_cleanup"] = cleaned = inspect_beat_hosts(
+                    interpreter, app, base_environment
+                )
+                if cleaned["records"]:
+                    raise QualificationError(f"BEAT cleanup left host registry records: {cleaned}")
+                deadline = time.monotonic() + CHILD_REAP_S
+                while still_running(beat_processes) and time.monotonic() < deadline:
+                    time.sleep(0.1)
+                if still_running(beat_processes):
+                    raise QualificationError("BEAT host/Julia processes survived authenticated cleanup")
+            except Exception as exc:  # noqa: BLE001 - retain the primary gate failure
+                report["beat_cleanup_error"] = str(exc)
+                if failure is None:
+                    raise
+                failure.add_note(f"BEAT cleanup also failed: {exc}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -588,11 +762,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--payload-kind", default="unspecified", help="recorded in the report")
     parser.add_argument("--work", type=Path, required=True, help="private scratch directory")
     parser.add_argument("--output", type=Path, required=True, help="logs and the JSON report")
+    parser.add_argument("--engine", choices=("bempp", "beat"), default="bempp")
+    parser.add_argument(
+        "--official-runtime-work", type=Path,
+        help="reuse the official CPU qualifier's work directory (runtime and Julia depot); requires --engine beat",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    if arguments.official_runtime_work is not None and arguments.engine != "beat":
+        parser.error("--official-runtime-work requires --engine beat")
     started = time.time()
     output = arguments.output.expanduser().resolve()
     report: dict[str, Any] = {
@@ -604,7 +786,18 @@ def main(argv: list[str] | None = None) -> int:
         resources, app, interpreter = resolve_payload(arguments.payload)
         work = arguments.work.expanduser().resolve()
         report.update({"payload": str(resources), "interpreter": str(interpreter)})
-        run_gate(app, interpreter, isolated_environment(app, work), work, output, report)
+        if arguments.engine == "beat":
+            runtime_work = (
+                arguments.official_runtime_work.expanduser().resolve()
+                if arguments.official_runtime_work is not None else None
+            )
+            environment = isolated_environment(
+                app, work, beat_provider="official", official_runtime_work=runtime_work
+            )
+            report["official_runtime_work"] = str(runtime_work or work)
+        else:
+            environment = isolated_environment(app, work)
+        run_gate(app, interpreter, environment, work, output, report, engine=arguments.engine)
     except QualificationError as exc:
         failure = str(exc)
     except Exception as exc:  # noqa: BLE001 - an unexpected failure is still a failure
