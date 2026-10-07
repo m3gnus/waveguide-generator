@@ -426,7 +426,9 @@ def test_corpus_fast_production_meshing_is_deterministic(case, tmp_path):
         first_elapsed = time.monotonic() - start
         start = time.monotonic()
         second = corpus.freeze_case(case, second_dir)
-        assert first_elapsed < 5 and time.monotonic() - start < 5
+        # A loose bound: fast meshing takes seconds, the accurate path minutes.
+        # Hosted Windows runners have measured 8.8 s for a fast case.
+        assert first_elapsed < 30 and time.monotonic() - start < 30
         assert first.mesh_bytes == second.mesh_bytes
         assert first.sha256 == second.sha256
         runner.settings_for(first, "cpu", "float32")
