@@ -70,7 +70,7 @@ from .result_mapping import (
 from .warmup import BEAT_WARMUP_STAGE_MESSAGE, beat_warmup_in_progress
 
 
-from .beat_runtime.provider import official_selected
+from .beat_runtime.provider import official_selected, solve_signature_scope
 
 
 if official_selected():
@@ -581,6 +581,7 @@ def announce_beat_warmup_wait(stage_callback: StageCallback | None) -> bool:
     return True
 
 
+@solve_signature_scope
 def solve_beat_from_msh_text(
     msh_text: str,
     context: SolverContext,

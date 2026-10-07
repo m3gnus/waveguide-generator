@@ -1872,7 +1872,11 @@ invalidation generation and metadata policy, and returns isolated key copies.
 
 This supersedes the earlier uncached-by-design policy: provisioning publishes
 records atomically, and a cheap `os.scandir` walk observes nested developer
-edits, additions and removals without hashing file contents. Metadata revokes
+edits, additions and removals without hashing file contents. On Windows,
+`st_ino` is 0, so mtime and size carry change detection there. Selected external
+Julia projects are walked too; junctions and linked directories are refused.
+Source observations are shared only within one solve call, with fresh walks
+for the post-proof check and no time-based stale window. Metadata revokes
 a cached proof; it does not replace the full content proof on a miss.
 `production_statuses` and backend status APIs accept `force_refresh=True`; official package reprobe does
 this automatically. `/api/capabilities?refresh=true` waits for a fresh official
@@ -1893,9 +1897,10 @@ restores it by shared reference at the client; changed provenance is sent again.
 The engine public API exposes parsed dictionaries only. Its Julia stdout JSON
 and Julia-side provenance copies therefore remain outside WG's control. Frame
 decoding accepts only UTF-8 without a BOM and uses the native JSON float
-decoder. A Python walk checks floats, using numpy only for long homogeneous
-numeric lists; exponent overflow, nested/ragged lists and nonstandard constants
-remain rejected. Both stream ends request 4 MiB send/receive buffers
+decoder. A Python walk checks floats only when the raw JSON could contain numeric
+overflow, including long mantissas with short positive exponents, using numpy
+only for long homogeneous numeric lists. Exponent overflow, nested/ragged lists
+and nonstandard constants remain rejected. Both stream ends request 4 MiB send/receive buffers
 best-effort, plus TCP_NODELAY on loopback TCP, to reduce per-event backpressure.
 
 Completed sessions skip a redundant bounded close thread. Cancellation monitors
@@ -1903,7 +1908,8 @@ start only for a callback or an explicit cancellation and wake on the stop event
 abandoned/failed retirement stays bounded. `WG2_BEAT_PROFILE=1` emits elapsed
 `perf_counter` marks for solve start, statuses done, request built, worker
 acquired, submitted, first event/result, last result, completed, mapped and closed
-in WG logs, with matching submission/relay marks in the host log. Host statuses
+in WG logs. Matching submission/relay marks and host-side relay stamps appear
+only when the host itself was started with `WG2_BEAT_PROFILE=1`. Host statuses
 and request marks denote receipt of WG's admission and staged request, rather
 than an additional host readiness proof. Profiled relayed events carry a host
 monotonic timestamp; WG logs each host-to-WG event latency and a count, median,

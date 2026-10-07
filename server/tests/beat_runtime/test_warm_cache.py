@@ -324,3 +324,96 @@ def test_direct_hardware_refresh_revokes_gpu_verdict(monkeypatch, tmp_path, back
     hardware.clear_hardware_cache()
     readiness.backend_readiness(backend, tmp_path)
     assert calls == [1, 1]
+
+
+@pytest.mark.parametrize("selection", ["argument", "environment"])
+def test_external_project_nested_edit_revokes_verdict_and_key(proved_cpu, monkeypatch, tmp_path, selection):
+    root, _, julia, saved, query, _, _ = proved_cpu
+    project = tmp_path / "external-project"
+    nested = project / "src" / "nested"
+    nested.mkdir(parents=True)
+    (project / "Project.toml").write_text('name = "Fixture"\n')
+    target = nested / "solver.jl"
+    target.write_text("original")
+    options = dict(julia_executable=str(julia), julia_threads=3, environment=query["environ"])
+    if selection == "argument":
+        query["julia_project"] = project
+        options["julia_project"] = project
+    else:
+        query["environ"]["JULIA_PROJECT"] = str(project)
+    saved.update(readiness.expected_identity("cpu", root, **query))
+    state.write_state(saved, root)
+    proofs, keys = [], []
+    prove, resolve = readiness._prove_backend_readiness, manager._resolve_key
+    monkeypatch.setattr(readiness, "_prove_backend_readiness", lambda *a, **kw: (proofs.append(1), prove(*a, **kw))[1])
+    monkeypatch.setattr(manager, "_resolve_key", lambda *a, **kw: (keys.append(1), resolve(*a, **kw))[1])
+    assert readiness.backend_readiness("cpu", root, **query).ready
+    assert readiness.backend_readiness("cpu", root, **query).ready
+    before = manager.resolve_key("cpu", **options)
+    assert manager.resolve_key("cpu", **options) == before
+    assert proofs == keys == [1]
+    parent_stamp = nested.stat().st_mtime_ns
+    target.write_text("changed nested project source")
+    assert nested.stat().st_mtime_ns == parent_stamp
+    # JULIA_PROJECT does not override an explicit --project path, but must still
+    # invalidate both caches because its selected environment is a launch input.
+    after = manager.resolve_key("cpu", **options)
+    if selection == "argument":
+        assert readiness.backend_readiness("cpu", root, **query).state == "stale"
+        assert after["engine_fingerprint"] != before["engine_fingerprint"]
+    else:
+        assert readiness.backend_readiness("cpu", root, **query).ready
+    assert proofs == keys == [1, 1]
+
+
+def test_warm_solve_shares_source_walks_and_next_solve_observes_edit(proved_cpu, monkeypatch):
+    root, engine, julia, _, query, _, _ = proved_cpu
+    options = dict(julia_executable=str(julia), julia_threads=3, environment=query["environ"])
+    readiness.backend_readiness("cpu", root, **query)
+    before = manager.resolve_key("cpu", **options)
+    walked = []
+    original = warm_cache.source_signature
+    monkeypatch.setattr(warm_cache, "source_signature", lambda path: (walked.append(path), original(path))[1])
+
+    @warm_cache.signature_scope
+    def solve():
+        verdict = readiness.backend_readiness("cpu", root, **query)
+        return verdict, manager.resolve_key("cpu", **options)
+
+    verdict, key = solve()
+    assert verdict.ready and key == before
+    assert walked == [engine.root, Path(warm_cache.__file__).parent]
+    (engine.root / "__init__.py").write_text("changed between solves")
+    verdict, key = solve()
+    assert verdict.state == "stale" and key != before
+
+
+def test_scope_keeps_postproof_walk_fresh(proved_cpu, monkeypatch):
+    root, engine, _, _, query, _, _ = proved_cpu
+    calls = []
+
+    def changed_during_proof(*args, **kwargs):
+        calls.append(1)
+        (engine.root / "__init__.py").write_text("new source" * len(calls))
+        return readiness.BackendReadiness(True, "ready", "fixture")
+
+    monkeypatch.setattr(readiness, "_prove_backend_readiness", changed_during_proof)
+
+    @warm_cache.signature_scope
+    def solve():
+        readiness.backend_readiness("cpu", root, **query)
+
+    solve()
+    solve()
+    assert calls == [1, 1]
+
+
+def test_source_walk_refuses_junction_before_descending(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from contextlib import nullcontext
+
+    entry = SimpleNamespace(is_junction=lambda: True,
+                            is_dir=lambda **kw: pytest.fail("descended into junction"))
+    monkeypatch.setattr(warm_cache.os, "scandir", lambda path: nullcontext([entry]))
+    with pytest.raises(ValueError, match="Linked identity directory"):
+        warm_cache.source_signature(tmp_path)

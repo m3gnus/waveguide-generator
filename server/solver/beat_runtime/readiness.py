@@ -192,7 +192,7 @@ def backend_readiness(
             _negative_verdicts[negative_key] = verdict, time.monotonic() + _NEGATIVE_TTL
         elif signature is not None and verdict.state not in {"provisioning", "interrupted"}:
             try:
-                unchanged = signature == warm_cache.runtime_signature(backend, directory, **options)
+                unchanged = signature == warm_cache.runtime_signature(backend, directory, _fresh=True, **options)
             except Exception:
                 unchanged = False
             if unchanged:

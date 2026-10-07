@@ -893,3 +893,35 @@ def test_request_or_compatibility_failure_keeps_cached_proof(runtime, monkeypatc
     with pytest.raises(error_type, match="request incompatible"):
         beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
     assert warm_cache.generation() == before
+
+
+@pytest.mark.parametrize("phase", ["shutdown", "cancelled"])
+def test_prelease_ownership_closed_is_preserved(runtime, monkeypatch, phase):
+    from server.solver.beat_runtime import warm_cache
+    from server.solver.beat_runtime.ownership import OwnershipClosed
+
+    if phase == "shutdown":
+        runtime.manager.shutdown()
+    else:
+        error = OwnershipClosed("BEAT session cancelled before startup")
+        def cancelled(*args, **kwargs):
+            raise error
+        monkeypatch.setattr(runtime.manager, "get_worker", cancelled)
+    before = warm_cache.generation()
+    with pytest.raises(OwnershipClosed) as caught:
+        beat.solve_beat_from_msh_text(MESH.read_text(), _context(), backend="cpu")
+    if phase == "cancelled":
+        assert caught.value is error
+    assert warm_cache.generation() == before
+
+
+def test_prelease_unsupported_backend_is_preserved(runtime, monkeypatch):
+    from server.solver.beat_runtime import warm_cache
+
+    monkeypatch.setattr(manager, "resolve_key", manager._resolve_key)
+    monkeypatch.setattr(bridge, "validated_negotiator", lambda *a: None)
+    request = SimpleNamespace(wire={"solver_options": {"bem_backend": "unknown"}})
+    before = warm_cache.generation()
+    with pytest.raises(manager.UnsupportedBackend, match="supports CPU, Metal, CUDA and ROCm"):
+        bridge.solve_compiled(request, channel_id="fixture", worker_manager=runtime.manager)
+    assert warm_cache.generation() == before

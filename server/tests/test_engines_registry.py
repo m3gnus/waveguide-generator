@@ -1849,3 +1849,66 @@ def test_provision_command_names_the_backend(monkeypatch):
     monkeypatch.setattr(beat_cpu_runtime, "official_selected", lambda: False)
     assert beat_cpu_runtime.provision_command().endswith("--backend cpu")
     assert beat_cpu_runtime.provision_command(backend="cuda").endswith("--backend cuda")
+
+
+def test_explicit_official_refresh_waits_for_its_revision(monkeypatch):
+    from server.solver.beat_runtime import readiness
+
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    engine_registry = registry.EngineRegistry(detector=lambda: [_cpu_info(False, "old")], cpu_refresh=True)
+    monkeypatch.setattr(engine_registry, "_check_official_state", lambda: None)
+
+    async def scenario():
+        first_started, second_started = asyncio.Event(), asyncio.Event()
+        release_first, release_second = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def refresh_one_revision():
+            with engine_registry._refresh_state_lock:
+                revision = engine_registry._refresh_revision
+            calls.append(revision)
+            if len(calls) == 1:
+                first_started.set()
+                await release_first.wait()
+            else:
+                second_started.set()
+                await release_second.wait()
+                engine_registry._cache = (_cpu_info(True, "fresh"),)
+            with engine_registry._refresh_state_lock:
+                engine_registry._refresh_applied_revision = revision
+            # Model an event arriving in the old task's return/completion window.
+
+        monkeypatch.setattr(engine_registry, "_refresh_cpu_backend", refresh_one_revision)
+        loop = asyncio.get_running_loop()
+        cleared = asyncio.Event()
+        monkeypatch.setattr(readiness, "probe_cache_clear", lambda **kw: loop.call_soon_threadsafe(cleared.set))
+        ui = None
+        try:
+            await engine_registry.capabilities()
+            engine_registry._cpu_readiness_changed()
+            await asyncio.wait_for(first_started.wait(), 1)
+            old_revision = calls[0]
+            ui = asyncio.create_task(engine_registry.refresh_official_readiness())
+            await asyncio.wait_for(cleared.wait(), 1)
+
+            async def wait_for_target():
+                while engine_registry._refresh_revision <= old_revision:
+                    await asyncio.sleep(0)
+            await asyncio.wait_for(wait_for_target(), 1)
+            release_first.set()
+            await asyncio.wait_for(second_started.wait(), 1)
+            await asyncio.sleep(0)
+            assert not ui.done()
+            release_second.set()
+            await asyncio.wait_for(ui, 1)
+            assert (await engine_registry.capabilities())[0].reason == "fresh"
+            assert calls[1] > old_revision
+            assert engine_registry._refresh_applied_revision >= calls[1]
+        finally:
+            release_first.set()
+            release_second.set()
+            if ui is not None:
+                await asyncio.gather(ui, return_exceptions=True)
+            await engine_registry.shutdown_prewarm()
+
+    asyncio.run(scenario())

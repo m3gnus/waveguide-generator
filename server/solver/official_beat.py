@@ -15,10 +15,11 @@ import numpy as np
 
 from .beat_adapter.request import CompiledRequest
 from .beat_adapter.results import ResultContractError, SweepResult, map_sweep
-from .beat_runtime import assets, discovery, paths, readiness, registry
+from .beat_runtime import assets, discovery, paths, readiness, registry, warm_cache
 from .beat_runtime.client import HostError
-from .beat_runtime.manager import WorkerManager, get_manager
+from .beat_runtime.manager import UnsupportedBackend, WorkerManager, get_manager
 from .beat_runtime.session import SolveSession
+from .beat_runtime.ownership import OwnershipClosed
 from .beat_runtime.negotiation import validated_negotiator
 from .beat_runtime.profile import start_profile, SweepProfile
 from .context import SolverContext
@@ -103,6 +104,7 @@ def common_artifact_results(results: Mapping[str, Any]) -> dict[str, Any]:
     return aligned
 
 
+@warm_cache.signature_scope
 def solve_compiled(
     request: CompiledRequest, *, channel_id: str,
     worker_manager: WorkerManager | None = None, julia_executable: str | None = None,
@@ -131,6 +133,8 @@ def solve_compiled(
                 client = (worker_manager or get_manager()).get_worker(
                     options["bem_backend"], julia_executable=julia_executable,
                 )
+            except (OwnershipClosed, UnsupportedBackend):
+                raise
             except (ValueError, RuntimeError, OSError) as exc:
                 # This phase has no request or compatibility validation: even
                 # plain ValueError from discovery/host launch revokes the proof.

@@ -204,7 +204,7 @@ def test_trickle_responder_exceeds_overall_receive_deadline(monkeypatch):
     assert now[0] < 1.5
 
 
-@pytest.mark.parametrize("number", ["1e999", "-1e999", "NaN", "Infinity", "-Infinity"])
+@pytest.mark.parametrize("number", ["1e999", "1E+0400", "9" * 250 + ".0e99", "9" * 308 + ".0e1", "-1e999", "NaN", "Infinity", "-Infinity"])
 def test_nonfinite_json_numbers_refused(number):
     with pytest.raises(ipc.FrameError):
         ipc.receive_frame(FragmentedPeer(frame(f'{{"a":{number}}}'.encode())))
@@ -260,8 +260,8 @@ def test_windows_loopback_exclusive_address_use(monkeypatch):
     monkeypatch.setattr(ipc.socket, "SO_EXCLUSIVEADDRUSE", -5, raising=False)
     monkeypatch.setattr(ipc.Endpoint, "_socket", lambda self: server)
     assert ipc.Endpoint("tcp").listen() is server
-    assert events[0] == ("exclusive", (socket.SOL_SOCKET, -5, 1))
-    assert events[1][0] == "bind"
+    assert events[-2] == ("exclusive", (socket.SOL_SOCKET, -5, 1))
+    assert events[-1][0] == "bind"
 
 
 @pytest.mark.parametrize("errors", [[errno.EAGAIN, None], [errno.EAGAIN] * 3, [errno.EACCES]])
@@ -323,3 +323,35 @@ def test_stream_socket_requests_large_buffers_and_tcp_nodelay(tcp, fails):
     assert requested[:2] == [(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024),
                              (socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024)]
     assert requested[2:] == ([(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)] if tcp else [])
+
+
+def test_large_integer_remains_exact():
+    number = "9" * 309
+    assert ipc.receive_frame(FragmentedPeer(frame(f'{{"a":{number}}}'.encode()))) == {"a": int(number)}
+
+
+@pytest.mark.parametrize("number", ["1.25", "1e99", "1e-999", "-12", "0.0"])
+def test_safe_numbers_skip_finite_walk(monkeypatch, number):
+    monkeypatch.setattr(ipc, "_check_finite", lambda value: pytest.fail("unnecessary finite walk"))
+    assert ipc.receive_frame(FragmentedPeer(frame(f'{{"a":{number}}}'.encode()))) == {"a": json.loads(number)}
+
+
+@pytest.mark.parametrize("operation", ["listen", "connect"])
+def test_tcp_options_precede_handshake(monkeypatch, operation):
+    from types import SimpleNamespace
+
+    events = []
+    peer = SimpleNamespace(
+        setsockopt=lambda *args: events.append("option"),
+        bind=lambda *args: events.append("bind"),
+        listen=lambda *args: events.append("listen"),
+        getsockname=lambda: ("127.0.0.1", 1234),
+        connect=lambda *args: events.append("connect"),
+        settimeout=lambda *args: None,
+        close=lambda: None,
+    )
+    monkeypatch.setattr(ipc.Endpoint, "_socket", lambda self: peer)
+    endpoint = ipc.Endpoint("tcp", port=1234)
+    assert (endpoint.listen() if operation == "listen" else endpoint.connect(1)) is peer
+    assert events[:3] == ["option"] * 3
+    assert events[3] == ("bind" if operation == "listen" else "connect")

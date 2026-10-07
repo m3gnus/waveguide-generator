@@ -20,6 +20,10 @@ from typing import Any
 from . import paths
 
 _HEADER = struct.Struct("!I")
+_OVERFLOW = re.compile(rb"[eE][+]?0*[0-9]{3}|[0-9]{309}")
+# A shorter positive exponent can overflow a long integral mantissa too:
+# 210 integral digits shifted by e99 can exceed the largest finite float.
+_LONG_MANTISSA = re.compile(rb"[0-9]{210}")
 MAX_FRAME_BYTES = 512 * 1024 * 1024
 CONTROL_FRAME_BYTES = 1024 * 1024
 MAX_UNIX_PATH_BYTES = 100
@@ -124,7 +128,8 @@ def receive_frame(
     body = _receive_exactly(connection, length, deadline=deadline, cancelled=cancelled)
     try:
         decoded = json.loads(body.decode("utf-8"), parse_constant=_invalid_constant)
-        _check_finite(decoded)
+        if _OVERFLOW.search(body) or _LONG_MANTISSA.search(body):
+            _check_finite(decoded)
     except (UnicodeError, ValueError, RecursionError) as exc:
         raise FrameError("Malformed host JSON frame") from exc
     if not isinstance(decoded, dict):
@@ -183,6 +188,8 @@ class Endpoint:
         server = self._socket()
         bound = False
         try:
+            if self.kind == "tcp":
+                configure_stream_socket(server, tcp=True)
             if self.kind == "tcp" and os.name == "nt":
                 server.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
             server.bind(self._address())
@@ -204,6 +211,8 @@ class Endpoint:
             raise ValueError("Unpublished TCP endpoint")
         client = self._socket()
         try:
+            if self.kind == "tcp":
+                configure_stream_socket(client, tcp=True)
             deadline = time.monotonic() + timeout
             while True:
                 remaining = deadline - time.monotonic()

@@ -200,7 +200,11 @@ def test_macos_platform_reasons_survive_preparation(monkeypatch, tmp_path, cpu_p
     monkeypatch.setattr(hardware.platform, "system", lambda: "Darwin")
     monkeypatch.setattr(hardware.platform, "machine", lambda: "arm64")
     monkeypatch.setattr(hardware.platform, "mac_ver", lambda: ("14", (), ""))
-    monkeypatch.setattr(hardware.shutil, "which", lambda *a, **k: pytest.fail("macOS must not inspect NVIDIA/ROCm"))
+    def find_only_julia(executable, **kwargs):
+        assert executable == "julia", "macOS must not inspect NVIDIA/ROCm"
+        return None
+
+    monkeypatch.setattr(hardware.shutil, "which", find_only_julia)
 
     def absent(*a, **k):
         raise assets.AssetsUnavailable("optional package absent")

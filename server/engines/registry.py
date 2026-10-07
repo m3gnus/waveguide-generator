@@ -980,10 +980,25 @@ class EngineRegistry:
         if not official_selected():
             return
         await asyncio.to_thread(readiness.probe_cache_clear, notify=False)
-        self._cpu_readiness_changed()
+        with self._refresh_state_lock:
+            self._refresh_revision += 1
+            target_revision = self._refresh_revision
         await self.capabilities()
-        if self._refresh_task is not None:
-            await asyncio.shield(self._refresh_task)
+        while not self._listener_removed:
+            with self._refresh_state_lock:
+                if self._refresh_applied_revision >= target_revision:
+                    return
+            self._schedule_cpu_refresh()
+            task = self._refresh_task
+            if task is None:
+                # Initial detection may have exceeded the snapshot wait budget.
+                if self._initial_probe_task is not None:
+                    await asyncio.shield(self._initial_probe_task)
+                self._schedule_cpu_refresh()
+                task = self._refresh_task
+            if task is None:
+                raise RuntimeError("BEAT readiness refresh could not be scheduled")
+            await asyncio.shield(task)
 
     async def wait_for_bempp(self) -> tuple[EngineInfo, ...]:
         """Submission-only wait, shielded from caller cancellation.

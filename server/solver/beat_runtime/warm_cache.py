@@ -8,6 +8,8 @@ content identity and depot checks remain mandatory on every cache miss.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextvars import ContextVar
+from functools import wraps
 import os
 from pathlib import Path
 import shutil
@@ -18,6 +20,33 @@ from . import assets, discovery, hardware, locks, paths, probe, state
 
 _lock = threading.Lock()
 _generation = 0
+_source_observations: ContextVar[dict | None] = ContextVar("beat_source_observations", default=None)
+
+
+def signature_scope(function):
+    """Share source observations for one solve; discard them on every exit."""
+    @wraps(function)
+    def scoped(*args, **kwargs):
+        if _source_observations.get() is not None:
+            return function(*args, **kwargs)
+        token = _source_observations.set({})
+        try:
+            return function(*args, **kwargs)
+        finally:
+            _source_observations.reset(token)
+    return scoped
+
+
+def _observe_source(root: Path, *, fresh: bool) -> tuple:
+    observations = _source_observations.get()
+    key = (generation(), hardware.cache_generation(), str(root.absolute()))
+    if observations is None:
+        return source_signature(root)
+    if fresh:
+        observations.pop(key, None)
+    if key not in observations:
+        observations[key] = source_signature(root)
+    return observations[key]
 
 
 def invalidate() -> None:
@@ -42,13 +71,18 @@ def file_signature(path: Path) -> tuple:
 
 
 def source_signature(root: Path) -> tuple:
-    """Stat directories and source inputs with scandir, without hashing bytes."""
+    """Stat directories and source inputs with scandir, without hashing bytes.
+
+    Any OSError disables caching for that call; callers fall back to full proof.
+    """
     observed = []
     pending = [os.fspath(root)]
     while pending:
         directory = pending.pop()
         with os.scandir(directory) as entries:
             for entry in entries:
+                if getattr(entry, "is_junction", lambda: False)():
+                    raise ValueError("Linked identity directory")
                 if entry.is_dir(follow_symlinks=False):
                     pending.append(entry.path)
                 elif entry.is_symlink() and entry.is_dir():
@@ -69,7 +103,7 @@ def _freeze(value: Any) -> Any:
     return str(value) if isinstance(value, Path) else value
 
 
-def runtime_signature(backend: str, directory: Path | None = None, **options: Any) -> tuple:
+def runtime_signature(backend: str, directory: Path | None = None, *, _fresh: bool = False, **options: Any) -> tuple:
     """No hashes, depot checks or provisioning locks on a hit."""
     env = dict(options.get("environ", options.get("environment")) or {})
     if options.get("environ", options.get("environment")) is None:
@@ -98,9 +132,13 @@ def runtime_signature(backend: str, directory: Path | None = None, **options: An
     projects = [project]
     if env.get("JULIA_PROJECT") and not env["JULIA_PROJECT"].startswith("@"):
         projects.append(Path(env["JULIA_PROJECT"]))
+    external_sources = []
     for selected in projects:
         selected = selected.expanduser()
-        watched.extend([selected, selected / "Project.toml", *selected.glob("*Manifest*.toml")])
+        base = selected if selected.is_dir() else selected.parent
+        watched.extend([selected, base / "Project.toml", *base.glob("*Manifest*.toml")])
+        if not base.resolve().is_relative_to(engine.root.resolve()):
+            external_sources.append(base)
     for name in ("julia_sysimage", "solver_script", "compiled_request_policy", "depot"):
         if options.get(name) is not None:
             watched.append(Path(options[name]))
@@ -112,4 +150,5 @@ def runtime_signature(backend: str, directory: Path | None = None, **options: An
     settings = {key: value for key, value in options.items() if key not in {"environ", "environment"}}
     return (generation(), hardware.cache_generation(), backend, str(root.absolute()), str(Path.cwd()),
             _freeze(relevant), _freeze(settings), tuple(file_signature(path) for path in watched),
-            source_signature(engine.root), source_signature(runtime))
+            _observe_source(engine.root, fresh=_fresh), _observe_source(runtime, fresh=_fresh),
+            tuple(_observe_source(base, fresh=_fresh) for base in external_sources))

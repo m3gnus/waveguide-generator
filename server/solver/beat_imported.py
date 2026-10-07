@@ -63,6 +63,7 @@ from server.jobs.models import ImportedGeometrySource, SolveRequest
 from server.platform.temp_session import temporary_directory_root
 
 from .acoustics import solver_sound_speed_m_per_s
+from .beat_runtime.provider import solve_signature_scope
 from .base import CancelCallback, ResultCallback, StageCallback
 from .beat_threads import beat_julia_threads
 from .beat import (
@@ -647,6 +648,7 @@ def _combined_channel_response(
     return response
 
 
+@solve_signature_scope
 def solve_imported_beat_from_msh_text(
     msh_text: str,
     request: SolveRequest,

@@ -16,6 +16,10 @@ from .host import bounded_call, official_engine_factory
 from .ownership import OwnershipClosed, StreamOwnership
 
 
+class UnsupportedBackend(ValueError):
+    """A caller selected a backend this runtime cannot launch."""
+
+
 def _resolve_key(backend: str, *, julia_executable: str | None = None,
                 julia_threads: int | str = "auto", julia_project: Path | None = None,
                 julia_sysimage: Path | None = None, solver_script: Path | None = None,
@@ -27,7 +31,7 @@ def _resolve_key(backend: str, *, julia_executable: str | None = None,
     official_beat.py prototype is the default policy until callers select one.
     """
     if backend not in {"cpu", "metal", "cuda", "rocm"}:
-        raise ValueError("BEAT runtime supports CPU, Metal, CUDA and ROCm")
+        raise UnsupportedBackend("BEAT runtime supports CPU, Metal, CUDA and ROCm")
     env = dict(os.environ if environment is None else environment)
     executable = discovery.discover_julia(julia_executable, environ=env)
     if executable is None:
@@ -81,7 +85,7 @@ def resolve_key(backend: str, **options: Any) -> dict[str, Any]:
         if key is None:
             key = _resolve_key(backend, **options)
             try:
-                unchanged = signature == warm_cache.runtime_signature(backend, **options)
+                unchanged = signature == warm_cache.runtime_signature(backend, _fresh=True, **options)
             except Exception:
                 unchanged = False
             if unchanged:
