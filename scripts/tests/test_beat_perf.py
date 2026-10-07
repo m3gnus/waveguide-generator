@@ -4,6 +4,8 @@ from __future__ import annotations
 from copy import deepcopy
 from types import SimpleNamespace
 
+import sys
+
 import pytest
 
 from scripts.beat_conformance import corpus, run_corpus, run_perf as perf, perf_report as report
@@ -211,6 +213,7 @@ def test_sampler_psutil_reader_handles_exited_process():
     assert perf.psutil_processes(fake) == {1: {"ppid": 0, "rss": 200, "start": 12.}}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the perf harness is POSIX-only (process groups, SIGKILL)")
 def test_sampler_errors_are_recorded_and_only_owned_birth_identity_is_stopped(monkeypatch):
     sampler = perf.RSSSampler(1, (), reader=lambda: {1: {"ppid": 0, "rss": 1, "start": "parent"},
                                                    2: {"ppid": 1, "rss": 2, "start": "new"}})
@@ -326,6 +329,7 @@ def test_report_rendering_and_cli_write_json_and_markdown(tmp_path):
     assert "Evidence refused" in (tmp_path / "invalid/verdict.md").read_text()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="the perf harness is POSIX-only (process groups, SIGKILL)")
 def test_launch_reuses_fresh_process_isolation_and_recorded_group(monkeypatch, tmp_path):
     calls = []
     class Process:
