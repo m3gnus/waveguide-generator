@@ -139,8 +139,8 @@ def _wait_for_fixture_files(paths, *, write: bool = True, timeout: float = READY
     its handle. This gate is only for bytes the test itself has just created;
     malformed/foreign product objects are still passed straight to the helper.
     """
-    until = time.monotonic() + timeout
     for path in paths:
+        until = time.monotonic() + timeout
         while True:
             try:
                 _probe_fixture_file(path, write=write)
@@ -164,7 +164,6 @@ def test_fixture_sharing_gate_waits_without_rewriting_bytes(tmp_path, monkeypatc
             raise PermissionError("scanner still holds fixture")
         probe(path, write=write)
 
-    monkeypatch.setattr(sys, "platform", "darwin")
     monkeypatch.setattr(__name__ + "._probe_fixture_file", locked_once)
     _wait_for_fixture_files([target])
     assert attempts == [target, target]
