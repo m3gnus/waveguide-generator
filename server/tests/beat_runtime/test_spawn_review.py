@@ -52,6 +52,9 @@ def test_production_spawn_ignores_test_worker_environment(launch, monkeypatch):
 
     monkeypatch.setattr(builtins, '__import__', importing)
     monkeypatch.setattr(spawn.subprocess, 'Popen', launching)
+    # host.main runs in this process here, and on Windows it moves into the
+    # host's registry directory (host.working_directory); keep ours.
+    monkeypatch.chdir(os.getcwd())
     with pytest.raises(RealFactoryReached):
         spawn.start_host(key, directory)
     assert observed[0]['julia_threads'] == key['julia_threads']

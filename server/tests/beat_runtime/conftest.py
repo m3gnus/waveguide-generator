@@ -9,6 +9,22 @@ from server.solver.beat_runtime import assets, cleanup, hardware, installer, pat
 
 
 @pytest.fixture(autouse=True)
+def keeps_the_working_directory():
+    """Fail a test that leaves this process in another directory.
+
+    A host entry run in-process moves into its registry directory on Windows
+    (``host.working_directory``); every later ``[sys.executable, "-c",
+    "import server..."]`` in the session then fails to import the repository.
+    """
+    before = os.getcwd()
+    yield
+    after = os.getcwd()
+    if after != before:
+        os.chdir(before)
+        pytest.fail(f"the test left the working directory at {after}, not {before}")
+
+
+@pytest.fixture(autouse=True)
 def isolated_hardware_detection():
     hardware.clear_hardware_cache()
     yield
