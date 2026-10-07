@@ -665,6 +665,10 @@ def run_gate(
             if host_pid not in descendants(first.pid, table):
                 raise QualificationError("official BEAT host was not started by this server")
             parent = table[host_pid][0]
+            # Inspection reports host_pid/engine_pid/worker_instance only, so in
+            # production the launcher is recognised structurally: the host's
+            # parent, itself a direct child of the server. The bootstrap accepts
+            # only a launcher that is the server's own spawned child.
             launcher_pid = host["verified"][0].get("launcher_pid", parent)
             if (type(launcher_pid) is not int or launcher_pid != parent
                     or launcher_pid in {first.pid, first.server_pid}

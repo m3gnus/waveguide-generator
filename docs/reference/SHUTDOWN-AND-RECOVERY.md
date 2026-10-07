@@ -134,8 +134,8 @@ status-window Quit always kills the BEAT host and Julia, even after clean
 server detachment. The stop-file qualifier below does not launch the status
 window and therefore qualifies the server-detach path only on Windows.
 Follow-up qualification is needed for the packaged Windows path: job close
-kills the host, leaves a stale registry record, and the next start prunes that
-record and spawns a fresh host and Julia worker.
+kills the host and leaves a stale registry record; the next start is expected to
+prune that record and spawn a fresh host and Julia worker.
 
 ## How this is qualified
 
