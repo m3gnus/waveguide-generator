@@ -699,10 +699,12 @@ def test_a_cad_child_whose_job_is_refused_never_runs(tree, tmp_path, monkeypatch
 def test_a_refused_breakaway_retry_is_still_confined_before_it_runs(
     tree, tmp_path, monkeypatch
 ) -> None:
-    """The production path under a job that allows no breakaway (a CI runner's, say).
+    """The production path when its first CreateProcess fails.
 
-    The first CreateProcess really fails (an image that does not exist), so
-    the armed thread must survive it for the retry.
+    The production child never asks for breakaway (the status window's job
+    allows it for the official BEAT host alone), but its launch still retries
+    once. The first CreateProcess really fails (an image that does not exist),
+    so the armed thread must survive it for the retry.
     """
 
     from server.cadlink import isolation
@@ -719,7 +721,7 @@ def test_a_refused_breakaway_retry_is_still_confined_before_it_runs(
     def no_breakaway(*args: Any, **kwargs: Any) -> Any:
         flags = int(kwargs.get("creationflags", 0))
         attempts.append(flags)
-        if flags & 0x01000000:
+        if len(attempts) == 1:
             kwargs["executable"] = str(tmp_path / "no-such-image.exe")
         return real_popen(*args, **kwargs)
 
@@ -735,7 +737,7 @@ def test_a_refused_breakaway_retry_is_still_confined_before_it_runs(
     with pytest.raises(isolation.ChildRefusal, match="deadline"):
         _run_cad_child(isolation, _cad_staging(tmp_path))
     assert len(attempts) == 2
-    assert attempts[0] & 0x01000000 and not attempts[1] & 0x01000000
+    assert not any(flags & 0x01000000 for flags in attempts)
     assert seen == [False] and in_job == [True]
     assert _wait_dead(_read_pid(pidfile))
 

@@ -28,7 +28,9 @@ def test_source_launch_uses_module_app_root_devnull_and_reaping(launch, tmp_path
     record = spawn.start_host(key, directory, idle_timeout=0.2)
     command, options = observed[0]
     assert command[:4] == [sys.executable, "-m", spawn.HOST_MODULE, "--key"]
-    assert options["cwd"] == str(source)
+    # Windows runs the host from its registry, never the app layer (host.working_directory).
+    expected_cwd = str(r.private_directory(directory)) if os.name == "nt" else str(source)
+    assert options["cwd"] == expected_cwd
     assert options["stdin"] == subprocess.DEVNULL
     assert options["stderr"] == subprocess.STDOUT
     assert options["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(source)
@@ -38,7 +40,7 @@ def test_source_launch_uses_module_app_root_devnull_and_reaping(launch, tmp_path
         assert options["start_new_session"]
         assert os.getsid(record.pid) == record.pid
     wait_until(lambda: children[0].returncode is not None)
-    assert events(key)[0]["cwd"] == str(source)
+    assert events(key)[0]["cwd"] == expected_cwd
     assert r.log_path(record.identifier, directory).exists()
 
 
@@ -60,7 +62,7 @@ def test_packaged_app_root_imports_without_checkout_on_pythonpath(launch, tmp_pa
     monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.chdir(tmp_path)
     record = spawn.start_host(key, directory)
-    assert events(key)[0]["cwd"] == str(app)
+    assert events(key)[0]["cwd"] == (str(r.private_directory(directory)) if os.name == "nt" else str(app))
     assert record.key == key
     launched = events(key)[0]["kwargs"]["environment"]
     assert {name: launched[name] for name in key["environment"]} == key["environment"]

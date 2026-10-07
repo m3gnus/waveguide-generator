@@ -30,9 +30,9 @@ process tree may survive. Restart must reuse it. The gate then stops its host
 through authenticated cleanup and requires no surviving process or registry
 record. On Windows this qualifies the server-detach path only, since the
 status window's kill-on-close Job Object is not involved; ``beat_host_policy``
-reports the ``job_breakaway`` outcome the host recorded in its log. With
-``granted`` a status-window Quit detaches the host too; with ``refused`` the
-job kills it at Quit and the next start prunes its record and spawns afresh.
+reports the ``job_breakaway`` outcome the host recorded in its log: whether
+breakaway was allowed where the gate ran, not what a status-window Quit does
+(``docs/reference/SHUTDOWN-AND-RECOVERY.md``).
 
 Everything runs in this gate's private tree: data, temporary directory, a
 sandboxed Fusion AddIns directory and every cache ``isolated_environment``
@@ -193,10 +193,10 @@ def warm_beat_host(
 
 #: What each recorded breakaway outcome means for a status-window Quit.
 WINDOWS_BEAT_HOST_POLICY = {
-    "granted": "job_breakaway: granted (server-detach path qualified; "
-               "status-window Quit also detaches the host)",
-    "refused": "job_breakaway: refused (server-detach path qualified; "
-               "status-window Quit kills the host via the Job Object)",
+    "granted": "job_breakaway: granted (server-detach path qualified; breakaway was "
+               "allowed where this gate ran; status-window Quit not driven)",
+    "refused": "job_breakaway: refused (server-detach path qualified; this gate's own "
+               "job forbids breakaway, so the host dies with that job)",
 }
 
 

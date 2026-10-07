@@ -17,7 +17,7 @@ from server.platform.paths import app_root
 
 from . import paths, registry as r
 from .cleanup import cleanup_host, connect_authenticated, sweep_orphan_socket
-from .host import DEFAULT_IDLE_TIMEOUT, read_private_json, ready_path, validate_key
+from .host import DEFAULT_IDLE_TIMEOUT, read_private_json, ready_path, validate_key, working_directory
 from .ipc import Endpoint, remaining_time
 
 HOST_MODULE = "server.solver.beat_runtime.host"
@@ -31,10 +31,11 @@ def detached_options(*, windows: bool | None = None, breakaway: bool = True) -> 
     if is_windows:
         # Leave the status window's kill-on-close Job Object so a warm host
         # survives packaged Quit and the next launch adopts it (design PR 22).
-        # That job allows only explicit breakaway, so the server, gmsh and
-        # BEMPP children stay in it. An enclosing job that forbids breakaway
-        # refuses CreateProcess with ERROR_ACCESS_DENIED; _launch then retries
-        # with breakaway=False and the host stays in the job, dying at Quit.
+        # That job allows only explicit breakaway, so the server, gmsh, BEMPP
+        # and CAD children stay in it. A job the server is directly in that
+        # forbids breakaway (CI, without the status window) refuses
+        # CreateProcess with ERROR_ACCESS_DENIED; _launch then retries with
+        # breakaway=False and the host stays in that job, dying with it.
         flags = 0x00000200 | 0x00000008  # NEW_PROCESS_GROUP | DETACHED_PROCESS
         return {"creationflags": (flags | CREATE_BREAKAWAY_FROM_JOB) if breakaway else flags}
     return {"start_new_session": True}
@@ -69,7 +70,11 @@ def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: 
             # The host itself records the outcome, in its log and its ready
             # record, because it truncates the log when it starts.
             argv = command if breakaway is None else [*command, "--job-breakaway", breakaway]
-            return subprocess.Popen(argv, cwd=str(root), env=environment, stdin=subprocess.DEVNULL,
+            # Never the app layer on Windows: the native stub stays alive as
+            # the host's parent, and its cwd would pin ``app`` against an
+            # update (host.working_directory).
+            return subprocess.Popen(argv, cwd=str(working_directory(directory) if os.name == "nt" else root),
+                                    env=environment, stdin=subprocess.DEVNULL,
                                     stdout=fd, stderr=subprocess.STDOUT, close_fds=True,
                                     **detached_options(breakaway=breakaway != "refused"))
 

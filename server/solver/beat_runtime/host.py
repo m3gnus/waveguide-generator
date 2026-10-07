@@ -25,6 +25,7 @@ from .cleanup import sweep_orphan_socket
 from .clock import suspend_aware_monotonic
 from .ipc import endpoint_for, receive_frame, send_frame
 from .ownership import OwnedStream, StreamOwnership
+from .retire import RetireSignal
 
 DEFAULT_IDLE_TIMEOUT = 1800.0
 CONTROL_TIMEOUT = 2.0
@@ -239,6 +240,7 @@ class WorkerHost:
         self._queue: deque[_Job] = deque()
         self._sequence = 0
         self._worker_instance = r.new_token()
+        self._retire: RetireSignal | None = None
         self._ownership: StreamOwnership | None = None
 
     def _build_engine(self) -> Any:
@@ -455,6 +457,10 @@ class WorkerHost:
         self._server.settimeout(min(0.1, self.idle_timeout))
         self._last_activity = suspend_aware_monotonic()
         self._log(f"serving {self.identifier} (idle {self.idle_timeout:g}s)")
+        # Windows: the installer's retire request ends an idle host early (retire.py).
+        self._retire = RetireSignal()
+        if self._retire.error is not None:
+            self._log(f"installer retire signal unavailable: error {self._retire.error}")
         accept_errors = 0
         retrying_accept = False
         while not self._stopping.is_set():
@@ -466,6 +472,10 @@ class WorkerHost:
                 if (not retrying_accept and self._clients == 0 and not self._pending
                         and suspend_aware_monotonic() - self._last_activity >= self.idle_timeout):
                     self._log("idle exit")
+                    self._stopping.set()
+                    break
+                if not retrying_accept and self._clients == 0 and not self._pending and self._retire.requested():
+                    self._log("idle exit: the installer asked idle hosts to retire")
                     self._stopping.set()
                     break
             try:
@@ -606,6 +616,8 @@ class WorkerHost:
         self._fail_stop()
         if self._server is not None:
             self._server.close()
+        if self._retire is not None:
+            self._retire.close()
         with self._state:
             for connection in self._connections:
                 with contextlib.suppress(OSError):
@@ -653,6 +665,20 @@ class WorkerHost:
                         r.unlink_record(ready)
 
 
+def working_directory(directory: Path, *, windows: bool | None = None) -> Path:
+    """The host's (and its Julia worker's) current directory.
+
+    On Windows a process's current directory cannot be renamed, and a host that
+    broke away from the status window's job outlives Quit by up to its idle
+    timeout. Running from the app layer would then make an update's commit fail
+    to move ``app`` aside, so a Windows host runs from its private registry
+    directory. Imports never depend on it: ``wg-python._pth`` and PYTHONPATH
+    name the app layer, and every key path is absolute.
+    """
+    is_windows = os.name == "nt" if windows is None else windows
+    return Path(directory) if is_windows else app_root()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--key", required=True)
@@ -668,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
     directory = paths.checked_root(Path(args.dir)).absolute()
     key = read_private_json(Path(args.key))
     # The Windows native entry starts its interpreter from the bundle root.
-    os.chdir(app_root())
+    os.chdir(working_directory(directory))
     host = WorkerHost(key, directory, idle_timeout=args.idle_timeout, engine_factory=official_engine_factory)
     if Path(args.key).absolute() != r.launch_spec_path(host.identifier, directory):
         raise r.RecordRefused("Launch specification outside this host slot")

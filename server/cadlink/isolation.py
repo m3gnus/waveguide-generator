@@ -802,7 +802,11 @@ def _run_child(
         # A fresh session makes the child's process group the whole tree.
         popen_kwargs["start_new_session"] = True
     else:
-        popen_kwargs["creationflags"] = _windows_creation_flags()
+        # No breakaway: the status window's job allows it for the official BEAT
+        # host alone (``launchers/statusapp/controller.py``). This child nests
+        # its own job inside whatever job the server is in, so the launcher's
+        # job close still reaches it however the server ended.
+        popen_kwargs["creationflags"] = _windows_creation_flags(breakaway=False)
 
     # On Windows the child is created suspended and confined before it runs.
     # In the bundle sys.executable is the native stub, which starts the real

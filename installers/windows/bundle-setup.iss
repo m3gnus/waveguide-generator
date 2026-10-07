@@ -255,6 +255,13 @@ const
     to 120 s left the window unpainted and marked "Not Responding"; waiting in
     slices this long and pumping messages between them keeps it live. }
   WaitSliceMs = 100;
+  { A warm official BEAT host survives Quit and holds Running through its
+    native stub. This named event asks idle hosts to exit; the name is a
+    contract with server/solver/beat_runtime/retire.py. A host with a client,
+    which a running app keeps, ignores it. }
+  RetireIdleBeatHostsEvent = 'WaveguideGeneratorRetireIdleBeatHosts';
+  EVENT_MODIFY_STATE = $0002;
+  RetireIdleGraceMs = 20000;
   PM_REMOVE = 1;
   WM_QUIT = $0012;
 
@@ -532,6 +539,12 @@ end;
 
 function OpenMutexW(DesiredAccess, InheritHandle: Integer; Name: String): Integer;
   external 'OpenMutexW@kernel32.dll stdcall setuponly';
+function OpenEventW(DesiredAccess, InheritHandle: Integer; Name: String): Integer;
+  external 'OpenEventW@kernel32.dll stdcall setuponly';
+function SetEvent(Handle: Integer): Integer;
+  external 'SetEvent@kernel32.dll stdcall setuponly';
+function ResetEvent(Handle: Integer): Integer;
+  external 'ResetEvent@kernel32.dll stdcall setuponly';
 
 function CreateFileW(Name: String; Access, Share: Integer; Security: Integer;
   Creation, Flags: Integer; Template: Integer): Integer;
@@ -1606,45 +1619,67 @@ end;
 
 { SetupMutex is already held at ssInstall. No new native entry can be
   admitted while this check runs. Running is retained by both parent and child
-  until the app/worker exits, including a killed native parent. }
+  until the app/worker exits, including a killed native parent.
+  Idle official BEAT hosts left by an earlier Quit are asked to exit first,
+  and given RetireIdleGraceMs to do so even without /WAITPID. }
 function WaitForRunningApplicationExit(): Boolean;
 var
-  Handle, Error, Start, Elapsed, Slice: Integer;
+  Handle, Error, Start, Elapsed, Slice, Limit, Retire: Integer;
   WaitRequested: Boolean;
 begin
   Result := False;
   WaitRequested := ExpandConstant('{param:WAITPID|0}') <> '0';
-  { The 120 s cap is measured on the tick clock, as in WaitForApplicationExit:
-    counting 1201 sleeps of 100 ms stretched it to about 131 s. }
-  Start := GetTickCount();
-  while True do
+  { The event exists only while some official host holds it. }
+  Retire := OpenEventW(EVENT_MODIFY_STATE, 0, RetireIdleBeatHostsEvent);
+  if Retire <> 0 then
   begin
-    Handle := OpenMutexW(SYNCHRONIZE, 0, 'WaveguideGeneratorRunning');
-    if Handle = 0 then
-    begin
-      Error := DLLGetLastError();
-      Result := Error = 2;
-      exit;
-    end;
-    CloseHandle(Handle);
-    if not WaitRequested then
-    begin
-      WgLog('Install refused: native application or worker is still running.');
-      exit;
-    end;
-    { The deadline is tested only here, right after a fresh check of the
-      mutex, so a refusal never follows a sleep or a pump -- a modal dialog
-      held open in the pump is always followed by one more look. }
-    Elapsed := GetTickCount() - Start;
-    if Elapsed >= WaitForProcessLimitMs then
-      break;
-    Slice := WaitForProcessLimitMs - Elapsed;
-    if Slice > WaitSliceMs then
-      Slice := WaitSliceMs;
-    Sleep(Slice);
-    PumpMessages();
+    SetEvent(Retire);
+    WgLog('Asked idle BEAT hosts to exit before installing.');
   end;
-  WgLog('Install refused: native Running handles remained after 120 seconds.');
+  if WaitRequested then
+    Limit := WaitForProcessLimitMs
+  else if Retire <> 0 then
+    Limit := RetireIdleGraceMs
+  else
+    Limit := 0;
+  try
+    { The 120 s cap is measured on the tick clock, as in WaitForApplicationExit:
+      counting 1201 sleeps of 100 ms stretched it to about 131 s. }
+    Start := GetTickCount();
+    while True do
+    begin
+      Handle := OpenMutexW(SYNCHRONIZE, 0, 'WaveguideGeneratorRunning');
+      if Handle = 0 then
+      begin
+        Error := DLLGetLastError();
+        Result := Error = 2;
+        exit;
+      end;
+      CloseHandle(Handle);
+      { The deadline is tested only here, right after a fresh check of the
+        mutex, so a refusal never follows a sleep or a pump -- a modal dialog
+        held open in the pump is always followed by one more look. }
+      Elapsed := GetTickCount() - Start;
+      if Elapsed >= Limit then
+        break;
+      Slice := Limit - Elapsed;
+      if Slice > WaitSliceMs then
+        Slice := WaitSliceMs;
+      Sleep(Slice);
+      PumpMessages();
+    end;
+    if WaitRequested then
+      WgLog('Install refused: native Running handles remained after 120 seconds.')
+    else
+      WgLog('Install refused: native application or worker is still running.');
+  finally
+    { A refused install must not leave later idle hosts retiring early. }
+    if Retire <> 0 then
+    begin
+      ResetEvent(Retire);
+      CloseHandle(Retire);
+    end;
+  end;
 end;
 
 // [Icons] runs before ssPostInstall, while WaveguideGenerator.ico is still

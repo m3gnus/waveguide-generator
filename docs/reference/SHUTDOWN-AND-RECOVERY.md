@@ -117,10 +117,9 @@ run directly outside the status window.
 The status window's job is `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
 JOB_OBJECT_LIMIT_BREAKAWAY_OK`, never `SILENT_BREAKAWAY_OK`: only a child
 that asks for `CREATE_BREAKAWAY_FROM_JOB` leaves it. The server, the mesher
-and gmsh, and BEMPP workers do not ask, so they die when the job closes. The
-CAD Link child asks, and leaves, but it starts suspended in its own
-kill-on-close job that only the server holds, so it still dies with the
-server.
+and gmsh, BEMPP workers and the CAD Link child do not ask, so they die when
+the job closes. The CAD Link child nests its own kill-on-close job inside the
+status window's.
 
 `server/tests/test_beat_host_windows_quit.py` reproduces the mechanism on
 Windows with the launcher's real job and the package's exact flags, and checks
@@ -147,13 +146,32 @@ On packaged Windows the official host is started with
   adopts it through the registry's authenticated probe rather than spawning a
   second one. A detached host still ends: by its suspend-aware 1800 s idle
   expiry, or by authenticated cleanup (`cleanup.py`) after a crash of the
-  server and status window.
-- **Refused:** an enclosing job that forbids breakaway (a CI runner's, some
-  enterprise or antivirus jobs) fails `CreateProcess` with
-  `ERROR_ACCESS_DENIED`. The spawn retries once without the flag, so the host
-  stays in the job and the status window's `stop()` kills it with Julia at
-  Quit, as before. The next start prunes the stale record and spawns a fresh
-  host.
+  server and status window. Under the status window this is the normal case,
+  even inside an enclosing job (an enterprise or antivirus one) that lacks
+  `BREAKAWAY_OK`: Windows then moves the host out of the status window's job
+  into that enclosing job, and the host dies only with it.
+- **Refused:** only when the job the server is directly in forbids breakaway,
+  which happens when the server runs without the status window inside such a
+  job (a CI runner's, say). `CreateProcess` fails with `ERROR_ACCESS_DENIED`,
+  and the spawn retries once without the flag, so the host stays in that job
+  and dies with it, as every host did before. The next start prunes the stale
+  record and spawns a fresh host.
+
+A host that outlives Quit must not get in the way of an update:
+
+- **It does not pin the install tree.** On Windows the host, its native stub
+  and its Julia worker run from the host's private registry directory, not
+  the app layer (`host.working_directory`), because a process's current
+  directory cannot be renamed and the installer's commit moves `app` aside.
+- **It retires for the installer.** Through its native stub the host holds
+  the `WaveguideGeneratorRunning` mutex that the installer waits on. Before
+  that wait the installer sets the named event
+  `WaveguideGeneratorRetireIdleBeatHosts` (`installers/windows/bundle-setup.iss`,
+  `WaitForRunningApplicationExit`; `server/solver/beat_runtime/retire.py`).
+  An idle host exits on it as on idle expiry, and the installer allows idle
+  hosts 20 s even without `/WAITPID`. A host with a client, which a running
+  app keeps, ignores it, so the installer still refuses while the app runs.
+  The installer resets the event when its wait ends.
 
 The stop-file qualifier below does not launch the status window, so on Windows
 it qualifies the server-detach path; its `beat_host_policy` reports which
@@ -217,7 +235,9 @@ itself, and it runs no BEAT solve. Before a stable release, on each platform:
    without a cold start. With `refused`, or with the HBB provider, no
    `julia.exe` from the application remains and the next BEAT solve pays a
    cold start. Either way `python -m server.solver.beat_runtime.cli status`
-   afterwards shows no stale record.
+   afterwards shows no stale record. Then, with a warm host left by a Quit,
+   run the installer within a few minutes: it must install without saying
+   the application is still running, and the host must be gone afterwards.
 5. Windows: the server log line `Dense-solver memory ceiling: ...` names half of
    the installed memory (Settings > System > About) and the probe
    `GlobalMemoryStatusEx`.

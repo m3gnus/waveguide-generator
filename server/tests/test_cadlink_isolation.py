@@ -961,7 +961,12 @@ def test_windows_child_waits_for_its_envelope_until_after_job_assignment(
 def test_windows_breakaway_failure_retries_and_remains_memory_contained(
     step_file: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:  # pragma: no cover - Windows only
-    """The first launch failure is injected; the fallback child and job are real."""
+    """The first launch failure is injected; the fallback child and job are real.
+
+    The production child never asks for breakaway: the status window's job
+    allows it for the official BEAT host alone. The retry stays for callers
+    that do ask, and it must still leave a contained child.
+    """
 
     real_popen = subprocess.Popen
     attempts: list[int] = []
@@ -969,7 +974,7 @@ def test_windows_breakaway_failure_retries_and_remains_memory_contained(
     def popen_with_forbidden_breakaway(*args: object, **kwargs: object) -> object:
         flags = int(kwargs.get("creationflags", 0))
         attempts.append(flags)
-        if len(attempts) == 1 and flags & 0x01000000:
+        if len(attempts) == 1:
             raise OSError(5, "the parent job forbids breakaway")
         return real_popen(*args, **kwargs)  # type: ignore[arg-type]
 
@@ -981,8 +986,8 @@ def test_windows_breakaway_failure_retries_and_remains_memory_contained(
             "memory_hog",
             budget=_budget(wall_time_s=60.0, memory_bytes=192 * 1024 * 1024),
         )
-    assert attempts[0] & 0x01000000
-    assert attempts[1] & 0x01000000 == 0
+    assert len(attempts) == 2
+    assert not any(flags & 0x01000000 for flags in attempts)
     assert caught.value.stage == "stage 7 meshing"
     assert "could not confine" not in str(caught.value)
     assert time.monotonic() - started < 20.0

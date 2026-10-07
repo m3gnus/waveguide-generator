@@ -8,12 +8,14 @@ it; everything else the server starts dies when the job closes.
 
 * The **official** host (``server/solver/beat_runtime/spawn.py``) asks for
   breakaway, so a warm one survives Quit and the next launch adopts it through
-  the registry. An enclosing job that forbids breakaway (a CI runner's, some
-  enterprise or antivirus jobs) refuses it with ``ERROR_ACCESS_DENIED``; the
-  spawn then retries once inside the job, records ``job_breakaway: refused``,
-  and the host dies at Quit as before, its stale record pruned at the next
-  start. A host that broke away still ends: its suspend-aware idle expiry, or
-  authenticated cleanup.
+  the registry. If the job the server is directly in forbids breakaway (CI,
+  without the status window), ``CreateProcess`` refuses with
+  ``ERROR_ACCESS_DENIED``; the spawn then retries once inside that job,
+  records ``job_breakaway: refused``, and the host dies with the job, its
+  stale record pruned at the next start. A host that broke away still ends:
+  its suspend-aware idle expiry, authenticated cleanup, or the installer's
+  retire request while it is idle. It never runs from the app layer, which an
+  update must be able to move aside.
 * The legacy **HBB** host is started with
   ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` and no breakaway, so it stays
   in the job and dies with it. Clean server exit stops it first through
@@ -262,8 +264,8 @@ def test_without_the_launchers_job_the_detached_host_survives() -> None:
 #: Stands in for the server on the official route: starts the host through the
 #: real ``spawn.start_host`` (with the tests' engine-free host), a plain child
 #: the way the mesher starts gmsh, and a child the way CAD Link starts its
-#: isolated child (breakaway requested, its own kill-on-close job). Reports the
-#: pids, then waits for its stdin to close.
+#: isolated child (no breakaway, its own kill-on-close job nested in the
+#: server's). Reports the pids, then waits for its stdin to close.
 _OFFICIAL_SERVER = r"""
 import json, subprocess, sys
 from pathlib import Path
@@ -279,7 +281,7 @@ gmsh = subprocess.Popen(sleeper, close_fds=True, **quiet)
 with windows_job_start(lambda _pid, handle: isolation._assign_windows_job(handle, isolation.INSPECT_BUDGET),
                        required=True, subject="the CAD-style child") as started:
     cad = isolation.start_child_process(
-        sleeper, {"creationflags": isolation._windows_creation_flags(), "close_fds": True, **quiet}, stage="test")
+        sleeper, {"creationflags": isolation._windows_creation_flags(breakaway=False), "close_fds": True, **quiet}, stage="test")
 cad_job = started.job
 print(json.dumps({"host_pid": record.pid, "gmsh_pid": gmsh.pid, "cad_pid": cad.pid}), flush=True)
 sys.stdin.read()
@@ -432,7 +434,7 @@ def test_a_refused_breakaway_keeps_the_host_in_the_job_and_the_next_start_recove
     from launchers.statusapp import controller
     from server.solver.beat_runtime import registry as r, spawn
 
-    # A job without BREAKAWAY_OK, as an enclosing CI or enterprise job is.
+    # A server directly in a job without BREAKAWAY_OK, as on a CI runner.
     monkeypatch.setattr(controller, "WINDOWS_JOB_LIMIT_FLAGS", JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
     key, key_file, directory, pids = official
     server, job = _start_server_in_launcher_job(key_file, directory)
@@ -500,6 +502,123 @@ def test_a_host_that_broke_away_still_expires_when_idle(
     assert _wait_dead(host_pid, 20.0), "a detached idle host outlived its suspend-aware expiry"
     assert "idle exit" in _host_log(key, directory)
     assert r.read_record(r.key_id(key), directory) is None
+
+
+def _move_aside(path: Path) -> int:
+    """``MoveFileExW`` the way an update's native commit moves ``app`` aside; 0 or the error."""
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    aside = path.with_name(path.name + ".previous")
+    if not kernel32.MoveFileExW(str(path), str(aside), 0):
+        return ctypes.get_last_error()
+    assert kernel32.MoveFileExW(str(aside), str(path), 0)
+    return 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+def test_a_host_that_survived_quit_does_not_pin_the_app_layer(
+    official: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An update or reinstall right after Quit must still be able to move ``app`` aside.
+
+    A Windows process's current directory cannot be renamed, and a warm host
+    now outlives Quit, so neither it, its native stub nor its Julia worker may
+    run from the app layer (``host.working_directory``).
+    """
+
+    import shutil
+
+    if not _breakaway_permitted_here():
+        pytest.skip("this runner's own job forbids breakaway")
+    app = tmp_path / "bundle" / "app"
+    for relative in ("server/__init__.py", "server/solver/__init__.py", "server/platform/__init__.py",
+                     "server/platform/paths.py", "server/tests/beat_runtime/fake_host_worker.py",
+                     "server/tests/beat_runtime/fake_host_main.py"):
+        target = app / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(_ROOT / relative, target)
+    shutil.copytree(_ROOT / "server/solver/beat_runtime", app / "server/solver/beat_runtime",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    monkeypatch.setenv("WG2_APP_ROOT", str(app))
+    key, key_file, directory, pids = official
+    server, job = _start_server_in_launcher_job(key_file, directory)
+    try:
+        assert server.stdout is not None
+        started = json.loads(server.stdout.readline())
+        pids.extend(started.values())
+        host_pid = started["host_pid"]
+        _quit(server, job, crash=False)
+        time.sleep(0.5)
+        assert _alive(host_pid), "the host did not survive the launcher's job close"
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait(timeout=30)
+        job.close()  # type: ignore[attr-defined]
+
+    assert _move_aside(app) == 0, "a warm host pins the app layer against an update"
+    assert _alive(host_pid)
+
+
+def _signal_retire(*, reset: bool = False) -> bool:
+    """What the installer does (``WaitForRunningApplicationExit``): open and set, or reset."""
+    import ctypes
+    from ctypes import wintypes
+
+    from server.solver.beat_runtime.retire import RETIRE_IDLE_EVENT
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenEventW.restype = wintypes.HANDLE
+    kernel32.OpenEventW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
+    handle = kernel32.OpenEventW(0x0002, False, RETIRE_IDLE_EVENT)  # EVENT_MODIFY_STATE
+    if not handle:
+        return False
+    try:
+        (kernel32.ResetEvent if reset else kernel32.SetEvent)(wintypes.HANDLE(handle))
+    finally:
+        kernel32.CloseHandle(wintypes.HANDLE(handle))
+    return True
+
+
+def test_the_installer_and_the_host_name_the_same_retire_event() -> None:
+    from server.solver.beat_runtime.retire import RETIRE_IDLE_EVENT
+
+    script = (_ROOT / "installers" / "windows" / "bundle-setup.iss").read_text(encoding="utf-8")
+    assert f"RetireIdleBeatHostsEvent = '{RETIRE_IDLE_EVENT}';" in script
+    assert "OpenEventW(EVENT_MODIFY_STATE, 0, RetireIdleBeatHostsEvent)" in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named events")
+def test_the_installers_retire_request_ends_idle_hosts_but_not_one_in_use(
+    official: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A warm host holds the installer's Running mutex through its native stub.
+
+    The installer sets the retire event before it checks that mutex: an idle
+    host exits at once, but a host whose app is still connected stays, so the
+    installer still refuses a running app.
+    """
+
+    from server.solver.beat_runtime import client, registry as r, spawn
+
+    monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
+    key, _key_file, directory, pids = official
+    record = spawn.start_host(key, directory, timeout=60.0)
+    pids.append(record.pid)
+    connection = client.connect_client(record, r.private_directory(directory), timeout=10.0)
+    try:
+        assert _signal_retire(), "the host did not create the installer's retire event"
+        time.sleep(1.0)
+        assert _alive(record.pid), "a host with a connected client retired"
+    finally:
+        connection.close()
+    try:
+        assert _wait_dead(record.pid, 10.0), "an idle host ignored the installer's retire request"
+        assert "idle exit: the installer asked idle hosts to retire" in _host_log(key, directory)
+        assert r.read_record(r.key_id(key), directory) is None
+    finally:
+        _signal_retire(reset=True)
 
 
 def test_the_record_is_documented() -> None:

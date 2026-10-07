@@ -4,33 +4,55 @@ All paths are relative to the WG repository root. Changes are additive; no
 production caller adopts beat-engine, no pins change, and HBB state is untouched.
 
 - **Design PR 22 — the host survives a packaged Windows Quit (2026-10-07):**
-  `spawn.py`, `host.py`; `launchers/statusapp/controller.py`
-  (`WINDOWS_JOB_LIMIT_FLAGS`); `scripts/qualify_installed_quit.py`;
+  `spawn.py`, `host.py`, `retire.py` (new); `launchers/statusapp/controller.py`
+  (`WINDOWS_JOB_LIMIT_FLAGS`); `installers/windows/bundle-setup.iss`
+  (`WaitForRunningApplicationExit`); `server/cadlink/isolation.py`;
+  `scripts/qualify_installed_quit.py`;
   `server/tests/test_beat_host_windows_quit.py`,
   `server/tests/beat_runtime/test_spawn_platform.py`,
   `server/tests/beat_runtime/fake_host_main.py`,
+  `server/tests/test_cadlink_isolation.py`, `server/tests/test_job_start_windows.py`,
   `scripts/tests/test_qualify_installed_quit.py`.
   The status window's kill-on-close job now also sets
   `JOB_OBJECT_LIMIT_BREAKAWAY_OK` (not `SILENT_BREAKAWAY_OK`), and the host is
   spawned with `CREATE_BREAKAWAY_FROM_JOB` added to
   `NEW_PROCESS_GROUP | DETACHED_PROCESS`, so a warm host and its Julia worker
   survive Quit and the next launch adopts them through the registry, as on
-  macOS and Linux. Children that do not ask for breakaway (the server, mesher,
-  gmsh, BEMPP, the HBB host) still die with the job. The CAD Link child already
-  asked for breakaway and now gets it; it still dies with the server through
-  its own kill-on-close job. If an enclosing job forbids breakaway
-  (`ERROR_ACCESS_DENIED`, winerror 5), the spawn retries once without the flag
-  and the host stays in the job, which is the previous behaviour. Any other
-  launch error, or a second refusal, is raised. The host gets
-  `--job-breakaway granted|refused`, logs `job breakaway: <outcome>`, and adds
-  `job_breakaway` to its bootstrap record. On Windows the Quit qualifier's
-  `beat_host_policy` reports that outcome instead of a fixed label, and fails
-  when the log holds none or both. Orphan safety is unchanged and now tested
-  natively against the launcher's real job: after a Quit or a crash the next
-  start adopts the same host and a second start does not spawn,
-  authenticated cleanup stops it, and the suspend-aware idle expiry ends it.
-  A refused host dies at job close, and the next start prunes its stale record
-  and spawns afresh. HBB and the CUDA/ROCm paths are untouched.
+  macOS and Linux. Nothing else asks for breakaway, so the server, mesher,
+  gmsh, BEMPP and the HBB host still die with the job; the CAD Link child,
+  which used to ask and be refused, now never asks and nests its own job
+  inside the status window's, as it effectively did before. If the job the
+  server is directly in forbids breakaway (`ERROR_ACCESS_DENIED`, winerror 5:
+  CI, without the status window), the spawn retries once without the flag and
+  the host stays in that job. Any other launch error, or a second refusal, is
+  raised. Under the status window an enclosing job without `BREAKAWAY_OK`
+  does not refuse: Windows moves the host into that enclosing job. The host
+  gets `--job-breakaway granted|refused`, logs `job breakaway: <outcome>`, and
+  adds `job_breakaway` to its bootstrap record; on Windows the Quit
+  qualifier's `beat_host_policy` reports it, and fails when the log holds
+  none or both.
+  A host that outlives Quit must not block an update. On Windows it runs from
+  its private registry directory rather than the app layer
+  (`working_directory`), since a current directory cannot be renamed and the
+  installer's commit moves `app` aside (measured: error 32). Through its native
+  stub it also holds the installer's `WaveguideGeneratorRunning` mutex, so the
+  installer now sets the named event `WaveguideGeneratorRetireIdleBeatHosts`
+  before that wait, allows idle hosts 20 s even without `/WAITPID`, and resets
+  the event afterwards. A host exits on it only under the idle-exit
+  conditions (no client, no peer mid-handshake), so a running app's host stays
+  and the installer still refuses.
+  Orphan safety is tested natively against the launcher's real job: after a
+  Quit or a crash the next start adopts the same host and a second start does
+  not spawn, authenticated cleanup stops it, the suspend-aware idle expiry
+  ends it, the installer's retire event ends it only while idle, and the app
+  layer can be moved aside while it runs. A refused host dies at job close,
+  and the next start prunes its stale record and spawns afresh. HBB and the
+  CUDA/ROCm paths are untouched.
+  Review round 1 (Sonnet, Fable: BLOCK) findings fixed: the app-layer
+  current-directory pin and the Running mutex (both P1), the CAD child
+  leaving the job (P2), the refused-case prose and the qualifier's label (P3).
+  Objected: a winerror 5 from another cause is retried once and recorded as
+  refused; a second failure is raised, so no launch is hidden.
 
 - **Host fix — suspend-aware idle expiry (2026-10-07):**
   `clock.py`, `host.py`; `server/tests/beat_runtime/test_{clock,host_clock}.py`.

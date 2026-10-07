@@ -486,7 +486,7 @@ def test_windows_beat_report_names_the_recorded_breakaway_case(fake_quit_gate, m
                   state.work, state.work / "out", report, engine="beat")
     assert report["beat_host_policy"] == gate.WINDOWS_BEAT_HOST_POLICY[outcome]
     assert report["beat_host_policy"].startswith(f"job_breakaway: {outcome} ")
-    assert ("detaches" if outcome == "granted" else "kills the host") in report["beat_host_policy"]
+    assert ("allowed" if outcome == "granted" else "forbids breakaway") in report["beat_host_policy"]
 
 
 @pytest.mark.parametrize("lines", [[], ["granted", "refused"]])
