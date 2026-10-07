@@ -53,6 +53,9 @@ production caller adopts beat-engine, no pins change, and HBB state is untouched
   leaving the job (P2), the refused-case prose and the qualifier's label (P3).
   Objected: a winerror 5 from another cause is retried once and recorded as
   refused; a second failure is raised, so no launch is hidden.
+  Review round 2 (Fable: APPROVE) note fixed directly: the docs now say that
+  an installer killed between setting and resetting the retire event leaves
+  idle hosts retiring early until the last one exits.
 
 - **Host fix — suspend-aware idle expiry (2026-10-07):**
   `clock.py`, `host.py`; `server/tests/beat_runtime/test_{clock,host_clock}.py`.

@@ -171,7 +171,10 @@ A host that outlives Quit must not get in the way of an update:
   An idle host exits on it as on idle expiry, and the installer allows idle
   hosts 20 s even without `/WAITPID`. A host with a client, which a running
   app keeps, ignores it, so the installer still refuses while the app runs.
-  The installer resets the event when its wait ends.
+  The installer resets the event when its wait ends. An installer killed
+  between the two leaves it set until the last host holding it exits; until
+  then every host retires as soon as it is idle, so warm reuse across Quit is
+  lost for that while, and nothing in use is affected.
 
 The stop-file qualifier below does not launch the status window, so on Windows
 it qualifies the server-detach path; its `beat_host_policy` reports which
