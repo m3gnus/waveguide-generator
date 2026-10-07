@@ -25,7 +25,9 @@ def test_report_runs_without_engine_or_hbb_and_counts_one_unit(monkeypatch):
     scenarios = report["scenarios"]
     assert report["supported_count"] + report["refused_count"] == len(scenarios)
     for name in ("parametric.exterior", "imported.exterior", "route.beat-cpu.float64",
-                 "route.beat-metal.float32", "frequencies.unordered", "frequencies.float32_alias"):
+                 "route.beat-metal.float32", "route.beat-cuda.float32", "route.beat-rocm.float64",
+                 "route.official-beat-cuda.float64", "route.official-beat-rocm.float32",
+                 "route.beat.cuda", "route.beat.rocm", "frequencies.unordered", "frequencies.float32_alias"):
         assert scenarios[name]["supported"], (name, scenarios[name])
     for name in ("route.beat-metal.float64", "route.beat.None", "symmetry.xy", "symmetry.x",
                  "symmetry.y", "parametric.infinite_baffle", "imported.infinite_baffle",

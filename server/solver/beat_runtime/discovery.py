@@ -110,7 +110,7 @@ def discover_julia(
 
 def legacy_executable_hint(legacy_root: Path) -> str | None:
     """Read an opt-in HBB executable hint; legacy status is never WG readiness."""
-    for name in ("state-cpu.json", "state-metal.json", "state.json"):
+    for name in ("state-cpu.json", "state-metal.json", "state-cuda.json", "state-rocm.json", "state.json"):
         record = _read_json(legacy_root / name)
         candidate = record.get("julia_executable") if record else None
         if isinstance(candidate, str) and candidate.strip():

@@ -101,8 +101,10 @@ def test_failed_and_interrupted_records_have_independent_reasons(proved_cpu, sta
 
 def test_metal_failure_leaves_cpu_ready(proved_cpu, monkeypatch):
     root, _, _, _, query, _, setup = proved_cpu
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {
         "metal": {"available": True, "reason": "eligible"},
+        "cuda": {"available": False, "reason": "no device"},
+        "rocm": {"available": False, "reason": "no device"},
     })
     before = (root / "state-cpu.json").read_bytes()
 
@@ -117,7 +119,7 @@ def test_metal_failure_leaves_cpu_ready(proved_cpu, monkeypatch):
     assert not statuses["metal"]["available"] and "offline" in statuses["metal"]["reason"]
     assert readiness.beat_engine_status(root, **query)["backend"] == "cpu"
     for backend in ("cuda", "rocm"):
-        assert statuses[backend]["reason"] == "not supported in this build"
+        assert statuses[backend]["state"] == "no-device"
 
 
 @pytest.mark.parametrize("payload", ["{", '{"provider":"hornlab-beat"}', "{}"])
@@ -129,7 +131,7 @@ def test_corrupt_or_foreign_records_never_prove_ready(proved_cpu, payload):
 
 def test_static_catalog_and_hardware_do_not_mean_usable(cpu_provisioning, monkeypatch):
     root, _, _, _, options = cpu_provisioning
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": True, "reason": "eligible"}})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {"metal": {"available": True, "reason": "eligible"}})
     for backend in ("cpu", "metal"):
         verdict = readiness.backend_readiness(backend, root, environ=options["environ"], julia_executable=options["julia_executable"], julia_threads=3)
         assert not verdict.ready and verdict.state == "unprovisioned"
@@ -225,7 +227,7 @@ def test_lazy_public_worker_factory_publishes_completed_readiness(proved_cpu, mo
 def test_gpu_detection_error_does_not_hide_cpu(proved_cpu, monkeypatch):
     root, _, _, _, query, _, _ = proved_cpu
 
-    def broken():
+    def broken(**kwargs):
         raise OSError("inventory failed")
 
     monkeypatch.setattr(hardware, "gpu_hardware", broken)

@@ -1,4 +1,4 @@
-"""Provision and inspect WG-owned CPU/Metal runtimes for setup hooks."""
+"""Provision and inspect WG-owned CPU/GPU runtimes for setup hooks."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("command", nargs="?", choices=("provision", "status", "clear-cache"), default="provision")
     parser.add_argument("--backend", choices=("auto", *readiness.BACKENDS), default="auto")
     parser.add_argument("--if-gpu", action="store_true")
-    parser.add_argument("--if-nvidia-gpu", action="store_true", help="legacy gate; NVIDIA is unsupported in this build")
+    parser.add_argument("--if-nvidia-gpu", action="store_true", help="only provision when NVIDIA hardware is detected")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--retry", action="store_true")
     parser.add_argument("--dir", type=Path)
@@ -44,26 +44,21 @@ def main(argv: list[str] | None = None) -> int:
                     else {args.backend: readiness.backend_status(args.backend, args.dir, **options)})
         print(json.dumps(statuses, sort_keys=True))
         return 0
-    if args.if_nvidia_gpu:
+    if args.if_nvidia_gpu and not hardware.gpu_hardware()["cuda"]["available"]:
         return 0
     backend = hardware.detect_gpu_backend() if args.backend == "auto" else args.backend
     if backend is None:
-        if not args.if_gpu:
+        if not args.if_gpu and not args.if_nvidia_gpu:
             print("No supported GPU detected; nothing to provision.")
         return 0
-    if backend in {"cuda", "rocm"}:
-        if not args.if_gpu:
-            print(f"BEAT {backend}: {hardware.UNSUPPORTED}.")
-            return 1
-        return 0
-    if backend == "metal" and not hardware.gpu_hardware()["metal"]["available"]:
-        if not args.if_gpu:
-            print("No eligible Metal hardware; nothing to provision.")
+    if backend in hardware.GPU_BACKENDS and not hardware.gpu_hardware()[backend]["available"]:
+        if not args.if_gpu and not args.if_nvidia_gpu:
+            print(f"BEAT {backend}: no eligible hardware; nothing to provision.")
         return 0
     try:
         # An optional missing engine must not create state or fetch Julia.
         assets.engine_assets(backend)
-        action = readiness.provision_cpu if backend == "cpu" else readiness.provision_metal
+        action = getattr(readiness, f"provision_{backend}")
         record = action(args.dir, force=args.force, retry=args.retry, **options)
         return 0 if record.get("status") in {"ready", "skipped"} else 1
     except Exception as exc:

@@ -630,7 +630,7 @@ def solve_beat_from_msh_text(
         if package is None:
             raise BeatUnavailable("hornlab-beat-bem is not installed.")
     if backend is None:
-        status = (next((statuses[name] for name in ("metal", "cpu")
+        status = (next((statuses[name] for name in BEAT_BACKENDS
                         if statuses[name]["available"]), statuses["cpu"])
                   if official else beat_status())
         if not status["available"]:

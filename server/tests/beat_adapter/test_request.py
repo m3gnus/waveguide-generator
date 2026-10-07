@@ -59,7 +59,10 @@ def test_packed_mesh_preserves_original_identity_scale_order_and_winding(build):
 
 @pytest.mark.parametrize("engine,backend,precision", [
     ("beat-cpu", None, "float64"), ("beat-metal", None, "float32"),
-    ("beat", "cpu", "float32"), ("beat", "metal", "float32")])
+    ("beat", "cpu", "float32"), ("beat", "metal", "float32"),
+    ("beat-cuda", None, "float32"), ("beat-rocm", None, "float64"),
+    ("official-beat-cuda", None, "float64"), ("official-beat-rocm", None, "float32"),
+    ("beat", "cuda", "float32"), ("beat", "rocm", "float32")])
 def test_stored_engine_ids_survive_and_quadrature_is_fixed_order_4(build, engine, backend, precision):
     built = build(engine_id=engine, backend=backend, precision=precision)
     options = built.wire["solver_options"]

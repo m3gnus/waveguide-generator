@@ -776,7 +776,7 @@ def _gpu_backend_present(provision: Any) -> str | None:
 
 
 def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | None:
-    """Prepare WG-owned CPU/Metal records using the existing launcher lifecycle."""
+    """Prepare WG-owned CPU/GPU records using the existing launcher lifecycle."""
     from .beat_runtime import hardware, readiness
 
     global _preparation_in_flight, _provision_thread
@@ -787,9 +787,11 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
     prepare_gpu = False
     if str(env.get(SKIP_GPU_PROVISION_ENV_VAR, "")).strip() != "1":
         try:
-            prepare_gpu = bool(hardware.gpu_hardware()["metal"]["available"])
+            # Only PATH/directory hints here: nvidia-smi belongs in the worker.
+            prepare_gpu = any(row["available"] for row in
+                              hardware.gpu_hardware(environ=env, probe_nvidia=False).values())
         except Exception:
-            log.info("BEAT Metal hardware inventory failed; skipping GPU preparation", exc_info=True)
+            log.info("BEAT GPU hardware inventory failed; skipping GPU preparation", exc_info=True)
     if not prepare_cpu and not prepare_gpu:
         return None
     snapshot = dict(env)
@@ -797,27 +799,34 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
     def worker() -> None:
         global _preparation_in_flight, _provision_step, _gpu_stage_backend, _gpu_stage_step
         try:
+            try:
+                gpu_backend = hardware.detect_gpu_backend(environ=snapshot) if prepare_gpu else None
+            except Exception:
+                log.info("BEAT GPU hardware inventory failed; assuming none", exc_info=True)
+                gpu_backend = None
             if prepare_cpu:
                 _mark_runtimes_prepared()
                 _record_step("starting")
                 try:
                     readiness.provision_cpu(environ=snapshot, status_cb=_provision_status, step_cb=_record_step)
+                except Exception:
+                    log.warning("WG-owned BEAT CPU preparation could not run", exc_info=True)
                 finally:
                     _record_step(None)
-            if prepare_gpu:
-                verdict = readiness.backend_readiness("metal", environ=snapshot)
+            if gpu_backend is not None:
+                verdict = readiness.backend_readiness(gpu_backend, environ=snapshot)
                 if verdict.ready or verdict.state in {"failed", "no-device", "package-unusable"}:
                     return
                 _mark_runtimes_prepared()
                 with _provision_lock:
-                    _gpu_stage_backend, _gpu_stage_step = "metal", "starting"
+                    _gpu_stage_backend, _gpu_stage_step = gpu_backend, "starting"
                 _notify_readiness_listeners()
 
                 def status(message: str) -> None:
                     global _gpu_stage_step
                     with _provision_lock:
                         _gpu_stage_step = message
-                    log.info("BEAT Metal runtime provisioning: %s", message)
+                    log.info("BEAT %s runtime provisioning: %s", gpu_backend, message)
 
                 def step_changed(step: str) -> None:
                     global _gpu_stage_step
@@ -827,7 +836,8 @@ def _start_official_provisioning(env: Mapping[str, str]) -> threading.Thread | N
                     if changed:
                         _notify_readiness_listeners()
 
-                readiness.provision_metal(environ=snapshot, status_cb=status, step_cb=step_changed)
+                getattr(readiness, f"provision_{gpu_backend}")(
+                    environ=snapshot, status_cb=status, step_cb=step_changed)
         except Exception:
             log.warning("WG-owned BEAT preparation could not run", exc_info=True)
         finally:

@@ -317,11 +317,11 @@ def _warmup_beat_status() -> dict[str, Any]:
     from .official_beat import production_statuses
 
     statuses = production_statuses()
-    for backend in ("metal", "cpu"):
+    for backend in beat.BEAT_BACKENDS:
         if statuses[backend].get("available"):
             return statuses[backend]
     return {"available": False, "reason": "; ".join(
-        str(statuses[backend].get("reason", "")) for backend in ("metal", "cpu"))}
+        str(statuses[backend].get("reason", "")) for backend in beat.BEAT_BACKENDS)}
 
 
 def _beat_cpu_leads_bempp() -> bool:

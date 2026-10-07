@@ -60,13 +60,14 @@ def _axis(value: Sequence[float] | None) -> np.ndarray:
 
 
 def _backend(engine_id: str, backend: str | None) -> str:
-    named = {"beat-cpu": "cpu", "beat-metal": "metal",
-             "official-beat-cpu": "cpu", "official-beat-metal": "metal"}
+    named = {"beat-cpu": "cpu", "beat-metal": "metal", "beat-cuda": "cuda", "beat-rocm": "rocm",
+             "official-beat-cpu": "cpu", "official-beat-metal": "metal",
+             "official-beat-cuda": "cuda", "official-beat-rocm": "rocm"}
     if engine_id not in {"beat", *named}:
         raise ValueError(f"Unsupported BEAT engine ID {engine_id!r}")
     selected = backend or named.get(engine_id)
-    if selected not in {"cpu", "metal"}:
-        raise ValueError("A legacy 'beat' request requires a resolved CPU/Metal backend")
+    if selected not in {"cpu", "metal", "cuda", "rocm"}:
+        raise ValueError("A legacy 'beat' request requires a resolved CPU/Metal/CUDA/ROCm backend")
     if engine_id in named and named[engine_id] != selected:
         raise ValueError("Stored BEAT engine ID disagrees with selected backend")
     return selected

@@ -12,7 +12,7 @@ from server.solver import beat, bempp, metal, official_beat, warmup
 
 @pytest.mark.parametrize("hbb_present", [False, True])
 @pytest.mark.parametrize("official", [False, True])
-@pytest.mark.parametrize("backend", ["cpu", "metal", None])
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm", None])
 def test_boot_warmup_selects_provider_readiness(monkeypatch, official, backend, hbb_present):
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", SimpleNamespace() if hbb_present else None)
     if official:
@@ -27,7 +27,7 @@ def test_boot_warmup_selects_provider_readiness(monkeypatch, official, backend, 
     def statuses():
         probes.append("official")
         return {name: {"available": name == backend, "backend": name, "reason": "test"}
-                for name in ("cpu", "metal")}
+                for name in beat.BEAT_BACKENDS}
 
     monkeypatch.setattr(official_beat, "production_statuses", statuses)
     if official:
@@ -54,7 +54,7 @@ def test_legacy_engine_prewarm_uses_selected_readiness(monkeypatch, official):
     monkeypatch.setattr(warmup, "_warm_beat", warmed.append)
     monkeypatch.setattr(official_beat, "production_statuses", lambda: {
         "cpu": {"available": True, "backend": "cpu"},
-        "metal": {"available": False, "backend": "metal"}})
+        **{name: {"available": False, "backend": name} for name in beat.BEAT_BACKENDS if name != "cpu"}})
     if official:
         monkeypatch.setattr(beat, "beat_status", lambda: pytest.fail("legacy prewarm probed HBB"))
     else:
@@ -69,7 +69,7 @@ def test_unavailable_legacy_prewarm_respects_official_readiness(monkeypatch, off
         monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     monkeypatch.setattr(official_beat, "production_statuses", lambda: {
-        backend: {"available": False, "reason": "not proved"} for backend in ("cpu", "metal")})
+        backend: {"available": False, "reason": "not proved"} for backend in beat.BEAT_BACKENDS})
     monkeypatch.setattr(beat, "beat_status", lambda: {"available": False, "backend": None})
     warmed = []
     monkeypatch.setattr(warmup, "_warm_beat", warmed.append)

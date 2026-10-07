@@ -137,7 +137,7 @@ def test_no_device_preserves_both_existing_records(metal_provisioning, monkeypat
     root, _, _, _, _, options, before = metal_provisioning
     gpu.provision_gpu(**options)
     metal_before = (root / "state-metal.json").read_bytes()
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {
         "metal": {"available": False, "reason": "no device"},
     })
     assert gpu.provision_gpu(**dict(options, force=True))["status"] == "skipped"

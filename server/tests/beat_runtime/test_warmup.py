@@ -54,7 +54,7 @@ def runtime_factory(engine_tree, launch, monkeypatch, tmp_path):  # noqa: F811
                 cleanup.cleanup_host(record, record.key, directory, timeout=3)
 
 
-@pytest.mark.parametrize("backend", ["cpu", "metal"])
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
 def test_selected_backend_warmup_and_solve_reuse_key_threads_host(runtime_factory, backend):
     make, event_key, _ = runtime_factory
     runtime = make()
@@ -62,7 +62,7 @@ def test_selected_backend_warmup_and_solve_reuse_key_threads_host(runtime_factor
     client = runtime.get_worker(backend)
     host_pid, instance = client.worker.host_pid, client.worker.worker_instance
     key = client.worker.key
-    expected_threads = 8 if backend == "cpu" else 6
+    expected_threads = 6 if backend == "metal" else 8
     assert key["julia_threads"] == expected_threads
     assert key["environment"]["JULIA_NUM_THREADS"] == str(expected_threads)
     assert key["backend"] == backend

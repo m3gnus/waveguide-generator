@@ -114,7 +114,7 @@ def test_failed_replace_preserves_previous_record_and_cleans_scratch(directory, 
     assert sorted(p.name for p in directory.iterdir()) == ["state-cpu.json"]
 
 
-@pytest.mark.parametrize("backend", ["../escape", "", "cuda", "rocm", None])
+@pytest.mark.parametrize("backend", ["../escape", "", "vulkan", None])
 def test_invalid_backend_writes_nothing(directory, record, backend):
     with pytest.raises(ValueError, match="Unsupported"):
         state.write_state(dict(record, backend=backend))

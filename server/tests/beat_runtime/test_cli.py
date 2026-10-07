@@ -7,18 +7,18 @@ import pytest
 from server.solver.beat_runtime import assets, cli, hardware, readiness
 
 
-@pytest.mark.parametrize("backend,status,code", [("cpu", "ready", 0), ("cpu", "failed", 1),
-                                                 ("metal", "ready", 0), ("metal", "failed", 1)])
+@pytest.mark.parametrize("backend,status,code", [(backend, status, code) for backend in readiness.BACKENDS
+                                                 for status, code in (("ready", 0), ("failed", 1))])
 def test_provision_flags_and_exit_codes(tmp_path, monkeypatch, backend, status, code):
     calls = []
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": True}})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": True} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(assets, "engine_assets", lambda name: None)
 
     def action(directory, **options):
         calls.append((directory, options))
         return {"status": status}
 
-    monkeypatch.setattr(readiness, "provision_cpu" if backend == "cpu" else "provision_metal", action)
+    monkeypatch.setattr(readiness, f"provision_{backend}", action)
     root = tmp_path / "runtime"
     assert cli.main(["provision", "--backend", backend, "--force", "--retry", "--dir", str(root),
                      "--julia", "explicit", "--project", str(tmp_path / "project"),
@@ -32,7 +32,7 @@ def test_provision_flags_and_exit_codes(tmp_path, monkeypatch, backend, status, 
                                   ["--backend", "cuda", "--if-gpu"], ["--backend", "rocm", "--if-gpu"]])
 def test_hardware_gate_is_quiet_noop_without_engine(monkeypatch, capsys, args):
     monkeypatch.setattr(hardware, "detect_gpu_backend", lambda: None)
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": False}})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": False} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(assets, "engine_assets", lambda *args: pytest.fail("hardware gate bypassed"))
     assert cli.main(args) == 0
     assert capsys.readouterr().out == ""
@@ -85,13 +85,25 @@ def test_default_auto_never_provisions_cpu(monkeypatch):
     assert cli.main([]) == 0
 
 
-def test_auto_gpu_dispatches_metal(monkeypatch):
-    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda: "metal")
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": True}})
+@pytest.mark.parametrize("backend", hardware.GPU_BACKENDS)
+def test_auto_gpu_dispatches_detected_backend(monkeypatch, backend):
+    monkeypatch.setattr(hardware, "detect_gpu_backend", lambda: backend)
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": True} for name in hardware.GPU_BACKENDS})
     monkeypatch.setattr(assets, "engine_assets", lambda backend: None)
     calls = []
-    monkeypatch.setattr(readiness, "provision_metal", lambda *args, **kwargs: calls.append(kwargs) or {"status": "ready"})
+    monkeypatch.setattr(readiness, f"provision_{backend}", lambda *args, **kwargs: calls.append(kwargs) or {"status": "ready"})
     assert cli.main(["--if-gpu"]) == 0
+    assert len(calls) == 1
+
+
+def test_nvidia_gate_provisions_cuda_when_present(monkeypatch):
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {name: {"available": name == "cuda"} for name in hardware.GPU_BACKENDS})
+    monkeypatch.setattr(assets, "engine_assets", lambda backend: None)
+    calls = []
+    monkeypatch.setattr(readiness, "provision_cuda", lambda *a, **k:
+                        calls.append(k) or {"status": "ready"})
+    assert cli.main(["--if-nvidia-gpu"]) == 0
     assert len(calls) == 1
 
 

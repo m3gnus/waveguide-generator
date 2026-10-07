@@ -291,7 +291,7 @@ the model you happen to display in the viewport.
    | **Metal** | Apple GPU; Normal and axial CAD sources, and passive cardioid. An older installed package without per-source axes refuses CAD axial. |
    | **BEMPP** | Imported CAD requires OpenCL assembly and no free rim away from mirror planes. CAD axial is solved along each source's axis; an older installed package without per-source axes refuses it. |
    | **BEAT · CPU** | Requires its provisioned Julia runtime. Can solve imported CAD; passive cardioid is refused. |
-   | **BEAT · Metal / CUDA / ROCm** | Requires the matching available GPU/runtime. CUDA and ROCm are not qualified on real hardware yet. Choose Accurate for CUDA/ROCm CAD solves; explicit BEAT · Metal also accepts CAD in Fast. Passive cardioid is refused. |
+   | **BEAT · Metal / CUDA / ROCm** | Requires the matching available GPU/runtime. CUDA and ROCm, including the fork route (`WG2_BEAT_PROVIDER=official`), are **not hardware-qualified**. The fork route offers them on Linux and Windows. Choose Accurate for CUDA/ROCm CAD solves; explicit BEAT · Metal also accepts CAD in Fast. Passive cardioid is refused. |
 
    AUTO in Fast skips BEAT GPU engines for CAD. Read the solver row's reason
    when it is unavailable: the actual returned domain, source motion and runtime

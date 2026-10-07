@@ -52,7 +52,7 @@ def fixture_identity() -> str:
 
 def build_request(mesh: Path, *, backend: str = "cpu") -> dict:
     """One source, frequency and observation; paths are worker-local absolutes."""
-    if backend not in {"cpu", "metal"}:
+    if backend not in {"cpu", "metal", "cuda", "rocm"}:
         raise ValueError(f"Unsupported probe backend: {backend!r}")
     return {
         "schema_version": 1,

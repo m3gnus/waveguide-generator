@@ -13,7 +13,7 @@ from server.solver.beat_runtime import hardware, provider, readiness
 @pytest.fixture
 def official(monkeypatch, tmp_path):
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": True}})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": name == "metal"} for name in hardware.GPU_BACKENDS})
     monkeypatch.setenv(provider.PROVIDER_ENV, "official")
     for name, value in (("_provision_thread", None), ("_provision_step", None),
                         ("_preparation_in_flight", False), ("_runtimes_prepared", False),
@@ -48,7 +48,10 @@ def test_alternative_does_not_change_solve_api(official, monkeypatch):
     assert beat._load_readiness_api() is sentinel
 
 
-def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypatch, tmp_path):
+@pytest.mark.parametrize("backend,system", [("metal", "Darwin"), ("cuda", "Windows"), ("rocm", "Linux")])
+def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypatch, tmp_path, backend, system):
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {name: {"available": name == backend} for name in hardware.GPU_BACKENDS})
     begun, finish = threading.Event(), threading.Event()
     ready = set()
     observed = []
@@ -66,32 +69,32 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
         ready.add("cpu")
         return {"status": "ready"}
 
-    def metal(**kwargs):
-        calls.append(("metal", kwargs["environ"], threading.current_thread().name))
+    def gpu(**kwargs):
+        calls.append((backend, kwargs["environ"], threading.current_thread().name))
         kwargs["step_cb"]("offline")
         kwargs["status_cb"]("offline")
-        status = _official_runtime_statuses()["metal"]
+        status = _official_runtime_statuses()[backend]
         assert not status["available"] and status["state"] == "provisioning"
         assert "offline" in status["reason"]
         return {"status": "failed"}
 
     monkeypatch.setattr(readiness, "backend_readiness", verdict)
     monkeypatch.setattr(readiness, "provision_cpu", cpu)
-    monkeypatch.setattr(readiness, "provision_metal", metal)
+    monkeypatch.setattr(readiness, f"provision_{backend}", gpu)
     monkeypatch.setattr(facade, "_import", lambda name: pytest.fail("HBB import"))
-    listener = lambda: observed.append((facade.cpu_preparation_in_flight(), facade.cpu_provisioning_step(), facade.gpu_preparation_reason("metal")))
+    listener = lambda: observed.append((facade.cpu_preparation_in_flight(), facade.cpu_provisioning_step(), facade.gpu_preparation_reason(backend)))
     facade.add_readiness_listener(listener)
     env = {provider.PROVIDER_ENV: "official", "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "runtime")}
     try:
-        thread = facade.start_cpu_provisioning(environ=env, system="Darwin")
+        thread = facade.start_cpu_provisioning(environ=env, system=system)
         assert thread is not None and begun.wait(2)
         assert facade.cpu_runtime_readiness(None).state == "provisioning"
         assert _official_runtime_statuses()["cpu"]["state"] == "provisioning"
-        assert facade.start_cpu_provisioning(environ=env, system="Darwin") is thread
+        assert facade.start_cpu_provisioning(environ=env, system=system) is thread
         finish.set()
         thread.join(2)
         assert not thread.is_alive() and not facade.cpu_preparation_in_flight()
-        assert [row[0] for row in calls] == ["cpu", "metal"]
+        assert [row[0] for row in calls] == ["cpu", backend]
         assert all(row[1] == env and row[2] == facade.PROVISION_THREAD_NAME for row in calls)
         assert facade.cpu_runtime_readiness(None).ready
         assert any(row[1] == "probe" for row in observed)
@@ -100,6 +103,37 @@ def test_background_stages_publish_progress_and_preserve_cpu(official, monkeypat
     finally:
         finish.set()
         facade.remove_readiness_listener(listener)
+
+
+@pytest.mark.parametrize("failure", ["detection", "cpu"])
+def test_background_failure_does_not_hide_other_stage(official, monkeypatch, failure):
+    calls = []
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {name: {"available": name == "cuda"} for name in hardware.GPU_BACKENDS})
+    monkeypatch.setattr(readiness, "backend_readiness", lambda *a, **k:
+                        readiness.BackendReadiness(False, "unprovisioned", "mock"))
+
+    def detect(**kwargs):
+        assert threading.current_thread().name == facade.PROVISION_THREAD_NAME
+        if failure == "detection":
+            raise OSError("inventory failed")
+        return "cuda"
+
+    def cpu(**kwargs):
+        calls.append("cpu")
+        if failure == "cpu":
+            raise OSError("CPU offline")
+        return {"status": "ready"}
+
+    monkeypatch.setattr(hardware, "detect_gpu_backend", detect)
+    monkeypatch.setattr(readiness, "provision_cpu", cpu)
+    monkeypatch.setattr(readiness, "provision_cuda", lambda **kwargs:
+                        calls.append("cuda") or {"status": "ready"})
+    thread = facade.start_cpu_provisioning(environ={provider.PROVIDER_ENV: "official"}, system="Windows")
+    assert thread is not None
+    thread.join(2)
+    assert not thread.is_alive() and not facade.cpu_preparation_in_flight()
+    assert calls == (["cpu"] if failure == "detection" else ["cpu", "cuda"])
 
 
 @pytest.mark.parametrize("state", ["ready", "failed", "package-unusable"])

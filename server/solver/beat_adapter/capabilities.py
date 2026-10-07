@@ -71,7 +71,7 @@ EXPECTED_REFUSALS = frozenset({
     "symmetry.xy", "symmetry.x", "symmetry.y",
     *(f"ground.{axis}+reduction" for axis in "xyz"),
     *(f"frequencies.{name}" for name in ("empty", "duplicate", "nonpositive", "nonfinite", "boolean")),
-    *(f"quadrature.{backend}.{order}" for backend in ("cpu", "metal") for order in (3, 6, 8)),
+    *(f"quadrature.{backend}.{order}" for backend in ("cpu", "metal", "cuda", "rocm") for order in (3, 6, 8)),
     "source.axial.[0, 0, 0]", "source.normal.[0, 0, 1]", "source.radial.None",
     *(f"feature.{name}" for name in DECLARED_FEATURES),
     *(f"singular.float32.{order}" for order in (0, 5, 12, 13)),
@@ -100,12 +100,13 @@ def capability_report() -> dict[str, Any]:
     explicit; the observed refusal set must equal the declared acceptance set.
     """
     probes: dict[str, Callable[[], request.CompiledRequest]] = {}
-    for engine in ("beat-cpu", "beat-metal", "official-beat-cpu", "official-beat-metal"):
+    for engine in ("beat-cpu", "beat-metal", "beat-cuda", "beat-rocm",
+                   "official-beat-cpu", "official-beat-metal", "official-beat-cuda", "official-beat-rocm"):
         for precision in ("float32", "float64"):
             probes[f"route.{engine}.{precision}"] = (
                 lambda engine=engine, precision=precision:
                 probe_request(engine_id=engine, precision=precision))
-    for backend in (None, "cpu", "metal"):
+    for backend in (None, "cpu", "metal", "cuda", "rocm"):
         probes[f"route.beat.{backend}"] = lambda backend=backend: probe_request(engine_id="beat", backend=backend)
     for symmetry in ("full", "off", "yz", "xz", "yz+xz", "xy", "x", "y"):
         probes[f"symmetry.{symmetry}"] = lambda symmetry=symmetry: probe_request(symmetry=symmetry)
@@ -118,7 +119,7 @@ def capability_report() -> dict[str, Any]:
                                "nonfinite": [float("nan")], "boolean": [True],
                                "float32_alias": [500., 500.000001]}.items():
         probes[f"frequencies.{label}"] = lambda frequencies=frequencies: probe_request(frequencies_hz=frequencies)
-    for backend in ("cpu", "metal"):
+    for backend in ("cpu", "metal", "cuda", "rocm"):
         for order in (1, 2, 3, 4, 6, 8):
             probes[f"quadrature.{backend}.{order}"] = (
                 lambda backend=backend, order=order:

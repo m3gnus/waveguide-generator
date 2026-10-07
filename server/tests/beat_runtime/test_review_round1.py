@@ -120,7 +120,8 @@ def test_backend_manifest_scope_preserves_cpu_after_metal_instantiate_failure(pr
     manifest.write_text("before")
     assert readiness.backend_readiness("cpu", root, **query).ready
     before_metal = identity.engine_fingerprint(engine, backend="metal")
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": True, "reason": "fixture"}})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {name: {"available": name == "metal", "reason": "fixture"}
+                                                       for name in hardware.GPU_BACKENDS})
 
     def fail(*args, **kwargs):
         manifest.write_text("changed Metal manifest bytes")
@@ -134,10 +135,11 @@ def test_backend_manifest_scope_preserves_cpu_after_metal_instantiate_failure(pr
 
 
 @pytest.mark.parametrize("operation", ["provision", "clear-cache"])
-def test_cross_process_state_stamp_refreshes_live_registry(selected, monkeypatch, tmp_path, operation):
+@pytest.mark.parametrize("state_backend", ["cpu", "cuda", "rocm"])
+def test_cross_process_state_stamp_refreshes_live_registry(selected, monkeypatch, tmp_path, operation, state_backend):
     root = paths.runtime_dir()
     root.mkdir(parents=True)
-    target = root / "state-cpu.json"
+    target = root / f"state-{state_backend}.json"
     target.write_text('{"ready": false}')
     computations = []
 
@@ -227,15 +229,17 @@ def test_cwd_independent_provision_command_runs_from_unrelated_directory(selecte
 def test_cpu_only_host_starts_no_gpu_check_thread_or_notifications(selected, monkeypatch, system):
     monkeypatch.setattr(readiness, "backend_readiness", lambda *args, **kwargs:
                         readiness.BackendReadiness(True, "ready", "ready CPU"))
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {"metal": {"available": False}})
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {"metal": {"available": False}})
     monkeypatch.setattr(facade, "_notify_readiness_listeners", lambda: pytest.fail("no work must not notify"))
     assert facade.start_cpu_provisioning(system=system) is None
 
 
 @pytest.mark.parametrize("backend", ["cuda", "rocm"])
-def test_unsupported_backend_explicit_cli_exit(backend, capsys):
-    assert cli.main(["--backend", backend]) == 1
-    assert "not supported in this build" in capsys.readouterr().out
+def test_absent_gpu_explicit_cli_skips_without_install(backend, capsys, monkeypatch):
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {name: {"available": False} for name in hardware.GPU_BACKENDS})
+    assert cli.main(["--backend", backend]) == 0
+    assert "no eligible hardware" in capsys.readouterr().out
 
 
 def test_cross_process_provisioning_lock_prevents_interrupted_verdict(proved_cpu, monkeypatch):

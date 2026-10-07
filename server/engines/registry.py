@@ -399,7 +399,7 @@ def _official_runtime_statuses() -> dict[str, dict[str, Any]]:
         return {backend: {"available": False, "state": "provisioning", "backend": backend,
                           "version": engine_version(), "reason": cpu.reason if backend == "cpu" else (
                               beat_cpu_runtime.gpu_preparation_reason(backend) or "Waiting for BEAT CPU preparation.")}
-                for backend in ("cpu", "metal")}
+                for backend in ("cpu", "metal", "cuda", "rocm")}
     return production_statuses()
 
 
@@ -424,7 +424,7 @@ def _beat_row_updates(
     if official_selected():
         return {f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
                 for backend, status in _official_runtime_statuses().items()
-                if backend in {"cpu", "metal"}}
+                if backend in {"cpu", "metal", "cuda", "rocm"}}
 
     updates = {"beat-cpu": cpu_backend_status(package)}
     if beat_cpu_runtime.cpu_preparation_in_flight():
@@ -992,7 +992,7 @@ class EngineRegistry:
 
         root = paths.runtime_dir()
         stamp = []
-        for name in ("state-cpu.json", "state-metal.json", "julia.json"):
+        for name in ("state-cpu.json", "state-metal.json", "state-cuda.json", "state-rocm.json", "julia.json"):
             try:
                 info = (root / name).stat()
                 stamp.append((info.st_ino, info.st_mtime_ns, info.st_size))
@@ -1050,7 +1050,7 @@ class EngineRegistry:
                 if selected or package is not None:
                     updates = ({f"beat-{backend}": (bool(status["available"]), str(status["reason"]))
                                 for backend, status in self.official_runtime_statuses.items()
-                                if backend in {"cpu", "metal"}} if selected else
+                                if backend in {"cpu", "metal", "cuda", "rocm"}} if selected else
                                await asyncio.to_thread(_beat_row_updates, package, _cpu_backend_status))
                     async with self._lock:
                         if self._cache is not None and not self._listener_removed:

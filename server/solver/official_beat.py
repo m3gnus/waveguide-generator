@@ -49,7 +49,7 @@ def production_statuses() -> dict[str, dict[str, Any]]:
 
     statuses = readiness.beat_backend_statuses()
     installed_version = engine_version()
-    for backend in ("cpu", "metal"):
+    for backend in ("cpu", "metal", "cuda", "rocm"):
         statuses[backend] = dict(statuses[backend], surface_traces=True, version=installed_version)
     return statuses
 

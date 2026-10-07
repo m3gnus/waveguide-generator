@@ -28,7 +28,7 @@ _IDENTITY_FIELDS = (
     "probe_contract", "probe_fixture_identity",
 )
 _STATUSES = ("in_progress", "ready", "failed", "skipped")
-_BACKENDS = ("cpu", "metal")
+_BACKENDS = ("cpu", "metal", "cuda", "rocm")
 _WINDOWS = os.name == "nt"
 _REPLACE_ATTEMPTS = 5
 
@@ -140,7 +140,7 @@ def read_state(directory: Path | None = None, *, backend: str) -> dict[str, Any]
 
 
 def read_backend_states(directory: Path | None = None) -> dict[str, dict[str, Any]]:
-    """Return valid CPU/Metal records independently, without a legacy mirror."""
+    """Return valid backend records independently, without a legacy mirror."""
     return {backend: record for backend in _BACKENDS
             if (record := read_state(directory, backend=backend)) is not None}
 

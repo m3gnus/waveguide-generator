@@ -1,7 +1,32 @@
 # Review slices
 
-All paths are relative to the WG repository root. Changes are additive; no
-production caller adopts beat-engine, no pins change, and HBB state is untouched.
+All paths are relative to the WG repository root. The optional official
+provider uses beat-engine; pins and HBB state are unchanged.
+
+- **Fork CUDA/ROCm enablement (2026-10-07):** Reverses the earlier owner's
+  CPU/Metal-only decision and CUDA/ROCm "not supported in this build" refusal.
+  On Linux/Windows, NVIDIA detection uses `nvidia-smi -L` (15 s timeout); ROCm
+  uses existing runtime directories or `rocminfo`/`hipinfo`/`hipInfo` on PATH.
+  Detection and AUTO order match HBB: CUDA, ROCm, Metal, CPU. Launch-time GPU
+  preparation uses cheap hints before verified detection in the worker.
+  Provisioning uses `julia_cuda`/`julia_rocm`, a shared provisioning lock with
+  per-backend state, GPU disk budgets, `Pkg.instantiate()`, `Pkg.precompile()`,
+  and CUDA/AMDGPU device/artifact checks. A matching Float32 1 kHz compiled-system request proves readiness.
+  CUDA/ROCm's source driver is accepted without compiled-bundle evidence;
+  their first solve warms slower. CLI GPU/NVIDIA gates, worker keys, adapter
+  engine IDs, capability rows, refresh and warm-up now include both families.
+  macOS does not offer them. CUDA/ROCm CAD remains Accurate-only; HBB remains
+  the default with unchanged behaviour. CUDA/ROCm on this fork route are
+  **not hardware-qualified**; mocked unit/integration tests and existing CI
+  qualify enablement, with no real-GPU qualification gate. Earlier entries
+  below describe the superseded decision.
+  Validation with the pinned Python via `scripts/run_tests.py`, in focused
+  batches below two minutes each: 2,099 passed, 7 skipped, 0 failed. Runtime
+  tests excluding warm-up: 1,126 passed, 7 skipped; warm-up, all adapter tests,
+  official bridge, provider warm-up selection and targeted CAD routing: 671
+  passed; required CPU-runtime, solver, registry, bootstrap and Windows
+  sandbox/installer tests: 302 passed. The seven skips require native Windows
+  APIs. No Julia runtime, real solve, GPU qualification or provisioning ran.
 
 - **Design PR 22 — the host survives a packaged Windows Quit (2026-10-07):**
   `spawn.py`, `host.py`, `retire.py` (new); `launchers/statusapp/controller.py`

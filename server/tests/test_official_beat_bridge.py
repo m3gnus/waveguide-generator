@@ -187,7 +187,7 @@ def runtime(monkeypatch, tmp_path):
     assert all(not path.exists() for path in state.paths)
 
 
-@pytest.mark.parametrize("backend", ["cpu", "metal"])
+@pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
 @pytest.mark.parametrize("motion", ["normal", "axial"])
 @pytest.mark.parametrize("adaptive", [False, True])
 def test_parametric_production(runtime, backend, motion, adaptive):
@@ -219,9 +219,21 @@ def test_parametric_production(runtime, backend, motion, adaptive):
     assert "terminate" not in runtime.calls
 
 
+@pytest.mark.parametrize("available,selected", [(("cuda", "rocm", "metal", "cpu"), "cuda"),
+                                                 (("rocm", "metal", "cpu"), "rocm"),
+                                                 (("metal", "cpu"), "metal"), (("cpu",), "cpu")])
+def test_auto_production_uses_hbb_backend_order(runtime, monkeypatch, available, selected):
+    monkeypatch.setattr(readiness, "backend_readiness", lambda backend, *a, **k:
+                        readiness.BackendReadiness(backend in available, "ready", "mock proof"))
+    response = beat.solve_beat_from_msh_text(MESH.read_text(), _context())
+    assert response["metadata"]["beat_backend"] == selected
+    assert runtime.requests[0]["solver_options"]["bem_backend"] == selected
+
+
 @pytest.mark.parametrize("adaptive", [False, True])
 @pytest.mark.parametrize("axial", [False, True])
-def test_imported_production(runtime, adaptive, axial):
+@pytest.mark.parametrize("backend", ["cpu", "cuda", "rocm"])
+def test_imported_production(runtime, adaptive, axial, backend):
     msh = cad.MESH_Z if axial else cad.MESH
     request = cad._request(drive_channels=[
         {"id": "left", "source_ids": ["source-a", "source-b"], "motion": "axial" if axial else "normal"},
@@ -234,7 +246,7 @@ def test_imported_production(runtime, adaptive, axial):
         request.options.num_frequencies = 24
     frames = []
     result = beat_imported.solve_imported_beat_from_msh_text(
-        msh, request, cad._record(msh_text=msh), backend="cpu",
+        msh, request, cad._record(msh_text=msh), backend=backend,
         result_callback=lambda i, frame: frames.append((i, frame)),
     )
     assert result["channel_order"] == ["left", "right"]
@@ -465,7 +477,7 @@ def test_registry_official_readiness_without_hbb(runtime, monkeypatch):
     from server.engines.registry import EngineRegistry, detect_engines
 
     async def scenario():
-        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")))
+        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal", "beat-cuda", "beat-rocm")))
         try:
             rows = await engines.capabilities()
             assert all(row.available and row.field_traces for row in rows)
@@ -725,7 +737,7 @@ def test_selected_registry_reports_official_version(runtime, monkeypatch):
     monkeypatch.setattr(bridge, "version", lambda distribution: "1.2.3" if distribution == "beat-engine" else None)
 
     async def scenario():
-        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal")))
+        engines = EngineRegistry(cpu_refresh=True, detector=lambda: detect_engines(names=("beat-cpu", "beat-metal", "beat-cuda", "beat-rocm")))
         try:
             assert all(row.version == "1.2.3" for row in await engines.capabilities())
             await engines._refresh_cpu_backend()

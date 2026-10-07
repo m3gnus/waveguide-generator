@@ -19,7 +19,7 @@ def _completion_valid(completion: Mapping[str, Any], *, backend: str = "cpu") ->
         completion.get("finite") is True and completion.get("nonzero") is True
         and type(completion.get("terminal_count")) is int
         and completion["terminal_count"] == 1
-        and (backend != "metal" or completion.get("bem_backend") == "metal")
+        and (backend == "cpu" or completion.get("bem_backend") == backend)
     )
 
 
@@ -56,7 +56,7 @@ def _failure(
     with suppress(Exception):
         if not paths.is_link(directory):
             record = state.write_state(record, directory)
-    label = "CPU" if record["backend"] == "cpu" else "Metal"
+    label = {"cpu": "CPU", "metal": "Metal", "cuda": "CUDA", "rocm": "ROCm"}[record["backend"]]
     report(f"BEAT {label} runtime provisioning failed: {exc}")
     return record
 
@@ -80,9 +80,9 @@ def _provision_backend(
     julia_threads, environment and status_cb and returns completion evidence.
     Its contract/fixture identity must be supplied for reuse and a ready record.
     """
-    if backend not in {"cpu", "metal"}:
+    if backend not in {"cpu", "metal", "cuda", "rocm"}:
         raise ValueError(f"Unsupported provisioning backend: {backend!r}")
-    label = "CPU" if backend == "cpu" else "Metal"
+    label = {"cpu": "CPU", "metal": "Metal", "cuda": "CUDA", "rocm": "ROCm"}[backend]
     report = julia_steps.guarded_status(status_cb)
     transition = julia_steps.guarded_status(step_cb) if step_cb is not None else lambda step: None
     env = dict(os.environ if environ is None else environ)

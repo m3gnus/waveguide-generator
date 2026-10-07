@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from server.solver.beat_runtime import assets, gpu, hardware, installer, locks, probe, provision, state, threads
+from server.solver.beat_runtime import assets, gpu, hardware, installer, locks, manager, probe, provision, readiness, state, threads
 from server.tests.beat_runtime.test_probe import COMPLETED, FakeWorker, result
 
 
@@ -18,10 +18,10 @@ def metal_provisioning(cpu_provisioning, monkeypatch):
     (project / "Project.toml").write_text("fake Metal project")
     metal = assets.EngineAssets(cpu.root, project, cpu.system_solver, cpu.source_solver)
     monkeypatch.setattr(assets, "engine_assets", lambda backend: metal if backend == "metal" else cpu)
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: {
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: {
         "metal": {"available": True, "reason": "Apple Silicon"},
-        "cuda": {"available": False, "reason": hardware.UNSUPPORTED},
-        "rocm": {"available": False, "reason": hardware.UNSUPPORTED},
+        "cuda": {"available": False, "reason": "no device"},
+        "rocm": {"available": False, "reason": "no device"},
     })
     workers = []
 
@@ -44,8 +44,8 @@ def metal_provisioning(cpu_provisioning, monkeypatch):
 
 
 @pytest.mark.parametrize("backend", [None, "metal", "cuda", "rocm"])
-def test_no_device_or_unsupported_backend_does_nothing(tmp_path, monkeypatch, backend):
-    monkeypatch.setattr(hardware, "gpu_hardware", lambda: hardware_rows())
+def test_no_device_does_nothing(tmp_path, monkeypatch, backend):
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: hardware_rows())
 
     def forbidden(*args, **kwargs):
         raise AssertionError("no-device path attempted provisioning")
@@ -56,13 +56,13 @@ def test_no_device_or_unsupported_backend_does_nothing(tmp_path, monkeypatch, ba
     root = tmp_path / "not-created"
     skipped = gpu.provision_gpu(root, backend=backend, status_cb=forbidden)
     assert skipped["status"] == "skipped"
-    assert skipped["reason"] == (hardware.UNSUPPORTED if backend in {"cuda", "rocm"} else "no device")
+    assert skipped["reason"] == "no device"
     assert not root.exists()
 
 
 def hardware_rows():
     return {backend: {"available": False, "reason": reason} for backend, reason in (
-        ("metal", "no device"), ("cuda", hardware.UNSUPPORTED), ("rocm", hardware.UNSUPPORTED),
+        ("metal", "no device"), ("cuda", "no device"), ("rocm", "no device"),
     )}
 
 
@@ -153,3 +153,90 @@ def test_force_retry_and_guarded_callback(metal_provisioning, capsys, flag):
 def test_unknown_backend_is_refused(tmp_path):
     with pytest.raises(ValueError, match="Unknown GPU backend"):
         gpu.provision_gpu(tmp_path, backend="cpu")
+
+
+@pytest.mark.parametrize("backend,module,label", [("cuda", "CUDA", "CUDA"), ("rocm", "AMDGPU", "ROCm")])
+def test_source_gpu_provision_readiness_and_launch_identity(cpu_provisioning, monkeypatch, backend, module, label):
+    root, cpu, julia, calls, options = cpu_provisioning
+    class CpuWorker(FakeWorker):
+        def __init__(self, **launch):
+            super().__init__([result(), COMPLETED])
+
+        def terminate(self):
+            pass
+
+    cpu_setup = {key: value for key, value in options.items()
+                 if key not in {"probe", "probe_contract", "probe_fixture_identity"}}
+    readiness.provision_cpu(root, worker_factory=CpuWorker, **cpu_setup)
+    before = (root / "state-cpu.json").read_bytes()
+    project = cpu.root / f"julia_{backend}"
+    project.mkdir()
+    (project / "Project.toml").write_text(f"fixture {backend} project")
+    engine = assets.EngineAssets(cpu.root, project, cpu.system_solver, cpu.source_solver)
+    monkeypatch.setattr(assets, "engine_assets", lambda name: cpu if name == "cpu" else engine)
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {name: {"available": name == backend, "reason": "inventory"}
+                         for name in hardware.GPU_BACKENDS})
+    workers, budgets = [], []
+
+    class Worker(FakeWorker):
+        def __init__(self, **launch):
+            super().__init__([result(backend=backend), COMPLETED])
+            self.worker_info["backends"][backend] = {"available": True}
+            self.worker_info["compiled_worker"] = {
+                "driver_mode": "source", "fallback_reason": "backend_has_no_compiled_bundle"}
+            self.launch, self.terminated = launch, False
+            workers.append(self)
+
+        def terminate(self):
+            self.terminated = True
+
+    def ensure(*args, **kwargs):
+        budgets.append(kwargs["required_bytes"])
+        return str(julia)
+
+    setup = {key: value for key, value in options.items()
+             if key not in {"probe", "probe_contract", "probe_fixture_identity"}}
+    calls.clear()
+    saved = getattr(readiness, f"provision_{backend}")(root, worker_factory=Worker, ensure_julia=ensure, **setup)
+    assert saved["status"] == "ready", saved
+    assert budgets == [installer.GPU_REQUIRED_FREE_BYTES]
+    assert [code for code, _ in calls] == ["using Pkg; Pkg.instantiate()", "using Pkg; Pkg.precompile()",
+                                          f"import {module}; {module}.versioninfo(); exit({module}.functional() ? 0 : 1)"]
+    assert all(call["project"] == project for _, call in calls)
+    assert (root / "state-cpu.json").read_bytes() == before
+    assert workers[0].terminated and workers[0].stream.closed
+    assert workers[0].launch["backend_label"] == label
+    assert workers[0].request["solver_options"]["precision"] == "float32"
+    assert workers[0].request["solver_options"]["bem_backend"] == backend
+    query = {key: setup[key] for key in ("environ", "julia_executable", "julia_threads")}
+    assert readiness.backend_readiness(backend, root, **query).ready
+    key = manager.resolve_key(backend, environment=query["environ"], julia_executable=str(julia), julia_threads=3)
+    assert key["backend"] == backend and key["julia_project"] == str(project)
+    assert key["environment"]["BLAB_BEAT_ENGINE_GPU_BACKEND"] == backend
+    # Matching records are reused without new artifacts or worker launches.
+    assert gpu.provision_gpu(root, backend=backend, worker_factory=Worker, **setup) == saved
+    assert len(workers) == 1
+    saved["completion"]["bem_backend"] = "cpu"
+    state.write_state(saved, root)
+    assert not readiness.backend_readiness(backend, root, **query).ready
+    assert readiness.backend_readiness("cpu", root, **query).ready
+
+
+@pytest.mark.parametrize("backend", ["cuda", "rocm"])
+def test_gpu_artifact_failure_preserves_cpu_and_records_backend(cpu_provisioning, monkeypatch, backend):
+    root, _, _, _, options = cpu_provisioning
+    provision.provision_cpu(root, **options)
+    before = (root / "state-cpu.json").read_bytes()
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs:
+                        {name: {"available": name == backend, "reason": "inventory"}
+                         for name in hardware.GPU_BACKENDS})
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("GPU artifacts offline")
+
+    failed = gpu.provision_gpu(root, backend=backend, **dict(options, run_step=fail))
+    assert failed["status"] == "failed" and failed["backend"] == backend
+    assert "offline" in failed["error"]
+    assert state.read_state(root, backend=backend) == failed
+    assert (root / "state-cpu.json").read_bytes() == before

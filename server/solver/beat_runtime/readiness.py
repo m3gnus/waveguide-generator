@@ -1,4 +1,4 @@
-"""Backend-local compiled proof, matched against the current launch identity."""
+"""Backend-local compiled-system proof, matched against the current launch identity."""
 
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ def probe_cache_clear(*, notify: bool = True, directory: Path | None = None, per
     """
     if persist:
         root = paths.runtime_dir() if directory is None else paths.checked_root(directory)
-        for name in ("state-cpu.json", "state-metal.json", "julia.json"):
+        for name in ("state-cpu.json", "state-metal.json", "state-cuda.json", "state-rocm.json", "julia.json"):
             target = root / name
             if paths.is_link(root) or paths.is_link(target):
                 raise ValueError("Linked readiness state refused")
@@ -100,13 +100,12 @@ def backend_readiness(
     """Static engine catalogs and hardware eligibility never establish ready."""
     if backend not in BACKENDS:
         raise ValueError(f"Unknown BEAT backend: {backend!r}")
-    if backend in {"cuda", "rocm"}:
-        return BackendReadiness(False, "unsupported", hardware.UNSUPPORTED)
-    if backend == "metal":
+    if backend in hardware.GPU_BACKENDS:
         try:
-            facts = hardware.gpu_hardware()[backend]
+            facts = (hardware.gpu_hardware() if options.get("environ") is None
+                     else hardware.gpu_hardware(environ=options["environ"]))[backend]
         except Exception as exc:
-            return BackendReadiness(False, "detection-failed", f"BEAT Metal hardware detection failed: {exc}")
+            return BackendReadiness(False, "detection-failed", f"BEAT {backend} hardware detection failed: {exc}")
         if not facts["available"]:
             return BackendReadiness(False, "no-device", str(facts["reason"]))
     try:
@@ -135,7 +134,7 @@ def backend_readiness(
         if not selected and not (version == provision.installer.JULIA_VERSION or version.startswith(f"{provision.installer.JULIA_VERSION}-")):
             return BackendReadiness(False, "stale", "WG's portable Julia needs an upgrade; provision again.")
     if provision._ready(record, expected):
-        return BackendReadiness(True, "ready", f"BEAT {backend} runtime proved by a matching compiled 1 kHz solve.")
+        return BackendReadiness(True, "ready", f"BEAT {backend} runtime proved by a matching compiled-system 1 kHz solve.")
     reason = "Stored identity or compiled proof is stale; provision again." if record else "Runtime has not been provisioned and proved."
     return BackendReadiness(False, "stale" if record else "unprovisioned", f"BEAT {backend}: {reason}")
 
@@ -152,7 +151,7 @@ def beat_backend_statuses(directory: Path | None = None, **options: Any) -> dict
 
 def beat_engine_status(directory: Path | None = None, **options: Any) -> dict[str, Any]:
     statuses = beat_backend_statuses(directory, **options)
-    return next((statuses[name] for name in ("metal", "cpu") if statuses[name]["available"]), statuses["cpu"])
+    return next((statuses[name] for name in (*hardware.GPU_BACKENDS, "cpu") if statuses[name]["available"]), statuses["cpu"])
 
 
 def _engine_worker(**launch: Any) -> Any:
@@ -199,5 +198,19 @@ def provision_cpu(
 def provision_metal(directory: Path | None = None, **options: Any) -> dict[str, Any]:
     try:
         return gpu.provision_gpu(directory, backend="metal", **options)
+    finally:
+        probe_cache_clear()
+
+
+def provision_cuda(directory: Path | None = None, **options: Any) -> dict[str, Any]:
+    try:
+        return gpu.provision_gpu(directory, backend="cuda", **options)
+    finally:
+        probe_cache_clear()
+
+
+def provision_rocm(directory: Path | None = None, **options: Any) -> dict[str, Any]:
+    try:
+        return gpu.provision_gpu(directory, backend="rocm", **options)
     finally:
         probe_cache_clear()

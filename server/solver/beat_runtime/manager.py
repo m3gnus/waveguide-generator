@@ -26,8 +26,8 @@ def resolve_key(backend: str, *, julia_executable: str | None = None,
     compiled_request_policy selects the WG adapter identity; the opt-in
     official_beat.py prototype is the default policy until callers select one.
     """
-    if backend not in {"cpu", "metal"}:
-        raise ValueError("BEAT runtime supports CPU and Metal")
+    if backend not in {"cpu", "metal", "cuda", "rocm"}:
+        raise ValueError("BEAT runtime supports CPU, Metal, CUDA and ROCm")
     env = dict(os.environ if environment is None else environment)
     executable = discovery.discover_julia(julia_executable, environ=env)
     if executable is None:
@@ -40,6 +40,7 @@ def resolve_key(backend: str, *, julia_executable: str | None = None,
         env["JULIA_PROJECT"] = str(julia_steps.julia_environment(Path(jp), env)[0])
     count = threads.resolve_julia_threads(backend, julia_threads)
     env["JULIA_NUM_THREADS"] = str(count)
+    env["BLAB_BEAT_ENGINE_GPU_BACKEND"] = backend
     # The same destination checks provisioning uses: project and every depot
     # entry, HBB refused, relative entries made absolute, empty entries refused.
     project, env = julia_steps.julia_environment(
@@ -57,7 +58,7 @@ def resolve_key(backend: str, *, julia_executable: str | None = None,
         "julia_project": str(project),
         "julia_sysimage": str(sysimage) if sysimage else None, "julia_threads": count,
         "engine_fingerprint": identity.engine_fingerprint(
-            engine, julia_project=project, julia_sysimage=sysimage, cache=True),
+            engine, backend=backend, julia_project=project, julia_sysimage=sysimage, cache=True),
         "runtime_fingerprint": identity.runtime_fingerprint(
             compiled_request_policy=policy, cache=True),
         "environment": keyed, "depots": depots,

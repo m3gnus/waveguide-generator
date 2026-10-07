@@ -36,7 +36,7 @@ WORKER_INFO = {
     "contracts": {"system_request": [1], "compiled_system": [1], "system_result": [2]},
     "operations": ["solve"], "precisions": ["float32"], "solve_kinds": ["exterior_bem"],
     "request_transports": ["file"], "phasor_conventions": ["exp(-i omega t)"],
-    "backends": {"cpu": {"available": True}, "metal": {"available": True}},
+    "backends": {name: {"available": True} for name in ("cpu", "metal", "cuda", "rocm")},
 }
 
 
@@ -73,6 +73,7 @@ class FakeWorker:
 @pytest.mark.parametrize("backend,dtype,real,imag", [
     ("cpu", "complex64", 1.0, -2.0), ("metal", "complex64", 0.0, 2.0),
     ("cpu", "complex64", 2.0, 0.0),
+    ("cuda", "complex64", 1.0, -2.0), ("rocm", "complex64", 1.0, -2.0),
 ])
 def test_compiled_probe_stages_tiny_request_and_completion(tmp_path, backend, dtype, real, imag):
     worker = FakeWorker([{"type": "status", "message": "solving"},

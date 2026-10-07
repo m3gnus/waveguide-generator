@@ -677,6 +677,14 @@ def test_python_app_launch_inventory() -> None:
             ('_kill', 'subprocess.run'): 1,
             ('run_gate', 'Run.start'): 2,
         },
+        'server/solver/beat_runtime/hardware.py': {
+            # Fixed read-only NVIDIA inventory, resolved on PATH, bounded to 15 s.
+            # ROCm checks only directories/PATH; GPU Julia setup uses the existing
+            # run_julia_step launch with CUDA/AMDGPU versioninfo and functional.
+            ('_nvidia_gpu_present', 'subprocess.run'): 1,
+            # Existing macOS version fallback, fixed absolute executable, 2 s.
+            ('gpu_hardware', 'subprocess.check_output'): 1,
+        },
         'scripts/build_bundle.py': {
             ('verify_bundle', 'self.process_factory'): 1,
             ('verify_bundle', 'self.runner'): 2,
