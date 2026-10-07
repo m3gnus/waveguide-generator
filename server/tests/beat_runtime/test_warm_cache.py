@@ -67,7 +67,8 @@ def test_stat_signature_observes_replacements(tmp_path, component):
     stat = path.stat()
     before = warm_cache.file_signature(path)
     if component == "mtime":
-        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1))
+        # 1 ms, not 1 ns: NTFS stores times in 100 ns units and drops smaller steps.
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
     elif component == "size":
         path.write_bytes(b"longer")
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))

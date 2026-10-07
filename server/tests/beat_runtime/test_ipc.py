@@ -353,5 +353,7 @@ def test_tcp_options_precede_handshake(monkeypatch, operation):
     monkeypatch.setattr(ipc.Endpoint, "_socket", lambda self: peer)
     endpoint = ipc.Endpoint("tcp", port=1234)
     assert (endpoint.listen() if operation == "listen" else endpoint.connect(1)) is peer
-    assert events[:3] == ["option"] * 3
-    assert events[3] == ("bind" if operation == "listen" else "connect")
+    # Every option precedes the handshake. Windows listeners also set
+    # SO_EXCLUSIVEADDRUSE before bind, so count options instead of assuming three.
+    handshake = events.index("bind" if operation == "listen" else "connect")
+    assert handshake >= 3 and set(events[:handshake]) == {"option"}
