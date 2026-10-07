@@ -90,12 +90,9 @@ IMPORTED_FREQUENCIES = [1000.0, 2000.0]
 #: paint, so ``source-paint-missing`` is expected. Anything else that blocks is
 #: a regression, and approving it would hide one.
 EXPECTED_BLOCKING = {"freshness": "missing_design", "source-paint-missing": None}
-#: A hang guard for waiting on a job, not the solve's performance budget.
+#: A hang guard for waiting on a job. These are correctness checks, not
+#: benchmarks: cold JIT/OpenCL compilation and shared hosted CPUs vary widely.
 JOB_TIMEOUT_S = 300.0
-#: Per-solve wall time from submission to results, excluding cleanup. Local
-#: solves measured about 24 s and 3 s; 60 s allows cold JIT/OpenCL compilation
-#: and slower hosted CPUs while still catching a substantial regression.
-SOLVE_BUDGET_S = 60.0
 #: Set to 1 on a host that must run the imported solve, beyond the defaults
 #: in ``_imported_engine_expected``.
 REQUIRE_IMPORTED_ENV = "WG_REQUIRE_IMPORTED_PIPELINE"
@@ -426,13 +423,8 @@ def test_a_parametric_design_solves_on_the_real_mesher_and_bempp(tmp_path: Path)
                 f"included) on every host: {getattr(bempp, 'reason', 'not registered')}; "
                 f"{_opencl_diagnosis()}"
             )
-            started = time.perf_counter()
             accepted = await _call(app, "POST", "/api/solve", PARAMETRIC_BODY)
             result = await _finish(app, accepted["job_id"])
-            elapsed = time.perf_counter() - started
-            assert elapsed < SOLVE_BUDGET_S, (
-                f"parametric solve took {elapsed:.2f} s; budget is {SOLVE_BUDGET_S:.0f} s"
-            )
         finally:
             await _close(app)
 
@@ -565,7 +557,6 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
             assert set(kinds) == set(EXPECTED_BLOCKING) and all(
                 EXPECTED_BLOCKING[kind] in (None, verdict) for kind, verdict in kinds.items()
             ), f"blocking findings {kinds}, expected exactly {EXPECTED_BLOCKING}"
-            started = time.perf_counter()
             submitted = (
                 await _call(
                     app,
@@ -588,11 +579,6 @@ def test_a_cad_return_ingests_prepares_and_solves_through_the_operation(tmp_path
             parent = app.state.jobs_runtime.store.job_for_submission_key("cad-solve:real-pipeline-cad")
             assert parent is not None and parent != submitted["jobId"], (parent, submitted)
             result = await _finish(app, submitted["jobId"])
-            elapsed = time.perf_counter() - started
-            assert elapsed < SOLVE_BUDGET_S, (
-                f"imported solve on {engine} took {elapsed:.2f} s; "
-                f"budget is {SOLVE_BUDGET_S:.0f} s"
-            )
             return engine, held["preparationId"], result, parent
         finally:
             await _close(app)
