@@ -478,20 +478,25 @@ class Run:
             run.fail_if_exited("reserving its port")
             return ready.is_file()
 
-        wait_for(reserved, START_TIMEOUT_S, f"the server to reserve a port (log: {output})", interval=0.2)
-        run.base = f"http://127.0.0.1:{int(json.loads(ready.read_text(encoding='utf-8'))['port'])}"
+        try:
+            wait_for(reserved, START_TIMEOUT_S, f"the server to reserve a port (log: {output})", interval=0.2)
+            run.base = f"http://127.0.0.1:{int(json.loads(ready.read_text(encoding='utf-8'))['port'])}"
 
-        def serving(budget: float) -> bool:
-            run.fail_if_exited("starting")
-            return http(run.base, "/api/jobs", timeout=budget) is not None
+            def serving(budget: float) -> bool:
+                run.fail_if_exited("starting")
+                return http(run.base, "/api/jobs", timeout=budget) is not None
 
-        wait_for(
-            serving,
-            START_TIMEOUT_S,
-            f"the server to answer (log: {output})",
-            interval=0.5,
-            budgeted=True,
-        )
+            wait_for(
+                serving,
+                START_TIMEOUT_S,
+                f"the server to answer (log: {output})",
+                interval=0.5,
+                budgeted=True,
+            )
+        except QualificationError as exc:
+            # A server that neither answers nor exits must still leave evidence.
+            tail = output.read_text(encoding="utf-8", errors="replace")[-4000:] if output.exists() else ""
+            raise QualificationError(f"{exc}\n--- server log tail ---\n{tail}") from exc
         run.server_pid = server_pid(data_dir)
         return run
 

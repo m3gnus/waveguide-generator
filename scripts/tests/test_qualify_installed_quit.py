@@ -170,6 +170,9 @@ def test_a_server_pid_that_cannot_be_read_is_a_failure(tmp_path: Path, content: 
 @pytest.mark.slow
 def test_the_gate_passes_against_this_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = _gate()
+    # Each start takes seconds here; bound it well below the suite's 300 s
+    # faulthandler so a hung start fails with the gate's own error and log tail.
+    monkeypatch.setattr(gate, "START_TIMEOUT_S", 120.0)
     # What the suite's own WG2_* settings say describes this process, not the
     # server the gate starts; the gate says exactly what the server gets.
     environment = {
@@ -699,3 +702,24 @@ def test_rc_build_runs_the_beat_quit_gate_on_every_installed_candidate():
             assert '$ErrorActionPreference = "Stop"' in run and "$LASTEXITCODE" in run
         else:
             assert "shell" not in step and "set -euo pipefail" in run
+
+
+def test_a_start_that_never_reserves_a_port_fails_with_the_server_log_tail(tmp_path, monkeypatch):
+    gate = _gate()
+
+    class Hung:
+        pid = 4242
+
+        def __init__(self, command, **kwargs):
+            kwargs["stdout"].write(b"loading engines...\nstill waiting on a lock\n")
+
+        def poll(self):
+            return None  # alive, never writes ready.json, never exits
+
+    monkeypatch.setattr(gate.subprocess, "Popen", Hung)
+    monkeypatch.setattr(gate, "START_TIMEOUT_S", 0.3)
+    with pytest.raises(gate.QualificationError) as failure:
+        gate.Run.start(Path("python"), tmp_path / "app", {}, tmp_path / "data", tmp_path / "run")
+    message = str(failure.value)
+    assert "reserve a port" in message
+    assert "server log tail" in message and "still waiting on a lock" in message
