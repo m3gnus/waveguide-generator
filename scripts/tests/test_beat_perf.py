@@ -82,7 +82,9 @@ def test_environment_keeps_production_thread_policy_and_isolates_hosts(monkeypat
     assert "OMP_NUM_THREADS" not in env
     assert env["HORNLAB_BEAT_WORKER_DIR"] == str(tmp_path / "job/hbb-workers")
     assert env["WG2_BEAT_WORKER_DIR"] == str(tmp_path / "job/official-workers")
-    second = dict(env, HORNLAB_BEAT_WORKER_DIR="/another/job", WG2_BEAT_WORKER_DIR="/another/job")
+    env["HORNLAB_BROKER_JOB"] = "job-a"
+    second = dict(env, HORNLAB_BEAT_WORKER_DIR="/another/job", WG2_BEAT_WORKER_DIR="/another/job",
+                  HORNLAB_BROKER_JOB="job-b")
     assert perf.comparison_environment_hash(env) == perf.comparison_environment_hash(second)
     assert run_corpus.environment_sha256(env) != run_corpus.environment_sha256(second)
     second["OPENBLAS_NUM_THREADS"] = "4"

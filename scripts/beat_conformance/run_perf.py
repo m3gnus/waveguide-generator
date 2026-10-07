@@ -29,7 +29,9 @@ PERF_FREQUENCIES = {
     "osse-full": tuple(float(f) for f in range(500, 3501, 100)),
     "imported-two-sources": tuple(float(f) for f in range(500, 2301, 60)),
 }
-ISOLATION_ENV = ("WG2_BEAT_WORKER_DIR", "HORNLAB_BEAT_WORKER_DIR")
+# Per-invocation names: private worker registries, and the compute broker's job id,
+# which differs for every broker job even when the measured environment matches.
+ISOLATION_ENV = ("WG2_BEAT_WORKER_DIR", "HORNLAB_BEAT_WORKER_DIR", "HORNLAB_BROKER_JOB")
 SCHEMA = "beat-perf-v1"
 
 
