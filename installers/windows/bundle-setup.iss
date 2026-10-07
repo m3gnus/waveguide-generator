@@ -914,13 +914,15 @@ begin
     means setup never even opens an external add-in while uninstalling. An
     interrupted replacement is the exception: install_wglink.py owns its
     durable recovery protocol, so it must see the journal before we decide
-    whether the current target is ours. }
+    whether the current target is ours. An absent target must also reach
+    Python so it can take the OS lock and remove an unused lock file. }
   if WgLinkHasDeveloperMarker(Target) and not HasTransaction then
   begin
     WgLog('WGLink uninstall: preserved developer-managed target at ' + Target + '.');
     exit;
   end;
-  if (not WgLinkManagedByThisInstall(Target)) and not HasTransaction then
+  if (DirExists(Target) or FileExists(Target)) and
+    (not WgLinkManagedByThisInstall(Target)) and not HasTransaction then
   begin
     WgLog('WGLink uninstall: preserved non-owned target at ' + Target + '.');
     exit;

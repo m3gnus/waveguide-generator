@@ -141,6 +141,25 @@ def test_setup_choice_is_recorded_only_for_the_selected_task_before_install(code
         assert "RecordWGLinkSetupChoice" not in uninstall and "--record-setup-choice" not in uninstall
 
 
+def test_uninstall_reaches_locked_cleanup_when_only_an_orphan_lock_remains(code: str) -> None:
+    uninstall = _body(code, "procedure UninstallWGLink();")
+    # An absent target has no ownership marker. It must still reach Python,
+    # which takes the OS lock before deleting an unused lock file on Windows.
+    guard = (
+        "if (DirExists(Target) or FileExists(Target)) and\n"
+        "    (not WgLinkManagedByThisInstall(Target)) and not HasTransaction then"
+    )
+    assert guard in uninstall
+    preserved = uninstall.split(guard, 1)[1].split("end;", 1)[0]
+    assert "preserved non-owned target" in preserved and "exit;" in preserved
+    assert uninstall.index(guard) < uninstall.index(" --uninstall --yes --root ")
+    assert "SW_HIDE, ewWaitUntilTerminated, ExitCode, @WgLinkOutput" in uninstall
+    # Cleanup runs before Inno deletes the bundled interpreter and script.
+    step = _body(code, "procedure CurUninstallStepChanged(")
+    assert "if CurUninstallStep = usUninstall then" in step
+    assert "UninstallWGLink();" in step
+
+
 def test_layers_are_renamed_aside_at_install_and_deleted_at_post_install(code: str) -> None:
     step = _body(code, "procedure CurStepChanged(CurStep: TSetupStep);")
     install = step.split("if CurStep = ssInstall then", 1)[1].split("if CurStep = ssPostInstall", 1)[0]
