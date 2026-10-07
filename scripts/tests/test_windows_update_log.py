@@ -10,10 +10,14 @@ import shutil
 import ast
 import operator
 import re
+import uuid
 
 import pytest
 
-from scripts.tests.test_windows_native_recovery import BOOT, _old_root, native as native
+from scripts.tests.test_windows_native_recovery import (
+    BOOT, EXIT_TIMEOUT, NATIVE_TIMEOUT, _old_root, _read_pause_marker,
+    _wait_for_fixture_files, native as native,
+)
 from scripts import build_bundle
 
 pytestmark = pytest.mark.xdist_group("windows_native_setup_mutex")
@@ -101,7 +105,7 @@ def _paths(tmp_path):
 
 
 def _run(native, log, message="test", mode="--update-log-append"):
-    return subprocess.run([str(native), mode, str(log), message], timeout=8).returncode
+    return subprocess.run([str(native), mode, str(log), message], timeout=NATIVE_TIMEOUT).returncode
 
 
 def _bounded(log, backup):
@@ -120,7 +124,7 @@ def log_pausing_native(native, tmp_path_factory):
     code = (ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()
     pause = r'''
 static void log_test_pause(const wchar_t *stage) {
-    wchar_t wanted[32], marker[1024], temporary[1024]; HANDLE h; DWORD done; ULONGLONG end;
+    wchar_t wanted[32], marker[1024], temporary[1024], event_name[128]; HANDLE h; DWORD done; ULONGLONG end;
     if (!GetEnvironmentVariableW(L"WG_LOG_TEST_PAUSE", wanted, 32) || wcscmp(wanted, stage) ||
         !GetEnvironmentVariableW(L"WG_LOG_TEST_MARKER", marker, 1024)) return;
     /* Pathname observation must not race the exclusive publishing handle. */
@@ -129,8 +133,25 @@ static void log_test_pause(const wchar_t *stage) {
     if (h == INVALID_HANDLE_VALUE) ExitProcess(3);
     if (!WriteFile(h, "paused", 6, &done, NULL) || done != 6 || !FlushFileBuffers(h)) ExitProcess(3);
     if (!CloseHandle(h) || !MoveFileExW(temporary, marker, MOVEFILE_WRITE_THROUGH)) ExitProcess(3);
-    end = GetTickCount64() + 60000;
+    if (GetEnvironmentVariableW(L"WG_LOG_TEST_EVENT", event_name, 128)) {
+        h = OpenEventW(EVENT_MODIFY_STATE, FALSE, event_name);
+        if (!h || !SetEvent(h) || !CloseHandle(h)) ExitProcess(3);
+    }
+    end = GetTickCount64() + 300000;
     while (GetFileAttributesW(marker) != INVALID_FILE_ATTRIBUTES && GetTickCount64() < end) Sleep(10);
+}
+static HANDLE log_test_ready_event(void) {
+    wchar_t name[128]; HANDLE h;
+    if (!GetEnvironmentVariableW(L"WG_LOG_TEST_EVENT", name, 128)) return NULL;
+    h = CreateEventW(NULL, TRUE, FALSE, name);
+    if (!h) ExitProcess(3);
+    return h;
+}
+static void log_test_wait_result(DWORD wait, ULONGLONG elapsed) {
+    wchar_t marker[1024]; char data[64]; int n;
+    if (!GetEnvironmentVariableW(L"WG_LOG_TEST_WAIT_RESULT", marker, 1024)) return;
+    n = sprintf_s(data, sizeof(data), "%lu,%llu", wait, elapsed);
+    if (n <= 0 || !durable_write(marker, data, (DWORD)n, 0)) ExitProcess(3);
 }
 '''
     code = code.replace("static int log_write(", pause + "\nstatic int log_write(", 1)
@@ -138,10 +159,35 @@ static void log_test_pause(const wchar_t *stage) {
     code = code.replace("    /* Both leaves are proven", '    log_test_pause(L"locked");\n    /* Both leaves are proven', 1)
     assert code.count("        /* No-clobber also preserves") == 1
     code = code.replace("        /* No-clobber also preserves", '        log_test_pause(L"rename");\n        /* No-clobber also preserves', 1)
+    # In this private compile only, start the real five-second wait once the
+    # worker has reached its actual locked pause. Runner/AV image-start latency
+    # must not consume the deadline this test is trying to exercise.
+    before = "    if (!CreateProcessW(self, command, NULL, NULL, FALSE, CREATE_NO_WINDOW,"
+    assert code.count(before) == 1
+    code = code.replace(before, "    ULONGLONG test_started;\n    HANDLE test_ready = log_test_ready_event();\n" + before, 1)
+    wait = "    wait = WaitForSingleObject(pi.hProcess, 5000);"
+    assert code.count(wait) == 1
+    code = code.replace(wait, r'''
+    if (test_ready) {
+        HANDLE test_waits[2] = {test_ready, pi.hProcess};
+        if (WaitForMultipleObjects(2, test_waits, FALSE, 120000) != WAIT_OBJECT_0) {
+            TerminateProcess(pi.hProcess, 3); WaitForSingleObject(pi.hProcess, 30000); ExitProcess(3);
+        }
+        CloseHandle(test_ready);
+    }
+    test_started = GetTickCount64();
+    wait = WaitForSingleObject(pi.hProcess, 5000);
+''', 1)
+    returned = "    CloseHandle(pi.hProcess); return wait == WAIT_OBJECT_0 && code == 0;"
+    assert code.count(returned) == 1
+    # Record only after the real termination/wait path; test I/O must not delay
+    # killing the worker whose production deadline is under examination.
+    code = code.replace(returned, "    log_test_wait_result(wait, GetTickCount64() - test_started);\n" + returned, 1)
     source.write_text(code)
     shutil.copy2(ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE, repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE)
     target = repo / "helper.exe"
     build_bundle.write_windows_launcher(target, repo_root=repo)
+    _wait_for_fixture_files([target], write=False)
     return target
 
 
@@ -149,11 +195,14 @@ def _paused(native, log, tmp_path, stage, mode="--update-log-worker-init"):
     marker = tmp_path / (stage + ".txt")
     env = dict(os.environ, WG_LOG_TEST_PAUSE=stage, WG_LOG_TEST_MARKER=str(marker))
     child = subprocess.Popen([str(native), mode, str(log), "paused record"], env=env)
-    end = time.monotonic() + 3
-    while not marker.exists() and time.monotonic() < end:
+    try:
+        assert _read_pause_marker(marker, child, expected="paused") == "paused"
         assert child.poll() is None
-        time.sleep(0.01)
-    assert marker.exists()
+    except BaseException:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=EXIT_TIMEOUT)
+        raise
     return child
 
 
@@ -186,7 +235,7 @@ def test_native_logging_needs_no_application_runtime_or_running_admission(native
 def test_malformed_reserved_logger_modes_never_fall_through(native, tmp_path, mode, args):
     log, _ = _paths(tmp_path)
     command = [str(native), mode, str(log)] + args
-    assert subprocess.run(command, timeout=8).returncode == 3
+    assert subprocess.run(command, timeout=NATIVE_TIMEOUT).returncode == 3
     assert not log.exists() and not (tmp_path / ".wg-install-lock").exists()
 
 
@@ -202,6 +251,7 @@ def test_both_old_slots_normalize_to_valid_bounded_tails_before_rotation(native,
     log, backup = _paths(tmp_path)
     log.write_bytes(("😀 current\n" * 40000).encode())
     backup.write_bytes(("é backup\n" * 40000).encode())
+    _wait_for_fixture_files([log, backup])
     assert _run(native, log, "new attempt", "--update-log-init") == 0
     _bounded(log, backup)
     assert b"new attempt" in log.read_bytes()
@@ -212,20 +262,29 @@ def test_both_old_slots_normalize_to_valid_bounded_tails_before_rotation(native,
 def test_actual_native_flood_keeps_both_slots_bounded_and_one_rotation(native, tmp_path):
     log, backup = _paths(tmp_path)
     assert _run(native, log, "begin", "--update-log-init") == 0
-    children = []
     for i in range(120):
         message = f"record {i}: " + "😀" * 2000
         child = subprocess.Popen([str(native), "--update-log-append", str(log), message])
-        children.append(child)
-        while child.poll() is None:
-            # Windows denies write while reading; size observation needs no open.
-            for p in (log, backup):
+        end = time.monotonic() + NATIVE_TIMEOUT
+        try:
+            while True:
+                # Windows denies write while reading; size observation needs no open.
+                for p in (log, backup):
+                    try:
+                        assert p.stat().st_size <= LIMIT
+                    except FileNotFoundError:
+                        pass
+                remaining = end - time.monotonic()
+                assert remaining > 0, f"logger {child.pid} hung on record {i}"
                 try:
-                    assert p.stat().st_size <= LIMIT
-                except FileNotFoundError:
+                    assert child.wait(timeout=min(0.01, remaining)) == 0
+                    break
+                except subprocess.TimeoutExpired:
                     pass
-            time.sleep(0.005)
-        assert child.returncode == 0
+        finally:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=EXIT_TIMEOUT)
         _bounded(log, backup)
     assert b"record 119:" in log.read_bytes()
     assert backup.exists() and not list(log.parent.glob("install.log.[2-9]*"))
@@ -256,10 +315,12 @@ def test_foreign_directory_at_log_leaf_preserved(native, tmp_path, leaf):
 def test_interrupted_final_utf8_character_is_repaired_but_invalid_interior_is_refused(native, tmp_path):
     log, backup = _paths(tmp_path)
     log.write_bytes(b"last complete\n\xf0\x9f")
+    _wait_for_fixture_files([log])
     assert _run(native, log) == 0
     _bounded(log, backup)
     before = b"foreign \xff interior"
     log.write_bytes(before)
+    _wait_for_fixture_files([log])
     assert _run(native, log) == 3 and log.read_bytes() == before
 
 
@@ -267,17 +328,18 @@ def test_terminated_actual_writer_releases_all_log_handles(log_pausing_native, n
     log, backup = _paths(tmp_path)
     log.write_bytes(b"old active\n")
     backup.write_bytes(b"old backup\n")
+    _wait_for_fixture_files([log, backup])
     child = _paused(log_pausing_native, log, tmp_path, "locked")
     try:
         child.kill()
-        child.wait(timeout=3)
+        child.wait(timeout=EXIT_TIMEOUT)
         assert _run(native, log, "after writer death", "--update-log-init") == 0
         _bounded(log, backup)
         assert b"after writer death" in log.read_bytes()
     finally:
         if child.poll() is None:
             child.kill()
-        child.wait(timeout=3)
+        child.wait(timeout=EXIT_TIMEOUT)
 
 
 @pytest.mark.parametrize("prior_backup", [False, True])
@@ -286,6 +348,7 @@ def test_raced_backup_is_never_clobbered_after_proven_old_slot_deletion(log_paus
     log.write_bytes(b"old active\n")
     if prior_backup:
         backup.write_bytes(b"old verified backup\n")
+    _wait_for_fixture_files([log, backup] if prior_backup else [log])
     child = _paused(log_pausing_native, log, tmp_path, "rename")
     try:
         assert not backup.exists()
@@ -294,23 +357,30 @@ def test_raced_backup_is_never_clobbered_after_proven_old_slot_deletion(log_paus
         # Resume the actual rename after placing a new occupant. ReplaceIfExists
         # would overwrite this file and return success, making this case fail.
         (tmp_path / "rename.txt").unlink()
-        assert child.wait(timeout=3) == 3
+        assert child.wait(timeout=EXIT_TIMEOUT) == 3
         assert backup.read_bytes() == b"foreign raced backup"
         assert backup.stat().st_ino == raced.st_ino
         assert log.read_bytes() == b"old active\n"
     finally:
         if child.poll() is None:
             child.kill()
-        child.wait(timeout=3)
+        child.wait(timeout=EXIT_TIMEOUT)
 
 
 def test_supervisor_terminates_only_its_actual_paused_writer_within_deadline(log_pausing_native, native, tmp_path):
     log, backup = _paths(tmp_path)
     marker = tmp_path / "timeout.txt"
-    env = dict(os.environ, WG_LOG_TEST_PAUSE="locked", WG_LOG_TEST_MARKER=str(marker))
-    start = time.monotonic()
-    child = subprocess.run([str(log_pausing_native), "--update-log-init", str(log), "bounded"], env=env, timeout=7)
-    assert child.returncode == 3 and marker.exists() and time.monotonic() - start < 7
+    wait_result = tmp_path / "wait-result.txt"
+    env = dict(os.environ, WG_LOG_TEST_PAUSE="locked", WG_LOG_TEST_MARKER=str(marker),
+               WG_LOG_TEST_EVENT=f"Local\\WG-log-test-{uuid.uuid4().hex}",
+               WG_LOG_TEST_WAIT_RESULT=str(wait_result))
+    child = subprocess.run([str(log_pausing_native), "--update-log-init", str(log), "bounded"],
+                           env=env, timeout=NATIVE_TIMEOUT)
+    assert child.returncode == 3 and marker.read_text() == "paused"
+    wait, elapsed_ms = map(int, wait_result.read_text().split(","))
+    assert wait == 258  # WAIT_TIMEOUT, not another early refusal.
+    # GetTickCount64 has tick-sized quantization; keep a small lower tolerance.
+    assert 4900 <= elapsed_ms < 30000
     assert _run(native, log, "after timeout", "--update-log-init") == 0
     _bounded(log, backup)
 
@@ -320,7 +390,7 @@ def test_real_native_commit_caps_flooded_diagnostics_without_overriding_its_verd
     root, record = _old_root(tmp_path, native)
     log, backup = _paths(tmp_path)
     assert subprocess.run([str(native), "--installer-prepare", str(root), "0.3.4", "0.3.5",
-                           str(record), str(log)], timeout=15).returncode == 0
+                           str(record), str(log)], timeout=NATIVE_TIMEOUT).returncode == 0
     for name in ("app", "runtime", "recovery"):
         (root / name / "new.txt").write_text(name)
     for name in BOOT:
@@ -329,7 +399,12 @@ def test_real_native_commit_caps_flooded_diagnostics_without_overriding_its_verd
     backup.write_bytes(("é older diagnostics\n" * 40000).encode())
     if logging_blocked:
         (log.parent / ".install-log.lock").write_bytes(b"foreign lock content")
-    assert subprocess.run([str(native), "--installer-commit", str(root)], timeout=15).returncode == 0
+    # The fixture's last write returning is not a Win32 flush/rename readiness
+    # event. Wait for the same write access commit needs before invoking it;
+    # never retry commit itself or accept a different verdict.
+    _wait_for_fixture_files([root / name / "new.txt" for name in ("app", "runtime", "recovery")] +
+                            [root / ".wg-install-new" / name for name in BOOT] + [log, backup])
+    assert subprocess.run([str(native), "--installer-commit", str(root)], timeout=NATIVE_TIMEOUT).returncode == 0
     import json
     outcome = json.loads(record.read_text())
     assert outcome["result"] == "installed" and outcome["previousKept"] is False

@@ -5,11 +5,14 @@ import json
 import importlib.util
 import os
 from pathlib import Path
+import queue
 import shutil
 import subprocess
 import sys
 import struct
+import threading
 import time
+import uuid
 import zlib
 
 import pytest
@@ -22,18 +25,27 @@ ROOT = Path(__file__).resolve().parents[2]
 BOOT = ["wg-python.exe", "python313.dll", "python3.dll", "vcruntime140.dll",
         "vcruntime140_1.dll", "msvcp140.dll", "wg-python._pth",
         "Waveguide Generator._pth", "pyvenv.cfg", "WaveguideGenerator.ico"]
+NATIVE_TIMEOUT = 180  # Native admission/transaction locks themselves allow 120 s.
+READY_TIMEOUT = 60
+EXIT_TIMEOUT = 30
 
 
-def _read_pause_marker(marker: Path, helper: subprocess.Popen, *, timeout: float = 20) -> str:
-    """Wait for readable publication, within the original native pause cap."""
+def _read_pause_marker(marker: Path, helper: subprocess.Popen, *, timeout: float = READY_TIMEOUT,
+                       expected: str = "ready") -> str:
+    """Observe complete, closed publication, not merely pathname creation."""
     until = time.monotonic() + timeout
     while True:
         try:
-            return marker.read_text()
-        except (FileNotFoundError, PermissionError):
+            value = marker.read_text()
+            if value == expected:
+                return value
+            assert not value, f"unexpected marker {marker}: {value!r}"
+            raise FileNotFoundError(f"marker {marker} has not published {expected!r}")
+        except (FileNotFoundError, PermissionError) as error:
             # Publication can remain temporarily unreadable on Windows. Only
             # the private ready marker gets this bounded retry.
             if helper.poll() is not None or time.monotonic() >= until:
+                error.add_note(f"waiting for {marker}; helper exit={helper.returncode}")
                 raise
         time.sleep(0.01)
 
@@ -71,6 +83,8 @@ def test_pause_marker_sharing_refusal_is_bounded(tmp_path: Path, monkeypatch: py
         raise PermissionError("marker remains locked")
 
     class Helper:
+        returncode = 3 if stop == "process_exit" else None
+
         def poll(self):
             return 3 if stop == "process_exit" else None
 
@@ -80,9 +94,94 @@ def test_pause_marker_sharing_refusal_is_bounded(tmp_path: Path, monkeypatch: py
         patch.setattr(time, "monotonic", lambda: next(clock))
         patch.setattr(time, "sleep", sleeps.append)
         with pytest.raises(PermissionError, match="marker remains locked"):
-            _read_pause_marker(tmp_path / "paused.txt", Helper())
+            _read_pause_marker(tmp_path / "paused.txt", Helper(), timeout=20)
     assert len(attempts) == (2 if stop == "deadline" else 1)
     assert sleeps == ([0.01] if stop == "deadline" else [])
+
+
+def test_pause_marker_waits_for_payload_even_when_path_exists(tmp_path, monkeypatch):
+    marker = tmp_path / "paused.txt"
+    marker.write_text("")
+
+    class Helper:
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(time, "sleep", lambda _: marker.write_text("ready"))
+    assert _read_pause_marker(marker, Helper()) == "ready"
+
+
+def _probe_fixture_file(path: Path, *, write: bool) -> None:
+    """Match native flush/image access without changing any fixture bytes."""
+    if sys.platform != "win32":
+        with path.open("r+b" if write else "rb"):
+            return
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+                                  ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    # DELETE access also checks sharing needed by prepare/commit/log rotation.
+    handle = kernel.CreateFileW(str(path), 0x40010000 if write else 0x80000000,
+                               1 if write else 5, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not kernel.CloseHandle(handle):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def _wait_for_fixture_files(paths, *, write: bool = True, timeout: float = READY_TIMEOUT) -> None:
+    """Wait out sharing locks from fixture publication, never retry a native verdict.
+
+    Closing Python's writer is not evidence that a Windows scanner has released
+    its handle. This gate is only for bytes the test itself has just created;
+    malformed/foreign product objects are still passed straight to the helper.
+    """
+    until = time.monotonic() + timeout
+    for path in paths:
+        while True:
+            try:
+                _probe_fixture_file(path, write=write)
+                break
+            except PermissionError as error:
+                if time.monotonic() >= until:
+                    error.add_note(f"fixture file still unavailable: {path}")
+                    raise
+            time.sleep(0.01)
+
+
+def test_fixture_sharing_gate_waits_without_rewriting_bytes(tmp_path, monkeypatch):
+    target = tmp_path / "boot.dll"
+    target.write_bytes(b"exact staged bytes")
+    probe = _probe_fixture_file
+    attempts = []
+
+    def locked_once(path, *, write):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise PermissionError("scanner still holds fixture")
+        probe(path, write=write)
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(__name__ + "._probe_fixture_file", locked_once)
+    _wait_for_fixture_files([target])
+    assert attempts == [target, target]
+    assert target.read_bytes() == b"exact staged bytes"
+
+
+def test_fixture_sharing_gate_is_bounded_and_missing_files_fail(tmp_path, monkeypatch):
+    target = tmp_path / "boot.dll"
+    with pytest.raises(FileNotFoundError):
+        _wait_for_fixture_files([target])
+
+    def locked(path, *, write):
+        raise PermissionError("scanner still holds fixture")
+
+    monkeypatch.setattr(__name__ + "._probe_fixture_file", locked)
+    with pytest.raises(PermissionError, match="scanner still holds fixture"):
+        _wait_for_fixture_files([target], timeout=0)
 
 
 def _old_receiver():
@@ -167,6 +266,7 @@ def native(tmp_path_factory: pytest.TempPathFactory) -> Path:
         pytest.skip("requires real Windows C compiler and Win32 filesystem/process APIs")
     target = tmp_path_factory.mktemp("native") / "helper.exe"
     build_bundle.write_windows_launcher(target, repo_root=ROOT)
+    _wait_for_fixture_files([target], write=False)
     return target
 
 
@@ -182,6 +282,7 @@ def changed_natives(native: Path, tmp_path_factory: pytest.TempPathFactory):
         (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(hook)
         target = repo / "helper.exe"
         build_bundle.write_windows_launcher(target, repo_root=repo)
+        _wait_for_fixture_files([target], write=False)
         variants.append((target, hook))
     return variants
 
@@ -223,6 +324,7 @@ static void test_pause(const wchar_t *target, const wchar_t *stage) {
     (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(hook)
     target = repo / "helper.exe"
     build_bundle.write_windows_launcher(target, repo_root=repo)
+    _wait_for_fixture_files([target], write=False)
     return target
 
 
@@ -235,8 +337,41 @@ def _old_root(tmp_path: Path, native: Path) -> tuple[Path, Path]:
     for name in BOOT:
         (root / name).write_bytes(("old:" + name).encode())
     (root / "Waveguide Generator.exe").write_bytes(native.read_bytes())
+    _wait_for_fixture_files([root / name for name in BOOT + ["Waveguide Generator.exe"]] +
+                            [root / name / "old.txt" for name in ("app", "runtime", "recovery")])
     outcome = tmp_path / "outcome.json"
     return root, outcome
+
+
+def _prepare_owner(command: list[str], outcome: Path) -> subprocess.Popen[str]:
+    diagnostic = outcome.with_name(f"{outcome.name}.{uuid.uuid4().hex}.owner-log")
+    code = ("import subprocess,sys;"
+            f"result=subprocess.run(sys.argv[1:],capture_output=True,timeout={NATIVE_TIMEOUT});"
+            "sys.stderr.buffer.write(result.stdout+result.stderr);sys.stderr.flush();"
+            "assert result.returncode==0, f'prepare exited {result.returncode}';"
+            "print('ready',flush=True);sys.stdin.read()")
+    with diagnostic.open("ab") as transcript:
+        owner = subprocess.Popen([sys.executable, "-c", code, *command], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE, stderr=transcript, text=True)
+    assert owner.stdout is not None
+    ready = queue.Queue()
+    # Windows pipe handles are not selectable. A reader thread delivers the
+    # publication/EOF event without blocking pytest's deadline enforcement.
+    reader = threading.Thread(target=lambda: ready.put(owner.stdout.readline()), daemon=True)
+    reader.start()
+    try:
+        try:
+            line = ready.get(timeout=NATIVE_TIMEOUT)
+        except queue.Empty as error:
+            raise TimeoutError(f"prepare owner {owner.pid} did not publish readiness") from error
+        assert line.strip() == "ready", f"prepare owner {owner.pid} exited before readiness"
+    except BaseException as error:
+        _kill_owner(owner)
+        error.add_note(diagnostic.read_text(errors="replace"))
+        raise
+    finally:
+        reader.join(timeout=EXIT_TIMEOUT)
+    return owner
 
 
 def _prepare(native: Path, root: Path, outcome: Path, *, dead_owner: bool) -> subprocess.Popen[str] | None:
@@ -244,34 +379,55 @@ def _prepare(native: Path, root: Path, outcome: Path, *, dead_owner: bool) -> su
     if dead_owner:
         # Hold a real owner until the partial/foreign objects are ready. The
         # monitor may restore immediately after owner.kill(), before startup.
-        code = "import subprocess,sys;assert subprocess.call(sys.argv[1:])==0;print('ready',flush=True);sys.stdin.read()"
-        owner = subprocess.Popen([sys.executable, "-c", code, *command], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-        assert owner.stdout is not None and owner.stdout.readline().strip() == "ready"
-        return owner
-    result = subprocess.run(command, check=False)
-    assert result.returncode == 0
+        return _prepare_owner(command, outcome)
+    result = subprocess.run(command, check=False, capture_output=True, timeout=NATIVE_TIMEOUT)
+    assert result.returncode == 0, (result.returncode, result.stdout, result.stderr)
     return None
 
 
 def _kill_owner(owner: subprocess.Popen[str] | None) -> None:
     assert owner is not None
-    owner.kill()
-    owner.wait(timeout=5)
+    if owner.poll() is None:
+        owner.kill()
+    owner.wait(timeout=EXIT_TIMEOUT)
     if owner.stdout is not None:
         owner.stdout.close()
     if owner.stdin is not None:
         owner.stdin.close()
 
 
+def test_owner_ready_event_keeps_the_actual_prepare_parent_alive(tmp_path):
+    parent = tmp_path / "parent.txt"
+    command = [sys.executable, "-c",
+               f"import os;from pathlib import Path;Path({str(parent)!r}).write_text(str(os.getppid()))"]
+    owner = _prepare_owner(command, tmp_path / "outcome.json")
+    try:
+        assert owner.poll() is None
+        assert int(parent.read_text()) == owner.pid
+    finally:
+        _kill_owner(owner)
+    assert owner.poll() is not None
+
+
+def test_failed_prepare_exits_without_a_ready_event_and_reports_its_diagnostics(tmp_path):
+    command = [sys.executable, "-c", "import sys;print('native failure detail',file=sys.stderr);sys.exit(3)"]
+    with pytest.raises(AssertionError, match="exited before readiness") as failure:
+        _prepare_owner(command, tmp_path / "outcome.json")
+    notes = "\n".join(failure.value.__notes__)
+    assert "native failure detail" in notes and "prepare exited 3" in notes
+
+
 def test_dead_owner_partial_runtime_is_restored_before_python(native: Path, tmp_path: Path) -> None:
     root, record = _old_root(tmp_path, native)
     owner = _prepare(native, root, record, dead_owner=True)
-    (root / "runtime" / "partial.dll").write_bytes(b"truncated runtime")
-    (root / "app" / "new.txt").write_text("partial app")
-    _kill_owner(owner)
+    try:
+        (root / "runtime" / "partial.dll").write_bytes(b"truncated runtime")
+        (root / "app" / "new.txt").write_text("partial app")
+    finally:
+        _kill_owner(owner)
     # -c stays inert after recovery; the fake Python image intentionally cannot
     # run. Restoration and its outcome must already be complete before that.
-    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=NATIVE_TIMEOUT)
     assert (root / "runtime" / "old.txt").read_text() == "runtime"
     assert not (root / "runtime" / "partial.dll").exists()
     assert not (root / "app" / "new.txt").exists()
@@ -284,12 +440,14 @@ def test_dead_owner_partial_runtime_is_restored_before_python(native: Path, tmp_
 def test_foreign_live_directory_is_preserved_and_real_backup_reported(native: Path, tmp_path: Path) -> None:
     root, record = _old_root(tmp_path, native)
     owner = _prepare(native, root, record, dead_owner=True)
-    displaced = root / "owned-partial"
-    (root / "runtime").rename(displaced)
-    (root / "runtime").mkdir()
-    (root / "runtime" / "foreign.txt").write_text("preserve")
-    _kill_owner(owner)
-    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    try:
+        displaced = root / "owned-partial"
+        (root / "runtime").rename(displaced)
+        (root / "runtime").mkdir()
+        (root / "runtime" / "foreign.txt").write_text("preserve")
+    finally:
+        _kill_owner(owner)
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 3
     assert (root / "runtime" / "foreign.txt").read_text() == "preserve"
     data = json.loads(record.read_text())
@@ -306,7 +464,9 @@ def test_successful_commit_replaces_entire_layers_and_exact_boot_files(native: P
         (root / name / "new.txt").write_text(name)
     for name in BOOT:
         (root / ".wg-install-new" / name).write_bytes(("new:" + name).encode())
-    result = subprocess.run([str(native), "--installer-commit", str(root)], check=False)
+    _wait_for_fixture_files([root / name / "new.txt" for name in ("app", "runtime", "recovery")] +
+                            [root / ".wg-install-new" / name for name in BOOT])
+    result = subprocess.run([str(native), "--installer-commit", str(root)], check=False, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0
     for name in ("app", "runtime", "recovery"):
         assert not (root / name / "old.txt").exists()
@@ -322,7 +482,7 @@ def test_malformed_journal_never_touches_installed_files(native: Path, tmp_path:
     root, record = _old_root(tmp_path, native)
     (root / ".upgrade-in-progress").write_bytes(b"truncated or foreign journal")
     before = (root / "runtime" / "old.txt").read_bytes()
-    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 3
     assert (root / "runtime" / "old.txt").read_bytes() == before
     assert not record.exists()
@@ -376,24 +536,26 @@ def test_native_first_manual_rollback_starts_actual_old_hook_and_forwards_args(n
     for marker, data in manifests.items():
         marker.write_bytes(data)
     original_pth = (root / "Waveguide Generator._pth").read_bytes()
-    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=NATIVE_TIMEOUT).returncode == 0
     owner = _prepare(native, root, record, dead_owner=True)
-    (root / "runtime/partial.dll").write_bytes(b"incomplete")
-    _kill_owner(owner)
+    try:
+        (root / "runtime/partial.dll").write_bytes(b"incomplete")
+    finally:
+        _kill_owner(owner)
     started = tmp_path / "old-desktop.txt"
     environment = dict(os.environ, WG_TEST_STARTED=str(started), WG2_DATA_DIR=str(tmp_path / "private-data"),
                        WG2_FUSION_ADDINS_DIR=str(tmp_path / "private-AddIns"))
-    result = subprocess.run([str(root / "Waveguide Generator.exe")], env=environment, check=False, timeout=30)
+    result = subprocess.run([str(root / "Waveguide Generator.exe")], env=environment, check=False, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0 and started.read_text() == "old desktop ran"
     assert all(marker.read_bytes() == data for marker, data in manifests.items())
     assert (root / "Waveguide Generator._pth").read_bytes() == original_pth
     assert json.loads(record.read_text())["result"] == "failed"
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "import json,sys;print(json.dumps(sys.argv))", "value with spaces"],
-                            env=environment, capture_output=True, text=True, timeout=30)
+                            env=environment, capture_output=True, text=True, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0 and json.loads(result.stdout) == ["-c", "value with spaces"]
     (root / "app/argv_probe.py").write_text("import json,sys;print(json.dumps(sys.argv[1:]))")
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-m", "argv_probe", "quoted value"],
-                            env=environment, capture_output=True, text=True, timeout=30)
+                            env=environment, capture_output=True, text=True, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0 and json.loads(result.stdout) == ["quoted value"]
     # Nested workers return through the public native image too; stdout and
     # quoted argv survive both admissions.
@@ -405,20 +567,20 @@ def test_native_first_manual_rollback_starts_actual_old_hook_and_forwards_args(n
     code = (f"import subprocess,sys;subprocess.run([sys.executable,'-c',{worker!r},'nested value'],"
             "stdout=sys.stdout,stderr=sys.stderr,check=True)")
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", code], env=environment,
-                            capture_output=True, text=True, timeout=30)
+                            capture_output=True, text=True, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0 and result.stdout.strip() == "nested value"
 
 
 def test_forged_capability_never_executes_worker_code(native: Path, tmp_path: Path) -> None:
     root, _ = _old_root(tmp_path, native)
     _host_python_old_hook(root)
-    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=NATIVE_TIMEOUT).returncode == 0
     # One legitimate inert invocation publishes the embedded hook/private pth.
-    assert subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=30).returncode == 0
+    assert subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=NATIVE_TIMEOUT).returncode == 0
     worker_wrote = tmp_path / "forged-worker.txt"
     environment = dict(os.environ, WG_NATIVE_START=f"{os.getpid()},0,0,123,124,125,0")
     result = subprocess.run([str(root / "wg-python.exe"), "-B", "-c", f"open({str(worker_wrote)!r},'w').write('bad')"],
-                            env=environment, check=False, timeout=15)
+                            env=environment, check=False, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 4 and not worker_wrote.exists()
 
 
@@ -427,8 +589,8 @@ def test_missing_capability_refuses_active_setup(native: Path, tmp_path: Path) -
     from ctypes import wintypes
     root, _ = _old_root(tmp_path, native)
     _host_python_old_hook(root)
-    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
-    assert subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=30).returncode == 0
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=NATIVE_TIMEOUT).returncode == 0
+    assert subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=NATIVE_TIMEOUT).returncode == 0
     k = ctypes.WinDLL("kernel32", use_last_error=True)
     k.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
     k.CreateMutexW.restype = wintypes.HANDLE
@@ -440,7 +602,7 @@ def test_missing_capability_refuses_active_setup(native: Path, tmp_path: Path) -
     wrote = tmp_path / "unadmitted.txt"
     try:
         result = subprocess.run([str(root / "wg-python.exe"), "-B", "-c", f"open({str(wrote)!r},'w').write('bad')"],
-                                env=environment, check=False, timeout=15)
+                                env=environment, check=False, timeout=NATIVE_TIMEOUT)
         assert result.returncode == 4 and not wrote.exists()
     finally:
         k.CloseHandle(mutex)
@@ -456,12 +618,12 @@ def test_known_old_hook_refreshes_before_runtime_source_changes(native: Path, tm
     (root / "runtime/wg-startup-hook.py").write_bytes(old_hook)
     # Native entry publication has access to the old source before prepare
     # moves its runtime. After it disappears, the embedded new hook is exact.
-    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False).returncode == 0
+    assert subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=NATIVE_TIMEOUT).returncode == 0
     expected = (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes()
     assert (sidecar / "sitecustomize.py").read_bytes() == expected
     (root / "runtime/wg-startup-hook.py").write_bytes(expected)
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "print('new hook admitted')"],
-                            check=False, capture_output=True, text=True, timeout=30)
+                            check=False, capture_output=True, text=True, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0 and result.stdout.strip() == "new hook admitted"
 
 
@@ -473,7 +635,7 @@ def test_junction_root_refused_before_any_native_entry_or_lock_write(native: Pat
                             capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
     try:
-        result = subprocess.run([str(native), "--installer-entry", str(junction)], check=False)
+        result = subprocess.run([str(native), "--installer-entry", str(junction)], check=False, timeout=NATIVE_TIMEOUT)
         assert result.returncode == 3
         assert (target / "Waveguide Generator.exe").read_bytes() == previous
         assert not (target / ".wg-install-lock").exists()
@@ -483,13 +645,13 @@ def test_junction_root_refused_before_any_native_entry_or_lock_write(native: Pat
 
 
 def _entry(native: Path, root: Path) -> int:
-    return subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=20).returncode
+    return subprocess.run([str(native), "--installer-entry", str(root)], check=False, timeout=NATIVE_TIMEOUT).returncode
 
 
 def _run_admitted(root: Path) -> None:
     result = subprocess.run([str(root / "Waveguide Generator.exe"), "-c",
                              "import sys;assert sys._wg_native_start_admitted;print('admitted')"],
-                            check=False, capture_output=True, text=True, timeout=30)
+                            check=False, capture_output=True, text=True, timeout=NATIVE_TIMEOUT)
     assert result.returncode == 0 and result.stdout.strip() == "admitted", result.stderr
 
 
@@ -502,9 +664,11 @@ def test_changed_hook_rollback_then_next_setup_is_recognised(changed_natives, tm
     _run_admitted(root)
     assert _entry(b1, root) == 0
     owner = _prepare(b1, root, record, dead_owner=True)
-    (root / "runtime/wg-startup-hook.py").write_bytes(b1_hook)
-    (root / "runtime/partial.dll").write_bytes(b"incomplete B1")
-    _kill_owner(owner)
+    try:
+        (root / "runtime/wg-startup-hook.py").write_bytes(b1_hook)
+        (root / "runtime/partial.dll").write_bytes(b"incomplete B1")
+    finally:
+        _kill_owner(owner)
     _run_admitted(root)
     assert (root / "runtime/wg-startup-hook.py").read_bytes() == b_hook
     assert (root / ".native-start/sitecustomize.py").read_bytes() == b1_hook
@@ -637,7 +801,7 @@ def test_legal_payload_becomes_long_backup_path_and_recovers(native: Path, tmp_p
     assert len(str(previous)) < 260 and len(str(root / ".wg-install-old/runtime" / relative)) > 260
     owner = _prepare(native, root, record, dead_owner=True)
     _kill_owner(owner)
-    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=15)
+    subprocess.run([str(root / "Waveguide Generator.exe"), "-c", "pass"], check=False, timeout=NATIVE_TIMEOUT)
     assert previous.read_bytes() == b"deep previous payload"
     assert json.loads(record.read_text())["previousKept"] is True
     assert not (root / ".upgrade-in-progress").exists()
@@ -659,7 +823,7 @@ def test_actual_terminated_sidecar_writer_recovers(native: Path, pausing_native:
         assert _read_pause_marker(marker, helper) == "ready"
         temporary = root / ".native-start" / f"{target}.{helper.pid}.tmp"
         helper.kill()
-        helper.wait(timeout=5)
+        helper.wait(timeout=EXIT_TIMEOUT)
         if stage == "cleared":
             assert temporary.exists()  # Ex genuinely cleared on-close deletion
         else:
@@ -671,7 +835,7 @@ def test_actual_terminated_sidecar_writer_recovers(native: Path, pausing_native:
     finally:
         if helper.poll() is None:
             helper.kill()
-            helper.wait(timeout=5)
+            helper.wait(timeout=EXIT_TIMEOUT)
 
 
 @pytest.mark.parametrize("target", ["known-hooks", "sitecustomize.py"])
@@ -701,10 +865,10 @@ def test_actual_entry_termination_after_hook_before_public_image(native: Path, p
         assert (root / "Waveguide Generator.exe").read_bytes() == old_image
         assert (root / ".native-start/sitecustomize.py").read_bytes() != old_hook
         helper.kill()
-        helper.wait(timeout=5)
+        helper.wait(timeout=EXIT_TIMEOUT)
         _run_admitted(root)
         assert (root / ".native-start/sitecustomize.py").read_bytes() == old_hook
     finally:
         if helper.poll() is None:
             helper.kill()
-            helper.wait(timeout=5)
+            helper.wait(timeout=EXIT_TIMEOUT)
