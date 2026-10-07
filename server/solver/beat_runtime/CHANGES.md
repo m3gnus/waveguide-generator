@@ -3,6 +3,35 @@
 All paths are relative to the WG repository root. Changes are additive; no
 production caller adopts beat-engine, no pins change, and HBB state is untouched.
 
+- **Design PR 22 — the host survives a packaged Windows Quit (2026-10-07):**
+  `spawn.py`, `host.py`; `launchers/statusapp/controller.py`
+  (`WINDOWS_JOB_LIMIT_FLAGS`); `scripts/qualify_installed_quit.py`;
+  `server/tests/test_beat_host_windows_quit.py`,
+  `server/tests/beat_runtime/test_spawn_platform.py`,
+  `server/tests/beat_runtime/fake_host_main.py`,
+  `scripts/tests/test_qualify_installed_quit.py`.
+  The status window's kill-on-close job now also sets
+  `JOB_OBJECT_LIMIT_BREAKAWAY_OK` (not `SILENT_BREAKAWAY_OK`), and the host is
+  spawned with `CREATE_BREAKAWAY_FROM_JOB` added to
+  `NEW_PROCESS_GROUP | DETACHED_PROCESS`, so a warm host and its Julia worker
+  survive Quit and the next launch adopts them through the registry, as on
+  macOS and Linux. Children that do not ask for breakaway (the server, mesher,
+  gmsh, BEMPP, the HBB host) still die with the job. The CAD Link child already
+  asked for breakaway and now gets it; it still dies with the server through
+  its own kill-on-close job. If an enclosing job forbids breakaway
+  (`ERROR_ACCESS_DENIED`, winerror 5), the spawn retries once without the flag
+  and the host stays in the job, which is the previous behaviour. Any other
+  launch error, or a second refusal, is raised. The host gets
+  `--job-breakaway granted|refused`, logs `job breakaway: <outcome>`, and adds
+  `job_breakaway` to its bootstrap record. On Windows the Quit qualifier's
+  `beat_host_policy` reports that outcome instead of a fixed label, and fails
+  when the log holds none or both. Orphan safety is unchanged and now tested
+  natively against the launcher's real job: after a Quit or a crash the next
+  start adopts the same host and a second start does not spawn,
+  authenticated cleanup stops it, and the suspend-aware idle expiry ends it.
+  A refused host dies at job close, and the next start prunes its stale record
+  and spawns afresh. HBB and the CUDA/ROCm paths are untouched.
+
 - **Host fix — suspend-aware idle expiry (2026-10-07):**
   `clock.py`, `host.py`; `server/tests/beat_runtime/test_{clock,host_clock}.py`.
   Measure idle age with Linux `CLOCK_BOOTTIME`, Darwin

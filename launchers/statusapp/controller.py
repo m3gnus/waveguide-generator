@@ -261,6 +261,17 @@ def missing_frontend_reason() -> str:
     return f"frontend/dist missing — run {installer_hint()} or scripts/fetch_spa.py"
 
 
+#: ``JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK``. The
+#: job kills the whole server tree when it closes, except a process started
+#: with an explicit ``CREATE_BREAKAWAY_FROM_JOB``: the official BEAT host, so
+#: a warm one survives Quit (``server/solver/beat_runtime/spawn.py``). Never
+#: ``SILENT_BREAKAWAY_OK`` (0x1000), which would release every child. The CAD
+#: Link child asks for breakaway too, and now gets it, but it starts suspended
+#: in its own kill-on-close job that only the server holds
+#: (``server/cadlink/isolation.py``), so it still dies with the server.
+WINDOWS_JOB_LIMIT_FLAGS = 0x00002000 | 0x00000800
+
+
 def _windows_job_for(process: subprocess.Popen[str] | int) -> object | None:
     """Put the server tree in a kill-on-close Job Object when Win32 permits it.
 
@@ -276,7 +287,6 @@ def _windows_job_for(process: subprocess.Popen[str] | int) -> object | None:
     from ctypes import wintypes
 
     job_object_extended_limit_information = 9
-    job_object_limit_kill_on_job_close = 0x00002000
 
     class IoCounters(ctypes.Structure):
         _fields_ = [
@@ -330,7 +340,7 @@ def _windows_job_for(process: subprocess.Popen[str] | int) -> object | None:
     if not handle:
         raise ctypes.WinError(ctypes.get_last_error())
     limits = ExtendedLimitInformation()
-    limits.BasicLimitInformation.LimitFlags = job_object_limit_kill_on_job_close
+    limits.BasicLimitInformation.LimitFlags = WINDOWS_JOB_LIMIT_FLAGS
     configured = kernel32.SetInformationJobObject(
         handle,
         job_object_extended_limit_information,

@@ -1,30 +1,41 @@
-"""Check clean BEAT shutdown and the Windows Job Object backstop.
+"""Check what a packaged Windows Quit does to BEAT's persistent hosts.
 
-Clean server exit stops its workers through ``shutdown_workers()``. On
-Windows the persistent host is started with
-``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` and without
-``CREATE_BREAKAWAY_FROM_JOB``, and the packaged launcher runs the server in a
-kill-on-close Job Object that it closes at the end of every stop
-(``launchers/statusapp/controller.py``). A process a job member starts is in
-the job, so the host is terminated with the rest of the tree.
+The packaged launcher runs the server in a kill-on-close Job Object that it
+closes at the end of every stop (``launchers/statusapp/controller.py``). The
+job allows breakaway (``JOB_OBJECT_LIMIT_BREAKAWAY_OK``) but not silent
+breakaway, so only a child that asks for ``CREATE_BREAKAWAY_FROM_JOB`` leaves
+it; everything else the server starts dies when the job closes.
 
-The job still stops the host if server cleanup fails or the server crashes.
-``docs/reference/SHUTDOWN-AND-RECOVERY.md`` states it.
+* The **official** host (``server/solver/beat_runtime/spawn.py``) asks for
+  breakaway, so a warm one survives Quit and the next launch adopts it through
+  the registry. An enclosing job that forbids breakaway (a CI runner's, some
+  enterprise or antivirus jobs) refuses it with ``ERROR_ACCESS_DENIED``; the
+  spawn then retries once inside the job, records ``job_breakaway: refused``,
+  and the host dies at Quit as before, its stale record pruned at the next
+  start. A host that broke away still ends: its suspend-aware idle expiry, or
+  authenticated cleanup.
+* The legacy **HBB** host is started with
+  ``DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`` and no breakaway, so it stays
+  in the job and dies with it. Clean server exit stops it first through
+  ``shutdown_workers()``; the job is the backstop if that fails or the server
+  crashes.
 
-The Windows test drives the real ``_windows_job_for`` and a stand-in host
-started with the package's exact flags. The tripwire below it runs everywhere,
-so a pin that changes those flags fails here and the record gets revisited.
+``docs/reference/SHUTDOWN-AND-RECOVERY.md`` states both. The Windows tests
+drive the real ``_windows_job_for``; the tripwires run everywhere, so a change
+to either side's flags fails here and the record gets revisited.
 """
 
 from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import time
+from typing import Any
 
 import pytest
 
@@ -35,10 +46,15 @@ CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 BEAT_HOST_CREATION_FLAGS = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JOB_OBJECT_LIMIT_BREAKAWAY_OK = 0x00000800
+JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK = 0x00001000
+
 #: Every process this starts exits by itself after this long, whatever happens.
 SELF_EXIT_SECONDS = 60.0
 
 _STILL_ACTIVE = 259
+_ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_clean_server_exit_requests_shutdown_of_its_persistent_host(
@@ -73,7 +89,7 @@ def test_clean_server_exit_requests_shutdown_of_its_persistent_host(
 
 
 def test_the_pinned_beat_host_is_started_without_breaking_away_from_a_job() -> None:
-    """The record below is only true while the package starts its host this way."""
+    """The HBB record below is only true while the package starts its host this way."""
 
     worker_client = pytest.importorskip("hornlab_beat_bem.worker_client")
     source = inspect.getsource(worker_client.HostedBeatWorker._launch)
@@ -84,6 +100,28 @@ def test_the_pinned_beat_host_is_started_without_breaking_away_from_a_job() -> N
     )
     assert "BREAKAWAY" not in source.upper()
     assert "0x01000000" not in source
+
+
+def test_the_launcher_job_allows_explicit_breakaway_only() -> None:
+    """Tripwire for the status window's job and the official host's spawn flags."""
+
+    from launchers.statusapp import controller
+    from server.solver.beat_runtime import spawn
+
+    assert controller.WINDOWS_JOB_LIMIT_FLAGS == (
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
+    ), "the launcher's job flags changed; re-record what a packaged Quit does"
+    assert not controller.WINDOWS_JOB_LIMIT_FLAGS & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK
+    job_source = inspect.getsource(controller._windows_job_for)
+    assert "LimitFlags = WINDOWS_JOB_LIMIT_FLAGS" in job_source
+
+    assert spawn.detached_options(windows=True) == {
+        "creationflags": BEAT_HOST_CREATION_FLAGS | CREATE_BREAKAWAY_FROM_JOB
+    }
+    assert spawn.detached_options(windows=True, breakaway=False) == {
+        "creationflags": BEAT_HOST_CREATION_FLAGS
+    }
+    assert spawn.detached_options(windows=False) == {"start_new_session": True}
 
 
 def _alive(pid: int) -> bool:
@@ -114,6 +152,13 @@ def _terminate(pid: int) -> None:
         kernel32.CloseHandle(handle)
 
 
+def _wait_dead(pid: int, seconds: float = 10.0) -> bool:
+    deadline = time.monotonic() + seconds
+    while _alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return not _alive(pid)
+
+
 #: Stands in for the server: starts a "host" the way the package does, reports
 #: its pid, then waits for its stdin to close.
 _SERVER = r"""
@@ -133,7 +178,7 @@ sys.stdin.read()
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
-def test_a_packaged_quit_on_windows_terminates_the_beat_persistent_host() -> None:
+def test_a_packaged_quit_on_windows_terminates_the_hbb_persistent_host() -> None:
     from launchers.statusapp.controller import _windows_job_for
 
     server = subprocess.Popen(
@@ -163,11 +208,8 @@ def test_a_packaged_quit_on_windows_terminates_the_beat_persistent_host() -> Non
         job.close()  # type: ignore[attr-defined]
         job = None
 
-        deadline = time.monotonic() + 10.0
-        while _alive(host_pid) and time.monotonic() < deadline:
-            time.sleep(0.1)
-        assert not _alive(host_pid), (
-            "the detached host survived the launcher's job close; the record in "
+        assert _wait_dead(host_pid), (
+            "the HBB host survived the launcher's job close; the record in "
             "docs/reference/SHUTDOWN-AND-RECOVERY.md is wrong"
         )
     finally:
@@ -215,10 +257,255 @@ def test_without_the_launchers_job_the_detached_host_survives() -> None:
             _terminate(host_pid)
 
 
+# -- The official host -------------------------------------------------------
+
+#: Stands in for the server on the official route: starts the host through the
+#: real ``spawn.start_host`` (with the tests' engine-free host), a plain child
+#: the way the mesher starts gmsh, and a child the way CAD Link starts its
+#: isolated child (breakaway requested, its own kill-on-close job). Reports the
+#: pids, then waits for its stdin to close.
+_OFFICIAL_SERVER = r"""
+import json, subprocess, sys
+from pathlib import Path
+from server.cadlink import isolation
+from server.platform.job_start import windows_job_start
+from server.solver.beat_runtime import spawn
+spawn.HOST_MODULE = "server.tests.beat_runtime.fake_host_main"
+key = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+record = spawn.start_host(key, Path(sys.argv[2]), timeout=60.0)
+sleeper = [sys.executable, "-c", "import time; time.sleep(%s)" % sys.argv[3]]
+quiet = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+gmsh = subprocess.Popen(sleeper, close_fds=True, **quiet)
+with windows_job_start(lambda _pid, handle: isolation._assign_windows_job(handle, isolation.INSPECT_BUDGET),
+                       required=True, subject="the CAD-style child") as started:
+    cad = isolation.start_child_process(
+        sleeper, {"creationflags": isolation._windows_creation_flags(), "close_fds": True, **quiet}, stage="test")
+cad_job = started.job
+print(json.dumps({"host_pid": record.pid, "gmsh_pid": gmsh.pid, "cad_pid": cad.pid}), flush=True)
+sys.stdin.read()
+"""
+
+
+def _breakaway_permitted_here() -> bool:
+    """Whether the job this test runs in, if any, lets a child break away."""
+
+    try:
+        probe = subprocess.Popen(
+            [sys.executable, "-c", "pass"],
+            creationflags=BEAT_HOST_CREATION_FLAGS | CREATE_BREAKAWAY_FROM_JOB,
+        )
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 5:
+            return False
+        raise
+    probe.wait(timeout=30)
+    return True
+
+
+@pytest.fixture
+def official(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    """One official host slot; tears down whatever host is left in it."""
+
+    from server.solver.beat_runtime import cleanup, registry as r
+
+    monkeypatch.setenv("WG2_BEAT_WORKER_DIR", str(tmp_path / "workers"))
+    monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
+    fixture = tmp_path / "fixture"
+    key = r.host_key({"backend": "cpu", "julia_executable": str(fixture / "julia"),
+                      "julia_identity": "binary-content", "solver_script": str(fixture / "solver.jl"),
+                      "julia_project": str(fixture / "project"), "julia_sysimage": str(fixture / "sysimage"),
+                      "julia_threads": 2, "engine_fingerprint": "engine-content",
+                      "runtime_fingerprint": "runtime-content",
+                      "environment": {"TEST_EVENTS": str(tmp_path / "events"), "JULIA_NUM_THREADS": "2"}})
+    key_file = tmp_path / "key.json"
+    key_file.write_text(json.dumps(key), encoding="utf-8")
+    directory = tmp_path / "registry"
+    pids: list[int] = []
+    yield key, key_file, directory, pids
+    record = r.read_record(r.key_id(key), directory) if directory.exists() else None
+    if record is not None:
+        try:
+            cleanup.cleanup_host(record, key, directory, timeout=3)
+        except Exception:  # noqa: BLE001 - the pid sweep below still runs
+            pass
+    for pid in pids:
+        if _alive(pid):
+            _terminate(pid)
+
+
+def _start_server_in_launcher_job(key_file: Path, directory: Path) -> tuple[subprocess.Popen, object]:
+    """Start the stand-in server suspended and owned, as ``StatusController.start`` does."""
+
+    from launchers.statusapp.controller import _windows_job_for
+    from server.platform.job_start import windows_job_start
+
+    # The base interpreter, not a venv's python.exe: that redirector runs the
+    # real interpreter in a job of its own with SILENT_BREAKAWAY_OK, which
+    # would grant the host's breakaway whatever the launcher's job allows.
+    interpreter = getattr(sys, "_base_executable", sys.executable)
+    import site
+
+    environment = dict(os.environ, PYTHONPATH=os.pathsep.join(
+        filter(None, (str(_ROOT), *site.getsitepackages(), os.environ.get("PYTHONPATH")))
+    ))
+    with windows_job_start(
+        lambda _pid, handle: _windows_job_for(handle), required=True, subject="the stand-in server"
+    ) as started:
+        server = subprocess.Popen(
+            [interpreter, "-c", _OFFICIAL_SERVER, str(key_file), str(directory), str(SELF_EXIT_SECONDS)],
+            cwd=str(_ROOT), env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+        )
+    assert started.fired and started.job is not None
+    return server, started.job
+
+
+def _quit(server: subprocess.Popen, job: Any, *, crash: bool) -> None:
+    """A status-window stop: the server exits (or dies), then the job closes."""
+
+    assert server.stdin is not None
+    if crash:
+        server.kill()
+    else:
+        server.stdin.close()
+    server.wait(timeout=30)
+    job.close()
+
+
+def _host_log(key: dict, directory: Path) -> str:
+    from server.solver.beat_runtime import registry as r
+
+    return r.log_path(r.key_id(key), r.private_directory(directory)).read_text(
+        encoding="utf-8", errors="replace"
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+@pytest.mark.parametrize("crash", [False, True], ids=["quit", "crash"])
+def test_a_granted_official_host_survives_quit_and_the_next_start_adopts_it(
+    official: Any, monkeypatch: pytest.MonkeyPatch, crash: bool
+) -> None:
+    from server.solver.beat_runtime import cleanup, registry as r, spawn
+
+    if not _breakaway_permitted_here():
+        pytest.skip("this runner's own job forbids breakaway; the refused test covers it")
+    key, key_file, directory, pids = official
+    server, job = _start_server_in_launcher_job(key_file, directory)
+    try:
+        assert server.stdout is not None
+        started = json.loads(server.stdout.readline())
+        pids.extend(started.values())
+        host_pid = started["host_pid"]
+        assert "job breakaway: granted" in _host_log(key, directory)
+
+        _quit(server, job, crash=crash)
+
+        assert _wait_dead(started["gmsh_pid"]), "a plain server child survived the job close"
+        assert _wait_dead(started["cad_pid"]), "the CAD-style child survived the server"
+        time.sleep(0.5)
+        assert _alive(host_pid), "the official host did not survive the launcher's job close"
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait(timeout=30)
+        job.close()  # type: ignore[attr-defined]
+
+    # The next start adopts the detached host through the registry and its
+    # authenticated probe; neither this start nor the one after spawns.
+    def no_spawn(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a relaunch spawned a second host instead of adopting")
+
+    monkeypatch.setattr(spawn, "_launch", no_spawn)
+    adopted = spawn.start_host(key, directory)
+    assert adopted.pid == host_pid
+    assert spawn.start_host(key, directory) == adopted
+
+    # Authenticated cleanup still finds and stops a host that left the job.
+    assert cleanup.cleanup_host(adopted, key, directory, timeout=5)
+    assert _wait_dead(host_pid)
+    assert r.read_record(r.key_id(key), directory) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+def test_a_refused_breakaway_keeps_the_host_in_the_job_and_the_next_start_recovers(
+    official: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from launchers.statusapp import controller
+    from server.solver.beat_runtime import registry as r, spawn
+
+    # A job without BREAKAWAY_OK, as an enclosing CI or enterprise job is.
+    monkeypatch.setattr(controller, "WINDOWS_JOB_LIMIT_FLAGS", JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+    key, key_file, directory, pids = official
+    server, job = _start_server_in_launcher_job(key_file, directory)
+    try:
+        assert server.stdout is not None
+        started = json.loads(server.stdout.readline())
+        pids.extend(started.values())
+        host_pid = started["host_pid"]
+        assert "job breakaway: refused" in _host_log(key, directory)
+
+        _quit(server, job, crash=False)
+
+        assert _wait_dead(started["gmsh_pid"])
+        assert _wait_dead(started["cad_pid"])
+        assert _wait_dead(host_pid), "a host whose breakaway was refused survived the job close"
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait(timeout=30)
+        job.close()  # type: ignore[attr-defined]
+
+    # Its record is stale now; the next start prunes it and spawns afresh.
+    stale = r.read_record(r.key_id(key), directory)
+    assert stale is not None and stale.pid == host_pid
+    monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
+    fresh = spawn.start_host(key, directory, timeout=60.0)
+    pids.append(fresh.pid)
+    assert fresh.pid != host_pid
+    assert r.read_record(r.key_id(key), directory) == fresh
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job objects")
+def test_a_host_that_broke_away_still_expires_when_idle(
+    official: Any, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The 1800 s suspend-aware idle expiry ends a detached host by itself.
+
+    The tests' host jumps its suspend-aware clock a day forward once a marker
+    file exists (``fake_host_main``), as a resume from sleep would.
+    """
+
+    from server.solver.beat_runtime import registry as r
+
+    if not _breakaway_permitted_here():
+        pytest.skip("this runner's own job forbids breakaway")
+    marker = tmp_path / "resumed"
+    monkeypatch.setenv("BEAT_FAKE_HOST_SUSPEND_FILE", str(marker))
+    key, key_file, directory, pids = official
+    server, job = _start_server_in_launcher_job(key_file, directory)
+    try:
+        assert server.stdout is not None
+        started = json.loads(server.stdout.readline())
+        pids.extend(started.values())
+        host_pid = started["host_pid"]
+        _quit(server, job, crash=False)
+        time.sleep(1.0)
+        assert _alive(host_pid), "the host did not leave the launcher's job"
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait(timeout=30)
+        job.close()  # type: ignore[attr-defined]
+
+    marker.write_text("", encoding="utf-8")
+    assert _wait_dead(host_pid, 20.0), "a detached idle host outlived its suspend-aware expiry"
+    assert "idle exit" in _host_log(key, directory)
+    assert r.read_record(r.key_id(key), directory) is None
+
+
 def test_the_record_is_documented() -> None:
-    doc = (
-        Path(__file__).resolve().parents[2] / "docs" / "reference" / "SHUTDOWN-AND-RECOVERY.md"
-    ).read_text(encoding="utf-8")
+    doc = (_ROOT / "docs" / "reference" / "SHUTDOWN-AND-RECOVERY.md").read_text(encoding="utf-8")
 
     assert "persistent host" in doc
     assert "CREATE_BREAKAWAY_FROM_JOB" in doc
+    assert "BREAKAWAY_OK" in doc
+    assert "job_breakaway" in doc

@@ -28,9 +28,11 @@ mesh is parked. Quit deliberately detaches that idle host and its Julia
 worker for relaunch (``WorkerManager.detach``), so precisely that authenticated
 process tree may survive. Restart must reuse it. The gate then stops its host
 through authenticated cleanup and requires no surviving process or registry
-record. On Windows this qualifies the server-detach path only: status-window
-Quit always closes its kill-on-close Job Object and kills the host and Julia.
-The next start's pruning of that stale record and fresh spawn is not qualified.
+record. On Windows this qualifies the server-detach path only, since the
+status window's kill-on-close Job Object is not involved; ``beat_host_policy``
+reports the ``job_breakaway`` outcome the host recorded in its log. With
+``granted`` a status-window Quit detaches the host too; with ``refused`` the
+job kills it at Quit and the next start prunes its record and spawns afresh.
 
 Everything runs in this gate's private tree: data, temporary directory, a
 sandboxed Fusion AddIns directory and every cache ``isolated_environment``
@@ -187,6 +189,29 @@ def warm_beat_host(
     if type(host.get("host_pid")) is not int or not host.get("worker_instance"):
         raise QualificationError(f"BEAT host has no process/worker identity: {answer}")
     return answer
+
+
+#: What each recorded breakaway outcome means for a status-window Quit.
+WINDOWS_BEAT_HOST_POLICY = {
+    "granted": "job_breakaway: granted (server-detach path qualified; "
+               "status-window Quit also detaches the host)",
+    "refused": "job_breakaway: refused (server-detach path qualified; "
+               "status-window Quit kills the host via the Job Object)",
+}
+
+
+def beat_job_breakaway(environment: dict[str, str]) -> str:
+    """The Windows ``job_breakaway`` outcome this gate's official host logged."""
+    root = Path(environment["WG2_BEAT_WORKER_DIR"])
+    outcomes: set[str] = set()
+    for log in sorted(root.glob("*/*.log")):
+        text = log.read_text(encoding="utf-8", errors="replace")
+        outcomes.update(re.findall(r"job breakaway: (granted|refused)$", text, re.MULTILINE))
+    if len(outcomes) != 1:
+        raise QualificationError(
+            f"the official BEAT host logged no single job_breakaway outcome: {sorted(outcomes)}"
+        )
+    return outcomes.pop()
 
 
 def require_detached_host(
@@ -637,11 +662,10 @@ def run_gate(
         # Qualify the release's default worker prewarm, without the diagnostic
         # in-process warmup or an inherited setting disabling worker prewarm.
         base_environment.pop("WG2_SOLVER_WARMUP", None)
-        report["beat_host_policy"] = (
-            "server-detach path only (status-window Quit kills the host via the Job Object)"
-            if platform.system() == "Windows" else
-            "detach completed-prewarm host/Julia for relaunch (1800 s idle timeout)"
-        )
+        if platform.system() != "Windows":
+            report["beat_host_policy"] = (
+                "detach completed-prewarm host/Julia for relaunch (1800 s idle timeout)"
+            )
     else:
         base_environment["WG2_SKIP_BEAT_CPU_PROVISION"] = "1"
     for name in ("TMPDIR", "TEMP", "TMP"):
@@ -664,6 +688,10 @@ def run_gate(
             report["beat_host_before_quit"] = host = warm_beat_host(
                 first, interpreter, app, base_environment
             )
+            if platform.system() == "Windows":
+                report["beat_host_policy"] = WINDOWS_BEAT_HOST_POLICY[
+                    beat_job_breakaway(base_environment)
+                ]
             host_pid = host["verified"][0]["host_pid"]
             beat_processes = {host_pid} | descendants(host_pid)
             table = process_table()

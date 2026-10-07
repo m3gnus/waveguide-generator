@@ -68,10 +68,93 @@ def test_packaged_app_root_imports_without_checkout_on_pythonpath(launch, tmp_pa
 
 
 
-def test_windows_detach_flags_preserve_job_inheritance():
-    assert spawn.detached_options(windows=True) == {"creationflags": 0x208}
+def test_windows_detach_flags_break_away_from_the_launcher_job():
+    assert spawn.detached_options(windows=True) == {"creationflags": 0x01000208}
+    assert spawn.detached_options(windows=True, breakaway=False) == {"creationflags": 0x208}
     assert spawn.detached_options(windows=False) == {"start_new_session": True}
-    assert not spawn.detached_options(windows=True)["creationflags"] & 0x01000000  # No breakaway.
+    assert spawn.detached_options(windows=False, breakaway=False) == {"start_new_session": True}
+
+
+def _launch_attempts(launch, monkeypatch, refuse):
+    """Run one real start_host, refusing CreateProcess attempts as ``refuse`` says."""
+    key, directory, _ = launch
+    original = spawn.subprocess.Popen
+    attempts = []
+
+    def popen(command, **options):
+        attempts.append((command, options["creationflags"]))
+        error = refuse(options["creationflags"])
+        if error is not None:
+            raise error
+        return original(command, **options)
+
+    monkeypatch.setattr(spawn.subprocess, "Popen", popen)
+    return key, directory, attempts
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job breakaway")
+def test_windows_breakaway_granted_is_recorded_by_the_host(launch, monkeypatch):
+    key, directory, attempts = _launch_attempts(launch, monkeypatch, lambda flags: None)
+    record = spawn.start_host(key, directory)
+    assert [(command[-2:], flags) for command, flags in attempts] == [
+        (["--job-breakaway", "granted"], 0x01000208)]
+    log = r.log_path(record.identifier, r.private_directory(directory)).read_text()
+    assert "job breakaway: granted" in log
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job breakaway")
+def test_windows_breakaway_refused_by_an_enclosing_job_retries_once_inside_it(launch, monkeypatch):
+    denied = lambda flags: OSError(13, "Access is denied", None, 5) if flags & 0x01000000 else None  # noqa: E731
+    key, directory, attempts = _launch_attempts(launch, monkeypatch, denied)
+    record = spawn.start_host(key, directory)
+    assert [(command[-2:], flags) for command, flags in attempts] == [
+        (["--job-breakaway", "granted"], 0x01000208), (["--job-breakaway", "refused"], 0x208)]
+    log = r.log_path(record.identifier, r.private_directory(directory)).read_text()
+    assert "job breakaway: refused" in log
+    assert "job breakaway: granted" not in log
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows job breakaway")
+@pytest.mark.parametrize("error", [OSError(2, "not found", None, 2), OSError(13, "denied", None, 5)])
+def test_windows_other_launch_failures_are_not_retried_as_a_refusal(launch, monkeypatch, error):
+    # A second ERROR_ACCESS_DENIED (an unreadable executable, say) is not retried again.
+    key, directory, attempts = _launch_attempts(launch, monkeypatch, lambda flags: error)
+    with pytest.raises(OSError):
+        spawn.start_host(key, directory)
+    assert len(attempts) == (2 if error.winerror == 5 else 1)
+
+
+def test_the_host_puts_its_breakaway_outcome_in_its_bootstrap_record(launch, monkeypatch):
+    key, directory, _ = launch
+    original = spawn.read_private_json
+    bootstraps = []
+
+    def read(path):
+        value = original(path)
+        if path.name.endswith(".ready.json"):
+            bootstraps.append(value)
+        return value
+
+    monkeypatch.setattr(spawn, "read_private_json", read)
+    original_launch = spawn._launch
+    command_tail = []
+
+    def launch_with_outcome(*args, **kwargs):
+        # Force the Windows argument on every platform; the host only echoes it.
+        original_popen = spawn.subprocess.Popen
+
+        def popen(command, **options):
+            if "--job-breakaway" not in command:
+                command = [*command, "--job-breakaway", "refused"]
+            command_tail.append(command[-2:])
+            return original_popen(command, **options)
+
+        monkeypatch.setattr(spawn.subprocess, "Popen", popen)
+        return original_launch(*args, **kwargs)
+
+    monkeypatch.setattr(spawn, "_launch", launch_with_outcome)
+    spawn.start_host(key, directory)
+    assert bootstraps and bootstraps[-1]["job_breakaway"] == command_tail[0][1]
 
 
 

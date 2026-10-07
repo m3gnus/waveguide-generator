@@ -22,14 +22,21 @@ from .ipc import Endpoint, remaining_time
 
 HOST_MODULE = "server.solver.beat_runtime.host"
 RECOVERY_INTERVAL = 0.2
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+ERROR_ACCESS_DENIED = 5
 
 
-def detached_options(*, windows: bool | None = None) -> dict[str, Any]:
+def detached_options(*, windows: bool | None = None, breakaway: bool = True) -> dict[str, Any]:
     is_windows = os.name == "nt" if windows is None else windows
     if is_windows:
-        # Remain in the launcher's Job Object: packaged Windows Quit still kills
-        # the host. Breakaway permission/refusal belongs to design PR 22.
-        return {"creationflags": 0x00000200 | 0x00000008}  # NEW_PROCESS_GROUP | DETACHED_PROCESS
+        # Leave the status window's kill-on-close Job Object so a warm host
+        # survives packaged Quit and the next launch adopts it (design PR 22).
+        # That job allows only explicit breakaway, so the server, gmsh and
+        # BEMPP children stay in it. An enclosing job that forbids breakaway
+        # refuses CreateProcess with ERROR_ACCESS_DENIED; _launch then retries
+        # with breakaway=False and the host stays in the job, dying at Quit.
+        flags = 0x00000200 | 0x00000008  # NEW_PROCESS_GROUP | DETACHED_PROCESS
+        return {"creationflags": (flags | CREATE_BREAKAWAY_FROM_JOB) if breakaway else flags}
     return {"start_new_session": True}
 
 
@@ -57,8 +64,24 @@ def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: 
             # The inherited handle must append at the OS level. It deliberately
             # lacks FILE_WRITE_DATA, so truncate through the separate fd above.
             fd = stack.enter_context(r._private_file(log, append=True))
-        process = subprocess.Popen(command, cwd=str(root), env=environment, stdin=subprocess.DEVNULL,
-                                   stdout=fd, stderr=subprocess.STDOUT, close_fds=True, **detached_options())
+
+        def popen(breakaway: str | None) -> subprocess.Popen:
+            # The host itself records the outcome, in its log and its ready
+            # record, because it truncates the log when it starts.
+            argv = command if breakaway is None else [*command, "--job-breakaway", breakaway]
+            return subprocess.Popen(argv, cwd=str(root), env=environment, stdin=subprocess.DEVNULL,
+                                    stdout=fd, stderr=subprocess.STDOUT, close_fds=True,
+                                    **detached_options(breakaway=breakaway != "refused"))
+
+        if os.name != "nt":
+            process = popen(None)
+        else:
+            try:
+                process = popen("granted")
+            except OSError as exc:
+                if getattr(exc, "winerror", None) != ERROR_ACCESS_DENIED:
+                    raise
+                process = popen("refused")
     # Detached children still need reaping. This thread also covers failures,
     # idle exit and authenticated shutdown, even after start_host has returned.
     threading.Thread(target=process.wait, daemon=True, name=f"beat-host-reap-{process.pid}").start()

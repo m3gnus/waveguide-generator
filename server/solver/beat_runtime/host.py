@@ -660,6 +660,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--idle-timeout", type=float, default=DEFAULT_IDLE_TIMEOUT)
     parser.add_argument("--ready", action="store_true", help="Parent publishes under its held spawn lock")
     parser.add_argument("--startup-timeout", type=float, default=10.0)
+    parser.add_argument("--job-breakaway", choices=("granted", "refused"),
+                        help="Windows: whether the spawner's CREATE_BREAKAWAY_FROM_JOB was allowed")
     args = parser.parse_args(argv)
     if not math.isfinite(args.startup_timeout) or args.startup_timeout <= 0:
         raise ValueError("Host startup timeout must be positive and finite")
@@ -672,15 +674,22 @@ def main(argv: list[str] | None = None) -> int:
         raise r.RecordRefused("Launch specification outside this host slot")
     with r._private_file(r.log_path(host.identifier, directory), create=True) as fd:
         os.ftruncate(fd, 0)
+    if args.job_breakaway is not None:
+        # Refused: the host stays in an enclosing job and dies with it, so a
+        # packaged Windows Quit kills it and the next start prunes its record.
+        host._log(f"job breakaway: {args.job_breakaway}")
     try:
         if args.ready:
             # The parent keeps spawn exclusion until this exact child is published.
             # If it dies before publication, bootstrap times out and closes the host.
             record = host.bind()
-            r._atomic_json(ready_path(host.identifier, directory), {
+            bootstrap = {
                 "record": record.as_dict(), "launcher_pid": os.getppid(),
                 "launcher_start": r.process_start_identity(os.getppid()),
-            })
+            }
+            if args.job_breakaway is not None:
+                bootstrap["job_breakaway"] = args.job_breakaway
+            r._atomic_json(ready_path(host.identifier, directory), bootstrap)
             deadline = time.monotonic() + args.startup_timeout
             while r.read_record(host.identifier, directory) != record:
                 if time.monotonic() >= deadline:

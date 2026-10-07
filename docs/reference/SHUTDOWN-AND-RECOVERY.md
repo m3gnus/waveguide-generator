@@ -108,11 +108,19 @@ run directly outside the status window.
 - **macOS and Linux:** the host starts its own session (`setsid`), so stopping
   the server alone is insufficient; the clean shutdown hook stops the host.
 - **Windows, packaged app:** the Job Object remains a backstop if cleanup
-  fails or the server crashes. The host is started with
+  fails or the server crashes. The HBB host is started with
   `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP` and without
   `CREATE_BREAKAWAY_FROM_JOB`, so it joins the status window's kill-on-close
   Job Object, and the status window closes that job at the end of every stop.
   The next launch pays one cold BEAT start.
+
+The status window's job is `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE |
+JOB_OBJECT_LIMIT_BREAKAWAY_OK`, never `SILENT_BREAKAWAY_OK`: only a child
+that asks for `CREATE_BREAKAWAY_FROM_JOB` leaves it. The server, the mesher
+and gmsh, and BEMPP workers do not ask, so they die when the job closes. The
+CAD Link child asks, and leaves, but it starts suspended in its own
+kill-on-close job that only the server holds, so it still dies with the
+server.
 
 `server/tests/test_beat_host_windows_quit.py` reproduces the mechanism on
 Windows with the launcher's real job and the package's exact flags, and checks
@@ -127,15 +135,30 @@ Quit during an active solve or aborted prewarm retires the engine; the Python
 host remains until idle exit. Child mode terminates. This is intentional, as
 recorded in `server/solver/beat_runtime/CHANGES.md`, PR 21 review round 1,
 “P3 Quit documentation”. The host's registry lives outside swept WG sessions.
-On packaged Windows the host stays in the status window's kill-on-close Job
-Object (`server/solver/beat_runtime/spawn.py`, `detached_options`). The status
-window's `stop()` always closes that object after the server exits, so
-status-window Quit always kills the BEAT host and Julia, even after clean
-server detachment. The stop-file qualifier below does not launch the status
-window and therefore qualifies the server-detach path only on Windows.
-Follow-up qualification is needed for the packaged Windows path: job close
-kills the host and leaves a stale registry record; the next start is expected to
-prune that record and spawn a fresh host and Julia worker.
+
+On packaged Windows the official host is started with
+`CREATE_BREAKAWAY_FROM_JOB` added (`server/solver/beat_runtime/spawn.py`,
+`detached_options` and `_launch`), and the host records the outcome as
+`job_breakaway` in its bootstrap record and as a `job breakaway: granted` or
+`job breakaway: refused` line in its host log:
+
+- **Granted:** the host and its Julia worker leave the status window's job.
+  Quit detaches the warm host as on macOS and Linux, and the next launch
+  adopts it through the registry's authenticated probe rather than spawning a
+  second one. A detached host still ends: by its suspend-aware 1800 s idle
+  expiry, or by authenticated cleanup (`cleanup.py`) after a crash of the
+  server and status window.
+- **Refused:** an enclosing job that forbids breakaway (a CI runner's, some
+  enterprise or antivirus jobs) fails `CreateProcess` with
+  `ERROR_ACCESS_DENIED`. The spawn retries once without the flag, so the host
+  stays in the job and the status window's `stop()` kills it with Julia at
+  Quit, as before. The next start prunes the stale record and spawns a fresh
+  host.
+
+The stop-file qualifier below does not launch the status window, so on Windows
+it qualifies the server-detach path; its `beat_host_policy` reports which
+breakaway case the host recorded. The status-window Quit itself (job close,
+then adoption or pruning at the next start) is checked by hand below.
 
 ## How this is qualified
 
@@ -169,8 +192,9 @@ prune that record and spawn a fresh host and Julia worker.
   Quit gate's registry and other directories isolated. Without it, provisioning
   uses the Quit gate's private work tree; it is never skipped in BEAT mode.
   The gate removes inherited `WG2_SOLVER_WARMUP` settings and uses the product's
-  default worker prewarm. On Windows its BEAT report explicitly labels this as
-  “server-detach path only (status-window Quit kills the host via the Job Object)”.
+  default worker prewarm. On Windows its BEAT report's `beat_host_policy` says
+  which case the host recorded, `job_breakaway: granted` or `refused`, read from
+  the host log; status-window Quit is not driven.
 
 ### Still to check by hand on a packaged machine
 
@@ -187,9 +211,13 @@ itself, and it runs no BEAT solve. Before a stable release, on each platform:
    (`kill -9 <pid>`). The server exits by itself within about 5 s and no
    Waveguide Generator process remains.
 4. Windows, with BEAT CPU prepared and one BEAT solve done (so its host is
-   warm): Quit, and confirm in Task Manager that no `julia.exe` from the
-   application remains. That matches the record above; the next BEAT solve
-   pays a cold start.
+   warm): Quit from the status window. With the official provider and
+   `job breakaway: granted` in the host log, the host and its `julia.exe`
+   remain; start again, and the next BEAT solve reuses the same host PID
+   without a cold start. With `refused`, or with the HBB provider, no
+   `julia.exe` from the application remains and the next BEAT solve pays a
+   cold start. Either way `python -m server.solver.beat_runtime.cli status`
+   afterwards shows no stale record.
 5. Windows: the server log line `Dense-solver memory ceiling: ...` names half of
    the installed memory (Settings > System > About) and the probe
    `GlobalMemoryStatusEx`.

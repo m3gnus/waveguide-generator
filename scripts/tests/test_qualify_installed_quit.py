@@ -264,6 +264,8 @@ def fake_quit_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     state = SimpleNamespace(
         damage=None, cleanup_damage=None, prewarm_log=None,
         runs=[], launches=[], inspections=[], cleaned=False, solves=[],
+        # What the official host logs on Windows (``host.main``); [] logs nothing.
+        breakaway=["granted"],
     )
     work = tmp_path / "work"
     monkeypatch.setattr(gate, "launcher_grace", lambda app: 8.0)
@@ -285,6 +287,13 @@ def fake_quit_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                                    ("BEAT worker prewarm failed after 0.1 s: failed\n"
                                    if state.damage == "prewarm-failed" else
                                    "BEAT worker prewarm finished in 0.1 s\n"))
+            if environment.get("WG2_BEAT_PROVIDER") == "official" and not state.runs:
+                registry = Path(environment["WG2_BEAT_WORKER_DIR"]) / "official"
+                registry.mkdir(parents=True, exist_ok=True)
+                for index, outcome in enumerate(state.breakaway):
+                    (registry / f"host{index}.log").write_bytes(
+                        f"2026-10-07 10:00:00 job breakaway: {outcome}\r\n"
+                        "2026-10-07 10:00:01 serving host (idle 1800s)\r\n".encode())
             state.runs.append(self)
             state.launches.append(environment)
         def capabilities(self):
@@ -465,17 +474,34 @@ def test_beat_gate_retains_an_owned_launcher_parent(fake_quit_gate, monkeypatch,
     assert state.cleaned and len(state.runs) == 2
 
 
-def test_windows_beat_report_labels_only_the_server_detach_path(fake_quit_gate, monkeypatch):
+@pytest.mark.parametrize("outcome", ["granted", "refused"])
+def test_windows_beat_report_names_the_recorded_breakaway_case(fake_quit_gate, monkeypatch, outcome):
     state = fake_quit_gate
     gate = state.gate
     monkeypatch.setattr(gate.platform, "system", lambda: "Windows")
+    state.breakaway = [outcome]
+    environment = gate.isolated_environment(REPO_ROOT, state.work, beat_provider="official")
     report = {}
-    gate.run_gate(REPO_ROOT, Path(sys.executable),
-                  gate.isolated_environment(REPO_ROOT, state.work, beat_provider="official"),
+    gate.run_gate(REPO_ROOT, Path(sys.executable), environment,
                   state.work, state.work / "out", report, engine="beat")
-    assert report["beat_host_policy"] == (
-        "server-detach path only (status-window Quit kills the host via the Job Object)"
-    )
+    assert report["beat_host_policy"] == gate.WINDOWS_BEAT_HOST_POLICY[outcome]
+    assert report["beat_host_policy"].startswith(f"job_breakaway: {outcome} ")
+    assert ("detaches" if outcome == "granted" else "kills the host") in report["beat_host_policy"]
+
+
+@pytest.mark.parametrize("lines", [[], ["granted", "refused"]])
+def test_windows_beat_report_refuses_a_missing_or_ambiguous_breakaway_record(
+    fake_quit_gate, monkeypatch, lines,
+):
+    state = fake_quit_gate
+    gate = state.gate
+    monkeypatch.setattr(gate.platform, "system", lambda: "Windows")
+    state.breakaway = lines
+    environment = gate.isolated_environment(REPO_ROOT, state.work, beat_provider="official")
+    with pytest.raises(gate.QualificationError, match="no single job_breakaway"):
+        gate.run_gate(REPO_ROOT, Path(sys.executable), environment,
+                      state.work, state.work / "out", {}, engine="beat")
+    assert state.cleaned
 
 
 @pytest.mark.parametrize("log", [

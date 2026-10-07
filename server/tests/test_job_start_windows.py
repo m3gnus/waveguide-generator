@@ -699,7 +699,7 @@ def test_a_cad_child_whose_job_is_refused_never_runs(tree, tmp_path, monkeypatch
 def test_a_refused_breakaway_retry_is_still_confined_before_it_runs(
     tree, tmp_path, monkeypatch
 ) -> None:
-    """The production path under the desktop's job, which allows no breakaway.
+    """The production path under a job that allows no breakaway (a CI runner's, say).
 
     The first CreateProcess really fails (an image that does not exist), so
     the armed thread must survive it for the retry.
