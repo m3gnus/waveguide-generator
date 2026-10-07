@@ -676,11 +676,26 @@ def test_rc_build_runs_the_beat_quit_gate_on_every_installed_candidate():
         assert step["if"] == "${{ !cancelled() }}"
         assert "env" not in step or "WG2_BEAT_PROVIDER" not in step["env"]  # the gate selects official itself
         run = step["run"]
-        assert "--engine beat" in run and "official-work" in run
-        assert "beat-quit-work" in run and "beat-quit-qualification" in run
-        payload = [line for line in default_step["run"].splitlines() if "--payload " in line]
-        assert payload and all(line.strip() in run for line in payload)
-        if job == "windows-bundle":
-            assert step["shell"] == "pwsh" and "$LASTEXITCODE" in run
+
+        def argument(text, flag):
+            line = next(line for line in text.splitlines() if line.strip().startswith(flag + " "))
+            return line.strip()[len(flag):].strip().rstrip("\\`").strip()
+
+        assert "--engine beat" in run
+        official = next(s for s in steps if s.get("name", "").startswith("Qualify the official BEAT engine"))
+        # The reused runtime is exactly the official CPU gate's work directory.
+        assert argument(run, "--official-runtime-work") == argument(official["run"], "--work")
+        assert argument(run, "--payload") == argument(default_step["run"], "--payload")
+        assert argument(run, "--payload-kind") == argument(default_step["run"], "--payload-kind")
+        assert argument(run, "--work") != argument(default_step["run"], "--work")
+        assert argument(run, "--output") != argument(default_step["run"], "--output")
+        assert "beat-quit-work" in argument(run, "--work")
+        assert "beat-quit-qualification" in argument(run, "--output")
+        log = steps[beat + 1]
         assert names[beat + 1] == "Preserve the BEAT Quit qualification logs"
-        assert steps[beat + 1]["if"] == "always()"
+        assert log["if"] == "always()" and "beat-quit-qualification" in log["run"]
+        if job == "windows-bundle":
+            assert step["shell"] == "pwsh" and log["shell"] == "pwsh"
+            assert '$ErrorActionPreference = "Stop"' in run and "$LASTEXITCODE" in run
+        else:
+            assert "shell" not in step and "set -euo pipefail" in run
