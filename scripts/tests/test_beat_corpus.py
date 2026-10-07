@@ -647,7 +647,7 @@ def test_corpus_actual_official_production_overrides(frozen, imported, monkeypat
     from server.solver.context import SolverContext
     from server.solver import beat, beat_imported, official_beat
     statuses = {"cpu": {"available": True, "backend": "cpu", "surface_traces": False, "reason": "fake official"}}
-    monkeypatch.setattr(official_beat, "production_statuses", lambda: statuses)
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **_: statuses)
     marker = object()
     captures, wires = [], []
     def solve(compiled, **kwargs):
@@ -902,7 +902,7 @@ def test_corpus_driver_production_response_supplies_electrical_features(official
         monkeypatch.setattr(module, "_load_api", lambda: package)
         monkeypatch.setattr(module, "beat_backend_statuses", lambda: statuses)
     monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
-    monkeypatch.setattr(official_beat, "production_statuses", lambda: statuses)
+    monkeypatch.setattr(official_beat, "production_statuses", lambda **_: statuses)
     def solve(compiled, **kwargs):
         values = native(compiled.wire["frequencies_hz"], settings)
         values.update(impedance=np.full(len(values["frequencies_hz"]), .01, complex),
