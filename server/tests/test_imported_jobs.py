@@ -134,6 +134,11 @@ def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
                 assert not cpu.available
                 assert "imported" not in cpu.geometry_sources
             else:
+                # The 0.01 s capabilities wait can return before a slow runner
+                # finishes the other engines' probes; wait for the failed
+                # detection itself rather than assume it is already done.
+                async with asyncio.timeout(5):
+                    await asyncio.wait({engine_registry._initial_probe_task})
                 assert engine_registry._initial_probe_task.done()
             # The preparation notification can arrive before the full BEAT
             # detection publishes, or recover a row cleared by _failed_detection.
