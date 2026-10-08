@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import inspect
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import socket
@@ -41,7 +42,7 @@ PINS = {
 }
 
 
-@pytest.mark.parametrize("provider", [None, "hbb", "official", " official ", "Official"])
+@pytest.mark.parametrize("provider", [None, "", "hbb", "legacy", "official", " official ", "Official"])
 def test_shared_selector_registry_probe_and_isolation(tmp_path, monkeypatch, provider):
     if provider is None:
         monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
@@ -57,7 +58,7 @@ def test_shared_selector_registry_probe_and_isolation(tmp_path, monkeypatch, pro
 
     monkeypatch.setattr(gate.subprocess, "run", run)
     gate.stop_our_workers(Path(sys.executable), environment, tmp_path)
-    official = provider in {"official", " official "}
+    official = provider not in {"hbb", "legacy"}
     assert commands[0][2] == (gate._IDENTIFY_AND_STOP_OFFICIAL if official else gate._IDENTIFY_AND_STOP)
     expected = "WG2_BEAT_WORKER_DIR" if official else "HORNLAB_BEAT_WORKER_DIR"
     assert commands[0][3] == environment[expected]
@@ -732,7 +733,7 @@ def test_every_platform_candidate_is_qualified_for_cpu(job: str) -> None:
 
     runs = [step for step in _steps(job) if "qualify_installed_cpu.py" in (step.get("run") or "")]
 
-    assert len(runs) == 2, f"{job} must qualify both default and official routes"
+    assert len(runs) == 2, f"{job} must qualify both default official and HBB rollback routes"
     command = runs[0]["run"]
     assert "--pins-json pins.json" in command, job
     assert "--build-manifest" in command, job
@@ -740,24 +741,27 @@ def test_every_platform_candidate_is_qualified_for_cpu(job: str) -> None:
 
 
 @pytest.mark.parametrize("job", PLATFORM_JOBS)
-def test_official_gate_reuses_the_candidate_and_preserves_its_own_evidence(job: str) -> None:
+def test_rollback_gate_reuses_the_candidate_and_preserves_its_own_evidence(job: str) -> None:
     workflow = _workflow()
     steps = _steps(job)
     default_index = next(i for i, step in enumerate(steps)
                          if step.get("name", "").startswith("Qualify BEAT CPU"))
-    official = steps[default_index + 1]
-    assert official["name"] == "Qualify the official BEAT engine on the same candidate"
-    assert official["if"] == "${{ !cancelled() }}"
-    assert official["env"] == {"WG2_BEAT_PROVIDER": "official"}
+    rollback = steps[default_index + 1]
+    assert rollback["name"] == "Qualify the HBB rollback on the same candidate"
+    assert rollback["if"] == "${{ !cancelled() }}"
+    assert rollback["env"] == {"WG2_BEAT_PROVIDER": "hbb"}
     assert "WG2_BEAT_PROVIDER" not in workflow.get("env", {})
     assert "WG2_BEAT_PROVIDER" not in workflow["jobs"][job].get("env", {})
+    rollback_quit = next(step for step in steps if step.get("name", "").startswith(
+        "Qualify Quit with a live HBB rollback BEAT host"))
+    assert rollback_quit["env"] == {"WG2_BEAT_PROVIDER": "hbb"}
     assert all("WG2_BEAT_PROVIDER" not in step.get("env", {})
                and "WG2_BEAT_PROVIDER" not in step.get("run", "")
-               for step in steps if step is not official)
-    command = official["run"]
+               for step in steps if step is not rollback and step is not rollback_quit)
+    command = rollback["run"]
     assert "WG2_CPU_GATE_ROOT" in command
     for arg in ("--pins-json pins.json", "--build-manifest", "--imported-engine beat-cpu",
-                "--work", "official-work", "--output", "official-qualification"):
+                "--work", "hbb-work", "--output", "hbb-qualification"):
         assert arg in command
     payload, kind = {
         "macos-bundle": ('$root/Waveguide Generator.app', 'dmg-ditto'),
@@ -771,19 +775,19 @@ def test_official_gate_reuses_the_candidate_and_preserves_its_own_evidence(job: 
         assert preparation not in command
     assert not any(line.lstrip().startswith("ditto ") for line in command.splitlines())
     if job == "windows-bundle":
-        assert official["shell"] == "pwsh"
+        assert rollback["shell"] == "pwsh"
         assert command.index("$LASTEXITCODE") > command.index("qualify_installed_cpu.py")
-        assert 'throw "The official BEAT qualification exited $LASTEXITCODE"' in command
+        assert 'throw "The HBB rollback qualification exited $LASTEXITCODE"' in command
     else:
         assert "set -euo pipefail" in command
     logs = steps[default_index + 2]
-    assert logs["name"] == "Preserve the official BEAT qualification logs"
+    assert logs["name"] == "Preserve the HBB rollback qualification logs"
     assert logs["if"] == "always()"
     default_logs = next(step for step in steps if step.get("name") == "Preserve the CPU qualification logs")
     assert logs["run"] == default_logs["run"].replace(
-        '"qualification"', '"official-qualification"'
-    ).replace('$root/qualification', '$root/official-qualification').replace(
-        'No qualification output', 'No official BEAT qualification output'
+        '"qualification"', '"hbb-qualification"'
+    ).replace('$root/qualification', '$root/hbb-qualification').replace(
+        'No qualification output', 'No HBB rollback qualification output'
     )
     assert logs.get("shell") == default_logs.get("shell")
 
@@ -2299,7 +2303,7 @@ def _imported_phase(
         gate.qualify_imported_return(
             payload / "runtime" / "bin" / "python3.13",
             payload / "app",
-            {},
+            {"WG2_BEAT_PROVIDER": "hbb"},
             work,
             output,
             required=list(required),
@@ -3070,7 +3074,7 @@ def test_ib_opt_in_runs_on_the_cpu_server_and_keeps_its_report(
     assert state["starts"] == 1
 
 
-@pytest.mark.parametrize("selector,official", [(" official ", True), ("Official", False)])
+@pytest.mark.parametrize("selector,official", [("", True), (" official ", True), ("hbb", False), ("legacy", False), ("Official", True)])
 def test_shared_selector_qualifier_report_paths(tmp_path, monkeypatch, selector, official):
     monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
     monkeypatch.setattr(gate, "resolve_payload", lambda payload: (tmp_path, tmp_path, Path(sys.executable)))
@@ -3291,3 +3295,61 @@ def test_official_imported_phase_cannot_qualify_a_stub_on_hbb(tmp_path, _in_proc
         )
     assert section["engines"][0]["engine"] == "beat-cpu"
     assert section["engines"][0].get("decision") != "solved"
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_simulations(monkeypatch):
+    """Historic installed stubs report HBB; selector/official tests override it."""
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
+
+
+@pytest.mark.parametrize("selector", [None, "official", "hbb", "legacy"])
+def test_provider_default_and_cli_override(tmp_path, monkeypatch, selector):
+    monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    argv = ["--payload", str(tmp_path), "--work", str(tmp_path / "work"),
+            "--output", str(tmp_path / "out")]
+    if selector is not None:
+        argv += ["--beat-provider", selector]
+    args = gate.build_parser().parse_args(argv)
+    environment = gate.isolated_environment(tmp_path, args.work, beat_provider=args.beat_provider)
+    assert gate.provider.official_selected(environment) == (selector in {None, "official"})
+    assert "WG2_BEAT_PROVIDER" not in os.environ
+
+
+@pytest.mark.parametrize("selector", [None, " OffICIAL ", " HBB ", " Legacy "])
+@pytest.mark.parametrize("override", [False, True])
+def test_preparation_diagnosis_follows_selected_provider(tmp_path, monkeypatch, selector, override):
+    from server.solver.beat_runtime import paths
+
+    environment = {"HORNLAB_BEAT_RUNTIME_DIR": str(tmp_path / "hbb"),
+                   "WG2_BEAT_RUNTIME_DIR": str(tmp_path / "official")}
+    if selector is not None:
+        environment["WG2_BEAT_PROVIDER"] = selector
+    official = selector is None or selector.strip().casefold() == "official"
+    root = paths.runtime_dir(environ=environment) if official else Path(environment["HORNLAB_BEAT_RUNTIME_DIR"])
+    other = Path(environment["HORNLAB_BEAT_RUNTIME_DIR"]) if official else paths.runtime_dir(environ=environment)
+    root.mkdir(parents=True)
+    other.mkdir(parents=True)
+    julia = root / "julia" / "bin" / "julia"
+    (root / "state-cpu.json").write_text(json.dumps({"status": "ready", "julia_executable": str(julia)}))
+    (other / "state-cpu.json").write_text(json.dumps({"status": "failed", "julia_executable": "foreign"}))
+    selected_override = "WG2_BEAT_JULIA" if official else "HORNLAB_BEAT_JULIA"
+    other_override = "HORNLAB_BEAT_JULIA" if official else "WG2_BEAT_JULIA"
+    environment[selected_override if override else other_override] = "explicit-julia"
+    calls = []
+    def run(command, **kwargs):
+        calls.append(command)
+        assert kwargs["env"] is environment and kwargs["cwd"] == str(tmp_path)
+        return subprocess.CompletedProcess(command, 7, "Downloading Julia for diagnosis", "test stderr")
+    monkeypatch.setattr(gate.subprocess, "run", run)
+    answer = gate.diagnose_preparation(Path("installed-python"), tmp_path, environment, tmp_path)
+    assert calls == [["installed-python", "-m",
+                      "server.solver.beat_runtime.cli" if official else "hornlab_beat_bem.provision",
+                      "--backend", "cpu"]]
+    assert answer["command_exit_code"] == 7 and answer["status"] == "ready"
+    assert answer["julia_executable"] == str(julia)
+    assert answer["julia_inside_this_runs_runtime_dir"]
+    assert answer["julia_env_var_set"] is override
+    assert answer["note"].startswith("diagnosis only")
+    assert "fresh-state provisioning" in answer["claim"]
+    assert (tmp_path / "cpu-provision-diagnosis.log").read_text().endswith("test stderr")

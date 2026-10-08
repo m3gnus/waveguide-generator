@@ -11,7 +11,7 @@ from server.diagnostics.capabilities import capabilities_payload
 from server.engines.registry import EngineRegistry
 from server.jobs.runtime import JobRuntime, resolve_submission
 from server.jobs.store import JobStore
-from server.solver import beat, bempp, bempp_opencl as probe, metal
+from server.solver import beat, bempp, bempp_opencl as probe, metal, official_beat
 from server.solver.base import EngineRunResult
 from server.tests.test_bempp_opencl import CPU
 from server.tests.test_engines_registry import _planner_request
@@ -35,6 +35,8 @@ def pending_probe(monkeypatch):
         backend: {'available': (backend == 'cpu' and state.cpu) or (backend in {'cuda', 'metal'} and state.gpu),
                   'reason': 'BEAT real state', 'version': 'test'}
         for backend in beat.BEAT_BACKENDS})
+    # Model the same inventory under the product's unset official default.
+    monkeypatch.setattr(official_beat, 'production_statuses', lambda: beat.beat_backend_statuses())
     def run(mode, device, timeout):
         calls.append((mode, timeout))
         if mode == 'inventory':

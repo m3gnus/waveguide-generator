@@ -668,3 +668,11 @@ def test_the_metal_solve_and_its_warmup_ask_for_the_same_worker(monkeypatch) -> 
 
     assert warmed == [6]
     assert [config.julia_threads for config in configs] == [6]
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_provider():
+    """The fake package/provisioner in this module exercises the rollback route."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
+        yield

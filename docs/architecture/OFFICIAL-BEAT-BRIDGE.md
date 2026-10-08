@@ -1,8 +1,14 @@
 # Official BEAT production bridge
 
-`WG2_BEAT_PROVIDER=official` routes the registered `beat-cpu`, `beat-metal`,
-`beat-cuda` and `beat-rocm` engines, including AUTO readiness and warm-up, through `official_beat.solve_compiled`.
-The default selector retains HBB. The optional official distribution is
+By default (unset or empty `WG2_BEAT_PROVIDER`), WG routes the registered `beat-cpu`, `beat-metal`, `beat-cuda` and `beat-rocm`
+engines, including AUTO readiness and warm-up, through `official_beat.solve_compiled`.
+The legacy explicit `WG2_BEAT_PROVIDER=official` remains accepted. For one
+release, set `WG2_BEAT_PROVIDER=hbb` (alias `legacy`) before launch to roll back
+solves, readiness, preparation, warm-up and Quit to hornlab-beat-bem. Unknown
+values warn once and use the official default. Slice 10 removes the HBB route,
+selector and installed rollback gates only after CPU and Metal performance
+is proven as fast as HBB or faster.
+The optional official distribution is
 `beat-engine` from JWSound/BEAT_Engine; imports remain lazy. Pins are unchanged.
 
 WG's `beat_adapter` owns compiled requests, source frames, observations,
@@ -50,7 +56,8 @@ is required for readiness. Their first solve warms slower than a compiled
 bundle. These backends are **not hardware-qualified**. Mocked unit/integration
 tests and existing CI qualify this routing change; real-GPU qualification is
 not a gate for enabling it. CAD solves on CUDA/ROCm still require Accurate;
-explicit BEAT Metal also accepts Fast. HBB remains the default provider.
+explicit BEAT Metal also accepts Fast. The official provider is the default;
+HBB remains available through the explicit rollback selector.
 
 The conformance and agreement tools in `scripts/beat_conformance` cover CPU
 and Metal only. There is no CUDA/ROCm corpus.

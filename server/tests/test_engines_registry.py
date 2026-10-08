@@ -6,6 +6,7 @@ import asyncio
 from datetime import datetime
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import threading
 from typing import Any
 
@@ -1912,3 +1913,34 @@ def test_explicit_official_refresh_waits_for_its_revision(monkeypatch):
             await engine_registry.shutdown_prewarm()
 
     asyncio.run(scenario())
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_fakes():
+    """The package, probe and refresh fakes in this module exercise HBB rollback."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
+        yield
+
+
+@pytest.mark.parametrize("system,machine,version,eligible", [
+    ("Linux", "x86_64", "", False), ("Windows", "AMD64", "", False),
+    ("Darwin", "x86_64", "14.0", False), ("Darwin", "arm64", "13.2", False),
+    ("Darwin", "arm64", "14.0", True),
+])
+def test_official_cpu_preparation_preserves_metal_hardware_reason(monkeypatch, system, machine, version, eligible):
+    from server.solver import beat_cpu_runtime, official_beat
+    from server.solver.beat_runtime import hardware
+
+    monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    facts = hardware.gpu_hardware(system=system, machine=machine, macos_version=version)
+    monkeypatch.setattr(hardware, "gpu_hardware", lambda **kwargs: facts)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_preparation_in_flight", lambda: True)
+    monkeypatch.setattr(beat_cpu_runtime, "cpu_runtime_readiness", lambda package: SimpleNamespace(reason="Preparing CPU", state="provisioning", ready=False))
+    monkeypatch.setattr(beat_cpu_runtime, "gpu_preparation_reason", lambda backend: None)
+    monkeypatch.setattr(official_beat, "engine_version", lambda: "test")
+    statuses = registry._official_runtime_statuses()
+    assert statuses["cpu"]["reason"] == "Preparing CPU"
+    assert not statuses["metal"]["available"]
+    assert statuses["metal"]["state"] == ("pending" if eligible else "no-device")
+    assert statuses["metal"]["reason"] == ("BEAT metal readiness is pending CPU preparation." if eligible else facts["metal"]["reason"])

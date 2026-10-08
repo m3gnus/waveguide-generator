@@ -227,6 +227,10 @@ if not contained:
                       "note": "refused to read or signal a registry outside the gate tree"}))
     raise SystemExit(0)
 
+# HBB launch keys persist after shutdown and are not host records, exactly
+# as in find_live_hosts. Count records before inspection can prune them.
+records = [path.name for path in sorted(Path(directory).glob("*.json"))
+           if not path.name.endswith(".key.json")] if action == "inspect" else []
 verified, refused = [], []
 for host in find_live_hosts(directory):
     found = identity(host)
@@ -248,7 +252,7 @@ if action == "stop" and verified:
                 for item in verified]
 
 print(json.dumps({"verified": verified, "refused": refused,
-                  "effective_worker_dir": effective, "contained": True}))
+                  "effective_worker_dir": effective, "contained": True, "records": records}))
 """
 
 _IDENTIFY_AND_STOP_OFFICIAL = r"""
@@ -260,7 +264,7 @@ from server.solver.beat_runtime.inspection import inspect_hosts
 from server.solver.beat_runtime.provider import official_selected
 
 if not official_selected():
-    raise RuntimeError("Official BEAT inspection requires WG2_BEAT_PROVIDER=official")
+    raise RuntimeError("Official BEAT inspection requires the official provider")
 directory = Path(sys.argv[1]) / paths.PROVIDER_ID
 print(json.dumps(inspect_hosts(directory, stop=sys.argv[2] == "stop")))
 """
@@ -275,7 +279,7 @@ from server.solver.beat_runtime import paths, probe, readiness, state
 from server.solver.beat_runtime.provider import official_selected
 
 if not official_selected():
-    raise RuntimeError("Official runtime inspection requires WG2_BEAT_PROVIDER=official")
+    raise RuntimeError("Official runtime inspection requires the official provider")
 root = paths.runtime_dir()
 expected = Path(os.environ["WG2_BEAT_RUNTIME_DIR"]) / paths.PROVIDER_ID
 if root.resolve() != expected.resolve():
@@ -961,14 +965,24 @@ def diagnose_preparation(
     the provisioning transcript says whether the runtime can be built there at
     all, which separates "the product never tried" from "the host cannot".
 
-    ``HORNLAB_BEAT_RUNTIME_DIR`` is this run's own directory, so no previously
+    The selected provider's runtime root is this run's own directory, so no previously
     provisioned record is read -- but discovery also consults
-    ``HORNLAB_BEAT_JULIA`` and ``PATH``. Reusing a Julia already on the host
+    the provider's Julia override and ``PATH``. Reusing a Julia already on the host
     says nothing about a clean machine, so which happened is recorded.
     """
 
+    official = provider.official_selected(environment)
+    if official:
+        from server.solver.beat_runtime import paths
+        runtime_dir = str(paths.runtime_dir(environ=environment))
+        module = "server.solver.beat_runtime.cli"
+        julia_env = "WG2_BEAT_JULIA"
+    else:
+        runtime_dir = environment["HORNLAB_BEAT_RUNTIME_DIR"]
+        module = "hornlab_beat_bem.provision"
+        julia_env = "HORNLAB_BEAT_JULIA"
     completed = subprocess.run(  # noqa: S603 - packaged interpreter, documented module
-        [str(interpreter), "-m", "hornlab_beat_bem.provision", "--backend", "cpu"],
+        [str(interpreter), "-m", module, "--backend", "cpu"],
         cwd=str(app),
         env=environment,
         capture_output=True,
@@ -979,7 +993,6 @@ def diagnose_preparation(
     transcript = completed.stdout + completed.stderr
     log = output / "cpu-provision-diagnosis.log"
     log.write_text(transcript, encoding="utf-8")
-    runtime_dir = environment["HORNLAB_BEAT_RUNTIME_DIR"]
     state_path = Path(runtime_dir) / "state-cpu.json"
     state: dict[str, Any] = {}
     if state_path.is_file():
@@ -992,7 +1005,7 @@ def diagnose_preparation(
         "command_exit_code": completed.returncode,
         "status": state.get("status"),
         "julia_executable": julia,
-        "julia_env_var_set": bool(environment.get("HORNLAB_BEAT_JULIA")),
+        "julia_env_var_set": bool(environment.get(julia_env)),
         "julia_inside_this_runs_runtime_dir": inside,
         "claim": (
             "a Julia was provisioned inside this run's own runtime directory, so this is "
@@ -2068,7 +2081,7 @@ def qualify(arguments: argparse.Namespace, report: dict[str, Any]) -> None:
     work.mkdir(parents=True, exist_ok=True)
     output.mkdir(parents=True, exist_ok=True)
     data_dir = work / "data"
-    environment = isolated_environment(app, work)
+    environment = isolated_environment(app, work, beat_provider=arguments.beat_provider)
     expected_pins = pins_from_file(arguments.pins_json)
     pinned_beat_revision = expected_pins.get("beat-engine")
     expected_pins.update(arguments.expected_pin or {})
@@ -2249,6 +2262,8 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="installed application root (holding app/ and runtime/), or a macOS .app",
     )
+    parser.add_argument("--beat-provider", choices=("official", "hbb", "legacy"),
+                        help="BEAT provider (default: official, or WG2_BEAT_PROVIDER; hbb/legacy is the one-release rollback)")
     parser.add_argument(
         "--payload-kind",
         default="unspecified",

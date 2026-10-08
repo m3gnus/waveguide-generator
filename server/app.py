@@ -694,8 +694,8 @@ def create_app(
     async def shutdown_beat_worker() -> None:
         """Stop the prewarm and this server's BEAT workers on clean exit.
 
-        ``hornlab_beat_bem`` keeps its workers in a module-level registry with
-        no exit hook of its own, and the prewarm means one can be alive for a
+        The HBB rollback (``WG2_BEAT_PROVIDER=hbb``/``legacy``) keeps its workers
+        in a module-level registry with no exit hook of its own, and the prewarm means one can be alive for a
         session that never solved -- so this hook has to run either way.
 
         ``shutdown_workers()`` stops the process-local worker registry,
@@ -704,7 +704,7 @@ def create_app(
         daemon thread: an executor thread would still be joined at Python
         exit even if an async timeout had already expired.
 
-        The explicit official provider instead closes its process-default
+        The default official provider closes its process-default
         manager for good: idle hosts detach, active sessions retire their
         engine, and child mode terminates. After idle or completed-warm-up Quit,
         hosts keep Julia warm for relaunch until DEFAULT_IDLE_TIMEOUT (1800 s).

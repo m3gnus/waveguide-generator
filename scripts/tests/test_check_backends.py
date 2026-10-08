@@ -106,3 +106,31 @@ def test_drift_does_not_change_the_can_this_host_solve_exit_status() -> None:
     body = source.split("def main(")[1]
     assert "report_dependency_drift()" in body
     assert "return report_dependency_drift" not in body
+
+
+@pytest.mark.parametrize("selector,expected", [(None, "official"), ("", "official"),
+                                              ("official", "official"), ("hbb", "hbb"),
+                                              ("legacy", "hbb")])
+def test_backend_gate_probes_the_selected_provider(monkeypatch, capsys, selector, expected):
+    from server.solver import beat, bempp, metal, official_beat
+
+    if selector is None:
+        monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
+    monkeypatch.setattr(metal, "metal_status", lambda: {"available": False, "reason": "test"})
+    monkeypatch.setattr(bempp, "bempp_status", lambda: {"available": False, "reason": "test"})
+    monkeypatch.setattr(bempp, "_missing_windows_runtime_dlls", lambda: ())
+    monkeypatch.setattr(check_backends, "report_dependency_drift", lambda: [])
+    calls = []
+
+    def statuses(provider):
+        calls.append(provider)
+        return {backend: {"available": backend == "cpu", "reason": provider}
+                for backend in beat.BEAT_BACKENDS}
+
+    monkeypatch.setattr(beat, "beat_backend_statuses", lambda: statuses("hbb"))
+    monkeypatch.setattr(official_beat, "production_statuses", lambda: statuses("official"))
+    assert check_backends.main() == 0
+    assert calls == [expected]
+    assert expected in capsys.readouterr().out

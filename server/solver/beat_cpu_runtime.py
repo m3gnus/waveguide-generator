@@ -3,6 +3,11 @@
 Two things live in this module, and they are one subject: what a *provisioned*
 BEAT CPU runtime is, and who provisions it.
 
+The default official provider delegates readiness and preparation to WG-owned
+``beat_runtime``: CPU is prepared first, then Metal on supported hardware.
+The HBB-specific records, probes and GPU rules described below apply only to
+the one-release ``WG2_BEAT_PROVIDER=hbb``/``legacy`` rollback.
+
 **Readiness.** The question the picker asks about ``beat-cpu`` used to be "is
 there a Julia executable, and is the bundled project on disk". Both can be true
 on a machine where the first solve then fails: the Julia project has a

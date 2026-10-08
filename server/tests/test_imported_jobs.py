@@ -91,6 +91,8 @@ def test_imported_beat_cpu_refresh_restores_the_complete_capability_row(
     monkeypatch: pytest.MonkeyPatch, preparing: bool, detection: str,
 ) -> None:
     """A ready CPU must accept CAD while the GPU probe is slow or has failed."""
+    # The readiness fakes below model the HBB rollback's live CPU refresh.
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
 
     from server.diagnostics.capabilities import capabilities_payload
     from server.engines import registry
@@ -4209,7 +4211,7 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
 
     from server.engines.registry import create_engine, detect_engines, engine_supports_symmetry
     from server.jobs.runtime import resolve_imported_submission
-    from server.solver import beat, bempp
+    from server.solver import beat, bempp, official_beat
 
     available = {"available": True, "reason": "ok", "version": "t"}
     monkeypatch.setattr(metal, "metal_status", lambda: dict(available))
@@ -4221,6 +4223,13 @@ def test_imported_outcomes_follow_from_each_engines_declared_capability(
     monkeypatch.setattr(
         beat,
         "beat_backend_statuses",
+        lambda: {name: dict(available, backend=name) for name in beat.BEAT_BACKENDS},
+    )
+    # The unset provider is official; stub its readiness alongside HBB so the
+    # declaration/adapter contract is tested without a machine runtime.
+    monkeypatch.setattr(
+        official_beat,
+        "production_statuses",
         lambda: {name: dict(available, backend=name) for name in beat.BEAT_BACKENDS},
     )
     engines = detect_engines(environ={})

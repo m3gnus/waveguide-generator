@@ -26,9 +26,11 @@ def official(monkeypatch, tmp_path):
         assert not thread.is_alive()
 
 
-def test_provider_is_explicit_and_default_off():
-    assert not provider.official_selected({})
+def test_provider_defaults_to_official_with_explicit_rollback():
+    assert provider.official_selected({})
     assert not provider.official_selected({provider.PROVIDER_ENV: "hbb"})
+    assert not provider.official_selected({provider.PROVIDER_ENV: "legacy"})
+    assert provider.official_selected({provider.PROVIDER_ENV: ""})
     assert provider.official_selected({provider.PROVIDER_ENV: "official"})
 
 

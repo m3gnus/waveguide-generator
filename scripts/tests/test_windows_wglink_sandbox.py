@@ -481,16 +481,19 @@ ENTRYPOINTS = ('build_bundle.py', 'gates.ps1', 'qualify_installed_cpu.py', 'qual
 
 
 # rc-build runs qualify_installed_cpu.py six times: per OS the default-route CPU
-# gate and, reviewed for the 0.3.6 BEAT switch, an official-engine gate on the
+# gate (now official) and a one-release HBB rollback gate on the
 # same installed payload. The second run is the same entrypoint and argument
-# shape with WG2_BEAT_PROVIDER=official scoped to its step; the qualifier's own
-# isolated_environment sandboxes every launch exactly as on the default route.
-# rc-build also runs qualify_installed_quit.py six times: per OS the default
+# shape with WG2_BEAT_PROVIDER=hbb scoped to its step; slice 10 removes it.
+# The qualifier's isolated_environment sandboxes every launch exactly as on the default route.
+# rc-build also runs qualify_installed_quit.py nine times: per OS the default
 # (BEMPP) Quit gate and the reviewed --engine beat Quit gate on the same
-# installed payload. The second run is the same entrypoint and argument shape
-# plus --engine beat and --official-runtime-work (the official CPU gate's work
+# installed payload, plus one HBB rollback BEAT Quit gate. That third run uses
+# WG2_BEAT_PROVIDER=hbb and separate work/output directories; it delegates to
+# the same reviewed qualifier and isolated_environment boundary.
+# The official run is the same entrypoint and argument shape
+# plus --engine beat and --official-runtime-work (the default CPU gate's official work
 # directory); the gate's own isolated environment sandboxes every launch.
-@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 6, 6)), ('release', (3, 1, 0, 0))])
+@pytest.mark.parametrize('workflow_name,counts', [('rc-build', (3, 1, 6, 9)), ('release', (3, 1, 0, 0))])
 def test_workflow_execution_inventory(workflow_name: str, counts: tuple[int, ...]) -> None:
     workflow = yaml.safe_load((ROOT / f'.github/workflows/{workflow_name}.yml').read_text())
     found = dict.fromkeys(ENTRYPOINTS, 0)

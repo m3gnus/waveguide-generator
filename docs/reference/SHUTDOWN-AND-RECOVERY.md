@@ -98,8 +98,11 @@ skips is crash-safe by construction:
 
 ## BEAT's persistent host on Windows
 
-BEAT keeps its Julia worker in a *persistent host* process. With the legacy HBB
-provider, WG's clean server
+BEAT keeps its Julia worker in a *persistent host* process. Slice 10 removes
+the HBB rollback switch and route after this release's qualification.
+
+With the one-release HBB rollback
+(`WG2_BEAT_PROVIDER=hbb` or `legacy`, set before launch), WG's clean server
 shutdown calls `shutdown_workers()` to stop the workers in this server's
 registry, including these hosts, rather than leaving them until the 30-minute
 idle timeout. This applies on macOS, Linux and Windows, including a server
@@ -125,7 +128,8 @@ status window's.
 Windows with the launcher's real job and the package's exact flags, and checks
 that clean exit requests host shutdown through the pinned package's registry.
 
-With `WG2_BEAT_PROVIDER=official`, the Quit hook instead calls
+By default (unset/empty `WG2_BEAT_PROVIDER`, or explicit `official`),
+the Quit hook calls
 `get_manager().detach()` (`server/app.py`, `shutdown_beat_worker`;
 `server/solver/beat_runtime/manager.py`, `WorkerManager.detach`). Idle hosts,
 including those whose prewarm has completed, retain their Julia worker and

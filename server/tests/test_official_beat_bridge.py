@@ -345,7 +345,7 @@ def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, 
         self.create_system = zip_creator_system
 
     monkeypatch.setattr(zipfile.ZipInfo, "__init__", zip_info)
-    monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
     monkeypatch.setattr(beat.time, "time", lambda: 1700000000.)
     monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
     original = importlib.import_module

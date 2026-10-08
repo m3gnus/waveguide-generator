@@ -1101,3 +1101,9 @@ def test_signed_sum_auxiliary_aggregation_is_only_adaptive(parts):
     assert legacy.solver_log is groups[0][1].solver_log
     np.testing.assert_array_equal(adaptive.surface_pressure_avg[2], expected)
     assert adaptive.solver_log == [entry for _, group in groups for entry in group.solver_log]
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_provider(monkeypatch):
+    """The fake package/provisioner in this module exercises the rollback route."""
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")

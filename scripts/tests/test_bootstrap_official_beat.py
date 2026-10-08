@@ -12,11 +12,16 @@ from scripts import bootstrap
 
 @pytest.mark.parametrize("selector,module", [("official", "server.solver.beat_runtime.cli"),
                                             (" official ", "server.solver.beat_runtime.cli"),
-                                            ("Official", "hornlab_beat_bem.provision"),
+                                            ("Official", "server.solver.beat_runtime.cli"),
                                             ("hbb", "hornlab_beat_bem.provision"),
-                                            ("", "hornlab_beat_bem.provision")])
+                                            ("legacy", "hornlab_beat_bem.provision"),
+                                            ("", "server.solver.beat_runtime.cli"),
+                                            (None, "server.solver.beat_runtime.cli")])
 def test_shared_selector_bootstrap_commands(monkeypatch, selector, module):
-    monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
+    if selector is None:
+        monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
     monkeypatch.delenv("WG2_SKIP_GPU_PROVISION", raising=False)
     monkeypatch.delenv("WG2_SKIP_BEAT_CPU_PROVISION", raising=False)
     monkeypatch.setattr(bootstrap.platform, "system", lambda: "Linux")

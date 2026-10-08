@@ -1917,3 +1917,30 @@ p90 and maximum summary at sweep close. Disabled profiling reads no timing
 clock and stamps no frames. Request/compatibility exceptions preserve cached
 proofs; host/startup/connection failures revoke them even before lease creation.
 Failure listeners run after the lease lock is released.
+
+
+## PLAN slice 9 completion — official provider by default
+
+- Unset/empty `WG2_BEAT_PROVIDER` now selects official BEAT; explicit `official`
+  remains accepted. Unknown values warn once and follow the official default.
+- `WG2_BEAT_PROVIDER=hbb` (alias `legacy`) is the explicit one-release rollback.
+  Set it before launch and restart when switching: solves, imported solves,
+  warm-up, Quit, registry/readiness and CPU/Metal/CUDA/ROCm preparation share this selector.
+  Official runtime/host directories remain separate from HBB's. There is no
+  automatic fallback to HBB when the official provider is unavailable.
+- Bootstrap, first launch, backend checks and installed CPU qualification now
+  follow that default. CPU and BEAT Quit qualifiers accept `--beat-provider hbb`
+  or the environment switch. Quit's `--engine` still defaults to BEMPP;
+  `--engine beat` follows the provider, retaining official idle hosts for reuse
+  and requiring HBB hosts to stop on Quit.
+- rc-build keeps a default official CPU/imported gate and an explicit HBB
+  rollback CPU/imported gate per OS, with separate work/evidence directories.
+  The official BEAT Quit gate reuses the default CPU gate's runtime/depot.
+  Retaining the installed HBB gate proves the promised rollback on the same
+  candidate for its one supported release. Sandbox execution counts stay six
+  CPU and nine Quit invocations across the three OS jobs: BEMPP, official BEAT,
+  and HBB rollback BEAT Quit per OS, each with its own work/evidence directory.
+- Slice 10 removes the HBB provider route, rollback selector and installed HBB
+  gates after this release's qualification. Frozen HBB golden tests now select
+  the rollback explicitly; archived power provenance retains its HBB fallback
+  while new official results identify `beat-engine` in their own metadata.

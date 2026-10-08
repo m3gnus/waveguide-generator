@@ -90,7 +90,7 @@ def freeze(output: Path):
 
     frozen = {}
     with tempfile.TemporaryDirectory() as work, pytest.MonkeyPatch.context() as patch:
-        patch.delenv("WG2_BEAT_PROVIDER", raising=False)
+        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
         patch.setattr(beat.time, "time", lambda: 1700000000.)
         patch.setattr(temp_session, "_active_root", work)
         original = importlib.import_module

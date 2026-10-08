@@ -1475,3 +1475,11 @@ def test_interrupted_runtime_is_redone_before_background_prewarm(
         thread.join(timeout=3)
     assert not thread.is_alive()
     assert calls == [(backend, beat_cpu_runtime.PROVISION_THREAD_NAME)]
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_provider():
+    """The fake package/provisioner in this module exercises the rollback route."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
+        yield

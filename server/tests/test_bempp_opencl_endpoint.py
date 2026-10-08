@@ -17,6 +17,8 @@ from server.tests.test_bempp_opencl import CPU
 @pytest.mark.parametrize('recovery', ['request', 'idle'])
 @pytest.mark.parametrize('code', ['inventory_timeout', 'probe_error'])
 def test_endpoint_recovers_during_startup_without_restart(monkeypatch, tmp_path, recovery, code):
+    # Keep unrelated BEAT readiness on the HBB path that the fakes model.
+    monkeypatch.setenv('WG2_BEAT_PROVIDER', 'hbb')
     bempp.bempp_status.cache_clear()
     # This test keeps the real app's lifespan open long enough for the WGLink
     # startup pass to run. It must not touch the user's Fusion add-in, nor leave

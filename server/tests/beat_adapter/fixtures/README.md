@@ -31,8 +31,8 @@ compare the frozen controls with HBB's private helpers when available.
 `server/tests/test_imported_beat.py`. The clock is fixed at 1700000000; binary
 channel-bases artifacts are represented by their SHA-256. Plain/adaptive parametric and
 multi-channel imported requests, numerical arrays, frame metadata, diagnostics,
-trace refusal metadata and artifact hashes are compared on the selector-off
-path. This is application-contract preservation, not real-engine qualification.
+trace refusal metadata and artifact hashes are compared on the explicit
+`WG2_BEAT_PROVIDER=hbb` rollback path (formerly the default/selector-off path). This is application-contract preservation, not real-engine qualification.
 
 CI portability update (2026-10-06): the geometric tie-breaks from
 `fix/adaptive-sweep-flake` `60fb3474`, plus the difference/peak ordering closure
@@ -48,7 +48,7 @@ The replay uses a detached worktree at the pre-switch production commit
 `server/solver/adaptive_sweep.py` tie-break diff applied to production code.
 The shared test helper `server/tests/beat_adapter/hbb_snapshot.py` was copied
 into that worktree and invoked there, using the recording HBB stand-in from
-that commit and the fixed clock/context/requests of the selector-off test:
+that commit and the fixed clock/context/requests of the HBB rollback golden test:
 
 ```sh
 # From the CI fix worktree; PY is the supplied macOS test interpreter.

@@ -64,6 +64,9 @@ def test_clean_server_exit_requests_shutdown_of_its_persistent_host(
 ) -> None:
     """Exercise the pinned package's real registry and shutdown dispatch."""
 
+    # This regression exercises HBB's pinned shutdown dispatch explicitly.
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
+
     from hornlab_beat_bem import worker
     from hornlab_beat_bem.worker_client import HostedBeatWorker
     from server.app import create_app

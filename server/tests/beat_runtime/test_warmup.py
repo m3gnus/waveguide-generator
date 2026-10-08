@@ -217,7 +217,7 @@ def test_tiny_probe_failure_before_iteration_explicitly_closes_events(runtime_fa
     assert closed == [True]
 
 
-@pytest.mark.parametrize("selector,official", [(" official ", True), ("Official", False)])
+@pytest.mark.parametrize("selector,official", [("", True), (" official ", True), ("hbb", False), ("legacy", False), ("Official", True)])
 def test_shared_selector_lifecycle_and_readiness_decisions(runtime_factory, monkeypatch, tmp_path,
                                                           selector, official):
     monkeypatch.setenv("WG2_BEAT_PROVIDER", selector)
