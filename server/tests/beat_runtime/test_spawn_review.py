@@ -25,6 +25,7 @@ def test_production_spawn_ignores_test_worker_environment(launch, monkeypatch):
     monkeypatch.setattr(spawn, 'HOST_MODULE', 'server.solver.beat_runtime.host')
     monkeypatch.setenv('WG2_BEAT_TEST_WORKER', 'builtins:dict')
     monkeypatch.setenv('WG2_BEAT_TEST_OTHER', 'injected')
+    monkeypatch.setenv('WG2_BEAT_TEST_RETIRE_EVENT', 'injected')
     observed = []
     original_import = builtins.__import__
     original_popen = spawn.subprocess.Popen

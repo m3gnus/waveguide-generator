@@ -305,7 +305,7 @@ def _breakaway_permitted_here() -> bool:
 
 
 @pytest.fixture
-def official(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+def official(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, retire_event: str) -> Any:
     """One official host slot; tears down whatever host is left in it."""
 
     from server.solver.beat_runtime import cleanup, registry as r
@@ -561,17 +561,18 @@ def test_a_host_that_survived_quit_does_not_pin_the_app_layer(
     assert _alive(host_pid)
 
 
-def _signal_retire(*, reset: bool = False) -> bool:
-    """What the installer does (``WaitForRunningApplicationExit``): open and set, or reset."""
+def _signal_retire(event_name: str, *, reset: bool = False) -> bool:
+    """Open and set, or reset, only a private test event."""
+    from server.tests.beat_runtime.fake_host_main import _test_retire_event_name
+
+    event_name = _test_retire_event_name(event_name)
     import ctypes
     from ctypes import wintypes
-
-    from server.solver.beat_runtime.retire import RETIRE_IDLE_EVENT
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.OpenEventW.restype = wintypes.HANDLE
     kernel32.OpenEventW.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR)
-    handle = kernel32.OpenEventW(0x0002, False, RETIRE_IDLE_EVENT)  # EVENT_MODIFY_STATE
+    handle = kernel32.OpenEventW(0x0002, False, event_name)  # EVENT_MODIFY_STATE
     if not handle:
         return False
     try:
@@ -581,17 +582,35 @@ def _signal_retire(*, reset: bool = False) -> bool:
     return True
 
 
+@pytest.mark.parametrize("event_name", [
+    "WaveguideGeneratorRetireIdleBeatHosts", "", None,
+    "Global\\WaveguideGeneratorRetireIdleBeatHosts", "Local\\WaveguideGeneratorRetireIdleBeatHosts",
+    "WaveguideGeneratorTestRetireIdleBeatHosts-", "WaveguideGeneratorTestRetireIdleBeatHosts-unsafe\\name",
+])
+@pytest.mark.parametrize("reset", [False, True])
+def test_signal_retire_refuses_unsafe_names_before_loading_windows_api(monkeypatch, event_name, reset):
+    import ctypes
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("An unsafe retire name reached the Windows API")
+
+    monkeypatch.setattr(ctypes, "WinDLL", forbidden, raising=False)
+    with pytest.raises(ValueError, match="private test retire event"):
+        _signal_retire(event_name, reset=reset)
+
+
 def test_the_installer_and_the_host_name_the_same_retire_event() -> None:
     from server.solver.beat_runtime.retire import RETIRE_IDLE_EVENT
 
     script = (_ROOT / "installers" / "windows" / "bundle-setup.iss").read_text(encoding="utf-8")
+    assert RETIRE_IDLE_EVENT == "WaveguideGeneratorRetireIdleBeatHosts"
     assert f"RetireIdleBeatHostsEvent = '{RETIRE_IDLE_EVENT}';" in script
     assert "OpenEventW(EVENT_MODIFY_STATE, 0, RetireIdleBeatHostsEvent)" in script
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows named events")
 def test_the_installers_retire_request_ends_idle_hosts_but_not_one_in_use(
-    official: Any, monkeypatch: pytest.MonkeyPatch
+    official: Any, monkeypatch: pytest.MonkeyPatch, retire_event: str
 ) -> None:
     """A warm host holds the installer's Running mutex through its native stub.
 
@@ -608,7 +627,7 @@ def test_the_installers_retire_request_ends_idle_hosts_but_not_one_in_use(
     pids.append(record.pid)
     connection = client.connect_client(record, r.private_directory(directory), timeout=10.0)
     try:
-        assert _signal_retire(), "the host did not create the installer's retire event"
+        assert _signal_retire(retire_event), "the host did not create the test retire event"
         time.sleep(1.0)
         assert _alive(record.pid), "a host with a connected client retired"
     finally:
@@ -618,7 +637,7 @@ def test_the_installers_retire_request_ends_idle_hosts_but_not_one_in_use(
         assert "idle exit: the installer asked idle hosts to retire" in _host_log(key, directory)
         assert r.read_record(r.key_id(key), directory) is None
     finally:
-        _signal_retire(reset=True)
+        _signal_retire(retire_event, reset=True)
 
 
 def test_the_record_is_documented() -> None:
