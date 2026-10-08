@@ -40,4 +40,15 @@ if __name__ == "__main__":
     host.official_engine_factory = EngineWorker
     if os.environ.get("BEAT_FAKE_HOST_SUSPEND_FILE"):
         _simulate_suspend(Path(os.environ["BEAT_FAKE_HOST_SUSPEND_FILE"]))
+    if os.environ.get("BEAT_FAKE_HOST_ACCEPTED_FILE"):
+        accepted = Path(os.environ["BEAT_FAKE_HOST_ACCEPTED_FILE"])
+        serve_connection = host.WorkerHost._serve_connection
+
+        def record_accepted(self, connection):
+            # serve() registers this socket in _pending before starting us.
+            with accepted.open("a") as output:
+                output.write("accepted\n")
+            return serve_connection(self, connection)
+
+        host.WorkerHost._serve_connection = record_accepted
     raise SystemExit(host.main())

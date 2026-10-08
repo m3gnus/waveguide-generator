@@ -100,12 +100,24 @@ def test_authenticated_lifetime_invalid_submission_and_shutdown(launch):
         assert not record.endpoint.path.exists()
 
 
-def test_hello_alone_and_silent_peer_do_not_prevent_idle_exit(launch):
+def test_hello_alone_and_silent_peer_do_not_prevent_idle_exit(launch, monkeypatch):
     key, directory, children = launch
-    record = spawn.start_host(key, directory, idle_timeout=0.3)
+    expired = directory.parent / "expire-idle-clock"
+    accepted = directory.parent / "accepted-peers"
+    monkeypatch.setenv("BEAT_FAKE_HOST_SUSPEND_FILE", str(expired))
+    monkeypatch.setenv("BEAT_FAKE_HOST_ACCEPTED_FILE", str(accepted))
+    # Establish the peers before expiring the idle clock. A 0.3 s real-time
+    # window can close between start_host's authenticated probe and connect.
+    record = spawn.start_host(key, directory)
     with record.endpoint.connect(1), record.endpoint.connect(1) as connection:
         ipc.send_frame(connection, r.hello_message(record))
         assert ipc.receive_frame(connection)["type"] == "hello_ok"
+        # One startup authentication probe plus both scenario peers. Socket
+        # connect alone does not prove the silent peer entered host._pending.
+        wait_until(lambda: accepted.read_text().splitlines() == ["accepted"] * 3)
+        # The fake host advances only its idle clock a day; peer handshake
+        # deadlines retain real monotonic time and the exit observation is 3 s.
+        expired.touch()
         wait_until(lambda: children[0].returncode is not None)
     assert r.read_record(record.identifier, directory) is None
     assert events(key)[-1]["type"] == "terminated"
