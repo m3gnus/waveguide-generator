@@ -13,7 +13,7 @@ from server.tests.beat_runtime.fake_host_worker import events, wait_until
 
 
 @pytest.mark.parametrize("module", ["server.solver.beat_runtime.host", "server.tests.beat_runtime.fake_host_main"])
-def test_host_command_imports_app_under_isolated_python(monkeypatch, module):
+def test_host_command_imports_app_under_isolated_python(monkeypatch, module, retire_event):
     source = Path(__file__).resolve().parents[3]
     monkeypatch.setattr(spawn, "HOST_MODULE", module)
     environment = dict(os.environ, PYTHONPATH=str(source), WG2_APP_ROOT=str(source))

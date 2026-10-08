@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import uuid
 
 import pytest
 
@@ -54,6 +55,17 @@ os.environ.setdefault("WG2_SKIP_BEAT_CPU_PROVISION", "1")
 # backstop is recorded instead, and the test it fired under fails.
 _backstop_exits: list[int] = []
 shutdown_backstop._process_exit = _backstop_exits.append
+
+
+@pytest.fixture
+def retire_event(monkeypatch):
+    """Give in-process and fake subprocess hosts the same per-test event."""
+    from server.solver.beat_runtime import retire
+
+    name = f"WaveguideGeneratorTestRetireIdleBeatHosts-{uuid.uuid4().hex}"
+    monkeypatch.setattr(retire, "RETIRE_IDLE_EVENT", name)
+    monkeypatch.setenv("BEAT_FAKE_HOST_RETIRE_EVENT", name)
+    return name
 
 
 @pytest.fixture(autouse=True)

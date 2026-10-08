@@ -25,6 +25,11 @@ class RetireSignal:
     """This process's handle on the installer's retire event, or nothing."""
 
     def __init__(self) -> None:
+        # Resolve at construction so tests can replace the constant in-process.
+        # Production deliberately does not read an environment override.
+        event_name = RETIRE_IDLE_EVENT
+        if not isinstance(event_name, str) or not event_name.strip() or "\\" in event_name or "\0" in event_name:
+            raise ValueError("Retire event name must be a non-empty session-local name")
         self._kernel32 = None
         self._handle = None
         self.error: int | None = None
@@ -41,7 +46,7 @@ class RetireSignal:
         kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         kernel32.CloseHandle.restype = wintypes.BOOL
         # Manual reset, initially clear; every host shares the one object.
-        handle = kernel32.CreateEventW(None, True, False, RETIRE_IDLE_EVENT)
+        handle = kernel32.CreateEventW(None, True, False, event_name)
         if not handle:
             self.error = ctypes.get_last_error()
             return

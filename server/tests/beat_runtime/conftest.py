@@ -72,7 +72,7 @@ def cpu_provisioning(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def launch(tmp_path, monkeypatch):
+def launch(tmp_path, monkeypatch, retire_event):
     monkeypatch.setattr(spawn, "HOST_MODULE", "server.tests.beat_runtime.fake_host_main")
     monkeypatch.setenv("WG2_BEAT_WORKER_DIR", str(tmp_path / "workers"))
     monkeypatch.setenv("WG2_BEAT_RUNTIME_DIR", str(tmp_path / "runtime"))
