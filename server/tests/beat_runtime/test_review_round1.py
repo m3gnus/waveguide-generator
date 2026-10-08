@@ -34,9 +34,9 @@ def selected(monkeypatch, tmp_path):
         assert not thread.is_alive()
 
 
-def test_default_off_import_isolation_in_fresh_interpreter(tmp_path):
+def test_rollback_import_isolation_in_fresh_interpreter(tmp_path):
     env = dict(os.environ, WG2_BEAT_RUNTIME_DIR=str(tmp_path / "data"))
-    env.pop(provider.PROVIDER_ENV, None)
+    env[provider.PROVIDER_ENV] = "hbb"
     code = """
 import sys
 from scripts import bootstrap
@@ -52,8 +52,8 @@ assert loaded == {'server.solver.beat_runtime.provider'}, loaded
     assert not (tmp_path / "data").exists()
 
 
-def test_default_off_official_notifications_cannot_reach_registry(monkeypatch):
-    monkeypatch.delenv(provider.PROVIDER_ENV, raising=False)
+def test_rollback_official_notifications_cannot_reach_registry(monkeypatch):
+    monkeypatch.setenv(provider.PROVIDER_ENV, "hbb")
     registry = EngineRegistry()
     before = registry._refresh_revision
     readiness.probe_cache_clear()
@@ -277,12 +277,16 @@ with provisioning_lock(root, backend='cpu'):
     assert readiness.backend_readiness("cpu", root, **query).state == "interrupted"
 
 
-def test_selector_exact_value_warns_once_and_uses_process_environment(selected, monkeypatch, caplog):
+def test_selector_casefolds_values_warns_once_and_uses_process_environment(selected, monkeypatch, caplog):
     provider._warned_values.clear()
-    for value in ("OFFICIAL", "Official", "hbb", "invalid"):
+    for value in ("OFFICIAL", "Official", "invalid"):
+        assert provider.official_selected({provider.PROVIDER_ENV: value})
+        assert provider.official_selected({provider.PROVIDER_ENV: value})
+    assert len(caplog.records) == 1
+    assert "default official provider" in caplog.text
+    for value in ("hbb", "legacy"):
         assert not provider.official_selected({provider.PROVIDER_ENV: value})
-        assert not provider.official_selected({provider.PROVIDER_ENV: value})
-    assert len(caplog.records) == 4
+    assert len(caplog.records) == 1
     assert provider.official_selected({provider.PROVIDER_ENV: " official "})
     monkeypatch.setattr(facade, "_start_official_provisioning", lambda env: "official")
     # Launch options cannot silently select a different provider from status/listeners.

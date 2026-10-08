@@ -16,6 +16,7 @@ from server.jobs.models import GroundPlaneConfig, SolveOptions
 from server.solver import beat as _beat_module
 from server.solver import bempp as _bempp_module
 from server.solver import metal as _metal_module
+from server.solver import official_beat as _official_beat_module
 from server.solver.ground_plane import (
     GROUND_PLANE_AXES,
     NATIVE_GROUND_PLANE,
@@ -54,6 +55,10 @@ def _no_real_solver_probes(monkeypatch: pytest.MonkeyPatch) -> None:
             for backend in _beat_module.BEAT_BACKENDS
         },
     )
+    monkeypatch.setattr(_official_beat_module, "production_statuses", lambda: {
+        backend: {**_STUB_STATUS, "backend": backend, "surface_traces": False}
+        for backend in _beat_module.BEAT_BACKENDS
+    })
     monkeypatch.setattr(_bempp_module, "bempp_status", lambda: {
         **_STUB_STATUS,
         "coupled_infinite_baffle": True,
@@ -504,8 +509,9 @@ def test_an_engine_that_can_ground_is_accepted():
     assert resolution.engine_name == "bempp"
 
 
+@pytest.mark.parametrize("selected_provider", [None, "hbb"], ids=["official-default", "hbb-rollback"])
 def test_capability_tests_here_launch_no_solver_and_no_subprocess(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, selected_provider: str | None,
 ) -> None:
     """The probe stub is the point of this file's autouse fixture, so pin it.
 
@@ -526,6 +532,13 @@ def test_capability_tests_here_launch_no_solver_and_no_subprocess(
     monkeypatch.setattr(subprocess, "Popen", refuse)
     monkeypatch.setattr(subprocess, "run", refuse)
 
+    if selected_provider is None:
+        monkeypatch.delenv("WG2_BEAT_PROVIDER", raising=False)
+    else:
+        monkeypatch.setenv("WG2_BEAT_PROVIDER", selected_provider)
+    real_official = _official_beat_module.production_statuses
+    monkeypatch.setattr(_official_beat_module, "production_statuses",
+                        lambda: probed.append("official") or real_official())
     probed: list[str] = []
     real = _beat_module.beat_backend_statuses
     monkeypatch.setattr(
@@ -536,7 +549,9 @@ def test_capability_tests_here_launch_no_solver_and_no_subprocess(
 
     engines = {engine.name: engine for engine in detect_engines()}
 
-    assert probed == ["beat"], "detect_engines must have asked the stubbed probe"
+    assert probed == (["official"] if selected_provider is None else ["beat"]), (
+        "detect_engines must have asked the selected provider's stubbed probe"
+    )
     assert engines["bempp"].available is True
     assert engines["bempp"].reason == "stubbed for tests", (
         "the real bempp probe ran; the autouse stub is not in effect"

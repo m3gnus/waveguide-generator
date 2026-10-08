@@ -146,8 +146,57 @@ WG uses Full 3D solving with ordinary AUTO, half, and quarter symmetry reduction
 The backend selector chooses **Metal** (Apple GPU), one of the **BEAT**
 engines, or **BEMPP** (CPU OpenCL, with numba fallback).
 
-BEAT is one solver with four interchangeable execution backends, and the Solver
-backend list offers each of them separately:
+BEAT · CPU, BEAT · Metal, BEAT · CUDA and BEAT · ROCm use the official BEAT
+engine by default. CUDA supports NVIDIA GPUs and ROCm supports AMD GPUs on
+Windows and Linux; Metal supports eligible Apple GPUs on macOS. GPU readiness
+reports the detected hardware and any runtime preparation needed. BEMPP remains
+available for infinite-baffle and rigid-ground-plane solves.
+
+**The first launch after upgrading prepares the official runtime once**, even
+if an HBB runtime was already prepared. WG downloads a private Julia runtime
+and its packages, then compiles and verifies the engine in the background.
+This requires an internet connection and can take several minutes. Offline
+users need connectivity once to complete preparation; later launches reuse the
+prepared runtime without downloading it again.
+
+For one release, set `WG2_BEAT_PROVIDER=hbb` (or `legacy`) before starting WG
+to roll back BEAT solves, runtime preparation, readiness, warm-up and Quit to
+hornlab-beat-bem. Values are case-insensitive and surrounding spaces are ignored.
+WG has no provider setting in its GUI. Fully quit and restart WG after changing
+this environment variable:
+
+- **macOS, including double-click launch:** run `launchctl setenv WG2_BEAT_PROVIDER hbb`
+  in Terminal, then open WG from Finder or the Dock. An `export` in a Terminal
+  shell alone does not reach Finder-launched apps. The `launchctl` setting lasts
+  for the current login session; repeat after logging in again if needed. To
+  return to official, run `launchctl unsetenv WG2_BEAT_PROVIDER`, then restart WG.
+- **Windows:** search Start for **Edit environment variables for your account**.
+  Under **User variables**, add `WG2_BEAT_PROVIDER` with value `hbb`. Sign out
+  and back in so Explorer and shortcuts inherit it, then launch WG. Delete that
+  user variable and sign out/back in to return to official.
+- **Linux:** for a terminal launch, run `WG2_BEAT_PROVIDER=hbb waveguide-generator`.
+  For a desktop launcher, edit a user copy of WG's `.desktop` file under
+  `~/.local/share/applications/` and prefix its existing `Exec=` command with
+  `env WG2_BEAT_PROVIDER=hbb` (keep the existing executable and arguments).
+  Remove that prefix to return to official, then restart WG.
+
+Unset or empty selects official; `WG2_BEAT_PROVIDER=official` also works.
+The rollback switch remains available until CPU and Metal performance is
+proven as fast as HBB or faster. Official and HBB runtime caches and worker registries are
+separate. The upgrade leaves your existing HBB runtime on disk for rollback:
+
+| OS | HBB runtime directory |
+|---|---|
+| macOS | `~/Library/Application Support/hornlab-beat/runtime` |
+| Windows | `%LOCALAPPDATA%\hornlab-beat\runtime` |
+| Linux | `${XDG_DATA_HOME:-~/.local/share}/hornlab-beat/runtime` |
+
+If you set `HORNLAB_BEAT_RUNTIME_DIR`, that directory replaces the default above.
+Once you no longer need HBB rollback, it is safe to
+delete this HBB runtime directory with WG closed. The official engine does not
+read, modify or remove it and does not depend on it.
+
+The Solver backend list offers these BEAT engines:
 
 | Engine | Runs on |
 |---|---|
@@ -156,8 +205,8 @@ backend list offers each of them separately:
 | **BEAT · Metal** | an Apple Silicon GPU |
 | **BEAT · CPU** | any machine, once its Julia runtime has been provisioned |
 
-They all solve the same problem and differ only in speed, so on a machine with
-both a GPU and the CPU path you can pick either and compare. Any engine this
+The available engines solve the same problem and differ in speed, so on a
+machine with both a GPU and the CPU path you can pick either and compare. Any engine this
 machine cannot run stays in the list, greyed out, with the reason on the row —
 so a missing driver or an uninstalled runtime says so instead of vanishing.
 

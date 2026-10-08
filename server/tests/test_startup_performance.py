@@ -285,8 +285,8 @@ def _beat_quit_hook(application: Any) -> Any:
     )
 
 
-@pytest.mark.parametrize("provider", [None, "hbb", "Official", "official"])
-def test_beat_lifecycle_provider_is_explicit_and_default_off(monkeypatch, tmp_path, provider):
+@pytest.mark.parametrize("provider", [None, "hbb", "legacy", "Official", "official"])
+def test_beat_lifecycle_defaults_to_official_with_rollback(monkeypatch, tmp_path, provider):
     import server.app as app_module
     from server.solver import warmup
     from server.solver.beat_runtime import manager, warmup as official_warmup
@@ -322,7 +322,7 @@ def test_beat_lifecycle_provider_is_explicit_and_default_off(monkeypatch, tmp_pa
         assert application.state.beat_prewarm_task.cancelled()
 
     asyncio.run(quit_app())
-    if provider == "official":
+    if provider not in {"hbb", "legacy"}:
         assert called == [("official warm", {"beat_backend": "metal", "mode": "tiny"}),
                           "prewarm cancelled", "official quit"]
     else:
@@ -1771,3 +1771,11 @@ def test_the_beat_prewarm_records_every_outcome_in_the_log(
     assert any("skipped: the first solve uses metal" in message for message in messages)
     assert any("failed after" in message and "no Julia here" in message for message in messages)
     assert {record.levelno for record in caplog.records} == {logging.INFO}
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_fakes():
+    """Historic warm-up and shutdown fakes exercise HBB; selector tests override."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("WG2_BEAT_PROVIDER", "hbb")
+        yield

@@ -138,12 +138,12 @@ def _publish_status_ready(control_path: Path | None, port: int) -> None:
 
 
 def _start_beat_cpu_provisioning() -> None:
-    """Give a GPU-less Windows or Linux install a BEAT CPU runtime, in the background.
+    """Prepare the selected BEAT CPU runtime on first launch, in the background.
 
     The source install provisions from ``scripts/bootstrap.py``, which the
     packaged application never runs: it ships a prebuilt runtime layer with
-    ``hornlab-beat-bem`` already installed, so without this nothing would ever
-    fetch the Julia that backend needs and the engine would be permanently
+    ``beat-engine`` already installed (or ``hornlab-beat-bem`` for rollback).
+    Without this, nothing would fetch the Julia that backend needs and the engine would be permanently
     unavailable on exactly the machines it exists for.
 
     Here rather than in ``create_app`` for the same reason ``solver_warmup`` is

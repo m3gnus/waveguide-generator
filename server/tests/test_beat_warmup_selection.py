@@ -15,8 +15,7 @@ from server.solver import beat, bempp, metal, official_beat, warmup
 @pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm", None])
 def test_boot_warmup_selects_provider_readiness(monkeypatch, official, backend, hbb_present):
     monkeypatch.setitem(sys.modules, "hornlab_beat_bem", SimpleNamespace() if hbb_present else None)
-    if official:
-        monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official" if official else "hbb")
     warmed = []
     probes = []
     monkeypatch.setattr(metal, "metal_status", lambda: {"available": False})
@@ -47,8 +46,7 @@ def test_boot_warmup_selects_provider_readiness(monkeypatch, official, backend, 
 
 @pytest.mark.parametrize("official", [False, True])
 def test_legacy_engine_prewarm_uses_selected_readiness(monkeypatch, official):
-    if official:
-        monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official" if official else "hbb")
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     warmed = []
     monkeypatch.setattr(warmup, "_warm_beat", warmed.append)
@@ -65,8 +63,7 @@ def test_legacy_engine_prewarm_uses_selected_readiness(monkeypatch, official):
 
 @pytest.mark.parametrize("official", [False, True])
 def test_unavailable_legacy_prewarm_respects_official_readiness(monkeypatch, official):
-    if official:
-        monkeypatch.setenv("WG2_BEAT_PROVIDER", "official")
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "official" if official else "hbb")
     monkeypatch.delenv("WG2_SOLVER_WARMUP", raising=False)
     monkeypatch.setattr(official_beat, "production_statuses", lambda: {
         backend: {"available": False, "reason": "not proved"} for backend in beat.BEAT_BACKENDS})

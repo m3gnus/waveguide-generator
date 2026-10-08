@@ -258,15 +258,16 @@ jobs:
             --imported-engine beat-cpu \
             --imported-engine-when-offered metal
 
-      - name: Qualify the official BEAT engine on the same candidate
-        # Qualify both routes until the provider switch; slice 10 removes HBB.
-        # Reuse the installed payload, with a fresh official runtime and depot.
+      - name: Qualify the HBB rollback on the same candidate
+        # The default CPU gate is official. Keep an explicit installed rollback
+        # proof for one release; slice 10 removes this HBB gate and selector.
+        # Reuse the installed payload, with a fresh HBB runtime and depot.
         # Planning estimate: +10-25 min for Julia download, bundle instantiate/
-        # precompile and solves (unmeasured). The official gate checks BEAT CPU only.
+        # precompile and solves (unmeasured). The rollback gate checks BEAT CPU only.
         # No explicit job timeout-minutes; revisit the default after RC timings.
         if: ${{ !cancelled() }}
         env:
-          WG2_BEAT_PROVIDER: official
+          WG2_BEAT_PROVIDER: hbb
         run: |
           set -euo pipefail
           root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
@@ -274,14 +275,14 @@ jobs:
           uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py \
             --payload "$root/Waveguide Generator.app" \
             --payload-kind dmg-ditto \
-            --work "$root/official-work" \
-            --output "$root/official-qualification" \
+            --work "$root/hbb-work" \
+            --output "$root/hbb-qualification" \
             --pins-json pins.json \
             --build-manifest "$manifest" \
             --imported-engine beat-cpu \
             --imported-engine-when-offered metal
 
-      - name: Preserve the official BEAT qualification logs
+      - name: Preserve the HBB rollback qualification logs
         if: always()
         # Into the job log rather than a new artifact: this workflow's artifact
         # set is the candidate a person hand-tests, and a gate's evidence should
@@ -289,11 +290,11 @@ jobs:
         run: |
           set -u
           root="${WG2_CPU_GATE_ROOT:-}"
-          if [ -z "$root" ] || [ ! -d "$root/official-qualification" ]; then
-            echo "No official BEAT qualification output was produced."
+          if [ -z "$root" ] || [ ! -d "$root/hbb-qualification" ]; then
+            echo "No HBB rollback qualification output was produced."
             exit 0
           fi
-          for file in "$root/official-qualification"/*; do
+          for file in "$root/hbb-qualification"/*; do
             [ -f "$file" ] || continue
             echo "===== $(basename "$file") ====="
             tail -c 200000 "$file"
@@ -340,7 +341,7 @@ jobs:
         # host (docs/reference/SHUTDOWN-AND-RECOVERY.md). Quit detaches that
         # host for relaunch by design, so the gate requires the same verified
         # host across Quit and restart and an authenticated cleanup that leaves
-        # no BEAT process or record. It reuses the official CPU gate's runtime
+        # no BEAT process or record. It reuses the default CPU gate's official runtime
         # and Julia depot; if those are incomplete the app prepares its own.
         # Runs even when an earlier gate failed, so every verdict is on record.
         if: ${{ !cancelled() }}
@@ -351,7 +352,7 @@ jobs:
             --payload "$root/Waveguide Generator.app" \
             --payload-kind dmg-ditto \
             --engine beat \
-            --official-runtime-work "$root/official-work" \
+            --official-runtime-work "$root/work" \
             --work "$root/beat-quit-work" \
             --output "$root/beat-quit-qualification"
 
@@ -365,6 +366,37 @@ jobs:
             exit 0
           fi
           for file in "$root/beat-quit-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
+      - name: Qualify Quit with a live HBB rollback BEAT host on the same candidate
+        # One-release HBB rollback: prove worker shutdown and a fresh host on restart.
+        if: ${{ !cancelled() }}
+        env:
+          WG2_BEAT_PROVIDER: hbb
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py \
+            --payload "$root/Waveguide Generator.app" \
+            --payload-kind dmg-ditto \
+            --engine beat \
+            --work "$root/hbb-beat-quit-work" \
+            --output "$root/hbb-beat-quit-qualification"
+
+      - name: Preserve the HBB rollback BEAT Quit qualification logs
+        if: always()
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/hbb-beat-quit-qualification" ]; then
+            echo "No BEAT Quit qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/hbb-beat-quit-qualification"/*; do
             [ -f "$file" ] || continue
             echo "===== $(basename "$file") ====="
             tail -c 200000 "$file"
@@ -544,15 +576,16 @@ jobs:
             throw "The CPU qualification exited $LASTEXITCODE"
           }
 
-      - name: Qualify the official BEAT engine on the same candidate
-        # Qualify both routes until the provider switch; slice 10 removes HBB.
-        # Reuse the installed payload, with a fresh official runtime and depot.
+      - name: Qualify the HBB rollback on the same candidate
+        # The default CPU gate is official. Keep an explicit installed rollback
+        # proof for one release; slice 10 removes this HBB gate and selector.
+        # Reuse the installed payload, with a fresh HBB runtime and depot.
         # Planning estimate: +15-35 min for Julia download, bundle instantiate/
         # precompile and solves (unmeasured).
         # No explicit job timeout-minutes; revisit the default after RC timings.
         if: ${{ !cancelled() }}
         env:
-          WG2_BEAT_PROVIDER: official
+          WG2_BEAT_PROVIDER: hbb
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -565,25 +598,25 @@ jobs:
           uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py `
             --payload (Join-Path $root "app") `
             --payload-kind windows-installer `
-            --work (Join-Path $root "official-work") `
-            --output (Join-Path $root "official-qualification") `
+            --work (Join-Path $root "hbb-work") `
+            --output (Join-Path $root "hbb-qualification") `
             --pins-json pins.json `
             --build-manifest $manifest `
             --imported-engine beat-cpu
           if ($LASTEXITCODE -ne 0) {
-            throw "The official BEAT qualification exited $LASTEXITCODE"
+            throw "The HBB rollback qualification exited $LASTEXITCODE"
           }
 
-      - name: Preserve the official BEAT qualification logs
+      - name: Preserve the HBB rollback qualification logs
         if: always()
         shell: pwsh
         run: |
           $root = $env:WG2_CPU_GATE_ROOT
-          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "official-qualification"))) {
-            Write-Host "No official BEAT qualification output was produced."
+          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "hbb-qualification"))) {
+            Write-Host "No HBB rollback qualification output was produced."
             exit 0
           }
-          Get-ChildItem -File (Join-Path $root "official-qualification") | ForEach-Object {
+          Get-ChildItem -File (Join-Path $root "hbb-qualification") | ForEach-Object {
             Write-Host "===== $($_.Name) ====="
             Get-Content -Tail 4000 -LiteralPath $_.FullName
             Write-Host ""
@@ -644,7 +677,7 @@ jobs:
             --payload (Join-Path $root "app") `
             --payload-kind windows-installer `
             --engine beat `
-            --official-runtime-work (Join-Path $root "official-work") `
+            --official-runtime-work (Join-Path $root "work") `
             --work (Join-Path $root "beat-quit-work") `
             --output (Join-Path $root "beat-quit-qualification")
           if ($LASTEXITCODE -ne 0) {
@@ -661,6 +694,43 @@ jobs:
             exit 0
           }
           Get-ChildItem -File (Join-Path $root "beat-quit-qualification") | ForEach-Object {
+            Write-Host "===== $($_.Name) ====="
+            Get-Content -Tail 4000 -LiteralPath $_.FullName
+            Write-Host ""
+          }
+
+      - name: Qualify Quit with a live HBB rollback BEAT host on the installed candidate
+        # One-release HBB rollback: prove worker shutdown and a fresh host on restart.
+        if: ${{ !cancelled() }}
+        env:
+          WG2_BEAT_PROVIDER: hbb
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root) {
+            throw "The CPU gate did not prepare the installed candidate."
+          }
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py `
+            --payload (Join-Path $root "app") `
+            --payload-kind windows-installer `
+            --engine beat `
+            --work (Join-Path $root "hbb-beat-quit-work") `
+            --output (Join-Path $root "hbb-beat-quit-qualification")
+          if ($LASTEXITCODE -ne 0) {
+            throw "The HBB rollback BEAT Quit qualification exited $LASTEXITCODE"
+          }
+
+      - name: Preserve the HBB rollback BEAT Quit qualification logs
+        if: always()
+        shell: pwsh
+        run: |
+          $root = $env:WG2_CPU_GATE_ROOT
+          if (-not $root -or -not (Test-Path -LiteralPath (Join-Path $root "hbb-beat-quit-qualification"))) {
+            Write-Host "No BEAT Quit qualification output was produced."
+            exit 0
+          }
+          Get-ChildItem -File (Join-Path $root "hbb-beat-quit-qualification") | ForEach-Object {
             Write-Host "===== $($_.Name) ====="
             Get-Content -Tail 4000 -LiteralPath $_.FullName
             Write-Host ""
@@ -793,15 +863,16 @@ jobs:
             --ib-engine bempp \
             --ib-expect-backend any
 
-      - name: Qualify the official BEAT engine on the same candidate
-        # Qualify both routes until the provider switch; slice 10 removes HBB.
-        # Reuse the installed payload, with a fresh official runtime and depot.
+      - name: Qualify the HBB rollback on the same candidate
+        # The default CPU gate is official. Keep an explicit installed rollback
+        # proof for one release; slice 10 removes this HBB gate and selector.
+        # Reuse the installed payload, with a fresh HBB runtime and depot.
         # Planning estimate: +10-25 min for Julia download, bundle instantiate/
         # precompile and solves (unmeasured).
         # No explicit job timeout-minutes; revisit the default after RC timings.
         if: ${{ !cancelled() }}
         env:
-          WG2_BEAT_PROVIDER: official
+          WG2_BEAT_PROVIDER: hbb
         run: |
           set -euo pipefail
           root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
@@ -809,13 +880,13 @@ jobs:
           uv run --no-project --python 3.13.12 python scripts/qualify_installed_cpu.py \
             --payload "$root/prefix/waveguide-generator" \
             --payload-kind linux-install-sh \
-            --work "$root/official-work" \
-            --output "$root/official-qualification" \
+            --work "$root/hbb-work" \
+            --output "$root/hbb-qualification" \
             --pins-json pins.json \
             --build-manifest "$manifest" \
             --imported-engine beat-cpu
 
-      - name: Preserve the official BEAT qualification logs
+      - name: Preserve the HBB rollback qualification logs
         if: always()
         # Into the job log rather than a new artifact: this workflow's artifact
         # set is the candidate a person hand-tests, and a gate's evidence should
@@ -823,11 +894,11 @@ jobs:
         run: |
           set -u
           root="${WG2_CPU_GATE_ROOT:-}"
-          if [ -z "$root" ] || [ ! -d "$root/official-qualification" ]; then
-            echo "No official BEAT qualification output was produced."
+          if [ -z "$root" ] || [ ! -d "$root/hbb-qualification" ]; then
+            echo "No HBB rollback qualification output was produced."
             exit 0
           fi
-          for file in "$root/official-qualification"/*; do
+          for file in "$root/hbb-qualification"/*; do
             [ -f "$file" ] || continue
             echo "===== $(basename "$file") ====="
             tail -c 200000 "$file"
@@ -872,7 +943,7 @@ jobs:
             --payload "$root/prefix/waveguide-generator" \
             --payload-kind linux-install-sh \
             --engine beat \
-            --official-runtime-work "$root/official-work" \
+            --official-runtime-work "$root/work" \
             --work "$root/beat-quit-work" \
             --output "$root/beat-quit-qualification"
 
@@ -886,6 +957,37 @@ jobs:
             exit 0
           fi
           for file in "$root/beat-quit-qualification"/*; do
+            [ -f "$file" ] || continue
+            echo "===== $(basename "$file") ====="
+            tail -c 200000 "$file"
+            echo
+          done
+
+      - name: Qualify Quit with a live HBB rollback BEAT host on the same candidate
+        # One-release HBB rollback: prove worker shutdown and a fresh host on restart.
+        if: ${{ !cancelled() }}
+        env:
+          WG2_BEAT_PROVIDER: hbb
+        run: |
+          set -euo pipefail
+          root="${WG2_CPU_GATE_ROOT:?the CPU gate did not prepare the candidate}"
+          uv run --no-project --python 3.13.12 python scripts/qualify_installed_quit.py \
+            --payload "$root/prefix/waveguide-generator" \
+            --payload-kind linux-install-sh \
+            --engine beat \
+            --work "$root/hbb-beat-quit-work" \
+            --output "$root/hbb-beat-quit-qualification"
+
+      - name: Preserve the HBB rollback BEAT Quit qualification logs
+        if: always()
+        run: |
+          set -u
+          root="${WG2_CPU_GATE_ROOT:-}"
+          if [ -z "$root" ] || [ ! -d "$root/hbb-beat-quit-qualification" ]; then
+            echo "No BEAT Quit qualification output was produced."
+            exit 0
+          fi
+          for file in "$root/hbb-beat-quit-qualification"/*; do
             [ -f "$file" ] || continue
             echo "===== $(basename "$file") ====="
             tail -c 200000 "$file"

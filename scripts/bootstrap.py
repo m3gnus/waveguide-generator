@@ -636,12 +636,11 @@ def bootstrap(environment: Path, *, force: bool = False) -> None:
 def _provision_beat_runtime(python: Path) -> None:
     """Provision whichever BEAT runtime this host can actually use.
 
-    Two steps, and the difference between them is who decides. The GPU step is
-    hardware-gated and downloads nothing without a matching device. The CPU step
-    runs only where there is no such device, on the platforms this application
-    provisions a CPU runtime for, and is what makes BEAT's CPU backend a real
-    engine on a GPU-less Windows or Linux box instead of a permanently
-    greyed-out row.
+    Official BEAT is the default; WG2_BEAT_PROVIDER=hbb/legacy uses the
+    one-release HBB rollback. The GPU step is hardware-gated and downloads
+    nothing without a matching supported device. The CPU step provisions on
+    Windows and Linux, independently of GPU readiness when the selected
+    provider records readiness per backend.
     """
 
     if official_selected():

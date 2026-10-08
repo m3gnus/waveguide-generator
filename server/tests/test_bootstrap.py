@@ -546,3 +546,9 @@ def test_an_environment_without_beat_provisions_nothing(tmp_path, monkeypatch) -
     bootstrap._provision_beat_runtime(tmp_path / "python")
 
     assert _provision_calls(commands) == []
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_provider(monkeypatch):
+    """The fake package/provisioner in this module exercises the rollback route."""
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")

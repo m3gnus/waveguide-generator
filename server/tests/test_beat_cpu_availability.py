@@ -234,3 +234,9 @@ def test_a_ready_record_is_only_believed_with_a_julia_that_exists(
     readiness = cpu_runtime_readiness(package)
 
     assert readiness.ready is False, "a record naming a Julia that is gone is not ready"
+
+
+@pytest.fixture(autouse=True)
+def _hbb_rollback_provider(monkeypatch):
+    """The fake package/provisioner in this module exercises the rollback route."""
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")

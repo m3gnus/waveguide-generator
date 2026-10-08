@@ -92,6 +92,9 @@ UNKNOWN_POWER_CHECK_UNAVAILABLE = "power_check_unavailable"
 UNKNOWN_PROVENANCE_MISSING = "provenance_missing"
 UNKNOWN_MEMBER = "member_unknown"
 
+# Fallback for archived results without package metadata, recorded before the
+# official default. New BEAT results name beat-engine explicitly; never infer
+# an archived result's provider from the current environment/selector.
 _ENGINE_PACKAGES = {
     "metal": "hornlab-metal-bem",
     "circsym": "hornlab-metal-bem",

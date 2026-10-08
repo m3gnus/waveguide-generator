@@ -207,8 +207,8 @@ def _warm_beat(backend: str) -> None:
 
     BEAT is the one engine whose cost was never being paid off the user's
     first solve, and the one where a warmup is cheapest to justify. Every BEAT
-    solve goes through a Julia worker that ``hornlab_beat_bem`` keeps for the
-    life of *this* process, so the cost is paid once per server -- but nothing
+    solve goes through the selected provider's Julia worker (official by
+    default; HBB with the explicit rollback), so startup is reused -- but nothing
     was paying it until a user asked for a solve and then waited through Julia
     startup, package loading, engine compilation and accelerator kernel
     compilation before the first frequency began.
