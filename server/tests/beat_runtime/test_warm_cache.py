@@ -4,9 +4,11 @@
 # ruff: noqa: F811
 
 import os
+from contextlib import contextmanager
 from time import perf_counter
 from statistics import median
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -327,8 +329,59 @@ def test_direct_hardware_refresh_revokes_gpu_verdict(monkeypatch, tmp_path, back
     assert calls == [1, 1]
 
 
+def _simulate_windows_directory_metadata(monkeypatch, target):
+    """NTFS enumeration can lag path stat; DirEntry.stat also lacks an inode."""
+    snapshot = target.stat()
+    scans = []
+    original = os.scandir
+
+    @contextmanager
+    def scandir(directory):
+        with original(directory) as entries:
+            observed = []
+            for entry in entries:
+                if Path(entry.path) == target:
+                    # The first listing still has the size from file creation.
+                    # Later listings catch up, then retain that metadata on edit.
+                    metadata = SimpleNamespace(st_mtime_ns=snapshot.st_mtime_ns // 100 * 100,
+                                               st_size=snapshot.st_size if scans else 0, st_ino=0)
+                    scans.append(1)
+                    entry = SimpleNamespace(name=entry.name, path=entry.path,
+                                            is_junction=getattr(entry, "is_junction", lambda: False),
+                                            is_dir=entry.is_dir, is_symlink=entry.is_symlink,
+                                            stat=lambda **kw: metadata)
+                observed.append(entry)
+            yield iter(observed)
+
+    # Keep the simulation local to the warm walk; full proof uses real metadata.
+    monkeypatch.setattr(warm_cache, "os", SimpleNamespace(**{**vars(os), "scandir": scandir}))
+
+
+@pytest.mark.parametrize("change", ["edit", "replacement"])
+def test_source_walk_ignores_stale_windows_directory_metadata(monkeypatch, tmp_path, change):
+    target = tmp_path / "solver.jl"
+    target.write_text("original")
+    _simulate_windows_directory_metadata(monkeypatch, target)
+    before = warm_cache.source_signature(tmp_path)
+    assert warm_cache.source_signature(tmp_path) == before
+    if change == "edit":
+        target.write_text("changed source bytes")
+    else:
+        stat = target.stat()
+        replacement = tmp_path / "replacement"
+        replacement.write_text("replaced")  # Same size and timestamp; only the inode changes.
+        os.utime(replacement, ns=(stat.st_atime_ns, stat.st_mtime_ns))
+        replacement.replace(target)
+    after = warm_cache.source_signature(tmp_path)
+    assert after != before
+    assert warm_cache.source_signature(tmp_path) == after
+
+
+@pytest.mark.parametrize("directory_metadata", ["native", "windows_cached"])
 @pytest.mark.parametrize("selection", ["argument", "environment"])
-def test_external_project_nested_edit_revokes_verdict_and_key(proved_cpu, monkeypatch, tmp_path, selection):
+def test_external_project_nested_edit_revokes_verdict_and_key(
+    proved_cpu, monkeypatch, tmp_path, selection, directory_metadata,
+):
     root, _, julia, saved, query, _, _ = proved_cpu
     project = tmp_path / "external-project"
     nested = project / "src" / "nested"
@@ -344,6 +397,8 @@ def test_external_project_nested_edit_revokes_verdict_and_key(proved_cpu, monkey
         query["environ"]["JULIA_PROJECT"] = str(project)
     saved.update(readiness.expected_identity("cpu", root, **query))
     state.write_state(saved, root)
+    if directory_metadata == "windows_cached":
+        _simulate_windows_directory_metadata(monkeypatch, target)
     proofs, keys = [], []
     prove, resolve = readiness._prove_backend_readiness, manager._resolve_key
     monkeypatch.setattr(readiness, "_prove_backend_readiness", lambda *a, **kw: (proofs.append(1), prove(*a, **kw))[1])
@@ -352,7 +407,8 @@ def test_external_project_nested_edit_revokes_verdict_and_key(proved_cpu, monkey
     assert readiness.backend_readiness("cpu", root, **query).ready
     before = manager.resolve_key("cpu", **options)
     assert manager.resolve_key("cpu", **options) == before
-    assert proofs == keys == [1]
+    assert proofs == [1]
+    assert keys == [1]
     parent_stamp = nested.stat().st_mtime_ns
     target.write_text("changed nested project source")
     assert nested.stat().st_mtime_ns == parent_stamp
@@ -364,7 +420,39 @@ def test_external_project_nested_edit_revokes_verdict_and_key(proved_cpu, monkey
         assert after["engine_fingerprint"] != before["engine_fingerprint"]
     else:
         assert readiness.backend_readiness("cpu", root, **query).ready
-    assert proofs == keys == [1, 1]
+    assert proofs == [1, 1]
+    assert keys == [1, 1]
+    assert manager.resolve_key("cpu", **options) == after
+    readiness.backend_readiness("cpu", root, **query)
+    assert proofs == [1, 1]
+    assert keys == [1, 1]
+
+
+@pytest.mark.parametrize("cache", ["readiness", "key"])
+def test_source_stat_failure_uses_full_resolution(proved_cpu, monkeypatch, cache):
+    root, engine, julia, _, query, _, _ = proved_cpu
+    target = engine.root / "__init__.py"
+    original = os.stat
+
+    def stat(path, *args, **kwargs):
+        if Path(path) == target:
+            raise PermissionError("source stat unavailable")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(warm_cache, "os", SimpleNamespace(**{**vars(os), "stat": stat}))
+    calls = []
+    if cache == "readiness":
+        full = readiness._prove_backend_readiness
+        monkeypatch.setattr(readiness, "_prove_backend_readiness", lambda *a, **kw: (calls.append(1), full(*a, **kw))[1])
+        for _ in range(2):
+            assert readiness.backend_readiness("cpu", root, **query).ready
+    else:
+        full = manager._resolve_key
+        monkeypatch.setattr(manager, "_resolve_key", lambda *a, **kw: (calls.append(1), full(*a, **kw))[1])
+        options = dict(julia_executable=str(julia), julia_threads=3, environment=query["environ"])
+        first = manager.resolve_key("cpu", **options)
+        assert manager.resolve_key("cpu", **options) == first
+    assert calls == [1, 1]
 
 
 def test_warm_solve_shares_source_walks_and_next_solve_observes_edit(proved_cpu, monkeypatch):

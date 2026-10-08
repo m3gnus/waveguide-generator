@@ -90,7 +90,10 @@ def source_signature(root: Path) -> tuple:
                     raise ValueError("Linked identity directory")
                 elif not entry.name.endswith((".py", ".jl", ".toml", ".json")):
                     continue
-                stat = entry.stat()
+                # Windows DirEntry.stat uses enumeration metadata, which NTFS
+                # can return stale, and reports st_ino=0. Query the path so an
+                # unchanged tree stays stable and edits/replacements revoke it.
+                stat = os.stat(entry.path)
                 observed.append((entry.path, stat.st_mtime_ns, stat.st_size, stat.st_ino))
     return tuple(sorted(observed))
 
