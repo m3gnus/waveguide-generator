@@ -46,6 +46,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # free-port probe is released before the server binds, and no production CLI
 # validation needs to change for a test's ephemeral listener.
 _EPHEMERAL_SERVER_MAIN = """
+import faulthandler
+import os
+from pathlib import Path
+# The watchdog dumps Python stacks from C without taking the GIL. Native
+# sample output alone cannot identify the Python import/lock owner when
+# startup freezes, and Gmsh replaces signal-based dump handlers.
+python_stacks = open(Path(os.environ["TMPDIR"]) / "python-stacks.txt", "w")
+faulthandler.dump_traceback_later(__START_DIAGNOSTIC_SECONDS__, repeat=True, file=python_stacks)
 from launch import serve
 reserve = serve.reserve_port
 def reserve_ephemeral(_preferred, **kwargs):
@@ -127,6 +135,10 @@ class _Server:
                 continue
             lines.append(f"--- {path.name} (tail) ---")
             lines.extend(text.splitlines()[-40:])
+        python_stacks = self.tmp_dir / "python-stacks.txt"
+        if python_stacks.is_file():
+            lines.append("--- python-stacks.txt (watchdog dump of all Python threads) ---")
+            lines.extend(python_stacks.read_text(encoding="utf-8", errors="replace").splitlines())
         stacks = self.output.with_name("stacks.txt")
         if stacks.is_file():
             lines.append("--- stacks.txt (native stacks of the unresponsive server) ---")
@@ -320,7 +332,7 @@ def _launch(
     command = [
         sys.executable,
         "-c",
-        _EPHEMERAL_SERVER_MAIN,
+        _EPHEMERAL_SERVER_MAIN.replace("__START_DIAGNOSTIC_SECONDS__", str(START_TIMEOUT_SECONDS * .75)),
         "--no-browser",
         "--status-control",
         str(control_dir / "stop"),
