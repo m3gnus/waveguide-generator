@@ -79,7 +79,9 @@ print(probe._READY_MARKER, flush=True)
 probe._child_result = lambda *args: {result!r}
 probe._child_main('smoke', None, Path(sys.argv[1]))
 """)
-    verdict = probe._run_probe("smoke", CPU, 5)
+    # Allow teardown to abort on loaded runners before the test-only compute
+    # budget expires; this test exercises child failure, not the timeout path.
+    verdict = probe._run_probe("smoke", CPU, 60)
     assert children[0].returncode != 0
     assert verdict["ok"] is False
     assert "Child exited with status" in verdict["reason"]
