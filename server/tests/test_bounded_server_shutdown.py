@@ -535,7 +535,11 @@ def test_a_stop_request_during_a_blocked_build_ends_the_process_in_time(
 def test_a_second_interrupt_during_a_blocked_build_exits_promptly(
     tmp_path: Path, started: list[subprocess.Popen[bytes]]
 ) -> None:
-    server = _launch(tmp_path, started, block=True)
+    # A child-process build is killed by the first stop, so graceful shutdown
+    # can finish and restore signal handlers before the second interrupt.
+    # Park the in-process worker instead: it cannot be killed, and the first
+    # stop must keep waiting for it until the second interrupt ends the wait.
+    server = _launch(tmp_path, started, block=True, in_process_mesher=True)
     _submit_parked_job(server)
 
     os.kill(server.process.pid, signal.SIGINT)
@@ -552,6 +556,7 @@ def test_a_second_interrupt_during_a_blocked_build_exits_promptly(
 
     _wait_for_exit(server, second_at, PROMPT_EXIT_SECONDS, "a second Ctrl+C")
     assert server.process.returncode == 0, server.evidence()
+    assert _server_log_contains(server, "Exiting now: a second Ctrl+C"), server.evidence()
 
 
 @POSIX_ONLY
