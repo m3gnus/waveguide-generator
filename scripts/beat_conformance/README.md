@@ -672,7 +672,11 @@ thread policy resolves CPU AUTO to performance cores and applies WG's Metal
 headroom; no one-thread overrides are introduced. Record ambient thread env,
 resolved Julia launch count (HBB worker key/resolver; official also native runtime
 provenance), and observed BLAS count on **every** channel/frequency row. The report
-requires both counts to match across both routes and repetitions. Raw environments
+requires both counts to remain stable within each backend/route across all cases
+and repetitions. Routes may have different production policies: report the observed
+Julia and BLAS counts separately, without normalizing the evidence or overriding
+the deployed policy. The resulting ratios compare production routes, not matched
+thread counts; the fixed 1.20/1.10 speed budgets remain unchanged. Raw environments
 and their corpus hashes are retained; the comparison hash excludes only the two
 per-job private registry paths in addition to corpus volatile exclusions.
 

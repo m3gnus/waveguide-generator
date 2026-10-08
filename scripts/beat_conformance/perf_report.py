@@ -89,7 +89,8 @@ def aggregate(runs: list[dict], *, load_threshold: float = DEFAULT_LOAD_THRESHOL
     """Return invalid evidence as a nonpassing verdict, never discard bad rows."""
     report = {"schema": SCHEMA, "gates": GATES, "minimum_repetitions": 3,
               "load_threshold_per_logical_cpu": load_threshold, "cases": [], "errors": [],
-              "passed": False, "status": "invalid", "record_count": len(runs)}
+              "passed": False, "status": "invalid", "record_count": len(runs),
+              "comparison": "production routes", "matched_thread_counts": False}
     try:
         positive(load_threshold, "load threshold")
         if not runs:
@@ -97,6 +98,7 @@ def aggregate(runs: list[dict], *, load_threshold: float = DEFAULT_LOAD_THRESHOL
         groups = defaultdict(list)
         identities, pids, sequences = set(), set(), set()
         route_envs = defaultdict(set)
+        route_threads = defaultdict(set)
         for run in runs:
             validate_run(run)
             identities.add(dumps(identity_key(run["identity"])))
@@ -106,9 +108,13 @@ def aggregate(runs: list[dict], *, load_threshold: float = DEFAULT_LOAD_THRESHOL
             pids.add(pid)
             sequences.add(run["sequence"])
             route_envs[(run["backend"], run["route"])].add(run["comparison_environment_sha256"])
+            route_threads[(run["backend"], run["route"])].add(tuple(
+                run["timing"]["threads"][name] for name in ("julia_threads", "blas_threads")))
             groups[(run["case"], run["backend"])].append(run)
         if len(identities) != 1 or any(len(envs) != 1 for envs in route_envs.values()):
             raise ValueError("Mixed WG/engine/Julia/thread/environment identities")
+        if any(len(counts) != 1 for counts in route_threads.values()):
+            raise ValueError("Resolved Julia/BLAS thread counts must match within each backend/route across all cases and repetitions")
         chronological = sorted(runs, key=lambda r: r["started_at_epoch_s"])
         if [r["sequence"] for r in chronological] != sorted(sequences):
             raise ValueError("Actual acquisition order differs from interleaving plan")
@@ -134,9 +140,10 @@ def aggregate(runs: list[dict], *, load_threshold: float = DEFAULT_LOAD_THRESHOL
             for field in ("mesh_sha256", "request_sha256"):
                 if len({r[field] for r in ordered}) != 1:
                     raise ValueError(f"Unmatched {field}")
-            thread_counts = {(r["timing"]["threads"]["julia_threads"], r["timing"]["threads"]["blas_threads"]) for r in ordered}
-            if len(thread_counts) != 1:
-                raise ValueError("Resolved Julia/BLAS thread counts must match both routes and all repetitions")
+            threads = {route: dict(zip(("julia_threads", "blas_threads"),
+                                      next(iter(route_threads[(backend, route)]))))
+                       for route in routes}
+            matched_threads = threads["hbb"] == threads["official"]
             metrics = {}
             flags = []
             for metric in METRICS:
@@ -164,9 +171,11 @@ def aggregate(runs: list[dict], *, load_threshold: float = DEFAULT_LOAD_THRESHOL
                 pairs.append({"repetition": a["repetition"], "sequence": [a["sequence"], b["sequence"]],
                               "max_normalized_load": load, "high_load": noisy, "power_states": power})
             report["cases"].append({"case": case, "backend": backend, "repetitions_per_route": count,
-                                    "metrics": metrics, "threads": dict(zip(("julia_threads", "blas_threads"), next(iter(thread_counts)))),
+                                    "metrics": metrics, "threads_by_route": threads,
+                                    "matched_thread_counts": matched_threads,
                                     "pairs": pairs, "noisy": bool(flags), "noise_flags": flags,
                                     "passed": all(metrics[m]["passed"] for m in GATES)})
+        report["matched_thread_counts"] = all(c["matched_thread_counts"] for c in report["cases"])
         report["passed"] = all(c["passed"] for c in report["cases"])
         report["noisy"] = any(c["noisy"] for c in report["cases"])
         report["status"] = "pass" if report["passed"] else "fail"
@@ -180,6 +189,7 @@ def render_markdown(report: dict) -> str:
     lines = ["# BEAT production performance — PLAN slice 8", "",
              f"Verdict: **{report['status'].upper()}**. Records: {report['record_count']}.", "",
              "Fixed median gates: first result official/HBB ≤ 1.20; warm sweep ≤ 1.10.",
+             "Comparison: production routes with their observed thread policies; this is not a matched-thread benchmark.",
              "N ≥ 3 per route; ranges are min–max, not confidence intervals.",
              "Noise flags annotate the measured verdict; they never relax either budget.", "",
              "| Case / backend | N/route | Metric | HBB median [range] | Official median [range] | Ratio | Gate |",
@@ -194,8 +204,9 @@ def render_markdown(report: dict) -> str:
             lines.append(f"| {case['case']} / {case['backend']} | {case['repetitions_per_route']} | {name} | "
                          f"{values[0]} | {values[1]} | {metric['official_over_hbb']:.4f} | {gate} |")
     for case in report["cases"]:
-        lines.extend(["", f"{case['case']} / {case['backend']}: Julia {case['threads']['julia_threads']}, "
-                      f"BLAS {case['threads']['blas_threads']} threads on both routes.", ""])
+        lines.extend(["", f"{case['case']} / {case['backend']}: " + "; ".join(
+            f"{route}: Julia {threads['julia_threads']}, BLAS {threads['blas_threads']}"
+            for route, threads in case["threads_by_route"].items()) + ".", ""])
         lines.extend(f"- Noise: {flag}" for flag in case["noise_flags"])
     if report["errors"]:
         lines.extend(["", "Evidence refused:", ""])

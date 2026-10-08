@@ -280,6 +280,26 @@ def test_bad_evidence_cannot_pass(mutate, match):
     assert match in result["errors"][0]
 
 
+def test_production_route_threads_are_recorded_without_normalization():
+    rows = records()
+    for row in rows:
+        row["timing"]["threads"].update(julia_threads=6,
+            blas_threads=7 if row["route"] == "official" else 6)
+    result = aggregate(rows)
+    assert result["passed"] and not result["matched_thread_counts"]
+    case = result["cases"][0]
+    assert case["threads_by_route"] == {
+        "hbb": {"julia_threads": 6, "blas_threads": 6},
+        "official": {"julia_threads": 6, "blas_threads": 7}}
+    text = report.render_markdown(result)
+    assert "hbb: Julia 6, BLAS 6" in text and "official: Julia 6, BLAS 7" in text
+    assert "not a matched-thread benchmark" in text
+    # A difference between production policies cannot relax either speed budget.
+    rows[-1]["timing"]["warm_sweep_s"] = 20.
+    rows[-3]["timing"]["warm_sweep_s"] = 20.
+    assert aggregate(rows)["status"] == "fail"
+
+
 def test_route_batches_refuse_even_with_three_each():
     rows = records()
     rows = sorted(rows, key=lambda r: r["route"])
@@ -303,9 +323,15 @@ def test_all_required_cases_cpu_and_metal_are_separate():
     for row in metal:
         sequence = row["sequence"] + len(rows)
         row.update(backend="metal", sequence=sequence, started_at_epoch_s=sequence * 100., ended_at_epoch_s=sequence * 100. + 80)
+        row["timing"]["threads"].update(julia_threads=6, blas_threads=7 if row["route"] == "official" else 6)
         row["identity"]["pid"] = 100 + sequence
     result = report.aggregate(rows + metal)
     assert result["passed"] and len(result["cases"]) == 6
+    assert not result["matched_thread_counts"]
+    # A policy change across cases on the same route is invalid evidence.
+    metal[-1]["timing"]["threads"]["blas_threads"] = 8
+    invalid = report.aggregate(rows + metal)
+    assert invalid["status"] == "invalid" and "across all cases" in invalid["errors"][0]
 
 
 def test_report_rendering_and_cli_write_json_and_markdown(tmp_path):
