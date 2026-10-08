@@ -119,9 +119,19 @@ def test_successor_token_is_retained_before_connect(tmp_path, host):
 
 def test_live_host_that_acknowledges_but_does_not_exit_is_retained(tmp_path, host, monkeypatch):
     record, peer = host
+    # One deadline covers the whole cleanup. On Windows the spawn lock and
+    # registry reads alone exceed 10 ms, before the control exchange starts.
+    now = [0.0]
+    monkeypatch.setattr(c.time, "monotonic", lambda: now[0])
+
+    def sleep(delay):
+        now[0] += delay
+
+    monkeypatch.setattr(c.time, "sleep", sleep)
     monkeypatch.setattr(c, "pid_alive", lambda pid: True)
     with pytest.raises(r.RecordRefused, match="still live"):
         c.cleanup_host(record, record.key, tmp_path, timeout=0.01)
+    assert now[0] == 0.01
     assert [x["op"] for x in peer.sent] == ["hello", "shutdown"]
     assert r.read_record(record.identifier, tmp_path) == record
 

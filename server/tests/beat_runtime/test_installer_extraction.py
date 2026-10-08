@@ -4,6 +4,7 @@ from dataclasses import replace
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tarfile
 import zipfile
@@ -98,7 +99,9 @@ def test_unsafe_archive_member_is_rejected(tmp_path, windows, name):
     assert not (root / "julia" / spec.directory).exists()
 
 
-def test_tar_preserves_internal_library_link_but_refuses_escape(tmp_path):
+# Windows installs Julia from ZIP; only tar symlink preservation needs a skip.
+@pytest.mark.skipif(os.name == "nt", reason="Windows Julia uses ZIP, not Linux tar symlinks")
+def test_tar_preserves_internal_library_link(tmp_path):
     source = archive(tmp_path)
     spec = installer.julia_download("Linux", "x86_64")
     with tarfile.open(source, "w:gz") as bundle:
@@ -111,7 +114,16 @@ def test_tar_preserves_internal_library_link_but_refuses_escape(tmp_path):
     root = paths.runtime_dir()
     binary = installer.extract_julia(source, root, spec)
     assert (binary.parent.parent / "lib/libjulia.so").read_bytes() == b"Julia"
+
+
+def test_tar_refuses_escaping_library_link(tmp_path):
+    source = archive(tmp_path, members={"julia/bin/julia": b"Julia"})
+    spec = installer.julia_download("Linux", "x86_64")
+    root = paths.runtime_dir()
+    binary = installer.extract_julia(source, root, spec)
     with tarfile.open(source, "w:gz") as bundle:
+        link = tarfile.TarInfo("julia/lib/libjulia.so")
+        link.type = tarfile.SYMTYPE
         link.linkname = str(tmp_path / "external")
         bundle.addfile(link)
     with pytest.raises(tarfile.FilterError):
