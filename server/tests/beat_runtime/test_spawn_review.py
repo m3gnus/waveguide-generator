@@ -44,11 +44,12 @@ def test_production_spawn_ignores_test_worker_environment(launch, monkeypatch):
     def launching(command, **options):
         if command[0] != sys.executable:
             return original_popen(command, **options)
-        assert command[2] == 'server.solver.beat_runtime.host'
+        assert command[1] == '-c'
+        assert command[4] == 'server.solver.beat_runtime.host'
         assert not any(name.upper().startswith('WG2_BEAT_TEST_') for name in options['env'])
         # Run the selected production entry with an import sentinel; the optional
         # engine is never loaded, and the environment cannot select builtins.dict.
-        host.main(command[3:])
+        host.main(command[5:])
 
     monkeypatch.setattr(builtins, '__import__', importing)
     monkeypatch.setattr(spawn.subprocess, 'Popen', launching)

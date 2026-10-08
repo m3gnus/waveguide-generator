@@ -26,6 +26,20 @@ CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 ERROR_ACCESS_DENIED = 5
 
 
+# The app root and the module arrive as arguments, never interpolated into
+# the source, so any install path (spaces, quotes, non-ASCII) is passed intact.
+_HOST_BOOTSTRAP = ("import runpy, sys\n"
+                   "root = sys.argv.pop(1)\n"
+                   "if root not in sys.path:\n"
+                   "    sys.path.insert(0, root)\n"
+                   "runpy.run_module(sys.argv.pop(1), run_name='__main__', alter_sys=True)\n")
+
+
+def _host_command(root: Path, *arguments: str) -> list[str]:
+    # The module stays its own argument; the test fakes match on it (conftest.py).
+    return [sys.executable, "-c", _HOST_BOOTSTRAP, str(root), HOST_MODULE, *arguments]
+
+
 def detached_options(*, windows: bool | None = None, breakaway: bool = True) -> dict[str, Any]:
     is_windows = os.name == "nt" if windows is None else windows
     if is_windows:
@@ -49,14 +63,12 @@ def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: 
     environment = {name: value for name, value in (os.environ if environment is None else environment).items()
                    if not name.upper().startswith("WG2_BEAT_TEST_")}
     root = app_root(environ=environment)
-    # Packaged Windows Python can ignore cwd through its isolated ._pth file.
-    # Use sys.executable through native admission; wg-python._pth includes app.
-    # PYTHONPATH additionally supports source and nonisolated bundled runtimes.
+    # The bootstrap carries app even when isolated Python ignores PYTHONPATH
+    # and cwd. Keep sys.executable so packaged workers use native admission.
     environment["WG2_APP_ROOT"] = str(root)
     environment["PYTHONPATH"] = os.pathsep.join(filter(None, (str(root), environment.get("PYTHONPATH"))))
-    command = [sys.executable, "-m", HOST_MODULE,
-               "--key", str(r.launch_spec_path(identifier, directory)), "--dir", str(directory),
-               "--idle-timeout", str(idle_timeout), "--ready", "--startup-timeout", str(timeout)]
+    command = _host_command(root, "--key", str(r.launch_spec_path(identifier, directory)), "--dir", str(directory),
+                            "--idle-timeout", str(idle_timeout), "--ready", "--startup-timeout", str(timeout))
     with contextlib.ExitStack() as stack:
         log = r.log_path(identifier, directory)
         fd = stack.enter_context(r._private_file(log, create=True, append=os.name != "nt"))

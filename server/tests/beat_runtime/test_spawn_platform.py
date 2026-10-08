@@ -12,7 +12,36 @@ from server.solver.beat_runtime import ipc, registry as r, spawn
 from server.tests.beat_runtime.fake_host_worker import events, wait_until
 
 
-def test_source_launch_uses_module_app_root_devnull_and_reaping(launch, tmp_path, monkeypatch):
+@pytest.mark.parametrize("module", ["server.solver.beat_runtime.host", "server.tests.beat_runtime.fake_host_main"])
+def test_host_command_imports_app_under_isolated_python(monkeypatch, module):
+    source = Path(__file__).resolve().parents[3]
+    monkeypatch.setattr(spawn, "HOST_MODULE", module)
+    environment = dict(os.environ, PYTHONPATH=str(source), WG2_APP_ROOT=str(source))
+    command = spawn._host_command(source, "--help")
+    result = subprocess.run([command[0], "-I", *command[1:]], cwd=source, env=environment,
+                            capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert "--idle-timeout" in result.stdout
+
+
+def test_host_command_passes_an_awkward_app_root_intact(tmp_path, monkeypatch):
+    # Spaces, a quote and non-ASCII: the root is an argument, not source text.
+    root = tmp_path / "Wave guide's Gén"
+    (root / "awkward_host_pkg").mkdir(parents=True)
+    (root / "awkward_host_pkg" / "__init__.py").write_text("")
+    (root / "awkward_host_pkg" / "entry.py").write_text(
+        "import sys\nprint('ARGS', sys.argv[1:])\n", encoding="utf-8")
+    monkeypatch.setattr(spawn, "HOST_MODULE", "awkward_host_pkg.entry")
+    command = spawn._host_command(root, "--key", "k y")
+    assert str(root) not in command[2]
+    result = subprocess.run([command[0], "-I", *command[1:]], cwd=tmp_path, capture_output=True,
+                            text=True, encoding="utf-8", timeout=30,
+                            env=dict(os.environ, PYTHONIOENCODING="utf-8"))
+    assert result.returncode == 0, result.stderr
+    assert "ARGS ['--key', 'k y']" in result.stdout
+
+
+def test_source_launch_uses_bootstrap_app_root_devnull_and_reaping(launch, tmp_path, monkeypatch):
     key, directory, children = launch
     source = Path(__file__).resolve().parents[3]
     monkeypatch.chdir(tmp_path)
@@ -27,7 +56,8 @@ def test_source_launch_uses_module_app_root_devnull_and_reaping(launch, tmp_path
     monkeypatch.setattr(spawn.subprocess, "Popen", popen)
     record = spawn.start_host(key, directory, idle_timeout=0.2)
     command, options = observed[0]
-    assert command[:4] == [sys.executable, "-m", spawn.HOST_MODULE, "--key"]
+    assert command[:2] == [sys.executable, "-c"]
+    assert command[3:6] == [str(source), spawn.HOST_MODULE, "--key"]
     # Windows runs the host from its registry, never the app layer (host.working_directory).
     expected_cwd = str(r.private_directory(directory)) if os.name == "nt" else str(source)
     assert options["cwd"] == expected_cwd
