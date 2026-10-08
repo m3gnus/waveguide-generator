@@ -95,9 +95,18 @@ def ps_processes() -> dict[int, dict]:
 
 def psutil_processes(module: Any) -> dict[int, dict]:
     rows = {}
+    # psutil >= 6 retains Process objects without checking PID reuse. Refresh
+    # birth identities each sample (also avoids stale cached parent PIDs).
+    clear_cache = getattr(module.process_iter, "cache_clear", None)
+    if clear_cache is not None:
+        clear_cache()
     for process in module.process_iter(["pid", "ppid", "memory_info", "create_time"]):
         try:
             info = process.info
+            # Attribute collection can itself race exit/PID reuse. is_running
+            # compares this object's birth identity with a fresh Process(pid).
+            if not process.is_running():
+                continue
             memory = info.get("memory_info")
             rows[info["pid"]] = {"ppid": info["ppid"], "rss": memory.rss if memory else None,
                                  "start": info["create_time"]}
@@ -158,6 +167,12 @@ class RSSSampler:
         if self.root_pid not in rows:
             raise ValueError("RSS sampler cannot observe harness parent")
         roots = {self.root_pid} | registry_pids(self.directories)
+        # A missing birth identity cannot establish that a previously owned
+        # PID is safely unrelated. Refuse partial evidence instead of silently
+        # dropping an inaccessible root or known descendant from the sum.
+        for pid in roots | self.known.keys():
+            if pid in rows and rows[pid]["start"] is None:
+                raise ValueError(f"RSS sampler cannot observe owned PID {pid}")
         selected = {pid for pid in roots if pid in rows and (
             pid not in self.known or self.known[pid] == rows[pid]["start"])}
         selected.update(pid for pid, start in self.known.items()

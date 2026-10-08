@@ -208,9 +208,96 @@ def test_sampler_psutil_reader_handles_exited_process():
         def info(self):
             raise Gone()
     fake = SimpleNamespace(NoSuchProcess=Gone, AccessDenied=PermissionError,
-        process_iter=lambda attrs: [Process(), SimpleNamespace(info={"pid": 1, "ppid": 0,
+        process_iter=lambda attrs: [Process(), SimpleNamespace(is_running=lambda: True, info={"pid": 1, "ppid": 0,
             "memory_info": SimpleNamespace(rss=200), "create_time": 12.})])
     assert perf.psutil_processes(fake) == {1: {"ppid": 0, "rss": 200, "start": 12.}}
+
+
+class CachedPsutil:
+    """Model cached Process birth time with fresh attributes, as in psutil >= 6."""
+    NoSuchProcess = ProcessLookupError
+    AccessDenied = PermissionError
+
+    def __init__(self, rows):
+        self.rows, self.cache, self.clears = rows, {}, 0
+        self.after_attributes = lambda: None
+        module = self
+
+        class Process:
+            def __init__(self, pid):
+                self.pid, self.birth = pid, module.rows[pid]["start"]
+
+            @property
+            def info(self):
+                row = module.rows[self.pid]
+                if row.get("denied"):
+                    raise PermissionError()
+                info = {"pid": self.pid, "ppid": row["ppid"],
+                        "memory_info": SimpleNamespace(rss=row["rss"]),
+                        "create_time": self.birth}
+                module.after_attributes()
+                return info
+
+            def is_running(self):
+                row = module.rows.get(self.pid)
+                return row is not None and row["start"] == self.birth
+
+        def iterate(attrs):
+            assert attrs == ["pid", "ppid", "memory_info", "create_time"]
+            for pid in list(module.rows):
+                if pid not in module.cache:
+                    module.cache[pid] = Process(pid)
+                yield module.cache[pid]
+
+        def clear():
+            module.clears += 1
+            module.cache.clear()
+
+        iterate.cache_clear = clear
+        self.process_iter = iterate
+
+
+def test_psutil_refreshes_cached_birth_and_keeps_detached_reparented_tree(tmp_path):
+    rows = {1: {"ppid": 0, "rss": 10, "start": 1.},
+            2: {"ppid": 1, "rss": 20, "start": 2.},
+            3: {"ppid": 0, "rss": 30, "start": 3.},
+            4: {"ppid": 3, "rss": 40, "start": 4.}}
+    fake = CachedPsutil(rows)
+    write_json(tmp_path / "host.json", {"pid": 3, "key": {}})
+    sampler = perf.RSSSampler(1, (tmp_path,), reader=lambda: perf.psutil_processes(fake))
+    sampler.sample()
+    old = fake.cache[2]
+    rows[2].update(start=20., rss=9000)
+    rows[4]["ppid"] = 0
+    sampler.sample()
+    assert fake.clears == 2 and fake.cache[2] is not old
+    assert sampler.samples[0]["rss_bytes"] == 100
+    assert sampler.samples[1]["rss_bytes"] == 80
+    assert sampler.samples[1]["pids"] == [1, 3, 4]
+
+
+@pytest.mark.parametrize("change", ["exit", "reuse"])
+def test_psutil_rejects_identity_changed_during_attribute_collection(change):
+    rows = {1: {"ppid": 0, "rss": 10, "start": 1.}}
+    fake = CachedPsutil(rows)
+    def change_identity():
+        if change == "exit":
+            rows.clear()
+        else:
+            rows[1]["start"] = 2.
+    fake.after_attributes = change_identity
+    assert perf.psutil_processes(fake) == {}
+
+
+def test_psutil_access_denied_owned_row_refuses_partial_tree():
+    rows = {1: {"ppid": 0, "rss": 10, "start": 1.},
+            2: {"ppid": 1, "rss": 20, "start": 2.}}
+    fake = CachedPsutil(rows)
+    sampler = perf.RSSSampler(1, (), reader=lambda: perf.psutil_processes(fake))
+    sampler.sample()
+    rows[2]["denied"] = True
+    with pytest.raises(ValueError, match="owned PID 2"):
+        sampler.sample()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the perf harness is POSIX-only (process groups, SIGKILL)")
@@ -467,9 +554,9 @@ def test_psutil_unavailable_rss_only_refuses_owned_processes():
     class Gone(Exception):
         pass
     fake = SimpleNamespace(NoSuchProcess=Gone, AccessDenied=PermissionError,
-        process_iter=lambda attrs: [SimpleNamespace(info={"pid": 1, "ppid": 0,
+        process_iter=lambda attrs: [SimpleNamespace(is_running=lambda: True, info={"pid": 1, "ppid": 0,
             "memory_info": SimpleNamespace(rss=200), "create_time": 12.}),
-            SimpleNamespace(info={"pid": 2, "ppid": 0, "memory_info": None, "create_time": 13.})])
+            SimpleNamespace(is_running=lambda: True, info={"pid": 2, "ppid": 0, "memory_info": None, "create_time": 13.})])
     rows = perf.psutil_processes(fake)
     sampler = perf.RSSSampler(1, (), reader=lambda: rows)
     sampler.sample()
