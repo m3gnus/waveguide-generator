@@ -1,3 +1,4 @@
+import { exteriorModeBlocker } from '../jobs/importedSubmission';
 import {
   putProjectSetup,
   putSolverSelection,
@@ -67,7 +68,7 @@ export function buildCadProjectSetup(
 ): CadProjectSetup | null {
   const bundle = state.selectedBundle;
   if (!bundle || !bundle.sources.length || !lineageId) return null;
-  if (incompleteDriverChannels(state).length) return null;
+  if (incompleteDriverChannels(state).length || exteriorModeBlocker(state, solveStore)) return null;
   const cardioidPresent = hasPassiveCardioidSurface(bundle.sources);
   if (cardioidPresent && passiveCardioidBlocker(state)) return null;
   if (polarValidationError(solveStore.polar)) return null;
@@ -88,7 +89,7 @@ export function buildCadProjectSetup(
     channel.id,
     channelAcceptsDriver(channel) ? channelDriverWire(state.channelDrivers[channel.id]) : undefined,
   ]));
-  const driven = [...drivers.values()].some(Boolean);
+  const driven = [...drivers.values()].some(Boolean) || state.driveChannels.some(channel => channel.exterior_transducer);
   const combine = combineWire(state);
   const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
   const driverReferences = Object.fromEntries(state.driveChannels.flatMap((channel) => {

@@ -1,3 +1,4 @@
+import { parseExteriorTransducer } from '../../stores/exteriorTransducer';
 import { useEffect, useRef, type Dispatch, type MutableRefObject, type SetStateAction } from 'react';
 import { CadLinkApiError, getIngest, listReturns, type CadReturnBundle, type CadReturnIngestRecord } from '../../api/cadlink';
 import type { CadSetup, JobItem } from '../../api/jobsSocket';
@@ -64,7 +65,8 @@ function savedDriveChannels(setup: CadSetup | null | undefined, record: CadRetur
         typeof id !== 'string' || !knownSources.has(id) || assigned.has(id)
       ))) return [];
     channel.source_ids.forEach((id) => assigned.add(id));
-    return [{ id: channel.id, source_ids: [...channel.source_ids], motion: channel.motion ?? 'normal' }];
+    return [{ id: channel.id, source_ids: [...channel.source_ids], motion: channel.motion ?? 'normal',
+      ...(channel.exterior_transducer !== undefined ? { exterior_transducer: parseExteriorTransducer(channel.exterior_transducer) } : {}) }];
   });
   return channels.length === raw.length ? channels : [];
 }

@@ -111,7 +111,8 @@ class EngineInfo:
     ground_plane_composes_with_symmetry: bool = False
     geometry_sources: tuple[str, ...] = ("parametric",)
     # Imported-geometry features beyond solving the returned mesh. Only
-    # "passive-cardioid" exists: Metal's radiation-matrix campaign
+    # "passive-cardioid" and opt-in "exterior-transducers" are negotiated
+    # separately. The former is Metal's radiation-matrix campaign
     # (``server/solver/metal.py``). A return that enables one is offered only
     # to an engine that names it here.
     imported_features: tuple[str, ...] = ()
@@ -372,6 +373,8 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
 
     from server.solver.beat import BEAT_BACKEND_LABELS, beat_engine_name, beat_geometry_sources
 
+    from server.solver.beat_runtime.provider import official_selected
+
     name = beat_engine_name(backend)
     return EngineInfo(
         name=name,
@@ -383,6 +386,7 @@ def _beat_engine_info(backend: str, status: Mapping[str, Any]) -> EngineInfo:
         # No ground plane: the BEAT adapter does not translate one yet.
         mountings=("free-standing",),
         geometry_sources=beat_geometry_sources(backend),
+        imported_features=("exterior-transducers",) if official_selected() and backend in {"cpu", "metal"} else (),
         symmetry_domains=_symmetry_domains(name),
         field_traces=bool(status.get("surface_traces")),
         di_sphere=True,

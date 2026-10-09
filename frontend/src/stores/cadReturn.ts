@@ -1,3 +1,4 @@
+import { parseExteriorTransducer, type ExteriorTransducerForm } from './exteriorTransducer';
 import { create } from 'zustand';
 import { subscribeSolveSettingsEdits, withEditSignals } from './solveSettingsEdits';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
@@ -28,6 +29,7 @@ export interface CadDriveChannel {
   id: string;
   source_ids: string[];
   motion: 'normal' | 'axial';
+  exterior_transducer?: ExteriorTransducerForm;
 }
 
 /**
@@ -218,6 +220,7 @@ interface CadReturnState {
   setTransition: (value: number) => void;
   setSkipped: (sourceId: string, skipped: boolean) => void;
   setSourceChannel: (sourceId: string, channelId: string) => void;
+  setExteriorTransducer: (channelId: string, form: ExteriorTransducerForm | undefined) => void;
   setChannelMotion: (channelId: string, motion: 'normal' | 'axial') => void;
   setAreaDriftOverride: (sourceId: string, enabled: boolean) => void;
   flagAreaDrift: (sourceId: string) => void;
@@ -438,7 +441,8 @@ function parseDriveChannels(value: unknown, inventory: SourceInventoryEntry[], s
     const ids = stringArray(item.source_ids);
     if (!ids?.length || ids.some((id) => !sourceIds.has(id) || skipped.has(id) || assigned.has(id))) return [];
     ids.forEach((id) => assigned.add(id));
-    return [{ id: item.id, source_ids: ids, motion: item.motion }];
+    return [{ id: item.id, source_ids: ids, motion: item.motion,
+      ...(item.exterior_transducer !== undefined ? { exterior_transducer: parseExteriorTransducer(item.exterior_transducer) } : {}) }];
   });
   return channels.length === value.length ? channels : null;
 }
@@ -866,7 +870,12 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
         motion: existing?.motion ?? 'normal' as const,
       };
     });
-  const driveChannels = groupChannels(rows);
+  const driveChannels = groupChannels(rows).map(channel => {
+    const previous = state.driveChannels.find(old => old.id === channel.id);
+    return previous?.exterior_transducer ? { ...channel, motion: 'axial' as const,
+      exterior_transducer: previous.source_ids.length === channel.source_ids.length && previous.source_ids.every(id => channel.source_ids.includes(id))
+        ? previous.exterior_transducer : { version: 0, motion_axis: [0, 0, 0] as [number, number, number] } } : channel;
+  });
   return {
     selectedBundle,
     sourceSizesMm,
@@ -945,7 +954,7 @@ function groupChannels(sourceChannels: Array<{ sourceId: string; channelId: stri
 /** The setters a person drives. Selections, ingestions and restores change the
  * same state without anyone choosing it, and say nothing. */
 const CAD_RETURN_EDITS: ReadonlyArray<keyof CadReturnState> = [
-  'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel', 'setChannelMotion',
+  'setSourceSize', 'setRigidSize', 'setTransition', 'setSkipped', 'setSourceChannel', 'setChannelMotion', 'setExteriorTransducer',
   'setAreaDriftOverride', 'setExteriorOnly', 'setCombineEnabled', 'setCombineSpec', 'updateCombineSpec',
   'setCombineCrossover', 'setCombineSpecFromResult', 'setChannelDriverField', 'setChannelDriverPreset',
   'clearChannelDriverOverrides', 'setDriveVoltage', 'setMaxDriveVoltage', 'setPassiveCardioid', 'setSweep',
@@ -1164,7 +1173,8 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
       const skippedSourceIds = skipped
         ? [...new Set([...state.skippedSourceIds, sourceId])]
         : state.skippedSourceIds.filter((id) => id !== sourceId);
-      let driveChannels = state.driveChannels.map((channel) => ({ ...channel, source_ids: channel.source_ids.filter((id) => id !== sourceId) })).filter((channel) => channel.source_ids.length);
+      let driveChannels = state.driveChannels.map((channel) => ({ ...channel, source_ids: channel.source_ids.filter((id) => id !== sourceId),
+        ...(channel.exterior_transducer && channel.source_ids.includes(sourceId) ? { exterior_transducer: { version: 0, motion_axis: [0, 0, 0] as [number, number, number] } } : {}) })).filter((channel) => channel.source_ids.length);
       if (!skipped && !driveChannels.some((channel) => channel.source_ids.includes(sourceId))) {
         const source = state.selectedBundle?.sources.find((item) => item.id === sourceId);
         if (source) driveChannels = [...driveChannels, { id: source.defaultDriveChannelId, source_ids: [sourceId], motion: 'normal' }];
@@ -1184,20 +1194,40 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     saveSolveProfile(get());
   },
   setSourceChannel: (sourceId, channelId) => {
+    // A mechanical coordinate cannot silently become another source group.
+    // Clear the explicit model before moving either endpoint of an assignment.
+    if (get().driveChannels.some(channel => channel.exterior_transducer
+      && (channel.id === channelId || channel.source_ids.includes(sourceId)))) return;
     set((state) => {
       const activeIds = (state.selectedBundle?.sources ?? []).map((source) => source.id).filter((id) => !state.skippedSourceIds.includes(id));
       const rows = activeIds.map((id) => {
         const existing = state.driveChannels.find((channel) => channel.source_ids.includes(id));
         return { sourceId: id, channelId: id === sourceId ? channelId : existing?.id ?? id, motion: existing?.motion ?? 'normal' as const };
       });
-      const driveChannels = groupChannels(rows);
+      const driveChannels = groupChannels(rows).map(channel => {
+        const previous = state.driveChannels.find(old => old.id === channel.id);
+        return previous?.exterior_transducer ? { ...channel, motion: 'axial' as const,
+          exterior_transducer: previous.source_ids.length === channel.source_ids.length && previous.source_ids.every(id => channel.source_ids.includes(id))
+            ? previous.exterior_transducer : { version: 0, motion_axis: [0, 0, 0] as [number, number, number] } } : channel;
+      });
+      return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
+    });
+    saveSolveProfile(get());
+  },
+  setExteriorTransducer: (channelId, form) => {
+    set((state) => {
+      const driveChannels = state.driveChannels.map(channel => {
+        if (channel.id !== channelId) return channel;
+        const { exterior_transducer: _previous, ...base } = channel;
+        return form ? { ...base, motion: 'axial' as const, exterior_transducer: form } : base;
+      });
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
     saveSolveProfile(get());
   },
   setChannelMotion: (channelId, motion) => {
     set((state) => {
-      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId ? { ...channel, motion } : channel);
+      const driveChannels = state.driveChannels.map((channel) => channel.id === channelId && !channel.exterior_transducer ? { ...channel, motion } : channel);
       return { driveChannels, channelDrivers: retainedChannelDrivers(state, driveChannels) };
     });
     saveSolveProfile(get());

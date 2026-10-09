@@ -1,7 +1,7 @@
 """Opt-in exterior voltage bases, kept separate from WG's acceleration results.
 
-This first consumer slice supports complete closed solids, CPU Float64 and no
-image symmetry. Mmd is bare moving mass, supplied explicitly in SI units. No
+This opt-in slice supports complete closed solids, CPU Float64 or Metal
+Float32 and no image symmetry. Mmd is bare moving mass, supplied explicitly in SI units. No
 Thiele/Small inference, extra radiation mass, or second driver network is added.
 """
 from __future__ import annotations
@@ -93,6 +93,7 @@ def build_transducer_request(
     ideal_sources: Sequence[SourceBasis] = (), excitation_port_ids: Sequence[str] | None = None,
     reference_voltage_rms_v: float = 2.83, mesh_scale_to_m: float = 1.,
     sound_speed_m_per_s: float = 343., density_kg_per_m3: float = 1.2041,
+    backend: str = "cpu", precision: str = "float64",
 ) -> TransducerRequest:
     """Build independent voltage/RMS and ideal 1 m/s RMS bases in requested order.
 
@@ -119,7 +120,7 @@ def build_transducer_request(
     port_ids = [s.port_id or f"excitation:{s.motion}:{quote(s.source_id, safe='')}" for s in surrogate]
     prepared = build_request(
         msh_text, sources=surrogate, channel_ports={"basis": port_ids}, layout=layout,
-        frame=frame, frequencies_hz=frequencies_hz, precision="float64", engine_id="beat-cpu",
+        frame=frame, frequencies_hz=frequencies_hz, precision=precision, engine_id=f"beat-{backend}",
         mesh_scale_to_m=mesh_scale_to_m, sound_speed_m_per_s=sound_speed_m_per_s,
         density_kg_per_m3=density_kg_per_m3,
     )
@@ -156,9 +157,9 @@ def validate_transducer_request(request: TransducerRequest) -> None:
     """WG-only v3 admission; BEAT's existing validator remains authoritative."""
     wire = request.wire
     system, options = wire["compiled_system"], wire["solver_options"]
-    if (system["contract_version"] != 3 or options.get("bem_backend") != "cpu"
-            or options.get("precision") != "float64" or options.get("symmetry") != "off"):
-        raise UnsupportedPhysics("WG transducer adoption currently requires v3 CPU float64 symmetry off")
+    if (system["contract_version"] != 3 or (options.get("bem_backend"), options.get("precision")) not in
+            {("cpu", "float64"), ("metal", "float32")} or options.get("symmetry") != "off"):
+        raise UnsupportedPhysics("WG transducer adoption currently requires v3 CPU float64 or Metal float32, symmetry off")
     _positive(options.get("transducer_reference_voltage_v"), "transducer_reference_voltage_v")
     if wire["outputs"] != outputs(request.layout):
         raise UnsupportedPhysics("WG transducer outputs must match the requested voltage-basis layout")
@@ -258,7 +259,8 @@ def parse_transducer_frequency(raw: Any, request: TransducerRequest, frequency_h
     ports, drivers, matrix_ids = wire["excitation_port_ids"], request.transducer_ids, request.matrix_ids
     if (not isinstance(raw, dict) or type(raw.get("schema_version")) is not int
             or raw["schema_version"] != 2 or type(raw.get("freq_hz")) not in (float, int)
-            or raw["freq_hz"] != frequency_hz or raw.get("excitation_port_ids") != ports):
+            or raw["freq_hz"] != float(np.asarray(frequency_hz, dtype=wire["solver_options"]["precision"]))
+            or raw.get("excitation_port_ids") != ports):
         raise ResultContractError("Transducer result version, frequency or excitation order changed")
     diagnostics = raw.get("diagnostics")
     if not isinstance(diagnostics, dict) or any(diagnostics.get(k) != wire["solver_options"][k]
@@ -281,8 +283,9 @@ def parse_transducer_frequency(raw: Any, request: TransducerRequest, frequency_h
         if (item.get("quantity"), item.get("unit"), item.get("axes"), item.get("target_id")) != (kind, unit, axes, None):
             raise ResultContractError(f"{kind} unit, axes, quantity or target changed")
         descriptor = item.get("values")
-        if not isinstance(descriptor, dict) or descriptor.get("dtype") != "complex128":
-            raise ResultContractError(f"{kind} requires complex128")
+        dtype = "complex64" if kind == "exterior_pressure" and wire["solver_options"]["precision"] == "float32" else "complex128"
+        if not isinstance(descriptor, dict) or descriptor.get("dtype") != dtype:
+            raise ResultContractError(f"{kind} requires {dtype}")
         values = decode_complex_values(descriptor, shape)
         metadata = item.get("metadata")
         if not isinstance(metadata, dict):
@@ -347,7 +350,7 @@ class TransducerSweep:
         return np.asarray([row.frequency_hz for row in self.rows], dtype=float)
 
 
-def map_transducer_sweep(events: Iterable[dict], request: TransducerRequest) -> TransducerSweep:
+def map_transducer_sweep(events: Iterable[dict], request: TransducerRequest, *, on_frequency_result=None) -> TransducerSweep:
     """Only a cancellation terminal can authorize a short ordered prefix."""
     rows, terminal = [], None
     frequencies = request.wire["frequencies_hz"]
@@ -360,6 +363,8 @@ def map_transducer_sweep(events: Iterable[dict], request: TransducerRequest) -> 
                 if len(rows) >= len(frequencies):
                     raise ResultContractError("Extra transducer frequency result")
                 rows.append(parse_transducer_frequency(event.get("result"), request, frequencies[len(rows)]))
+                if on_frequency_result:
+                    on_frequency_result(TransducerSweep(tuple(rows), False, len(frequencies)))
             elif kind in {"completed", "cancelled"}:
                 count = event.get("solved_count")
                 if type(count) is not int or count != len(rows) or (kind == "completed" and count != len(frequencies)):

@@ -1258,11 +1258,15 @@ _IMPORTED_DOMAIN_LABELS = {
 }
 
 #: Imported features a request can use, as a refusal names them.
-_IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation campaign"}
+_IMPORTED_FEATURE_LABELS = {"passive-cardioid": "the passive-cardioid radiation campaign",
+                            "exterior-transducers": "coupled exterior transducers"}
 
 
 def _imported_features_needed(geometry: ImportedGeometrySource) -> set[str]:
-    return {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
+    features = {"passive-cardioid"} if geometry.passive_cardioid_enabled else set()
+    if any(channel.exterior_transducer is not None for channel in geometry.drive_channels):
+        features.add("exterior-transducers")
+    return features
 
 
 def _imported_capability_blocker(
@@ -1370,6 +1374,8 @@ def _imported_axial_refusal(
         or not any(channel.motion == "axial" for channel in geometry.drive_channels)
     ):
         return None
+    if any(channel.exterior_transducer is not None for channel in geometry.drive_channels):
+        return None  # Explicit global axes are validated by the opt-in adapter.
     from server.solver.imported import prepare_axial_drive
 
     try:
@@ -3745,9 +3751,10 @@ class JobRuntime:
         ):
             results_text = await asyncio.to_thread(self.store.get_results_text, job_id)
             axial_ids = [
-                channel.id for channel in request.geometry.drive_channels if channel.motion == "axial"
+                channel.id for channel in request.geometry.drive_channels
+                if channel.motion == "axial" and channel.exterior_transducer is None
             ]
-            if _solved_under_legacy_axial(results_text, axial_ids):
+            if axial_ids and _solved_under_legacy_axial(results_text, axial_ids):
                 # A retry promises the same solve again. Axial drive now runs
                 # per source axis, so replaying this request would silently
                 # answer a different question than the run it repeats.

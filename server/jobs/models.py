@@ -339,14 +339,45 @@ class ParametricGeometrySource(JobModel):
         return self
 
 
+class ExteriorTransducerSpec(JobModel):
+    """Opt-in BEAT bare-driver coordinate; SI scalars, global axis, RMS volts."""
+    version: Literal[1] = 1
+    re_ohm: float = Field(gt=0, strict=True, allow_inf_nan=False)
+    le_h: float = Field(ge=0, strict=True, allow_inf_nan=False)
+    bl_n_per_a: float = Field(gt=0, strict=True, allow_inf_nan=False)
+    mmd_kg: float = Field(gt=0, strict=True, allow_inf_nan=False)
+    cms_m_per_n: float = Field(gt=0, strict=True, allow_inf_nan=False)
+    rms_n_s_per_m: float = Field(gt=0, strict=True, allow_inf_nan=False)
+    motion_axis: tuple[Annotated[float, Field(strict=True, allow_inf_nan=False)],
+                       Annotated[float, Field(strict=True, allow_inf_nan=False)],
+                       Annotated[float, Field(strict=True, allow_inf_nan=False)]]
+
+    @model_validator(mode="after")
+    def nonzero_axis(self):
+        if not any(self.motion_axis):
+            raise ValueError("transducer motion_axis must be nonzero")
+        return self
+
+
 class DriveChannel(JobModel):
     id: str = Field(min_length=1)
     source_ids: list[str] = Field(min_length=1)
     motion: Literal["normal", "axial"] = "normal"
     driver: DriverSpec | None = None
+    exterior_transducer: ExteriorTransducerSpec | None = None
+
+    @model_serializer(mode="wrap")
+    def omit_absent_transducer(self, handler):
+        wire = handler(self)
+        if self.exterior_transducer is None:
+            wire.pop("exterior_transducer", None)
+        return wire
 
     @model_validator(mode="after")
     def validate_driver_applicability(self) -> "DriveChannel":
+        if self.exterior_transducer is not None:
+            if self.driver is not None or self.motion != "axial":
+                raise ValueError("an exterior transducer requires axial motion and no legacy driver model")
         if self.driver is None:
             return self
         if self.motion != "normal":
@@ -1019,6 +1050,21 @@ class SolveRequest(JobModel):
             for name in legacy_fields:
                 result.pop(name, None)
         return result
+
+    @model_validator(mode="after")
+    def validate_exterior_transducer_mode(self):
+        geometry = self.geometry
+        if not isinstance(geometry, ImportedGeometrySource) or not any(c.exterior_transducer for c in geometry.drive_channels):
+            return self
+        if not all(c.exterior_transducer for c in geometry.drive_channels):
+            raise ValueError("exterior transducer jobs currently require a model on every drive channel")
+        if self.options.engine not in {"beat-cpu", "beat-metal"}:
+            raise ValueError("exterior transducer jobs require an explicit beat-cpu or beat-metal engine")
+        if (geometry.combine is not None or geometry.passive_cardioid_enabled or geometry.rg_ohm != 0
+                or geometry.max_drive_voltage_v is not None or self.options.adaptive_frequency_sampling
+                or self.options.mesh_ladder != "off" or self.options.ground_plane.enabled):
+            raise ValueError("exterior transducer jobs do not yet support crossovers, passive cardioid, generator resistance, ceilings, adaptive sampling, mesh ladders or ground")
+        return self
 
     @model_validator(mode="after")
     def validate_combine_band(self) -> "SolveRequest":

@@ -1,3 +1,4 @@
+import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import type { components } from './generated/openapi';
 import { compareSelection, provisionalResults, type ResultData } from './results';
@@ -151,6 +152,7 @@ export interface CadSetup {
     source_ids: string[];
     motion?: 'normal' | 'axial';
     driver?: Record<string, number> | null;
+    exterior_transducer?: ExteriorTransducerForm;
   }>;
   /** Both crossover generations: the per-channel v2 form every new submission
    * writes, and the legacy triple older jobs still carry. */

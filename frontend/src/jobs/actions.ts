@@ -1,3 +1,4 @@
+import type { ExteriorTransducerForm } from '../stores/exteriorTransducer';
 import type { CrossoverChannelWire } from '../results/crossoverSpec';
 import { serializeSolveDesign, type DesignDocument } from '../stores/design';
 import { useSolveOptionsStore, type SolveOptions } from '../stores/solveOptions';
@@ -100,6 +101,7 @@ export interface ImportedGeometrySubmission {
     /** Thiele-Small numbers in `DriverSpec`'s wire units, plus the optional
      * `label` naming the driver they came from. */
     driver?: Record<string, number | string>;
+    exterior_transducer?: ExteriorTransducerForm;
   }>;
   /** The per-channel v2 crossover (CADLINK-CROSSOVER-DRIVERS.md §2). The
    * legacy `crossovers_hz`/`level_match`/`align` triple is still accepted by

@@ -677,6 +677,15 @@ def solve_imported_beat_from_msh_text(
 
     from .beat_runtime.provider import official_selected
 
+    from .beat_transducer_imported import enabled, solve
+
+    if isinstance(request.geometry, ImportedGeometrySource) and enabled(request.geometry.drive_channels):
+        if _official is False:
+            raise BeatUnavailable("Exterior transducers require the official BEAT runtime")
+        return solve(msh_text, request, record, backend=backend,
+                     stage_callback=stage_callback, cancellation_callback=cancellation_callback,
+                     result_callback=result_callback, worker_manager=_worker_manager,
+                     julia_executable=_julia_executable)
     official = official_selected() if _official is None else _official
     profile = None
     if official:

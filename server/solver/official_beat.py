@@ -231,13 +231,14 @@ def solve_transducer_compiled(
     julia_executable: str | None = None,
     cancellation_callback: Callable[[], None] | None = None,
     status_callback: Callable[[str], None] | None = None,
+    on_frequency_result: Callable | None = None,
 ):
     """Explicit opt-in v3 solve; return RMS voltage bases, never W4 results.
 
     This uses the same worker admission, capability negotiation, cancellation
     and ownership as the production bridge. Existing job/provider routing keeps
-    its ideal-source path. The CPU Float64 complete-solid scope is deliberate;
-    adoption of reduced solids and other backends needs consumer qualification.
+    its ideal-source path. CPU Float64 and Metal Float32 complete solids are
+    qualified; reduced solids and other backends need consumer qualification.
     """
     from .beat_adapter.transducers import (
         TransducerRequest, map_transducer_sweep, validate_transducer_request,
@@ -255,7 +256,7 @@ def solve_transducer_compiled(
         try:
             try:
                 client = (worker_manager or get_manager()).get_worker(
-                    "cpu", julia_executable=julia_executable,
+                    request.wire["solver_options"]["bem_backend"], julia_executable=julia_executable,
                 )
             except (OwnershipClosed, UnsupportedBackend):
                 raise
@@ -284,7 +285,7 @@ def solve_transducer_compiled(
             finally:
                 events.close()
 
-        result = map_transducer_sweep(reported_events(), request)
+        result = map_transducer_sweep(reported_events(), request, on_frequency_result=on_frequency_result)
         session.close()
         session.raise_callback_error()
         if result.cancelled and not result.rows:

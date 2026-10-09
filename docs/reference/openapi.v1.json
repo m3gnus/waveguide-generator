@@ -2397,6 +2397,16 @@
               }
             ]
           },
+          "exterior_transducer": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExteriorTransducerSpec"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "id": {
             "minLength": 1,
             "title": "Id",
@@ -3434,6 +3444,76 @@
           }
         },
         "title": "Expr",
+        "type": "object"
+      },
+      "ExteriorTransducerSpec": {
+        "additionalProperties": false,
+        "description": "Opt-in BEAT bare-driver coordinate; SI scalars, global axis, RMS volts.",
+        "properties": {
+          "bl_n_per_a": {
+            "exclusiveMinimum": 0.0,
+            "title": "Bl N Per A",
+            "type": "number"
+          },
+          "cms_m_per_n": {
+            "exclusiveMinimum": 0.0,
+            "title": "Cms M Per N",
+            "type": "number"
+          },
+          "le_h": {
+            "minimum": 0.0,
+            "title": "Le H",
+            "type": "number"
+          },
+          "mmd_kg": {
+            "exclusiveMinimum": 0.0,
+            "title": "Mmd Kg",
+            "type": "number"
+          },
+          "motion_axis": {
+            "maxItems": 3,
+            "minItems": 3,
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Motion Axis",
+            "type": "array"
+          },
+          "re_ohm": {
+            "exclusiveMinimum": 0.0,
+            "title": "Re Ohm",
+            "type": "number"
+          },
+          "rms_n_s_per_m": {
+            "exclusiveMinimum": 0.0,
+            "title": "Rms N S Per M",
+            "type": "number"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "re_ohm",
+          "le_h",
+          "bl_n_per_a",
+          "mmd_kg",
+          "cms_m_per_n",
+          "rms_n_s_per_m",
+          "motion_axis"
+        ],
+        "title": "ExteriorTransducerSpec",
         "type": "object"
       },
       "FieldPlaneRequest": {

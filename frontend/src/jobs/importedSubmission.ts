@@ -1,3 +1,4 @@
+import { exteriorTransducerError } from '../stores/exteriorTransducer';
 import type { ImportedSolveSubmission } from './actions';
 import {
   blockingFindingWire,
@@ -104,6 +105,8 @@ export function importedSubmissionBlocker(
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';
+  const nativeError = exteriorModeBlocker(state, solveStore);
+  if (nativeError) return nativeError;
   // Match SolveRequest.validate_combine_band for the exact spec sent on the
   // wire, including independently edited HP and LP corners.
   const combine = combineWire(state);
@@ -155,6 +158,22 @@ export function importedSubmissionBlocker(
   return null;
 }
 
+export function exteriorModeBlocker(state: CadReturnSnapshot, solveStore: SolveOptionsSnapshot): string | null {
+  if (!state.driveChannels.some(channel => channel.exterior_transducer)) return null;
+  if (!['beat-cpu', 'beat-metal'].includes(solveStore.engine)) return 'Choose BEAT CPU or BEAT Metal for coupled exterior drivers.';
+  if (state.driveChannels.some(channel => !channel.exterior_transducer)) return 'Enable the BEAT driver model on every channel in this solve.';
+  for (const channel of state.driveChannels) {
+    const error = exteriorTransducerError(channel.exterior_transducer!);
+    if (error) return `${channel.id}: ${error}`;
+    if (channel.motion !== 'axial') return `${channel.id}: coupled exterior drivers require axial motion.`;
+  }
+  if (combineWire(state)) return 'Turn off the crossover combination for coupled exterior drivers.';
+  if (state.passiveCardioid.enabled || state.maxDriveVoltageV !== null || solveStore.adaptiveFrequencySampling || solveStore.groundPlane.enabled) {
+    return 'Coupled exterior drivers require cardioid, voltage ceiling, adaptive sampling, mesh ladder and ground plane off.';
+  }
+  return null;
+}
+
 /**
  * Channels this solve will run without a driver model.
  *
@@ -174,7 +193,7 @@ export function undrivenChannels(
   state: Pick<CadReturnSnapshot, 'driveChannels' | 'channelDrivers'>,
 ): string[] {
   return state.driveChannels
-    .filter((channel) => !(channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id])))
+    .filter((channel) => !channel.exterior_transducer && !(channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id])))
     .map((channel) => channel.id);
 }
 
@@ -262,6 +281,8 @@ export function buildImportedSubmission(
   }
   const passiveCardioid = cardioidPresent ? passiveCardioidWire(state.passiveCardioid) : null;
   const solveStore = useSolveOptionsStore.getState();
+  const nativeError = exteriorModeBlocker(state, solveStore);
+  if (nativeError) throw new Error(nativeError);
   const options = solveStore.options() as ImportedSolveSubmission['options'];
   if (solveStore.frequencyMode === 'range') {
     options.frequency_range = [state.frequencyStartHz, state.frequencyEndHz];
@@ -284,7 +305,7 @@ export function buildImportedSubmission(
         const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };
       }),
-      ...(state.driveChannels.some((channel) => submittedDriver(state, channel))
+      ...(state.driveChannels.some((channel) => channel.exterior_transducer || submittedDriver(state, channel))
         ? {
           drive_voltage_v: state.driveVoltageV,
           // Only ever a ceiling for the maximum-output pass, so it rides

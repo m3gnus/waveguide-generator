@@ -1,3 +1,4 @@
+import { EXTERIOR_FIELDS } from '../stores/exteriorTransducer';
 import { OpenclUnavailableHook } from './OpenclUnavailableHook';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -902,11 +903,26 @@ function CadDriveChannels() {
         const driverForm = state.channelDrivers[channel.id];
         const driverEligible = channelAcceptsDriver(channel);
         return <div className="cad-channel" data-channel-id={channel.id} key={channel.id}>
-          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channelHeadingText(channel)}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
+          <div className="cad-channel-summary" data-control-reveal-id={CAD_CONTROLS.channelMotion.reveal.id}><span>{channelHeadingText(channel)}</span><select aria-label={`${CAD_CONTROLS.channelMotion.label} for ${channel.id}`} value={channel.motion} disabled={!!channel.exterior_transducer} onChange={(event) => state.setChannelMotion(channel.id, event.target.value as 'normal' | 'axial')}><option value="normal">Normal</option><option value="axial">Axial (pistonic)</option></select></div>
           <div className="cad-channel-hint">Normal moves each source face along its own normal. Axial moves the source as a rigid piston along its axis.</div>
           {showsAssignment(channel) && channel.source_ids
             .filter((sourceId) => activeSources.some((source) => source.id === sourceId))
-            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
+            .map((sourceId) => <div className="cad-channel-row" key={sourceId}><b>{sourceId}</b><select aria-label={`Drive channel for ${sourceId}`} disabled={!!channel.exterior_transducer} value={channel.id} onChange={(event) => state.setSourceChannel(sourceId, event.target.value)}>{channelIds.map((id) => <option value={id} key={id}>{id}</option>)}</select></div>)}
+          <label className="cad-driver-hint"><input type="checkbox" aria-label={`Solve driver in BEAT for ${channel.id}`} checked={!!channel.exterior_transducer}
+            onChange={(event) => state.setExteriorTransducer(channel.id, event.target.checked ? { version: 1, motion_axis: [0, 0, 1] } : undefined)}/>
+            Solve driver in BEAT</label>
+          {channel.exterior_transducer && <>
+            <p className="cad-driver-hint">Complete outward solids only. Enter bare Mmd, excluding air load; datasheet Mms is not Mmd. Other drivers are shorted for each excitation.</p>
+            <div className="cad-driver-grid">{EXTERIOR_FIELDS.map(([key, label, unit]) => <label key={key} className="cad-driver-field">
+              <span>{label} ({unit}) *</span><input type="number" aria-label={`${label} for ${channel.id}`} value={channel.exterior_transducer?.[key] ?? ''}
+                onChange={event => state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, [key]: event.target.value === '' ? undefined : Number(event.target.value) })}/>
+            </label>)}</div>
+            <p className="cad-driver-hint">Motion axis in the returned mesh frame:</p>
+            <div className="cad-driver-grid">{['x', 'y', 'z'].map((axis, index) => <label key={axis}><span>{axis}</span>
+              <input type="number" aria-label={`Motion axis ${axis} for ${channel.id}`} value={channel.exterior_transducer!.motion_axis[index]}
+                onChange={event => { const motion_axis = [...channel.exterior_transducer!.motion_axis] as [number, number, number]; motion_axis[index] = Number(event.target.value); state.setExteriorTransducer(channel.id, { ...channel.exterior_transducer!, motion_axis }); }}/>
+            </label>)}</div>
+          </>}
           {driverEligible && <ChannelDriverPicker
             channel={channel}
             form={driverForm}
@@ -915,7 +931,7 @@ function CadDriveChannels() {
         </div>;
       })}
     </div>
-    {state.driveChannels.some((channel) => channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id]))
+    {state.driveChannels.some((channel) => channel.exterior_transducer || (channelAcceptsDriver(channel) && channelDriverPresent(state.channelDrivers[channel.id])))
       && <>
         <NumberField label={CAD_CONTROLS.driveVoltage.label} revealId={CAD_CONTROLS.driveVoltage.reveal.id} unit="V" value={state.driveVoltageV} min={0.01} step={0.1} precision={2} description="RMS voltage applied to every driver channel (2.83 V ≈ 1 W into 8 Ω)" onCommit={state.setDriveVoltage}/>
         {/* A ceiling, not a drive: it changes nothing about the response and

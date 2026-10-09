@@ -722,3 +722,38 @@ volume-area conversion uses `D_S^-1 W Z D_S^-1` and refuses zero or near-cancell
 areas, including a translating closed sphere. Cancellation permits only an
 explicitly acknowledged ordered prefix; malformed, truncated or failed streams
 raise and close their managed session.
+
+## Opt-in exterior-transducer CAD jobs
+
+`DriveChannel.exterior_transducer` version 1 explicitly selects bare SI driver
+parameters and a rigid-translation axis in the returned mesh frame. The CAD
+rail exposes this as **Solve driver in BEAT**. Absent fields serialize exactly
+as before; legacy WG jobs and Boundary Lab engine behavior remain unchanged.
+The official provider, explicit `beat-cpu`/`beat-metal`, complete closed outward
+solids and all-modelled channels are required. CPU Float64 and Metal Float32
+use the same facade and negotiate compiled-system v3 before worker submission.
+
+Each channel result is one RMS-voltage excitation with every other driver
+shorted. Native pressure is mapped directly to SPL and wrapped solver phase;
+there is no acceleration normalization or second client-side driver solve.
+Electrical impedance is conjugated once for WG's engineering convention.
+Results retain native current/velocity, peak excursion, radiation matrix,
+signed-area diagnostics, component order, units, phasor and source provenance.
+Live results send revisioned frequency deltas; durable jobs preserve the model
+for history restore and faithful retry.
+
+The first job adoption refuses hybrid ideal/voltage channels, crossover
+combination, passive cardioid, generator resistance, amplifier ceilings,
+adaptive sampling, mesh ladders, ground and symmetry cuts. Legacy recombination
+and retained field traces are unavailable for these jobs and carry explicit
+reasons. These restrictions apply only to the new opt-in mode.
+
+Qualification: `reference_exterior_transducer` checks Metal against the
+translating-sphere analytical solution with the existing frozen 1% network/2%
+pressure-load budgets and doubled-voltage invariance. `reference_transducer_job`
+checks CPU/Metal through the WG CAD job/live/result facade with 0.1% relative
+network drift and 0.01 dB/degree on-axis drift budgets. Both require an installed
+engine independently byte-matched to the pin; native compute runs only through
+the shared broker. Unit tests cover unsupported inputs, legacy wire bytes,
+result conventions, cancellation prefixes, runtime persistence and retry,
+and frontend submission/setup/history preservation.

@@ -46,8 +46,8 @@ def validate_installed_provenance(provenance: dict, package: Path) -> None:
             raise ValueError(f"Dispatched numerical source differs from verified pin: {name}")
 
 
-def qualify(*, julia: str, engine_source: Path, output: Path) -> dict:
-    facts = verify_runtime(julia, "cpu", engine_source=engine_source)
+def qualify(*, julia: str, engine_source: Path, output: Path, backend: str = "cpu") -> dict:
+    facts = verify_runtime(julia, backend, engine_source=engine_source)
     if (facts["engine_revision"] != expected_engine_revision()
             or facts["engine_revision_source"] != "installed_source_byte_match"
             or facts["artifact_kind"] != "installed"):
@@ -56,8 +56,9 @@ def qualify(*, julia: str, engine_source: Path, output: Path) -> dict:
     mesh = output / "translating-sphere.msh"
     mesh_info = make_sphere_mesh(mesh, mesh_size_m=.016)
     frequencies = [400., 80., 40., 160.]
+    precision = "float64" if backend == "cpu" else "float32"
     layout = build_observations(angle_range=(0, 180, 5), sphere_grid=None,
-                                origin_m=exact.CENTRE_M, distance_m=1., precision="float64")
+                                origin_m=exact.CENTRE_M, distance_m=1., precision=precision)
     frame = {"origin": exact.CENTRE_M.tolist(), "axis": [0, 0, 1], "u": [1, 0, 0], "v": [0, 1, 0]}
     driver = ExteriorDriver("sphere", (1,), [0, 0, 1],
                             **{k: v for k, v in exact.DRIVER_PARAMETERS.items()
@@ -65,7 +66,7 @@ def qualify(*, julia: str, engine_source: Path, output: Path) -> dict:
     request = build_transducer_request(mesh.read_text(), drivers=[driver], layout=layout,
                                        frame=frame, frequencies_hz=frequencies,
                                        density_kg_per_m3=exact.DENSITY,
-                                       sound_speed_m_per_s=exact.SOUND_SPEED)
+                                       sound_speed_m_per_s=exact.SOUND_SPEED, backend=backend, precision=precision)
     (output / "request.json").write_text(json.dumps(request.wire, indent=2) + "\n")
     manager = WorkerManager(mode="child")
     try:
@@ -91,7 +92,7 @@ def qualify(*, julia: str, engine_source: Path, output: Path) -> dict:
             radius = np.linalg.norm(displacement, axis=1)
             mu = displacement[:, 2] / radius
             expected = exact.analytic_pressure(frequency, radius, mu, NEGATIVE_TIME, velocity=u)
-            active = np.abs(mu) > 1e-10
+            active = np.abs(mu) > (1e-6 if precision == "float32" else 1e-10)
             values[f"pressure:{name}"] = float(np.max(np.abs(row.pressure_rms_pa[name][0, active] / expected[active] - 1)))
             node = np.max(np.abs(row.pressure_rms_pa[name][0, ~active]))
             assert node < .03 * np.max(np.abs(expected))
@@ -108,7 +109,7 @@ def qualify(*, julia: str, engine_source: Path, output: Path) -> dict:
         validate_installed_provenance(provenance, Path(facts["engine_path"]))
         errors.append({"frequency_hz": frequency, **{k: float(v) for k, v in values.items()},
                        "matrix_metadata": row.radiation.metadata})
-    report = {"passed": True, "scope": "installed pin; explicit WG v3 CPU Float64, symmetry off",
+    report = {"passed": True, "scope": f"installed pin; explicit WG v3 {backend} {precision}, symmetry off",
               "observations": facts, "mesh": mesh_info, "errors": errors,
               "voltage_scaling": "2.83 -> 5.66 V RMS: linear pressure/current/velocity, invariant Zrad/Zin",
               "engine_provenance": first.rows[0].diagnostics["engine_provenance"]}
@@ -118,11 +119,12 @@ def qualify(*, julia: str, engine_source: Path, output: Path) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--backend", choices=("cpu", "metal"), default="cpu")
     parser.add_argument("--julia", required=True)
     parser.add_argument("--engine-source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = qualify(julia=args.julia, engine_source=args.engine_source, output=args.output)
+    report = qualify(julia=args.julia, engine_source=args.engine_source, output=args.output, backend=args.backend)
     print(json.dumps({"passed": report["passed"], "frequency_count": len(report["errors"]),
                       "report": str(args.output / "qualification.json")}))
 

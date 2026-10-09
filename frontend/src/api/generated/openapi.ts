@@ -2859,6 +2859,7 @@ export interface components {
         /** DriveChannel */
         DriveChannel: {
             driver?: components["schemas"]["DriverSpec"] | null;
+            exterior_transducer?: components["schemas"]["ExteriorTransducerSpec"] | null;
             /** Id */
             id: string;
             /**
@@ -3211,6 +3212,36 @@ export interface components {
             raw?: string | null;
             /** Value */
             value?: number | null;
+        };
+        /**
+         * ExteriorTransducerSpec
+         * @description Opt-in BEAT bare-driver coordinate; SI scalars, global axis, RMS volts.
+         */
+        ExteriorTransducerSpec: {
+            /** Bl N Per A */
+            bl_n_per_a: number;
+            /** Cms M Per N */
+            cms_m_per_n: number;
+            /** Le H */
+            le_h: number;
+            /** Mmd Kg */
+            mmd_kg: number;
+            /** Motion Axis */
+            motion_axis: [
+                number,
+                number,
+                number
+            ];
+            /** Re Ohm */
+            re_ohm: number;
+            /** Rms N S Per M */
+            rms_n_s_per_m: number;
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version?: 1;
         };
         /** FieldPlaneRequest */
         FieldPlaneRequest: {

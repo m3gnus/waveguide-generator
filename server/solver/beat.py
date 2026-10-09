@@ -1066,6 +1066,10 @@ class BeatEngine:
     ) -> str | None:
         """Why this engine cannot solve an ingestion record, asked at submission."""
 
+        from .beat_transducer_imported import enabled, preflight
+
+        if drive_channels and enabled(drive_channels):
+            return preflight(record, msh_text, drive_channels, backend=self.backend or "cpu")
         from .beat_imported import imported_beat_preflight
 
         return imported_beat_preflight(record, msh_text, drive_channels)
