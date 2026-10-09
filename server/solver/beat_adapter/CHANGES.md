@@ -686,3 +686,39 @@ Notes kept open:
 - `beat-engine` is not in `pins.json`, so official results are power-qualification "unknown" (missing `solver_pin`) until the 0.3.6 pin round.
   Resolved by the 0.3.6 pin: `beat-engine` is pinned to m3gnus/BEAT_Engine d0d624a0, so official results resolve their `solver_pin`.
 - The official cancel monitor polls the store at 20 Hz, so a transient store error fails the job, as on HBB.
+
+### Opt-in exterior transducer consumer
+
+`transducers.build_transducer_request` and
+`official_beat.solve_transducer_compiled` adopt the pinned engine's existing
+compiled v3 voltage ports. This Python adapter entry point supports CPU Float64,
+complete closed outward-wound solids, and symmetry off. It is explicitly called;
+stored jobs, default provider routing and the existing unit-acceleration results
+continue to use the v1/v2 ideal-source adapter. There is no engine or pin change.
+Reduced solids and other backends remain outside this consumer's qualified scope.
+
+Supply bare moving mass `mmd_kg` and the five other LEM scalars in SI units.
+Measured `Mms` is not accepted as an alias or inferred. One driver may own multiple
+disjoint moving tags with a common global rigid-translation axis. Outward mesh
+normals supply the signed front/rear projection; the adapter adds no rear sign,
+extra radiation mass, end correction or second electrical/mechanical solve.
+Open/two-sided diaphragms and compression-driver throats are refused by the
+engine's existing exterior topology checks. Optional engine chambers,
+semi-inductance and driver symmetry accounting await separate consumer adoption.
+
+Each requested voltage port is an independent `reference_voltage_rms_v` basis
+(default 2.83 V); ideal ports remain independent 1 m/s RMS bases. Request order is
+preserved and undriven transducers are shorted. Pressure, current and velocity
+remain native RMS phasors in WG's negative-time convention. The client derives
+`V/I` only for the driven driver's voltage port, displacement as `u/(-i omega)`,
+and one-way peak excursion as `sqrt(2)*abs(displacement_rms)*1000` mm. Zero current
+returns undefined (`None`) input impedance, never a fictitious finite value.
+No acceleration normalization or legacy driver postprocessing is applied.
+
+Matrix values retain mechanical `N*s/m` units and their component axis, separately
+from excitation axes. WG retains and validates the engine's weighted reciprocity
+and passivity diagnostics rather than symmetrizing or altering the matrix. Signed
+volume-area conversion uses `D_S^-1 W Z D_S^-1` and refuses zero or near-cancelling
+areas, including a translating closed sphere. Cancellation permits only an
+explicitly acknowledged ordered prefix; malformed, truncated or failed streams
+raise and close their managed session.

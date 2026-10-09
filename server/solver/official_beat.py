@@ -223,3 +223,70 @@ def solve_official_beat_from_msh_text(
 
 
 # The explicit entry above replaces the former standalone prototype port.
+
+
+@warm_cache.signature_scope
+def solve_transducer_compiled(
+    request, *, worker_manager: WorkerManager | None = None,
+    julia_executable: str | None = None,
+    cancellation_callback: Callable[[], None] | None = None,
+    status_callback: Callable[[str], None] | None = None,
+):
+    """Explicit opt-in v3 solve; return RMS voltage bases, never W4 results.
+
+    This uses the same worker admission, capability negotiation, cancellation
+    and ownership as the production bridge. Existing job/provider routing keeps
+    its ideal-source path. The CPU Float64 complete-solid scope is deliberate;
+    adoption of reduced solids and other backends needs consumer qualification.
+    """
+    from .beat_adapter.transducers import (
+        TransducerRequest, map_transducer_sweep, validate_transducer_request,
+    )
+    if not isinstance(request, TransducerRequest):
+        raise TypeError("Expected an opt-in TransducerRequest")
+    validate_transducer_request(request)
+    try:
+        contract = importlib.import_module("beat_engine.beat_contract.worker")
+    except ImportError as exc:
+        raise OfficialBeatUnavailable("beat-engine is not installed.") from exc
+    with SolveSession(cancellation_callback=cancellation_callback) as session:
+        wire = dict(request.wire, cancel_path=str(session.cancel_path.resolve()))
+        negotiate = validated_negotiator(contract, wire)
+        try:
+            try:
+                client = (worker_manager or get_manager()).get_worker(
+                    "cpu", julia_executable=julia_executable,
+                )
+            except (OwnershipClosed, UnsupportedBackend):
+                raise
+            except (ValueError, RuntimeError, OSError) as exc:
+                readiness.probe_cache_clear()
+                raise OfficialBeatUnavailable(str(exc)) from exc
+            session.submit(client, wire, negotiate=negotiate, status_callback=status_callback)
+        except (discovery.JuliaDiscoveryError, assets.AssetsUnavailable, paths.RootConflict,
+                registry.RecordRefused, HostError, OSError) as exc:
+            readiness.probe_cache_clear()
+            raise OfficialBeatUnavailable(str(exc)) from exc
+        events = session.events()
+
+        def reported_events():
+            try:
+                for event in events:
+                    if isinstance(event, dict) and event.get("type") == "status" and status_callback:
+                        status_callback(str(event.get("message") or ""))
+                    yield event
+                    if isinstance(event, dict) and event.get("type") == "result" and cancellation_callback:
+                        try:
+                            cancellation_callback()
+                        except BaseException:
+                            session.request_cancel()
+                            raise
+            finally:
+                events.close()
+
+        result = map_transducer_sweep(reported_events(), request)
+        session.close()
+        session.raise_callback_error()
+        if result.cancelled and not result.rows:
+            raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
+        return result
