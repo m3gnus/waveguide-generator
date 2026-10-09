@@ -12,7 +12,7 @@ from typing import Annotated, Any, Literal
 from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from fastapi import APIRouter, FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
 
 Number = Annotated[StrictFloat | StrictInt, Field(allow_inf_nan=False)]
@@ -56,6 +56,41 @@ class Drive(WireModel):
 class SourceDocument(WireModel):
     contour: Contour
     drive: Drive
+
+
+class AssemblyDimensions(WireModel):
+    width_mm: Number
+    height_mm: Number
+    depth_mm: Number
+    front_z_mm: Number
+    horn_xy_mm: tuple[Number, Number]
+    horn_length_mm: Number
+    mouth_radius_mm: Number
+    woofer_xy_mm: tuple[Number, Number]
+    aperture_radius_mm: Number
+
+
+class AssemblyRequest(WireModel):
+    horn: SourceDocument
+    woofer: SourceDocument
+    dimensions: AssemblyDimensions
+    mesh_size_mm: Annotated[Number, Field(gt=0)] = 2
+
+
+def native_assembly(body: AssemblyRequest):
+    try:
+        from hornlab_mesher.source_assembly import SourceAssembly, assembly_channels
+    except ImportError as exc:
+        raise HTTPException(
+            503, "This mesher does not support shared horn and woofer geometry."
+        ) from exc
+    horn, hf = native(body.horn)
+    woofer, lf = native(body.woofer)
+    try:
+        model = SourceAssembly(horn, woofer, **body.dimensions.model_dump())
+        return model, [hf, lf], assembly_channels(model, [hf, lf])
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 def native(document: SourceDocument):
@@ -306,6 +341,78 @@ def create_router(data_dir: Path) -> APIRouter:
     router = APIRouter(prefix="/api/source-editor", tags=["source-editor"])
     store = PresetStore(data_dir / "source_presets.json")
     export_lock = threading.Lock()
+
+    @router.post("/assembly/validate")
+    def assembly_validate_endpoint(body: AssemblyRequest) -> dict[str, Any]:
+        model, _, channels = native_assembly(body)
+        return {
+            "recipe": model.to_dict(),
+            "geometry_sha256": model.geometry_sha256,
+            "channels": channels,
+            "observation_origin_mm": [0, 0, model.front_z_mm],
+            "source_origins_mm": {
+                c.physical_source_id: list(origin) for c, origin, _ in model.parts
+            },
+        }
+
+    @router.post("/assembly/ingest")
+    def assembly_ingest_endpoint(body: AssemblyRequest, request: Request) -> dict[str, Any]:
+        model, drives, _ = native_assembly(body)
+        try:
+            from hornlab_mesher.assembly_artifact import export_assembly
+            from server.cadlink.native_source import ingest_native_source
+        except ImportError as exc:
+            raise HTTPException(
+                503, "This mesher does not support shared horn and woofer geometry."
+            ) from exc
+        if not export_lock.acquire(blocking=False):
+            raise HTTPException(
+                409, "A source export is already running. Try again when it finishes."
+            )
+        try:
+            root = data_dir / "tmp"
+            root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=root, prefix="source-assembly-") as stage:
+                destination = Path(stage) / "artifact"
+                manifest = export_assembly(
+                    model, drives, destination, mesh_size_mm=body.mesh_size_mm
+                )
+                record = ingest_native_source(
+                    destination,
+                    store=request.app.state.cadlink_store,
+                    data_dir=data_dir,
+                    sizes={
+                        "rigid_size_mm": body.mesh_size_mm,
+                        "transition_mm": body.mesh_size_mm,
+                        "source_size_mm": {
+                            p["id"]: body.mesh_size_mm
+                            for p in manifest["patches"]
+                            if p["role"] == "moving"
+                        },
+                    },
+                )
+            geometry = {
+                "type": "imported",
+                "ingest_id": record["ingest_id"],
+                "manifest_sha256": record["manifest_sha256"],
+                "artifact_sha256": record["artifact_sha256"],
+                "required_features": manifest["required_features"],
+                "mesh": record["mesh_sizes"],
+                "drive_channels": record["native_source"]["channels"],
+            }
+            return {
+                "geometry": geometry,
+                "native_source": record["native_source"],
+                "mesh": record["mesh"]["stats"],
+                "geometric_quality": record["mesh"]["geometric_quality"],
+            }
+        except (TypeError, ValueError) as exc:
+            detail = str(exc)
+            if "export failed" in detail or "ingestion failed" in detail:
+                detail = "Native assembly could not be built. Check source clearances, mesh size and resource limits."
+            raise HTTPException(422, detail) from exc
+        finally:
+            export_lock.release()
 
     @router.post("/validate")
     def validate_endpoint(body: SourceDocument) -> dict[str, Any]:

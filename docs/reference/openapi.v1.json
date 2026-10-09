@@ -39,6 +39,191 @@
         "title": "ArchiveRunDocumentRequest",
         "type": "object"
       },
+      "AssemblyDimensions": {
+        "additionalProperties": false,
+        "properties": {
+          "aperture_radius_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Aperture Radius Mm"
+          },
+          "depth_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Depth Mm"
+          },
+          "front_z_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Front Z Mm"
+          },
+          "height_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Height Mm"
+          },
+          "horn_length_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Horn Length Mm"
+          },
+          "horn_xy_mm": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              }
+            ],
+            "title": "Horn Xy Mm",
+            "type": "array"
+          },
+          "mouth_radius_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Mouth Radius Mm"
+          },
+          "width_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Width Mm"
+          },
+          "woofer_xy_mm": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              }
+            ],
+            "title": "Woofer Xy Mm",
+            "type": "array"
+          }
+        },
+        "required": [
+          "width_mm",
+          "height_mm",
+          "depth_mm",
+          "front_z_mm",
+          "horn_xy_mm",
+          "horn_length_mm",
+          "mouth_radius_mm",
+          "woofer_xy_mm",
+          "aperture_radius_mm"
+        ],
+        "title": "AssemblyDimensions",
+        "type": "object"
+      },
+      "AssemblyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "$ref": "#/components/schemas/AssemblyDimensions"
+          },
+          "horn": {
+            "$ref": "#/components/schemas/SourceDocument"
+          },
+          "mesh_size_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "default": 2,
+            "gt": 0,
+            "title": "Mesh Size Mm"
+          },
+          "woofer": {
+            "$ref": "#/components/schemas/SourceDocument"
+          }
+        },
+        "required": [
+          "horn",
+          "woofer",
+          "dimensions"
+        ],
+        "title": "AssemblyRequest",
+        "type": "object"
+      },
       "Attachment": {
         "additionalProperties": false,
         "properties": {
@@ -4971,7 +5156,8 @@
             "items": {
               "enum": [
                 "native-source-contour-v1",
-                "native-front-baffle-woofer-v1"
+                "native-front-baffle-woofer-v1",
+                "native-shared-horn-woofer-v1"
               ],
               "type": "string"
             },
@@ -14431,6 +14617,92 @@
           }
         },
         "summary": "Solver Mesh"
+      }
+    },
+    "/api/source-editor/assembly/ingest": {
+      "post": {
+        "operationId": "assembly_ingest_endpoint_api_source_editor_assembly_ingest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssemblyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assembly Ingest Endpoint Api Source Editor Assembly Ingest Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assembly Ingest Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/assembly/validate": {
+      "post": {
+        "operationId": "assembly_validate_endpoint_api_source_editor_assembly_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssemblyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assembly Validate Endpoint Api Source Editor Assembly Validate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assembly Validate Endpoint",
+        "tags": [
+          "source-editor"
+        ]
       }
     },
     "/api/source-editor/expand": {

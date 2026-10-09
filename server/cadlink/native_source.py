@@ -15,6 +15,7 @@ import tempfile
 
 FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
+ASSEMBLY_FEATURE = "native-shared-horn-woofer-v1"
 
 
 def _canonical(value):
@@ -42,7 +43,8 @@ def read_native_source(directory):
     manifest = json.loads(raw, object_pairs_hook=unique_pairs)
     if (
         manifest.get("version") != 1
-        or manifest.get("required_features") not in ([FEATURE], [FEATURE, BAFFLE_FEATURE])
+        or manifest.get("required_features")
+        not in ([FEATURE], [FEATURE, BAFFLE_FEATURE], [FEATURE, ASSEMBLY_FEATURE])
         or manifest.get("producer") != "native"
         or manifest.get("units") != "mm"
     ):
@@ -53,6 +55,10 @@ def read_native_source(directory):
         if _digest((directory / name).read_bytes()) != expected:
             raise ValueError(f"tampered or stale native source member {name}")
     recipe = manifest["recipe"]
+    if ASSEMBLY_FEATURE in manifest["required_features"]:
+        from .native_assembly import read_assembly
+
+        return manifest, read_assembly(manifest), None, _digest(raw)
     contour = SourceContour.from_dict(recipe["contour"])
     drive = ContourDrive(**manifest["drive"])
     drive.validate(contour)
@@ -146,34 +152,49 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
     if set(sizes["source_size_mm"]) != {p["id"] for p in moving}:
         raise ValueError("native source sizes must cover exactly moving patches")
     requested_sizes = {**sizes, "source_size_mm": dict(sizes["source_size_mm"])}
-    sizes["rigid_size_mm"] = min(
-        sizes["rigid_size_mm"],
-        math.sqrt(
-            8
-            * 0.03
-            * (
-                manifest["recipe"]["baffle"]["aperture_radius_mm"]
-                if "baffle" in manifest["recipe"]
-                else manifest["recipe"]["horn"]["housing_radius_mm"]
-            )
-        ),
+    assembly = ASSEMBLY_FEATURE in manifest["required_features"]
+    sizes["rigid_size_mm"] = (
+        sizes["rigid_size_mm"]
+        if assembly
+        else min(
+            sizes["rigid_size_mm"],
+            math.sqrt(
+                8
+                * 0.03
+                * (
+                    manifest["recipe"]["baffle"]["aperture_radius_mm"]
+                    if "baffle" in manifest["recipe"]
+                    else manifest["recipe"]["horn"]["housing_radius_mm"]
+                )
+            ),
+        )
     )
-    for i, segment in enumerate(contour.segments):
+    segments = (
+        [(key, c, i) for key, c, i, _, _ in contour.patches]
+        if assembly
+        else [(s.id, contour, i) for i, s in enumerate(contour.segments)]
+    )
+    for key, model, i in segments:
+        segment = model.segments[i]
         if segment.role == "moving" and segment.kind == "arc":
-            sizes["source_size_mm"][segment.id] = min(
-                sizes["source_size_mm"][segment.id], math.sqrt(8 * 0.02 * contour.arc(i)[0])
+            sizes["source_size_mm"][key] = min(
+                sizes["source_size_mm"][key], math.sqrt(8 * 0.02 * model.arc(i)[0])
             )
-    channel = {
-        "id": drive.channel_id,
-        "source_ids": [p["id"] for p in moving],
-        "physical_source_id": contour.physical_source_id,
-        "patch_weights": dict(drive.weights),
-        "motion": drive.motion,
-    }
+    channel = (
+        manifest["channels"]
+        if assembly
+        else {
+            "id": drive.channel_id,
+            "source_ids": [p["id"] for p in moving],
+            "physical_source_id": contour.physical_source_id,
+            "patch_weights": dict(drive.weights),
+            "motion": drive.motion,
+        }
+    )
     sources = [
         {
             "id": p["id"],
-            "role": "LF" if "baffle" in manifest["recipe"] else "HF",
+            "role": p["band"] if assembly else ("LF" if "baffle" in manifest["recipe"] else "HF"),
             "instance_id": None,
             "label": p["id"],
             "required": True,
@@ -231,6 +252,16 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 ],
             }
             woofer = "baffle" in manifest["recipe"]
+            if assembly:
+                origin = [0, 0, contour.front_z_mm * 0.001]
+                frame = {
+                    "axis": [0, 0, 1],
+                    "u": [1, 0, 0],
+                    "v": [0, 1, 0],
+                    "origin_m": origin,
+                    "source_center_m": origin,
+                    "mouth_center_m": origin,
+                }
             if woofer:
                 origin = [float(x) * 0.001 for x in manifest["recipe"]["baffle"]["center_mm"]]
                 frame = {
@@ -264,7 +295,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 "findings": [],
                 "finding_ids": [],
                 "normalisation": {
-                    "source_frame" if woofer else "anchor_throat_frame": frame,
+                    "source_frame" if woofer or assembly else "anchor_throat_frame": frame,
                     "matrix": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
                 },
                 "identity": {
@@ -274,7 +305,9 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                     "solver_anchor_instance_id": None,
                 },
                 "domain_interpretation": {
-                    "type": "native-front-baffle-woofer-closed-enclosure"
+                    "type": "native-shared-horn-woofer-closed-enclosure"
+                    if assembly
+                    else "native-front-baffle-woofer-closed-enclosure"
                     if woofer
                     else "native-full-circle-closed-housing"
                 },
@@ -286,13 +319,45 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 },
                 "transformed_geometry_hash": built["transformed_geometry_hash"],
                 "native_source": {
-                    "channel": channel,
+                    "channels" if assembly else "channel": channel,
+                    **(
+                        {
+                            "recipe": manifest["recipe"],
+                            "observation_frame": frame,
+                            "source_frames": {
+                                c.physical_source_id: {
+                                    "origin_m": [x * 0.001 for x in origin],
+                                    "axis": [0, 0, 1],
+                                }
+                                for c, origin, _ in contour.parts
+                            },
+                        }
+                        if assembly
+                        else {}
+                    ),
                     "geometry_sha256": manifest["geometry_sha256"],
                     "excitation_sha256": manifest["excitation_sha256"],
                     "patches": manifest["patches"],
                     "required_features": manifest["required_features"],
                     "mesh_density_sha256": _digest(
-                        _canonical({"sizes": sizes, "surface_deviation_mm": 0.1})
+                        _canonical(
+                            {
+                                "sizes": sizes,
+                                "surface_deviation_mm": 0.1,
+                                **(
+                                    {
+                                        "rigid_role_sizes_mm": {
+                                            "horn-wall": min(
+                                                sizes["rigid_size_mm"],
+                                                math.sqrt(8 * 0.1 * contour.horn.points[-1].r_mm),
+                                            )
+                                        }
+                                    }
+                                    if assembly
+                                    else {}
+                                ),
+                            }
+                        )
                     ),
                 },
             }
@@ -322,11 +387,21 @@ def _worker(stage):
     gmsh.initialize()
     try:
         _verify_recipe_faces(stage, gmsh)
+        manifest, model, _, _ = read_native_source(stage)
+        options = {"symmetry_mode": "full", "surface_deviation_mm": 0.1}
+        if ASSEMBLY_FEATURE in manifest["required_features"]:
+            wall = next(p for p in manifest["rigid_faces"] if p["role"] == "horn-wall")
+            options["rigid_face_sizes_mm"] = {
+                wall["advanced_face_indices"][0]: min(
+                    request["sizes"]["rigid_size_mm"],
+                    math.sqrt(8 * 0.1 * model.horn.points[-1].r_mm),
+                )
+            }
         built = build_imported_mesh(
             stage / "geometry.step",
             request["manifest"],
             request["sizes"],
-            options={"symmetry_mode": "full", "surface_deviation_mm": 0.1},
+            options=options,
             include_viewport_mesh=False,
         )
     finally:
@@ -360,11 +435,14 @@ def _worker(stage):
         contour,
         manifest["recipe"].get("horn"),
         baffle=manifest["recipe"].get("baffle"),
+        assembly=contour if ASSEMBLY_FEATURE in manifest["required_features"] else None,
     )
     (stage / "built.json").write_bytes(_canonical(built))
 
 
-def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn=None, *, baffle=None):
+def _certify_mesh(
+    xyz, triangles, tags, source_tags, contour, horn=None, *, baffle=None, assembly=None
+):
     """Certify every facet against finite surfaces, or refuse publication.
 
     A barycentric lattice covers a triangle within diameter/n. Distance to a
@@ -455,6 +533,29 @@ def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn=None, *, baff
             facets = np.asarray(pending)
         raise ValueError("native mesh whole-facet tolerance could not be certified")
 
+    if assembly is not None:
+        bounds = {
+            key: certify(
+                xyz[tags == source_tags[key]], lambda p, key=key: assembly.patch_distance(key, p)
+            )
+            for key, c, i, _, _ in assembly.patches
+            if c.segments[i].role == "moving"
+        }
+        rigid = [
+            lambda p, role=role: assembly.rigid_distance(role, p) for role in assembly.rigid_areas()
+        ]
+        rigid += [
+            lambda p, key=key: assembly.patch_distance(key, p)
+            for key, c, i, _, _ in assembly.patches
+            if c.segments[i].role == "rigid"
+        ]
+        rigid_bound = certify(xyz[tags == 1], lambda p: np.minimum.reduce([f(p) for f in rigid]))
+        return {
+            "tolerance_mm": 0.15,
+            "moving_patch_bounds_mm": bounds,
+            "rigid_bound_mm": rigid_bound,
+            "method": "finite-shared-assembly-lipschitz-v1",
+        }
     bounds = {
         s.id: certify(xyz[tags == source_tags[s.id]], radial(meridian(i)))
         for i, s in enumerate(contour.segments)
@@ -505,6 +606,11 @@ def _verify_recipe_faces(stage, gmsh):
     if sorted(ids) != sorted(manifest["all_face_indices"]):
         raise ValueError("native STEP face coverage is stale")
     mapped = dict(zip(ids, faces))
+    if ASSEMBLY_FEATURE in manifest["required_features"]:
+        from .native_assembly import verify_faces
+
+        verify_faces(gmsh, manifest, contour, mapped)
+        return
     origin = np.asarray(manifest["recipe"].get("baffle", {}).get("center_mm", (0, 0, 0)))
     for i, patch in enumerate(manifest["patches"]):
         face = mapped[patch["advanced_face_indices"][0]]

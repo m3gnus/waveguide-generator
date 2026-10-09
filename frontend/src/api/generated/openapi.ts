@@ -1849,6 +1849,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/source-editor/assembly/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assembly Ingest Endpoint */
+        post: operations["assembly_ingest_endpoint_api_source_editor_assembly_ingest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-editor/assembly/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assembly Validate Endpoint */
+        post: operations["assembly_validate_endpoint_api_source_editor_assembly_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/source-editor/expand": {
         parameters: {
             query?: never;
@@ -2254,6 +2288,44 @@ export interface components {
             runStem: string;
             /** Subdirectory */
             subdirectory: string;
+        };
+        /** AssemblyDimensions */
+        AssemblyDimensions: {
+            /** Aperture Radius Mm */
+            aperture_radius_mm: number;
+            /** Depth Mm */
+            depth_mm: number;
+            /** Front Z Mm */
+            front_z_mm: number;
+            /** Height Mm */
+            height_mm: number;
+            /** Horn Length Mm */
+            horn_length_mm: number;
+            /** Horn Xy Mm */
+            horn_xy_mm: [
+                number,
+                number
+            ];
+            /** Mouth Radius Mm */
+            mouth_radius_mm: number;
+            /** Width Mm */
+            width_mm: number;
+            /** Woofer Xy Mm */
+            woofer_xy_mm: [
+                number,
+                number
+            ];
+        };
+        /** AssemblyRequest */
+        AssemblyRequest: {
+            dimensions: components["schemas"]["AssemblyDimensions"];
+            horn: components["schemas"]["SourceDocument"];
+            /**
+             * Mesh Size Mm
+             * @default 2
+             */
+            mesh_size_mm?: number;
+            woofer: components["schemas"]["SourceDocument"];
         };
         /** Attachment */
         Attachment: {
@@ -3771,7 +3843,7 @@ export interface components {
             /** Port Area Source */
             port_area_source?: ("user" | "bem_aperture") | null;
             /** Required Features */
-            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1")[];
+            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1")[];
             /**
              * Rg Ohm
              * @default 0
@@ -8720,6 +8792,76 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SolverMeshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assembly_ingest_endpoint_api_source_editor_assembly_ingest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssemblyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assembly_validate_endpoint_api_source_editor_assembly_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssemblyRequest"];
             };
         };
         responses: {

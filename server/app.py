@@ -499,7 +499,7 @@ class _HashedAssetStaticFiles(StaticFiles):
 #: work that outlives its request -- a deferred viewport, and a capture of the
 #: CAD document that copies tens of megabytes -- and it is refused before its
 #: handler runs, so the return stays on disk exactly as it was.
-RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export"})
+RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export", "/api/source-editor/assembly/ingest"})
 #: Routes whose invalid requests answer 400 ``invalid_request`` without echoing
 #: any input (docs/reference/CADLINK-LIVE-PROTOCOL.md). FastAPI's default 422
 #: repeats the offending values, and a live request can carry a token or proof.
