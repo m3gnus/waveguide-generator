@@ -7,7 +7,7 @@ import binascii
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 import math
-from typing import TYPE_CHECKING, Any
+from typing import Mapping, TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -132,6 +132,7 @@ def parse_frequency(
     mean_pressure_velocity: complex | None = None, boundary_loading: BoundaryLoading | None = None,
     excitation_port_ids: tuple[str, ...] | None = None,
     channel_port_ids: tuple[str, ...] | None = None,
+    _decoded_quantities: dict[str, np.ndarray] | None = None,
 ) -> FrequencyResult:
     """Map a unit-velocity basis or a WG channel's sum of independent ports.
 
@@ -186,7 +187,11 @@ def parse_frequency(
                 kind, unit, axes, None):
             raise ResultContractError(f"{name} quantity, unit, axes or target changed")
         values = item.get("values")
-        array = decode_complex_values(values, shape)
+        array = (_decoded_quantities.get(name) if _decoded_quantities is not None else None)
+        if array is None:
+            array = decode_complex_values(values, shape)
+            if _decoded_quantities is not None:
+                _decoded_quantities[name] = array
         if values["dtype"] != ("complex64" if precision == "float32" else "complex128"):
             raise ResultContractError(f"{name} precision changed")
         return array if axis == "radiator" else np.sum(array[indices], axis=0)
@@ -243,13 +248,15 @@ def parse_compiled_frequency(result: Any, request: CompiledRequest, *, frequency
     options = request.wire["solver_options"]
     ports = tuple(request.wire["excitation_port_ids"])
     counts = (len(request.mesh.points_m), len(request.mesh.faces)) if request.surface_traces else None
+    decoded: dict[str, np.ndarray] = {}
     return {
         channel: parse_frequency(
             result, frequency_hz=frequency_hz, layout=request.layout,
             source_area_m2=request.channel_loading[channel].area_m2,
             excitation_port_id=members[0], excitation_port_ids=ports, channel_port_ids=members,
             symmetry=options["symmetry"], precision=options["precision"], backend=options["bem_backend"],
-            trace_counts=counts, boundary_loading=request.channel_loading[channel])
+            trace_counts=counts, boundary_loading=request.channel_loading[channel],
+            _decoded_quantities=decoded)
         for channel, members in request.channel_ports.items()
     }
 
@@ -315,6 +322,7 @@ def map_sweep(
     on_frequency_result: Callable[[int, float, dict[str, Any]], bool | None] | None = None,
     request_cancel: Callable[[], None] | None = None,
     compiled_request: CompiledRequest | None = None, channel_id: str | None = None,
+    _channel_callbacks: Mapping[str, tuple[Callable | None, Callable | None]] | None = None,
 ) -> SweepResult:
     """Consume and close an owned stream, including on callback/decoder failure.
 
@@ -324,7 +332,11 @@ def map_sweep(
     """
     stream = iter(events)
     try:
-        if compiled_request is not None and channel_id not in compiled_request.channel_ports:
+        channels = tuple(_channel_callbacks) if _channel_callbacks is not None else (channel_id,)
+        if _channel_callbacks is not None and (compiled_request is None or not channels
+                or any(name not in compiled_request.channel_ports for name in channels)):
+            raise ValueError("Compiled sweep requires known WG channels")
+        if _channel_callbacks is None and compiled_request is not None and channel_id not in compiled_request.channel_ports:
             raise ValueError("Compiled sweep requires a named WG channel")
         frequencies = np.asarray(list(frequencies_hz), dtype=float)
         if (frequencies.ndim != 1 or frequencies.size == 0 or not np.isfinite(frequencies).all()
@@ -342,8 +354,10 @@ def map_sweep(
             wire_frequencies = frequencies.astype(precision)
         if not np.isfinite(wire_frequencies).all() or np.any(wire_frequencies <= 0):
             raise ValueError("Frequencies are invalid at solver precision")
-        rows: list[FrequencyResult] = []
-        logs: list[dict[str, Any]] = []
+        channel_rows = {name: [] for name in channels}
+        channel_logs = {name: [] for name in channels}
+        rows = channel_rows[channels[0]]
+        logs = channel_logs[channels[0]]
         terminal = None
         for event in stream:
             if terminal is not None:
@@ -363,18 +377,28 @@ def map_sweep(
                 index = len(rows)
                 if index >= len(frequencies):
                     raise ResultContractError("Worker returned extra frequency rows")
-                row = (parse_compiled_frequency(
-                    event.get("result"), compiled_request, frequency_hz=float(frequencies[index])
-                )[channel_id] if compiled_request is not None else parse_frequency(
-                    event.get("result"), frequency_hz=float(frequencies[index]), layout=layout,
-                    source_area_m2=source_area_m2, excitation_port_id=excitation_port_id,
-                    symmetry=symmetry, precision=precision, backend=backend, trace_counts=trace_counts,
-                    boundary_loading=boundary_loading, source_motion=source_motion))
-                rows.append(row)
-                logs.append(row.log_entry(layout))
-                if progress_callback:
-                    progress_callback(index, len(frequencies), row.frequency_hz)
-                if on_frequency_result and on_frequency_result(index, row.frequency_hz, logs[-1]) is False:
+                if compiled_request is not None:
+                    parsed = parse_compiled_frequency(
+                        event.get("result"), compiled_request, frequency_hz=float(frequencies[index]))
+                else:
+                    parsed = {channel_id: parse_frequency(
+                        event.get("result"), frequency_hz=float(frequencies[index]), layout=layout,
+                        source_area_m2=source_area_m2, excitation_port_id=excitation_port_id,
+                        symmetry=symmetry, precision=precision, backend=backend, trace_counts=trace_counts,
+                        boundary_loading=boundary_loading, source_motion=source_motion)}
+                stopping = False
+                for name in channels:
+                    row = parsed[name]
+                    channel_rows[name].append(row)
+                    log = row.log_entry(layout)
+                    channel_logs[name].append(log)
+                    progress, publish = (_channel_callbacks[name] if _channel_callbacks is not None
+                                         else (progress_callback, on_frequency_result))
+                    if progress:
+                        progress(index, len(frequencies), row.frequency_hz)
+                    if publish and publish(index, row.frequency_hz, log) is False:
+                        stopping = True
+                if stopping:
                     if request_cancel is None:
                         raise ValueError("A stopping result callback requires request_cancel")
                     request_cancel()
@@ -385,23 +409,27 @@ def map_sweep(
         if terminal is None:
             raise ResultContractError("Stream ended without a completed or cancelled event")
 
-        def stack(field: str, shape: tuple[int, ...]) -> np.ndarray:
-            return (np.stack([getattr(row, field) for row in rows]) if rows
-                    else np.empty((0, *shape), dtype=np.complex128))
+        def finish(name):
+            rows, logs = channel_rows[name], channel_logs[name]
+            def stack(field: str, shape: tuple[int, ...]) -> np.ndarray:
+                return (np.stack([getattr(row, field) for row in rows]) if rows
+                        else np.empty((0, *shape), dtype=np.complex128))
 
-        pressure = stack("pressure_complex", (len(layout.planes), len(layout.angles_deg)))
-        with np.errstate(divide="ignore"):
-            spl = 20.0 * np.log10(np.abs(pressure) / 20e-6)
-        return SweepResult(
-            frequencies[:len(rows)], pressure, spl, np.asarray([r.impedance for r in rows], dtype=complex),
-            layout.angles_deg, list(layout.planes),
-            stack("sphere_pressure_complex", (len(layout.points_m["sphere"]),))
-            if "sphere" in layout.points_m else None,
-            layout.sphere_theta_deg, layout.sphere_phi_deg,
-            stack("surface_pressure_complex", (trace_counts[0],)) if trace_counts else None,
-            stack("surface_neumann_complex", (trace_counts[1],)) if trace_counts else None,
-            terminal == "cancelled", len(frequencies), logs,
-            np.asarray([row.radiation_impedance for row in rows], dtype=complex))
+            pressure = stack("pressure_complex", (len(layout.planes), len(layout.angles_deg)))
+            with np.errstate(divide="ignore"):
+                spl = 20.0 * np.log10(np.abs(pressure) / 20e-6)
+            return SweepResult(
+                frequencies[:len(rows)], pressure, spl, np.asarray([r.impedance for r in rows], dtype=complex),
+                layout.angles_deg, list(layout.planes),
+                stack("sphere_pressure_complex", (len(layout.points_m["sphere"]),))
+                if "sphere" in layout.points_m else None,
+                layout.sphere_theta_deg, layout.sphere_phi_deg,
+                stack("surface_pressure_complex", (trace_counts[0],)) if trace_counts else None,
+                stack("surface_neumann_complex", (trace_counts[1],)) if trace_counts else None,
+                terminal == "cancelled", len(frequencies), logs,
+                np.asarray([row.radiation_impedance for row in rows], dtype=complex))
+        results = {name: finish(name) for name in channels}
+        return results if _channel_callbacks is not None else results[channel_id]
     finally:
         close = getattr(events, "close", None) or getattr(stream, "close", None)
         if close is not None:

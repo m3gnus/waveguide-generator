@@ -106,7 +106,8 @@ def common_artifact_results(results: Mapping[str, Any]) -> dict[str, Any]:
 
 @warm_cache.signature_scope
 def solve_compiled(
-    request: CompiledRequest, *, channel_id: str,
+    request: CompiledRequest, *, channel_id: str | None = None,
+    channel_callbacks: Mapping[str, tuple[Callable | None, Callable | None]] | None = None,
     worker_manager: WorkerManager | None = None, julia_executable: str | None = None,
     cancellation_callback: Callable[[], None] | None = None,
     progress_callback: Callable[[int, int, float], None] | None = None,
@@ -173,16 +174,17 @@ def solve_compiled(
             finally:
                 events.close()
 
-        loading = request.channel_loading[channel_id]
+        selected = channel_id if channel_callbacks is None else next(iter(channel_callbacks))
+        loading = request.channel_loading[selected]
         native = map_sweep(
             reported_events(), wire["frequencies_hz"], layout=request.layout,
             source_area_m2=loading.area_m2,
-            excitation_port_id=request.channel_ports[channel_id][0],
+            excitation_port_id=request.channel_ports[selected][0],
             symmetry=options["symmetry"], precision=options["precision"],
             backend=options["bem_backend"], boundary_loading=loading,
             trace_counts=(len(request.mesh.points_m), len(request.mesh.faces))
             if request.surface_traces else None,
-            compiled_request=request, channel_id=channel_id,
+            compiled_request=request, channel_id=channel_id, _channel_callbacks=channel_callbacks,
             progress_callback=progress_callback, on_frequency_result=on_frequency_result,
             request_cancel=session.request_cancel,
         )
@@ -192,7 +194,8 @@ def solve_compiled(
         if profile is not None:
             profile.mark("closed")
         session.raise_callback_error()
-        if native.cancelled and not len(native.frequencies_hz):
+        first = next(iter(native.values())) if channel_callbacks is not None else native
+        if first.cancelled and not len(first.frequencies_hz):
             raise OfficialBeatUnavailable("BEAT solve cancelled before any results")
         return native
 

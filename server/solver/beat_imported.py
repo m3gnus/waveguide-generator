@@ -821,6 +821,11 @@ def solve_imported_beat_from_msh_text(
     # does not advance it, so frames are numbered across channels.
     next_revision = [0]
     live_channel_status: dict[str, list[str]] = {}
+    # Adaptive channels retain independent refinement criteria and acquisition axes.
+    # Fixed grids share the operator and independent excitation columns.
+    joint = official and not adaptive and channel_count > 1
+    joint_callbacks = {}
+    joint_compiled = None
     for channel_index, channel in enumerate(geometry.drive_channels):
         channel_context = SolverContext.from_imported_request(
             request, quadrants=quadrants, source_motion=channel.motion
@@ -851,7 +856,9 @@ def solve_imported_beat_from_msh_text(
                 if adaptive:
                     work_done += 1
                     index, total = work_done - _offset - 1, acquisition_count * len(groups)
-                completed = work_done if adaptive else _offset + index + 1
+                completed = (work_done if adaptive else
+                             (index * channel_count + _channel_index + 1 if joint
+                              else _offset + index + 1))
                 if cancellation_callback and not official:
                     cancellation_callback()
                 if stage_callback:
@@ -927,8 +934,7 @@ def solve_imported_beat_from_msh_text(
                     "channel_order": channel_order,
                     "metadata": {
                         "geometry_type": "imported",
-                        # Channels arrive one after another here, so the
-                        # count is the current channel's, out of the sweep.
+                        # The count describes this channel on the requested sweep.
                         "provisional": {
                             "completed_frequency_count": int(index) + 1,
                             "expected_frequency_count": frequency_count,
@@ -949,8 +955,9 @@ def solve_imported_beat_from_msh_text(
 
             if official:
                 try:
-                    compiled = build_imported_request(
-                        msh_text, channel_context, record, [channel], frequencies_hz=frequencies,
+                    compiled = joint_compiled or build_imported_request(
+                        msh_text, channel_context, record,
+                        geometry.drive_channels if joint else [channel], frequencies_hz=frequencies,
                         engine_id=beat_engine_name(backend), backend=backend,
                         surface_traces=retain_traces,
                         precision=_precision,
@@ -959,6 +966,8 @@ def solve_imported_beat_from_msh_text(
                     raise BeatUnavailable(str(exc)) from exc
                 if profile is not None:
                     profile.mark("request built")
+                if joint:
+                    joint_compiled = compiled
                 config = response_config(compiled, channel_context)
             else:
                 try:
@@ -989,6 +998,10 @@ def solve_imported_beat_from_msh_text(
                 except NotImplementedError as exc:
                     raise BeatUnavailable(str(exc)) from exc
             holder["config"] = config
+            if joint:
+                joint_callbacks[channel.id] = (progress, on_frequency_result if result_callback else None)
+                configs[channel.id] = config
+                continue
 
             path: Path | None = None
             try:
@@ -1139,10 +1152,22 @@ def solve_imported_beat_from_msh_text(
             parts.append((1.0 if adaptive else sign, result))
             if not adaptive:
                 work_done += frequency_count
+        if joint:
+            continue
         sorted_results[channel.id] = _signed_sum(parts)
         configs[channel.id] = holder["config"]
         if official and getattr(sorted_results[channel.id], "cancelled", False):
             break
+
+    if joint:
+        sorted_results = solve_compiled(
+            joint_compiled, channel_callbacks=joint_callbacks,
+            worker_manager=_worker_manager, julia_executable=_julia_executable,
+            _profile=profile, cancellation_callback=cancellation_callback,
+            status_callback=stage_status,
+        )
+        for result in sorted_results.values():
+            sort_official_result(result)
 
     cancelled = official and any(getattr(r, "cancelled", False) for r in sorted_results.values())
     if cancellation_callback:

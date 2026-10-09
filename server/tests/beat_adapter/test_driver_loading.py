@@ -93,8 +93,15 @@ def test_generalized_force_on_a_rear_axis_is_separate_from_pressure_loading(make
 
 
 def test_multisource_channels_sum_independent_pressures_and_keep_diagonal_forces(
-    make_mesh, durable_request, compiled_result,
+    make_mesh, durable_request, compiled_result, monkeypatch,
 ):
+    from server.solver.beat_adapter import results as mapping
+    decoded = []
+    original_decode = mapping.decode_complex_values
+    def decode(values, shape):
+        decoded.append(values)
+        return original_decode(values, shape)
+    monkeypatch.setattr(mapping, "decode_complex_values", decode)
     msh = make_mesh([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 2], [2, 0, 2], [0, 1, 2]],
                     [[0, 1, 2], [3, 5, 4]], [101, 102])
     built = durable_request(build_request(
@@ -107,6 +114,7 @@ def test_multisource_channels_sum_independent_pressures_and_keep_diagonal_forces
     boundary = np.array([[2, 2, 2, 7, 7, 7], [11, 11, 11, 3, 3, 3]], dtype=complex)
     raw = compiled_result(built, boundary_pressure=boundary, forces=[1 + 2j, 3 - 4j])
     rows = parse_compiled_frequency(raw, built, frequency_hz=500)
+    assert len(decoded) == len(raw["quantities"])
     both = rows["both"]
     np.testing.assert_allclose(both.pressure_complex, rows["one"].pressure_complex + rows["two"].pressure_complex)
     np.testing.assert_allclose(both.sphere_pressure_complex, rows["one"].sphere_pressure_complex + rows["two"].sphere_pressure_complex)

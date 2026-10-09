@@ -261,7 +261,8 @@ def test_imported_production(runtime, adaptive, axial, backend):
     assert len(runtime.workers) == 1
     # Independent ports retain original tags and unrotated node/face order.
     system = runtime.requests[0]["compiled_system"]
-    assert system["metadata"]["source_tags"] == {"source-a": 101, "source-b": 102}
+    assert system["metadata"]["source_tags"] == ({"source-a": 101, "source-b": 102}
+        if adaptive else {"source-a": 101, "source-b": 102, "source-c": 103})
     points = system["meshes"][0]["mesh_data"]["points"]
     decoded = np.frombuffer(base64.b64decode(points["data"]), dtype="<f8").reshape(points["shape"])
     np.testing.assert_allclose(decoded[0], [.01, 0, 0] if not axial else [0, 0, 0])
@@ -492,13 +493,13 @@ def test_registry_official_readiness_without_hbb(runtime, monkeypatch):
     asyncio.run(scenario())
 
 
-def test_cancellation_during_second_channel_exports_shared_artifact_axis(runtime):
+def test_joint_cancellation_exports_shared_artifact_axis(runtime):
     from server.solver.combine import deserialize_channel_bases
 
-    runtime.cancel_after, runtime.cancel_submission = 1, 2
+    runtime.cancel_after, runtime.cancel_submission = 1, 1
     result = beat_imported.solve_imported_beat_from_msh_text(
         cad.MESH, cad._request(), cad._record(), backend="cpu")
-    assert len(result["channels"]["left"]["frequencies"]) == 3
+    assert result["channels"]["left"]["frequencies"] == [100.]
     assert result["channels"]["right"]["frequencies"] == [100.]
     artifact = result["_field_traces"]
     np.testing.assert_equal(artifact.frequencies_hz, [100.])
@@ -656,7 +657,7 @@ def test_compiled_topology_built_once_per_channel(runtime, monkeypatch, imported
         beat.solve_beat_from_msh_text(
             MESH.read_text(), _context(adaptive_frequency_sampling=adaptive,
                                       num_frequencies=24 if adaptive else 3), backend="cpu")
-    assert len(builds) == (2 if imported else 1)
+    assert len(builds) == (2 if imported and adaptive else 1)
     assert all(request["compiled_system"] in [built.wire["compiled_system"] for built in builds]
                for request in runtime.requests)
 
@@ -715,7 +716,7 @@ def test_explicit_scaled_mesh_and_precision_reach_response_artifacts(runtime, mo
     np.testing.assert_allclose(np.linalg.norm(points - built.frame["origin"], axis=1), 2.)
 
 
-def test_cancelled_first_channel_does_not_advertise_missing_channels(runtime, monkeypatch):
+def test_cancelled_joint_basis_advertises_only_acquired_channels(runtime, monkeypatch):
     runtime.cancel_after, runtime.cancel_submission = 1, 1
     metadata_names = []
     serialize = beat_imported.serialize_channel_bases
@@ -727,8 +728,9 @@ def test_cancelled_first_channel_does_not_advertise_missing_channels(runtime, mo
     monkeypatch.setattr(beat_imported, "serialize_channel_bases", record)
     request = cad._request(combine={"members": ["left", "right"], "crossovers_hz": [500.]})
     result = beat_imported.solve_imported_beat_from_msh_text(cad.MESH, request, cad._record(), backend="cpu")
-    assert result["channel_order"] == list(result["channels"]) == ["left"]
-    assert metadata_names == ["left"]
+    assert result["channel_order"] == list(result["channels"]) == ["left", "right"]
+    assert all(member["frequencies"] == [100.] for member in result["channels"].values())
+    assert metadata_names == ["left", "right"]
 
 
 def test_selected_registry_reports_official_version(runtime, monkeypatch):
@@ -925,3 +927,20 @@ def test_prelease_unsupported_backend_is_preserved(runtime, monkeypatch):
     with pytest.raises(manager.UnsupportedBackend, match="supports CPU, Metal, CUDA and ROCm"):
         bridge.solve_compiled(request, channel_id="fixture", worker_manager=runtime.manager)
     assert warm_cache.generation() == before
+
+
+def test_shared_basis_streams_each_channel_before_next_frequency(runtime):
+    seen = []
+    stages = []
+    def publish(revision, frame):
+        cid = next(iter(frame["channels"]))
+        seen.append((revision, cid, frame["metadata"]["provisional"]["completed_frequency_count"]))
+    beat_imported.solve_imported_beat_from_msh_text(
+        cad.MESH, cad._request(), cad._record(), backend="cpu", result_callback=publish,
+        stage_callback=lambda stage, fraction, message: stages.append((stage, fraction)))
+    assert len(runtime.requests) == 1
+    assert seen == [(0, "left", 1), (1, "right", 1), (2, "left", 2),
+                    (3, "right", 2), (4, "left", 3), (5, "right", 3)]
+    fractions = [fraction for stage, fraction in stages if stage == "frequency_solve"]
+    assert fractions == sorted(fractions)
+    assert fractions[-1] == 1.0
