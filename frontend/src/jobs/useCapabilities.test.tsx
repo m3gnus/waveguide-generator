@@ -1,3 +1,5 @@
+import { jobsSocket } from '../api/jobsSocket';
+import { getCapabilities } from './actions';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -67,6 +69,24 @@ describe('useCapabilities', () => {
 
   const textOf = (tag: string) => host.querySelector(`[data-tag="${tag}"]`)?.textContent ?? '';
 
+  it('replaces stale capability information with a backend connection notice', async () => {
+    const manager = jobsSocket as unknown as { snapshot: ReturnType<typeof jobsSocket.getSnapshot>; listeners: Set<() => void> };
+    const previous = manager.snapshot;
+    try {
+      await render(<Consumer tag="status"/>);
+      await act(async () => {
+        manager.snapshot = { ...previous, connection: 'reconnecting' };
+        manager.listeners.forEach((listener) => listener());
+      });
+      expect(textOf('status')).toContain('Backend connection interrupted');
+    } finally {
+      await act(async () => {
+        manager.snapshot = previous;
+        manager.listeners.forEach((listener) => listener());
+      });
+    }
+  });
+
   it('issues one request for every consumer on the page', async () => {
     // The status bar, the job coordinator and the solver-options section each
     // used to fetch independently, so a cold load made three identical calls.
@@ -74,7 +94,7 @@ describe('useCapabilities', () => {
       <><Consumer tag="status"/><Consumer tag="jobs"/><Consumer tag="options"/></>,
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities');
+    expect(fetchMock).toHaveBeenCalledWith('/api/capabilities', { signal: expect.any(AbortSignal) });
     for (const tag of ['status', 'jobs', 'options']) expect(textOf(tag)).toBe('metal,bempp');
   });
 
@@ -440,4 +460,19 @@ describe('AppQueryProvider wiring', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     for (const host of hosts) expect(host.textContent).toBe('metal,bempp');
   });
+});
+
+
+it('bounds a stuck capability request independently of slow export requests', async () => {
+  vi.useFakeTimers();
+  try {
+    const fetcher = vi.fn((_url: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    }));
+    const request = getCapabilities(fetcher as typeof fetch);
+    const assertion = expect(request).rejects.toThrow('Capability refresh timed out');
+    await vi.advanceTimersByTimeAsync(10_000);
+    await assertion;
+    expect(fetcher).toHaveBeenCalledOnce();
+  } finally { vi.useRealTimers(); }
 });

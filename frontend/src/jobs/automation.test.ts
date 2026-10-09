@@ -204,3 +204,45 @@ describe('run archiving', () => {
     expect(deps.archiveCompleted).not.toHaveBeenCalled();
   });
 });
+
+it('queues a historical backlog before HTTP, including overlapping process calls', async () => {
+  const automation = new JobAutomation();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let active = 0, peak = 0;
+  const exportCompleted = vi.fn(async () => {
+    active++; peak = Math.max(peak, active);
+    await gate; active--;
+    return { files: ['result.csv'], failures: [] };
+  });
+  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted, markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn() };
+  const prefs = { ...preferencesStore.getSnapshot(), archiveRunsOnComplete: false, autoExportOnComplete: true, autoExportFormats: ['csv' as const] };
+  const historical = Array.from({ length: 40 }, (_, index) => ({ ...job, id: `old-${index}` }));
+  const first = automation.process(historical, prefs, dependencies);
+  const second = automation.process([...historical, { ...job, id: 'new' }], prefs, dependencies);
+  await Promise.resolve();
+  expect(exportCompleted).toHaveBeenCalledTimes(1);
+  release();
+  await Promise.all([first, second]);
+  expect(exportCompleted).toHaveBeenCalledTimes(41);
+  expect(peak).toBe(1);
+});
+
+it('does not regenerate blocked formats after reopening, and retains completed formats on retry', async () => {
+  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn().mockResolvedValue({ files: ['one.step'], failures: [] }), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn() };
+  const prefs = { ...preferencesStore.getSnapshot(), archiveRunsOnComplete: false, autoExportOnComplete: true, autoExportFormats: ['csv', 'step'] as ExportFormat[] };
+  const blocked = { ...job, auto_export_formats: { csv: { status: 'complete' as const, attempted_at: 'yesterday' }, step: { status: 'blocked' as const, attempted_at: 'today', reason: 'Existing destination' } } };
+  await new JobAutomation().process([blocked], prefs, dependencies);
+  expect(dependencies.exportCompleted).not.toHaveBeenCalled();
+  await new JobAutomation().process([{ ...blocked, auto_export_formats: { ...blocked.auto_export_formats, step: { ...blocked.auto_export_formats.step, status: 'failed' } } }], prefs, dependencies);
+  expect(dependencies.exportCompleted).toHaveBeenCalledWith(expect.anything(), ['step']);
+  expect(dependencies.markExported.mock.calls[0][2].csv).toEqual(blocked.auto_export_formats.csv);
+});
+
+it('holds a conflicted automatic run archive across reopening', async () => {
+  const dependencies = { downloadMesh: vi.fn(), markMeshDownloaded: vi.fn(), exportCompleted: vi.fn(), markExported: vi.fn(), archiveCompleted: vi.fn(), markArchived: vi.fn(), reportError: vi.fn() };
+  const prefs = { ...preferencesStore.getSnapshot(), archiveRunsOnComplete: true, autoExportOnComplete: false };
+  const blocked = { ...job, auto_export_formats: { run_archive: { status: 'blocked' as const, attempted_at: 'today', reason: 'Conflict' } } };
+  await new JobAutomation().process([blocked], prefs, dependencies);
+  expect(dependencies.archiveCompleted).not.toHaveBeenCalled();
+});

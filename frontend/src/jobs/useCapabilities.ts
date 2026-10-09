@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { jobsSocket } from '../api/jobsSocket';
 import {
   getCapabilities,
   type EngineCapability,
@@ -71,7 +72,12 @@ export interface CapabilitiesSnapshot {
   refreshCapabilities: () => void;
 }
 
+const subscribeConnection = (listener: () => void) => jobsSocket.subscribe(listener);
+const connectionSnapshot = () => jobsSocket.getSnapshot().connection;
+
 export function useCapabilities(): CapabilitiesSnapshot {
+  const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
+  const backendLost = connection === 'reconnecting' || connection === 'disconnected';
   const client = useQueryClient();
   let clock = qualificationClocks.get(client);
   if (!clock) {
@@ -92,7 +98,7 @@ export function useCapabilities(): CapabilitiesSnapshot {
   );
   const { data, error, isError, isPending } = useQuery({
     queryKey: CAPABILITIES_QUERY_KEY,
-    queryFn: () => getCapabilities(),
+    queryFn: ({ signal }) => getCapabilities(fetch, signal),
     retry: 1,
     staleTime: CAPABILITIES_STALE_MS,
     // This explicit server lifecycle covers delayed hardware inventory too.
@@ -147,9 +153,10 @@ export function useCapabilities(): CapabilitiesSnapshot {
     hostPlatform: data?.hostPlatform ?? null,
     engines: data?.engines ?? NO_ENGINES,
     engineSelection: data?.engineSelection ?? NO_ENGINE_SELECTION,
-    error: isError ? (error instanceof Error ? error.message : String(error)) : null,
+    error: backendLost ? 'Backend connection interrupted. Reconnecting; refresh capabilities when it returns.'
+      : isError ? (error instanceof Error ? error.message : String(error)) : null,
     isLoading: isPending,
-    qualificationRefreshNeeded: pending && ceilingReached,
+    qualificationRefreshNeeded: pending && (ceilingReached || isError || backendLost),
     refreshCapabilities,
   };
 }

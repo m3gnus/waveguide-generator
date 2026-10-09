@@ -1,3 +1,5 @@
+import type { ExportFormat } from '../prefs/preferences';
+import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
 import { compareSelection, fetchJobResults } from '../api/results';
@@ -621,11 +623,17 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, [actionError, reportError, retry, run, runImported, solveCurrentCadImport]);
 
   useEffect(() => {
+    const retryExport = (event: Event) => automation.retryExport((event as CustomEvent<string>).detail);
+    window.addEventListener('wg-retry-auto-export', retryExport);
+    return () => window.removeEventListener('wg-retry-auto-export', retryExport);
+  }, [automation]);
+  useEffect(() => {
     void automation.process(jobs, preferences, {
       downloadMesh: (job) => saveMeshArtifactToWorkspace(job),
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
-      exportCompleted: async (job, formats) => runWorkspaceExportBundle({
-        result: await fetchJobResults(job.id) as ResultPayload,
+      exportCompleted: (job, formats) => ownedAutoExport(job, formats, async (job, formats, fetcher) => runWorkspaceExportBundle({
+        fetcher,
+        result: await fetchJobResults(job.id, fetcher) as ResultPayload,
         ...resultExportSnapshot(job),
         jobId: job.id,
         jobStem: exportStemForJob(job),
@@ -634,16 +642,19 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
         designName: job.label ?? undefined,
         normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
         preferences,
-      }, formats),
+      }, formats), preferences.autoExportFormats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {
         exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
         auto_export_formats: formats,
         auto_export_completed_at: completedAt,
       }),
       archiveCompleted: async (job) => {
-        await archiveRunToWorkspace(await refreshedArchiveJob(job), preferences);
+        // Archiving is another automatic bundle and shares the backend lane.
+        await ownedAutoExport(job, ['run_archive' as ExportFormat], async (freshJob, _formats, fetcher) => ({
+          files: await archiveRunToWorkspace(freshJob, preferences, fetcher), failures: [],
+        }));
       },
-      markArchived: (job, archivedAt) => jobsSocket.patchMetadata(job.id, { archived_at: archivedAt }),
+      markArchived: async () => undefined,
       reportError,
     });
   }, [automation, jobs, preferences, reportError]);

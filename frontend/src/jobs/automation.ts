@@ -6,7 +6,7 @@ import { needsArchiving } from './runArchive';
 export interface AutomationDependencies {
   downloadMesh(job: JobItem): Promise<string>;
   markMeshDownloaded(job: JobItem, filename: string): Promise<void>;
-  exportCompleted(job: JobItem, formats: ExportFormat[]): Promise<{ files: string[]; failures: Array<{ format: ExportFormat; reason: string }> }>;
+  exportCompleted(job: JobItem, formats: ExportFormat[]): Promise<{ files: string[]; failures: Array<{ format: ExportFormat; reason: string; blocked?: boolean }> } | null>;
   markExported(job: JobItem, files: string[], formats: JobItem['auto_export_formats'], completedAt: string | null): Promise<void>;
   /** Write the run record and its curves to the design's archive folder. */
   archiveCompleted(job: JobItem): Promise<void>;
@@ -19,6 +19,16 @@ export class JobAutomation {
   private readonly meshStarted = new Set<string>();
   private readonly exportStarted = new Set<string>();
   private readonly archiveStarted = new Set<string>();
+  private tail: Promise<void> = Promise.resolve();
+
+  retryExport(jobId: string): void { this.exportStarted.delete(jobId); this.archiveStarted.delete(jobId); }
+
+  private enqueue(task: () => Promise<void>): Promise<void> {
+    const next = this.tail.then(task);
+    this.tail = next.catch(() => undefined);
+    return next;
+  }
+
   private emptyAutoExportWarningShown = false;
 
   async process(jobs: JobItem[], preferences: Preferences, dependencies: AutomationDependencies): Promise<void> {
@@ -26,7 +36,7 @@ export class JobAutomation {
     if (preferences.autoDownloadMesh) jobs.filter((job) => job.has_mesh_artifact && !job.mesh_artifact_file).forEach((job) => {
       if (this.meshStarted.has(job.id)) return;
       this.meshStarted.add(job.id);
-      tasks.push((async () => {
+      tasks.push(this.enqueue(async () => {
         let filename: string;
         try {
           filename = await dependencies.downloadMesh(job);
@@ -44,7 +54,7 @@ export class JobAutomation {
           // an app restart, when this in-memory guard intentionally resets.
           dependencies.reportError(`Could not record mesh auto-save for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
         }
-      })());
+      }));
     });
     if (preferences.autoExportOnComplete && !preferences.autoExportFormats.length) {
       if (!this.emptyAutoExportWarningShown) {
@@ -56,17 +66,19 @@ export class JobAutomation {
     }
     if (preferences.autoExportOnComplete && preferences.autoExportFormats.length) jobs.filter((job) => job.status === 'complete' && job.has_results && !job.auto_export_completed_at).forEach((job) => {
       if (this.exportStarted.has(job.id)) return;
-      const pendingFormats = preferences.autoExportFormats.filter((format) => job.auto_export_formats[format]?.status !== 'complete');
+      const pendingFormats = preferences.autoExportFormats.filter((format) => !['complete', 'blocked'].includes(job.auto_export_formats[format]?.status ?? ''));
       if (!pendingFormats.length) return;
       this.exportStarted.add(job.id);
-      tasks.push(dependencies.exportCompleted(job, pendingFormats).then(async (result) => {
+      tasks.push(this.enqueue(async () => {
+        const result = await dependencies.exportCompleted(job, pendingFormats);
+        if (result === null) return;
         const attemptedAt = dependencies.now?.() ?? new Date().toISOString();
-        const failures = new Map(result.failures.map((failure) => [failure.format, failure.reason]));
+        const failures = new Map(result.failures.map((failure) => [failure.format, failure]));
         const formatStatus = { ...job.auto_export_formats };
         pendingFormats.forEach((format) => {
-          const reason = failures.get(format);
-          formatStatus[format] = reason
-            ? { status: 'failed', attempted_at: attemptedAt, reason }
+          const failure = failures.get(format);
+          formatStatus[format] = failure
+            ? { status: failure.blocked ? 'blocked' : 'failed', attempted_at: attemptedAt, reason: failure.reason }
             : { status: 'complete', attempted_at: attemptedAt };
         });
         const allSelectedComplete = preferences.autoExportFormats.every((format) => formatStatus[format]?.status === 'complete');
@@ -84,10 +96,10 @@ export class JobAutomation {
     // record and results whatever export formats are selected, because its job
     // is to outlive the job database -- its optional 30-day cleanup, or a run
     // being removed -- rather than to produce the files a person picked.
-    if (preferences.archiveRunsOnComplete) jobs.filter(needsArchiving).forEach((job) => {
+    if (preferences.archiveRunsOnComplete) jobs.filter((job) => needsArchiving(job) && job.auto_export_formats.run_archive?.status !== 'blocked').forEach((job) => {
       if (this.archiveStarted.has(job.id)) return;
       this.archiveStarted.add(job.id);
-      tasks.push((async () => {
+      tasks.push(this.enqueue(async () => {
         try {
           await dependencies.archiveCompleted(job);
         } catch (error) {
@@ -104,7 +116,7 @@ export class JobAutomation {
           // restart, when this in-memory guard intentionally resets.
           dependencies.reportError(`Could not record the run archive for ${job.id.slice(0, 6)}: ${error instanceof Error ? error.message : String(error)}`);
         }
-      })());
+      }));
     });
     await Promise.all(tasks);
   }

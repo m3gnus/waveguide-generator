@@ -1154,3 +1154,15 @@ describe('result exporters', () => {
     expect(uploaded[uploaded.length - 1]).toBe(0xff);
   });
 });
+
+
+it('marks lost Workspace publication response bodies as indeterminate', async () => {
+  const broken = new Response(new ReadableStream({ start(controller) { controller.error(new Error('Response body connection lost')); } }), { status: 200 });
+  const fetcher = vi.fn().mockResolvedValue(broken);
+  await expect(writeWorkspaceFiles('run', [{ filename: 'one.csv', blob: new Blob(['saved']) }], fetcher)).rejects.toMatchObject({ publicationUncertain: true });
+});
+
+it('marks lost Workspace publication requests as indeterminate but preserves destination conflict classification', async () => {
+  await expect(writeWorkspaceFiles('run', [{ filename: 'one.csv', blob: new Blob(['saved']) }], vi.fn().mockRejectedValue(new TypeError('Network lost')))).rejects.toMatchObject({ publicationUncertain: true });
+  await expect(writeWorkspaceFiles('run', [{ filename: 'one.csv', blob: new Blob(['saved']) }], vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: 'Existing file' }), { status: 409 })))).rejects.toMatchObject({ destinationConflict: true });
+});

@@ -27,7 +27,7 @@ export function isActiveJobStatus(status: JobStatus): boolean {
 }
 export type JobsConnection = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 export interface AutoExportFormatStatus {
-  status: 'complete' | 'failed';
+  status: 'complete' | 'failed' | 'blocked';
   attempted_at: string;
   reason?: string;
 }

@@ -12715,6 +12715,54 @@
         "summary": "List Jobs"
       }
     },
+    "/api/jobs/auto-export/{token}/{action}": {
+      "post": {
+        "operationId": "settle_api_jobs_auto_export__token___action__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "token",
+            "required": true,
+            "schema": {
+              "title": "Token",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "action",
+            "required": true,
+            "schema": {
+              "title": "Action",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Settle Api Jobs Auto Export  Token   Action  Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Settle"
+      }
+    },
     "/api/jobs/cad-solve": {
       "post": {
         "description": "Accept the displayed CAD Solve press, or recover its original job.",
@@ -12917,6 +12965,84 @@
           }
         },
         "summary": "Job Archive Snapshot"
+      }
+    },
+    "/api/jobs/{job_id}/auto-export/claim": {
+      "post": {
+        "operationId": "claim_api_jobs__job_id__auto_export_claim_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Claim Api Jobs  Job Id  Auto Export Claim Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim"
+      }
+    },
+    "/api/jobs/{job_id}/auto-export/retry": {
+      "post": {
+        "operationId": "retry_api_jobs__job_id__auto_export_retry_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Retry Api Jobs  Job Id  Auto Export Retry Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Retry"
       }
     },
     "/api/jobs/{job_id}/dismiss": {

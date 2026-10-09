@@ -78,7 +78,7 @@ export interface ExportContext {
   };
 }
 
-export interface ExportFailure { format: ExportFormat; reason: string }
+export interface ExportFailure { format: ExportFormat; reason: string; blocked?: boolean }
 export interface ExportBundleResult {
   files: string[];
   failures: ExportFailure[];
@@ -405,15 +405,27 @@ export async function writeWorkspaceFiles(
     if (destination) body.append('destination', destination);
     members.forEach(({ filename }) => body.append('relative_path', filename));
     members.forEach(({ filename }, index) => body.append('file', compatibleBlobs[index], filename));
-    const response = await fetcher('/api/workspace/write-export', {
-      method: 'POST',
-      body,
-    });
+    let response: Response;
+    try {
+      response = await fetcher('/api/workspace/write-export', { method: 'POST', body });
+    } catch (error) {
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { publicationUncertain: true });
+    }
     // The bytes are built once and posted again on confirmation: rebuilding the
     // bundle would re-render its charts and restamp its timestamps, so the
     // second request would not be the export the user was asked about.
-    if (!response.ok) throw await collisionFrom(response) ?? await responseError(response);
-    return response.json() as Promise<WorkspaceWriteResponse>;
+    if (!response.ok) {
+      const error = await collisionFrom(response) ?? await responseError(response);
+      if (response.status === 409) Object.assign(error, { destinationConflict: true });
+      throw error;
+    }
+    try {
+      return await response.json() as WorkspaceWriteResponse;
+    } catch (error) {
+      // Fetch resolves at response headers; losing the body can still hide a
+      // completed publication. Never automatically regenerate that bundle.
+      throw Object.assign(error instanceof Error ? error : new Error(String(error)), { publicationUncertain: true });
+    }
   };
   return existing === 'confirm'
     ? writeConfirmingReplacements(post, confirmReplacements)

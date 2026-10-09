@@ -186,10 +186,23 @@ async function detail(response: Response): Promise<string> {
   return `${response.status} ${response.statusText}`.trim();
 }
 
-export async function getCapabilities(fetcher: typeof fetch = fetch): Promise<Capabilities> {
-  const response = await fetcher('/api/capabilities');
-  if (!response.ok) throw new Error(await detail(response));
-  return response.json() as Promise<Capabilities>;
+export async function getCapabilities(fetcher: typeof fetch = fetch, signal?: AbortSignal): Promise<Capabilities> {
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
+  signal?.addEventListener('abort', cancel, { once: true });
+  if (signal?.aborted) cancel();
+  const timeout = setTimeout(cancel, 10_000);
+  try {
+    const response = await fetcher('/api/capabilities', { signal: controller.signal });
+    if (!response.ok) throw new Error(await detail(response));
+    return await response.json() as Capabilities;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('Capability refresh timed out or was cancelled. Check the backend connection and refresh.');
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', cancel);
+  }
 }
 
 interface EngineModePlan {

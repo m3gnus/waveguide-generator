@@ -1082,6 +1082,11 @@ def mount_jobs(
             settings_auto_cleanup_policy(settings) if settings is not None else None
         ),
     )
+    from server.jobs.auto_export import AutoExportMiddleware, AutoExportOwner, router_for
+
+    export_owner = AutoExportOwner(runtime)
+    application.add_middleware(AutoExportMiddleware, owner=export_owner)
+    application.include_router(router_for(export_owner))
     application.state.jobs_runtime = runtime
     application.include_router(
         create_jobs_router(

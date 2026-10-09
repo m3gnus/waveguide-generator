@@ -257,7 +257,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
     {mode === 'parametric' ? <>
       <HelpTipRow className="select-row" text="Advanced engine override. AUTO follows the Fast or Accurate choice. An explicit engine takes precedence."><label htmlFor="solve-engine">Advanced backend</label><select id="solve-engine" value={store.engine} onChange={(event) => store.setEngine(event.target.value)}>
         <option value="auto">Automatic — follow accuracy</option>
-        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available && engine.qualification !== 'pending'}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
+        {backendEngines.map((engine) => <option key={engine.name} value={engine.name.toLowerCase()} disabled={!engine.available && engine.qualification !== 'pending'}>{engine.label || engine.name}{engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : engine.available ? engine.version ? ` · ${engine.version}` : '' : ` · unavailable${engine.reason ? `: ${engine.reason}` : ''}`}</option>)}
       </select></HelpTipRow>
     </> : <>
       {/* The engine is the same choice as the parametric workspace's: the
@@ -271,7 +271,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
           const imported = choosableForImportedGeometry(engine);
           const version = engine.version ? ` · ${engine.version}` : '';
           const refused = verdict ? !verdict.solves : !engine.available || !imported;
-          const note = engine.qualification === 'pending' ? qualificationRefreshNeeded ? '' : ' · checking OpenCL…' : verdict
+          const note = engine.qualification === 'pending' ? qualificationRefreshNeeded || error ? '' : ' · checking OpenCL…' : verdict
             ? verdict.solves ? version : ` · ${verdict.reason ?? 'cannot solve this return'}`
             : !imported
               ? ' · does not solve imported CAD geometry'
@@ -282,7 +282,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
       <p className={`cad-solve-fact${importedEngine ? '' : ' cad-solve-fact-unavailable'}`}><b>Runs on</b><span>{runsOn}</span></p>
       <p className="cad-solve-fact"><b>Ingested cut planes</b><span>{ingestRecord?.symmetry.cut_planes?.length ? ingestRecord.symmetry.cut_planes.join(', ') : 'none · full domain'}</span></p>
     </>}
-    {qualificationRefreshNeeded
+    {error ? <span className="section-note" role="status">Capability refresh failed. Check the backend connection. <button type="button" onClick={refreshCapabilities}>Refresh</button></span> : qualificationRefreshNeeded
       ? <span className="section-note" role="status">BEMPP · <button type="button" onClick={refreshCapabilities}>Refresh</button></span>
       : engines.some((engine) => engine.name === 'bempp' && engine.qualification === 'pending')
       && <span className="section-note" role="status">BEMPP · checking OpenCL…</span>}

@@ -70,6 +70,19 @@ describe('preferences surfaces', () => {
     expect(preferencesStore.getSnapshot().groupDelayUnit).toBe('cycles');
   });
 
+  it('disables automatic formats while export is off without changing manual formats or saved choices', async () => {
+    preferencesStore.update({ autoExportOnComplete: false, autoExportFormats: ['csv'] });
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); });
+    const auto = host.querySelector<HTMLInputElement>('[aria-label="Automatic export: Frequency Data CSV"]')!;
+    const manual = host.querySelector<HTMLInputElement>('[aria-label="Manual export: Frequency Data CSV"]')!;
+    expect(auto.disabled).toBe(true);
+    expect(auto.checked).toBe(true);
+    expect(manual.disabled).toBe(false);
+    act(() => auto.click());
+    expect(preferencesStore.getSnapshot().autoExportFormats).toEqual(['csv']);
+    expect(host.textContent).toContain('Run archiving saves its own fixed set');
+  });
+
   it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     const autoToggle = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]

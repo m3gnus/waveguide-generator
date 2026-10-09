@@ -63,17 +63,28 @@ function publishJobs(jobs: JobItem[]): void {
 describe('completed-job auto-export naming', () => {
   let host: HTMLDivElement;
   let root: Root;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  const finishes = () => fetchMock.mock.calls.filter(([path]) => (path as string).endsWith('/finish')).map(([path, init]) => ({ jobId: (path as string).split('/')[4], body: JSON.parse((init as RequestInit).body as string) }));
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     preferencesStore.resetForTests();
     preferencesStore.update({
       autoExportOnComplete: true,
+      archiveRunsOnComplete: false,
       exportFormats: ['png'],
       autoExportFormats: ['csv'],
       runSequenceName: 'horn',
       runSequenceNext: 7,
     });
+    fetchMock = vi.fn(async (path: string, init?: RequestInit) => {
+      const body = path.endsWith('/claim') ? {
+        claimed: true, token: path.split('/')[3], formats: JSON.parse(init!.body as string).formats,
+        job: jobsSocket.getSnapshot().jobs.find((item) => item.id === path.split('/')[3]),
+      } : { status: 'ok' };
+      return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchMock);
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [100] });
     mocks.runWorkspaceExportBundle.mockImplementation(async (context: ExportContext) => ({
       files: [`${context.jobStem}.csv`],
@@ -95,6 +106,7 @@ describe('completed-job auto-export naming', () => {
     act(() => root.unmount());
     host.remove();
     publishJobs([]);
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });
@@ -103,19 +115,15 @@ describe('completed-job auto-export naming', () => {
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
     await act(async () => {
       await vi.waitFor(() => expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledTimes(2));
-      await vi.waitFor(() => expect(jobsSocket.patchMetadata).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(finishes()).toHaveLength(2));
     });
 
     const baseNames = mocks.runWorkspaceExportBundle.mock.calls.map(([context]) =>
       (context as ExportContext).jobStem);
     expect(baseNames).toEqual(['101_260808_horn_v01', '102_260808_horn_v02']);
 
-    expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-one', expect.objectContaining({
-      exported_files: ['101_260808_horn_v01.csv'],
-    }));
-    expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-two', expect.objectContaining({
-      exported_files: ['102_260808_horn_v02.csv'],
-    }));
+    expect(finishes().map(({ body }) => body.files)).toEqual([['101_260808_horn_v01.csv'], ['102_260808_horn_v02.csv']]);
+    expect(jobsSocket.patchMetadata).not.toHaveBeenCalled();
     // Exporting finished runs is not a submission, so the run counter stands.
     expect(preferencesStore.getSnapshot().runSequenceNext).toBe(7);
   });
@@ -134,15 +142,14 @@ describe('completed-job auto-export naming', () => {
 
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
     await act(async () => {
-      await vi.waitFor(() => expect(jobsSocket.patchMetadata).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(finishes()).toHaveLength(1));
     });
 
     expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['csv'],
     );
-    expect(jobsSocket.patchMetadata).toHaveBeenCalledWith('job-three', expect.objectContaining({
-      exported_files: ['103_260808_horn_v03-drive-hf.csv', '103_260808_horn_v03-drive-mf.csv'],
-    }));
+    expect(finishes()[0].body.files).toEqual(['103_260808_horn_v03-drive-hf.csv', '103_260808_horn_v03-drive-mf.csv']);
+    expect(jobsSocket.patchMetadata).not.toHaveBeenCalled();
   });
 });

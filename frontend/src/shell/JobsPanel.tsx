@@ -1,3 +1,4 @@
+import { retryBlockedExport } from '../jobs/autoExportOwner';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
 import {
@@ -336,6 +337,11 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
           these are advice about why it was slow or what it approximated --
           neither an error nor, as they were until now, silence. */}
       {meshWarnings(job).map((warning) => <div key={warning} className="job-warning" title={warning}>{warning}</div>)}
+      {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <div className="job-warning" role="status">
+        Automatic export blocked: {[...new Set(Object.values(job.auto_export_formats).filter((format) => format.status === 'blocked').map((format) => format.reason))].join(' ')}
+        <p>Choose another Workspace folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
+        <button type="button" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button>
+      </div>}
       <Rating job={job} onError={onError}/>
       {/* Selecting the run already loaded its design and results, so the only
           action left is running it again -- unless this job came from v1
