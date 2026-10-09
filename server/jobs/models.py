@@ -363,6 +363,8 @@ class DriveChannel(JobModel):
     id: str = Field(min_length=1)
     source_ids: list[str] = Field(min_length=1)
     motion: Literal["normal", "axial"] = "normal"
+    physical_source_id: str | None = Field(default=None, min_length=1)
+    patch_weights: dict[str, float] | None = None
     driver: DriverSpec | None = None
     exterior_transducer: ExteriorTransducerSpec | None = None
 
@@ -371,7 +373,22 @@ class DriveChannel(JobModel):
         wire = handler(self)
         if self.exterior_transducer is None:
             wire.pop("exterior_transducer", None)
+        if self.physical_source_id is None:
+            wire.pop("physical_source_id", None)
+        if self.patch_weights is None:
+            wire.pop("patch_weights", None)
         return wire
+
+    @model_validator(mode="after")
+    def validate_patch_weights(self) -> "DriveChannel":
+        if self.patch_weights is not None:
+            if set(self.patch_weights) != set(self.source_ids):
+                raise ValueError("patch_weights must cover exactly source_ids")
+            if not all(math.isfinite(w) for w in self.patch_weights.values()):
+                raise ValueError("patch_weights must be finite literal relative weights")
+            if self.driver is not None or self.exterior_transducer is not None:
+                raise ValueError("weighted prescribed patches cannot carry a driver model")
+        return self
 
     @model_validator(mode="after")
     def validate_driver_applicability(self) -> "DriveChannel":
@@ -806,6 +823,7 @@ PORT_APERTURE_NAME_GROUPS: tuple[tuple[str, ...], ...] = (
 
 class ImportedGeometrySource(JobModel):
     type: Literal["imported"]
+    required_features: list[Literal["native-source-contour-v1", "native-front-baffle-woofer-v1", "native-shared-horn-woofer-v1"]] = Field(default_factory=list)
     ingest_id: str
     manifest_sha256: str
     artifact_sha256: str
@@ -841,6 +859,13 @@ class ImportedGeometrySource(JobModel):
     passive_cardioid_invert_port: bool = True
     passive_cardioid_coupled: bool = False
 
+    @model_serializer(mode="wrap")
+    def omit_empty_native_features(self, handler):
+        wire = handler(self)
+        if not self.required_features:
+            wire.pop("required_features", None)
+        return wire
+
     @field_validator("ingest_id")
     @classmethod
     def validate_ingest_id(cls, value: str) -> str:
@@ -867,6 +892,8 @@ class ImportedGeometrySource(JobModel):
 
     @model_validator(mode="after")
     def validate_channels_and_sizes(self) -> "ImportedGeometrySource":
+        if any(c.patch_weights is not None or c.physical_source_id is not None for c in self.drive_channels) and "native-source-contour-v1" not in self.required_features:
+            raise ValueError("weighted/grouped patches require native-source-contour-v1 negotiation")
         channel_ids = [channel.id for channel in self.drive_channels]
         if len(set(channel_ids)) != len(channel_ids):
             raise ValueError("drive channel ids must be unique")

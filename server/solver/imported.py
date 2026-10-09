@@ -63,7 +63,13 @@ def imported_anchor_frame(record: Mapping[str, Any]) -> dict[str, np.ndarray]:
     if not isinstance(frame, Mapping):
         normalisation = record.get("normalisation")
         normalisation = normalisation if isinstance(normalisation, Mapping) else {}
-        frame = normalisation.get("anchor_throat_frame")
+        native = record.get("native_source")
+        if isinstance(native, Mapping) and native.get("required_features") in ([
+            "native-source-contour-v1", "native-front-baffle-woofer-v1",
+        ], ["native-source-contour-v1", "native-shared-horn-woofer-v1"]):
+            frame = normalisation.get("source_frame")
+        else:
+            frame = normalisation.get("anchor_throat_frame")
     if not isinstance(frame, Mapping):
         normalisation = record.get("normalisation")
         normalisation = normalisation if isinstance(normalisation, Mapping) else {}
@@ -358,7 +364,13 @@ def resolve_record_axial_axes(
     tags = {tag for members in channels.values() for tag in members.values()}
     if not tags:
         return {}
-    return resolve_source_axes(msh_text, tags, imported_domain_planes(record))
+    axes = resolve_source_axes(msh_text, tags, imported_domain_planes(record))
+    if record.get("native_source") is not None:
+        # Native contour v1 declares the aligned motion axis explicitly;
+        # triangulation asymmetry must not tilt it through an area-vector vote.
+        from dataclasses import replace
+        axes = {tag: replace(item, axis=(0.0,0.0,1.0), raw_axis=(0.0,0.0,1.0), snapped_to="+z") for tag,item in axes.items()}
+    return axes
 
 
 def axial_domain_problem(

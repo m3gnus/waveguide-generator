@@ -88,6 +88,16 @@ def channel_source_identity(
                 default=None,
             )
         }
+        if channel.patch_weights is not None:
+            entry["patch_weights"] = dict(channel.patch_weights)
+            entry["physical_source_id"] = channel.physical_source_id
+            entry["excitation_contract"] = "native-source-contour-v1"
+            entry["excitation_sha256"] = record.get("native_source", {}).get("excitation_sha256")
+            native = record.get("native_source", {})
+            if "native-shared-horn-woofer-v1" in native.get("required_features", []):
+                entry["excitation_contract"] = "native-shared-horn-woofer-v1"
+                entry["source_frame"] = native["source_frames"][channel.physical_source_id]
+                entry["observation_frame"] = native["observation_frame"]
         if any(source_id in labels for source_id in source_ids):
             entry["source_labels"] = [
                 labels.get(source_id, source_id) for source_id in source_ids
@@ -125,6 +135,14 @@ def channel_basis_metadata(
                 else "unit_normal_acceleration"
             ),
         }
+        if channel.patch_weights is not None:
+            entry["patch_weights"] = dict(channel.patch_weights)
+            entry["physical_source_id"] = channel.physical_source_id
+            entry["excitation_sha256"] = record.get("native_source", {}).get("excitation_sha256")
+            native = record.get("native_source", {})
+            if "native-shared-horn-woofer-v1" in native.get("required_features", []):
+                entry["source_frame"] = native["source_frames"][channel.physical_source_id]
+                entry["observation_frame"] = native["observation_frame"]
         if axial_identity and channel.id in axial_identity:
             entry.update(axial_identity[channel.id])
         try:

@@ -30,6 +30,7 @@ from server.cadlink import mount_cadlink, mount_onshape
 from server.cadlink.build_flags import onshape_enabled
 from server.cadlink.coordination import CAD_COORDINATION_ENV, read_cad_coordination
 from server.design_io import mount_design_io
+from server.source_editor import mount_source_editor
 from server.drivers import mount_drivers
 from server.exports import mount_exports
 from server.jobs import mount_jobs
@@ -498,7 +499,7 @@ class _HashedAssetStaticFiles(StaticFiles):
 #: work that outlives its request -- a deferred viewport, and a capture of the
 #: CAD document that copies tens of megabytes -- and it is refused before its
 #: handler runs, so the return stays on disk exactly as it was.
-RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest"})
+RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export", "/api/source-editor/assembly/ingest"})
 #: Routes whose invalid requests answer 400 ``invalid_request`` without echoing
 #: any input (docs/reference/CADLINK-LIVE-PROTOCOL.md). FastAPI's default 422
 #: repeats the offending values, and a live request can carry a token or proof.
@@ -999,6 +1000,7 @@ def create_app(
     async def acl_repair_status() -> dict[str, object]:
         return application.state.acl_repair_feedback
     mount_cadlink(application)
+    mount_source_editor(application)
     # Parked behind a build flag: absent, not merely hidden, when off.
     if onshape_enabled():
         mount_onshape(application)

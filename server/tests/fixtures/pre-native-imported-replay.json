@@ -1,0 +1,202 @@
+{
+  "base": "33748b075626289ef9314b219c4ab93523855a98",
+  "request": {
+    "client_metadata": {},
+    "client_request_id": "ordinary-imported:pre-native-retry",
+    "geometry": {
+      "acknowledged_findings": [],
+      "artifact_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "bem_port_area_m2": null,
+      "combine": null,
+      "drive_channels": [
+        {
+          "driver": null,
+          "id": "left",
+          "motion": "normal",
+          "source_ids": [
+            "source-a",
+            "source-b"
+          ]
+        },
+        {
+          "driver": null,
+          "id": "right",
+          "motion": "normal",
+          "source_ids": [
+            "source-c"
+          ]
+        }
+      ],
+      "drive_voltage_v": 2.83,
+      "exterior_only": false,
+      "ingest_id": "wgi_00000000000000000000000000",
+      "manifest_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "max_drive_voltage_v": null,
+      "mesh": {
+        "rigid_size_mm": 8.0,
+        "source_size_mm": {
+          "source-a": 3.0,
+          "source-b": 3.0,
+          "source-c": 4.0
+        },
+        "transition_mm": 20.0
+      },
+      "model_port_area_m2": null,
+      "passive_cardioid_coupled": false,
+      "passive_cardioid_foam_resistance_pa_s_m3": null,
+      "passive_cardioid_invert_port": true,
+      "passive_cardioid_port_length_mm": null,
+      "passive_cardioid_rear_volume_l": null,
+      "port_area_source": null,
+      "rg_ohm": 0.0,
+      "skipped_source_ids": [],
+      "type": "imported"
+    },
+    "label": null,
+    "options": {
+      "accuracy": "fast",
+      "engine": "metal",
+      "frequencies_hz": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "frequency_range": null,
+      "frequency_spacing": "log",
+      "ground_plane": {
+        "axis": "y",
+        "enabled": false,
+        "height_m": 1.0
+      },
+      "mesh_ladder": "off",
+      "mesh_validation_mode": "warn",
+      "num_frequencies": null,
+      "polar_config": {
+        "angle_range": [
+          -180.0,
+          180.0,
+          37
+        ],
+        "angle_step": null,
+        "distance": 2.0,
+        "enabled_axes": [
+          "horizontal",
+          "vertical",
+          "diagonal"
+        ],
+        "field_plane": true,
+        "inclination": 45.0,
+        "norm_angle": 5.0,
+        "observation_origin": "mouth",
+        "spherical_phi_count": 72,
+        "spherical_sampling": false,
+        "spherical_theta_count": 37
+      },
+      "solver_mode": "full_3d",
+      "stage_delay_ms": 30,
+      "symmetry": "auto",
+      "verbose": false
+    },
+    "parent_job_id": null
+  },
+  "request_sha256": "2c7263e0a502571fd213599c0a42ba984055353609bd3a908bca008a07069fb3",
+  "submission_identity": {
+    "client_metadata": {},
+    "client_request_id": "ordinary-imported:pre-native-retry",
+    "geometry": {
+      "acknowledged_findings": [],
+      "artifact_sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "bem_port_area_m2": null,
+      "combine": null,
+      "drive_channels": [
+        {
+          "driver": null,
+          "id": "left",
+          "motion": "normal",
+          "source_ids": [
+            "source-a",
+            "source-b"
+          ]
+        },
+        {
+          "driver": null,
+          "id": "right",
+          "motion": "normal",
+          "source_ids": [
+            "source-c"
+          ]
+        }
+      ],
+      "drive_voltage_v": 2.83,
+      "exterior_only": false,
+      "ingest_id": "wgi_00000000000000000000000000",
+      "manifest_sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "max_drive_voltage_v": null,
+      "mesh": {
+        "rigid_size_mm": 8.0,
+        "source_size_mm": {
+          "source-a": 3.0,
+          "source-b": 3.0,
+          "source-c": 4.0
+        },
+        "transition_mm": 20.0
+      },
+      "model_port_area_m2": null,
+      "passive_cardioid_coupled": false,
+      "passive_cardioid_foam_resistance_pa_s_m3": null,
+      "passive_cardioid_invert_port": true,
+      "passive_cardioid_port_length_mm": null,
+      "passive_cardioid_rear_volume_l": null,
+      "port_area_source": null,
+      "rg_ohm": 0.0,
+      "skipped_source_ids": [],
+      "type": "imported"
+    },
+    "label": null,
+    "options": {
+      "accuracy": "fast",
+      "engine": "metal",
+      "frequencies_hz": [
+        100.0,
+        500.0,
+        1000.0
+      ],
+      "frequency_range": null,
+      "frequency_spacing": "log",
+      "ground_plane": {
+        "axis": "y",
+        "enabled": false,
+        "height_m": 1.0
+      },
+      "mesh_ladder": "off",
+      "mesh_validation_mode": "warn",
+      "num_frequencies": null,
+      "polar_config": {
+        "angle_range": [
+          -180.0,
+          180.0,
+          37
+        ],
+        "angle_step": null,
+        "distance": 2.0,
+        "enabled_axes": [
+          "horizontal",
+          "vertical",
+          "diagonal"
+        ],
+        "field_plane": true,
+        "inclination": 45.0,
+        "norm_angle": 5.0,
+        "observation_origin": "mouth",
+        "spherical_phi_count": 72,
+        "spherical_sampling": false,
+        "spherical_theta_count": 37
+      },
+      "solver_mode": "full_3d",
+      "stage_delay_ms": 30,
+      "symmetry": "auto",
+      "verbose": false
+    },
+    "parent_job_id": null
+  }
+}

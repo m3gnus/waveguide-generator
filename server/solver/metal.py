@@ -1559,6 +1559,8 @@ def solve_imported_metal_from_msh_text(
     geometry = request.geometry
     if not isinstance(geometry, ImportedGeometrySource):
         raise ValueError("imported Metal solve requires imported geometry")
+    from server.contracts.source_contour import validate_contour_request
+    validate_contour_request(geometry, record)
     if request.options.ground_plane.enabled:
         raise MetalUnavailable(
             "The HornLab Metal adapter cannot apply a rigid ground plane to "
@@ -1629,7 +1631,7 @@ def solve_imported_metal_from_msh_text(
                     f"ingestion tag map has no active source {source_id!r}"
                 )
             tag = int(source_tags[source_id])
-            spec[tag] = 1.0 + 0.0j
+            spec[tag] = complex(channel.patch_weights[source_id] if channel.patch_weights is not None else 1.0)
             if len(motions) > 1:
                 profile_cls = AxialProfile if channel.motion == "axial" else NormalProfile
                 if profile_cls is None:

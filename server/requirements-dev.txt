@@ -1,6 +1,8 @@
 # Development and qualification tools for the v2-local environment.
 pytest==9.0.3
 pytest-xdist==3.8.0
+# Starlette TestClient used by native authoring API regressions.
+httpx2==2.13.1
 # Deliberately unpinned, to match what CI installs: the drift job runs
 # `pip install ruff` and then `ruff check`, so a pinned copy here would let a
 # tree lint clean locally and still fail the gate. `ruff.toml` selects rules

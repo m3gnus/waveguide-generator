@@ -2958,6 +2958,13 @@ class JobRuntime:
                 "request hashes do not match the immutable ingestion record",
                 details=mismatches,
             )
+        from server.contracts.source_contour import validate_contour_request
+        try:
+            validate_contour_request(geometry, record)
+        except ValueError as exc:
+            raise ImportedSolveRefusal("native_source_contract", str(exc)) from exc
+        if record.get("native_source") is not None and request.options.engine != "metal":
+            raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
         symmetry_metadata = _imported_symmetry_metadata(
             record, request.options.symmetry, _ground_plane_axis(request)
         )
@@ -3004,6 +3011,13 @@ class JobRuntime:
                 "request hashes do not match the immutable ingestion record",
                 details=mismatches,
             )
+        from server.contracts.source_contour import validate_contour_request
+        try:
+            validate_contour_request(geometry, record)
+        except ValueError as exc:
+            raise ImportedSolveRefusal("native_source_contract", str(exc)) from exc
+        if record.get("native_source") is not None and request.options.engine != "metal":
+            raise ImportedSolveRefusal("native_source_engine", "native source contours currently require the Metal consumer")
         # An unlinked (CAD-authored) model solves only in the solver frame its
         # project confirmed -- or, with nothing confirmed, in WG's own confident
         # automatic axis -- exactly the one this record was meshed in. Every
@@ -3011,7 +3025,7 @@ class JobRuntime:
         # own -- so no path solves a frame that is neither confirmed nor
         # confidently inferred (docs/architecture/CAD-OPERATIONS.md,
         # "Unlinked solver frame").
-        frame_refusal = await asyncio.to_thread(
+        frame_refusal = None if record.get("native_source") is not None else await asyncio.to_thread(
             record_frame_refusal, self.cadlink_store, record
         )
         if frame_refusal is not None:

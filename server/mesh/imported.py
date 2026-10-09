@@ -1019,6 +1019,8 @@ def resolve_user_source(
         )
     area = sum(float(face_areas_mm2[face]) for face in faces)
     expected_area = float(observed["total_area_mm2"])
+    if not math.isfinite(expected_area) or expected_area <= 0:
+        raise RoleResolutionError(f"role resolution: source {source_id!r} expected area must be finite and positive")
     drift = abs(area - expected_area) / expected_area
     if drift > AREA_REL_TOLERANCE and not allow_area_drift:
         raise RoleResolutionError(
@@ -2963,6 +2965,10 @@ def build_imported_mesh(
                     for identifier in source["selectors"].get("advanced_face_indices", ())
                 }
             )
+            rigid_size_selectors = options.get("rigid_face_sizes_mm", {})
+            if not isinstance(rigid_size_selectors, dict) or any(type(k) is not int for k in rigid_size_selectors):
+                raise ImportedMeshError("rigid face sizes must use integer STEP selectors")
+            addressed_faces = sorted(set(addressed_faces) | set(rigid_size_selectors))
             try:
                 face_order = advanced_face_order_for_surfaces(
                     Path(assembly_path),
@@ -3490,6 +3496,26 @@ def build_imported_mesh(
         if all_points:
             gmsh.model.mesh.setSize([(0, point) for point in all_points], normalized_sizes["rigid_size_mm"])
         fields: list[int] = []
+        # Exact STEP selectors can refine rigid structural faces without
+        # promoting them to source roles or refining every planar box face.
+        # This internal native adapter option is limited to the full domain;
+        # a cut/healed selector must never silently address another surface.
+        rigid_face_sizes = options.get("rigid_face_sizes_mm", {})
+        if not isinstance(rigid_face_sizes, dict):
+            raise ImportedMeshError("rigid face sizes must be a selector/size mapping")
+        if rigid_face_sizes and (domain_planes or cut.planes):
+            raise ImportedMeshError("rigid face sizes require an unchanged full domain")
+        for identifier, size in rigid_face_sizes.items():
+            if (type(identifier) is not int or identifier not in face_to_surface
+                    or face_to_surface[identifier] not in rigid_surfaces
+                    or type(size) not in (int, float) or not math.isfinite(size) or size <= 0):
+                raise ImportedMeshError("rigid face size must address a current rigid STEP face with a positive size")
+            constant = gmsh.model.mesh.field.add("MathEval")
+            gmsh.model.mesh.field.setString(constant, "F", str(min(size, normalized_sizes["rigid_size_mm"])))
+            restricted = gmsh.model.mesh.field.add("Restrict")
+            gmsh.model.mesh.field.setNumber(restricted, "InField", constant)
+            gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", [face_to_surface[identifier]])
+            fields.append(restricted)
         for spec in step_specs:
             surfaces_for_source = cut_groups[spec.name]
             distance = gmsh.model.mesh.field.add("Distance")
