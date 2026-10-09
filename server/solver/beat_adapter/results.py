@@ -357,7 +357,6 @@ def map_sweep(
         channel_rows = {name: [] for name in channels}
         channel_logs = {name: [] for name in channels}
         rows = channel_rows[channels[0]]
-        logs = channel_logs[channels[0]]
         terminal = None
         for event in stream:
             if terminal is not None:
