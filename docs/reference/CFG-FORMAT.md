@@ -16,7 +16,31 @@ output starts with:
 ```cfg
 ; Parameter config
 ; Waveguide Generator design-format: 2
+; Waveguide Generator geometry-interpretation: native-v1
 ```
+
+The geometry interpretation is persisted independently of the lexical dialect.
+Native authored documents use `native-v1`; external ATH imports without a stamp
+use the bounded `ath-2026-08c-v1` interpretation. Rewritten imports retain that
+stamp even though the canonical writer uses the Parameter config heading.
+Historical Parameter/MWG configs without a stamp retain native behavior.
+Unknown or conflicting interpretation stamps are rejected.
+
+The same provenance is retained as the optional `text_import_version` JSON
+field and passed to the mesher as `_textImportVersion`. Copying, editing,
+saving/reopening, preview, solve mesh, and STEP export must retain it. Native
+documents omit the JSON field, so their existing default serialization and
+geometry identity stay unchanged. The stamp is metadata, not an editor control.
+
+The bounded import policy uses a tapered OSSE slot at the throat angle, counted
+inside `Length`, and derives circular morph radius from the largest raw mouth
+radius while ignoring explicit circle width/height. Native cylindrical slots,
+explicit circle sizing, and literal no-shrink dimension floors are preserved.
+Imported slots with an active guiding curve, and imported rectangular no-shrink
+requests with smaller target dimensions, receive named unsupported-construction
+diagnostics. Use explicit `Morph.AllowShrinkage=1` for the requested smaller
+rectangle or author a native design for the dimension-floor behavior. This is
+not a claim of full ATH feature or topology parity.
 
 ```text
 document       = { blank | comment | assignment | block } ;

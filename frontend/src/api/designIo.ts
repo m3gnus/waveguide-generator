@@ -226,6 +226,9 @@ function merge<T>(base: T, incoming: unknown): T {
 
 /** Convert schema-wire Expr objects into the store's evaluated document shape. */
 export function hydrateDesignDocument(wire: Record<string, unknown>): DesignDocument {
+  if (wire.text_import_version != null && wire.text_import_version !== 'ath-2026-08c-v1') {
+    throw new Error(`Unsupported text import geometry version: ${String(wire.text_import_version)}`);
+  }
   const expressions: Record<string, ExprNumber> = {};
   const absent: string[] = [];
   const unwrapped = unwrapExpressions(wire, '', expressions, absent) as Record<string, unknown>;

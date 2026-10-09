@@ -91,4 +91,15 @@ describe('full DesignConfig client store', () => {
     expect(useDesignStore.getState().design._absent ?? []).not.toContain('morph.target_width');
     expect((serializeDesign(useDesignStore.getState().design).morph as Record<string, unknown>).target_width).toBe(240);
   });
+
+  it('keeps imported geometry provenance through hydration, edits and serialization', () => {
+    const design = hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'ath-2026-08c-v1' });
+    useDesignStore.getState().loadDesign(design);
+    useDesignStore.getState().updateValue('L', 137);
+    useDesignStore.getState().undo();
+    useDesignStore.getState().redo();
+    expect(serializeDesign(useDesignStore.getState().design).text_import_version).toBe('ath-2026-08c-v1');
+    expect(serializeDesign(designForFamily('OSSE'))).not.toHaveProperty('text_import_version');
+    expect(() => hydrateDesignDocument({ formula: 'OSSE', text_import_version: 'future-v2' })).toThrow('Unsupported text import geometry version');
+  });
 });

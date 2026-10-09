@@ -4254,6 +4254,18 @@
           "source": {
             "$ref": "#/components/schemas/SourceConfig"
           },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
           "throat_ext_angle": {
             "anyOf": [
               {
@@ -4924,6 +4936,18 @@
               }
             ],
             "title": "Termination"
+          },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
           },
           "theta1_deg": {
             "anyOf": [
@@ -7308,6 +7332,18 @@
           "source": {
             "$ref": "#/components/schemas/SourceConfig"
           },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
           "throat_ext_angle": {
             "anyOf": [
               {
@@ -8528,6 +8564,18 @@
           },
           "source": {
             "$ref": "#/components/schemas/SourceConfig"
+          },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
           },
           "throat_ext_angle": {
             "anyOf": [

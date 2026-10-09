@@ -464,7 +464,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
             if isinstance(value, str):
                 config["gcurve"][key] = text_number(value)
 
-    if mode == "enclosure" and root.enclosure is not None:
+    if root.enclosure is not None and (mode == "enclosure" or root.text_import_version is not None):
         enclosure = root.enclosure
         config["enclosure"] = _clean(
             {
@@ -479,6 +479,8 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "backMeshSize": _first_number(enclosure.back_resolution),
             }
         )
+    if root.text_import_version is not None:
+        config["_textImportVersion"] = root.text_import_version
     return config
 
 

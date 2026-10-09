@@ -87,6 +87,13 @@ afterEach(() => {
 });
 
 describe('designContentKey', () => {
+  it('distinguishes imported geometry interpretation from the same native controls', () => {
+    const native = seed();
+    const imported = structuredClone(native);
+    imported.text_import_version = 'ath-2026-08c-v1';
+    expect(key(imported)).not.toBe(key(native));
+    expect(key(structuredClone(imported))).toBe(key(imported));
+  });
   it('is versioned, and ignores the order a document was built in', () => {
     const design = seed();
     const reordered = Object.fromEntries(Object.entries(design).reverse()) as unknown as DesignDocument;

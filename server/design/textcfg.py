@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping
 from pydantic import ValidationError
 
 from .migrate import MigrationApplication, apply_migrations
+from .text_import import TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
 from .schema import (
     ConfigBlock,
     DesignConfig,
@@ -53,6 +54,7 @@ _MACHINE_SOLVE_ADVICE: tuple[tuple[str, str, str], ...] = (
 )
 _MACHINE_SOLVE_KEYS = frozenset(key for key, _why, _choose in _MACHINE_SOLVE_ADVICE)
 _DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
+_GEOMETRY_STAMP = re.compile(r"^;\s*Waveguide Generator geometry-interpretation:\s*(\S+)\s*$", re.IGNORECASE)
 
 
 class TextConfigError(ValueError):
@@ -942,7 +944,16 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
     ignored_profile: list[IgnoredSetting] = []
-    payload = _build_payload(flat, blocks, dialect=dialect, ignored_profile=ignored_profile)
+    versions = {match.group(1) for comment in comments if (match := _GEOMETRY_STAMP.match(comment))}
+    if len(versions) > 1:
+        raise TextConfigError("conflicting geometry interpretation stamps")
+    version = next(iter(versions), None)
+    if version is not None and version not in {TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION}:
+        raise TextConfigError(f"unsupported geometry interpretation {version!r}")
+    geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version == TEXT_IMPORT_VERSION else dialect
+    payload = _build_payload(flat, blocks, dialect=geometry_dialect, ignored_profile=ignored_profile)
+    if version == TEXT_IMPORT_VERSION or (version is None and dialect == "ath" and payload["formula"] != "FREEFORM"):
+        payload["text_import_version"] = TEXT_IMPORT_VERSION
     applications: list[MigrationApplication] = []
     if migrate:
         try:
@@ -1143,9 +1154,10 @@ def _serialize_canonical(
     lines = [
         "; Parameter config",
         f"; Waveguide Generator design-format: {_DESIGN_FORMAT}",
+        f"; {GEOMETRY_STAMP_LABEL} {config.text_import_version or NATIVE_GEOMETRY_VERSION}",
     ]
     for comment in comments or []:
-        if comment not in lines and "Generated:" not in comment:
+        if comment not in lines and "Generated:" not in comment and not _GEOMETRY_STAMP.match(comment):
             if _LINE_BREAK.search(comment) is not None or not comment.lstrip().startswith(";"):
                 raise TextConfigError("unsafe preserved config comment")
             lines.append(comment)

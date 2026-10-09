@@ -3623,6 +3623,8 @@ export interface components {
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
+            /** Text Import Version */
+            text_import_version?: "ath-2026-08c-v1" | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };
@@ -3797,6 +3799,8 @@ export interface components {
             source?: components["schemas"]["SourceConfig"];
             /** Termination */
             termination?: ("flat_baffle" | "rollback") | null;
+            /** Text Import Version */
+            text_import_version?: "ath-2026-08c-v1" | null;
             theta1_deg?: components["schemas"]["Expr"] | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
@@ -4448,6 +4452,8 @@ export interface components {
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
+            /** Text Import Version */
+            text_import_version?: "ath-2026-08c-v1" | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
             throat_profile?: components["schemas"]["Expr"] | null;
@@ -4826,6 +4832,8 @@ export interface components {
             simulation?: components["schemas"]["SimulationConfig"];
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
+            /** Text Import Version */
+            text_import_version?: "ath-2026-08c-v1" | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
             tmax?: components["schemas"]["Expr"] | null;
