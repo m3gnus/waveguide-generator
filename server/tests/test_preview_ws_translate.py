@@ -438,7 +438,12 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
     design = DesignConfig.model_validate(opened["design"])
 
     config = design_to_mesher_config(design)
-    geometry = build_preview_geometry(config, preview_options("coarse"))
+    with pytest.raises(ValueError, match="ATH text import has a nonplanar rear ring; warped rear caps are unsupported"):
+        build_preview_geometry(config, preview_options("coarse"))
+    # The imported rear cannot be flattened without changing ATH geometry.
+    # Retain the original native projection's component and payload assertions.
+    native_config = {**config, "_textImportVersion": None}
+    geometry = build_preview_geometry(native_config, preview_options("coarse"))
     surface_roles = [surface.role for surface in geometry.surfaces]
 
     assert config["mode"] == "freestanding"

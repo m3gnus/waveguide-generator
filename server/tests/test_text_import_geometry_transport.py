@@ -11,8 +11,9 @@ from server.design.schema import DesignConfig
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.design.text_import import TEXT_IMPORT_VERSION
 from server.preview.translate import design_to_mesher_config
-from hornlab_mesher.config_builder import build_geometry_params
-from hornlab_mesher.config_parser import ConfigError
+from hornlab_mesher.config_builder import build_geometry_params, resolve_geometry
+from hornlab_mesher.config_parser import ConfigError, parse_text_config
+from hornlab_mesher.profile_morph import _morph_target_radius_at_angle
 from hornlab_mesher.profile_sampling import build_point_grid_arrays
 
 ATH = """OSSE = {
@@ -107,3 +108,46 @@ def test_rewrite_does_not_keep_a_stale_geometry_stamp():
     assert "ath-2026-08c-v1" not in text
     assert text.count("geometry-interpretation:") == 1
     assert parse(text).design.root.text_import_version is None
+
+
+@pytest.mark.parametrize("scale", [.5, 2])
+@pytest.mark.parametrize("corner", ["imported-default", "native-default", "explicit"])
+@pytest.mark.parametrize("stretch", [False, True])
+def test_scaled_corner_defaults_match_saved_direct_geometry(scale, corner, stretch):
+    text = (
+        "OSSE = {\nL=30\nr0=4\na=32\na0=6\ns=.7\n"
+        + ("s1=.3\ns2=.01\n" if stretch else "")
+        + "}\nABEC.SimType=1\n"
+        + f"Scale={scale}\nMorph.TargetShape=1\nMorph.TargetWidth=120\n"
+        "Morph.TargetHeight=100\nMorph.AllowShrinkage=1\n"
+    )
+    if corner == "native-default":
+        text = "; Waveguide Generator geometry-interpretation: native-v1\n" + text
+    elif corner == "explicit":
+        text += "Morph.CornerRadius=17\n"
+    design = parse(text).design
+    before = design.model_dump(mode="json")
+    translated = design_to_mesher_config(design)
+    direct = parse_text_config(serialize(design))
+    expected_corner = scale * {"imported-default": 35, "native-default": 0, "explicit": 17}[corner]
+    params = [build_geometry_params(config)[0] for config in (translated, direct)]
+    for p in params:
+        assert p["morphCorner"] * p["scale"] == pytest.approx(expected_corner)
+    assert design.model_dump(mode="json") == before
+
+    # Scale can alter fit allocation. Compare physical target curves at shared
+    # azimuths and independently check both actual mouth grids against the
+    # authored rounded rectangle, without replacing either resolved mode.
+    phi = np.linspace(0, 2 * np.pi, 721)
+    curves = [np.array([
+        _morph_target_radius_at_angle(20 * scale / p["scale"], angle, p) * p["scale"]
+        for angle in phi
+    ]) for p in params]
+    np.testing.assert_allclose(curves[0], curves[1], rtol=0, atol=1e-10)
+    for config in (translated, direct):
+        resolved = resolve_geometry(config)
+        assert resolved.mode == "infinite-baffle"
+        mouth = resolved.geometry.inner_points[:, -1, :2]
+        q = np.abs(mouth) - np.array([60 * scale - expected_corner, 50 * scale - expected_corner])
+        distance = np.linalg.norm(np.maximum(q, 0), axis=1) + np.minimum(q.max(axis=1), 0) - expected_corner
+        np.testing.assert_allclose(distance, 0, rtol=0, atol=1e-8)

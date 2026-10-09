@@ -20,6 +20,10 @@ output starts with:
 ```
 
 The geometry interpretation is persisted independently of the lexical dialect.
+Imported omitted `Morph.CornerRadius` uses ATH's 35 mm authored default when a
+morph target is supplied. Translation applies the same profile scale as an
+explicit corner dimension; active throat stretch retains the existing final
+scale path. Native omitted corners retain their native default.
 Native authored documents use `native-v1`; external ATH imports without a stamp
 use the bounded `ath-2026-08c-v1` interpretation. Rewritten imports retain that
 stamp even though the canonical writer uses the Parameter config heading.
