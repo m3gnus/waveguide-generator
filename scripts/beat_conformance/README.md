@@ -742,3 +742,53 @@ Fake-only validation (no Julia, broker or numerical solves):
 $PY -m pytest -q -p no:cacheprovider scripts/tests/test_beat_perf.py scripts/tests/test_beat_corpus.py
 $PY -m ruff check scripts
 ```
+
+### Independent analytic references
+
+The existing `analytic_pulsating_sphere_phase` gate retains its 0.05 dB and
+0.6 degree budgets. Additional raw CPU Float64 qualification fixtures cover an
+offset pulsating sphere at 100/300/1000 Hz, two observation radii, self-load
+real/imaginary parts and propagation; and a translating electrodynamic sphere
+with a conforming FEM air shell at 40/80/160/400 Hz. Both time conventions are
+checked. Inputs and outputs are labelled RMS, with no square-root-of-two factor.
+
+Run through the compute broker, with the selected Julia and a clean source tree
+matching `pins.json` available as `WG_BEAT_ENGINE_SRC`:
+
+```sh
+python -m scripts.beat_conformance --evidence-mode real --analytic-reference all \
+  --julia /path/to/julia --output-dir /path/to/evidence
+```
+
+The selected installed engine is independently verified against the clean source.
+A byte-identical entry point in that source tree is executed, so every native
+result can truthfully identify its exact clean Git revision. The installed Julia
+project and selected depots are retained. The qualifier explicitly disables the compiled
+bundle and requires the native source-driver diagnostic. This is source numerical reference
+qualification, not qualification of a packaged application candidate. WG's managed
+child sessions, binary decoder and hashed evidence recorder own execution.
+Malformed, incomplete, reordered or nonfinite results fail before scoring. An exact
+offending wire and exception are retained in a private local failure file for triage;
+portable numerical reports retain the failure type only. These failure files use
+mode 0600 on POSIX; Windows relies on the private output root ACL, which this
+qualification does not verify. Zero-pressure diagnostics
+use explicit null values for undefined SPL and phase, while numerical gates fail.
+Individual reference selections are diagnostic and cannot qualify the complete
+reference set. This suite supplements the ordinary conformance cases.
+
+Sphere budgets are 2% magnitude/2 degrees, plus 3% separately on each self-load
+part and 2 degrees propagation. LEM budgets remain 2%/2 degrees for velocity,
+current and input impedance, 3%/3 degrees for pressure, and an absolute dipole
+node bound of 3% of same-radius on-axis pressure. Default-quadrature sphere
+results are informational; required fixed-order results cannot be omitted.
+
+The LEM budgets **do not qualify a halved radiation-resistance feedback error**:
+the preserved negative control demonstrates that blind spot. The exterior
+self-load gate detects halved real load output, which is a separate claim.
+Neither reference enables production coupled requests, driver chains or changes
+WG's acceleration/mean-pressure mapper, engine default or performance gates.
+
+This port supersedes the separate analytic-reference adapter: its duplicate
+runtime and exterior compiler are excluded. The unpublished original source
+and historical evidence remain retained until the integration owner disposes of
+them; this port makes no deletion or cross-platform qualification claim.
