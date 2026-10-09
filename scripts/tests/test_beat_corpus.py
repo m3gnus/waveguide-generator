@@ -656,10 +656,12 @@ def test_corpus_actual_official_production_overrides(frozen, imported, monkeypat
         wires.append(compiled.wire)
         frequencies = np.asarray(compiled.wire["frequencies_hz"])
         pressure = np.ones((len(frequencies), len(compiled.layout.planes), len(compiled.layout.angles_deg)), complex)
-        return SimpleNamespace(frequencies_hz=frequencies, pressure_complex=pressure, impedance=np.ones(len(frequencies), complex),
+        native = SimpleNamespace(frequencies_hz=frequencies, pressure_complex=pressure, impedance=np.ones(len(frequencies), complex),
                                directivity_db=np.zeros(pressure.shape), spl_db=np.zeros(pressure.shape),
                                observation_angles_deg=compiled.layout.angles_deg, observation_planes=compiled.layout.planes,
                                solver_log=[], timings={}, mesh_info=None, cancelled=False)
+        channels = kwargs.get("channel_callbacks")
+        return {channel: native for channel in channels} if channels is not None else native
     monkeypatch.setattr(official_beat, "solve_compiled", solve)
     kwargs = {"backend": "cpu", "_official": True, "_precision": "float64", "_worker_manager": marker,
               "_julia_executable": "fake-julia", "_native_result_callback": lambda ch, raw: captures.append(ch)}
@@ -670,7 +672,8 @@ def test_corpus_actual_official_production_overrides(frozen, imported, monkeypat
         request = SolveRequest.model_validate(frozen.request)
         response = beat.solve_beat_from_msh_text(frozen.mesh_bytes.decode(), SolverContext.from_request(request, solver_mode="full_3d"), **kwargs)
         assert response["metadata"]["beat"]["precision"] == "double"
-    assert len(captures) == len(wires) and len(captures) == len(set(captures))
+    assert len(wires) == 1
+    assert len(captures) == len(set(captures)) == (2 if imported else 1)
 
 
 @pytest.mark.parametrize("electrical,gain,passed", [(False, 1., False), (True, 1., True), (True, 1.1, False)])
