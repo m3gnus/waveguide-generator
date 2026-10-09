@@ -1,0 +1,31 @@
+{
+  "baseline_wg_revision": "9ca875c638b77064d424990a562306f04c5db601",
+  "beat_pin": "d7ed50d3da87277bef44419ec9e7401e7d6b1288",
+  "definition": "SHA256 of canonical complete request JSON built by the unchanged request builder; covers packed mesh, axes, frequency/source ordering, outputs, defaults and metadata. Not a numerical solver-result baseline. Explicit cardinal observation points and motion axes avoid platform-dependent trigonometric rounding; observation-generator parity uses existing dedicated fixtures.",
+  "cases": [
+    {
+      "name": "normal_cpu",
+      "wire_sha256": "269e0c6718eb56b0d8b086c492c865bc1c7cb3e77b53f98a892d01c9207f156c"
+    },
+    {
+      "name": "normal_metal",
+      "wire_sha256": "fb1258cd374a3783cf1c6200fe6af9f582bd36500a95db8ac86f88b95c3ac117"
+    },
+    {
+      "name": "axial_cpu",
+      "wire_sha256": "26dcd57756ddaccd3591688fb287227fcbe1643b46ad8515fb6bebf965b03d23"
+    },
+    {
+      "name": "axial_metal",
+      "wire_sha256": "9eeca0469e37ddc7483119a8cf6ed7e8bc05926caacc5073ff6abb7b3a85769e"
+    },
+    {
+      "name": "ground_cpu",
+      "wire_sha256": "dca10a14910f4a6d3ab2b440049503ff033ab0461569cee37fc46814d792356c"
+    },
+    {
+      "name": "normal_cpu_float64",
+      "wire_sha256": "7ea41510d333506e51c7752edf8138181e2b6c017c4f04efb79e8167f94a3b89"
+    }
+  ]
+}

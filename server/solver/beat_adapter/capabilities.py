@@ -14,6 +14,7 @@ from server.solver.ground_plane import GroundPlane
 
 from . import request
 from .observations import build_observations
+from .preflight import POLICY_VERSION, validate_exterior_physics
 
 # HBB conformance/warm-up tetrahedron; all four triangles are a normal source.
 PROBE_MESH = """$MeshFormat
@@ -54,6 +55,7 @@ def probe_request(**options: Any) -> request.CompiledRequest:
 def _outcome(call: Callable[[], request.CompiledRequest]) -> dict[str, Any]:
     try:
         built = call()
+        validate_exterior_physics(built.wire)
     except (ValueError, TypeError, NotImplementedError) as exc:
         return {"supported": False, "reason": str(exc), "exception": type(exc).__name__}
     return {"supported": True, "solver_options": built.wire["solver_options"],
@@ -77,7 +79,31 @@ EXPECTED_REFUSALS = frozenset({
     *(f"singular.float32.{order}" for order in (0, 5, 12, 13)),
     "singular.float64.0", "singular.float64.13", "imported.missing_tags",
     "parametric.infinite_baffle", "imported.infinite_baffle",
+    "wire.exterior_impedance", "wire.exterior_bulk_loss", "wire.source_parameter",
+    "wire.source_profile", "wire.solver_option", "wire.transducer",
 })
+
+
+def _unsupported_wire(feature: str) -> request.CompiledRequest:
+    built = probe_request()
+    system = built.wire["compiled_system"]
+    if feature == "exterior_impedance":
+        system["boundaries"][0]["kind"] = "impedance"
+    elif feature == "exterior_bulk_loss":
+        system["regions"][0]["loss_model"] = {"bulk_loss_factor": 0.2}
+    elif feature == "source_parameter":
+        system["components"][0]["parameters"]["source_velocity_profile"] = "taper"
+    elif feature == "source_profile":
+        system["contract_version"] = 2
+        system["components"][0]["parameters"]["motion_profile"] = "taper"
+    elif feature == "solver_option":
+        built.wire["solver_options"]["precisoin"] = "float64"
+    elif feature == "transducer":
+        system["contract_version"] = 3
+        system["components"][0]["kind"] = "electrodynamic_transducer"
+    else:
+        raise ValueError(f"Unknown wire probe: {feature}")
+    return built
 
 
 def probe_feature(name: str) -> dict[str, Any]:
@@ -147,6 +173,9 @@ def capability_report() -> dict[str, Any]:
     baffle = SolverContext(None, (300., 500.), 2, sim_type=1)
     probes["parametric.infinite_baffle"] = lambda: request.build_parametric_request(PROBE_MESH, baffle)
     probes["imported.infinite_baffle"] = lambda: request.build_imported_request(PROBE_MESH, baffle, {}, [])
+    for feature in ("exterior_impedance", "exterior_bulk_loss", "source_parameter",
+                    "source_profile", "solver_option", "transducer"):
+        probes[f"wire.{feature}"] = lambda feature=feature: _unsupported_wire(feature)
     scenarios = {name: _outcome(call) for name, call in probes.items()}
     scenarios.update({f"feature.{name}": probe_feature(name) for name in sorted(DECLARED_FEATURES)})
     refused = {name for name, outcome in scenarios.items() if not outcome["supported"]}
@@ -157,6 +186,7 @@ def capability_report() -> dict[str, Any]:
     return {"passed": not failures, "failures": failures,
             "expected_refusals": sorted(EXPECTED_REFUSALS),
             "schema_version": 1, "provider": PROVIDER_ID,
+            "physics_policy_version": POLICY_VERSION,
             "engine": "JWSound/BEAT_Engine", "distribution": "beat-engine",
             "time_convention": SOLVER_TIME_CONVENTION,
             "scope": "request construction; not runtime readiness or production adoption",

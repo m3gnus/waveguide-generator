@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from .beat_adapter.request import CompiledRequest
+from .beat_adapter.preflight import validate_exterior_physics
 from .beat_adapter.results import ResultContractError, SweepResult, map_sweep
 from .beat_runtime import assets, discovery, paths, readiness, registry, warm_cache
 from .beat_runtime.client import HostError
@@ -116,6 +117,10 @@ def solve_compiled(
     _profile: SweepProfile | None = None,
 ) -> SweepResult:
     """Negotiate and map one acquired batch, retaining the manager for reuse."""
+    options = request.wire["solver_options"]
+    if options.get("bem_backend") not in {"cpu", "metal", "cuda", "rocm"}:
+        raise UnsupportedBackend("BEAT runtime supports CPU, Metal, CUDA and ROCm")
+    validate_exterior_physics(request.wire)
     profile = _profile or start_profile(logging.getLogger(__name__).info, "wg")
     if profile is not None and _profile is None:
         # Direct compiled callers have already selected their runtime.
@@ -125,7 +130,6 @@ def solve_compiled(
         contract = importlib.import_module("beat_engine.beat_contract.worker")
     except ImportError as exc:
         raise OfficialBeatUnavailable("beat-engine is not installed.") from exc
-    options = request.wire["solver_options"]
     with SolveSession(cancellation_callback=cancellation_callback) as session:
         wire = dict(request.wire, cancel_path=str(session.cancel_path.resolve()))
         negotiate = validated_negotiator(contract, wire)

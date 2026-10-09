@@ -1,5 +1,68 @@
 # Review slices
 
+## Exterior input policy (policy version 1)
+
+`preflight.validate_exterior_physics` checks the physics WG can both send and
+interpret before `official_beat.solve_compiled` imports the engine or acquires a
+worker. The capability report runs this same guard against constructed requests
+and explicit unsupported-wire probes. It reports representability, separately
+from runtime readiness and numerical qualification.
+
+This is **WG policy**, not a change to BEAT's validators or Boundary Lab's
+request acceptance. The engine pin, source, defaults and result contracts are
+unchanged. The guard does not mutate requests, rescale amplitudes, infer axes,
+change quadrature, select a replacement model or invalidate readiness evidence.
+BEAT's own schema, reference, mesh and capability checks still run afterwards.
+
+The supported subset is one exterior air region, no coupled interfaces, rigid
+and moving boundaries with empty material parameters, v1/v2 ideal sources,
+normal/explicit signed axial motion, normal-velocity ports, WG's existing fixed
+quadrature settings, and its separately represented symmetry or rigid ground.
+Unknown physical options and source parameters are refused with their field
+path. Descriptive graph metadata stays open.
+
+In particular, exterior impedance/Robin boundaries and bulk losses are refused
+instead of being sent into the current exterior Neumann path. Shaped/modal
+sources, voltage-driven v3 components and FEM coupling are also refused by this
+adapter until it explicitly adopts their input AND result semantics. This does
+not mean those features are absent from BEAT: v3 drivers and bounded/coupled
+physics already exist there. No unqualified solver fallback is selected.
+
+The existing amplitude interpretation remains intact. The engine supplies unit
+velocity bases; WG performs its existing unit-acceleration and client driver
+calculations. Subsequent common-input work must explicitly declare the chosen
+RMS convention and perform phase conversion once, without changing Boundary
+Lab's legacy interpretation. Source/observation coordinates remain metres;
+air speed, density and frequency retain m/s, kg/m^3 and Hz. Physical symmetry
+copies and fictitious ground images keep their existing distinct loading rules.
+
+### Compatibility evidence and subsequent engine changes
+
+`fixtures/wg_request_compatibility.json` under `server/tests/beat_adapter` freezes
+six complete canonical requests from WG `9ca875c6`, with CPU/Metal, normal/axial,
+ground, Float64 and trace cases. Explicit cardinal observation points avoid
+platform libm rounding in byte hashes; existing observation fixtures cover the
+generator separately. These checks compare request bytes, not numerical solver
+results. Production refusal tests prove that unsupported requests never reach
+engine import, session creation or worker acquisition.
+
+Before changing BEAT numerical code, freeze the affected legacy fixtures,
+expected outputs, tolerances and default-path performance budgets. Include the
+legacy source-request driver and compiled v1/v2, plus bounded/coupled consumers
+and installed startup where shared code is touched. BEAT's
+`scripts/compare_exterior_legacy.jl` compares quantities and bytes against
+`4839c7e6` on `two_tetrahedra.msh`, with reversed ports, two frequencies, both
+precisions/phasors/profiles. Its other numerical dependencies are shared with
+the baseline: changing those requires independently frozen outputs or a complete
+pre-change runtime. Opt-in new request fields alone do not isolate changes to
+shared force integration, geometry, quadrature, phasors or worker code.
+
+Existing BEAT matrix diagnostics use weighted `W*Z`, with signed effective-area
+conversion and cancellation flags. Adopt and qualify those diagnostics instead
+of rebuilding or symmetrizing the matrix. Complex source profiles additionally
+need defined receiving-force dual, area and power semantics; complex RHS weights
+alone are insufficient. These additions are separate, opt-in migration slices.
+
 All paths below are relative to the WG repository root. The target is official
 `JWSound/BEAT_Engine` (`beat-engine`, import `beat_engine`), superseding the
 design's fork references. Changes are additive.

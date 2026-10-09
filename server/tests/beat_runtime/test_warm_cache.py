@@ -266,8 +266,8 @@ def test_hardware_negative_cache_expires_and_refresh_clears(monkeypatch, tmp_pat
 
 @pytest.mark.parametrize("signature_error", [ValueError, paths.RootConflict])
 def test_signature_errors_preserve_unavailable_bridge_semantics(monkeypatch, tmp_path, signature_error):
-    from types import SimpleNamespace
     from server.solver import official_beat
+    from server.solver.beat_adapter.capabilities import probe_request
     from server.solver.beat_runtime import discovery
 
     def signature(*a, **kw):
@@ -278,7 +278,9 @@ def test_signature_errors_preserve_unavailable_bridge_semantics(monkeypatch, tmp
     monkeypatch.setattr(manager, "_resolve_key", unavailable)
     monkeypatch.setattr(official_beat, "validated_negotiator", lambda *a: None)
     runtime = manager.WorkerManager(mode="host", directory=tmp_path / "workers")
-    request = SimpleNamespace(wire={"solver_options": {"bem_backend": "cpu"}})
+    # Runtime error behavior must be reached with a valid physical request;
+    # the production bridge now refuses missing/unsupported physics first.
+    request = probe_request()
     before = warm_cache.generation()
     with pytest.raises(official_beat.OfficialBeatUnavailable, match="runtime unavailable"):
         official_beat.solve_compiled(request, channel_id="fixture", worker_manager=runtime)
