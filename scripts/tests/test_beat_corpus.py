@@ -1197,3 +1197,39 @@ def test_corpus_explicit_frequency_limit_is_shared_with_validator():
     assert SolveOptions(num_frequencies=401).num_frequencies == 401
     with pytest.raises(ValueError):
         SolveOptions(num_frequencies=402)
+
+
+@pytest.mark.parametrize("precision,tolerance", [("float32", 1e-6), ("float64", 1e-12)])
+def test_corpus_legacy_overlap_uses_declared_frozen_precision(frozen, precision, tolerance):
+    settings = runner.settings_for(frozen, "cpu", precision)
+    a = evidence(frozen, (500., 510., 520.), settings, official=False)
+    b = evidence(frozen, (510., 520., 530.), settings, official=False)
+    for run in (a, b):
+        for row in run["native"]["source"]["solver_log"]:
+            row["native_diagnostics"].pop("precision", None)
+        run["native"]["source"]["pressure_complex"] = np.ones((3, 2), complex)
+    b["native"]["source"]["pressure_complex"][0, 1] += .5j * tolerance
+    runner.merge_runs([a, b], precision=precision)
+    b["native"]["source"]["pressure_complex"][0, 1] += 2j * tolerance
+    with pytest.raises(ValueError, match="overlapping numeric"):
+        runner.merge_runs([a, b], precision=precision)
+
+
+def test_corpus_overlap_observed_precision_cannot_override_frozen_precision(frozen):
+    settings = runner.settings_for(frozen, "cpu", "float64")
+    a = evidence(frozen, (500., 510., 520.), settings, official=False)
+    b = evidence(frozen, (510., 520., 530.), settings, official=False)
+    with pytest.raises(ValueError, match="Observed overlap precision"):
+        runner.merge_runs([a, b], precision="float32")
+
+
+def test_corpus_nonoverlap_observed_precision_cannot_override_frozen_precision(frozen):
+    settings = runner.settings_for(frozen, "cpu", "float32")
+    a = evidence(frozen, (500., 510., 520.), settings, official=False)
+    b = evidence(frozen, (510., 520., 530.), settings, official=False)
+    for run in (a, b):
+        for row in run["native"]["source"]["solver_log"]:
+            row["native_diagnostics"].pop("precision", None)
+    b["native"]["source"]["solver_log"][-1]["native_diagnostics"]["precision"] = "float64"
+    with pytest.raises(ValueError, match="Observed overlap precision"):
+        runner.merge_runs([a, b], precision="float32")

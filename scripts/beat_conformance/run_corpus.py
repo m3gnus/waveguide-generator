@@ -649,8 +649,16 @@ def slice_run(run: dict, axis: list[float]) -> dict:
     return result
 
 
-def merge_runs(runs: list[dict]) -> dict:
-    """Join acquired arrays and frequency-keyed logs, checking overlapping settings."""
+def merge_runs(runs: list[dict], *, precision: str | None = None) -> dict:
+    """Join acquired arrays and frequency-keyed logs, checking overlapping settings.
+
+    Legacy HBB diagnostics omit precision. The caller may supply the frozen
+    acquisition precision; this remains declared evidence, not native observation.
+    An observed precision must agree, and unknown direct calls retain the strict
+    Float64 fallback. Numerical tolerances are unchanged.
+    """
+    if precision is not None and precision not in {"float32", "float64"}:
+        raise ValueError("Overlap precision must be float32 or float64")
     from copy import deepcopy
     for run in runs:
         require_clean_wg(run.get("identity", {}))
@@ -658,6 +666,12 @@ def merge_runs(runs: list[dict]) -> dict:
         for member in run["native"].values():
             if not np.array_equal(member["frequencies_hz"], run["frequencies_hz"]):
                 raise ValueError("Native axis differs from actual acquisition frequencies")
+            if precision is not None:
+                for row in solver_rows(member).values():
+                    observed = row.get("native_diagnostics", {}).get("precision")
+                    observed = {"single": "float32", "double": "float64"}.get(observed, observed)
+                    if observed is not None and observed != precision:
+                        raise ValueError("Observed overlap precision differs from frozen acquisition")
     for run in runs[1:]:
         if run.get("mesh_sha256") != runs[0].get("mesh_sha256"):
             raise ValueError("Refine run mesh differs from dense evidence")
@@ -684,8 +698,10 @@ def merge_runs(runs: list[dict]) -> dict:
                 f = float(frequency)
                 if f in rows:
                     previous, previous_index = rows[f]
-                    precision = member_logs[f].get("native_diagnostics", {}).get("precision")
-                    tolerance = 1e-6 if precision in {"float32", "single"} else 1e-12
+                    observed = member_logs[f].get("native_diagnostics", {}).get("precision")
+                    observed = {"single": "float32", "double": "float64"}.get(observed, observed)
+                    resolved = observed if observed is not None else precision
+                    tolerance = 1e-6 if resolved == "float32" else 1e-12
                     for field in ARRAY_FIELDS:
                         a, b = previous.get(field), member.get(field)
                         if (a is None) != (b is None):
@@ -986,7 +1002,8 @@ def run_case(case: CorpusCase, directory: Path, *, backend: str, precision: str,
                 refs.append(a)
                 candidates.append(b)
                 completed.add(refine_part)
-            final_ref, final_got = merge_runs(refs), merge_runs(candidates)
+            final_ref, final_got = (merge_runs(refs, precision=precision),
+                                    merge_runs(candidates, precision=precision))
             report = score_pair(final_ref, final_got, frozen, settings,
                                 frequency_step=case.dense_step_hz, expected=True, refined_frequencies=refined_axis)
             local_reports = []
