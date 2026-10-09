@@ -36,7 +36,7 @@ aligned +Z per-source axes under the consumer's existing per-source-axis-v2
 contract, independent of the observation frame or triangulation sign votes.
 Metal source dictionaries retain actual literal patch weights. Result/channel
 basis metadata includes physical grouping, patch weights and excitation hash.
-Other engines, arbitrary axes, lumped drivers, folded sources, UI ingestion and
+Other engines, arbitrary axes, lumped drivers, folded sources and
 standalone linked source transport remain outside this slice.
 
 Consumer qualification uses actual native STEP ingestion, immutable persisted
@@ -46,3 +46,30 @@ independent projection oracle. This proves transport/BC behavior, without
 claiming acoustic accuracy or installed/pin qualification. Old readers reject
 the new request fields and required-feature vocabulary. The lander must install
 the producer revision before moving the consumer dependency pin.
+
+## Shared assembly and phase-plug extension
+
+`native-shared-horn-woofer-v1` carries two independent physical diaphragms in one
+full-domain scattering mesh and one front-centred observation frame. Per-source
+frames, source-qualified patch IDs and exact channel weights survive admission,
+dispatch and result metadata. WG's assembly editor supplies the actual authoring
+and preparation caller; see `source-contour-editor.md`.
+
+The additive `native-phase-plug-passages-v1` requires the mesher's canonical
+`SourceAssembly.phase_plugs` and `docs/phase-plug-passages.md` contract. The native
+reader rechecks the expected 1+N closed components, finite STEP surface selectors,
+exact areas, body genus, passage radii and local density targets. General imported
+body-count admission remains strict. The final mesh is independently certified
+within `min(0.15 mm, minimum analytical clearance / 10)`, including source,
+enclosure, split horn-wall and passive facets; each component must have correct
+winding and positive signed volume. The residual separation bound must be
+positive before publication.
+
+The imported adapter caps curved surfaces and circular source boundaries. Native
+assembly source size caps use restricted surface fields, so a distance field's
+sampling cannot miss the requested cap on the surface itself. The general
+importer's 0.1 mm deviation setting and existing resource ceilings remain intact.
+Requested/effective size records and density hashes retain these refinements.
+Passive roles remain rigid and absent from drive groups; inactive sources and
+rigid faces retain zero prescribed velocity. These checks qualify geometry and
+consumer transport, without invoking or qualifying an acoustic solve.

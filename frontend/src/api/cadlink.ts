@@ -29,7 +29,7 @@ export interface CadReturnInstanceSummary {
  * relative in both cases and the server owns each root, so this is the whole
  * of what the client has to say about where a bundle lives. Absent means
  * 'wglink', which is what every workspace listing item is. */
-export type CadReturnBundleOrigin = 'wglink' | 'onshape';
+export type CadReturnBundleOrigin = 'wglink' | 'onshape' | 'native';
 
 export interface CadReturnBundle {
   name: string;
@@ -298,6 +298,12 @@ export interface CadViewportMeshMetadata {
 }
 
 export interface CadReturnIngestRecord {
+  producer?: string;
+  native_source?: {
+    required_features: string[];
+    channels: Array<{ id: string; source_ids: string[]; physical_source_id: string;
+      patch_weights: Record<string, number>; motion: 'normal' | 'axial' }>;
+  };
   ingest_id: string;
   created_at: string;
   return_id: string;

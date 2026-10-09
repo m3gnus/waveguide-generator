@@ -3518,6 +3518,18 @@ def build_imported_mesh(
             fields.append(restricted)
         for spec in step_specs:
             surfaces_for_source = cut_groups[spec.name]
+            if options.get("native_source_size_limits", False):
+                if options["native_source_size_limits"] is not True or domain_planes or cut.planes:
+                    raise ImportedMeshError("native source size limits require an unchanged full domain")
+                # Distance fields sample curved surfaces and can report nonzero
+                # distance on the very surface they refine. An exact Restrict
+                # field binds the native hard limit to its resolved source faces.
+                constant = gmsh.model.mesh.field.add("MathEval")
+                gmsh.model.mesh.field.setString(constant, "F", str(spec.resolution_mm))
+                restricted = gmsh.model.mesh.field.add("Restrict")
+                gmsh.model.mesh.field.setNumber(restricted, "InField", constant)
+                gmsh.model.mesh.field.setNumbers(restricted, "SurfacesList", surfaces_for_source)
+                fields.append(restricted)
             distance = gmsh.model.mesh.field.add("Distance")
             gmsh.model.mesh.field.setNumbers(distance, "SurfacesList", surfaces_for_source)
             threshold = gmsh.model.mesh.field.add("Threshold")

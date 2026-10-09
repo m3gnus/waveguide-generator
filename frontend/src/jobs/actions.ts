@@ -91,6 +91,7 @@ export interface SolvePlan {
 export interface SolveSubmissionMetadata { label: string; designRevision: number }
 export interface ImportedGeometrySubmission {
   type: 'imported';
+  required_features?: string[];
   ingest_id: string;
   manifest_sha256: string;
   artifact_sha256: string;
@@ -98,6 +99,8 @@ export interface ImportedGeometrySubmission {
     id: string;
     source_ids: string[];
     motion: 'normal' | 'axial';
+    physical_source_id?: string;
+    patch_weights?: Record<string, number>;
     /** Thiele-Small numbers in `DriverSpec`'s wire units, plus the optional
      * `label` naming the driver they came from. */
     driver?: Record<string, number | string>;

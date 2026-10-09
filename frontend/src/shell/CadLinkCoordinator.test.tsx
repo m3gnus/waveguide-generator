@@ -202,6 +202,26 @@ describe('CadLinkCoordinator', () => {
     });
   };
 
+  it('retains prepared native geometry when the configured CAD folder has no matching return', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json({ cadFolderConfigured: true, items: [] });
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      return json({}, 404);
+    }));
+    await renderCoordinator();
+    const native = { ...initialBundle, bundlePath: 'wgi_native', bundleOrigin: 'native' as const };
+    act(() => {
+      useCadReturnStore.getState().selectBundle(native, null);
+      const generation = useCadReturnStore.getState().beginIngestIntent();
+      useCadReturnStore.getState().applyIngest(ingestRecord, generation);
+    });
+    const previous = useCadReturnStore.getState();
+    await act(async () => { await cadLinkCoordinatorBridge.getSnapshot().refresh(); });
+    expect(useCadReturnStore.getState().selectedBundle).toBe(previous.selectedBundle);
+    expect(useCadReturnStore.getState().ingestRecord).toBe(previous.ingestRecord);
+  });
+
   it('skips the Fusion returns poll while Onshape is selected', async () => {
     vi.useFakeTimers();
     preferencesStore.update({ cadApplication: 'onshape' });
