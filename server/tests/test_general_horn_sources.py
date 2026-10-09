@@ -139,6 +139,32 @@ def test_current_design_action_reuses_profile_and_preserves_design(client, formu
     assert design == retained
 
 
+def test_current_design_attachment_keeps_imported_circle_interpretation(client):
+    from hornlab_mesher.general_horn import GeneralHornWall
+    from hornlab_mesher.text_import import TEXT_IMPORT_VERSION
+
+    design = {"formula": "OSSE", "r0": 4, "L": 18, "a": 32, "a0": 6,
+              "text_import_version": TEXT_IMPORT_VERSION,
+              "morph": {"target_shape": 2, "target_width": 120, "target_height": 120},
+              "mesh": {"wall_thickness": 2, "quadrants": 1,
+                       "length_segments": 32, "angular_segments": 64,
+                       "throat_resolution": 2, "mouth_resolution": 3}}
+    retained = deepcopy(design)
+    imported = client.post("/api/source-editor/assembly/horn-profile", json=design)
+    assert imported.status_code == 200, imported.text
+    frozen = imported.json()["horn_config"]
+    assert frozen["_textImportVersion"] == TEXT_IMPORT_VERSION
+    assert imported.json()["mouth_radius_mm"] < 60
+    assert GeneralHornWall.from_config(frozen).mouth_radius_mm == pytest.approx(
+        imported.json()["mouth_radius_mm"], abs=1e-9)
+    native = client.post("/api/source-editor/assembly/horn-profile",
+                         json={key: value for key, value in design.items()
+                               if key != "text_import_version"})
+    assert native.status_code == 200, native.text
+    assert native.json()["mouth_radius_mm"] == pytest.approx(60, abs=1e-9)
+    assert design == retained
+
+
 def test_current_design_extension_reports_driver_end_rim_and_refuses_mismatched_contour(client):
     from hornlab_mesher.config_builder import resolve_geometry
     design = {"formula": "OSSE", "L": 24, "r0": 4, "a": 32, "a0": 6,
