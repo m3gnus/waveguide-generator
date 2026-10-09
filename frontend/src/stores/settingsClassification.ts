@@ -90,6 +90,7 @@ export const SETTINGS_NAMESPACE_EFFECTS: Record<SettingsNamespace, PreferenceEff
   // change is the most solve-affecting thing there is.
   designDraft: 'solve-affecting',
   sourceContourDraft: 'inert',
+  sourceAssemblyDraft: 'inert',
 };
 
 export type UnclassifiedNamespace = Exclude<keyof typeof SETTINGS_NAMESPACE_EFFECTS, SettingsNamespace>;

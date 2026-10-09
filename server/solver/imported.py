@@ -64,9 +64,18 @@ def imported_anchor_frame(record: Mapping[str, Any]) -> dict[str, np.ndarray]:
         normalisation = record.get("normalisation")
         normalisation = normalisation if isinstance(normalisation, Mapping) else {}
         native = record.get("native_source")
-        if isinstance(native, Mapping) and native.get("required_features") in ([
-            "native-source-contour-v1", "native-front-baffle-woofer-v1",
-        ], ["native-source-contour-v1", "native-shared-horn-woofer-v1"]):
+        if isinstance(native, Mapping) and native.get("required_features") in (
+            [
+                "native-source-contour-v1",
+                "native-front-baffle-woofer-v1",
+            ],
+            ["native-source-contour-v1", "native-shared-horn-woofer-v1"],
+            [
+                "native-source-contour-v1",
+                "native-shared-horn-woofer-v1",
+                "native-phase-plug-passages-v1",
+            ],
+        ):
             frame = normalisation.get("source_frame")
         else:
             frame = normalisation.get("anchor_throat_frame")
@@ -246,7 +255,9 @@ def _plane_cuts_source(coordinates: np.ndarray, corners: np.ndarray, component: 
     lying = edges[on_plane[edges[:, 0]] & on_plane[edges[:, 1]]]
     if not len(lying):
         return False
-    length = float(np.linalg.norm(coordinates[lying[:, 0]] - coordinates[lying[:, 1]], axis=1).sum())
+    length = float(
+        np.linalg.norm(coordinates[lying[:, 0]] - coordinates[lying[:, 1]], axis=1).sum()
+    )
     nodes = coordinates[np.unique(corners)]
     extent = float(np.linalg.norm(nodes.max(axis=0) - nodes.min(axis=0)))
     return length >= AXIAL_CUT_EDGE_FRACTION * extent
@@ -369,13 +380,15 @@ def resolve_record_axial_axes(
         # Native contour v1 declares the aligned motion axis explicitly;
         # triangulation asymmetry must not tilt it through an area-vector vote.
         from dataclasses import replace
-        axes = {tag: replace(item, axis=(0.0,0.0,1.0), raw_axis=(0.0,0.0,1.0), snapped_to="+z") for tag,item in axes.items()}
+
+        axes = {
+            tag: replace(item, axis=(0.0, 0.0, 1.0), raw_axis=(0.0, 0.0, 1.0), snapped_to="+z")
+            for tag, item in axes.items()
+        }
     return axes
 
 
-def axial_domain_problem(
-    axes: Mapping[int, SourceAxis], planes: Iterable[str]
-) -> str | None:
+def axial_domain_problem(axes: Mapping[int, SourceAxis], planes: Iterable[str]) -> str | None:
     """Why a mirrored domain cannot carry these axes, or ``None``.
 
     An axis outside the symmetry subspace is never projected: the reduction is
@@ -424,7 +437,11 @@ def config_supports_source_axes(config: Any) -> bool:
 def has_axial_channel(drive_channels: Iterable[Any] | None) -> bool:
     return any(
         str(
-            (channel.get("motion") if isinstance(channel, Mapping) else getattr(channel, "motion", None))
+            (
+                channel.get("motion")
+                if isinstance(channel, Mapping)
+                else getattr(channel, "motion", None)
+            )
             or "normal"
         )
         == "axial"

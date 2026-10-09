@@ -6,6 +6,7 @@ import json
 FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 ASSEMBLY_FEATURE = "native-shared-horn-woofer-v1"
+PLUG_FEATURE = "native-phase-plug-passages-v1"
 
 
 def validate_contour_request(geometry, record):
@@ -19,7 +20,13 @@ def validate_contour_request(geometry, record):
             raise ValueError("native source features require a native ingestion record")
         return
     if (
-        required not in ([FEATURE], [FEATURE, BAFFLE_FEATURE], [FEATURE, ASSEMBLY_FEATURE])
+        required
+        not in (
+            [FEATURE],
+            [FEATURE, BAFFLE_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE, PLUG_FEATURE],
+        )
         or required != native["required_features"]
     ):
         raise ValueError("native source requires explicit supported feature negotiation")
@@ -58,8 +65,13 @@ def validate_contour_request(geometry, record):
         raise ValueError("native source cannot skip moving patches")
     if assembly:
         from hornlab_mesher.source_assembly import SourceAssembly
+        from hornlab_mesher.phase_plug import passage_contract
 
         model = SourceAssembly.from_dict(native["recipe"])
+        if bool(model.phase_plugs) != (PLUG_FEATURE in required) or native.get(
+            "passage_contract"
+        ) != passage_contract(model):
+            raise ValueError("native phase-plug topology identity is inconsistent")
         if model.geometry_sha256 != native["geometry_sha256"]:
             raise ValueError("native assembly geometry identity is inconsistent")
         origin = [0, 0, model.front_z_mm * 0.001]

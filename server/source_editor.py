@@ -13,7 +13,7 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, field_validator
 
 Number = Annotated[StrictFloat | StrictInt, Field(allow_inf_nan=False)]
 Identity = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^\S(?:.*\S)?$")]
@@ -70,24 +70,52 @@ class AssemblyDimensions(WireModel):
     aperture_radius_mm: Number
 
 
+class PhasePlug(WireModel):
+    id: Identity
+    z0_mm: Number
+    z1_mm: Number
+    inner0_mm: Number
+    outer0_mm: Number
+    inner1_mm: Number
+    outer1_mm: Number
+
+
 class AssemblyRequest(WireModel):
     horn: SourceDocument
     woofer: SourceDocument
     dimensions: AssemblyDimensions
     mesh_size_mm: Annotated[Number, Field(gt=0)] = 2
+    phase_plugs: Annotated[list[PhasePlug], Field(max_length=8)] = Field(default_factory=list)
+    passage_refinement: Literal[1, 2, 4] = 1
+
+    @field_validator("passage_refinement", mode="before")
+    @classmethod
+    def exact_refinement(cls, value):
+        if type(value) is not int or value not in (1, 2, 4):
+            raise ValueError("passage refinement must be the integer 1, 2 or 4")
+        return value
 
 
 def native_assembly(body: AssemblyRequest):
     try:
         from hornlab_mesher.source_assembly import SourceAssembly, assembly_channels
+        from hornlab_mesher.phase_plug import PhasePlug as NativePlug
     except ImportError as exc:
         raise HTTPException(
-            503, "This mesher does not support shared horn and woofer geometry."
+            503, "This mesher does not support the assembly editor's passage contract. Update the mesher."
         ) from exc
     horn, hf = native(body.horn)
     woofer, lf = native(body.woofer)
     try:
-        model = SourceAssembly(horn, woofer, **body.dimensions.model_dump())
+        if body.phase_plugs:
+            model = SourceAssembly(
+                horn,
+                woofer,
+                **body.dimensions.model_dump(),
+                phase_plugs=tuple(NativePlug(**p.model_dump()) for p in body.phase_plugs),
+            )
+        else:
+            model = SourceAssembly(horn, woofer, **body.dimensions.model_dump())
         return model, [hf, lf], assembly_channels(model, [hf, lf])
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -345,6 +373,8 @@ def create_router(data_dir: Path) -> APIRouter:
     @router.post("/assembly/validate")
     def assembly_validate_endpoint(body: AssemblyRequest) -> dict[str, Any]:
         model, _, channels = native_assembly(body)
+        from hornlab_mesher.phase_plug import passage_contract, rigid_edges
+
         return {
             "recipe": model.to_dict(),
             "geometry_sha256": model.geometry_sha256,
@@ -353,7 +383,67 @@ def create_router(data_dir: Path) -> APIRouter:
             "source_origins_mm": {
                 c.physical_source_id: list(origin) for c, origin, _ in model.parts
             },
+            "passage_contract": passage_contract(model),
+            "horn_section_mm": {
+                **{
+                    s.id: [list(model.horn.evaluate(i, j / 32)) for j in range(33)]
+                    for i, s in enumerate(model.horn.segments)
+                },
+                **{role: [list(a), list(b)] for role, (a, b) in rigid_edges(model).items()},
+            },
         }
+
+    @router.post(
+        "/assembly/export",
+        response_class=Response,
+        responses={
+            200: {
+                "content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}
+            }
+        },
+    )
+    def assembly_export_endpoint(body: AssemblyRequest) -> Response:
+        model, drives, _ = native_assembly(body)
+        try:
+            from hornlab_mesher.assembly_artifact import export_assembly
+        except ImportError as exc:
+            raise HTTPException(
+                503, "This mesher does not support native assembly export."
+            ) from exc
+        if not export_lock.acquire(blocking=False):
+            raise HTTPException(
+                409, "A source export is already running. Try again when it finishes."
+            )
+        try:
+            root = data_dir / "tmp"
+            root.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(dir=root, prefix="assembly-export-") as stage:
+                destination = Path(stage) / "artifact"
+                export_assembly(
+                    model,
+                    drives,
+                    destination,
+                    mesh_size_mm=body.mesh_size_mm,
+                    passage_refinement=body.passage_refinement,
+                )
+                result = BytesIO()
+                with ZipFile(result, "w", ZIP_DEFLATED) as bundle:
+                    for name in ("source.json", "geometry.step", "preview.msh"):
+                        bundle.write(destination / name, arcname=name)
+                return Response(
+                    result.getvalue(),
+                    media_type="application/zip",
+                    headers={"Content-Disposition": 'attachment; filename="native-assembly.zip"'},
+                )
+        except (TypeError, ValueError) as exc:
+            detail = (
+                "Native assembly could not be exported. Check clearances, density and resource limits."
+                if "export failed" in str(exc)
+                else str(exc)
+            )
+            raise HTTPException(422, detail) from exc
+        finally:
+            export_lock.release()
 
     @router.post("/assembly/ingest")
     def assembly_ingest_endpoint(body: AssemblyRequest, request: Request) -> dict[str, Any]:
@@ -375,7 +465,11 @@ def create_router(data_dir: Path) -> APIRouter:
             with tempfile.TemporaryDirectory(dir=root, prefix="source-assembly-") as stage:
                 destination = Path(stage) / "artifact"
                 manifest = export_assembly(
-                    model, drives, destination, mesh_size_mm=body.mesh_size_mm
+                    model,
+                    drives,
+                    destination,
+                    mesh_size_mm=body.mesh_size_mm,
+                    passage_refinement=body.passage_refinement,
                 )
                 record = ingest_native_source(
                     destination,
@@ -402,6 +496,36 @@ def create_router(data_dir: Path) -> APIRouter:
             }
             return {
                 "geometry": geometry,
+                "ingestion": {
+                    key: record[key]
+                    for key in (
+                        "ingest_id",
+                        "created_at",
+                        "return_id",
+                        "acoustic_domain",
+                        "scope",
+                        "freshness",
+                        "manifest_sha256",
+                        "artifact_sha256",
+                        "report_sha256",
+                        "mesh_content_sha256",
+                        "solve_model_sha256",
+                        "sources",
+                        "mesh_sizes",
+                        "mesh",
+                        "skipped_source_ids",
+                        "findings",
+                        "symmetry",
+                        "healing",
+                        "sizing_estimate",
+                        "polar_grid_derivation",
+                        "tag_map",
+                        "native_source",
+                        "identity",
+                        "normalisation",
+                        "domain_interpretation",
+                    )
+                },
                 "native_source": record["native_source"],
                 "mesh": record["mesh"]["stats"],
                 "geometric_quality": record["mesh"]["geometric_quality"],

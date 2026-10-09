@@ -16,6 +16,7 @@ import tempfile
 FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 ASSEMBLY_FEATURE = "native-shared-horn-woofer-v1"
+PLUG_FEATURE = "native-phase-plug-passages-v1"
 
 
 def _canonical(value):
@@ -44,7 +45,12 @@ def read_native_source(directory):
     if (
         manifest.get("version") != 1
         or manifest.get("required_features")
-        not in ([FEATURE], [FEATURE, BAFFLE_FEATURE], [FEATURE, ASSEMBLY_FEATURE])
+        not in (
+            [FEATURE],
+            [FEATURE, BAFFLE_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE, PLUG_FEATURE],
+        )
         or manifest.get("producer") != "native"
         or manifest.get("units") != "mm"
     ):
@@ -153,6 +159,18 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
         raise ValueError("native source sizes must cover exactly moving patches")
     requested_sizes = {**sizes, "source_size_mm": dict(sizes["source_size_mm"])}
     assembly = ASSEMBLY_FEATURE in manifest["required_features"]
+    role_sizes = {}
+    if assembly:
+        from hornlab_mesher.phase_plug import surface_targets
+
+        role_sizes = surface_targets(
+            contour, sizes["rigid_size_mm"], manifest["density"].get("passage_refinement", 1)
+        )
+    deviation_mm = (
+        min(0.1, manifest["passage_contract"]["surface_tolerance_mm"] / 2)
+        if PLUG_FEATURE in manifest["required_features"]
+        else 0.1
+    )
     sizes["rigid_size_mm"] = (
         sizes["rigid_size_mm"]
         if assembly
@@ -178,7 +196,23 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
         segment = model.segments[i]
         if segment.role == "moving" and segment.kind == "arc":
             sizes["source_size_mm"][key] = min(
-                sizes["source_size_mm"][key], math.sqrt(8 * 0.02 * model.arc(i)[0])
+                sizes["source_size_mm"][key],
+                math.sqrt(8 * min(0.02, deviation_mm) * model.arc(i)[0]),
+            )
+        if segment.role == "moving" and (
+            PLUG_FEATURE in manifest["required_features"]
+            or (assembly and model.points[i].z_mm == model.points[i + 1].z_mm)
+        ):
+            a, b = model.points[i : i + 2]
+            radii = [p.r_mm for p in (a, b) if p.r_mm > 0]
+            radius = model.arc(i)[0] if segment.kind == "arc" else min(radii)
+            if a.r_mm > 0:
+                radius = min(radius, a.r_mm)
+            # A flat diaphragm still has a circular boundary. Its polygonal
+            # rim bounds the front opening, which must not intrude across it.
+            target = min(deviation_mm, 0.03) if a.z_mm == b.z_mm else deviation_mm
+            sizes["source_size_mm"][key] = min(
+                sizes["source_size_mm"][key], math.sqrt(8 * target * radius)
             )
     channel = (
         manifest["channels"]
@@ -209,7 +243,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
         "sources": sources,
         "instances": [],
         "coordinate_system": {"solver_anchor_instance_id": None},
-        "assembly": {"n_bodies_expected": 1},
+        "assembly": {"n_bodies_expected": 1 + len(contour.phase_plugs) if assembly else 1},
     }
     root = Path(data_dir) / "imports" / "native-source"
     root.mkdir(parents=True, exist_ok=True)
@@ -275,6 +309,10 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 "ingest_id": ingest_id,
                 "created_at": created_at,
                 "producer": "native",
+                "return_id": "native:" + ingest_id,
+                "acoustic_domain": "free-space",
+                "scope": {"status": "full", "degraded_skip_count": 0},
+                "freshness": {"verdict": "unlinked", "instances": []},
                 "manifest_sha256": manifest_hash,
                 "artifact_sha256": manifest["members"]["geometry.step"],
                 "mesh_store_path": str(published / "solve.msh"),
@@ -323,6 +361,14 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                     **(
                         {
                             "recipe": manifest["recipe"],
+                            **(
+                                {
+                                    "passage_contract": manifest["passage_contract"],
+                                    "passage_quality": built["geometric_quality"]["passages"],
+                                }
+                                if contour.phase_plugs
+                                else {}
+                            ),
                             "observation_frame": frame,
                             "source_frames": {
                                 c.physical_source_id: {
@@ -345,17 +391,11 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                                 "sizes": sizes,
                                 "surface_deviation_mm": 0.1,
                                 **(
-                                    {
-                                        "rigid_role_sizes_mm": {
-                                            "horn-wall": min(
-                                                sizes["rigid_size_mm"],
-                                                math.sqrt(8 * 0.1 * contour.horn.points[-1].r_mm),
-                                            )
-                                        }
-                                    }
-                                    if assembly
+                                    {"native_source_target_deviation_mm": deviation_mm}
+                                    if PLUG_FEATURE in manifest["required_features"]
                                     else {}
                                 ),
+                                **({"rigid_role_sizes_mm": role_sizes} if assembly else {}),
                             }
                         )
                     ),
@@ -390,12 +430,19 @@ def _worker(stage):
         manifest, model, _, _ = read_native_source(stage)
         options = {"symmetry_mode": "full", "surface_deviation_mm": 0.1}
         if ASSEMBLY_FEATURE in manifest["required_features"]:
-            wall = next(p for p in manifest["rigid_faces"] if p["role"] == "horn-wall")
+            options["native_source_size_limits"] = True
+        if ASSEMBLY_FEATURE in manifest["required_features"]:
+            from hornlab_mesher.phase_plug import surface_targets
+
+            targets = surface_targets(
+                model,
+                request["sizes"]["rigid_size_mm"],
+                manifest["density"].get("passage_refinement", 1),
+            )
             options["rigid_face_sizes_mm"] = {
-                wall["advanced_face_indices"][0]: min(
-                    request["sizes"]["rigid_size_mm"],
-                    math.sqrt(8 * 0.1 * model.horn.points[-1].r_mm),
-                )
+                p["advanced_face_indices"][0]: targets[p["role"]]
+                for p in manifest["rigid_faces"]
+                if p["role"] in targets
             }
         built = build_imported_mesh(
             stage / "geometry.step",
@@ -437,6 +484,12 @@ def _worker(stage):
         baffle=manifest["recipe"].get("baffle"),
         assembly=contour if ASSEMBLY_FEATURE in manifest["required_features"] else None,
     )
+    if ASSEMBLY_FEATURE in manifest["required_features"] and contour.phase_plugs:
+        from hornlab_mesher.passage_mesh import certify_passage_mesh
+
+        built["geometric_quality"]["passages"] = certify_passage_mesh(
+            contour, mesh.points * 1000, tri, active
+        )
     (stage / "built.json").write_bytes(_canonical(built))
 
 

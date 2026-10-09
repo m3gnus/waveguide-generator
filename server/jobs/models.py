@@ -823,7 +823,7 @@ PORT_APERTURE_NAME_GROUPS: tuple[tuple[str, ...], ...] = (
 
 class ImportedGeometrySource(JobModel):
     type: Literal["imported"]
-    required_features: list[Literal["native-source-contour-v1", "native-front-baffle-woofer-v1", "native-shared-horn-woofer-v1"]] = Field(default_factory=list)
+    required_features: list[Literal["native-source-contour-v1", "native-front-baffle-woofer-v1", "native-shared-horn-woofer-v1", "native-phase-plug-passages-v1"]] = Field(default_factory=list)
     ingest_id: str
     manifest_sha256: str
     artifact_sha256: str

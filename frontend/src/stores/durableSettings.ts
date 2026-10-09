@@ -48,6 +48,7 @@ export const SETTINGS_NAMESPACES = {
   driverLibrary: 'waveguide-v2-g3-driver-library',
   designDraft: 'wg2.autosave.v1',
   sourceContourDraft: 'wg2.source-contour-draft.v1',
+  sourceAssemblyDraft: 'wg2.source-assembly-draft.v1',
 } as const;
 
 export type SettingsNamespace = keyof typeof SETTINGS_NAMESPACES;
