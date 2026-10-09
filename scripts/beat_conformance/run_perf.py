@@ -166,7 +166,8 @@ class RSSSampler:
                     self._native_selected = self._select(rows)
                     return self._native_selected
 
-                reader = lambda: native.read_owned(select_native, self.known.setdefault)
+                def reader():
+                    return native.read_owned(select_native, self.known.setdefault)
                 self.method = "darwin-sysctl-libproc"
         self.reader = reader
         self.peak_bytes = 0
