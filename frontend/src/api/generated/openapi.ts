@@ -1866,6 +1866,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/source-editor/assembly/horn-profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Assembly Horn Profile Endpoint
+         * @description Copy the current horn profile onto the assembly's new enclosure.
+         *
+         *     The action deliberately selects the full horn wall and the assembly
+         *     enclosure, independently of the old design's source, shell and mesh
+         *     symmetry. Profile/morph/guide/scale/axis changes remain authoritative.
+         */
+        post: operations["assembly_horn_profile_endpoint_api_source_editor_assembly_horn_profile_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/source-editor/assembly/ingest": {
         parameters: {
             query?: never;
@@ -2308,8 +2332,11 @@ export interface components {
         };
         /** AssemblyDimensions */
         AssemblyDimensions: {
-            /** Aperture Radius Mm */
-            aperture_radius_mm: number;
+            /**
+             * Aperture Radius Mm
+             * @default 0
+             */
+            aperture_radius_mm?: number;
             /** Depth Mm */
             depth_mm: number;
             /** Front Z Mm */
@@ -2317,18 +2344,24 @@ export interface components {
             /** Height Mm */
             height_mm: number;
             /** Horn Length Mm */
-            horn_length_mm: number;
+            horn_length_mm?: number | null;
             /** Horn Xy Mm */
             horn_xy_mm: [
                 number,
                 number
             ];
             /** Mouth Radius Mm */
-            mouth_radius_mm: number;
+            mouth_radius_mm?: number | null;
             /** Width Mm */
             width_mm: number;
-            /** Woofer Xy Mm */
-            woofer_xy_mm: [
+            /**
+             * Woofer Xy Mm
+             * @default [
+             *       0,
+             *       0
+             *     ]
+             */
+            woofer_xy_mm?: [
                 number,
                 number
             ];
@@ -2337,6 +2370,10 @@ export interface components {
         AssemblyRequest: {
             dimensions: components["schemas"]["AssemblyDimensions"];
             horn: components["schemas"]["SourceDocument"];
+            /** Horn Config */
+            horn_config?: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Mesh Size Mm
              * @default 2
@@ -2350,7 +2387,7 @@ export interface components {
             passage_refinement?: 1 | 2 | 4;
             /** Phase Plugs */
             phase_plugs?: components["schemas"]["PhasePlug"][];
-            woofer: components["schemas"]["SourceDocument"];
+            woofer?: components["schemas"]["SourceDocument"] | null;
         };
         /** Attachment */
         Attachment: {
@@ -3868,7 +3905,7 @@ export interface components {
             /** Port Area Source */
             port_area_source?: ("user" | "bem_aperture") | null;
             /** Required Features */
-            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1" | "native-phase-plug-passages-v1")[];
+            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1" | "native-phase-plug-passages-v1" | "native-general-horn-attachment-v1")[];
             /**
              * Rg Ohm
              * @default 0
@@ -8879,6 +8916,41 @@ export interface operations {
                 };
                 content: {
                     "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assembly_horn_profile_endpoint_api_source_editor_assembly_horn_profile_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesignConfig"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

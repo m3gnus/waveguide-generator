@@ -17,6 +17,7 @@ FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 ASSEMBLY_FEATURE = "native-shared-horn-woofer-v1"
 PLUG_FEATURE = "native-phase-plug-passages-v1"
+GENERAL_FEATURE = "native-general-horn-attachment-v1"
 
 
 def _canonical(value):
@@ -50,6 +51,8 @@ def read_native_source(directory):
             [FEATURE, BAFFLE_FEATURE],
             [FEATURE, ASSEMBLY_FEATURE],
             [FEATURE, ASSEMBLY_FEATURE, PLUG_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE, GENERAL_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE, PLUG_FEATURE, GENERAL_FEATURE],
         )
         or manifest.get("producer") != "native"
         or manifest.get("units") != "mm"

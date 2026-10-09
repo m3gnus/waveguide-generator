@@ -45,6 +45,20 @@ describe('native assembly imported workspace handoff', () => {
     expect(buildCadProjectSetup(undefined,undefined,undefined,'unrelated-cad-project')).toBeNull();
   });
 
+  it('hydrates a negotiated horn-only artifact with its signed source weights', async () => {
+    const horn = structuredClone(record);
+    horn.sources = [horn.sources[0]];
+    horn.native_source!.channels = [horn.native_source!.channels![0]];
+    horn.native_source!.channels[0].patch_weights!['horn/piston'] = -.5;
+    horn.native_source!.required_features.push('native-general-horn-attachment-v1');
+    horn.mesh_sizes.source_size_mm = { 'horn/piston': 2 };
+    await prepareNativeAssembly(async () => ({ ingestion: horn }), fetcher);
+    const submission = buildImportedSubmission();
+    expect(submission.geometry.required_features).toContain('native-general-horn-attachment-v1');
+    expect(submission.geometry.drive_channels).toEqual(horn.native_source!.channels);
+    expect(useCadReturnStore.getState().selectedBundle?.name).toBe('Native horn');
+  });
+
   it('keeps previous valid geometry and solve state when fetching the new mesh fails', async () => {
     await prepareNativeAssembly(prepare, fetcher);
     const previous = useCadReturnStore.getState(); const scene = importedMeshStore.getSnapshot().cad;
