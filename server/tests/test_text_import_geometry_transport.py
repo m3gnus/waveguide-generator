@@ -12,6 +12,7 @@ from server.design.textcfg import TextConfigError, parse, serialize
 from server.design.text_import import TEXT_IMPORT_VERSION
 from server.preview.translate import design_to_mesher_config
 from hornlab_mesher.config_builder import build_geometry_params
+from hornlab_mesher.config_parser import ConfigError
 from hornlab_mesher.profile_sampling import build_point_grid_arrays
 
 ATH = """OSSE = {
@@ -92,6 +93,11 @@ def test_absent_enclosure_stays_absent_and_explicit_zero_depth_is_retained():
     assert "enclosure" not in design_to_mesher_config(absent)
     explicit = parse(ATH + "Mesh.Enclosure = {\nDepth = 0\n}\n").design
     assert design_to_mesher_config(explicit)["enclosure"]["depth"] == 0
+    with pytest.raises(ConfigError, match="zero-thickness enclosure sheets"):
+        build_geometry_params(design_to_mesher_config(explicit))
+    native = parse("; Parameter config\n" + ATH + "Mesh.Enclosure = {\nDepth = 0\n}\n").design
+    _, _, mode = build_geometry_params(design_to_mesher_config(native))
+    assert mode == "bare"
 
 
 def test_rewrite_does_not_keep_a_stale_geometry_stamp():
