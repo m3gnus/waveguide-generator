@@ -1849,6 +1849,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/source-editor/expand": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Expand Endpoint */
+        post: operations["expand_endpoint_api_source_editor_expand_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-editor/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Export Endpoint */
+        post: operations["export_endpoint_api_source_editor_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-editor/presets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Endpoint */
+        get: operations["list_endpoint_api_source_editor_presets_get"];
+        put?: never;
+        /** Create Endpoint */
+        post: operations["create_endpoint_api_source_editor_presets_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-editor/presets/{preset_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Endpoint */
+        put: operations["update_endpoint_api_source_editor_presets__preset_id__put"];
+        post?: never;
+        /** Delete Endpoint */
+        delete: operations["delete_endpoint_api_source_editor_presets__preset_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-editor/split": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Split Endpoint */
+        post: operations["split_endpoint_api_source_editor_split_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/source-editor/validate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Validate Endpoint */
+        post: operations["validate_endpoint_api_source_editor_validate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/status/{job_id}": {
         parameters: {
             query?: never;
@@ -2150,6 +2254,22 @@ export interface components {
             runStem: string;
             /** Subdirectory */
             subdirectory: string;
+        };
+        /** Attachment */
+        Attachment: {
+            /** Dimensions */
+            dimensions: {
+                [key: string]: number | [
+                    number,
+                    number,
+                    number
+                ];
+            };
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "baffle" | "horn";
         };
         /** Body_choose_update_channel_api_updates_channel_put */
         Body_choose_update_channel_api_updates_channel_put: {
@@ -2674,6 +2794,22 @@ export interface components {
             /** Lines */
             lines?: string[];
         };
+        /** Contour */
+        Contour: {
+            /** Physical Source Id */
+            physical_source_id: string;
+            /** Points */
+            points: components["schemas"]["Point"][];
+            /** Rim Id */
+            rim_id: string;
+            /** Segments */
+            segments: components["schemas"]["Segment"][];
+            /**
+             * Version
+             * @default 1
+             */
+            version?: number;
+        };
         /**
          * CornerGrid
          * @description Optional per-ring corner samples used by advanced FREEFORM payloads.
@@ -2856,6 +2992,21 @@ export interface components {
              */
             reading: "as-shown" | "reduced";
         };
+        /** Drive */
+        Drive: {
+            /** Channel Id */
+            channel_id: string;
+            /**
+             * Motion
+             * @default normal
+             * @enum {string}
+             */
+            motion?: "normal" | "axial";
+            /** Weights */
+            weights: {
+                [key: string]: number;
+            };
+        };
         /** DriveChannel */
         DriveChannel: {
             driver?: components["schemas"]["DriverSpec"] | null;
@@ -2867,6 +3018,12 @@ export interface components {
              * @enum {string}
              */
             motion?: "normal" | "axial";
+            /** Patch Weights */
+            patch_weights?: {
+                [key: string]: number;
+            } | null;
+            /** Physical Source Id */
+            physical_source_id?: string | null;
             /** Source Ids */
             source_ids: string[];
         };
@@ -3182,21 +3339,38 @@ export interface components {
             detail: string;
             error: components["schemas"]["ErrorDetail"];
         };
-        /** ExportRequest */
-        ExportRequest: {
+        /** ExpandRequest */
+        ExpandRequest: {
             /**
-             * Basename
-             * @default waveguide
+             * Channel Id
+             * @default motor
              */
-            baseName?: string;
-            design: components["schemas"]["DesignConfig"];
-            /** Designrevision */
-            designRevision: number;
+            channel_id?: string;
+            /** Dimensions */
+            dimensions: {
+                [key: string]: number;
+            };
             /**
-             * Modelname
-             * @default MWG Horn
+             * Kind
+             * @enum {string}
              */
-            modelName?: string;
+            kind: "flat" | "dome" | "cone";
+            /**
+             * Motion
+             * @default normal
+             * @enum {string}
+             */
+            motion?: "normal" | "axial";
+            /**
+             * Physical Source Id
+             * @default diaphragm
+             */
+            physical_source_id?: string;
+            /**
+             * Rim Id
+             * @default source.rim
+             */
+            rim_id?: string;
         };
         /**
          * Expr
@@ -3596,6 +3770,8 @@ export interface components {
             passive_cardioid_rear_volume_l?: number | null;
             /** Port Area Source */
             port_area_source?: ("user" | "bem_aperture") | null;
+            /** Required Features */
+            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1")[];
             /**
              * Rg Ohm
              * @default 0
@@ -4376,6 +4552,15 @@ export interface components {
              */
             requested: "omitted" | "explicit_zero";
         };
+        /** Point */
+        Point: {
+            /** Id */
+            id: string;
+            /** R Mm */
+            r_mm: number;
+            /** Z Mm */
+            z_mm: number;
+        };
         /**
          * PolarConfig
          * @description Directivity observation contract shared by every solve engine.
@@ -4457,6 +4642,14 @@ export interface components {
              * @default false
              */
             wait?: boolean;
+        };
+        /** PresetWrite */
+        PresetWrite: {
+            document: components["schemas"]["SourceDocument"];
+            /** Expected Revision */
+            expected_revision?: string | null;
+            /** Name */
+            name: string;
         };
         /** ProgressRequest */
         ProgressRequest: {
@@ -4662,6 +4855,38 @@ export interface components {
             designId: string;
             /** Lineageid */
             lineageId: string;
+        };
+        /** Segment */
+        Segment: {
+            /** Center Mm */
+            center_mm?: [
+                number,
+                number
+            ] | null;
+            /**
+             * Direction
+             * @default ccw
+             * @enum {string}
+             */
+            direction?: "cw" | "ccw";
+            /** End */
+            end: string;
+            /** Id */
+            id: string;
+            /**
+             * Kind
+             * @default line
+             * @enum {string}
+             */
+            kind?: "line" | "arc";
+            /**
+             * Role
+             * @default moving
+             * @enum {string}
+             */
+            role?: "moving" | "rigid";
+            /** Start */
+            start: string;
         };
         /** SelectCadWorkspaceRequest */
         SelectCadWorkspaceRequest: {
@@ -4937,6 +5162,11 @@ export interface components {
             /** Velocity Convention */
             velocity_convention?: ("normal" | "axial" | "legacy") | null;
         };
+        /** SourceDocument */
+        SourceDocument: {
+            contour: components["schemas"]["Contour"];
+            drive: components["schemas"]["Drive"];
+        };
         /**
          * SourceInventoryItem
          * @description One source of a return, as its manifest states it.
@@ -4948,6 +5178,12 @@ export interface components {
             required: boolean;
             /** Role */
             role: string;
+        };
+        /** SplitRequest */
+        SplitRequest: {
+            document: components["schemas"]["SourceDocument"];
+            /** Segment Index */
+            segment_index: number;
         };
         /** StopResponse */
         StopResponse: {
@@ -4994,6 +5230,32 @@ export interface components {
              * @default MWG Horn
              */
             modelName?: string;
+        };
+        /** ExportRequest */
+        server__exports__api__ExportRequest: {
+            /**
+             * Basename
+             * @default waveguide
+             */
+            baseName?: string;
+            design: components["schemas"]["DesignConfig"];
+            /** Designrevision */
+            designRevision: number;
+            /**
+             * Modelname
+             * @default MWG Horn
+             */
+            modelName?: string;
+        };
+        /** ExportRequest */
+        server__source_editor__ExportRequest: {
+            attachment: components["schemas"]["Attachment"];
+            document: components["schemas"]["SourceDocument"];
+            /**
+             * Mesh Size Mm
+             * @default 2
+             */
+            mesh_size_mm?: number;
         };
     };
     responses: never;
@@ -7320,7 +7582,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ExportRequest"];
+                "application/json": components["schemas"]["server__exports__api__ExportRequest"];
             };
         };
         responses: {
@@ -7355,7 +7617,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ExportRequest"];
+                "application/json": components["schemas"]["server__exports__api__ExportRequest"];
             };
         };
         responses: {
@@ -7388,7 +7650,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ExportRequest"];
+                "application/json": components["schemas"]["server__exports__api__ExportRequest"];
             };
         };
         responses: {
@@ -8458,6 +8720,273 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SolverMeshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    expand_endpoint_api_source_editor_expand_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpandRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    export_endpoint_api_source_editor_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["server__source_editor__ExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_endpoint_api_source_editor_presets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    }[];
+                };
+            };
+        };
+    };
+    create_endpoint_api_source_editor_presets_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresetWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_endpoint_api_source_editor_presets__preset_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresetWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_endpoint_api_source_editor_presets__preset_id__delete: {
+        parameters: {
+            query: {
+                revision: string;
+            };
+            header?: never;
+            path: {
+                preset_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: boolean;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    split_endpoint_api_source_editor_split_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SplitRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    validate_endpoint_api_source_editor_validate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceDocument"];
             };
         };
         responses: {

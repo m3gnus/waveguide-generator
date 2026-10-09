@@ -39,6 +39,76 @@
         "title": "ArchiveRunDocumentRequest",
         "type": "object"
       },
+      "Attachment": {
+        "additionalProperties": false,
+        "properties": {
+          "dimensions": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                },
+                {
+                  "maxItems": 3,
+                  "minItems": 3,
+                  "prefixItems": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "integer"
+                        }
+                      ]
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "integer"
+                        }
+                      ]
+                    }
+                  ],
+                  "type": "array"
+                }
+              ]
+            },
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "kind": {
+            "enum": [
+              "baffle",
+              "horn"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "dimensions"
+        ],
+        "title": "Attachment",
+        "type": "object"
+      },
       "Body_choose_update_channel_api_updates_channel_put": {
         "properties": {
           "channel": {
@@ -1907,6 +1977,58 @@
         "title": "ConfigBlock",
         "type": "object"
       },
+      "Contour": {
+        "additionalProperties": false,
+        "properties": {
+          "physical_source_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Physical Source Id",
+            "type": "string"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            },
+            "maxItems": 257,
+            "minItems": 2,
+            "title": "Points",
+            "type": "array"
+          },
+          "rim_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Rim Id",
+            "type": "string"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/Segment"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "title": "Segments",
+            "type": "array"
+          },
+          "version": {
+            "default": 1,
+            "maximum": 1.0,
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "physical_source_id",
+          "rim_id",
+          "points",
+          "segments"
+        ],
+        "title": "Contour",
+        "type": "object"
+      },
       "CornerGrid": {
         "additionalProperties": false,
         "description": "Optional per-ring corner samples used by advanced FREEFORM payloads.",
@@ -2384,6 +2506,55 @@
         "title": "DomainReadingRequest",
         "type": "object"
       },
+      "Drive": {
+        "additionalProperties": false,
+        "properties": {
+          "channel_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Channel Id",
+            "type": "string"
+          },
+          "motion": {
+            "default": "normal",
+            "enum": [
+              "normal",
+              "axial"
+            ],
+            "title": "Motion",
+            "type": "string"
+          },
+          "weights": {
+            "maxProperties": 256,
+            "minProperties": 1,
+            "patternProperties": {
+              "^\\S(?:.*\\S)?$": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              }
+            },
+            "propertyNames": {
+              "maxLength": 128,
+              "minLength": 1
+            },
+            "title": "Weights",
+            "type": "object"
+          }
+        },
+        "required": [
+          "channel_id",
+          "weights"
+        ],
+        "title": "Drive",
+        "type": "object"
+      },
       "DriveChannel": {
         "additionalProperties": false,
         "properties": {
@@ -2410,6 +2581,32 @@
             ],
             "title": "Motion",
             "type": "string"
+          },
+          "patch_weights": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Patch Weights"
+          },
+          "physical_source_id": {
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Physical Source Id"
           },
           "source_ids": {
             "items": {
@@ -3375,35 +3572,71 @@
         "title": "ErrorEnvelope",
         "type": "object"
       },
-      "ExportRequest": {
+      "ExpandRequest": {
         "additionalProperties": false,
         "properties": {
-          "baseName": {
-            "default": "waveguide",
-            "maxLength": 240,
-            "title": "Basename",
+          "channel_id": {
+            "default": "motor",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Channel Id",
             "type": "string"
           },
-          "design": {
-            "$ref": "#/components/schemas/DesignConfig"
+          "dimensions": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Dimensions",
+            "type": "object"
           },
-          "designRevision": {
-            "minimum": 0.0,
-            "title": "Designrevision",
-            "type": "integer"
+          "kind": {
+            "enum": [
+              "flat",
+              "dome",
+              "cone"
+            ],
+            "title": "Kind",
+            "type": "string"
           },
-          "modelName": {
-            "default": "MWG Horn",
-            "maxLength": 240,
-            "title": "Modelname",
+          "motion": {
+            "default": "normal",
+            "enum": [
+              "normal",
+              "axial"
+            ],
+            "title": "Motion",
+            "type": "string"
+          },
+          "physical_source_id": {
+            "default": "diaphragm",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Physical Source Id",
+            "type": "string"
+          },
+          "rim_id": {
+            "default": "source.rim",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Rim Id",
             "type": "string"
           }
         },
         "required": [
-          "design",
-          "designRevision"
+          "kind",
+          "dimensions"
         ],
-        "title": "ExportRequest",
+        "title": "ExpandRequest",
         "type": "object"
       },
       "Expr": {
@@ -4733,6 +4966,17 @@
               }
             ],
             "title": "Port Area Source"
+          },
+          "required_features": {
+            "items": {
+              "enum": [
+                "native-source-contour-v1",
+                "native-front-baffle-woofer-v1"
+              ],
+              "type": "string"
+            },
+            "title": "Required Features",
+            "type": "array"
           },
           "rg_ohm": {
             "default": 0.0,
@@ -7503,6 +7747,47 @@
         "title": "PlanAdjustment",
         "type": "object"
       },
+      "Point": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "r_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "R Mm"
+          },
+          "z_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Z Mm"
+          }
+        },
+        "required": [
+          "id",
+          "r_mm",
+          "z_mm"
+        ],
+        "title": "Point",
+        "type": "object"
+      },
       "PolarConfig": {
         "additionalProperties": false,
         "description": "Directivity observation contract shared by every solve engine.",
@@ -7654,6 +7939,37 @@
           }
         },
         "title": "PrepareOperationRequest",
+        "type": "object"
+      },
+      "PresetWrite": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/SourceDocument"
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Revision"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "document"
+        ],
+        "title": "PresetWrite",
         "type": "object"
       },
       "ProgressRequest": {
@@ -8333,6 +8649,101 @@
           "baseEditVersion"
         ],
         "title": "SaveIdentity",
+        "type": "object"
+      },
+      "Segment": {
+        "additionalProperties": false,
+        "properties": {
+          "center_mm": {
+            "anyOf": [
+              {
+                "maxItems": 2,
+                "minItems": 2,
+                "prefixItems": [
+                  {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  },
+                  {
+                    "anyOf": [
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "integer"
+                      }
+                    ]
+                  }
+                ],
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center Mm"
+          },
+          "direction": {
+            "default": "ccw",
+            "enum": [
+              "cw",
+              "ccw"
+            ],
+            "title": "Direction",
+            "type": "string"
+          },
+          "end": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "End",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "default": "line",
+            "enum": [
+              "line",
+              "arc"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "role": {
+            "default": "moving",
+            "enum": [
+              "moving",
+              "rigid"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "start": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "start",
+          "end"
+        ],
+        "title": "Segment",
         "type": "object"
       },
       "SelectCadWorkspaceRequest": {
@@ -9114,6 +9525,23 @@
         "title": "SourceConfig",
         "type": "object"
       },
+      "SourceDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "contour": {
+            "$ref": "#/components/schemas/Contour"
+          },
+          "drive": {
+            "$ref": "#/components/schemas/Drive"
+          }
+        },
+        "required": [
+          "contour",
+          "drive"
+        ],
+        "title": "SourceDocument",
+        "type": "object"
+      },
       "SourceInventoryItem": {
         "additionalProperties": false,
         "description": "One source of a return, as its manifest states it.",
@@ -9138,6 +9566,26 @@
           "required"
         ],
         "title": "SourceInventoryItem",
+        "type": "object"
+      },
+      "SplitRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "$ref": "#/components/schemas/SourceDocument"
+          },
+          "segment_index": {
+            "maximum": 255.0,
+            "minimum": 0.0,
+            "title": "Segment Index",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "document",
+          "segment_index"
+        ],
+        "title": "SplitRequest",
         "type": "object"
       },
       "StopResponse": {
@@ -9276,6 +9724,67 @@
           "designRevision"
         ],
         "title": "WgLinkExportRequest",
+        "type": "object"
+      },
+      "server__exports__api__ExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "baseName": {
+            "default": "waveguide",
+            "maxLength": 240,
+            "title": "Basename",
+            "type": "string"
+          },
+          "design": {
+            "$ref": "#/components/schemas/DesignConfig"
+          },
+          "designRevision": {
+            "minimum": 0.0,
+            "title": "Designrevision",
+            "type": "integer"
+          },
+          "modelName": {
+            "default": "MWG Horn",
+            "maxLength": 240,
+            "title": "Modelname",
+            "type": "string"
+          }
+        },
+        "required": [
+          "design",
+          "designRevision"
+        ],
+        "title": "ExportRequest",
+        "type": "object"
+      },
+      "server__source_editor__ExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "attachment": {
+            "$ref": "#/components/schemas/Attachment"
+          },
+          "document": {
+            "$ref": "#/components/schemas/SourceDocument"
+          },
+          "mesh_size_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "default": 2,
+            "gt": 0,
+            "title": "Mesh Size Mm"
+          }
+        },
+        "required": [
+          "document",
+          "attachment"
+        ],
+        "title": "ExportRequest",
         "type": "object"
       }
     }
@@ -12346,7 +12855,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ExportRequest"
+                "$ref": "#/components/schemas/server__exports__api__ExportRequest"
               }
             }
           },
@@ -12402,7 +12911,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ExportRequest"
+                "$ref": "#/components/schemas/server__exports__api__ExportRequest"
               }
             }
           },
@@ -12441,7 +12950,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ExportRequest"
+                "$ref": "#/components/schemas/server__exports__api__ExportRequest"
               }
             }
           },
@@ -13922,6 +14431,351 @@
           }
         },
         "summary": "Solver Mesh"
+      }
+    },
+    "/api/source-editor/expand": {
+      "post": {
+        "operationId": "expand_endpoint_api_source_editor_expand_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Expand Endpoint Api Source Editor Expand Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Expand Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/export": {
+      "post": {
+        "operationId": "export_endpoint_api_source_editor_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/server__source_editor__ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/presets": {
+      "get": {
+        "operationId": "list_endpoint_api_source_editor_presets_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Endpoint Api Source Editor Presets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      },
+      "post": {
+        "operationId": "create_endpoint_api_source_editor_presets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Endpoint Api Source Editor Presets Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/presets/{preset_id}": {
+      "delete": {
+        "operationId": "delete_endpoint_api_source_editor_presets__preset_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "revision",
+            "required": true,
+            "schema": {
+              "title": "Revision",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "title": "Response Delete Endpoint Api Source Editor Presets  Preset Id  Delete",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      },
+      "put": {
+        "operationId": "update_endpoint_api_source_editor_presets__preset_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preset_id",
+            "required": true,
+            "schema": {
+              "title": "Preset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PresetWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Endpoint Api Source Editor Presets  Preset Id  Put",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/split": {
+      "post": {
+        "operationId": "split_endpoint_api_source_editor_split_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SplitRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Split Endpoint Api Source Editor Split Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Split Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/validate": {
+      "post": {
+        "operationId": "validate_endpoint_api_source_editor_validate_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceDocument"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Validate Endpoint Api Source Editor Validate Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Validate Endpoint",
+        "tags": [
+          "source-editor"
+        ]
       }
     },
     "/api/status/{job_id}": {

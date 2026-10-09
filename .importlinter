@@ -15,7 +15,7 @@ layers =
     app : cli
     updates
     diagnostics
-    exports | design_io
+    exports | design_io | source_editor
     jobs : cadlink
     engines
     solver
