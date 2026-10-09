@@ -144,6 +144,7 @@ class RSSSampler:
     def __init__(self, root_pid: int, directories: tuple[Path, ...], *,
                  reader: Callable | None = None, interval: float = .1) -> None:
         self.root_pid, self.directories, self.interval = root_pid, directories, interval
+        self.known: dict[int, Any] = {}
         self.method = "fake" if reader else "ps"
         if reader is None:
             try:
@@ -154,16 +155,27 @@ class RSSSampler:
                 def reader():
                     return psutil_processes(psutil)
                 self.method = "psutil"
+        if self.method != "fake" and sys.platform == "darwin":
+            from .mac_processes import DarwinProcesses
+            try:
+                native = DarwinProcesses()
+            except (NotImplementedError, OSError, ValueError):
+                pass  # Unsupported ABI/unavailable API: retain portable reader.
+            else:
+                def select_native(rows):
+                    self._native_selected = self._select(rows)
+                    return self._native_selected
+
+                reader = lambda: native.read_owned(select_native, self.known.setdefault)
+                self.method = "darwin-sysctl-libproc"
         self.reader = reader
-        self.known: dict[int, Any] = {}
         self.peak_bytes = 0
         self.samples: list[dict] = []
         self.errors: list[str] = []
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def sample(self) -> None:
-        rows = self.reader()
+    def _select(self, rows: dict) -> set[int]:
         if self.root_pid not in rows:
             raise ValueError("RSS sampler cannot observe harness parent")
         roots = {self.root_pid} | registry_pids(self.directories)
@@ -183,6 +195,16 @@ class RSSSampler:
             if children <= selected:
                 break
             selected |= children
+        return selected
+
+    def sample(self) -> None:
+        rows = self.reader()
+        if self.method == "darwin-sysctl-libproc":
+            if self.root_pid not in rows:
+                raise ValueError("RSS sampler cannot observe harness parent")
+            selected = self._native_selected & rows.keys()
+        else:
+            selected = self._select(rows)
         for pid in selected:
             if rows[pid]["start"] is None or not isinstance(rows[pid]["rss"], int):
                 raise ValueError(f"RSS sampler cannot observe owned PID {pid}")
