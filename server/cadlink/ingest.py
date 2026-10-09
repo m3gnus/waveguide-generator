@@ -187,6 +187,8 @@ def solve_model_sha256(record: Mapping[str, Any]) -> str:
         "tag_map": record["tag_map"],
         "identity": record["identity"],
     }
+    if record.get("native_source") is not None:
+        solve_model["native_source"] = record["native_source"]
     return "sha256:" + hashlib.sha256(_canonical(solve_model)).hexdigest()
 
 

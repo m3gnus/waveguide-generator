@@ -1019,6 +1019,8 @@ def resolve_user_source(
         )
     area = sum(float(face_areas_mm2[face]) for face in faces)
     expected_area = float(observed["total_area_mm2"])
+    if not math.isfinite(expected_area) or expected_area <= 0:
+        raise RoleResolutionError(f"role resolution: source {source_id!r} expected area must be finite and positive")
     drift = abs(area - expected_area) / expected_area
     if drift > AREA_REL_TOLERANCE and not allow_area_drift:
         raise RoleResolutionError(

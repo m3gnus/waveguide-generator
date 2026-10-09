@@ -237,6 +237,13 @@ def test_advanced_face_selectors_are_identifiers_not_positions() -> None:
         _advanced_face_identifier_surfaces([1], [12, 38], [101, 205])
 
 
+@pytest.mark.parametrize("area", [-1, 0, float("nan"), float("inf")])
+def test_declared_source_area_must_be_positive_even_when_drift_is_allowed(area) -> None:
+    source = {"id": "lf", "patch_policy": "single-connected", "expected_connected_components": 1, "observed": {"face_count": 1, "total_area_mm2": area}}
+    with pytest.raises(RoleResolutionError, match="finite and positive"):
+        resolve_user_source(source, {"appearance_labels": [4]}, face_areas_mm2={4: 50}, connected_components=1, allow_area_drift=True)
+
+
 def test_source_claims_must_be_disjoint() -> None:
     with pytest.raises(RoleResolutionError, match="'a'.*'b'.*face 9"):
         _assert_disjoint_source_claims(
