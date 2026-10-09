@@ -70,6 +70,8 @@ def imported_anchor_frame(record: Mapping[str, Any]) -> dict[str, np.ndarray]:
                 "native-front-baffle-woofer-v1",
             ],
             ["native-source-contour-v1", "native-shared-horn-woofer-v1"],
+            ["native-source-contour-v1", "native-shared-horn-woofer-v1", "native-general-horn-attachment-v1"],
+            ["native-source-contour-v1", "native-shared-horn-woofer-v1", "native-phase-plug-passages-v1", "native-general-horn-attachment-v1"],
             [
                 "native-source-contour-v1",
                 "native-shared-horn-woofer-v1",

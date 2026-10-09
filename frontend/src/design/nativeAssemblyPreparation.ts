@@ -16,7 +16,9 @@ export async function prepareNativeAssembly(
   const viewportGeneration = importedMeshStore.beginIntent();
   const { ingestion: record } = await prepare();
   const channels = record.native_source?.channels;
-  if (!channels || channels.length !== 2) throw new Error('The prepared assembly has no verified two-channel contract.');
+  if (!channels || ![1, 2].includes(channels.length)
+      || (channels.length === 1 && !record.native_source?.required_features.includes('native-general-horn-attachment-v1')))
+    throw new Error('The prepared assembly has no verified physical source contract.');
   const response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(record.ingest_id)}/mesh`);
   if (!response.ok) throw new Error('The prepared mesh could not be verified. Previous geometry retained.');
   const mesh = parseMSH(await response.text());
@@ -26,8 +28,8 @@ export async function prepareNativeAssembly(
     throw new Error('A later geometry selection superseded this preparation.');
   }
   const bundle: CadReturnBundle = {
-    name: 'Native horn and woofer', bundlePath: record.ingest_id, bundleOrigin: 'native',
-    modifiedAt: record.created_at, readable: true, documentName: 'Native horn and woofer',
+    name: channels.length === 1 ? 'Native horn' : 'Native horn and woofer', bundlePath: record.ingest_id, bundleOrigin: 'native',
+    modifiedAt: record.created_at, readable: true, documentName: channels.length === 1 ? 'Native horn' : 'Native horn and woofer',
     requestId: null, sourceCount: record.sources.length, instanceCount: 0, declaredCutPlanes: [],
     sources: record.sources.map((source) => ({ id: source.id, role: source.role, required: true,
       suggestedResolutionMm: record.mesh_sizes.source_size_mm[source.id],

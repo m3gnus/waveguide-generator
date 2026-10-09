@@ -13,6 +13,7 @@ from uuid import uuid4
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
+from server.design.schema import DesignConfig
 from pydantic import BaseModel, ConfigDict, Field, StrictFloat, StrictInt, field_validator
 
 Number = Annotated[StrictFloat | StrictInt, Field(allow_inf_nan=False)]
@@ -64,10 +65,10 @@ class AssemblyDimensions(WireModel):
     depth_mm: Number
     front_z_mm: Number
     horn_xy_mm: tuple[Number, Number]
-    horn_length_mm: Number
-    mouth_radius_mm: Number
-    woofer_xy_mm: tuple[Number, Number]
-    aperture_radius_mm: Number
+    horn_length_mm: Number | None = None
+    mouth_radius_mm: Number | None = None
+    woofer_xy_mm: tuple[Number, Number] = (0, 0)
+    aperture_radius_mm: Number = 0
 
 
 class PhasePlug(WireModel):
@@ -82,7 +83,8 @@ class PhasePlug(WireModel):
 
 class AssemblyRequest(WireModel):
     horn: SourceDocument
-    woofer: SourceDocument
+    woofer: SourceDocument | None = None
+    horn_config: dict[str, Any] | None = None
     dimensions: AssemblyDimensions
     mesh_size_mm: Annotated[Number, Field(gt=0)] = 2
     phase_plugs: Annotated[list[PhasePlug], Field(max_length=8)] = Field(default_factory=list)
@@ -105,9 +107,17 @@ def native_assembly(body: AssemblyRequest):
             503, "This mesher does not support the assembly editor's passage contract. Update the mesher."
         ) from exc
     horn, hf = native(body.horn)
-    woofer, lf = native(body.woofer)
+    woofer, lf = native(body.woofer) if body.woofer is not None else (None, None)
+    drives = [hf] + ([lf] if lf is not None else [])
     try:
-        if body.phase_plugs:
+        if body.horn_config is not None:
+            from hornlab_mesher.general_horn import GeneralHornWall
+            dimensions = body.dimensions.model_dump()
+            if dimensions.pop("horn_length_mm") is not None or dimensions.pop("mouth_radius_mm") is not None:
+                raise ValueError("general horn length and mouth radius derive from the resolved profile; omit both dimensions")
+            model = SourceAssembly.attach(horn, body.horn_config, woofer=woofer,
+                **dimensions, phase_plugs=tuple(NativePlug(**p.model_dump()) for p in body.phase_plugs))
+        elif body.phase_plugs:
             model = SourceAssembly(
                 horn,
                 woofer,
@@ -116,7 +126,9 @@ def native_assembly(body: AssemblyRequest):
             )
         else:
             model = SourceAssembly(horn, woofer, **body.dimensions.model_dump())
-        return model, [hf, lf], assembly_channels(model, [hf, lf])
+        return model, drives, assembly_channels(model, drives)
+    except ImportError as exc:
+        raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
     except (TypeError, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -370,6 +382,31 @@ def create_router(data_dir: Path) -> APIRouter:
     store = PresetStore(data_dir / "source_presets.json")
     export_lock = threading.Lock()
 
+    @router.post("/assembly/horn-profile")
+    def assembly_horn_profile_endpoint(design: DesignConfig) -> dict[str, Any]:
+        """Copy the current horn profile onto the assembly's new enclosure.
+
+        The action deliberately selects the full horn wall and the assembly
+        enclosure, independently of the old design's source, shell and mesh
+        symmetry. Profile/morph/guide/scale/axis changes remain authoritative.
+        """
+        try:
+            from server.preview.translate import design_to_mesher_config
+            from hornlab_mesher.general_horn import GeneralHornWall
+            config = design_to_mesher_config(design)
+            config["mode"] = "bare"
+            config.pop("enclosure", None)
+            config["mesh"]["wallThickness"] = 0
+            config["mesh"]["quadrants"] = 1234
+            config["mesh"]["verticalOffset"] = 0
+            wall = GeneralHornWall.from_config(config)
+            return {"horn_config": config, "throat_radius_mm": wall.throat_radius_mm,
+                    "horn_length_mm": wall.length_mm, "mouth_radius_mm": wall.mouth_radius_mm}
+        except ImportError as exc:
+            raise HTTPException(503, "This mesher does not support general horn attachment. Update the mesher.") from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     @router.post("/assembly/validate")
     def assembly_validate_endpoint(body: AssemblyRequest) -> dict[str, Any]:
         model, _, channels = native_assembly(body)
@@ -390,6 +427,8 @@ def create_router(data_dir: Path) -> APIRouter:
                     for i, s in enumerate(model.horn.segments)
                 },
                 **{role: [list(a), list(b)] for role, (a, b) in rigid_edges(model).items()},
+                **({"horn-wall": model.horn_wall.evaluate([j / 256 for j in range(257)]).tolist()}
+                   if model.horn_wall is not None else {}),
             },
         }
 
