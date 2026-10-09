@@ -63,7 +63,14 @@ def imported_anchor_frame(record: Mapping[str, Any]) -> dict[str, np.ndarray]:
     if not isinstance(frame, Mapping):
         normalisation = record.get("normalisation")
         normalisation = normalisation if isinstance(normalisation, Mapping) else {}
-        frame = normalisation.get("anchor_throat_frame")
+        native = record.get("native_source")
+        if isinstance(native, Mapping) and native.get("required_features") == [
+            "native-source-contour-v1",
+            "native-front-baffle-woofer-v1",
+        ]:
+            frame = normalisation.get("source_frame")
+        else:
+            frame = normalisation.get("anchor_throat_frame")
     if not isinstance(frame, Mapping):
         normalisation = record.get("normalisation")
         normalisation = normalisation if isinstance(normalisation, Mapping) else {}

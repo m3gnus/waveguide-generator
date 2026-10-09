@@ -14,6 +14,7 @@ import sys
 import tempfile
 
 FEATURE = "native-source-contour-v1"
+BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 
 
 def _canonical(value):
@@ -41,7 +42,7 @@ def read_native_source(directory):
     manifest = json.loads(raw, object_pairs_hook=unique_pairs)
     if (
         manifest.get("version") != 1
-        or manifest.get("required_features") != [FEATURE]
+        or manifest.get("required_features") not in ([FEATURE], [FEATURE, BAFFLE_FEATURE])
         or manifest.get("producer") != "native"
         or manifest.get("units") != "mm"
     ):
@@ -55,8 +56,37 @@ def read_native_source(directory):
     contour = SourceContour.from_dict(recipe["contour"])
     drive = ContourDrive(**manifest["drive"])
     drive.validate(contour)
-    if (
-        recipe["frame"] != "aligned-z-mm-v1"
+    woofer = BAFFLE_FEATURE in manifest["required_features"]
+    if recipe["frame"] != "aligned-z-mm-v1":
+        raise ValueError("native source attachment/frame mismatch")
+    if woofer:
+        from hornlab_mesher.front_baffle import FrontBaffle
+
+        if set(recipe) != {"contour", "baffle", "frame"}:
+            raise ValueError("native woofer recipe must declare only contour, baffle and frame")
+        baffle = FrontBaffle.from_dict(recipe["baffle"])
+        baffle.validate(contour)
+        specs = baffle.surfaces(contour)
+        declared = manifest["baffle_faces"]
+        if len(declared) != len(specs) or {f["role"] for f in declared} != set(specs):
+            raise ValueError("native baffle rigid roles must exactly cover the enclosure")
+        extra_faces = [
+            f["advanced_face_indices"][0] for f in declared if len(f["advanced_face_indices"]) == 1
+        ]
+        if len(extra_faces) != len(specs) or len(set(extra_faces)) != len(extra_faces):
+            raise ValueError("native baffle selectors must be unique single faces")
+        for f in declared:
+            area = f["area_mm2"]
+            expected = specs[f["role"]][-1]
+            if (
+                type(area) not in (int, float)
+                or not math.isfinite(area)
+                or abs(area - expected) > 1e-7 * max(1, expected)
+            ):
+                raise ValueError("native baffle area contradicts canonical geometry")
+    elif (
+        "horn" not in recipe
+        or "baffle" in recipe
         or recipe["horn"]["rim_id"] != contour.rim_id
         or recipe["horn"]["radius_mm"] != contour.points[-1].r_mm
     ):
@@ -88,13 +118,19 @@ def read_native_source(directory):
         or len(set(rigid)) != len(rigid)
         or set(moving) & set(rigid)
         or set(moving) | set(rigid) != set(all_faces)
-        or len(all_faces) != len(patches) + 4
+        or len(all_faces) != len(patches) + (len(specs) if woofer else 4)
     ):
         raise ValueError("ambiguous, overlapping or incomplete native face mapping")
     if not set(owned) <= set(all_faces) or any(
         p["role"] == "rigid" and not set(p["advanced_face_indices"]) <= set(rigid) for p in patches
     ):
         raise ValueError("native patch role coverage mismatch")
+    if woofer and (
+        set(extra_faces) & set(owned)
+        or set(extra_faces) | set(owned) != set(all_faces)
+        or not set(extra_faces) <= set(rigid)
+    ):
+        raise ValueError("native baffle selectors overlap source patches or leave gaps")
     return manifest, contour, drive, _digest(raw)
 
 
@@ -112,7 +148,15 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
     requested_sizes = {**sizes, "source_size_mm": dict(sizes["source_size_mm"])}
     sizes["rigid_size_mm"] = min(
         sizes["rigid_size_mm"],
-        math.sqrt(8 * 0.03 * manifest["recipe"]["horn"]["housing_radius_mm"]),
+        math.sqrt(
+            8
+            * 0.03
+            * (
+                manifest["recipe"]["baffle"]["aperture_radius_mm"]
+                if "baffle" in manifest["recipe"]
+                else manifest["recipe"]["horn"]["housing_radius_mm"]
+            )
+        ),
     )
     for i, segment in enumerate(contour.segments):
         if segment.role == "moving" and segment.kind == "arc":
@@ -129,7 +173,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
     sources = [
         {
             "id": p["id"],
-            "role": "HF",
+            "role": "LF" if "baffle" in manifest["recipe"] else "HF",
             "instance_id": None,
             "label": p["id"],
             "required": True,
@@ -180,8 +224,22 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 "v": [0, 1, 0],
                 "origin_m": [0, 0, 0],
                 "source_center_m": [0, 0, 0],
-                "mouth_center_m": [0, 0, manifest["recipe"]["horn"]["length_mm"] * 0.001],
+                "mouth_center_m": [
+                    0,
+                    0,
+                    manifest["recipe"].get("horn", {}).get("length_mm", 0) * 0.001,
+                ],
             }
+            woofer = "baffle" in manifest["recipe"]
+            if woofer:
+                origin = [float(x) * 0.001 for x in manifest["recipe"]["baffle"]["center_mm"]]
+                frame = {
+                    "axis": [0, 0, 1],
+                    "u": [1, 0, 0],
+                    "v": [0, 1, 0],
+                    "origin_m": origin,
+                    "source_center_m": origin,
+                }
             record = {
                 "ingest_id": ingest_id,
                 "created_at": created_at,
@@ -206,7 +264,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 "findings": [],
                 "finding_ids": [],
                 "normalisation": {
-                    "anchor_throat_frame": frame,
+                    "source_frame" if woofer else "anchor_throat_frame": frame,
                     "matrix": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
                 },
                 "identity": {
@@ -215,7 +273,11 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                     "selected_instance_id": None,
                     "solver_anchor_instance_id": None,
                 },
-                "domain_interpretation": {"type": "native-full-circle-closed-housing"},
+                "domain_interpretation": {
+                    "type": "native-front-baffle-woofer-closed-enclosure"
+                    if woofer
+                    else "native-full-circle-closed-housing"
+                },
                 "mesh": {
                     "stats": built["stats"],
                     "metadata": built["metadata"],
@@ -228,7 +290,7 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                     "geometry_sha256": manifest["geometry_sha256"],
                     "excitation_sha256": manifest["excitation_sha256"],
                     "patches": manifest["patches"],
-                    "required_features": [FEATURE],
+                    "required_features": manifest["required_features"],
                     "mesh_density_sha256": _digest(
                         _canonical({"sizes": sizes, "surface_deviation_mm": 0.1})
                     ),
@@ -296,12 +358,13 @@ def _worker(stage):
         tags,
         built["tag_allocation"]["source_tags"],
         contour,
-        manifest["recipe"]["horn"],
+        manifest["recipe"].get("horn"),
+        baffle=manifest["recipe"].get("baffle"),
     )
     (stage / "built.json").write_bytes(_canonical(built))
 
 
-def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn):
+def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn=None, *, baffle=None):
     """Certify every facet against finite surfaces, or refuse publication.
 
     A barycentric lattice covers a triangle within diameter/n. Distance to a
@@ -321,6 +384,20 @@ def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn):
         np.linalg.norm(np.cross(xyz[:, 1] - xyz[:, 0], xyz[:, 2] - xyz[:, 0]), axis=1) <= 1e-12
     ):
         raise ValueError("native imported mesh has degenerate facets")
+
+    if baffle is not None:
+        from hornlab_mesher.front_baffle import FrontBaffle
+
+        baffle = FrontBaffle.from_dict(baffle)
+        baffle.validate(contour)
+    origin = np.asarray(baffle.center_mm if baffle else (0, 0, 0))
+
+    def radial(distance):
+        def wrapped(samples):
+            local = samples - origin
+            return distance(np.linalg.norm(local[..., :2], axis=-1), local[..., 2])
+
+        return wrapped
 
     def line(a, b):
         ar, az = a
@@ -364,9 +441,7 @@ def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn):
                     + uv[None, :, 0, None] * (batch[:, 1, None, :] - batch[:, 0, None, :])
                     + uv[None, :, 1, None] * (batch[:, 2, None, :] - batch[:, 0, None, :])
                 )
-                sampled = distance(np.linalg.norm(samples[:, :, :2], axis=2), samples[:, :, 2]).max(
-                    axis=1
-                )
+                sampled = distance(samples).max(axis=1)
                 if np.any(sampled > 0.15):
                     raise ValueError("native mesh facet exceeds 0.15 mm geometric tolerance")
                 diameter = np.linalg.norm(batch - np.roll(batch, 1, axis=1), axis=2).max(axis=1)
@@ -381,26 +456,35 @@ def _certify_mesh(xyz, triangles, tags, source_tags, contour, horn):
         raise ValueError("native mesh whole-facet tolerance could not be certified")
 
     bounds = {
-        s.id: certify(xyz[tags == source_tags[s.id]], meridian(i))
+        s.id: certify(xyz[tags == source_tags[s.id]], radial(meridian(i)))
         for i, s in enumerate(contour.segments)
         if s.role == "moving"
     }
-    points = [
-        (horn["radius_mm"], 0),
-        (horn["mouth_radius_mm"], horn["length_mm"]),
-        (horn["housing_radius_mm"], horn["length_mm"]),
-        (horn["housing_radius_mm"], -horn["backing_depth_mm"]),
-        (0, -horn["backing_depth_mm"]),
+    rigid_meridians = [
+        radial(meridian(i)) for i, s in enumerate(contour.segments) if s.role == "rigid"
     ]
-    rigid = [line(a, b) for a, b in zip(points, points[1:])] + [
-        meridian(i) for i, s in enumerate(contour.segments) if s.role == "rigid"
-    ]
-    rigid_bound = certify(xyz[tags == 1], lambda r, z: np.minimum.reduce([f(r, z) for f in rigid]))
+    if baffle:
+        rigid = rigid_meridians + [
+            lambda xyz, role=role: baffle.distance(contour, role, xyz)
+            for role in baffle.surfaces(contour)
+        ]
+    else:
+        points = [
+            (horn["radius_mm"], 0),
+            (horn["mouth_radius_mm"], horn["length_mm"]),
+            (horn["housing_radius_mm"], horn["length_mm"]),
+            (horn["housing_radius_mm"], -horn["backing_depth_mm"]),
+            (0, -horn["backing_depth_mm"]),
+        ]
+        rigid = [radial(line(a, b)) for a, b in zip(points, points[1:])] + rigid_meridians
+    rigid_bound = certify(xyz[tags == 1], lambda xyz: np.minimum.reduce([f(xyz) for f in rigid]))
     return {
         "tolerance_mm": 0.15,
         "moving_patch_bounds_mm": bounds,
         "rigid_bound_mm": rigid_bound,
-        "method": "finite-meridian-lipschitz-v1",
+        "method": "finite-baffle-meridian-lipschitz-v1"
+        if baffle
+        else "finite-meridian-lipschitz-v1",
     }
 
 
@@ -421,6 +505,7 @@ def _verify_recipe_faces(stage, gmsh):
     if sorted(ids) != sorted(manifest["all_face_indices"]):
         raise ValueError("native STEP face coverage is stale")
     mapped = dict(zip(ids, faces))
+    origin = np.asarray(manifest["recipe"].get("baffle", {}).get("center_mm", (0, 0, 0)))
     for i, patch in enumerate(manifest["patches"]):
         face = mapped[patch["advanced_face_indices"][0]]
         a, b = contour.points[i : i + 2]
@@ -457,6 +542,7 @@ def _verify_recipe_faces(stage, gmsh):
         if not len(uv):
             raise ValueError("native STEP patch has no valid trimmed samples")
         xyz = np.asarray(gmsh.model.getValue(2, face, uv.reshape(-1))).reshape(-1, 3)
+        xyz = xyz - origin
         r = np.linalg.norm(xyz[:, :2], axis=1)
         z = xyz[:, 2]
         if segment.kind == "line":
@@ -472,6 +558,26 @@ def _verify_recipe_faces(stage, gmsh):
                 raise ValueError("native STEP selector uses the wrong circular arc branch")
         if np.max(residual) > 1e-6 or np.min(r) < a.r_mm - 1e-6 or np.max(r) > b.r_mm + 1e-6:
             raise ValueError("native STEP selector contradicts the canonical meridian")
+    if "baffle" in manifest["recipe"]:
+        from hornlab_mesher.front_baffle import FrontBaffle
+
+        baffle = FrontBaffle.from_dict(manifest["recipe"]["baffle"])
+        for patch in manifest["baffle_faces"]:
+            face = mapped[patch["advanced_face_indices"][0]]
+            expected_area = baffle.surfaces(contour)[patch["role"]][-1]
+            if abs(gmsh.model.occ.getMass(2, face) - expected_area) > 1e-7 * max(1, expected_area):
+                raise ValueError("native rigid STEP selector contradicts baffle area")
+            lo, hi = gmsh.model.getParametrizationBounds(2, face)
+            uv = np.asarray(
+                [(u, v) for u in np.linspace(lo[0], hi[0], 7) for v in np.linspace(lo[1], hi[1], 7)]
+            )
+            uv = uv[_parametric_trim_mask(gmsh, face, uv.reshape(-1))]
+            if not len(uv):
+                raise ValueError("native rigid STEP face has no valid trimmed samples")
+            xyz = np.asarray(gmsh.model.getValue(2, face, uv.reshape(-1))).reshape(-1, 3)
+            if np.max(baffle.distance(contour, patch["role"], xyz)) > 1e-6:
+                raise ValueError("native rigid STEP selector contradicts finite baffle geometry")
+        return
     horn = manifest["recipe"]["horn"]
     paths = [
         ((horn["radius_mm"], 0), (horn["mouth_radius_mm"], horn["length_mm"])),

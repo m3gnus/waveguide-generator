@@ -4,6 +4,7 @@ import hashlib
 import json
 
 FEATURE = "native-source-contour-v1"
+BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 
 
 def validate_contour_request(geometry, record):
@@ -16,7 +17,10 @@ def validate_contour_request(geometry, record):
         ):
             raise ValueError("native source features require a native ingestion record")
         return
-    if required != [FEATURE]:
+    if (
+        required not in ([FEATURE], [FEATURE, BAFFLE_FEATURE])
+        or required != native["required_features"]
+    ):
         raise ValueError("native source requires explicit supported feature negotiation")
     expected = native["channel"]
     excitation = {
