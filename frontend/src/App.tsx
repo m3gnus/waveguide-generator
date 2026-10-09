@@ -3,6 +3,7 @@ import { bundleUrl, reportClientError } from './api/diagnostics';
 import { AppQueryProvider } from './queryClient';
 import { Shell } from './shell/Shell';
 import { SourceContourDialog } from './design/SourceContourEditor';
+import { SourceAssemblyDialog } from './design/SourceAssemblyEditor';
 
 /**
  * Last-resort boundary above the whole shell.
@@ -92,5 +93,5 @@ export class AppErrorBoundary extends Component<{ children: ReactNode }, { messa
 }
 
 export default function App() {
-  return <AppErrorBoundary><AppQueryProvider><Shell /><SourceContourDialog /></AppQueryProvider></AppErrorBoundary>;
+  return <AppErrorBoundary><AppQueryProvider><Shell /><SourceContourDialog /><SourceAssemblyDialog /></AppQueryProvider></AppErrorBoundary>;
 }

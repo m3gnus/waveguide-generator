@@ -23,12 +23,18 @@ def patch_area(contour, index):
 
 
 def read_assembly(manifest):
+    from hornlab_mesher.phase_plug import FEATURE as PLUG_FEATURE
+    from hornlab_mesher.phase_plug import passage_contract, surface_targets
     from hornlab_mesher.source_assembly import SourceAssembly, assembly_channels
     from hornlab_mesher.source_contour import ContourDrive, digest
 
     if type(manifest["version"]) is not int or manifest["version"] != 1:
         raise ValueError("unsupported native assembly version")
     assembly = SourceAssembly.from_dict(manifest["recipe"])
+    if bool(assembly.phase_plugs) != (PLUG_FEATURE in manifest["required_features"]):
+        raise ValueError("passive topology requires explicit phase-plug feature negotiation")
+    if manifest.get("passage_contract") != passage_contract(assembly):
+        raise ValueError("native passage contract contradicts canonical geometry")
     patches = manifest["patches"]
     expected = [
         (key, c.physical_source_id, c.segments[i].id, c.segments[i].role, band)
@@ -88,6 +94,10 @@ def read_assembly(manifest):
     ):
         raise ValueError("native assembly selectors overlap or leave gaps")
     density = manifest["density"]
+    if assembly.phase_plugs and density.get("rigid_role_sizes_mm") != surface_targets(
+        assembly, density["mesh_size_mm"], density.get("passage_refinement")
+    ):
+        raise ValueError("native passage density targets contradict its refinement recipe")
     if (
         type(density["triangle_limit"]) is not int
         or not 1 <= density["triangle_limit"] <= 250000
@@ -137,13 +147,14 @@ def verify_faces(gmsh, manifest, assembly, mapped):
             raise ValueError("native assembly STEP selector contradicts finite canonical surface")
     # Reopened STEP must retain actual shared edges, not coincident duplicates.
     from hornlab_mesher.source_assembly import patch_id
+    from hornlab_mesher.phase_plug import wall_edges
 
     by_id = {p["id"]: mapped[p["advanced_face_indices"][0]] for p in manifest["patches"]}
     by_role = {p["role"]: mapped[p["advanced_face_indices"][0]] for p in manifest["rigid_faces"]}
     for c, _, band in assembly.parts:
         chain = [by_id[patch_id(c, s)] for s in c.segments]
         if band == "HF":
-            chain.append(by_role["horn-wall"])
+            chain.extend(by_role[key] for key in wall_edges(assembly))
         elif "collar" in by_role:
             chain.append(by_role["collar"])
         chain.append(by_role["front"])
@@ -153,3 +164,20 @@ def verify_faces(gmsh, manifest, assembly, mapped):
         ]
         if any(not a & b for a, b in zip(edges, edges[1:])):
             raise ValueError("native assembly STEP source joins are disconnected")
+    if assembly.phase_plugs:
+        from server.mesh.imported import occ_body_groups
+
+        groups = occ_body_groups(gmsh, gmsh.model.getEntities(2))
+        if len(groups) != 1 + len(assembly.phase_plugs):
+            raise ValueError("native passage STEP component inventory contradicts recipe")
+        owned = []
+        for plug in assembly.phase_plugs:
+            faces = {by_role[key] for key in plug.edges}
+            matches = [g for g in groups if {t for dim, t in g if dim == 2} == faces]
+            if len(matches) != 1:
+                raise ValueError(
+                    "native passage STEP body is disconnected or joined to another shell"
+                )
+            owned.extend(faces)
+        if len(set(owned)) != len(owned):
+            raise ValueError("native passive STEP faces overlap")

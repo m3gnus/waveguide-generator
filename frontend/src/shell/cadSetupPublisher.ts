@@ -66,6 +66,7 @@ export function buildCadProjectSetup(
   lineageId: string | null = projectLineage(state),
 ): CadProjectSetup | null {
   const bundle = state.selectedBundle;
+  if (bundle?.bundleOrigin === 'native') return null;
   if (!bundle || !bundle.sources.length || !lineageId) return null;
   if (incompleteDriverChannels(state).length) return null;
   const cardioidPresent = hasPassiveCardioidSurface(bundle.sources);

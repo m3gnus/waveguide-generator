@@ -104,6 +104,21 @@ export function importedSubmissionBlocker(
   }
   if (rangeInvalid || listInvalid) return 'Enter a valid explicit frequency sweep.';
   if (!state.driveChannels.length) return 'At least one drive channel is required.';
+  const nativeChannels = state.ingestRecord.native_source?.channels;
+  if (nativeChannels && (state.driveChannels.length !== nativeChannels.length
+      || state.driveChannels.some((channel, i) => {
+        const expected = nativeChannels[i];
+        const weights = channel.patch_weights ?? {};
+        const expectedWeights = expected.patch_weights ?? {};
+        return channel.id !== expected.id || channel.motion !== expected.motion
+          || channel.physical_source_id !== expected.physical_source_id
+          || channel.source_ids.length !== expected.source_ids.length
+          || channel.source_ids.some((id, j) => id !== expected.source_ids[j])
+          || Object.keys(weights).length !== Object.keys(expectedWeights).length
+          || Object.entries(expectedWeights).some(([id, weight]) => weights[id] !== weight);
+      }))) {
+    return 'Source assignment or motion changed. Edit the source assembly and prepare it again.';
+  }
   // Match SolveRequest.validate_combine_band for the exact spec sent on the
   // wire, including independently edited HP and LP corners.
   const combine = combineWire(state);
@@ -280,6 +295,7 @@ export function buildImportedSubmission(
       ingest_id: record.ingest_id,
       manifest_sha256: record.manifest_sha256,
       artifact_sha256: record.artifact_sha256,
+      ...(record.native_source ? { required_features: [...record.native_source.required_features] } : {}),
       drive_channels: state.driveChannels.map((channel) => {
         const driver = submittedDriver(state, channel);
         return { ...channel, source_ids: [...channel.source_ids], ...(driver ? { driver } : {}) };

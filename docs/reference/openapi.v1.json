@@ -212,6 +212,24 @@
             "gt": 0,
             "title": "Mesh Size Mm"
           },
+          "passage_refinement": {
+            "default": 1,
+            "enum": [
+              1,
+              2,
+              4
+            ],
+            "title": "Passage Refinement",
+            "type": "integer"
+          },
+          "phase_plugs": {
+            "items": {
+              "$ref": "#/components/schemas/PhasePlug"
+            },
+            "maxItems": 8,
+            "title": "Phase Plugs",
+            "type": "array"
+          },
           "woofer": {
             "$ref": "#/components/schemas/SourceDocument"
           }
@@ -5157,7 +5175,8 @@
               "enum": [
                 "native-source-contour-v1",
                 "native-front-baffle-woofer-v1",
-                "native-shared-horn-woofer-v1"
+                "native-shared-horn-woofer-v1",
+                "native-phase-plug-passages-v1"
               ],
               "type": "string"
             },
@@ -7892,6 +7911,95 @@
           "metadata"
         ],
         "title": "ParametricResultEnvelope",
+        "type": "object"
+      },
+      "PhasePlug": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^\\S(?:.*\\S)?$",
+            "title": "Id",
+            "type": "string"
+          },
+          "inner0_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Inner0 Mm"
+          },
+          "inner1_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Inner1 Mm"
+          },
+          "outer0_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Outer0 Mm"
+          },
+          "outer1_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Outer1 Mm"
+          },
+          "z0_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Z0 Mm"
+          },
+          "z1_mm": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "integer"
+              }
+            ],
+            "title": "Z1 Mm"
+          }
+        },
+        "required": [
+          "id",
+          "z0_mm",
+          "z1_mm",
+          "inner0_mm",
+          "outer0_mm",
+          "inner1_mm",
+          "outer1_mm"
+        ],
+        "title": "PhasePlug",
         "type": "object"
       },
       "PlanAdjustment": {
@@ -14617,6 +14725,48 @@
           }
         },
         "summary": "Solver Mesh"
+      }
+    },
+    "/api/source-editor/assembly/export": {
+      "post": {
+        "operationId": "assembly_export_endpoint_api_source_editor_assembly_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssemblyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assembly Export Endpoint",
+        "tags": [
+          "source-editor"
+        ]
       }
     },
     "/api/source-editor/assembly/ingest": {

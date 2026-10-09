@@ -293,6 +293,7 @@ export function useCadReturnArrivals({
       } else if (!initial) {
         const currentSelected = useCadReturnStore.getState().selectedBundle;
         if (!currentSelected) return;
+        if (currentSelected.bundleOrigin === 'native') return;
         if (!response.cadFolderConfigured) return;
         const current = response.items.find((bundle) => bundle.bundlePath === currentSelected.bundlePath);
         useCadReturnStore.getState().refreshSelectedBundle(current ?? null);

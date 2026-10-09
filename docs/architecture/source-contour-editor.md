@@ -46,3 +46,42 @@ native geometry builders. The installed mesher must provide native source
 contour and front-baffle APIs; older dependencies return a visible unsupported
 message without preventing application startup. Dependency pins remain a
 separate integration step.
+
+## Shared horn, woofer and passive passages
+
+**Geometry → Edit horn + woofer assembly** opens the WG-owned assembly editor.
+It reuses the canonical contour editor and source-preset library independently
+for each diaphragm. Applying a contour retains its identity, roles, signed/zero
+weights and normal/axial motion. The assembly draft has a separate durable
+settings namespace and JSON save/load, containing both source documents,
+enclosure/XY placement, horn dimensions, passive bodies and mesh density.
+
+The front layout and canonical horn section preview show the two apertures,
+wall and passive-body meridians. Add a central plug or annular vanes, edit their
+IDs and inlet/outlet radii, and set common axial planes. The mesher owns the
+canonical passive geometry, topology, clearances and local refinement. WG owns
+authoring, validation/ingestion routes and publishing prepared geometry into
+the existing imported workspace. Supported scope is the mesher's
+`docs/phase-plug-passages.md`; no automatic channel-design algorithm is implied.
+
+`POST /api/source-editor/assembly/validate` returns canonical preview geometry,
+channels and passage contract. `assembly/export` returns the three-member ZIP;
+`assembly/ingest` rebuilds through the general STEP importer and returns the
+immutable ingestion envelope plus the imported request contract. These export
+and ingestion operations share the existing one-export lock and update restart
+gate. Invalid/stale previews disable preparation and export.
+
+**Prepare assembly in WG** fetches and parses the verified persisted mesh before
+selecting the new geometry and both authoritative drive channels. Failure or
+later geometry intent retains the previous valid selection. The imported
+submission repeats required features, physical-source IDs and literal patch
+weights; changed assignment/motion requires editing and preparing again.
+Prescribed contour channels cannot receive a lumped driver model.
+Preparation selects Metal, the supported native contour consumer; the readiness
+plan reports runtime availability without allocating a solve job. CAD-folder
+refreshes retain native geometry, and native preparations write no unrelated CAD
+project setup. Preparation performs no acoustic solve.
+
+An older mesher that lacks the assembly passage APIs returns an actionable
+unsupported response without preventing application startup. Paired development
+checks do not qualify the installed dependency pin.

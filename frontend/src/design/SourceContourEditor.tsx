@@ -60,8 +60,8 @@ export function SourceContourDialog() {
   return open ? createPortal(<Editor onClose={close}/>, document.body) : null;
 }
 
-export function Editor({ onClose }: { onClose: () => void }) {
-  const [draft, setDraft] = useState(readSourceDraft);
+export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange }: { onClose: () => void; initialDocument?: SourceDocument; onUseDocument?: (document: SourceDocument) => void; onDraftChange?: (document: SourceDocument) => void }) {
+  const [draft, setDraft] = useState(() => initialDocument ? structuredClone(initialDocument) : readSourceDraft());
   const [undo, setUndo] = useState<SourceDocument[]>([]);
   const [view, setView] = useState(() => fit(draft.contour.points));
   const [accepted, setAccepted] = useState<{ key: string; value: SourceValidation }>();
@@ -85,13 +85,13 @@ export function Editor({ onClose }: { onClose: () => void }) {
   const key = JSON.stringify(draft);
   const valid = accepted?.key === key && drawPoints === null;
 
-  useEffect(() => durableSettings.subscribe('sourceContourDraft', () => {
+  useEffect(() => initialDocument ? undefined : durableSettings.subscribe('sourceContourDraft', () => {
     // The settings owner only notifies adopted server state: it already protects
     // edits made while hydration was in flight. Follow that same authority here.
     setDraft(readSourceDraft()); setUndo([]); setSelected(undefined); setSelectedPatch(0);
     fitted.current = false; drag.current = null;
     setNotice('Restored source draft from saved settings.');
-  }), []);
+  }), [initialDocument]);
 
   useEffect(() => {
     let current = true;
@@ -105,7 +105,7 @@ export function Editor({ onClose }: { onClose: () => void }) {
 
   function change(next: SourceDocument, recordUndo = true) {
     if (recordUndo) setUndo((history) => [...history.slice(-19), structuredClone(draft)]);
-    setDraft(next); storage.setItem('', JSON.stringify(next)); setNotice(''); setError('');
+    setDraft(next); if (!initialDocument) storage.setItem('', JSON.stringify(next)); onDraftChange?.(next); setNotice(''); setError('');
   }
   async function run(action: () => Promise<void>) {
     setBusy(true); setError(''); setNotice('');
@@ -178,6 +178,6 @@ export function Editor({ onClose }: { onClose: () => void }) {
         <p>Source presets store the contour and drive. Attachment and mesh size apply to this export.</p>
       </aside></div>
     </fieldset>
-    <footer>{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>Draft changes are remembered. Use Undo to recover replaced contours.</small></footer>
+    <footer>{onUseDocument && <button type="button" disabled={!valid || busy} onClick={() => onUseDocument(accepted!.value.document)}>Use contour in assembly</button>}{busy && <p role="status">Working…</p>}{error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}<small>{onDraftChange ? 'Contour edits are remembered in the assembly draft.' : initialDocument ? 'Use contour to apply these edits to the assembly.' : 'Draft changes are remembered.'} Use Undo to recover replaced contours.</small></footer>
   </div></div>;
 }

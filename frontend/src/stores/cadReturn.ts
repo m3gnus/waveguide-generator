@@ -28,6 +28,8 @@ export interface CadDriveChannel {
   id: string;
   source_ids: string[];
   motion: 'normal' | 'axial';
+  physical_source_id?: string;
+  patch_weights?: Record<string, number>;
 }
 
 /**
@@ -886,7 +888,8 @@ function reconcileListing(state: CadReturnState, selectedBundle: CadReturnBundle
  * hides the driver controls by the same rule.
  */
 export function channelAcceptsDriver(channel: CadDriveChannel): boolean {
-  return channel.source_ids.length === 1 && channel.motion === 'normal';
+  return channel.source_ids.length === 1 && channel.motion === 'normal'
+    && channel.physical_source_id === undefined && channel.patch_weights === undefined;
 }
 
 /**

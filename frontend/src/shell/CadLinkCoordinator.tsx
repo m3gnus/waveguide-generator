@@ -995,6 +995,7 @@ export function CadLinkCoordinator() {
   const ingestSelected = useCallback(async (): Promise<CadReturnIngestRecord> => {
     const current = useCadReturnStore.getState();
     if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
+    if (current.selectedBundle.bundleOrigin === 'native') throw new Error('Edit the native source assembly and prepare it again.');
     // This intent covers the ingest record itself. The viewport has a separate
     // token because its follow-up artifact fetch can be superseded independently.
     const ingestGeneration = current.beginIngestIntent();

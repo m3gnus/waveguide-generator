@@ -31,6 +31,7 @@ import { workspaceModeStore } from '../stores/workspaceMode';
 import { DirectivityMapControls, SolveOptionsControls, ToggleRow } from './SolveOptionsSections';
 import { EditablePointTable, EditableStationTable } from './FreeformEditors';
 import { SourceContourEditor } from './SourceContourEditor';
+import { SourceAssemblyLauncher } from './SourceAssemblyEditor';
 import { lambdaSixthHint } from './lambdaLimit';
 import { NumberField } from './NumberField';
 import { LiveDimensions } from './LiveDimensions';
@@ -1255,6 +1256,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
       {workspaceMode === 'parametric' && !searching && tab === 'geometry' && modelTypeSection}
       {workspaceMode === 'parametric' && tab === 'geometry' && <LiveDimensions />}
       {!searching && tab === 'geometry' && <SourceContourEditor />}
+      {!searching && tab === 'geometry' && <SourceAssemblyLauncher />}
       {workspaceMode === 'parametric' ? definitions.map((definition) => <div key={definition.title}>
           {renderRegistrySection(definition)}
           {!searching && definition.title === 'Frequency Sweep' && <Section title="Directivity Map" description="Polar planes and angular sampling used for directivity exports and plots." forceOpen={false}><DirectivityMapControls /></Section>}

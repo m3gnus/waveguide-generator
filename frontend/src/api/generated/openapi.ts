@@ -1849,6 +1849,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/source-editor/assembly/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Assembly Export Endpoint */
+        post: operations["assembly_export_endpoint_api_source_editor_assembly_export_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/source-editor/assembly/ingest": {
         parameters: {
             query?: never;
@@ -2325,6 +2342,14 @@ export interface components {
              * @default 2
              */
             mesh_size_mm?: number;
+            /**
+             * Passage Refinement
+             * @default 1
+             * @enum {integer}
+             */
+            passage_refinement?: 1 | 2 | 4;
+            /** Phase Plugs */
+            phase_plugs?: components["schemas"]["PhasePlug"][];
             woofer: components["schemas"]["SourceDocument"];
         };
         /** Attachment */
@@ -3843,7 +3868,7 @@ export interface components {
             /** Port Area Source */
             port_area_source?: ("user" | "bem_aperture") | null;
             /** Required Features */
-            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1")[];
+            required_features?: ("native-source-contour-v1" | "native-front-baffle-woofer-v1" | "native-shared-horn-woofer-v1" | "native-phase-plug-passages-v1")[];
             /**
              * Rg Ohm
              * @default 0
@@ -4594,6 +4619,23 @@ export interface components {
             result_kind: "parametric";
         } & {
             [key: string]: unknown;
+        };
+        /** PhasePlug */
+        PhasePlug: {
+            /** Id */
+            id: string;
+            /** Inner0 Mm */
+            inner0_mm: number;
+            /** Inner1 Mm */
+            inner1_mm: number;
+            /** Outer0 Mm */
+            outer0_mm: number;
+            /** Outer1 Mm */
+            outer1_mm: number;
+            /** Z0 Mm */
+            z0_mm: number;
+            /** Z1 Mm */
+            z1_mm: number;
         };
         /**
          * PlanAdjustment
@@ -8804,6 +8846,39 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    assembly_export_endpoint_api_source_editor_assembly_export_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AssemblyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
                 };
             };
             /** @description Validation Error */
