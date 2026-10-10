@@ -2,7 +2,7 @@
   "modules": {
     "beat-engine": {
       "repo": "https://github.com/m3gnus/BEAT_Engine.git",
-      "sha": "d7ed50d3da87277bef44419ec9e7401e7d6b1288"
+      "sha": "5f4a3b498780770ddfd8746b62e581896f53e6ea"
     },
     "hornlab-beat-bem": {
       "repo": "https://github.com/m3gnus/hornlab-beat-bem.git",
