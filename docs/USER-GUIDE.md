@@ -157,9 +157,14 @@ if an HBB runtime was already prepared. WG downloads a private Julia runtime
 and its packages, then compiles and verifies the engine in the background.
 This requires an internet connection and can take several minutes. Offline
 users need connectivity once to complete preparation; later launches reuse the
-prepared runtime without downloading it again.
+prepared runtime without downloading it again. If preparation fails (for
+example because you were offline), WG does not retry it automatically on later
+launches: run the preparation command shown on the BEAT row's reason, with
+`--force`, once you are online. CUDA and ROCm are enabled but not
+hardware-qualified, and they download their own GPU stack into the official
+runtime.
 
-For one release, set `WG2_BEAT_PROVIDER=hbb` (or `legacy`) before starting WG
+As a rollback (hornlab-beat-bem, "HBB"), set `WG2_BEAT_PROVIDER=hbb` (or `legacy`) before starting WG
 to roll back BEAT solves, runtime preparation, readiness, warm-up and Quit to
 hornlab-beat-bem. Values are case-insensitive and surrounding spaces are ignored.
 WG has no provider setting in its GUI. Fully quit and restart WG after changing
@@ -182,7 +187,7 @@ this environment variable:
 
 Unset or empty selects official; `WG2_BEAT_PROVIDER=official` also works.
 The rollback switch remains available until CPU and Metal performance is
-proven as fast as HBB or faster. Official and HBB runtime caches and worker registries are
+proven as fast as HBB or faster; it is not removed in this release. Official and HBB runtime caches and worker registries are
 separate. The upgrade leaves your existing HBB runtime on disk for rollback:
 
 | OS | HBB runtime directory |

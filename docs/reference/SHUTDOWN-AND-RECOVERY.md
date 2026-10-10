@@ -99,7 +99,7 @@ skips is crash-safe by construction:
 ## BEAT's persistent host on Windows
 
 BEAT keeps its Julia worker in a *persistent host* process. Slice 10 removes
-the HBB rollback switch and route after this release's qualification.
+the HBB rollback switch and route only after CPU and Metal performance is proven as fast as HBB or faster.
 
 With the one-release HBB rollback
 (`WG2_BEAT_PROVIDER=hbb` or `legacy`, set before launch), WG's clean server

@@ -1923,7 +1923,7 @@ Failure listeners run after the lease lock is released.
 
 - Unset/empty `WG2_BEAT_PROVIDER` now selects official BEAT; explicit `official`
   remains accepted. Unknown values warn once and follow the official default.
-- `WG2_BEAT_PROVIDER=hbb` (alias `legacy`) is the explicit one-release rollback.
+- `WG2_BEAT_PROVIDER=hbb` (alias `legacy`) is the explicit rollback.
   Set it before launch and restart when switching: solves, imported solves,
   warm-up, Quit, registry/readiness and CPU/Metal/CUDA/ROCm preparation share this selector.
   Official runtime/host directories remain separate from HBB's. There is no
@@ -1941,6 +1941,6 @@ Failure listeners run after the lease lock is released.
   CPU and nine Quit invocations across the three OS jobs: BEMPP, official BEAT,
   and HBB rollback BEAT Quit per OS, each with its own work/evidence directory.
 - Slice 10 removes the HBB provider route, rollback selector and installed HBB
-  gates after this release's qualification. Frozen HBB golden tests now select
+  gates only after CPU and Metal performance is proven as fast as HBB or faster. Frozen HBB golden tests now select
   the rollback explicitly; archived power provenance retains its HBB fallback
   while new official results identify `beat-engine` in their own metadata.

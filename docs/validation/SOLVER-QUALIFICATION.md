@@ -6,7 +6,7 @@ does not own real GPU/OpenCL devices, so passing unit tests is necessary but not
 sufficient. Archive the report under `docs/validation/YYYY-MM/` with the exact
 WG, mesher, Metal-BEM, and BEMPP-BEM SHAs plus hardware/OS details.
 
-CUDA/ROCm on the fork route (`WG2_BEAT_PROVIDER=official`, `beat-engine`) are
+CUDA/ROCm on the official default route (`beat-engine`) are
 **not hardware-qualified**. Mocked detection, provisioning and routing tests,
 plus existing CI, qualify their enablement; real-GPU tests are not a rollout
 gate for this change. This does not claim installed-app or numerical hardware
