@@ -73,7 +73,12 @@ function workspace(jobId: string) {
     const members = await Promise.all(names.map(async (name, index) => ({
       path: `${subdirectory}/${name}`, text: await blobs[index].text(),
     })));
-    const differing = members.filter(({ path: member, text }) => files.has(member) && files.get(member) !== text);
+    // Case-insensitive, as on Windows: a name that differs only in case is
+    // the same file, and the server reports it with its on-disk casing.
+    const onDisk = (member: string) => [...files.keys()].find((key) => key.toLowerCase() === member.toLowerCase());
+    const differing = members
+      .filter(({ path: member, text }) => onDisk(member) !== undefined && files.get(onDisk(member)!) !== text)
+      .map(({ path: member, text }) => ({ path: onDisk(member)!, text }));
     const record = (status: number) => writes.push({ subdirectory, existing, names, status });
     if (differing.length && existing === 'merge_identical') {
       record(409);
@@ -87,7 +92,7 @@ function workspace(jobId: string) {
       }, 409);
     }
     record(200);
-    members.forEach(({ path: member, text }) => files.set(member, text));
+    members.forEach(({ path: member, text }) => files.set(onDisk(member) ?? member, text));
     return json({ directory: absolute(subdirectory), files: members.map(({ path: member }) => absolute(member)), replaced: [] });
   });
   return { files, writes, fetcher };
@@ -169,13 +174,14 @@ describe('run archive and automatic export in one Workspace', () => {
     // What an earlier version left when automatic export won the race: its
     // own JSON and report, and a mesh, under the archive's names.
     files.set('OSSE/9_OSSE/9_OSSE.json', 'legacy export json');
-    files.set('OSSE/9_OSSE/9_OSSE_report.html', 'legacy export report');
+    // Exported under a label later relabelled in case only.
+    files.set('OSSE/9_OSSE/9_osse_report.html', 'legacy export report');
     files.set('OSSE/9_OSSE/9_OSSE.msh', 'a different mesh');
 
     await archiveRunToWorkspace(job, preferences, fetcher);
 
     expect(files.get('OSSE/9_OSSE/9_OSSE.json')).toBe('legacy export json');
-    expect(files.get('OSSE/9_OSSE/9_OSSE_report.html')).toBe('legacy export report');
+    expect(files.get('OSSE/9_OSSE/9_osse_report.html')).toBe('legacy export report');
     expect(files.get('OSSE/9_OSSE/9_OSSE.msh')).toBe('a different mesh');
     // The archive's copy, stamped with the run's completion time.
     expect(JSON.parse(files.get('OSSE/9_OSSE/archive/9_OSSE.json')!)).toMatchObject({

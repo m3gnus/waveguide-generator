@@ -1061,8 +1061,10 @@ interface ArchiveWrite {
 }
 
 function collidingMember(paths: readonly string[], filename: string): boolean {
-  const tail = `/${filename}`;
-  return paths.some((path) => path.replaceAll('\\', '/').endsWith(tail));
+  // The server reports on-disk paths, and on Windows and macOS a file whose
+  // name differs from the member's only in case is the same file.
+  const tail = `/${filename}`.toLowerCase();
+  return paths.some((path) => path.replaceAll('\\', '/').toLowerCase().endsWith(tail));
 }
 
 /**
