@@ -235,6 +235,60 @@ def test_kind_classification_lf_cd_and_unknown(tmp_path: Path) -> None:
     assert kind_of("Mystery") == "unknown"
 
 
+def test_driver_type_cell_overrides_the_kind_heuristic(tmp_path: Path) -> None:
+    _write_csv(
+        tmp_path,
+        "declared.csv",
+        ["Brand", "Model", "Size_in", "Diameter_mm", "XO_min_Hz", "Driver_type"],
+        [
+            # Diameter and a crossover would read as cd; the row says lf.
+            ["Acme", "DomeTweeter", "", "100", "2400", "lf"],
+            ["Acme", "UpperCase", "", "100", "2400", " LF "],
+            # A declared cd on a row the heuristic would call lf.
+            ["Acme", "DeclaredCD", "4", "", "", "cd"],
+            # Blank or unrecognised cells fall back to the heuristic.
+            ["Acme", "BlankType", "", "100", "2400", ""],
+            ["Acme", "TypoType", "", "100", "2400", "tweeter"],
+        ],
+    )
+    library = DriverLibrary(tmp_path, bundled=None)
+    library.rescan()
+
+    def kind_of(model: str) -> str:
+        hits = library.search(q=f"Acme {model}", kind="all", z=None, limit=5)
+        matching = [h for h in hits if h["model"] == model]
+        assert len(matching) == 1
+        return matching[0]["kind"]
+
+    assert kind_of("DomeTweeter") == "lf"
+    assert kind_of("UpperCase") == "lf"
+    assert kind_of("DeclaredCD") == "cd"
+    assert kind_of("BlankType") == "cd"
+    assert kind_of("TypoType") == "cd"
+
+
+def test_bundled_stx_tweeters_are_not_compression_drivers() -> None:
+    library = DriverLibrary(Path("/nonexistent-user-dir"), bundled=bundled_library_dir())
+    library.rescan()
+
+    def kind_of(model: str) -> str:
+        hits = library.search(q=f"STX {model}", kind="all", z=None, limit=50)
+        matching = [h for h in hits if h["model"] == model]
+        assert matching, model
+        return matching[0]["kind"]
+
+    for model in (
+        "T.9.100.4.MS",
+        "T.10.250.8.PC",
+        "T.10.800.8.AL",
+        "T.9.250.8.PH",
+        "T.18.250.8.PH",
+    ):
+        assert kind_of(model) == "lf", model
+    for model in ("D.9.500.8.TI", "D.12.800.8.TI", "D.14.1000.8.TI"):
+        assert kind_of(model) == "cd", model
+
+
 # --- completeness ------------------------------------------------------------
 
 

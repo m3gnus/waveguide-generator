@@ -43,10 +43,14 @@ ALIASES: dict[str, tuple[str, ...]] = {
     "freq_low_hz": ("Freq_low_Hz",),
     "price_avg_eur": ("Price_avg_EUR", "Price_EUR"),
     "source_url": ("Source_URL", "URL"),
+    "driver_type": ("Driver_type",),
 }
 
 #: Fields kept as (stripped) text rather than parsed as numbers.
-TEXT_FIELDS = frozenset({"brand", "model", "source_url"})
+TEXT_FIELDS = frozenset({"brand", "model", "source_url", "driver_type"})
+
+#: The values a ``Driver_type`` cell may carry; they are the picker's kinds.
+DRIVER_TYPES = frozenset({"cd", "lf", "unknown"})
 
 #: Thiele/Small fields that make a driver record "partial" rather than
 #: "catalogue" when at least one of them is present.
@@ -154,8 +158,18 @@ def parse_row(row: dict[str | None, str | None]) -> tuple[dict[str, float | str 
 
 
 def classify_kind(fields: dict[str, float | str | None]) -> str:
-    """CADLINK-CROSSOVER-DRIVERS.md §4's row-level compression/LF classifier."""
+    """CADLINK-CROSSOVER-DRIVERS.md §4's row-level compression/LF classifier.
 
+    A row's own ``Driver_type`` cell (``cd``, ``lf`` or ``unknown``) wins over
+    the field heuristic below. It exists for products the heuristic cannot tell
+    apart from a compression driver, such as a dome tweeter that publishes a
+    diameter and a recommended crossover. A blank or unrecognised cell falls
+    back to the heuristic, so a typo can never hide a driver.
+    """
+
+    declared = fields.get("driver_type")
+    if isinstance(declared, str) and declared.strip().lower() in DRIVER_TYPES:
+        return declared.strip().lower()
     has_throat = fields.get("throat_in") is not None
     has_bare_diameter = fields.get("diameter_mm") is not None and fields.get("sd_cm2") is None
     has_xo = fields.get("xo_min_hz") is not None
@@ -250,6 +264,7 @@ def classify_size(fields: dict[str, float | str | None], kind: str) -> str | Non
 
 __all__ = [
     "ALIASES",
+    "DRIVER_TYPES",
     "SPEC_FIELD_MAP",
     "TEXT_FIELDS",
     "TS_FIELDS",

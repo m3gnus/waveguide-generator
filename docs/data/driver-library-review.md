@@ -35,13 +35,19 @@ unreliable windings with their stated and recomputed values. Its `corrected_*`,
 `correction_source`, `notes` and `hold_resolution` columns are blank and kept
 for any later manual review.
 
-## Known misclassified rows
+## STX tweeters and the `Driver_type` column
 
 The app decides a row's picker group from its fields. A throat size, a diameter
-without Sd, or a recommended crossover makes a row a compression driver. These
-16 STX products publish a panel or horn diameter and a recommended crossover,
-so they appear as compression drivers. They are not bare compression drivers.
-Their published values are kept unchanged.
+without Sd, or a recommended crossover makes a row a compression driver. The 16
+STX tweeters below publish a panel or horn diameter and a recommended crossover,
+so those fields alone would list them as compression drivers. They are not bare
+compression drivers.
+
+The library therefore carries an optional `Driver_type` column (`cd`, `lf` or
+`unknown`). When a row has a value the loader uses it instead of the field rule;
+a blank or unrecognised cell falls back to the field rule. The 16 rows below
+carry `lf`, which is the picker's non-compression ("Cone") group. Their published
+values are unchanged. The column is data only: it never blocks a driver.
 
 | Model | Product type |
 |---|---|
@@ -50,7 +56,7 @@ Their published values are kept unchanged.
 | T.10.800.8.AL, T.9.250.8.PH, T.18.250.8.PH | tweeter with an integral horn |
 
 The bare STX compression drivers D.9.500.8.TI, D.12.800.8.TI and D.14.1000.8.TI
-are correctly classified.
+carry no `Driver_type` and are correctly classified as compression drivers.
 
 ## Provenance and research
 
