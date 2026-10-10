@@ -211,3 +211,78 @@ def test_a_stamped_wg_file_keeps_flat_enclosure_keys_as_passthrough() -> None:
     parsed = parse(text)
     assert parsed.design.root.enclosure is None
     assert parsed.extra_keys["Mesh.Enclosure.Depth"] == "300"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        "Scale.Z = 1\n",
+        "Scale.Z = 0.5+0.5\n",
+        "Mesh.Roundover = 0\n",
+        "Rollback = 0\n",
+        "Mesh.RearShape = 1\n",
+        "Mesh.RearShape = 3-2\n",
+        "Throat.Profile = 1\n",
+        "BEE = {\n}\n",
+        "BEE = {\n _x = 1\n}\n",
+        "LFSource.Below = {\n}\n",
+    ],
+)
+def test_no_op_values_of_unsupported_items_still_import(extra: str) -> None:
+    assert parse(BASE + extra).dialect == "ath"
+
+
+@pytest.mark.parametrize(
+    "extra, key",
+    [
+        ("Mesh.RearShape = 1+1\n", "Mesh.RearShape"),
+        ("Scale.Z = 0.5+0.5+1\n", "Scale.Z"),
+        ("Scale.Z = foo\n", "Scale.Z"),
+        ("Mesh.Roundover = 2*5\n", "Mesh.Roundover"),
+    ],
+)
+def test_expression_values_are_evaluated_before_the_check(extra: str, key: str) -> None:
+    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+        parse(BASE + extra)
+    assert key in str(caught.value)
+
+
+def test_throat_profile_expression_is_evaluated() -> None:
+    with pytest.raises(TextConfigError, match="Throat.Profile"):
+        parse(BASE.replace(" q = 0.995\n", " q = 0.995\n Throat.Profile = 1+2\n"))
+    assert parse(BASE.replace(" q = 0.995\n", " q = 0.995\n Throat.Profile = 0+1\n")).dialect == "ath"
+
+
+def test_a_stamped_file_is_not_refused_for_a_repeated_block() -> None:
+    stamp = "; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\n"
+    text = stamp + BASE + "Report = {\n Title = a\n}\nReport = {\n Title = b\n}\n"
+    assert parse(text) is not None
+    with pytest.raises(TextConfigError, match="more than once"):
+        parse(BASE + "Report = {\n Title = a\n}\nReport = {\n Title = b\n}\n")
+
+
+def _corpus_files() -> list[Path]:
+    import os
+
+    root = Path(__file__).resolve().parents[2]
+    files = [root / "docs/validation/abec-g8-circsym-ib/g8_osse_circsym_ib.cfg",
+             root / "docs/validation/abec-g8-circsym-ib/ath-config-as-run.txt",
+             root / "server/tests/data/260308tritonia-q.txt"]
+    # Optional corpora, skipped when absent: the mesher's ATH import fixtures
+    # (sibling checkout), the v1 ATH fixtures and any extra directory, named in
+    # HORNLAB_ATH_CORPUS (os.pathsep-separated), scanned recursively for *.cfg.
+    files += sorted((root.parent / "hornlab-waveguide-mesher/tests/fixtures/ath_import").rglob("*.cfg"))
+    for entry in filter(None, os.environ.get("HORNLAB_ATH_CORPUS", "").split(os.pathsep)):
+        files += sorted(Path(entry).rglob("*.cfg"))
+    return [path for path in files if path.is_file()]
+
+
+@pytest.mark.parametrize("path", _corpus_files(), ids=lambda p: p.name)
+def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> None:
+    try:
+        parse(path.read_text(errors="replace"))
+    except TextConfigError as exc:
+        # Files that are not designs, or that fail for older reasons, are not
+        # this module's concern; only its own refusals count.
+        assert "unsupported item" not in str(exc), f"{path.name}: {exc}"
+        assert "appears more than once" not in str(exc), f"{path.name}: {exc}"

@@ -741,6 +741,11 @@ _ATH_ROSSE_MEMBERS = frozenset(
 )
 
 
+# Values at which an otherwise unsupported item changes nothing in ATH: no
+# separate axial scale (1), no mouth roundover (0), rollback switched off (0).
+_ATH_NOOP_VALUES = {"Scale.Z": 1.0, "Mesh.Roundover": 0.0, "Rollback": 0.0}
+
+
 def _ath_name(name: str) -> str:
     return name.split(":", 1)[0].strip()
 
@@ -779,10 +784,27 @@ def _refuse_unsupported_ath_items(
     from .throat_stretch import text_number
 
     def number(raw: str) -> float | None:
+        # The importer's own evaluator, so `1+1` is read as 2 rather than
+        # slipping past a numeric check. Unevaluable text is None.
+        from hornlab_mesher.profile_common import eval_param
+
         try:
-            return float(text_number(raw))
-        except (TypeError, ValueError):
+            value = float(eval_param(text_number(raw)))
+        except (TypeError, ValueError, ArithmeticError, SyntaxError):
             return None
+        return value if math.isfinite(value) else None
+
+    def noop(base: str, value: str) -> bool:
+        # Defaults ATH treats as "off": the item is present and changes nothing.
+        expected = _ATH_NOOP_VALUES.get(base)
+        return expected is not None and number(value) == expected
+
+    def live(block: _RawBlock) -> bool:
+        # An empty block, or one whose members are all parked, applies nothing.
+        return any(not key.startswith("_") for key in block.items) or any(
+            entry.strip() and not entry.strip().startswith(("_", ";", "#"))
+            for entry in (*block.entries, *block.lines)
+        )
 
     found: list[tuple[str, str]] = []
     seen: set[str] = set()
@@ -802,19 +824,21 @@ def _refuse_unsupported_ath_items(
     for key, value in dotted.items():
         reason = _ath_unsupported_reason(key)
         if reason is not None:
-            add(key, reason)
+            if not noop(_ath_name(key), value):
+                add(key, reason)
         elif key.startswith(_ENCLOSURE_FLAT_PREFIX):
             member = key[len(_ENCLOSURE_FLAT_PREFIX):]
             if member not in _ATH_ENCLOSURE_MEMBERS and not member.startswith("_"):
                 add(key, _UNSUPPORTED_ATH_REASONS.get(
                     member, "this enclosure member is not implemented; WG reads Depth, "
                     "EdgeRadius, EdgeType, FrontResolution, BackResolution and Spacing"))
-        elif key == "Mesh.RearShape" and number(value) not in (None, 1.0):
+        elif key == "Mesh.RearShape" and number(value) != 1.0:
             add(key, f"Mesh.RearShape = {value} is not implemented; only the full rear (1) is")
     for name, block in blocks.items():
         reason = _ath_unsupported_reason(name)
         if reason is not None:
-            add(f"{_ath_name(name)} = {{...}}", reason)
+            if live(block):
+                add(f"{_ath_name(name)} = {{...}}", reason)
             continue
         base = _ath_name(name)
         if base == "Mesh.Enclosure":
@@ -829,14 +853,14 @@ def _refuse_unsupported_ath_items(
                 inner = _ath_unsupported_reason(key)
                 if inner is None and base != "OSSE":
                     inner = _ATH_ROSSE_BLOCK_ONLY.get(key)
-                if inner is not None:
+                if inner is not None and not noop(_ath_name(key), value):
                     add(f"{base}.{key}", inner)
         # A named in-block child (a block opened inside this one) never reaches
         # `items`; the lexer already refuses nesting.
     # The selected profile block's Throat.Profile wins over the top-level one.
     selected_items = blocks[block_name].items if block_name is not None else {}
     profile = selected_items.get("Throat.Profile", flat.get("Throat.Profile"))
-    if profile is not None and number(profile) not in (None, 1.0):
+    if profile is not None and number(profile) != 1.0:
         add("Throat.Profile", f"Throat.Profile = {profile} is not measured against ATH; only the "
             "OS-SE profile (1) is")
     if formula == "R-OSSE" and block_name is not None:
@@ -1166,7 +1190,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (TypeError, ValueError, ValidationError) as exc:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
-    if dialect == "ath" and repeated:
+    if dialect == "ath" and repeated and not any(_GEOMETRY_STAMP.match(c) for c in comments):
         # ATH merges a repeated block member by member; this parser never did,
         # so the second copy silently replaced the first. WG's own files keep
         # passthrough blocks verbatim, repeats included.
