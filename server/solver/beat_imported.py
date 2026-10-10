@@ -619,7 +619,7 @@ def _combined_channel_response(
         "combine": combine_payload,
         "mesh_validation": {
             "mode": request.options.mesh_validation_mode,
-            "backend": "hornlab-beat-bem",
+            "backend": "beat-engine" if official else "hornlab-beat-bem",
         },
         "performance": {"total_time_seconds": time.time() - started},
         "observation_frame_basis": dict(frame_basis),
