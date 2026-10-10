@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import hashlib
+import os
 import sys
 from types import SimpleNamespace
 import zipfile
@@ -133,6 +134,13 @@ def test_unsafe_wheel_member_is_refused(installation, name):
     package, wheel, root, digest = installation
     with zipfile.ZipFile(wheel, "a") as archive:
         archive.writestr(name, b"foreign")
+    if "\\" in name and os.sep == "\\":
+        # On Windows zipfile turns os.sep into "/" in member names when it writes
+        # and reads them, so a backslash can never reach the check there.
+        with zipfile.ZipFile(wheel) as archive:
+            assert name.replace("\\", "/") in archive.namelist()
+            assert not any("\\" in member for member in archive.namelist())
+        return
     with pytest.raises(ValueError, match="Unsafe"):
         qualification.verify_installation(package, wheel, root, qualification.sha256(wheel.read_bytes()))
 
