@@ -1431,3 +1431,6 @@ textarea:disabled { opacity: .48; }
 .result-diagnostics .result-power-check[data-status="unknown"] { border-color: var(--hair-soft); background: none; color: var(--fg2); font-style: italic; }
 .result-unqualified { flex: none; max-width: 46%; overflow: hidden; padding: 0 5px; border: 1px dashed rgba(var(--amber-rgb), .6); border-radius: 3px; background: rgba(var(--amber-rgb), .12); color: var(--amber); font-size: var(--text-micro); text-overflow: ellipsis; white-space: nowrap; }
 .result-model-load { padding: 3px 8px; color: var(--amber); font-size: var(--text-micro); }
+
+/* Shared by the native source-assembly editors and the CAD panel. */
+.experimental-badge { display: inline-block; justify-self: start; align-self: start; margin: 2px 0; padding: 1px 6px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; white-space: nowrap; cursor: help; }

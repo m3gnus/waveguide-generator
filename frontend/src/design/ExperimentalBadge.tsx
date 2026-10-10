@@ -8,5 +8,5 @@
 export const EXPERIMENTAL_NOTE = 'Experimental: results are geometry-checked only and not yet acoustically qualified.';
 
 export function ExperimentalBadge() {
-  return <span className="experimental-badge" title={EXPERIMENTAL_NOTE} aria-label={`Experimental. ${EXPERIMENTAL_NOTE}`} role="note">Experimental</span>;
+  return <span className="experimental-badge" title={EXPERIMENTAL_NOTE}>Experimental</span>;
 }

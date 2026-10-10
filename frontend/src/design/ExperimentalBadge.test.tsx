@@ -27,15 +27,17 @@ describe('experimental native assembly labels', () => {
     badges().forEach((badge) => { expect(badge.textContent).toBe('Experimental'); expect(badge.title).toBe(EXPERIMENTAL_NOTE); });
     expect([...host.querySelectorAll('button')].every((b) => !b.disabled)).toBe(true);
   });
-  it('labels the contour editor and its baffle export section', async () => {
+  it('labels the contour editor dialog', async () => {
     await act(async () => root.render(<Editor onClose={() => {}}/>));
-    expect(badges().length).toBeGreaterThanOrEqual(2);
-    expect(host.querySelector('h2')?.textContent).toContain('Experimental');
+    expect(badges()).toHaveLength(1);
+    expect(host.querySelector('h2')?.textContent).toBe('Source contour');
+    expect(host.querySelector('header')?.textContent).toContain(EXPERIMENTAL_NOTE);
   });
-  it('labels the assembly dialog and the phase plug section', async () => {
+  it('labels the assembly dialog', async () => {
     await act(async () => root.render(<AssemblyEditor onClose={() => {}}/>));
-    const headings = [...host.querySelectorAll('h2, h3')].filter((h) => h.querySelector('.experimental-badge')).map((h) => h.textContent);
-    expect(headings.some((t) => t?.includes('Horn + woofer assembly'))).toBe(true);
-    expect(headings.some((t) => t?.includes('Phase plug'))).toBe(true);
+    expect(host.querySelector('h2')?.textContent).toBe('Horn + woofer assembly');
+    expect(host.querySelector('header .experimental-badge')).not.toBeNull();
+    expect(host.querySelector('header')?.textContent).toContain(EXPERIMENTAL_NOTE);
+    expect(host.querySelector('h2 .experimental-badge, h3 .experimental-badge')).toBeNull();
   });
 });

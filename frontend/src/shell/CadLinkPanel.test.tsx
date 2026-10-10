@@ -866,6 +866,16 @@ describe('CadLinkPanel', () => {
     expect(provenance.textContent).toContain(`Preparation ${record.ingest_id}`);
   });
 
+  it('labels a prepared native assembly as experimental but not a CAD return', async () => {
+    await renderAndSelect();
+    await clickIngest();
+    expect(host.querySelector('.cad-model-identity .experimental-badge')).toBeNull();
+    await act(async () => { useCadReturnStore.setState({ selectedBundle: { ...useCadReturnStore.getState().selectedBundle!, bundleOrigin: 'native' } }); });
+    const badge = host.querySelector('.cad-model-identity .experimental-badge');
+    expect(badge?.textContent).toBe('Experimental');
+    expect(badge?.getAttribute('title')).toContain('not yet acoustically qualified');
+  });
+
   it('tries the full-domain viewport artifact before silently falling back on 404', async () => {
     const requests: string[] = [];
     const notices: string[] = [];

@@ -1,3 +1,4 @@
+import { ExperimentalBadge } from '../design/ExperimentalBadge';
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
 import { installCadLinkAddin } from '../api/cadlink';
@@ -852,6 +853,7 @@ export function CadLinkPanel() {
       </div>}
       {bundle && <div className="cad-model-identity">
         <b className="cad-model-name" title={bundle.documentName ?? bundle.name}>{returnDisplayName(bundle)}</b>
+        {bundle.bundleOrigin === 'native' && <ExperimentalBadge/>}
         {record && <span
           className={`cad-state-chip${['current', 'unlinked'].includes(freshnessSummary(record)) ? '' : ' warn'}`}
           title={FRESHNESS_COPY[freshnessSummary(record).replaceAll(' ', '_')] ?? FRESHNESS_COPY.unknown}

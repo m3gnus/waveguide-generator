@@ -44,4 +44,3 @@
 .source-editor [role="alert"] { color: #ffbf80; }
 @media (max-width: 800px) { .source-editor-columns { grid-template-columns: 1fr; } .source-editor aside { border: 0; padding: 0; } }
 .assembly-preview { width: 100%; height: 260px; display: block; }
-.experimental-badge { display: inline-block; margin-left: 8px; padding: 1px 6px; border: 1px solid rgba(var(--amber-rgb), .45); border-radius: var(--r3); background: rgba(var(--amber-rgb), .1); color: var(--amber); font-size: var(--text-micro); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; vertical-align: middle; white-space: nowrap; cursor: help; }
