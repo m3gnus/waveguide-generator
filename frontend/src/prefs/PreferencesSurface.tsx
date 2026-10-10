@@ -107,8 +107,8 @@ function ResultsPreferencesContent() {
     <fieldset className={`preferences-formats${preferences.autoExportOnComplete ? '' : ' preferences-formats-inactive'}`}>
       <legend>Automatic export formats</legend>
       <p className="preferences-section-copy">{preferences.autoExportOnComplete
-        ? 'Used for automatic export. The run archive saves its own fixed set of files separately.'
-        : 'Auto-export is off, so these formats are not used. Turn on “Auto-export completed jobs” to choose them. The run archive saves its own fixed set of files either way.'}</p>
+        ? 'Used for automatic export. Run archiving is a separate setting and uses its own fixed set of files, whatever is chosen here.'
+        : 'Auto-export is off, so these formats are not used. Turn on “Auto-export completed jobs” to choose them. Run archiving is a separate setting and uses its own fixed set of files, whatever is chosen here.'}</p>
       {preferences.autoExportOnComplete && !preferences.autoExportFormats.length && <p className="job-warning" role="alert">Choose at least one automatic format. Auto-export is enabled but will not write any files.</p>}
       {EXPORT_FORMATS.map(({ id, label }) => <label key={id} className="ui-check"><input type="checkbox" aria-label={`Automatic export: ${label}`} disabled={!preferences.autoExportOnComplete} checked={preferences.autoExportFormats.includes(id)} onChange={() => preferencesStore.toggleAutoExportFormat(id)}/>{label}</label>)}
     </fieldset>
