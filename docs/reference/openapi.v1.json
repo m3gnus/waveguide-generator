@@ -51,6 +51,7 @@
                 "type": "integer"
               }
             ],
+            "default": 0,
             "title": "Aperture Radius Mm"
           },
           "depth_mm": {
@@ -93,6 +94,9 @@
               },
               {
                 "type": "integer"
+              },
+              {
+                "type": "null"
               }
             ],
             "title": "Horn Length Mm"
@@ -132,6 +136,9 @@
               },
               {
                 "type": "integer"
+              },
+              {
+                "type": "null"
               }
             ],
             "title": "Mouth Radius Mm"
@@ -148,6 +155,10 @@
             "title": "Width Mm"
           },
           "woofer_xy_mm": {
+            "default": [
+              0,
+              0
+            ],
             "maxItems": 2,
             "minItems": 2,
             "prefixItems": [
@@ -181,11 +192,7 @@
           "height_mm",
           "depth_mm",
           "front_z_mm",
-          "horn_xy_mm",
-          "horn_length_mm",
-          "mouth_radius_mm",
-          "woofer_xy_mm",
-          "aperture_radius_mm"
+          "horn_xy_mm"
         ],
         "title": "AssemblyDimensions",
         "type": "object"
@@ -198,6 +205,18 @@
           },
           "horn": {
             "$ref": "#/components/schemas/SourceDocument"
+          },
+          "horn_config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Horn Config"
           },
           "mesh_size_mm": {
             "anyOf": [
@@ -231,12 +250,18 @@
             "type": "array"
           },
           "woofer": {
-            "$ref": "#/components/schemas/SourceDocument"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
           "horn",
-          "woofer",
           "dimensions"
         ],
         "title": "AssemblyRequest",
@@ -4334,6 +4359,18 @@
           "source": {
             "$ref": "#/components/schemas/SourceConfig"
           },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
           "throat_ext_angle": {
             "anyOf": [
               {
@@ -5005,6 +5042,18 @@
             ],
             "title": "Termination"
           },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
           "theta1_deg": {
             "anyOf": [
               {
@@ -5256,7 +5305,8 @@
                 "native-source-contour-v1",
                 "native-front-baffle-woofer-v1",
                 "native-shared-horn-woofer-v1",
-                "native-phase-plug-passages-v1"
+                "native-phase-plug-passages-v1",
+                "native-general-horn-attachment-v1"
               ],
               "type": "string"
             },
@@ -7388,6 +7438,18 @@
           "source": {
             "$ref": "#/components/schemas/SourceConfig"
           },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
+          },
           "throat_ext_angle": {
             "anyOf": [
               {
@@ -8608,6 +8670,18 @@
           },
           "source": {
             "$ref": "#/components/schemas/SourceConfig"
+          },
+          "text_import_version": {
+            "anyOf": [
+              {
+                "const": "ath-2026-08c-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text Import Version"
           },
           "throat_ext_angle": {
             "anyOf": [
@@ -14970,6 +15044,50 @@
           }
         },
         "summary": "Assembly Export Endpoint",
+        "tags": [
+          "source-editor"
+        ]
+      }
+    },
+    "/api/source-editor/assembly/horn-profile": {
+      "post": {
+        "description": "Copy the current horn profile onto the assembly's new enclosure.\n\nThe action deliberately selects the full horn wall and the assembly\nenclosure, independently of the old design's source, shell and mesh\nsymmetry. Profile/morph/guide/scale/axis changes remain authoritative.",
+        "operationId": "assembly_horn_profile_endpoint_api_source_editor_assembly_horn_profile_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesignConfig"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Assembly Horn Profile Endpoint Api Source Editor Assembly Horn Profile Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assembly Horn Profile Endpoint",
         "tags": [
           "source-editor"
         ]

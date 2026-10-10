@@ -85,3 +85,27 @@ project setup. Preparation performs no acoustic solve.
 An older mesher that lacks the assembly passage APIs returns an actionable
 unsupported response without preventing application startup. Paired development
 checks do not qualify the installed dependency pin.
+
+## Attach the current horn design
+
+**Use current horn design** resolves the existing design through
+`POST /api/source-editor/assembly/horn-profile`. It selects the full resolved
+profile on the assembly enclosure and freezes its configuration in the draft.
+Later edits to the main design do not change an attached draft. Length and mouth
+radius derive from the wall; the displayed driver-end rim includes any throat
+extension. A mismatched authored contour receives a concrete diagnostic and is
+not rescaled. Optional advanced configuration is hydrated together with draft
+JSON, including when loading a different saved assembly.
+
+The optional woofer control permits a horn-only assembly with one authoritative
+channel. General attachments negotiate `native-general-horn-attachment-v1`
+through export, actual immutable STEP ingestion and imported request validation.
+The mesher's `docs/native-general-horn-attachment.md` defines the rotational
+domain, angular correction bound and explicit refusals. Noncircular geometry
+remains outside this route. Preview and prepare perform no acoustic solve.
+
+The existing 22,000-triangle imported artifact ceiling remains enforced. Passive
+gap refinement covers the complete canonical wall face; a geometrically valid
+larger attachment can reach that limit. Increasing only enclosure mesh size may
+not help when the wall's gap target dominates. Such preparations refuse rather
+than weakening the facet or clearance certificate.

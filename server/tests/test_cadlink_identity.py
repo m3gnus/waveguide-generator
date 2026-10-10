@@ -43,7 +43,10 @@ def test_cadlink_block_is_typed_canonical_and_not_passthrough() -> None:
     identity = _identity()
     emitted = serialize(parse(SOURCE).design, cadlink=identity)
 
-    assert emitted.splitlines()[2:10] == identity.block_lines()
+    lines = emitted.splitlines()
+    assert lines.count("CadLink = {") == 1
+    block_start = lines.index("CadLink = {")
+    assert lines[block_start:block_start + len(identity.block_lines())] == identity.block_lines()
     reopened = parse(emitted)
     assert reopened.cadlink == identity
     assert "CadLink" not in reopened.extra_blocks

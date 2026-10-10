@@ -7,6 +7,7 @@ block rows.  Stable writer order mirrors ``src/export/mwgConfig.js:46-295``.
 
 from __future__ import annotations
 
+import ast
 import json
 import math
 import re
@@ -16,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, Mapping
 from pydantic import ValidationError
 
 from .migrate import MigrationApplication, apply_migrations
+from .text_import import TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
 from .schema import (
     ConfigBlock,
     DesignConfig,
@@ -53,6 +55,7 @@ _MACHINE_SOLVE_ADVICE: tuple[tuple[str, str, str], ...] = (
 )
 _MACHINE_SOLVE_KEYS = frozenset(key for key, _why, _choose in _MACHINE_SOLVE_ADVICE)
 _DESIGN_FORMAT_STAMP = re.compile(r"\bdesign-format\s*:\s*(\d+)\b", re.IGNORECASE)
+_GEOMETRY_STAMP = re.compile(r"^;\s*Waveguide Generator geometry-interpretation:\s*(\S+)\s*$", re.IGNORECASE)
 
 
 class TextConfigError(ValueError):
@@ -701,14 +704,17 @@ def _build_payload(
                     raise TextConfigError(str(exc)) from exc
     block_name = _profile_block_name(formula, blocks)
     selected = blocks[block_name].items if block_name is not None else flat
+    if dialect == "ath" and not selected:
+        # An empty ATH selector leaves the formula controls at top level.
+        selected = flat
     stretch = {key: text_number(selected[key]) for key in ("s1", "s2") if key in selected}
     active_stretch = stretch.get("s1", 0) != 0 and stretch.get("s2", 0) != 0
-    if block_name is not None and formula in {"OSSE", "R-OSSE"} and active_stretch:
-        in_block = [key for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length") if key in selected]
+    if block_name is not None and formula in {"OSSE", "R-OSSE"} and (active_stretch or dialect == "ath"):
+        in_block = [key for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length") if key in blocks[block_name].items]
         if in_block:
             raise TextConfigError(
                 f"{', '.join(in_block)} must be top-level keys — ATH ignores them inside "
-                f"the {block_name} block; move them out of the block"
+                f"the {formula if dialect == 'ath' else block_name} block; move them out of the block"
             )
     if formula not in {"OSSE", "R-OSSE"} and any(text_number(items[key]) != 0 for items in (flat, *(block.items for block in blocks.values())) for key in ("s1", "s2") if key in items):
         message = ("OSSE/R-OSSE shape keys are not valid with formula ICW" if formula == "ICW"
@@ -759,6 +765,29 @@ def _build_payload(
         raise TextConfigError(str(exc)) from exc
     if active_stretch and formula == "R-OSSE" and all(composition.get(k, 0) != 0 for k in ("GCurve.Type", "GCurve.Width")):
         raise TextConfigError("throat stretch geometry is invalid: guiding curves are only supported with formula OSSE")
+    ath_radius = None
+    if dialect == "ath" and formula in {"OSSE", "R-OSSE"} and "Throat.Diameter" in selected:
+        # Reuse the mesher's bounded numeric-expression evaluator. Validate
+        # the selected diameter even when an explicit r0 owns the radius.
+        from hornlab_mesher.profile_common import eval_param
+
+        diameter = text_number(selected["Throat.Diameter"])
+        try:
+            if isinstance(diameter, str):
+                tree = ast.parse(diameter.replace("^", "**"), mode="eval")
+                if any(isinstance(node, ast.Name) and node.id == "p" for node in ast.walk(tree)):
+                    raise ValueError("azimuth-varying diameter is unsupported")
+            ath_radius = eval_param(diameter) / 2.0
+        except (SyntaxError, TypeError, ValueError, OverflowError) as exc:
+            raise TextConfigError(
+                f"Throat.Diameter must be a positive finite number; got {diameter!r}. "
+                "Use a numeric value or constant numeric expression in millimetres; "
+                "azimuth-varying diameter expressions are not supported."
+            ) from exc
+        if not math.isfinite(ath_radius) or ath_radius <= 0:
+            raise TextConfigError(
+                f"Throat.Diameter must be a positive finite number that yields a positive radius; got {diameter!r}"
+            )
     # The mesher maps aliases in this order, regardless of their source order.
     profile_aliases = (
         ("r0", "r0"), ("a", "a"), ("Coverage.Angle", "a"),
@@ -808,9 +837,8 @@ def _build_payload(
                 elif active_stretch and key in active_aliases:
                     payload[active_aliases[key]] = value
                 elif formula in {"OSSE", "R-OSSE"} and key == "Throat.Diameter":
-                    if dialect == "ath" and active_stretch:
-                        # Numeric-only ATH conversion is handled below, using
-                        # the selected profile and its raw radius default.
+                    if dialect == "ath":
+                        # Selected ATH radius precedence is handled below.
                         continue
                     elif "r0" not in formula_block.items:
                         payload["r0"] = _numeric_or_expression_divide_by_two(value)
@@ -828,14 +856,6 @@ def _build_payload(
         for key, target in profile_aliases:
             if key in selected:
                 payload[target] = selected[key]
-        if dialect == "ath" and "r0" not in selected:
-            # The mesher's raw default must participate in global Scale.
-            # Its ATH importer drops nonnumeric diameter expressions instead
-            # of evaluating them; native WG expressions retain their path.
-            try:
-                payload["r0"] = float(text_number(selected["Throat.Diameter"])) / 2.0
-            except (KeyError, TypeError, ValueError):
-                payload["r0"] = 12.7
     if formula in {"OSSE", "R-OSSE"}:
         payload.update(stretch)
     consumed_keys.update(key for key in ("s1", "s2") if key in flat)
@@ -856,7 +876,7 @@ def _build_payload(
                 elif key == "Rot" and "Rot" not in block.items:
                     _put(payload, path, flat[key])
                 consumed_keys.add(key)
-        if "Throat.Diameter" in flat and (not active_stretch or (dialect != "ath" and block_name is None and "r0" not in selected)):
+        if dialect != "ath" and "Throat.Diameter" in flat and (not active_stretch or (block_name is None and "r0" not in selected)):
             payload["r0"] = _numeric_or_expression_divide_by_two(flat["Throat.Diameter"])
             consumed_keys.add("Throat.Diameter")
         if dialect == "ath":
@@ -869,6 +889,25 @@ def _build_payload(
             # infinite, i.e. a flat source; 15.5 domes it by ~1.7 mm.
             payload.setdefault("a0", 0)
             payload.setdefault("s", 0.7)
+
+    if dialect == "ath" and formula in {"OSSE", "R-OSSE"}:
+        if formula == "R-OSSE":
+            # Selected R-OSSE controls own the profile even without active
+            # stretch, including flat controls beside an empty selector.
+            for key, target in profile_aliases:
+                if key in selected:
+                    payload[target] = selected[key]
+                    if selected is flat:
+                        consumed_keys.add(key)
+        if "r0" in selected:
+            payload["r0"] = selected["r0"]
+        elif ath_radius is not None:
+            payload["r0"] = ath_radius
+        elif active_stretch:
+            # The raw ATH radius default participates in global Scale.
+            payload["r0"] = 12.7
+        if "Throat.Diameter" in flat:
+            consumed_keys.add("Throat.Diameter")
 
     if dialect == "ath" and formula != "FREEFORM":
         # ATH's Length is the nominal axial depth of the whole device, so
@@ -942,7 +981,16 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
     ignored_profile: list[IgnoredSetting] = []
-    payload = _build_payload(flat, blocks, dialect=dialect, ignored_profile=ignored_profile)
+    versions = {match.group(1) for comment in comments if (match := _GEOMETRY_STAMP.match(comment))}
+    if len(versions) > 1:
+        raise TextConfigError("conflicting geometry interpretation stamps")
+    version = next(iter(versions), None)
+    if version is not None and version not in {TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION}:
+        raise TextConfigError(f"unsupported geometry interpretation {version!r}")
+    geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version == TEXT_IMPORT_VERSION else dialect
+    payload = _build_payload(flat, blocks, dialect=geometry_dialect, ignored_profile=ignored_profile)
+    if version == TEXT_IMPORT_VERSION or (version is None and dialect == "ath" and payload["formula"] != "FREEFORM"):
+        payload["text_import_version"] = TEXT_IMPORT_VERSION
     applications: list[MigrationApplication] = []
     if migrate:
         try:
@@ -970,7 +1018,11 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
             )
             for name, items in [("", flat), *((name, block.items) for name, block in blocks.items())]
             for key, value in items.items()
-            if key in {"s1", "s2"} and ((name == "" and block_name is not None) or (name != "" and name != block_name))
+            if key in {"s1", "s2"} and (
+                (name == "" and block_name is not None and (
+                    geometry_dialect != "ath" or bool(blocks[block_name].items)
+                )) or (name != "" and name != block_name)
+            )
         ],
     )
 
@@ -1143,9 +1195,10 @@ def _serialize_canonical(
     lines = [
         "; Parameter config",
         f"; Waveguide Generator design-format: {_DESIGN_FORMAT}",
+        f"; {GEOMETRY_STAMP_LABEL} {config.text_import_version or NATIVE_GEOMETRY_VERSION}",
     ]
     for comment in comments or []:
-        if comment not in lines and "Generated:" not in comment:
+        if comment not in lines and "Generated:" not in comment and not _GEOMETRY_STAMP.match(comment):
             if _LINE_BREAK.search(comment) is not None or not comment.lstrip().startswith(";"):
                 raise TextConfigError("unsafe preserved config comment")
             lines.append(comment)

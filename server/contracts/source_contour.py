@@ -7,6 +7,7 @@ FEATURE = "native-source-contour-v1"
 BAFFLE_FEATURE = "native-front-baffle-woofer-v1"
 ASSEMBLY_FEATURE = "native-shared-horn-woofer-v1"
 PLUG_FEATURE = "native-phase-plug-passages-v1"
+GENERAL_FEATURE = "native-general-horn-attachment-v1"
 
 
 def validate_contour_request(geometry, record):
@@ -26,6 +27,8 @@ def validate_contour_request(geometry, record):
             [FEATURE, BAFFLE_FEATURE],
             [FEATURE, ASSEMBLY_FEATURE],
             [FEATURE, ASSEMBLY_FEATURE, PLUG_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE, GENERAL_FEATURE],
+            [FEATURE, ASSEMBLY_FEATURE, PLUG_FEATURE, GENERAL_FEATURE],
         )
         or required != native["required_features"]
     ):
@@ -72,6 +75,8 @@ def validate_contour_request(geometry, record):
             "passage_contract"
         ) != passage_contract(model):
             raise ValueError("native phase-plug topology identity is inconsistent")
+        if (model.horn_wall is not None or model.woofer is None) != (GENERAL_FEATURE in required):
+            raise ValueError("native general horn feature identity is inconsistent")
         if model.geometry_sha256 != native["geometry_sha256"]:
             raise ValueError("native assembly geometry identity is inconsistent")
         origin = [0, 0, model.front_z_mm * 0.001]

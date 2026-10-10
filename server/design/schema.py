@@ -666,6 +666,9 @@ class DesignCommon(StrictModel):
     """Fields shared by all formula families and all v1 export sections."""
 
     formula: str
+    text_import_version: Literal["ath-2026-08c-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     scale: Expr | None = None
     throat_ext_angle: Expr | None = None
     throat_ext_length: Expr | None = None

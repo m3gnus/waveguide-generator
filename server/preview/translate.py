@@ -348,6 +348,11 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
 
     mesh = root.mesh
     morph = root.morph
+    morph_corner = morph.corner_radius
+    if root.text_import_version is not None and morph.target_shape is not None and morph_corner is None:
+        # Imported ATH defaults are in authored units. Most profiles bake Scale
+        # into their dimensions here; active stretch instead retains post-scale.
+        morph_corner = Expr(value=35)
     config: dict[str, Any] = {
         "formula": root.formula,
         "mode": mode,
@@ -399,7 +404,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 # as implicit extents derived from the waveguide mouth.
                 "morphWidth": _scaled_expr(morph.target_width, profile_scale),
                 "morphHeight": _scaled_expr(morph.target_height, profile_scale),
-                "morphCorner": _scaled_expr(morph.corner_radius, profile_scale),
+                "morphCorner": _scaled_expr(morph_corner, profile_scale),
                 "morphRate": _expr(morph.rate),
                 "morphFixed": _expr(morph.fixed_part),
                 "morphAllowShrinkage": _expr(morph.allow_shrinkage),
@@ -464,7 +469,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
             if isinstance(value, str):
                 config["gcurve"][key] = text_number(value)
 
-    if mode == "enclosure" and root.enclosure is not None:
+    if root.enclosure is not None and (mode == "enclosure" or root.text_import_version is not None):
         enclosure = root.enclosure
         config["enclosure"] = _clean(
             {
@@ -479,6 +484,8 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "backMeshSize": _first_number(enclosure.back_resolution),
             }
         )
+    if root.text_import_version is not None:
+        config["_textImportVersion"] = root.text_import_version
     return config
 
 

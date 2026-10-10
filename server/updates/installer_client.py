@@ -264,8 +264,10 @@ class InstallerClient:
         self._closed.set()
 
     def get_status(self, *, force: bool = False) -> dict:
-        self.start_checker()
         with self._lock:
+            # Keep automatic startup and a forced check atomic: a fast worker
+            # must not finish between them and trigger a duplicate request.
+            self.start_checker()
             channel = self.channel()
             if channel != self._channel and self._progress["installState"] not in {"downloading", "verifying"}:
                 self._invalidate_channel(channel)

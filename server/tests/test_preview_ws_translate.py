@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from hornlab_mesher.config_builder import build_geometry_params, build_point_grid
+from hornlab_mesher.config_builder import build_geometry_params, build_point_grid, resolve_geometry
+from hornlab_mesher.builders.point_grid_freestanding import _restored_outer_throat_points
 from hornlab_mesher.preview.api import build_preview_geometry
 
 from server.design.schema import DesignConfig
@@ -438,6 +439,20 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
     design = DesignConfig.model_validate(opened["design"])
 
     config = design_to_mesher_config(design)
+    assert config["_textImportVersion"] == "ath-2026-08c-v1"
+    production = resolve_geometry(config).geometry
+    outer = _restored_outer_throat_points(
+        production.inner_points, production.outer_points,
+        wall_thickness_mm=production.wall_thickness_mm,
+    )
+    # Independently certify the actual production boundary, rather than
+    # dropping the import marker or using the preview's resampled normals.
+    target_z = outer[:, 0, 2] - production.wall_thickness_mm
+    plane_z = float(target_z.min() + (target_z.max() - target_z.min()) / 2)
+    displacement = float(np.max(np.abs(target_z - plane_z)))
+    budget = min(0.0001, 0.0001 * production.wall_thickness_mm)
+    assert np.all(np.isfinite(target_z))
+    assert 0 < displacement <= budget
     geometry = build_preview_geometry(config, preview_options("coarse"))
     surface_roles = [surface.role for surface in geometry.surfaces]
 
@@ -457,6 +472,21 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
         "morphRate": "3",
         "morphFixed": "0.0",
     }
+    for lod in ("coarse", "fine"):
+        preview = geometry if lod == "coarse" else build_preview_geometry(config, preview_options(lod))
+        roles = {surface.role: surface for surface in preview.surfaces}
+        cap = roles["wall.rear_cap"]
+        np.testing.assert_allclose(cap.positions[:, 2], plane_z, rtol=0, atol=1e-12)
+        rear_return = roles["wall.rear_return"].positions
+        rear_rim = rear_return[rear_return[:, 2] == plane_z]
+        assert len(rear_rim) > 2
+        # The cap and return share the same boundary; quarter-cut edges remain
+        # open on the authored symmetry planes, rather than a fictitious seal.
+        for point in rear_rim:
+            assert np.any(np.all(cap.positions == point, axis=1))
+        triangles = cap.positions[cap.indices.reshape(-1, 3)]
+        normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
+        assert np.all(normals[:, 2] < 0)  # Nondegenerate, outward rear winding.
 
 
 def test_every_expression_capable_field_survives_translation() -> None:

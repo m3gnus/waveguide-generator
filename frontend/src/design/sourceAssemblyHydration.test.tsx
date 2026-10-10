@@ -45,7 +45,7 @@ async function deferredHydration() {
   await vi.advanceTimersByTimeAsync(1500); await hydration;
   await act(async () => root.render(<AssemblyEditor onClose={() => {}}/>)); await settle();
   const remote = structuredClone(INITIAL_ASSEMBLY); remote.dimensions.width_mm = 82;
-  remote.horn.drive.weights.piston = .75; remote.woofer.drive.weights.piston = .5;
+  remote.horn.drive.weights.piston = .75; remote.woofer!.drive.weights.piston = .5;
   return { remote, uploads, unrelated, reply: async () => act(async () => {
     resolve({ ok: true, json: async () => ({ namespaces: { sourceAssemblyDraft: JSON.stringify(remote) } }) } as Response);
     await Promise.resolve(); await Promise.resolve();
@@ -61,7 +61,7 @@ it.each(['horn', 'woofer'] as const)('preserves nested %s edits, undo and subseq
   const pending = await deferredHydration();
   await act(async () => button(`Edit ${source} contour…`).click()); await settle();
   await editWeight('-.25');
-  expect(read()[source].drive.weights.piston).toBe(-.25);
+  expect(read()[source]!.drive.weights.piston).toBe(-.25);
   await pending.reply(); await settle();
   expect(Number(weightInput().value)).toBe(-.25);
   expect(button('Use contour in assembly').disabled).toBe(false);
@@ -77,7 +77,7 @@ it.each(['horn', 'woofer'] as const)('preserves nested %s edits, undo and subseq
   const writes = pending.uploads.filter((u) => u.url === '/api/settings/sourceAssemblyDraft')
     .map((u) => JSON.parse(JSON.parse(String(u.body))) as SourceAssemblyDocument);
   expect(writes.length).toBeGreaterThan(0);
-  expect(writes.at(-1)![source].drive.weights.piston).toBe(-.5);
+  expect(writes.at(-1)![source]!.drive.weights.piston).toBe(-.5);
   expect(writes.every((doc) => doc.dimensions.width_mm === INITIAL_ASSEMBLY.dimensions.width_mm)).toBe(true);
   expect(localStorage.getItem(SETTINGS_NAMESPACES.sourceContourDraft)).toBe(pending.unrelated);
   // Hydration may migrate the independent cache, but nested edits never alter it.

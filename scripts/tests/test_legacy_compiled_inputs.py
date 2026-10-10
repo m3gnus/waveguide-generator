@@ -91,6 +91,11 @@ def contract(tmp_path, monkeypatch):
     files = {"__init__.py": b"# validator", "mesh.py": b"# mesh", "system-v1.schema.json": b"{}"}
     for name, content in files.items():
         (root / name).write_bytes(content)
+    # The fake root must not inherit real submodules imported by earlier tests.
+    # Production verification still refuses any foreign preimported member.
+    for name in tuple(sys.modules):
+        if name.startswith("beat_engine.beat_contract."):
+            monkeypatch.delitem(sys.modules, name)
     monkeypatch.setitem(sys.modules, "beat_engine.beat_contract", SimpleNamespace(__file__=str(root / "__init__.py")))
     import json
     hashes = {name: qualification.sha256(content) for name, content in files.items()}
@@ -113,6 +118,13 @@ def test_changed_validator_or_schema_is_refused_before_solves(contract, file):
 def test_foreign_contract_import_is_refused(contract, monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "beat_engine.beat_contract", SimpleNamespace(__file__=str(tmp_path / "foreign.py")))
     with pytest.raises(ValueError, match="contract root"):
+        qualification.verify_contract(*contract)
+
+
+def test_foreign_contract_submodule_is_refused(contract, monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "beat_engine.beat_contract.mesh",
+                        SimpleNamespace(__file__=str(tmp_path / "foreign.py")))
+    with pytest.raises(ValueError, match="submodule"):
         qualification.verify_contract(*contract)
 
 

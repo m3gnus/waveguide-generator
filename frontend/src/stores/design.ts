@@ -57,6 +57,8 @@ export interface CornerGrid {
  */
 export interface DesignDocument {
   formula: DesignFamily;
+  /** Persisted geometry interpretation for imported ATH documents. */
+  text_import_version?: 'ath-2026-08c-v1';
   s1?: number;
   s2?: number;
   scale: number;

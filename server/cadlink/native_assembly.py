@@ -3,6 +3,7 @@
 import math
 
 FEATURE = "native-shared-horn-woofer-v1"
+GENERAL_FEATURE = "native-general-horn-attachment-v1"
 
 
 def patch_area(contour, index):
@@ -33,6 +34,8 @@ def read_assembly(manifest):
     assembly = SourceAssembly.from_dict(manifest["recipe"])
     if bool(assembly.phase_plugs) != (PLUG_FEATURE in manifest["required_features"]):
         raise ValueError("passive topology requires explicit phase-plug feature negotiation")
+    if (assembly.horn_wall is not None or assembly.woofer is None) != (GENERAL_FEATURE in manifest["required_features"]):
+        raise ValueError("general horn topology requires explicit attachment feature negotiation")
     if manifest.get("passage_contract") != passage_contract(assembly):
         raise ValueError("native passage contract contradicts canonical geometry")
     patches = manifest["patches"]
@@ -45,8 +48,8 @@ def read_assembly(manifest):
         for p in patches
     ] != expected:
         raise ValueError("native assembly patch identity/role contradicts geometry")
-    if len(manifest["channels"]) != 2:
-        raise ValueError("native assembly requires two physical driver channels")
+    if len(manifest["channels"]) != len(assembly.parts):
+        raise ValueError("native assembly requires one channel per physical source")
     drives = []
     for (c, _, _), channel in zip(assembly.parts, manifest["channels"]):
         weights = channel["patch_weights"]
@@ -129,7 +132,11 @@ def verify_faces(gmsh, manifest, assembly, mapped):
         raise ValueError("native assembly STEP must be a surface shell")
     for p in manifest["patches"] + manifest["rigid_faces"]:
         face = mapped[p["advanced_face_indices"][0]]
-        check_area(gmsh.model.occ.getMass(2, face), p["area_mm2"])
+        if p.get("role") == "horn-wall" and assembly.horn_wall is not None:
+            from hornlab_mesher.general_horn import wall_face_area
+            check_area(wall_face_area(gmsh, face, assembly.horn_wall), p["area_mm2"])
+        else:
+            check_area(gmsh.model.occ.getMass(2, face), p["area_mm2"])
         lo, hi = gmsh.model.getParametrizationBounds(2, face)
         uv = np.asarray(
             [(u, v) for u in np.linspace(lo[0], hi[0], 9) for v in np.linspace(lo[1], hi[1], 9)]
@@ -155,6 +162,8 @@ def verify_faces(gmsh, manifest, assembly, mapped):
         chain = [by_id[patch_id(c, s)] for s in c.segments]
         if band == "HF":
             chain.extend(by_role[key] for key in wall_edges(assembly))
+            if assembly.horn_wall is not None:
+                chain.append(by_role["horn-wall"])
         elif "collar" in by_role:
             chain.append(by_role["collar"])
         chain.append(by_role["front"])
