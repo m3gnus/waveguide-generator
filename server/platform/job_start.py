@@ -46,7 +46,11 @@ cannot be resumed:
   before it ran and :class:`ContainedStartError` is raised.
 * ``required=False`` (the mesher child, the BEMPP worker): it is stopped
   before it ran, started again the plain way and assigned after the fact.
-  An assignment that then fails stops that child too and raises.
+  An assignment that then fails stops that child too and raises. That
+  restart has run, so if its image were a launcher stub, an interpreter the
+  stub started before the refusal would escape: the stop reaches the direct
+  child only. The callers' direct child is ``wg-python.exe`` itself (above),
+  and the path needs two failures in a row, a resume and then a job.
 
 Outside Windows :func:`windows_job_start` does nothing, and its result reports
 that it never fired.

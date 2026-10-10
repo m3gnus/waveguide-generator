@@ -107,7 +107,8 @@ class BemppWorkerError(RuntimeError):
 UNCONTAINED_MESSAGE = (
     "The BEMPP solver could not start: Windows would not place its worker in a job "
     "object, and without one it could keep running after the app quits. It was "
-    "stopped before it ran, so nothing was solved. Restart the app and try again."
+    "stopped, so nothing was solved. Restart the app and try again; if this keeps "
+    "happening, the server log names the reason."
 )
 
 

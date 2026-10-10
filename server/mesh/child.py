@@ -77,8 +77,9 @@ CRASH_MESSAGE = (
 
 UNCONTAINED_MESSAGE = (
     "The mesher could not start: Windows would not place it in a job object, and "
-    "without one it could keep running after the app quits. It was stopped before "
-    "it ran, so nothing was meshed. Restart the app and try again."
+    "without one it could keep running after the app quits. It was stopped, so "
+    "nothing was meshed. Restart the app and try again; if this keeps happening, "
+    "the server log names the reason."
 )
 
 
