@@ -239,6 +239,8 @@ def test_capability_requires_official_provider(monkeypatch):
         assert "exterior-transducers" in _beat_engine_info(backend, {}).imported_features
     assert "exterior-transducers" not in _beat_engine_info("cuda", {}).imported_features
     monkeypatch.delenv("WG2_BEAT_PROVIDER")
+    assert "exterior-transducers" in _beat_engine_info("cpu", {}).imported_features
+    monkeypatch.setenv("WG2_BEAT_PROVIDER", "hbb")
     info = _beat_engine_info("cpu", {})
     assert (
         _imported_capability_blocker(info, 1234, needed)[0]
