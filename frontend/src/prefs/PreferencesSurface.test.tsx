@@ -81,8 +81,10 @@ describe('preferences surfaces', () => {
     act(() => auto.click());
     expect(preferencesStore.getSnapshot().autoExportFormats).toEqual(['csv']);
     expect(host.textContent).toContain('Auto-export is off, so these formats are not used');
-    expect(host.textContent).toContain('Run archiving is a separate setting');
-    expect(host.textContent).not.toContain('saves its own fixed set');
+    expect(host.textContent).toContain('independent of these choices');
+    expect(host.textContent).not.toContain('fixed set');
+    const note = host.querySelector('.preferences-formats-inactive > .preferences-section-copy')!;
+    expect(auto.getAttribute('aria-describedby')).toBe(note.id);
     expect(host.querySelector('.preferences-formats-inactive')).not.toBeNull();
   });
 
@@ -90,7 +92,8 @@ describe('preferences surfaces', () => {
     preferencesStore.update({ autoExportOnComplete: false, archiveRunsOnComplete: false, autoCleanupResults: true });
     await act(async () => { root.render(<ResultsPreferencesSurface/>); });
     expect(host.textContent).toContain('Archiving is off');
-    expect(host.textContent).not.toMatch(/archive saves|either way/);
+    expect(host.querySelector('.preferences-formats-inactive > .preferences-section-copy')!.textContent).toContain('Run archiving is off.');
+    expect(host.querySelector('.preferences-formats-inactive > .preferences-section-copy')!.textContent).not.toContain('independent of these choices');
   });
 
   it('edits manual and automatic formats independently and warns about an empty enabled auto list', async () => {
@@ -100,7 +103,7 @@ describe('preferences surfaces', () => {
     act(() => autoToggle.click());
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('will not write any files');
     expect(host.textContent).toContain('Used for automatic export.');
-    expect(host.textContent).toContain('Run archiving is a separate setting');
+    expect(host.textContent).toContain('independent of these choices');
     expect(host.querySelector('.preferences-formats-inactive')).toBeNull();
 
     act(() => host.querySelector<HTMLInputElement>('[aria-label="Automatic export: Frequency Data CSV"]')!.click());
