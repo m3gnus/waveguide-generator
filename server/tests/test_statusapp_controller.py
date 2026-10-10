@@ -1582,9 +1582,21 @@ _SOLVER_TRACEBACK = (
             "Could not find Gmsh.Interactive plotting and shapes module not available.\n",
             "RuntimeError: solver import failed",
         ),
+        (
+            "2026-10-10T23:03:40+0200 ERROR wg.jobs: solve worker died: "
+            "ConnectionResetError from the worker pipe\n",
+            "",
+            "solve worker died",
+        ),
         ("", "", "the cause was not logged"),
     ],
-    ids=["logged-error", "unlogged-traceback", "traceback-then-notice", "nothing-else"],
+    ids=[
+        "logged-error",
+        "unlogged-traceback",
+        "traceback-then-notice",
+        "own-error-naming-a-reset",
+        "nothing-else",
+    ],
 )
 def test_a_dropped_connection_is_never_reported_as_the_reason_the_server_died(
     tmp_path: Path, before: str, after: str, expected: str
@@ -1625,5 +1637,5 @@ def test_a_dropped_connection_is_never_reported_as_the_reason_the_server_died(
     assert reason.startswith("Server exited with code 1: ")
     assert expected in reason
     assert "10054" not in reason
-    assert "ConnectionResetError" not in reason
+    assert "_call_connection_lost" not in reason
     assert "Exception in callback" not in reason

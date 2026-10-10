@@ -373,6 +373,8 @@ _TRACEBACK = "Traceback (most recent call last):"
 #: first -- it happens in normal running and says nothing about why the
 #: server stopped.
 _DISCONNECT = re.compile(r"ConnectionResetError|WinError 10054")
+#: The loggers that report a peer's dropped connection as a matter of course.
+_TRANSPORT_RECORD = re.compile(r" (?:ERROR|CRITICAL) (?:asyncio|uvicorn(?:\.\w+)*):")
 
 
 def _is_disconnect(line: str) -> bool:
@@ -451,9 +453,16 @@ def _disconnect_lines(lines: Sequence[str]) -> set[int]:
             continue
         if " ERROR " in line or " CRITICAL " in line or line.startswith(_TRACEBACK):
             end = _exception_end(lines, index)
-            if end is not None and _is_disconnect(lines[end]):
-                marked.update(range(index, end + 1))
-        elif _is_disconnect(line):
+            if end is None or not _is_disconnect(lines[end]):
+                continue
+            # A record with no traceback is a disconnect only when the
+            # transport itself reported it: WG's own message naming a reset
+            # pipe ("solve worker died: ConnectionResetError ...") is a cause.
+            if end == index and not _TRANSPORT_RECORD.search(line):
+                continue
+            marked.update(range(index, end + 1))
+        elif line.startswith("ConnectionResetError"):
+            # The tail of a disconnect traceback whose header scrolled away.
             marked.add(index)
     return marked
 
