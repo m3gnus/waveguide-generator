@@ -31,10 +31,14 @@ differ, so a bundled mesher child or BEMPP worker is ``wg-python.exe`` itself
 containment then no longer rests on that detail, and nothing they start can
 predate the job either.
 
-A child is never handed over without a job. Whatever the caller asked for,
-a job that cannot be made or assigned (``assign`` raising or returning
-``None``) stops the child before it ever ran and raises
-:class:`ContainedStartError`. Running it uncontained is not a fallback: a
+A child this module starts suspended is never handed over without a job.
+Whatever the caller asked for, a job that cannot be made or assigned
+(``assign`` raising or returning ``None``) stops the child before it ever ran
+and raises :class:`ContainedStartError`. The one start it does not suspend,
+an armed ``CreateProcess`` call of an unexpected shape, is started as asked
+and logged; :func:`start_in_windows_job` then confines it after the fact and
+returns ``None`` if that fails, without refusing (test doubles on Windows take
+the same unfired path). Running it uncontained is not a fallback: a
 mesher child or BEMPP worker outside every job, holding no
 ``WaveguideGeneratorRunning`` mutex either, can outlive a server that died
 unseen by the installer, which then replaces ``app/`` under it.
@@ -187,8 +191,11 @@ def start_in_windows_job(
     on this thread; a ``None`` or an exception there stops the child before
     it ran and raises :class:`ContainedStartError` out of ``start()``, so
     ``process`` was never started. Otherwise ``confine`` runs after
-    ``start()`` -- off Windows, where it returns ``None``, and for a test
-    double that starts nothing real.
+    ``start()`` -- off Windows, where it returns ``None``; for a test double
+    that starts nothing real; and for an armed ``CreateProcess`` call of an
+    unexpected shape. That last is a real child, already logged as started
+    unsuspended, and a ``None`` from ``confine`` then hands it over without a
+    job: this path does not refuse.
     """
 
     # A start that fails after CreateProcess (its arguments would not pickle,
@@ -323,10 +330,20 @@ def _confine(armed: _Armed, pid: int, process_handle: int) -> Any:
     try:
         job = armed.assign(pid, process_handle)
     except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+        logger.warning(
+            "Refusing to start %s: no Windows job could hold it (%s).", armed.subject, exc
+        )
         raise ContainedStartError(
             f"could not confine {armed.subject} in a Windows job: {exc}"
         ) from exc
     if job is None:
+        # The assigner returned no job; confine_to_windows_job logs its OS
+        # error just before this.
+        logger.warning(
+            "Refusing to start %s: no Windows job could hold it (see the "
+            "previous warning for the reason).",
+            armed.subject,
+        )
         raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
     return job
 

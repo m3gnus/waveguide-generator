@@ -346,7 +346,7 @@ def test_a_required_job_that_cannot_be_assigned_stops_the_child_before_it_runs(t
 @pytest.mark.parametrize("required", [True, False])
 @pytest.mark.parametrize("failure", ["returns None", "raises"])
 def test_a_job_that_cannot_be_assigned_stops_the_child_whatever_the_policy(
-    tree, required: bool, failure: str
+    tree, caplog, required: bool, failure: str
 ) -> None:
     """Never resumed without a job: not even a best-effort caller's child.
 
@@ -366,9 +366,14 @@ def test_a_job_that_cannot_be_assigned_stops_the_child_whatever_the_policy(
         return None
 
     try:
-        with pytest.raises(ContainedStartError, match="could not confine the test stub"):
-            with windows_job_start(refuse, required=required, subject="the test stub"):
-                subprocess.Popen(_stub_command(stub, pidfile))
+        with caplog.at_level("WARNING", logger="wg.process"):
+            with pytest.raises(ContainedStartError, match="could not confine the test stub"):
+                with windows_job_start(refuse, required=required, subject="the test stub"):
+                    subprocess.Popen(_stub_command(stub, pidfile))
+        # The log names the refusal, and the OS reason when the assigner raised one.
+        assert "Refusing to start the test stub" in caplog.text
+        if failure == "raises":
+            assert "refused" in caplog.text.split("Refusing to start the test stub", 1)[1]
         assert len(held) == 1
         assert _exit_code(held[0]) == 1, "the refused child was not terminated"
         time.sleep(0.5)

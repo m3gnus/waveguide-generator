@@ -200,8 +200,8 @@ def confine_to_windows_job(
         return WindowsJob(job, kernel32)
     except Exception as exc:  # pragma: no cover - Windows-only failure paths
         logger.warning(
-            "Could not confine %s in a Windows job object (%s). Stop will "
-            "still kill it, but processes it started may outlive it.",
+            "Could not confine %s in a Windows job object: %s. What happens "
+            "to it next is the caller's policy.",
             subject,
             exc,
         )
@@ -258,6 +258,12 @@ def popen_in_windows_job(
                     with contextlib.suppress(Exception):
                         stream.close()
     if resumed:
+        if job is None:
+            logger.warning(
+                "Running %s without a Windows job object; processes it starts "
+                "may outlive it.",
+                subject,
+            )
         return child, job
     logger.warning(
         "Could not resume %s after starting it suspended; starting it again "
