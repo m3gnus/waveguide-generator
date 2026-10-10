@@ -141,8 +141,19 @@ class AutoExportOwner:
             self.owner = None
 
     async def release(self, token: str) -> None:
+        """Give up a reservation; idempotent.
+
+        The client releases in a ``finally`` after every claim, so the usual
+        release follows a ``finish`` that already ended the reservation. Only
+        the current owner's token can release anything, and a token that owns
+        nothing any more -- finished, expired or replaced -- has nothing left
+        to give up, so it answers success instead of a 409 in the request log.
+        """
         async with self.lock:
-            owner = self._require(token)
+            self._expire()
+            owner = self.owner
+            if owner is None or owner.token != token:
+                return
             owner.released = True
             self._expire()
 

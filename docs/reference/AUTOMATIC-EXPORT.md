@@ -30,7 +30,8 @@ files and any shared sidecar, so a destination conflict or an uncertain publicat
 blocks only that format; the others are written and recorded complete. The archive
 probes with `confirm`: a member whose name an earlier version's export already
 holds, with other bytes, is written under `archive/` instead, and `run.json` names
-the artifacts where they landed.
+the artifacts where they landed. A release after `finish`, or by any token that no
+longer owns the lane, is an idempotent success.
 
 Capability requests have a ten-second client timeout. Pending qualification, refresh
 failure and an interrupted backend connection have distinct notices. The server's

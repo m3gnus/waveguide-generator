@@ -250,3 +250,43 @@ def test_retry_clears_a_stale_completion_timestamp_without_losing_completed_form
         assert (await owner.claim("one", ["csv", "step"]))["formats"] == ["step"]
 
     asyncio.run(scenario())
+
+
+def test_release_after_finish_answers_success_and_cannot_release_the_next_owner(tmp_path):
+    """The client releases in a ``finally`` after every finish.
+
+    That release used to answer 409, so every automatic export left a refusal
+    in the request log of a job that had in fact finished normally.
+    """
+
+    async def scenario():
+        owner = AutoExportOwner(runtime_for(tmp_path))
+        settle = next(
+            route.endpoint
+            for route in router_for(owner).routes
+            if route.path == "/api/jobs/auto-export/{token}/{action}"
+        )
+        first = await owner.claim("one", ["csv"])
+        await owner.finish(
+            first["token"],
+            {
+                "files": ["one.csv"],
+                "formats": {"csv": {"status": "complete", "attempted_at": "now"}},
+                "completed_at": "now",
+            },
+        )
+        assert await settle(first["token"], "release", None) == {"status": "ok"}
+
+        second = await owner.claim("two", ["csv"])
+        assert second["claimed"]
+        assert await settle(first["token"], "release", None) == {"status": "ok"}
+        assert owner.owner is not None
+        assert owner.owner.token == second["token"] and not owner.owner.released
+        # The finished token still cannot do anything else.
+        with pytest.raises(HTTPException) as refused:
+            await settle(first["token"], "heartbeat", None)
+        assert refused.value.status_code == 409
+        assert await settle(second["token"], "release", None) == {"status": "ok"}
+        assert (await owner.claim("one", ["json"]))["claimed"]
+
+    asyncio.run(scenario())
