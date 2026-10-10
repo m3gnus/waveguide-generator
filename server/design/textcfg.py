@@ -718,6 +718,10 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
     "LFSource": "secondary LF sources are not implemented",
     "Source.Contours": "contour-drawn (dome) sources are not implemented; WG would solve "
     "with its default throat source",
+    "Mesh.ThroatSegments": "the throat-extension slice count is read but never built; use Mesh.ZMapPoints",
+    "Mesh.ThroatExtSegments": "the throat-extension slice count is not implemented; use Mesh.ZMapPoints",
+    "Mesh.ThroatSliceDensity": "the throat slice density is read but never built",
+    "Coverage.Mode": "the coverage mode is read but never built",
     "Plan": "user-defined enclosure plans are not implemented; use Depth and Spacing",
     "Dim": "enclosure dimensions by Dim are not implemented; use Spacing",
 }
@@ -876,6 +880,121 @@ def _refuse_unsupported_ath_items(
             f"unsupported item(s) in ATH config: {details}. ATH applies these and this "
             "importer would drop them, building a different model than the file "
             "describes. Remove them, or prefix a name with '_' to disable it."
+        )
+
+
+# Unread ATH items WG states in the open report instead of refusing: ATH ignores
+# them for geometry, or they only shape ABEC's subdomain interfaces, which a WG
+# solve never builds. Everything else WG does not read is refused by name.
+_ATH_IGNORED_WITH_NOTE = {
+    "Mesh.SubdomainSlices": "it only places ABEC subdomain interfaces, which a WG solve does not build",
+    "Mesh.InterfaceOffset": "it only places ABEC subdomain interfaces, which a WG solve does not build",
+    "Mesh.InterfaceResolution": "it only sizes ABEC subdomain interfaces, which a WG solve does not build",
+}
+# ATH mesh-output switches. The mesher ignores them too; listed here so a WG
+# paired with a mesher that predates that change still accepts them.
+_ATH_MESH_OUTPUT_KEYS = frozenset({"Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion"})
+# Top-level members that ATH reads only inside the R-OSSE block.
+_ATH_BLOCK_ONLY_AT_TOP = frozenset({"arcterm", "trunc"})
+_ATH_NAMESPACES_IGNORING_UNKNOWN = ("Morph.", "MORPH.", "GCurve.", "GCURVE.")
+_ATH_UNREAD_NOOP_VALUES = {"Rot": 0.0}
+# Blocks WG reads (or ATH ignores) in some layout; a profile block beside the
+# selected one, or a Mesh/Source section, is accounted for elsewhere.
+_ATH_READ_BLOCKS = frozenset(
+    {"OSSE", "R-OSSE", "ROSSE", "Mesh", "Source", "Mesh.Enclosure", "Morph", "MORPH", "GCurve", "GCURVE"}
+)
+
+
+def _refuse_unread_ath_items(
+    extra_keys: Mapping[str, str],
+    extra_blocks: Mapping[str, Any],
+    ignored: list[IgnoredSetting],
+) -> None:
+    """Refuse every ATH item that survives only as passthrough, by name.
+
+    What the importer neither builds nor knows to be harmless used to import as
+    a simpler horn: unknown keys, typos and items the mesher builds but WG does
+    not translate. The harmless set is the mesher's own ignore list (output,
+    project and solver items), so the two importers cannot drift; reasons and
+    near-miss hints come from the mesher too.
+    """
+
+    from hornlab_mesher import config_parser as mesher
+
+    from .throat_stretch import text_number
+
+    def parked(name: str) -> bool:
+        return any(part.startswith("_") for part in name.split(":", 1)[0].split("."))
+
+    def number(raw: str) -> float | None:
+        try:
+            return float(text_number(raw))
+        except (TypeError, ValueError):
+            return None
+
+    # Keys WG reads in some layout. Left over here they are keys ATH ignores in
+    # this one (r0 beside an R-OSSE block, the unselected profile block...), so
+    # they are not unknown. `Rot` is read only beside OSSE; leftover it is
+    # judged below.
+    read = ({*_COMMON_MAP, *_OSSE_MAP, *_ATH_ROSSE_MEMBERS, "Coverage.Angle", "Throat.Diameter",
+             "Throat.Angle", "Length", "Term.n", "Term.s", "Term.k", "Term.q", "OS.k", "OS.h", "n", "s", "h"}
+            - {"Rot"})
+    candidates = sorted(read)
+    found: list[tuple[str, str | None]] = []
+    for key, value in extra_keys.items():
+        if parked(key) or mesher._ath_item_ignored(key, block=False) or key in _ATH_MESH_OUTPUT_KEYS:
+            continue
+        # Judged by the named pass (`_refuse_unsupported_ath_items`), which has
+        # already accepted these at their no-op values.
+        if _ath_unsupported_reason(key) is not None or key in ("Mesh.RearShape", "Throat.Profile"):
+            continue
+        if key in read:
+            continue
+        if key.startswith(_ATH_NAMESPACES_IGNORING_UNKNOWN):
+            ignored.append(IgnoredSetting(
+                key=key, value=value,
+                note=f"ATH has no {key} key and ignores it, so it has no effect here either.",
+            ))
+            continue
+        if key in _ATH_IGNORED_WITH_NOTE:
+            ignored.append(IgnoredSetting(
+                key=key, value=value, note=f"{key} is not applied: {_ATH_IGNORED_WITH_NOTE[key]}.",
+            ))
+            continue
+        if key in _ATH_BLOCK_ONLY_AT_TOP:
+            ignored.append(IgnoredSetting(
+                key=key, value=value,
+                note=f"ATH reads {key} only inside the R-OSSE block, so it has no effect at top level.",
+            ))
+            continue
+        if key in _ATH_UNREAD_NOOP_VALUES and number(value) == _ATH_UNREAD_NOOP_VALUES[key]:
+            continue
+        reason = (
+            _UNSUPPORTED_ATH_REASONS.get(key)
+            or mesher._UNSUPPORTED_ATH_REASONS.get(key)
+            or mesher._ath_refusal_reason(key, candidates)
+            or "WG does not read this key and ATH may apply it"
+        )
+        found.append((key, reason))
+    for name in extra_blocks:
+        base = name.split(":", 1)[0].strip()
+        if parked(name) or mesher._ath_item_ignored(name, block=True):
+            continue
+        if (base.startswith(_ATH_NAMESPACES_IGNORING_UNKNOWN) or base in _ATH_READ_BLOCKS
+                or _ath_unsupported_reason(base) is not None or base.startswith("WG.")):
+            continue
+        reason = (
+            _UNSUPPORTED_ATH_REASONS.get(base)
+            or mesher._UNSUPPORTED_ATH_REASONS.get(base)
+            or "WG does not read this block and ATH may apply it"
+        )
+        found.append((f"{base} = {{...}}", reason))
+    if found:
+        details = "; ".join(f"{written} ({reason})" for written, reason in found)
+        raise TextConfigError(
+            f"unsupported item(s) in ATH config: {details}. ATH applies or would reject "
+            "these and this importer does not read them, building a different model than "
+            "the file describes. Remove them, or prefix a name with '_' to disable it."
         )
 
 
@@ -1152,6 +1271,8 @@ def _build_payload(
         for name, block in blocks.items()
         if name not in consumed_blocks
     }
+    if dialect == "ath" and refuse_unsupported:
+        _refuse_unread_ath_items(payload["extra_keys"], payload["extra_blocks"], ignored_profile)
     return payload
 
 

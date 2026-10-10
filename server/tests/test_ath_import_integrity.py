@@ -81,11 +81,9 @@ def test_parked_items_do_not_refuse() -> None:
 @pytest.mark.parametrize(
     "extra",
     [
-        "Coverage.Angel = 60\n",  # a typo: ATH ignores it too
         "Morph.TargetShape = 1\nMorph.Width = 300\n",
         "ABEC.SimProfile = 1\n",
         "Mesh.SubdomainSlices = 5\nMesh.InterfaceOffset = 5\n",
-        "Source.VelocityProfile = 2\n",
         "Gmsh.Algorithm = 5\nMeshCmd = x\n",
     ],
 )
@@ -101,9 +99,9 @@ def test_native_wg_files_keep_their_passthrough_semantics() -> None:
     assert "Scale.Z = 0.5" in serialize(parsed)
 
 
-def test_typo_fixture_imports_and_names_the_key_as_preserved() -> None:
-    parsed = parse(fixture("typo"))
-    assert "Coverage.Angel" in parsed.extra_keys
+def test_typo_fixture_is_refused_by_name_with_the_near_miss() -> None:
+    with pytest.raises(TextConfigError, match=r"Coverage\.Angel \(did you mean Coverage\.Angle\?\)"):
+        parse(fixture("typo"))
 
 
 def test_a_repeated_block_is_refused_not_replaced() -> None:
@@ -180,9 +178,12 @@ def test_a_wg_stamped_file_keeps_native_passthrough_for_unsupported_keys() -> No
     # A file WG wrote (geometry stamp, native header) is never refused on reopen.
     native = parse("; Parameter config\n" + BASE + "Scale.Z = 0.5\n")
     assert parse(serialize(native)).extra_keys["Scale.Z"] == "0.5"
-    imported = parse(BASE + "Coverage.Angel = 60\n")
+    imported = parse(BASE + "Gmsh.Algorithm = 5\n")
     saved = serialize(imported)
-    assert parse(saved).extra_keys["Coverage.Angel"] == "60"
+    assert parse(saved).extra_keys["Gmsh.Algorithm"] == "5"
+    # A stamped file keeps even a key an unstamped ATH file would be refused for.
+    stamped = "; Waveguide Generator geometry-interpretation: native-v1\n" + BASE + "Coverage.Angel = 60\n"
+    assert parse(stamped).extra_keys["Coverage.Angel"] == "60"
     stamped = "; Waveguide Generator geometry-interpretation: native-v1\n" + BASE + "Scale.Z = 0.5\n"
     assert parse(stamped).extra_keys["Scale.Z"] == "0.5"
 
@@ -286,3 +287,122 @@ def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> No
         # this module's concern; only its own refusals count.
         assert "unsupported item" not in str(exc), f"{path.name}: {exc}"
         assert "appears more than once" not in str(exc), f"{path.name}: {exc}"
+
+
+RBASE = """R-OSSE = {
+ R = 150
+ a = 45
+ r0 = 12.7
+ a0 = 10
+ k = 1
+ m = 0.8
+ b = 0.3
+ r = 0.4
+ q = 3.4
+}
+ABEC.SimType = 2
+"""
+
+# Keys from the ATH feature-gap study that WG used to drop without a word.
+# None carries s1/s2, so the refusal does not depend on throat stretch.
+GAP_STUDY_KEYS = {
+    "Throat.Ext.Ctrl": "Throat.Ext.Ctrl = 1,2,3,4,5,6\n",
+    "Throat.Ext.r0": "Throat.Ext.r0 = 5\n",
+    "Throat.Ext.Included": "Throat.Ext.Included = 1\n",
+    "Throat.Ext.Segments": "Throat.Ext.Segments = 4\n",
+    "NAC": "NAC = 4\n",
+    "Mesh.InterfaceDraw": "Mesh.InterfaceDraw = 1\n",
+    "MEH": "MEH = {\n x = 1\n}\n",
+    "ZFix": "ZFix = 3\n",
+    "ZFix.Stretched": "ZFix.Stretched = 3\n",
+    "Profile": "Profile = foo.txt\n",
+    "Coverage.Angel": "Coverage.Angel = 60\n",
+    "Throat.Profile": "Throat.Profile = 3\n",
+    "Mesh.Enclosure.Plan": "Mesh.Enclosure = {\n Depth = 200\n Plan = x\n}\n",
+    "Mesh.Enclosure.Dim": "Mesh.Enclosure = {\n Depth = 200\n Dim = 3,4\n}\n",
+    "Source.Contours": "Source.Contours = {\n dome 1 2\n}\n",
+    "SourceCover.Radius": "SourceCover.Radius = 3\n",
+    "Source.DuctResolution": "Source.DuctResolution = 3\n",
+    "Source.SaveAs": "Source.SaveAs = x\n",
+    "Source.VelocityProfile": "Source.VelocityProfile = 2\n",
+    "AxiMorph": "AxiMorph = {\n a = 1\n}\n",
+    "Superslot": "Superslot = 1\n",
+    "Mod": "Mod = {\n a = 1\n}\n",
+    "EXAR": "EXAR = 1\n",
+    "Vanes": "Vanes = {\n a = 1\n}\n",
+    "WallImpedance": "WallImpedance = 1\n",
+    "FusionRotaryProfile": "FusionRotaryProfile = x\n",
+    "Mesh.MouthArc": "Mesh.MouthArc = 1\n",
+    "Mesh.LFEnclosure": "Mesh.LFEnclosure = 1\n",
+    "Mesh.RearCubic": "Mesh.RearCubic = 1\n",
+    "Mesh.ThroatExtSegments": "Mesh.ThroatExtSegments = 3\n",
+    "Mesh.ZMapElementSize": "Mesh.ZMapElementSize = 3\n",
+    "Mesh.WG": "Mesh.WG = 0\n",
+    "Mesh.OpusRear": "Mesh.OpusRear = 1\n",
+    "Mesh.RoundedEdge": "Mesh.RoundedEdge = 1\n",
+    "Mesh.Wireframe": "Mesh.Wireframe = 1\n",
+    "Tickler": "Tickler = 1\n",
+    "System4": "System4.a = 1\n",
+    "Scale.Z": "Scale.Z = 2\n",
+    "HornGeometry": "HornGeometry = 2\n",
+    "Horn.Adapter": "Horn.Adapter = 1\n",
+    "Horn.Part": "Horn.Part:1 = {\n H = 1\n}\n",
+    "Rollback": "Rollback = 1\nRollback.Angle = 90\n",
+    "LFSource": "LFSource.Below = {\n a = 1\n}\n",
+    "BEE": "BEE = {\n a = 1\n}\n",
+    "Source.Array": "Source.Array = 3\n",
+    "Mesh.Roundover": "Mesh.Roundover = {\n Radius = 5\n}\n",
+    "Mesh.RearShape": "Mesh.RearShape = 3\n",
+}
+
+
+@pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", RBASE)])
+@pytest.mark.parametrize("key", sorted(GAP_STUDY_KEYS))
+def test_every_gap_study_key_is_refused_by_name(family: str, base: str, key: str) -> None:
+    with pytest.raises(TextConfigError, match="unsupported item") as caught:
+        parse(base + GAP_STUDY_KEYS[key])
+    assert key.split(".")[-1] in str(caught.value) or key in str(caught.value)
+
+
+def test_rot_beside_r_osse_is_refused_unless_zero() -> None:
+    with pytest.raises(TextConfigError, match="Rot"):
+        parse(RBASE + "Rot = 10\n")
+    assert parse(RBASE + "Rot = 0\n").dialect == "ath"
+    assert parse(BASE + "Rot = 10\n").dialect == "ath"  # OSSE reads it
+
+
+@pytest.mark.parametrize("key", ["Mesh.Algorithm", "Mesh.Binary", "Mesh.MshFileVersion"])
+def test_mesh_output_only_keys_import(key: str) -> None:
+    assert parse(BASE + f"{key} = 2\n").dialect == "ath"
+    assert parse(BASE + "Mesh = {\n" + f" {key[5:]} = 2\n" + "}\n").dialect == "ath"
+
+
+@pytest.mark.parametrize("key", ["Mesh.SubdomainSlices", "Mesh.InterfaceOffset"])
+def test_abec_interface_keys_import_and_are_named_in_the_report(key: str) -> None:
+    parsed = parse(BASE + f"{key} = 5\n")
+    assert [item.key for item in parsed.ignored_settings] == [key]
+    assert "ABEC subdomain interfaces" in parsed.ignored_settings[0].note
+
+
+def test_unknown_morph_and_gcurve_keys_are_ignored_as_ath_ignores_them() -> None:
+    parsed = parse(BASE + "Morph.Widht = 3\nGCurve.Widht = 3\n")
+    assert {item.key for item in parsed.ignored_settings} == {"Morph.Widht", "GCurve.Widht"}
+
+
+def test_refusals_do_not_depend_on_throat_stretch() -> None:
+    assert "s1" not in BASE and "s2" not in BASE
+    for key in ("Rollback", "LFSource", "Throat.Profile"):
+        with pytest.raises(TextConfigError):
+            parse(BASE + GAP_STUDY_KEYS[key])
+
+
+def test_parked_unknown_items_and_known_ignorable_items_import() -> None:
+    text = BASE + "_NAC = 4\n_Vanes = {\n a = 1\n}\nGmsh.Algorithm = 5\nOutput.STL = 1\nLE.Rg = 3\nReport = {\n Title = a\n}\n"
+    assert parse(text).dialect == "ath"
+
+
+@pytest.mark.parametrize("key", ["Mesh.ThroatSegments", "Mesh.ThroatSliceDensity", "Coverage.Mode"])
+def test_keys_wg_stores_but_never_builds_are_refused_by_name(key: str) -> None:
+    with pytest.raises(TextConfigError, match=key.replace(".", r"\.")):
+        parse(BASE + f"{key} = 3\n")
+    assert parse("; Parameter config\n" + BASE + f"{key} = 3\n").dialect == "mwg"
