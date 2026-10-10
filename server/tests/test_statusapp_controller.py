@@ -1545,3 +1545,85 @@ def test_an_exit_sends_the_reader_to_the_log_only_when_this_start_wrote_to_it(
     assert snapshot.exit_code == 1
     assert "No module named 'uvicorn'" in reason
     assert reason.endswith(location.format(log=log)), reason
+
+
+#: What asyncio's proactor logs on Windows when a peer drops a connection
+#: first: an ERROR record, with a traceback, in perfectly normal running.
+_DISCONNECT_RECORD = (
+    "2026-10-10T23:03:46+0200 ERROR asyncio: Exception in callback "
+    "_ProactorBasePipeTransport._call_connection_lost(None)\n"
+    "handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>\n"
+    "Traceback (most recent call last):\n"
+    '  File "asyncio\\events.py", line 89, in _run\n'
+    "    self._context.run(self._callback, *self._args)\n"
+    "ConnectionResetError: [WinError 10054] An existing connection was "
+    "forcibly closed by the remote host\n"
+)
+
+
+_SOLVER_TRACEBACK = (
+    "Traceback (most recent call last):\n"
+    '  File "server\\app.py", line 1, in <module>\n'
+    "RuntimeError: solver import failed\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("before", "after", "expected"),
+    [
+        (
+            "2026-10-10T23:03:40+0200 ERROR wg.launch: the data directory is not writable\n",
+            "",
+            "the data directory is not writable",
+        ),
+        (_SOLVER_TRACEBACK, "", "RuntimeError: solver import failed"),
+        (
+            _SOLVER_TRACEBACK,
+            "Could not find Gmsh.Interactive plotting and shapes module not available.\n",
+            "RuntimeError: solver import failed",
+        ),
+        ("", "", "the cause was not logged"),
+    ],
+    ids=["logged-error", "unlogged-traceback", "traceback-then-notice", "nothing-else"],
+)
+def test_a_dropped_connection_is_never_reported_as_the_reason_the_server_died(
+    tmp_path: Path, before: str, after: str, expected: str
+) -> None:
+    """A WinError 10054 record is the last ERROR far more often than the cause.
+
+    The status window took the last ERROR line, or failing that the last line
+    of output, and so reported a browser closing a socket as why the server
+    exited. The real error wins when there is one, the last traceback when
+    nothing was logged at ERROR, and otherwise the window says so.
+    """
+
+    server = tmp_path / "disconnect_then_exit.py"
+    server.write_text(
+        "import sys\n"
+        f"sys.stderr.write({before!r})\n"
+        f"sys.stderr.write({_DISCONNECT_RECORD!r})\n"
+        "sys.stderr.flush()\n"
+        f"sys.stdout.write({after!r})\n"
+        "sys.stdout.flush()\n"
+        "raise SystemExit(1)\n",
+        encoding="utf-8",
+    )
+    controller = _controller(tmp_path, server_command=(sys.executable, str(server)))
+    controller.start()
+    try:
+        snapshot = _wait_for(
+            lambda: (
+                controller.poll()
+                if controller.poll().backend.state is ServiceState.ERROR
+                else None
+            )
+        )
+    finally:
+        controller.close()
+
+    reason = snapshot.backend.reason
+    assert reason.startswith("Server exited with code 1: ")
+    assert expected in reason
+    assert "10054" not in reason
+    assert "ConnectionResetError" not in reason
+    assert "Exception in callback" not in reason

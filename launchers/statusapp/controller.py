@@ -365,6 +365,125 @@ def _windows_job_for(process: subprocess.Popen[str] | int) -> object | None:
     return WindowsJob(handle)
 
 
+#: A line of the server's own log format, which starts each new record.
+_LOG_RECORD = re.compile(r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}")
+_TRACEBACK = "Traceback (most recent call last):"
+#: A peer dropping a socket. On Windows asyncio's proactor logs it at ERROR,
+#: with a full traceback, whenever a browser or probe closes a connection
+#: first -- it happens in normal running and says nothing about why the
+#: server stopped.
+_DISCONNECT = re.compile(r"ConnectionResetError|WinError 10054")
+
+
+def _is_disconnect(line: str) -> bool:
+    return bool(_DISCONNECT.search(line))
+
+
+#: Python 3.11+ marks the failing expression under a source line.
+_CARETS = re.compile(r"^[~^\s]+$")
+#: ``ValueError: ...``, ``asyncio.exceptions.CancelledError``, ``SystemExit: 1``.
+_EXCEPTION_NAME = re.compile(r"^(?:[A-Za-z_]\w*\.)*[A-Z]\w*(?::|$)")
+
+
+def _traceback_end(lines: Sequence[str], start: int) -> int | None:
+    """The index of the exception line closing the traceback at ``start``.
+
+    The collector strips each line, so indentation cannot tell a frame's
+    source line from the exception: after a ``File "..."`` line comes at most
+    one source line, then another frame or the exception.
+    """
+
+    after_frame = False
+    for index in range(start + 1, len(lines)):
+        line = lines[index].strip()
+        if not line or _CARETS.match(line):
+            continue
+        if line.startswith('File "'):
+            after_frame = True
+            continue
+        if after_frame and not _EXCEPTION_NAME.match(line):
+            after_frame = False
+            continue
+        return index
+    return None
+
+
+_CHAINED = ("During handling of the above exception", "The above exception was the direct cause")
+
+
+def _exception_end(lines: Sequence[str], start: int) -> int | None:
+    """The line that names the exception a report starting at ``start`` is about.
+
+    A traceback ends on its exception line, followed through any chained
+    tracebacks. A log record carries its traceback directly under its message
+    -- asyncio adds one ``handle:`` line between them -- so only a traceback
+    that close is the record's own; without one, the record is its own line.
+    """
+
+    header = start if lines[start].startswith(_TRACEBACK) else None
+    for index in range(start + 1, min(len(lines), start + 4)):
+        if header is not None:
+            break
+        line = lines[index]
+        if _LOG_RECORD.match(line) or line.startswith("Waveguide Generator did not start"):
+            break
+        if line.startswith(_TRACEBACK):
+            header = index
+    if header is None:
+        return start
+    end = _traceback_end(lines, header)
+    while (
+        end is not None
+        and end + 2 < len(lines)
+        and lines[end + 1].startswith(_CHAINED)
+        and lines[end + 2].startswith(_TRACEBACK)
+    ):
+        end = _traceback_end(lines, end + 2)
+    return end
+
+
+def _disconnect_lines(lines: Sequence[str]) -> set[int]:
+    """Every line that belongs to a dropped-connection report, and only those."""
+
+    marked: set[int] = set()
+    for index, line in enumerate(lines):
+        if index in marked:
+            continue
+        if " ERROR " in line or " CRITICAL " in line or line.startswith(_TRACEBACK):
+            end = _exception_end(lines, index)
+            if end is not None and _is_disconnect(lines[end]):
+                marked.update(range(index, end + 1))
+        elif _is_disconnect(line):
+            marked.add(index)
+    return marked
+
+
+def _undiagnosed_exit_detail(lines: Sequence[str]) -> str:
+    """What to say when no line claims to be the failure.
+
+    The last line of merged output is whatever happened to flush last, and on
+    Windows that is often a dropped connection's traceback -- which sent a
+    reader after a network fault that never happened. Prefer the last
+    traceback's exception; failing that the last line that is not part of a
+    dropped connection (``launch/serve`` prints its refusals plainly); and if
+    nothing is left, say the cause was not logged.
+    """
+
+    if not lines:
+        return "no diagnostic output"
+    benign = _disconnect_lines(lines)
+    for index in range(len(lines) - 1, -1, -1):
+        if index in benign or not lines[index].startswith(_TRACEBACK):
+            continue
+        end = _traceback_end(lines, index)
+        if end is not None:
+            return lines[end].strip()
+    for index in range(len(lines) - 1, -1, -1):
+        if index not in benign and lines[index].strip():
+            return lines[index]
+    return "the cause was not logged"
+
+
 class StatusController:
     """Start, observe, and stop exactly one local WG server process tree.
 
@@ -852,10 +971,16 @@ class StatusController:
 
         So look for a line that claims to be a failure: the level field of the
         server's own log format, or one of the plain messages ``launch/serve``
-        prints to stderr before logging exists.
+        prints to stderr before logging exists -- except a dropped connection,
+        which asyncio logs at ERROR in normal running (``_DISCONNECT``).
         """
 
-        for line in reversed(self._output_lines()):
+        lines = self._output_lines()
+        benign = _disconnect_lines(lines)
+        for index in range(len(lines) - 1, -1, -1):
+            line = lines[index]
+            if index in benign:
+                continue
             if " ERROR " in line or " CRITICAL " in line:
                 return line
             if line.startswith("Waveguide Generator did not start"):
@@ -869,8 +994,7 @@ class StatusController:
             # would attribute the stop to whatever happened to be on stdout.
             detail = "the server shut down without reporting an error"
         elif detail is None:
-            lines = self._output_lines()
-            detail = lines[-1] if lines else "no diagnostic output"
+            detail = _undiagnosed_exit_detail(self._output_lines())
         return f"Server exited with code {return_code}: {detail}. {self._log_location()}"
 
     def _server_log(self) -> Path | None:
