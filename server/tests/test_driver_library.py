@@ -261,6 +261,8 @@ def test_driver_type_cell_overrides_the_kind_heuristic(tmp_path: Path) -> None:
         return matching[0]["kind"]
 
     assert kind_of("DomeTweeter") == "lf"
+    # An lf row without Size_in is labelled by its diameter, not left blank.
+    assert library.search(q="Acme DomeTweeter", kind="all", z=None, limit=5)[0]["size"] == "100 mm"
     assert kind_of("UpperCase") == "lf"
     assert kind_of("DeclaredCD") == "cd"
     assert kind_of("BlankType") == "cd"

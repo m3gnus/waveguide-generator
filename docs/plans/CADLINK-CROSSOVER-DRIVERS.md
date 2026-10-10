@@ -249,7 +249,9 @@ per-user library folder and exposes a search API.
   `Cms_mm_per_N|Cms_mmN`, `Rms_kg_per_s`, `Xmax_mm|Xmax`,
   `Sensitivity_dB`, `Power_W|Power_AES_W`, `XO_min_Hz`, `Freq_low_Hz`,
   `Price_avg_EUR|Price_EUR`, `Source_URL|URL`. Unknown columns are kept
-  as opaque extras. Never invent a value for a missing column.
+  as opaque extras. Never invent a value for a missing column. An optional
+  `Driver_type` column (`cd`, `lf` or `unknown`) overrides the row-level
+  field rule that decides `kind`; a blank or unrecognised cell falls back to it.
 - `GET /api/drivers?q=&kind=lf|cd|all&z=&limit=&complete=` — ranked by token
   prefix match on brand + model, then impedance match, then completeness.
   Each hit: `id` (`Brand::Model::Z`), `brand`, `model`, `z_ohm`, `kind`,

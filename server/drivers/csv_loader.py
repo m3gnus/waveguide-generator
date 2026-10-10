@@ -259,6 +259,9 @@ def classify_size(fields: dict[str, float | str | None], kind: str) -> str | Non
     size = fields.get("size_in")
     if isinstance(size, (int, float)):
         return f'{_fmt(float(size))}"'
+    diameter = fields.get("diameter_mm")
+    if kind == "lf" and isinstance(diameter, (int, float)):
+        return f"{_fmt(float(diameter))} mm"
     return None
 
 
