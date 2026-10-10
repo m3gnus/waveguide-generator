@@ -17,7 +17,9 @@ _REAL_C4 = pytest.mark.skipif(not mesher_supports_stretch(), reason="needs real 
 
 
 def text(family, extra="", top=""):
-    dimension = "L = 160" if family == "OSSE" else "R = 200"
+    # `s` is stated so the oracle (the pinned mesher importer, which still
+    # defaults an omitted Term.s to 0.7) and WG (0.5, as ATH measured) agree.
+    dimension = "L = 160\ns = 0.5" if family == "OSSE" else "R = 200"
     return f"{family} = {{\n{dimension}\ns1 = .5\ns2 = .2\n{extra}\n}}\n{top}"
 
 
@@ -113,12 +115,16 @@ def test_native_active_diameter_expression_keeps_expression(family):
 @pytest.mark.parametrize("scale", [.48, 2])
 @pytest.mark.parametrize("diameter", ["", "Throat.Diameter = 28", "Throat.Diameter = 20+2"])
 def test_flat_active_ath_radius_matches_mesher(scale, diameter):
-    assert_parity(f"Length = 160\ns1 = .5\ns2 = .2\nScale = {scale}\n{diameter}")
+    assert_parity(f"Length = 160\nTerm.s = 0.5\ns1 = .5\ns2 = .2\nScale = {scale}\n{diameter}")
 
 
 def diameter_source(family, placement, active, diameter, explicit_radius, scale):
     dimension = "Length = 160" if family == "OSSE" else "R = 200"
     coefficients = "s1 = .5\ns2 = .2" if active else "s1 = 0\ns2 = .2"
+    if family == "OSSE":
+        # Stated so the mesher oracle (omitted Term.s) and WG (0.5 as ATH builds
+        # it) agree whichever mesher is pinned.
+        coefficients += "\ns = 0.5" if placement == "profile" else "\nTerm.s = 0.5"
     controls = f"{dimension}\n{coefficients}\nThroat.Diameter = {diameter}"
     if explicit_radius:
         controls += "\nr0 = 10"

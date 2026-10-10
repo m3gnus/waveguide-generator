@@ -628,7 +628,7 @@ Term.q = 0.996
 
 
 def test_ath_osse_import_takes_aths_own_throat_angle_and_term_s_defaults() -> None:
-    """ATH defaults Throat.Angle to 0 and Term.s to 0.7 (User Guide 4.1.1).
+    """ATH defaults Throat.Angle to 0 and Term.s to 0.5 (measured; the guide says 0.7).
 
     Leaving them unset reaches the mesher's native-config defaults instead
     (a0 = 15.5, s = 0), which rebuilds the throat at a different opening angle.
@@ -640,7 +640,7 @@ def test_ath_osse_import_takes_aths_own_throat_angle_and_term_s_defaults() -> No
     assert parsed.dialect == "ath"
     profile = design_to_mesher_config(parsed.design)["profile"]
     assert profile["a0"] == 0
-    assert profile["s"] == 0.7
+    assert profile["s"] == 0.5
 
 
 @pytest.mark.parametrize(

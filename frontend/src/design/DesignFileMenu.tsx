@@ -56,6 +56,19 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
   missing: { label: 'unlinked', detail: 'Unlinked: this file has no CAD-link identity yet. Its first CAD-linked export will create one.' },
 };
 
+const NAMES_SHOWN = 8;
+
+/**
+ * Name the preserved keys or blocks, so a user can see that a key they meant
+ * to matter was kept but not read. A count alone hid exactly that.
+ */
+function nameList(names: readonly string[] | undefined): string {
+  if (!names?.length) return '';
+  const shown = names.slice(0, NAMES_SHOWN).join(', ');
+  const more = names.length > NAMES_SHOWN ? `, +${names.length - NAMES_SHOWN} more` : '';
+  return ` (${shown}${more})`;
+}
+
 /**
  * What an opened file's parse report says, in the status line.
  *
@@ -65,7 +78,8 @@ const CLASSIFICATION_DISPLAY: Record<CadLinkClassification, { label: string; det
  * nothing here.
  */
 export function reportText(report: ImportReport): string {
-  const summary = `${report.dialect.toUpperCase()} · migrations: ${report.migrationsApplied.length || 'none'} · passthrough: ${report.passthrough.blockCount} blocks, ${report.passthrough.keyCount} keys preserved`;
+  const { blockCount, keyCount, blocksPreserved, keysPreserved } = report.passthrough;
+  const summary = `${report.dialect.toUpperCase()} · migrations: ${report.migrationsApplied.length || 'none'} · passthrough: ${blockCount} blocks${nameList(blocksPreserved)}, ${keyCount} keys preserved${nameList(keysPreserved)}`;
   const notes = [...report.migrationsApplied, ...report.ignoredSettings ?? []]
     .map((item) => item.note.trim())
     .filter(Boolean);

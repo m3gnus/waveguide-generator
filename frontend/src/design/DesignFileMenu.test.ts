@@ -82,6 +82,28 @@ describe('opened-file report line', () => {
       .toBe('MWG · migrations: none · passthrough: 1 blocks, 3 keys preserved');
   });
 
+  it('names the preserved keys and blocks instead of only counting them', () => {
+    const text = reportText({
+      ...base,
+      passthrough: {
+        keysPreserved: ['Coverage.Angel', 'Output.ABECProject'],
+        blocksPreserved: ['GridExport:s1'],
+        keyCount: 2,
+        blockCount: 1,
+      },
+    });
+    expect(text).toContain('1 blocks (GridExport:s1), 2 keys preserved (Coverage.Angel, Output.ABECProject)');
+  });
+
+  it('shortens a long list of preserved names', () => {
+    const keysPreserved = Array.from({ length: 11 }, (_, index) => `K${index}`);
+    const text = reportText({
+      ...base,
+      passthrough: { keysPreserved, blocksPreserved: [], keyCount: 11, blockCount: 0 },
+    });
+    expect(text).toContain('(K0, K1, K2, K3, K4, K5, K6, K7, +3 more)');
+  });
+
   it('carries an ignored-setting note alongside the migration explanation', () => {
     const text = reportText({
       ...base,

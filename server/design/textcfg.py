@@ -250,7 +250,7 @@ def _collect_function(lines: list[str], index: int, first_value: str) -> tuple[s
     return "\n".join(raw), index
 
 
-def _lex(text: str) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], dict[str, str]]:
+def _lex(text: str, repeats: list[str] | None = None) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], dict[str, str]]:
     flat: dict[str, str] = {}
     blocks: dict[str, _RawBlock] = {}
     comments: list[str] = []
@@ -279,6 +279,8 @@ def _lex(text: str) -> tuple[dict[str, str], dict[str, _RawBlock], list[str], di
             if current is not None:
                 raise TextConfigError(f"nested block {match.group(1)!r} inside {current!r}")
             current = match.group(1)
+            if current in blocks and not current.startswith("_") and repeats is not None:
+                repeats.append(current)
             blocks[current] = _RawBlock()
             continue
         if line == "}":
@@ -482,10 +484,23 @@ def _legacy_sections(flat: dict[str, str], blocks: Mapping[str, _RawBlock]) -> s
     return consumed
 
 
-def _enclosure(blocks: Mapping[str, _RawBlock]) -> dict[str, Any] | None:
+_ENCLOSURE_FLAT_PREFIX = "Mesh.Enclosure."
+
+
+def _enclosure(
+    blocks: Mapping[str, _RawBlock], flat: Mapping[str, str] | None = None
+) -> dict[str, Any] | None:
     block = blocks.get("Mesh.Enclosure")
-    if block is None:
+    # ATH also spells the members as top-level dotted keys, which the mesher
+    # importer reads; a member in the block wins over the same dotted key.
+    flat_items = {
+        key[len(_ENCLOSURE_FLAT_PREFIX):]: value
+        for key, value in (flat or {}).items()
+        if key.startswith(_ENCLOSURE_FLAT_PREFIX)
+    }
+    if block is None and not flat_items:
         return None
+    block = _RawBlock(items={**flat_items, **(block.items if block else {})})
     result: dict[str, Any] = {}
     mapping = {
         "Depth": "depth",
@@ -683,12 +698,170 @@ def _freeform_payload(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) 
     return result
 
 
+# ATH items that ATH applies and this importer has no model for. In an ATH file
+# each one is refused by name: dropping it built a different, simpler horn with
+# nothing on screen but a key count. The reasons follow the mesher importer's
+# own table. Keys that ATH itself ignores (typos, solver and export settings)
+# are not listed: they import and are shown by name as preserved.
+_UNSUPPORTED_ATH_REASONS: dict[str, str] = {
+    "Scale.Z": "a separate axial scale is not implemented",
+    "Horn.Part": "the two-profile (Horn.Part) geometry is not implemented",
+    "HornGeometry": "the two-profile (Horn.Part) geometry is not implemented",
+    "Horn.Adapter": "the two-profile (Horn.Part) geometry is not implemented",
+    "Throat.Ext.Ctrl": "the curved throat adapter is not implemented",
+    "Rollback": "the rollback mouth termination is not implemented",
+    "Mesh.Roundover": "the mouth roundover is not implemented",
+    "Profile": "a profile read from a point file is not implemented",
+    "FusionRotaryProfile": "the rotary profile with flange and joint is not implemented",
+    "BEE": "the LF enclosure is not implemented",
+    "Source.Array": "source arrays are not implemented",
+    "LFSource": "secondary LF sources are not implemented",
+    "Source.Contours": "contour-drawn (dome) sources are not implemented; WG would solve "
+    "with its default throat source",
+    "Plan": "user-defined enclosure plans are not implemented; use Depth and Spacing",
+    "Dim": "enclosure dimensions by Dim are not implemented; use Spacing",
+}
+# Applied by ATH only inside the R-OSSE block; a top-level copy is ignored by ATH.
+_ATH_ROSSE_BLOCK_ONLY = {
+    "arcterm": "the arc termination changes ATH's geometry and is not implemented",
+    "trunc": "throat truncation changes ATH's geometry and is not implemented",
+}
+_ATH_ENCLOSURE_MEMBERS = frozenset(
+    {"Depth", "EdgeRadius", "EdgeType", "FrontResolution", "BackResolution", "Spacing"}
+)
+# R-OSSE block members measured against ATH (the importer's profile aliases).
+# `Rot`, `Length` and `Scale` are read from inside the block by neither ATH nor
+# this importer (reported as ignored); every other member is unmeasured and
+# refused.
+_ATH_ROSSE_MEMBERS = frozenset(
+    {"R", "r0", "a", "Coverage.Angle", "a0", "Throat.Angle", "k", "OS.k", "Term.k",
+     "r", "m", "b", "q", "Term.q", "tmax", "s1", "s2",
+     "Throat.Diameter", "Throat.Profile", "Rot", "Length", "Scale",
+     "Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"}
+)
+
+
+def _ath_name(name: str) -> str:
+    return name.split(":", 1)[0].strip()
+
+
+def _ath_unsupported_reason(name: str) -> str | None:
+    base = _ath_name(name)
+    if base.startswith("_"):
+        return None
+    if base.startswith("LFSource"):
+        return _UNSUPPORTED_ATH_REASONS["LFSource"]
+    if base.startswith("Source.Velocity."):
+        return "per-source velocity profiles are not implemented"
+    if base == "Rollback" or base.startswith("Rollback."):
+        return _UNSUPPORTED_ATH_REASONS["Rollback"]
+    if base.startswith("Horn.Part"):
+        return _UNSUPPORTED_ATH_REASONS["Horn.Part"]
+    if base in {"Plan", "Dim"}:  # meaningful only inside Mesh.Enclosure
+        return None
+    return _UNSUPPORTED_ATH_REASONS.get(base)
+
+
+def _refuse_unsupported_ath_items(
+    flat: Mapping[str, str],
+    blocks: Mapping[str, _RawBlock],
+    *,
+    formula: str,
+    block_name: str | None,
+) -> None:
+    """Refuse ATH items that change ATH's model and that WG would drop.
+
+    Runs for ATH-format files only, whether or not stretch is active. WG's own
+    files (`; Parameter config` header) keep their passthrough semantics: what
+    WG writes it reads back, extras included.
+    """
+
+    from .throat_stretch import text_number
+
+    def number(raw: str) -> float | None:
+        try:
+            return float(text_number(raw))
+        except (TypeError, ValueError):
+            return None
+
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(written: str, reason: str) -> None:
+        if written not in seen:
+            seen.add(written)
+            found.append((written, reason))
+
+    # `Mesh = { ... }` and `Source = { ... }` blocks are ATH's section spelling
+    # of the dotted keys.
+    dotted = dict(flat)
+    for section in ("Mesh", "Source"):
+        if section in blocks:
+            for key, value in blocks[section].items.items():
+                dotted.setdefault(f"{section}.{key}", value)
+    for key, value in dotted.items():
+        reason = _ath_unsupported_reason(key)
+        if reason is not None:
+            add(key, reason)
+        elif key.startswith(_ENCLOSURE_FLAT_PREFIX):
+            member = key[len(_ENCLOSURE_FLAT_PREFIX):]
+            if member not in _ATH_ENCLOSURE_MEMBERS and not member.startswith("_"):
+                add(key, _UNSUPPORTED_ATH_REASONS.get(
+                    member, "this enclosure member is not implemented; WG reads Depth, "
+                    "EdgeRadius, EdgeType, FrontResolution, BackResolution and Spacing"))
+        elif key == "Mesh.RearShape" and number(value) not in (None, 1.0):
+            add(key, f"Mesh.RearShape = {value} is not implemented; only the full rear (1) is")
+    for name, block in blocks.items():
+        reason = _ath_unsupported_reason(name)
+        if reason is not None:
+            add(f"{_ath_name(name)} = {{...}}", reason)
+            continue
+        base = _ath_name(name)
+        if base == "Mesh.Enclosure":
+            for key in block.items:
+                if key.startswith("_") or key in _ATH_ENCLOSURE_MEMBERS:
+                    continue
+                add(f"Mesh.Enclosure.{key}", _UNSUPPORTED_ATH_REASONS.get(
+                    key, "this enclosure member is not implemented; WG reads Depth, "
+                    "EdgeRadius, EdgeType, FrontResolution, BackResolution and Spacing"))
+        elif base in ("OSSE", "R-OSSE", "ROSSE"):
+            for key, value in block.items.items():
+                inner = _ath_unsupported_reason(key)
+                if inner is None and base != "OSSE":
+                    inner = _ATH_ROSSE_BLOCK_ONLY.get(key)
+                if inner is not None:
+                    add(f"{base}.{key}", inner)
+        # A named in-block child (a block opened inside this one) never reaches
+        # `items`; the lexer already refuses nesting.
+    # The selected profile block's Throat.Profile wins over the top-level one.
+    selected_items = blocks[block_name].items if block_name is not None else {}
+    profile = selected_items.get("Throat.Profile", flat.get("Throat.Profile"))
+    if profile is not None and number(profile) not in (None, 1.0):
+        add("Throat.Profile", f"Throat.Profile = {profile} is not measured against ATH; only the "
+            "OS-SE profile (1) is")
+    if formula == "R-OSSE" and block_name is not None:
+        for key in blocks[block_name].items:
+            if key.startswith("_") or key in _ATH_ROSSE_MEMBERS:
+                continue
+            if _ath_unsupported_reason(key) is None:
+                add(f"{block_name}.{key}", "this member has not been measured against ATH's "
+                    "R-OSSE output, so it cannot be imported without risking a different horn")
+    if found:
+        details = "; ".join(f"{written} ({reason})" for written, reason in found)
+        raise TextConfigError(
+            f"unsupported item(s) in ATH config: {details}. ATH applies these and this "
+            "importer would drop them, building a different model than the file "
+            "describes. Remove them, or prefix a name with '_' to disable it."
+        )
+
+
 def _build_payload(
     flat_source: Mapping[str, str],
     blocks: Mapping[str, _RawBlock],
     *,
     dialect: Literal["mwg", "ath"],
     ignored_profile: list[IgnoredSetting],
+    refuse_unsupported: bool = False,
 ) -> dict[str, Any]:
     from .throat_stretch import coefficient, text_number, validate_composition
 
@@ -737,6 +910,8 @@ def _build_payload(
     rollback = sorted(key for key in refusal_keys if key == "Rollback" or key.startswith("Rollback."))
     if rollback:
         raise TextConfigError(f"Rollback is not supported by this mesher (saw {', '.join(rollback)})")
+    if dialect == "ath" and refuse_unsupported:
+        _refuse_unsupported_ath_items(flat, blocks, formula=formula, block_name=block_name)
     composition = {**stretch}
     for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"):
         if key in flat:
@@ -825,7 +1000,8 @@ def _build_payload(
                 ):
                     note = f"ATH ignores {key} inside the {block_name} profile block. "
                     note += ("Global Scale is read only at top level." if key == "Scale" else
-                             "This value does not change the imported geometry.")
+                             f"ATH does not read it from the block, so it has no effect "
+                             f"on the imported geometry; {key} is not applied.")
                     ignored_profile.append(IgnoredSetting(
                         key=f"{block_name}.{key}", value=value, note=note,
                     ))
@@ -887,8 +1063,11 @@ def _build_payload(
             # different opening angle -- and with it the auto source cap, whose
             # radius is r0/sin(a0). ATH's Throat.Angle = 0 makes that radius
             # infinite, i.e. a flat source; 15.5 domes it by ~1.7 mm.
+            # ATH's binary defaults an omitted Term.s to 0.5, not the guide's
+            # 0.7: an explicit 0.5 gives byte-identical output (measured on
+            # V2025-12 and V2026-09a), and 0.7 widens the mouth by a fifth.
             payload.setdefault("a0", 0)
-            payload.setdefault("s", 0.7)
+            payload.setdefault("s", 0.5)
 
     if dialect == "ath" and formula in {"OSSE", "R-OSSE"}:
         if formula == "R-OSSE":
@@ -927,10 +1106,16 @@ def _build_payload(
         consumed_blocks.update(name for name in ("GCurve", "GCURVE") if name in blocks)
         consumed_keys.update(key for key in flat if key.startswith(("GCurve.", "GCURVE.")))
 
-    enclosure = _enclosure(blocks)
+    enclosure = _enclosure(blocks, flat if dialect == "ath" and refuse_unsupported else None)
     if enclosure is not None:
         payload["enclosure"] = enclosure
         consumed_blocks.add("Mesh.Enclosure")
+        if dialect == "ath" and refuse_unsupported:
+            consumed_keys.update(
+                key for key in flat
+                if key.startswith(_ENCLOSURE_FLAT_PREFIX)
+                and key[len(_ENCLOSURE_FLAT_PREFIX):] in _ATH_ENCLOSURE_MEMBERS
+            )
 
     payload["extra_keys"] = {key: value for key, value in flat.items() if key not in consumed_keys}
     payload["extra_blocks"] = {
@@ -955,7 +1140,8 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
 
     if not isinstance(text, str):
         raise TypeError("text must be a string")
-    flat, blocks, comments, raw_values = _lex(text)
+    repeated: list[str] = []
+    flat, blocks, comments, raw_values = _lex(text, repeated)
     for comment in comments:
         for match in _DESIGN_FORMAT_STAMP.finditer(comment):
             version = int(match.group(1))
@@ -980,6 +1166,15 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
         except (TypeError, ValueError, ValidationError) as exc:
             raise TextConfigError(f"invalid CadLink block: {exc}") from exc
     dialect: Literal["mwg", "ath"] = "mwg" if _MWG_SNIFF.search(text) else "ath"
+    if dialect == "ath" and repeated:
+        # ATH merges a repeated block member by member; this parser never did,
+        # so the second copy silently replaced the first. WG's own files keep
+        # passthrough blocks verbatim, repeats included.
+        raise TextConfigError(
+            f"block {repeated[0]!r} appears more than once; ATH merges repeated "
+            "blocks member by member and this importer does not. Combine "
+            "the copies into one block, or prefix a copy with '_' to park it"
+        )
     ignored_profile: list[IgnoredSetting] = []
     versions = {match.group(1) for comment in comments if (match := _GEOMETRY_STAMP.match(comment))}
     if len(versions) > 1:
@@ -988,7 +1183,13 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     if version is not None and version not in {TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION}:
         raise TextConfigError(f"unsupported geometry interpretation {version!r}")
     geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version == TEXT_IMPORT_VERSION else dialect
-    payload = _build_payload(flat, blocks, dialect=geometry_dialect, ignored_profile=ignored_profile)
+    # Refuse only files that are ATH by their own text and carry no WG stamp. A WG-saved file that
+    # carries the text-import geometry stamp is read with ATH geometry but keeps
+    # native passthrough semantics, so it never becomes unopenable.
+    payload = _build_payload(
+        flat, blocks, dialect=geometry_dialect, ignored_profile=ignored_profile,
+        refuse_unsupported=dialect == "ath" and version is None,
+    )
     if version == TEXT_IMPORT_VERSION or (version is None and dialect == "ath" and payload["formula"] != "FREEFORM"):
         payload["text_import_version"] = TEXT_IMPORT_VERSION
     applications: list[MigrationApplication] = []

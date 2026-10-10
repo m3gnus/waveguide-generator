@@ -22,7 +22,9 @@ _REAL_C4 = pytest.mark.skipif(not mesher_supports_stretch(), reason="needs real 
 
 
 def _profile(family, extra="", coefficients="s1 = .5\ns2 = .2"):
-    dimension = "L = 160" if family == "OSSE" else "R = 200"
+    # `s` is stated so the oracle (the pinned mesher importer, which still
+    # defaults an omitted Term.s to 0.7) and WG (0.5, as ATH measured) agree.
+    dimension = "L = 160\ns = 0.5" if family == "OSSE" else "R = 200"
     return f"{family} = {{\n{dimension}\n{coefficients}\n{extra}\n}}"
 
 
@@ -153,8 +155,16 @@ def test_legacy_and_wg_native_block_scale_keep_existing_behavior(family, coeffic
 
 
 @pytest.mark.parametrize("family", ["R-OSSE", "ROSSE"])
-@pytest.mark.parametrize("extra", ["Rot = 10", "Length = 180", "Rot = ignored", "Length = ignored",
-                                   "L = 180", "n = 6", "Term.n = 6", "s = .9", "h = 2", "Unknown = 9"])
+@pytest.mark.parametrize("extra", ["L = 180", "n = 6", "Term.n = 6", "s = .9", "h = 2", "Unknown = 9",
+                                   "arcterm = 1", "trunc = 0.9"])
+def test_unmeasured_r_osse_block_members_are_refused_by_name(family, extra):
+    with pytest.raises(TextConfigError) as caught:
+        parse(_profile(family, extra))
+    assert f"{family}.{extra.split(' = ')[0]}" in str(caught.value)
+
+
+@pytest.mark.parametrize("family", ["R-OSSE", "ROSSE"])
+@pytest.mark.parametrize("extra", ["Rot = 10", "Length = 180", "Rot = ignored", "Length = ignored"])
 def test_ignored_r_osse_block_keys_are_accepted_and_reported(family, extra):
     text = _profile(family, extra)
     parsed = parse(text)
