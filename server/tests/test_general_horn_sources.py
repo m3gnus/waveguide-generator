@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from io import BytesIO
-import json
 from zipfile import ZipFile
 
 from fastapi import FastAPI
@@ -11,7 +10,6 @@ import meshio
 import numpy as np
 import pytest
 
-from hornlab_mesher.source_assembly import SourceAssembly
 from hornlab_mesher.general_horn import FEATURE
 from server.cadlink.store import CadLinkStore
 from server.cadlink.native_source import read_native_source

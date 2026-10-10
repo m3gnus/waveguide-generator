@@ -111,7 +111,7 @@ def native_assembly(body: AssemblyRequest):
     drives = [hf] + ([lf] if lf is not None else [])
     try:
         if body.horn_config is not None:
-            from hornlab_mesher.general_horn import GeneralHornWall
+            from hornlab_mesher.general_horn import GeneralHornWall  # noqa: F401 - availability probe: an older mesher answers 503
             dimensions = body.dimensions.model_dump()
             if dimensions.pop("horn_length_mm") is not None or dimensions.pop("mouth_radius_mm") is not None:
                 raise ValueError("general horn length and mouth radius derive from the resolved profile; omit both dimensions")
@@ -392,7 +392,7 @@ def create_router(data_dir: Path) -> APIRouter:
         """
         try:
             from server.preview.translate import design_to_mesher_config
-            from hornlab_mesher.general_horn import GeneralHornWall
+            from hornlab_mesher.general_horn import GeneralHornWall  # noqa: F401 - availability probe: an older mesher answers 503
             config = design_to_mesher_config(design)
             config["mode"] = "bare"
             config.pop("enclosure", None)
