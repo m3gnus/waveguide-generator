@@ -34,12 +34,15 @@ def body(family, woofer=False):
     else:
         value["woofer"]["drive"]["weights"]["piston"] = 0
         value["dimensions"].update(woofer_xy_mm=[25, -20])
+    # Compact horns: the mouth rim and horn wall are refined by a fixed 0.1 mm
+    # surface deviation, whatever the mm resolutions, so the horn's size is what
+    # keeps the dense solve under a 7 GiB host's memory ceiling (3.5 GiB).
     if family == "OSSE":
-        profile = {"L_mm": 18, "r0_mm": 4, "a_deg": 32, "a0_deg": 6,
+        profile = {"L_mm": 8, "r0_mm": 4, "a_deg": 32, "a0_deg": 6,
                    "k": 1.25, "s": .7, "n": 4, "q": .995}
     else:
-        profile = {"R_mm": 22, "r0_mm": 4, "a_deg": 40, "a0_deg": 6,
-                   "k": 1, "q": 1, "tmax": 1}
+        profile = {"R_mm": 18, "r0_mm": 4, "a_deg": 44, "a0_deg": 6,
+                   "k": 1, "q": 1, "tmax": .6}
     value["horn_config"] = {"formula": family, "mode": "bare", "profile": profile,
         "mesh": {"angular_segments": 64, "length_segments": 32,
                  "throat_res_mm": 2, "mouth_res_mm": 3, "rear_res_mm": 3}}
@@ -95,6 +98,20 @@ def test_real_editor_export_ingestion_mesh_and_excitation(client, tmp_path, fami
     bad.geometry.required_features.remove(FEATURE)
     with pytest.raises(ValueError, match="feature"):
         validate_contour_request(bad.geometry, record)
+
+
+def test_memory_ceiling_refusal_reaches_the_user(client, monkeypatch):
+    # The worker subprocess inherits the lowered ceiling; the 422 must carry the
+    # ceiling's own explanation, not the generic "could not be built" text.
+    monkeypatch.setenv("WG2_DENSE_SOLVER_MEMORY_LIMIT_BYTES", str(1024**2))
+    response = client.post("/api/source-editor/assembly/ingest", json=body("OSSE"))
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert "P1 vertex/DOFs" in detail
+    assert "conservative dense-solver memory estimate" in detail
+    assert "1,048,576 bytes safety ceiling" in detail
+    assert "coarsen" in detail
+    assert "could not be built" not in detail
 
 
 @pytest.mark.parametrize("mutation", ["noncircular", "rim", "datum", "shell", "unknown"])

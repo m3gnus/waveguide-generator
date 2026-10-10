@@ -36,9 +36,12 @@ def passages(tmp_path_factory):
         model, drives = case(narrow)
         bodies = (PhasePlug("vane/A", 2, 6, 2, 2.5, 2.4, 2.9),)
         if narrow:
+            # Narrow passages are still 1.4 mm wide, but the plugs stay
+            # clear of the source so the gap-driven refinement stays under
+            # the dense-solver memory ceiling of a 7 GiB host (3.5 GiB).
             bodies = (
-                PhasePlug("core", 2, 6, 0, 1, 0, 1.4),
-                PhasePlug("vane/A", 2, 6, 1.6, 2.1, 2, 2.5),
+                PhasePlug("core", 3.5, 6, 0, 0.5, 0, 0.7),
+                PhasePlug("vane/A", 3.5, 6, 1.9, 2.8, 2.1, 3.0),
             )
         model = replace(model, phase_plugs=bodies)
         size = 8 if narrow else 4
@@ -173,8 +176,11 @@ def test_per_body_topology_cannot_hide_in_global_volume(change, passages):
     tri = mesh.get_cells_type("triangle").copy()
     tags = mesh.get_cell_data("gmsh:physical", "triangle")
     q = mesh.points[tri] * 1000 - model.parts[0][1]
-    core = np.linalg.norm(q[..., :2], axis=2).max(axis=1) <= 1.4 + 1e-6
-    core &= (q[..., 2].min(axis=1) >= 2 - 1e-6) & (q[..., 2].max(axis=1) <= 6 + 1e-6)
+    plug = model.phase_plugs[0]
+    core = np.linalg.norm(q[..., :2], axis=2).max(axis=1) <= plug.outer1_mm + 1e-6
+    core &= (q[..., 2].min(axis=1) >= plug.z0_mm - 1e-6) & (
+        q[..., 2].max(axis=1) <= plug.z1_mm + 1e-6
+    )
     assert core.any()
     if change == "inverted":
         tri[core] = tri[core][:, [0, 2, 1]]

@@ -28,6 +28,16 @@ from server.solver import metal
 from server.tests.test_imported_jobs import _native_result
 
 
+# A compact horn: the 0.1 mm surface deviation refines every rigid wall, so a
+# larger horn pushes the dome and cone fixtures past the dense-solver memory
+# ceiling of a 7 GiB host (3.5 GiB). The dispatch and BC checks do not depend on size.
+# The moving surfaces are meshed at 1.5 mm so the geometry certificate's 0.15 mm bound holds
+# on the compact horn's meshes.
+MOUTH_RADIUS_MM = 30
+HORN_LENGTH_MM = 20
+HOUSING_RADIUS_MM = MOUTH_RADIUS_MM + 1
+
+
 @pytest.fixture(scope="module")
 def artifacts(tmp_path_factory):
     root = tmp_path_factory.mktemp("native-source")
@@ -53,8 +63,8 @@ def artifacts(tmp_path_factory):
             model,
             ContourDrive("motor", tuple(zip(moving, weights))),
             path,
-            mouth_radius_mm=48,
-            length_mm=70,
+            mouth_radius_mm=MOUTH_RADIUS_MM,
+            length_mm=HORN_LENGTH_MM,
             mesh_size_mm=2,
         )
         result.append(path)
@@ -66,7 +76,7 @@ def ingest(path, tmp_path):
     sizes = {
         "rigid_size_mm": 6,
         "transition_mm": 5,
-        "source_size_mm": {s.id: 2 for s in model.segments if s.role == "moving"},
+        "source_size_mm": {s.id: 1.5 for s in model.segments if s.role == "moving"},
     }
     store = CadLinkStore(tmp_path / "registry.sqlite")
     record = ingest_native_source(path, store=store, data_dir=tmp_path, sizes=sizes)
@@ -117,7 +127,10 @@ def test_actual_ingestion_dispatch_and_independent_bc(index, artifacts, tmp_path
     rigid = [
         line(a, b)
         for a, b in zip(
-            [(24, 0), (48, 70), (49, 70), (49, -15)], [(48, 70), (49, 70), (49, -15), (0, -15)]
+            [(24, 0), (MOUTH_RADIUS_MM, HORN_LENGTH_MM), (HOUSING_RADIUS_MM, HORN_LENGTH_MM),
+             (HOUSING_RADIUS_MM, -15)],
+            [(MOUTH_RADIUS_MM, HORN_LENGTH_MM), (HOUSING_RADIUS_MM, HORN_LENGTH_MM),
+             (HOUSING_RADIUS_MM, -15), (0, -15)]
         )
     ]
     rigid += [segment(model, i) for i, s in enumerate(model.segments) if s.role == "rigid"]

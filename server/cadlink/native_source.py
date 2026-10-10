@@ -267,6 +267,11 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
             text=True,
         )
         if run.returncode:
+            ceiling = _memory_ceiling_message(run.stderr)
+            if ceiling:
+                # The ceiling's own text names the DOF count, estimate, limit and
+                # host memory; the generic "ingestion failed" message hides them.
+                raise ValueError(ceiling)
             raise ValueError("native source ingestion failed: " + run.stderr)
         built = json.loads((stage / "built.json").read_text())
         mesh_text = built.pop("msh_text")
@@ -419,6 +424,18 @@ def ingest_native_source(directory, *, store, data_dir, sizes):
                 shutil.rmtree(published)
             raise
     return json.loads(row["record_json"])
+
+
+_MEMORY_CEILING_PREFIX = "RuntimeError: Solver mesh uses "
+
+
+def _memory_ceiling_message(stderr):
+    """The dense-solver memory ceiling's refusal text from a worker traceback, else None."""
+
+    for line in reversed(stderr.splitlines()):
+        if line.startswith(_MEMORY_CEILING_PREFIX) and "safety ceiling" in line:
+            return line[len("RuntimeError: ") :].strip()
+    return None
 
 
 def _worker(stage):
