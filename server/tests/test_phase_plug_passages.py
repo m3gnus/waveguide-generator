@@ -36,9 +36,10 @@ def passages(tmp_path_factory):
         model, drives = case(narrow)
         bodies = (PhasePlug("vane/A", 2, 6, 2, 2.5, 2.4, 2.9),)
         if narrow:
-            # Narrow passages are still 1.4 mm wide, but the plugs stay
-            # clear of the source so the gap-driven refinement stays under
-            # the dense-solver memory ceiling of a 7 GiB host (3.5 GiB).
+            # Narrower than the wide case (1.4 mm between plugs against 1.9 mm
+            # to the wall), not sub-millimetre: gaps of 0.6 mm refine the whole
+            # horn wall to gap/3 and estimate 3.8-5.3 GiB, over the 3.5 GiB
+            # ceiling of a 7 GiB host even with the plugs moved clear of the source.
             bodies = (
                 PhasePlug("core", 3.5, 6, 0, 0.5, 0, 0.7),
                 PhasePlug("vane/A", 3.5, 6, 1.9, 2.8, 2.1, 3.0),

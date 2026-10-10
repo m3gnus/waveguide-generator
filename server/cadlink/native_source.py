@@ -434,7 +434,7 @@ def _memory_ceiling_message(stderr):
 
     for line in reversed(stderr.splitlines()):
         if line.startswith(_MEMORY_CEILING_PREFIX) and "safety ceiling" in line:
-            return line[len("RuntimeError: ") :].strip()
+            return line.removeprefix("RuntimeError: ").strip()
     return None
 
 
