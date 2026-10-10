@@ -1143,6 +1143,7 @@ textarea:disabled { opacity: .48; }
    item in it. As a plain grid child it took one third of the width and set
    itself three lines deep beside two empty columns. */
 .preferences-formats > .preferences-section-copy { grid-column: 1 / -1; margin: 0 0 6px; }
+.preferences-formats-inactive .ui-check { opacity: .55; }
 .preferences-formats legend { padding-inline: 4px; color: var(--fg3); font-size: var(--text-micro); text-transform: uppercase; letter-spacing: .08em; }
 .job-naming-preferences { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: 16px; padding: 0; }
 .job-run-name-field { grid-column: 1 / -1; }
