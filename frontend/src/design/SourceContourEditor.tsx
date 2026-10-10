@@ -5,6 +5,7 @@ import { durableSettings, namespaceStorage } from '../stores/durableSettings';
 import { useModalDialogFocus } from '../shell/dialogFocus';
 import { NumberField } from './NumberField';
 import { drawnSource, editPatch, editPoint, INITIAL_SOURCE, removePoint } from './sourceContourEditing';
+import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import './sourceContourEditor.css';
 
 const storage = namespaceStorage('sourceContourDraft');
@@ -50,7 +51,7 @@ const visibility = {
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach((listener) => listener()); },
 };
 export function SourceContourEditor() {
-  return <div className="source-editor-launch"><button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit source contour…</button><small>Draw, edit points and arcs, or save a reusable source preset.</small></div>;
+  return <div className="source-editor-launch"><button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit source contour…</button><ExperimentalBadge/><small>Draw, edit points and arcs, or save a reusable source preset. {EXPERIMENTAL_NOTE}</small></div>;
 }
 
 /** The App owns the modal, so responsive panel replacement cannot discard edits. */
@@ -122,7 +123,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
   const fields = (values: Record<string, number>, write: (next: Record<string, number>) => void, suffix: string) => Object.entries(values).map(([field, value]) => <NumberField key={field} label={`${suffix === 'attachment' && attachment.kind === 'baffle' && field === 'height_mm' ? 'Baffle height' : suffix === 'attachment' && attachment.kind === 'baffle' && field === 'depth_mm' ? 'Baffle depth' : labels[field] ?? field.replace('_mm', '').replaceAll('_', ' ')} ${suffix}`} unit="mm" value={value} precision={6} step={.1} onCommit={(v) => write({ ...values, [field]: v })}/>);
 
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Source contour editor" className="source-editor">
-    <header><div><h2>Source contour</h2><p>Full circular source · dimensions in mm · aligned +Z</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
+    <header><div><h2>Source contour<ExperimentalBadge/></h2><p>Full circular source · dimensions in mm · aligned +Z</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
     <fieldset disabled={busy}>
       <div className="source-editor-columns"><div>
         <div className="source-editor-toolbar"><button type="button" onClick={() => setView(fit(draft.contour.points, valid ? accepted!.value.meridian : {}))}>Fit drawing</button><button type="button" disabled={!undo.length || drawPoints !== null} onClick={() => { const previous = undo.at(-1)!; setUndo(undo.slice(0, -1)); change(previous, false); }}>Undo edit</button>
@@ -168,7 +169,7 @@ export function Editor({ onClose, initialDocument, onUseDocument, onDraftChange 
           <button type="button" onClick={() => void run(async () => { setPresets(await sourceEditorApi.presets()); setNotice('Preset library refreshed. Load a preset to use its latest revision.'); })}>Refresh presets</button>
         </div>
         {presets.map((preset) => <div key={preset.id} className="source-preset"><button type="button" disabled={drawPoints !== null} onClick={() => void run(async () => { adopt(await sourceEditorApi.validate(preset.document)); setName(preset.name); setSelected(preset); })}>Load {preset.name}</button><button type="button" aria-label={`Delete preset ${preset.name}`} onClick={() => void run(async () => { await sourceEditorApi.delete(preset); setPresets(presets.filter((p) => p.id !== preset.id)); if (selected?.id === preset.id) setSelected(undefined); setNotice('Deleted preset. Current contour retained.'); })}>Delete</button></div>)}
-        <h3>Export geometry</h3><label>Attachment<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } } : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>
+        <h3>Export geometry<ExperimentalBadge/></h3><label>Attachment<select aria-label="Source attachment" value={attachment.kind} onChange={(e) => setAttachment(e.target.value === 'baffle' ? { kind: 'baffle', dimensions: { width_mm: 44, height_mm: 54, depth_mm: 12, aperture_radius_mm: 14, center_mm: [0, 0, 0] } } : { kind: 'horn', dimensions: { mouth_radius_mm: 20, length_mm: 30, housing_radius_mm: 22, backing_depth_mm: 12 } })}><option value="baffle">Front baffle woofer</option><option value="horn">Circular conical horn</option></select></label>
         <div className="source-fields">{fields(Object.fromEntries(Object.entries(attachment.dimensions).filter((entry): entry is [string, number] => typeof entry[1] === 'number')), (next) => setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, ...next } }), 'attachment')}
           {attachment.kind === 'baffle' && ([0, 1, 2] as const).map((axis) => <NumberField key={axis} label={`Source center ${['X', 'Y', 'Z'][axis]}`} value={(attachment.dimensions.center_mm as [number, number, number])[axis]} precision={6} unit="mm" step={.1} onCommit={(v) => { const center = [...attachment.dimensions.center_mm as [number, number, number]] as [number, number, number]; center[axis] = v; setAttachment({ ...attachment, dimensions: { ...attachment.dimensions, center_mm: center } }); }}/>) }
           <NumberField label="Mesh size" value={meshSize} min={.001} precision={6} unit="mm" step={.1} onCommit={setMeshSize}/>

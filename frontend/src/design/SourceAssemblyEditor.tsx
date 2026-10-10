@@ -8,6 +8,7 @@ import { serializeDesign, useDesignStore } from '../stores/design';
 import { Editor } from './SourceContourEditor';
 import { INITIAL_SOURCE } from './sourceContourEditing';
 import { prepareNativeAssembly } from './nativeAssemblyPreparation';
+import { ExperimentalBadge, EXPERIMENTAL_NOTE } from './ExperimentalBadge';
 import './sourceContourEditor.css';
 
 const storage = namespaceStorage('sourceAssemblyDraft');
@@ -57,7 +58,7 @@ const visibility = { open: false, listeners: new Set<() => void>(), getSnapshot:
   subscribe: (listener: () => void) => { visibility.listeners.add(listener); return () => { visibility.listeners.delete(listener); }; },
   set(open: boolean) { visibility.open = open; visibility.listeners.forEach((listener) => listener()); } };
 export function SourceAssemblyLauncher() {
-  return <div className="source-editor-launch"><button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit horn + woofer assembly…</button><small>Shared enclosure, source contours and phase-plug passages.</small></div>;
+  return <div className="source-editor-launch"><button type="button" aria-haspopup="dialog" onClick={() => visibility.set(true)}>Edit horn + woofer assembly…</button><ExperimentalBadge/><small>Shared enclosure, source contours and phase-plug passages. {EXPERIMENTAL_NOTE}</small></div>;
 }
 export function SourceAssemblyDialog() {
   const open = useSyncExternalStore(visibility.subscribe, visibility.getSnapshot, visibility.getSnapshot);
@@ -96,7 +97,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
   const span = Math.max(1, dimensions.horn_length_mm - minZ);
   const sectionPath = (points: [number, number][]) => points.map(([r,z], i) => `${i ? 'L' : 'M'}${25 + (z - minZ) / span * 550},${210 - r / maxR * 175}`).join(' ');
   return <div className="source-editor-backdrop"><div ref={dialog} role="dialog" aria-modal="true" aria-label="Horn and woofer assembly editor" className="source-editor">
-    <header><div><h2>Horn + woofer assembly</h2><p>Shared enclosure · dimensions in mm · parallel +Z axes</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
+    <header><div><h2>Horn + woofer assembly<ExperimentalBadge/></h2><p>Shared enclosure · dimensions in mm · parallel +Z axes</p></div><button type="button" disabled={busy} onClick={close}>Close</button></header>
     <fieldset disabled={busy}><div className="source-editor-columns"><div>
       <h3>Sources</h3><p>Each diaphragm keeps one physical identity and drive channel, including its patch weights.</p>
       <div className="source-editor-toolbar"><button type="button" onClick={() => setEditing('horn')}>Edit horn contour…</button>{draft.woofer && <button type="button" onClick={() => setEditing('woofer')}>Edit woofer contour…</button>}</div>
@@ -132,7 +133,7 @@ export function AssemblyEditor({ onClose }: { onClose: () => void }) {
       </svg>
       <div role="status" className={`source-validation ${valid ? 'valid' : ''}`}>{validationError || (valid ? 'Valid assembly · passive bodies and source roles checked' : 'Validating assembly…')}</div>
       {valid && accepted!.value.passage_contract && <p>{accepted!.value.passage_contract.open_passage_count} open passages · minimum analytical clearance {Math.min(...Object.values(accepted!.value.passage_contract.clearances_mm)).toFixed(3)} mm.</p>}
-      <h3>Phase plug and annular vanes</h3><p>Rigid, full circular bodies with independently tapered radii. All bodies share inlet and outlet planes.</p>
+      <h3>Phase plug and annular vanes<ExperimentalBadge/></h3><p>Rigid, full circular bodies with independently tapered radii. All bodies share inlet and outlet planes.</p>
       <div className="source-editor-toolbar"><button type="button" disabled={draft.phase_plugs.length >= 8 || draft.phase_plugs.some((p) => p.inner0_mm === 0)} onClick={() => {
         const first = draft.phase_plugs[0]; change({ ...draft, phase_plugs: [{ id: `core-${crypto.randomUUID()}`, z0_mm: first?.z0_mm ?? 2, z1_mm: first?.z1_mm ?? 6, inner0_mm: 0, inner1_mm: 0, outer0_mm: first ? first.inner0_mm / 2 : 1, outer1_mm: first ? first.inner1_mm / 2 : 1.4 }, ...draft.phase_plugs] });
       }}>Add central plug</button><button type="button" disabled={draft.phase_plugs.length >= 8} onClick={() => {
