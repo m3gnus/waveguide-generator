@@ -31,15 +31,22 @@ differ, so a bundled mesher child or BEMPP worker is ``wg-python.exe`` itself
 containment then no longer rests on that detail, and nothing they start can
 predate the job either.
 
-Two failure policies, chosen by the caller:
+A child is never handed over without a job. Whatever the caller asked for,
+a job that cannot be made or assigned (``assign`` raising or returning
+``None``) stops the child before it ever ran and raises
+:class:`ContainedStartError`. Running it uncontained is not a fallback: a
+mesher child or BEMPP worker outside every job, holding no
+``WaveguideGeneratorRunning`` mutex either, can outlive a server that died
+unseen by the installer, which then replaces ``app/`` under it.
 
-* ``required=True`` (the CAD child, the desktop's server): a job that cannot
-  be made or assigned, or a child that cannot be resumed, stops the child
-  before it ever ran and raises :class:`ContainedStartError`.
-* ``required=False`` (the mesher child, the BEMPP worker): containment is
-  best-effort, as it always was for them. A failed assignment resumes the
-  child without a job; a child that cannot be resumed is stopped before it
-  ran and started again the plain way, then assigned after the fact.
+``required`` chooses only what happens to a child that was confined but
+cannot be resumed:
+
+* ``required=True`` (the CAD child, the desktop's server): it is stopped
+  before it ran and :class:`ContainedStartError` is raised.
+* ``required=False`` (the mesher child, the BEMPP worker): it is stopped
+  before it ran, started again the plain way and assigned after the fact.
+  An assignment that then fails stops that child too and raises.
 
 Outside Windows :func:`windows_job_start` does nothing, and its result reports
 that it never fired.
@@ -75,7 +82,7 @@ Assign = Callable[[int, int], Any]
 
 
 class ContainedStartError(RuntimeError):
-    """A required job could not hold the child; it was stopped before it ran."""
+    """No job could hold the child, so it was stopped and never handed over."""
 
 
 @dataclass
@@ -126,8 +133,9 @@ def windows_job_start(
     it is terminated and closed, or without a job the child is terminated.
 
     ``assign(pid, process_handle)`` runs while the child is suspended. It
-    returns the job (anything with ``close()``) or ``None``; with
-    ``required=True``, ``None`` or an exception stops the child. A failed
+    returns the job (anything with ``close()``) or ``None``; ``None`` or an
+    exception stops the child and raises :class:`ContainedStartError`,
+    whatever ``required`` says. A failed
     ``CreateProcess`` (a refused breakaway, say) leaves the thread armed, so a
     caller's own retry inside the block is contained too.
     """
@@ -168,12 +176,15 @@ def windows_job_start(
 def start_in_windows_job(
     process: Any, *, confine: Callable[[int], Any], subject: str
 ) -> Any:
-    """``process.start()`` a ``multiprocessing`` child inside a best-effort job.
+    """``process.start()`` a ``multiprocessing`` child inside a job.
 
     ``confine(pid)`` makes and assigns the job (``None`` when it cannot). It
     runs while the child is suspended when the start reaches ``CreateProcess``
-    on this thread, and after ``start()`` otherwise -- off Windows, where it
-    returns ``None``, and for a test double that starts nothing real.
+    on this thread; a ``None`` or an exception there stops the child before
+    it ran and raises :class:`ContainedStartError` out of ``start()``, so
+    ``process`` was never started. Otherwise ``confine`` runs after
+    ``start()`` -- off Windows, where it returns ``None``, and for a test
+    double that starts nothing real.
     """
 
     # A start that fails after CreateProcess (its arguments would not pickle,
@@ -241,6 +252,11 @@ def _start_contained(real: Callable[..., Any], args: tuple[Any, ...], armed: _Ar
     holding it around arbitrary ``assign`` code can deadlock, because signal
     handlers run only on the main thread. In the app such an interrupt comes
     only at server shutdown, where the job's kill-on-close takes the tree.
+
+    The same class of window covers the cleanup below: an interrupt landing in
+    it after a refusal can leave the suspended, never-resumed child and its
+    handles behind. A refused child has no job for kill-on-close to take; it
+    never ran, so it starts nothing, but it keeps its inherited handles.
     """
 
     flags = int(args[_CREATION_FLAGS_INDEX])
@@ -271,29 +287,15 @@ def _confine_and_resume(
     process_handle, thread_handle, pid, _tid = child.handles
     armed.result.fired = True
     armed.result.pid = int(pid)
-    job = None
-    try:
-        job = armed.assign(int(pid), int(process_handle))
-    except Exception as exc:  # noqa: BLE001 - the policy below decides
-        if armed.required:
-            raise ContainedStartError(
-                f"could not confine {armed.subject} in a Windows job: {exc}"
-            ) from exc
-        logger.warning(
-            "Could not confine %s in a Windows job object (%s); starting it "
-            "without one, so processes it starts may outlive it.",
-            armed.subject,
-            exc,
-        )
-    child.job = job
-    if job is None and armed.required:
-        raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
+    # Never resumed without a job, whatever ``required`` says: raising leaves
+    # the suspended child owned, so _start_contained stops it unrun.
+    child.job = _confine(armed, int(pid), int(process_handle))
     if _resume(thread_handle):
         return
     if armed.required:
         raise ContainedStartError(f"could not resume {armed.subject} after confining it")
 
-    # Best effort, and the child could not be resumed. It never ran, so it
+    # Not required, and the child could not be resumed. It never ran, so it
     # started nothing: stop it, then start it the plain way and confine it
     # afterwards, as before this module existed.
     child.discard()
@@ -306,10 +308,23 @@ def _confine_and_resume(
     child.handles = real(*args)
     process_handle, _thread, pid, _tid = child.handles
     armed.result.pid = int(pid)
+    # The restarted child is already running; a failure here raises with it
+    # still owned, so it is stopped rather than handed over without a job.
+    child.job = _confine(armed, int(pid), int(process_handle))
+
+
+def _confine(armed: _Armed, pid: int, process_handle: int) -> Any:
+    """The child's job from ``armed.assign``, or :class:`ContainedStartError`."""
+
     try:
-        child.job = armed.assign(int(pid), int(process_handle))
-    except Exception:  # noqa: BLE001 - best effort, as before this module
-        child.job = None
+        job = armed.assign(pid, process_handle)
+    except Exception as exc:  # noqa: BLE001 - any failure is a refusal
+        raise ContainedStartError(
+            f"could not confine {armed.subject} in a Windows job: {exc}"
+        ) from exc
+    if job is None:
+        raise ContainedStartError(f"could not confine {armed.subject} in a Windows job")
+    return job
 
 
 class _Owned:

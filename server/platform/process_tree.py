@@ -19,10 +19,14 @@ The two platforms need opposite ownership:
   the parent even if the parent dies without running any cleanup, which is the
   property a ``TerminateProcess``-based Stop cannot otherwise get.
 
-Containment is best-effort by design. If the job API is unavailable the solve
-must still run -- an orphaned worker after a Stop is a bad outcome, but refusing
-to solve at all is a worse one. Callers that need containment to be mandatory
-(untrusted input) should keep using ``server.cadlink.isolation``, which refuses.
+:func:`confine_to_windows_job` itself is best-effort: it returns ``None`` when
+the job API is unavailable. What a caller does with that ``None`` is the
+caller's policy. The mesher child and the BEMPP worker start through
+``server/platform/job_start.py``, which refuses: a child outside every job also
+holds no ``WaveguideGeneratorRunning`` mutex, so it can outlive a dead server
+unseen by the installer. :func:`popen_in_windows_job` (the OpenCL check) still
+runs its child without a job when none can be made. ``server.cadlink.isolation``
+refuses as well.
 """
 
 from __future__ import annotations
@@ -116,7 +120,7 @@ def confine_to_windows_job(
     """Put ``pid`` and its future descendants in a kill-on-close job object.
 
     Returns ``None`` on non-Windows hosts and whenever the job API cannot be
-    used; see the module docstring for why that is not an error here.
+    used; see the module docstring for what callers do with that.
 
     Only descendants created *after* this call join the job. A child that
     starts processes of its own straight away needs

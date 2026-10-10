@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import atexit
 import asyncio
+import logging
 import multiprocessing
 from multiprocessing.connection import Connection
 import os
@@ -54,7 +55,7 @@ import traceback
 from typing import Any, Callable, Mapping
 import uuid
 
-from server.platform.job_start import start_in_windows_job
+from server.platform.job_start import ContainedStartError, start_in_windows_job
 from server.platform.process_tree import (
     adopt_process_group,
     kill_own_process_group,
@@ -65,6 +66,8 @@ from server.platform.process_tree import (
 from .base import CancelCallback, ResultCallback, StageCallback
 from .context import SolverContext
 
+
+log = logging.getLogger("wg.solve")
 
 _POLL_SECONDS = 0.05
 _JOIN_SECONDS = 0.5
@@ -99,6 +102,13 @@ _PARENT_GONE_EXIT_CODE = 3
 
 class BemppWorkerError(RuntimeError):
     """A native BEMPP worker failed or exited without a result."""
+
+
+UNCONTAINED_MESSAGE = (
+    "The BEMPP solver could not start: Windows would not place its worker in a job "
+    "object, and without one it could keep running after the app quits. It was "
+    "stopped before it ran, so nothing was solved. Restart the app and try again."
+)
 
 
 # -- what a dead worker leaves behind ------------------------------------------
@@ -641,13 +651,18 @@ class BemppProcessHost:
             # Contain the tree before the child can run: a parallel sweep
             # forks its own workers, and Stop must reclaim all of them, whether
             # or not the image started is a launcher stub
-            # (server/platform/job_start.py).
+            # (server/platform/job_start.py). A worker no job can hold is
+            # stopped before it ran, and this solve fails with that reason.
             job = start_in_windows_job(
                 process, confine=confine_to_windows_job, subject="the BEMPP worker"
             )
-        except BaseException:
+        except BaseException as exc:
             if stderr is not None:
                 stderr.discard()
+            if isinstance(exc, ContainedStartError):
+                _close_quietly(parent)
+                _close_quietly(child)
+                raise BemppWorkerError(UNCONTAINED_MESSAGE) from exc
             raise
         child.close()
         self._job = job
@@ -763,6 +778,12 @@ class BemppProcessHost:
         try:
             connection = self._ensure_started()
             connection.send((_WARMUP_JOB_ID, None))
+        except BemppWorkerError as exc:
+            # No job could hold the worker. A prewarm also runs after a failed
+            # solve, where raising would mask that solve's own error; the next
+            # solve reports this one.
+            log.warning("BEMPP worker not prewarmed: %s (%s)", exc, exc.__cause__)
+            return
         except (BrokenPipeError, EOFError, OSError):
             # The worker died between spawn and send.  The next solve spawns a
             # fresh one and pays the cost then, exactly as it did before.
@@ -865,7 +886,13 @@ class BemppProcessHost:
                 )
             job_id = uuid.uuid4().hex
             self._active_job_id = job_id
-            connection = self._ensure_started()
+            try:
+                connection = self._ensure_started()
+            except BaseException:
+                # Not started, so not active: otherwise every later solve is
+                # refused as overlapping this one.
+                self._active_job_id = None
+                raise
             process = self._process
             stderr = self._stderr
 
@@ -1012,6 +1039,7 @@ async def solve_imported_bempp_in_process(
 __all__ = [
     "BemppProcessHost",
     "BemppWorkerError",
+    "UNCONTAINED_MESSAGE",
     "prewarm_bempp_process",
     "shutdown_bempp_process",
     "solve_bempp_in_process",

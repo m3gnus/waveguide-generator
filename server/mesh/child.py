@@ -54,7 +54,7 @@ import traceback
 from collections.abc import Callable
 from typing import Any
 
-from server.platform.job_start import start_in_windows_job
+from server.platform.job_start import ContainedStartError, start_in_windows_job
 from server.platform.process_tree import confine_to_windows_job
 
 log = logging.getLogger("wg.mesh")
@@ -72,6 +72,13 @@ CRASH_MESSAGE = (
     "The mesher crashed on this geometry. A known cause is morph shrinkage with a "
     "fixed part of 0.8 or more: turn off shrinkage or lower the fixed part. "
     "Otherwise try a different morph target."
+)
+
+
+UNCONTAINED_MESSAGE = (
+    "The mesher could not start: Windows would not place it in a job object, and "
+    "without one it could keep running after the app quits. It was stopped before "
+    "it ran, so nothing was meshed. Restart the app and try again."
 )
 
 
@@ -306,12 +313,19 @@ class MesherChildHost:
         )
         # Confined before it can run, so nothing it ever starts is outside the
         # job, whether or not the image started is a launcher stub
-        # (server/platform/job_start.py).
-        job = start_in_windows_job(
-            process,
-            confine=lambda pid: confine_to_windows_job(pid, subject="the mesher child"),
-            subject="the mesher child",
-        )
+        # (server/platform/job_start.py). A child no job can hold is stopped
+        # before it ran; this build fails with that reason, and nothing here
+        # respawns it: the next build tries once more, on its own.
+        try:
+            job = start_in_windows_job(
+                process,
+                confine=lambda pid: confine_to_windows_job(pid, subject="the mesher child"),
+                subject="the mesher child",
+            )
+        except ContainedStartError as exc:
+            parent.close()
+            child.close()
+            raise MesherChildError(UNCONTAINED_MESSAGE) from exc
         child.close()
         self._channel = _Channel(process, parent, job)
         return self._channel
@@ -342,6 +356,12 @@ class MesherChildHost:
                     return
                 channel.connection.send(("warm", _WARM_ID))
                 channel.warm_pending = True
+            except MesherChildError as exc:
+                # No job could hold the child. A prewarm runs at startup and
+                # after a discard, where raising would fail app startup or
+                # mask the build's own error; the next build reports it.
+                log.warning("mesher child not prewarmed: %s (%s)", exc, exc.__cause__)
+                return
             except (BrokenPipeError, EOFError, OSError):
                 return
 
@@ -542,6 +562,7 @@ __all__ = [
     "MesherShuttingDownError",
     "MesherChildHost",
     "CRASH_MESSAGE",
+    "UNCONTAINED_MESSAGE",
     "begin_mesher_child_shutdown",
     "close_mesher_child",
     "get_mesher_child",

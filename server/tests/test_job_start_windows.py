@@ -27,6 +27,7 @@ terminates on Windows. Every grandchild also exits by itself after a minute.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import ctypes
 import io
@@ -137,6 +138,62 @@ def _terminate(pid: int) -> None:
             _kernel32.TerminateProcess(handle, 1)
         finally:
             _kernel32.CloseHandle(handle)
+
+
+def _duplicate(handle: int) -> int:
+    """A handle of our own to a child, valid after the start closes its own."""
+
+    import _winapi
+
+    current = _winapi.GetCurrentProcess()
+    return int(
+        _winapi.DuplicateHandle(
+            current, int(handle), current, 0, False, _winapi.DUPLICATE_SAME_ACCESS
+        )
+    )
+
+
+def _open_by_pid(pid: int) -> int:
+    """SYNCHRONIZE | QUERY_LIMITED_INFORMATION, taken while the child is suspended."""
+
+    handle = _kernel32.OpenProcess(0x00100000 | 0x1000, False, int(pid))
+    assert handle, f"cannot open {pid}"
+    return int(handle)
+
+
+def _exit_code(handle: int, timeout: float = 10.0) -> int:
+    """The exit code once the process behind ``handle`` has ended (259 if it never did)."""
+
+    import _winapi
+
+    _winapi.WaitForSingleObject(int(handle), int(timeout * 1000))
+    return int(_winapi.GetExitCodeProcess(int(handle)))
+
+
+def _close_all(handles: list[int]) -> None:
+    import _winapi
+
+    for handle in handles:
+        with contextlib.suppress(OSError):
+            _winapi.CloseHandle(int(handle))
+
+
+class _StandInJob:
+    """A non-None job for tests that only record the assignment."""
+
+    def terminate(self) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+
+def _recording(calls: list[int]) -> Any:
+    def assign(pid: int, _handle: int) -> _StandInJob:
+        calls.append(pid)
+        return _StandInJob()
+
+    return assign
 
 
 def _job_handle(job: Any) -> int:
@@ -286,18 +343,38 @@ def test_a_required_job_that_cannot_be_assigned_stops_the_child_before_it_runs(t
     assert not pidfile.exists(), "the refused child ran"
 
 
-def test_a_best_effort_job_that_cannot_be_assigned_still_starts_the_child(tree) -> None:
-    from server.platform.job_start import windows_job_start
+@pytest.mark.parametrize("required", [True, False])
+@pytest.mark.parametrize("failure", ["returns None", "raises"])
+def test_a_job_that_cannot_be_assigned_stops_the_child_whatever_the_policy(
+    tree, required: bool, failure: str
+) -> None:
+    """Never resumed without a job: not even a best-effort caller's child.
+
+    Liveness is read from a duplicate of the child's own process handle, so
+    the exit code is the child's and cannot belong to a reused pid.
+    """
+
+    from server.platform.job_start import ContainedStartError, windows_job_start
 
     stub, pidfile = tree
-    with windows_job_start(lambda _pid, _handle: None, required=False, subject="the test stub") as started:
-        process = subprocess.Popen(_stub_command(stub, pidfile))
+    held: list[int] = []
+
+    def refuse(_pid: int, handle: int) -> None:
+        held.append(_duplicate(handle))
+        if failure == "raises":
+            raise OSError(5, "refused")
+        return None
+
     try:
-        assert started.fired and started.job is None
-        _read_pid(pidfile)
+        with pytest.raises(ContainedStartError, match="could not confine the test stub"):
+            with windows_job_start(refuse, required=required, subject="the test stub"):
+                subprocess.Popen(_stub_command(stub, pidfile))
+        assert len(held) == 1
+        assert _exit_code(held[0]) == 1, "the refused child was not terminated"
+        time.sleep(0.5)
+        assert not pidfile.exists(), "the refused child ran"
     finally:
-        process.kill()
-        process.wait(timeout=WAIT_SECONDS)
+        _close_all(held)
 
 
 @pytest.mark.parametrize("required", [True, False])
@@ -336,14 +413,40 @@ def test_a_child_that_cannot_be_resumed_never_runs(tree, monkeypatch, required: 
         process.wait(timeout=WAIT_SECONDS)
 
 
+def test_a_restarted_child_whose_late_job_is_refused_is_stopped_not_handed_over(
+    monkeypatch,
+) -> None:
+    """The not-required resume fallback: the plain restart must not run unconfined."""
+
+    from server.platform import job_start
+    from server.platform.process_tree import confine_to_windows_job
+
+    monkeypatch.setattr(job_start, "_resume", lambda _thread: False)
+    held: list[int] = []
+
+    def assign(pid: int, handle: int) -> Any:
+        held.append(_duplicate(handle))
+        if len(held) == 1:
+            return confine_to_windows_job(pid, subject="the test child")
+        return None
+
+    command = [BASE_PYTHON, "-c", f"import time; time.sleep({SELF_EXIT_SECONDS})"]
+    try:
+        with pytest.raises(job_start.ContainedStartError, match="could not confine the test child"):
+            with job_start.windows_job_start(assign, required=False, subject="the test child"):
+                subprocess.Popen(command)
+        assert len(held) == 2, "the fallback restart never happened"
+        assert [_exit_code(handle) for handle in held] == [1, 1]
+    finally:
+        _close_all(held)
+
+
 def test_only_the_armed_thread_and_only_its_first_start_are_captured(tree) -> None:
     from server.platform.job_start import windows_job_start
 
     calls: list[int] = []
     other: list[subprocess.Popen[bytes]] = []
-    with windows_job_start(
-        lambda pid, _handle: calls.append(pid), required=False, subject="the test stub"
-    ) as started:
+    with windows_job_start(_recording(calls), required=False, subject="the test stub") as started:
         thread = threading.Thread(
             target=lambda: other.append(subprocess.Popen([BASE_PYTHON, "-c", "pass"]))
         )
@@ -360,9 +463,7 @@ def test_a_start_that_fails_leaves_the_thread_armed_for_the_retry(tree) -> None:
     from server.platform.job_start import windows_job_start
 
     calls: list[int] = []
-    with windows_job_start(
-        lambda pid, _handle: calls.append(pid), required=False, subject="the test stub"
-    ) as started:
+    with windows_job_start(_recording(calls), required=False, subject="the test stub") as started:
         with pytest.raises(OSError):
             subprocess.Popen([str(Path(BASE_PYTHON).with_name("no-such-python.exe"))])
         retry = subprocess.Popen([BASE_PYTHON, "-c", "pass"])
@@ -515,6 +616,113 @@ def test_the_bempp_worker_stop_takes_the_stubs_interpreter(spawn_through_stub, m
     finally:
         host._terminate_sync()
     assert _wait_dead(grandchild)
+
+
+def _refusing_confine(held: list[int]) -> Any:
+    """``confine_to_windows_job`` as it behaves when the job API fails: None.
+
+    It keeps a handle to each child it was offered, taken while the child is
+    still suspended, so the test reads that child's own exit code.
+    """
+
+    def confine(pid: int, *, subject: str = "") -> None:
+        held.append(_open_by_pid(pid))
+        return None
+
+    return confine
+
+
+def test_a_spawn_no_job_can_hold_is_stopped_before_it_runs(tmp_path) -> None:
+    from server.platform.job_start import ContainedStartError, start_in_windows_job
+
+    pidfile = tmp_path / "child.pid"
+    process = multiprocessing.get_context("spawn").Process(
+        target=report_pid, args=(str(pidfile),), daemon=True
+    )
+    held: list[int] = []
+    try:
+        with pytest.raises(ContainedStartError, match="could not confine the test child"):
+            start_in_windows_job(process, confine=_refusing_confine(held), subject="the test child")
+        assert process.pid is None, "the refused child was handed to multiprocessing"
+        assert len(held) == 1 and _exit_code(held[0]) == 1
+        time.sleep(0.5)
+        assert not pidfile.exists(), "the refused child ran"
+    finally:
+        _close_all(held)
+
+
+def test_a_mesher_child_no_job_can_hold_fails_the_build_and_is_not_respawned(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    from server.mesh import child as mesh_child
+    from server.platform.job_start import ContainedStartError
+
+    pidfile = tmp_path / "mesher.pid"
+    monkeypatch.setenv(GRANDCHILD_ENV, str(pidfile))
+    held: list[int] = []
+    monkeypatch.setattr(mesh_child, "confine_to_windows_job", _refusing_confine(held))
+    host = mesh_child.MesherChildHost(
+        process_context=multiprocessing.get_context("spawn"), target=mesh_target
+    )
+    try:
+        # The startup prewarm must not fail app startup: it logs and returns.
+        with caplog.at_level("WARNING", logger="wg.mesh"):
+            host.prewarm()
+        assert "not prewarmed" in caplog.text
+        assert host._channel is None
+        # The build reports a mesh error the user can read, and tries once.
+        with pytest.raises(mesh_child.MesherChildError) as raised:
+            asyncio.run(host.run(os.getpid, timeout=WAIT_SECONDS))
+        assert str(raised.value) == mesh_child.UNCONTAINED_MESSAGE
+        assert isinstance(raised.value.__cause__, ContainedStartError)
+        assert host._channel is None
+        assert len(held) == 2, "one start for the prewarm, one for the build, no respawns"
+        assert [_exit_code(handle) for handle in held] == [1, 1]
+        time.sleep(0.5)
+        assert not pidfile.exists(), "a refused mesher child ran"
+    finally:
+        host.close()
+        _close_all(held)
+
+
+def test_a_bempp_worker_no_job_can_hold_fails_the_solve_and_frees_the_host(
+    tmp_path, monkeypatch, caplog
+) -> None:
+    from server.platform.job_start import ContainedStartError
+    from server.solver import bempp_process
+
+    pidfile = tmp_path / "bempp.pid"
+    monkeypatch.setenv(GRANDCHILD_ENV, str(pidfile))
+    held: list[int] = []
+    monkeypatch.setattr(bempp_process, "confine_to_windows_job", _refusing_confine(held))
+    host = bempp_process.BemppProcessHost(
+        process_context=multiprocessing.get_context("spawn"), target=bempp_target
+    )
+
+    async def solve() -> Any:
+        return await host._run_payload(
+            {}, cancel_cb=lambda: None, stage_cb=lambda *_args: None, result_cb=None
+        )
+
+    try:
+        with caplog.at_level("WARNING", logger="wg.solve"):
+            host.prewarm()
+        assert "not prewarmed" in caplog.text
+        # Twice: a refused start must not leave the host thinking a solve is
+        # active, which would refuse every later one as overlapping.
+        for _attempt in range(2):
+            with pytest.raises(bempp_process.BemppWorkerError) as raised:
+                asyncio.run(solve())
+            assert str(raised.value) == bempp_process.UNCONTAINED_MESSAGE
+            assert isinstance(raised.value.__cause__, ContainedStartError)
+            assert host._active_job_id is None and host._process is None
+        assert len(held) == 3, "one start each for the prewarm and two solves"
+        assert [_exit_code(handle) for handle in held] == [1, 1, 1]
+        time.sleep(0.5)
+        assert not pidfile.exists(), "a refused BEMPP worker ran"
+    finally:
+        host.close()
+        _close_all(held)
 
 
 def test_the_cad_child_deadline_takes_the_stubs_interpreter(tree, tmp_path, monkeypatch) -> None:
@@ -853,9 +1061,10 @@ def _contained_start_codes() -> set[Any]:
     from server.platform import job_start
 
     codes = {job_start._start_contained.__code__}
-    function = getattr(job_start, "_confine_and_resume", None)
-    if function is not None:
-        codes.add(function.__code__)
+    for name in ("_confine_and_resume", "_confine"):
+        function = getattr(job_start, name, None)
+        if function is not None:
+            codes.add(function.__code__)
     owned = getattr(job_start, "_Owned", None)
     if owned is not None:
         codes.add(owned.hand_over.__code__)
@@ -869,7 +1078,7 @@ def _handle_is_open(handle: int) -> bool:
 
 @pytest.mark.parametrize(
     ("required", "assignment"),
-    [(True, "succeeds"), (False, "succeeds"), (False, "fails")],
+    [(True, "succeeds"), (False, "succeeds"), (True, "fails"), (False, "fails")],
 )
 def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
     monkeypatch, required: bool, assignment: str
@@ -906,10 +1115,17 @@ def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
         created.clear()
         lines = 0
         where: list[str] = []
+        refused: list[bool] = []
 
-        def local(frame: Any, event: str, _arg: Any) -> Any:
+        def local(frame: Any, event: str, arg: Any) -> Any:
             nonlocal lines
-            if event == "line":
+            if event == "exception" and issubclass(arg[0], job_start.ContainedStartError):
+                # From here on the lines are the refusal's own cleanup. An
+                # interrupt landing there is the accepted asynchronous-interrupt
+                # residual (job_start._start_contained), not something this
+                # sweep can close, so the sweep covers CreateProcess to refusal.
+                refused.append(True)
+            if event == "line" and not refused:
                 lines += 1
                 if lines == target:
                     where.append(f"{frame.f_code.co_name}:{frame.f_lineno}")
@@ -941,16 +1157,22 @@ def test_an_interrupt_at_any_line_of_a_contained_start_leaves_no_child(
             assert started.job is None, "a job was published for a child never handed over"
             continue
         except job_start.ContainedStartError:
-            raise AssertionError("the contained start refused a child it could confine")
+            if assignment != "fails":
+                raise AssertionError("the contained start refused a child it could confine")
+            # Every line passed without an interrupt, and no job could hold
+            # the child: the completed outcome is a refusal, never a handoff.
+            still_open = [h for record in created for h in record[:2] if _handle_is_open(h)]
+            assert still_open == [], "a refused start left handles open"
+            for _hp, _ht, pid in created:
+                assert _wait_dead(pid), "a refused child survived"
+            assert process is None and started.job is None
+            break
         # Every line passed without an interrupt: the child was handed over.
+        assert assignment == "succeeds", "a child no job could hold was handed over"
         assert process is not None
-        if assignment == "fails":
-            assert started.job is None
-            process.kill()
-        else:
-            assert started.job is not None and _in_job(process.pid, started.job)
-            started.job.terminate()
-            started.job.close()
+        assert started.job is not None and _in_job(process.pid, started.job)
+        started.job.terminate()
+        started.job.close()
         process.wait(timeout=WAIT_SECONDS)
         break
     else:
