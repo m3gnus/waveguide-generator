@@ -58,3 +58,22 @@ it('records a destination conflict as blocked rather than completion', async () 
   expect(body.completed_at).toBeNull();
   expect(body.files).toEqual([]);
 });
+
+it('records each format by its own outcome, and a refusal over a channel failure', async () => {
+  const fetcher = vi.fn(async (path: string, _init?: RequestInit) => path.endsWith('/claim')
+    ? response({ claimed: true, token: 'secret', formats: ['step', 'json', 'csv'], job }) : response({ status: 'ok' }));
+  vi.stubGlobal('fetch', fetcher);
+  await expect(ownedAutoExport(job, ['step', 'json', 'csv'], async () => ({
+    files: ['one.step', 'one.csv'],
+    failures: [
+      { format: 'csv' as const, reason: 'One channel had no data' },
+      { format: 'json' as const, reason: 'Export file already exists with different content', blocked: true },
+      { format: 'csv' as const, reason: 'Export file already exists with different content', blocked: true },
+    ],
+  }))).rejects.toThrow('json');
+  const body = JSON.parse(fetcher.mock.calls.find(([path]) => path.endsWith('/finish'))![1]!.body as string);
+  expect(body.formats.step.status).toBe('complete');
+  expect(body.formats.json).toMatchObject({ status: 'blocked', reason: 'Export file already exists with different content' });
+  expect(body.formats.csv.status).toBe('blocked');
+  expect(body.files).toEqual(['one.step', 'one.csv']);
+});

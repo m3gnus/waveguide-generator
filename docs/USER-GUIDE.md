@@ -450,7 +450,17 @@ Documents/Waveguide Generator/
     design.json                 which design this folder belongs to
     cad/<return-state>.f3d      the Fusion document a CAD return came from
     <run>/                      run.json, results, derived sidecars, *_report.html
+      exports/                  the formats chosen for automatic export
 ```
+
+Automatic export writes into the run's `exports` folder, so it never shares a file
+name with the archive: both can be on, and both always write. A format that cannot
+be written -- a file of that name already there with other contents, which an
+automatic write never replaces -- is reported on the run card with its reason, and
+the other formats are written regardless. A run folder from an earlier version may
+already hold that version's automatic export under the archive's names; the archive
+then leaves those files as they are and writes its own copies of them in an
+`archive` folder beside them.
 
 A CAD-linked project's folder is one of these design folders, so the Workspace
 folder is also the folder every CAD project is kept in. It can be opened or moved

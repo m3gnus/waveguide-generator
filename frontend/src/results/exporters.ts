@@ -2,6 +2,7 @@ import { samplingComments, samplingProvenance } from './sampling';
 import { downloadBlob, downloadText } from '../api/designIo';
 import {
   collisionFrom,
+  ExportCollisionError,
   writeConfirmingReplacements,
   type ConfirmReplacements,
 } from '../api/exportDestination';
@@ -810,7 +811,20 @@ export async function runExportFormat(format: ExportFormat, context: ExportConte
   return [filename];
 }
 
+/** A bundle with each file attributed to the format that produced it. */
+interface FormatAttributedBundle extends ExportBundleResult {
+  /** Every file each format needs, including one an earlier format emitted. */
+  formatFiles: Map<ExportFormat, string[]>;
+  /** Files belonging to no one format, such as the CAD provenance sidecar. */
+  sharedFiles: string[];
+}
+
 export async function runExportBundle(inputContext: ExportContext, formats = inputContext.preferences.exportFormats): Promise<ExportBundleResult> {
+  const { files, failures } = await runAttributedExportBundle(inputContext, formats);
+  return { files, failures };
+}
+
+async function runAttributedExportBundle(inputContext: ExportContext, formats: readonly ExportFormat[]): Promise<FormatAttributedBundle> {
   // One re-reference for the whole bundle, at the top, so the polar CSV, the
   // polar FRD set and the rendered heatmap PNG cannot disagree about where 0 dB
   // is -- and so each of them states the same angle in its own header.
@@ -819,6 +833,8 @@ export async function runExportBundle(inputContext: ExportContext, formats = inp
     : inputContext;
   const files: string[] = [];
   const failures: ExportFailure[] = [];
+  const formatFiles = new Map<ExportFormat, string[]>();
+  const sharedFiles: string[] = [];
   const emitted = new Set<string>();
   const saveBlob = context.saveBlob ?? downloadBlob;
   const saveText = context.saveText ?? downloadText;
@@ -867,6 +883,9 @@ export async function runExportBundle(inputContext: ExportContext, formats = inp
           },
         });
         produced.forEach((filename) => { if (!files.includes(filename)) files.push(filename); });
+        const own = formatFiles.get(format) ?? [];
+        produced.forEach((filename) => { if (!own.includes(filename)) own.push(filename); });
+        formatFiles.set(format, own);
       }
       catch (error) { failures.push({ format, reason: error instanceof Error ? error.message : String(error) }); }
     }
@@ -881,20 +900,18 @@ export async function runExportBundle(inputContext: ExportContext, formats = inp
     }, null, 2)}\n`;
     saveText(payload, filename, 'application/json;charset=utf-8');
     if (!files.includes(filename)) files.push(filename);
+    sharedFiles.push(filename);
   }
-  return { files, failures };
+  return { files, failures, formatFiles, sharedFiles };
 }
 
-/** Prepare exports in memory, then write them through the backend Workspace.
- * Automatic exports and every run-result export entry point use this path so
- * browser download permissions cannot silently redirect files to Downloads. */
-export async function runWorkspaceExportBundle(
+/** Build every selected format in memory, keyed by relative name. */
+async function prepareWorkspaceBundle(
   context: ExportContext,
-  formats = context.preferences.autoExportFormats,
-  existing: ExistingFilePolicy = 'merge_identical',
-): Promise<ExportBundleResult> {
+  formats: readonly ExportFormat[],
+): Promise<{ bundle: FormatAttributedBundle; prepared: Map<string, WorkspaceFile> }> {
   const prepared = new Map<string, WorkspaceFile>();
-  const bundle = await runExportBundle({
+  const bundle = await runAttributedExportBundle({
     ...context,
     destination: 'workspace',
     // VXP is a self-contained bundle and can share a ZMA dependency with an
@@ -905,7 +922,19 @@ export async function runWorkspaceExportBundle(
       prepared.set(filename, { filename, blob: new Blob([content], { type }) });
     },
   }, formats);
-  if (!prepared.size) return { ...bundle, files: [] };
+  return { bundle, prepared };
+}
+
+/** Prepare exports in memory, then write them through the backend Workspace.
+ * Automatic exports and every run-result export entry point use this path so
+ * browser download permissions cannot silently redirect files to Downloads. */
+export async function runWorkspaceExportBundle(
+  context: ExportContext,
+  formats = context.preferences.autoExportFormats,
+  existing: ExistingFilePolicy = 'merge_identical',
+): Promise<ExportBundleResult> {
+  const { bundle: { failures }, prepared } = await prepareWorkspaceBundle(context, formats);
+  if (!prepared.size) return { files: [], failures };
   const written = await writeWorkspaceFiles(
     workspaceSubdirectory(context),
     [...prepared.values()],
@@ -915,11 +944,58 @@ export async function runWorkspaceExportBundle(
     context.confirmReplacements,
   );
   return {
-    ...bundle,
-    directory: written.directory,
     files: written.files,
+    failures,
+    directory: written.directory,
     replaced: written.replaced ?? [],
   };
+}
+
+/**
+ * Automatic post-run export: one Workspace write per format.
+ *
+ * A format is the unit a run card reports and a retry repeats, so it is also
+ * the unit that may be refused. One request for the whole selection made one
+ * refused file -- a JSON a previous attempt left with an older timestamp --
+ * cost every format, STEP included, and wrote nothing at all. Each format's
+ * files still land together or not at all, and each format carries the files
+ * it shares with another (a VXP's ZMA, the CAD provenance sidecar): the
+ * builders are shared, so a second copy is byte identical and
+ * `merge_identical` makes it a no-op.
+ */
+export async function runAutomaticWorkspaceExport(
+  context: ExportContext,
+  formats: readonly ExportFormat[] = context.preferences.autoExportFormats,
+): Promise<ExportBundleResult> {
+  const { bundle, prepared } = await prepareWorkspaceBundle(context, formats);
+  const files: string[] = [];
+  const failures = [...bundle.failures];
+  let directory: string | undefined;
+  for (const format of formats) {
+    const names = bundle.formatFiles.get(format) ?? [];
+    // Nothing built means its failure is already recorded above.
+    if (!names.length) continue;
+    const members = [...new Set([...names, ...bundle.sharedFiles])]
+      .map((name) => prepared.get(name))
+      .filter((member): member is WorkspaceFile => member !== undefined);
+    try {
+      const written = await writeWorkspaceFiles(
+        workspaceSubdirectory(context), members, context.fetcher ?? fetch, 'merge_identical',
+      );
+      directory = written.directory;
+      written.files.forEach((file) => { if (!files.includes(file)) files.push(file); });
+    } catch (error) {
+      const flags = error as { destinationConflict?: boolean; publicationUncertain?: boolean };
+      failures.push({
+        format,
+        reason: error instanceof Error ? error.message : String(error),
+        // A refused or unanswered write is not regenerated automatically;
+        // anything else failed before publication and stays retryable.
+        blocked: flags.destinationConflict === true || flags.publicationUncertain === true,
+      });
+    }
+  }
+  return directory === undefined ? { files, failures } : { files, failures, directory };
 }
 
 export async function downloadMeshArtifact(
@@ -968,13 +1044,69 @@ function textFile({ filename, text }: { filename: string; text: string }): Works
 }
 
 /**
+ * Where the archive puts a file whose usual name in the run folder is taken.
+ *
+ * Automatic export now has its own folder (`AUTO_EXPORT_FOLDER`), but a run
+ * folder written by an earlier version can already hold an automatic export
+ * under the archive's names, with other bytes. The archive may neither refuse
+ * (the run would never be archived) nor overwrite (that file is the user's).
+ * It keeps that file and writes its own copy here instead.
+ */
+export const ARCHIVE_DISPLACED_FOLDER = 'archive';
+
+/** Archive members as written, and the new name of each one that moved. */
+interface ArchiveWrite {
+  files: string[];
+  moved: Map<string, string>;
+}
+
+function collidingMember(paths: readonly string[], filename: string): boolean {
+  const tail = `/${filename}`;
+  return paths.some((path) => path.replaceAll('\\', '/').endsWith(tail));
+}
+
+/**
+ * Write archive members without refusing over, or replacing, a different file.
+ *
+ * `confirm` writes what is missing, skips what is identical, and -- if any
+ * member would change a file that differs -- writes nothing and names every
+ * one of them. Those, and only those, move to `ARCHIVE_DISPLACED_FOLDER`.
+ * Both writes are deterministic in the folder's contents, so a retry of a
+ * half-finished archive lands on the same names and stays a no-op.
+ */
+async function writeArchiveMembers(
+  subdirectory: string,
+  members: WorkspaceFile[],
+  fetcher: typeof fetch,
+): Promise<ArchiveWrite> {
+  try {
+    const written = await writeWorkspaceFiles(subdirectory, members, fetcher, 'confirm');
+    return { files: written.files, moved: new Map() };
+  } catch (error) {
+    if (!(error instanceof ExportCollisionError)) throw error;
+    const moved = new Map(members
+      .filter(({ filename }) => collidingMember(error.collision.paths, filename))
+      .map(({ filename }) => [filename, `${ARCHIVE_DISPLACED_FOLDER}/${filename}`]));
+    if (!moved.size) throw error;
+    const written = await writeWorkspaceFiles(
+      subdirectory,
+      members.map((member) => ({ ...member, filename: moved.get(member.filename) ?? member.filename })),
+      fetcher,
+      'merge_identical',
+    );
+    return { files: written.files, moved };
+  }
+}
+
+/**
  * Write one completed run to its design's archive folder.
  *
- * The run record is written with `merge_identical` because it is evidence: it
- * is derived only from the stored job, so re-archiving the same run is a
- * byte-identical no-op rather than a rewrite. The design pointer file is
- * derived state and follows a rename, so it is the one file allowed to
- * replace itself.
+ * The run's files and record never replace anything, because they are
+ * evidence: they are derived only from the stored job and its snapshot, so
+ * re-archiving the same run is a byte-identical no-op rather than a rewrite,
+ * and a different file already holding one of their names keeps it
+ * (`writeArchiveMembers`). The design pointer file is derived state and
+ * follows a rename, so it is the one file allowed to replace itself.
  */
 export async function archiveRunToWorkspace(
   job: JobItem,
@@ -1009,7 +1141,7 @@ export async function archiveRunToWorkspace(
       ? RADIATION_IMPEDANCE_ARCHIVE_FORMATS
       : []),
   ];
-  const bundle = await runWorkspaceExportBundle({
+  const { bundle, prepared } = await prepareWorkspaceBundle({
     result: snapshot.results as ResultPayload,
     ...resultExportSnapshot(archiveJob),
     jobId: archiveJob.id,
@@ -1032,14 +1164,21 @@ export async function archiveRunToWorkspace(
   if (bundle.failures.length) {
     throw new Error(bundle.failures.map(({ format, reason }) => `${format} (${reason})`).join(', '));
   }
+  const results = prepared.size
+    ? await writeArchiveMembers(subdirectory, [...prepared.values()], fetcher)
+    : { files: [], moved: new Map<string, string>() };
   const mesh = snapshot.mesh_artifact
-    ? await writeWorkspaceFiles(subdirectory, [{
+    ? await writeArchiveMembers(subdirectory, [{
       filename: `${exportStemForJob(archiveJob)}.msh`,
       blob: new Blob([snapshot.mesh_artifact], { type: 'text/plain;charset=utf-8' }),
-    }], fetcher, 'merge_identical')
-    : { files: [] };
-  const record = await writeWorkspaceFiles(
-    subdirectory, [textFile(buildRunRecord(archiveJob))], fetcher, 'merge_identical',
+    }], fetcher)
+    : { files: [], moved: new Map<string, string>() };
+  // The record names the artifacts it sits beside, wherever they landed.
+  const moved = new Map([...results.moved, ...mesh.moved]);
+  const record = await writeArchiveMembers(
+    subdirectory,
+    [textFile(buildRunRecord(archiveJob, (filename) => moved.get(filename) ?? filename))],
+    fetcher,
   );
   const pointer = await writeWorkspaceFiles(
     archiveFolderForJob(archiveJob), [textFile(buildDesignRecord(archiveJob))], fetcher, 'overwrite',
@@ -1063,5 +1202,5 @@ export async function archiveRunToWorkspace(
   } catch (error) {
     console.warn('Could not file the run\u2019s CAD document', error);
   }
-  return [...bundle.files, ...mesh.files, ...record.files, ...pointer.files];
+  return [...results.files, ...mesh.files, ...record.files, ...pointer.files];
 }

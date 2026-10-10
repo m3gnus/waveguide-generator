@@ -22,6 +22,16 @@ Failures known to occur before publication remain failed rather than conflicted.
 An interrupted archive uses the reserved `run_archive` metadata entry; successful
 archive completion records that entry and `archived_at` together.
 
+The two never write to the same names. The archive owns the run folder,
+`<design>/<run>`, and stamps its files with the run's completion time so a retry is
+byte identical; automatic export writes to `<design>/<run>/exports`. Automatic
+export publishes one `write-export` request per format, each with that format's
+files and any shared sidecar, so a destination conflict or an uncertain publication
+blocks only that format; the others are written and recorded complete. The archive
+probes with `confirm`: a member whose name an earlier version's export already
+holds, with other bytes, is written under `archive/` instead, and `run.json` names
+the artifacts where they landed.
+
 Capability requests have a ten-second client timeout. Pending qualification, refresh
 failure and an interrupted backend connection have distinct notices. The server's
 bounded OpenCL qualification and fallback behavior are unchanged. Neither a stale

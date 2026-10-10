@@ -1,8 +1,9 @@
 import type { ExportFormat } from '../prefs/preferences';
 import { ownedAutoExport } from '../jobs/autoExportOwner';
+import { exportRunAutomatically } from '../jobs/autoExportRun';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
-import { compareSelection, fetchJobResults } from '../api/results';
+import { compareSelection } from '../api/results';
 import { createSetupRevision, getSetupRevision, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
 import { importedSolvePlanRequestBody, planSolveDesign, postImportedSolvePlan, SolveSubmissionRefused, submitDesign, submitImported, type EngineSubstitution, type ImportedSolveSubmission, type SolvePlan } from '../jobs/actions';
@@ -13,7 +14,6 @@ import {
 } from '../jobs/useCapabilities';
 import { useSolvePlan } from '../jobs/useSolvePlan';
 import { JobAutomation } from '../jobs/automation';
-import { exportStemForJob, exportSubdirectoryForJob } from '../jobs/exportNaming';
 import { explainImportedRefusal } from '../jobs/importedRefusals';
 import { buildImportedSubmission, importedSubmissionBlocker } from '../jobs/importedSubmission';
 import { acknowledgeCadSolve, beginCadSolve, cadJobSummaries, discardUnsubmittedCadSolve, forgetPendingCadSolve, hasLegacyCadSolve, cadSolveClaim, latestCadJobs, pendingCadSolve, recoverLegacyCadSolves, releaseCadSolve, rememberCadSolve, retainCadSolvePress, solveCadAgain, submitCadSolve } from '../jobs/cadSolve';
@@ -21,9 +21,7 @@ import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import { advanceRunSequence, nextRunLabel } from '../jobs/runNaming';
 import { currentRunNameSource } from '../jobs/runNameSource';
 import { preferencesStore, usePreferences } from '../prefs/preferences';
-import { archiveRunToWorkspace, runWorkspaceExportBundle, saveMeshArtifactToWorkspace } from '../results/exporters';
-import { resultExportSnapshot } from '../results/exportContext';
-import type { ResultPayload } from '../results/types';
+import { archiveRunToWorkspace, saveMeshArtifactToWorkspace } from '../results/exporters';
 import { useDesignStore, type DesignDocument } from '../stores/design';
 import { useDocumentStore } from '../stores/document';
 import { useCadReturnStore } from '../stores/cadReturn';
@@ -631,18 +629,11 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
     void automation.process(jobs, preferences, {
       downloadMesh: (job) => saveMeshArtifactToWorkspace(job),
       markMeshDownloaded: (job, filename) => jobsSocket.patchMetadata(job.id, { mesh_artifact_file: filename }),
-      exportCompleted: (job, formats) => ownedAutoExport(job, formats, async (job, formats, fetcher) => runWorkspaceExportBundle({
+      exportCompleted: (job, formats) => ownedAutoExport(job, formats, (job, formats, fetcher) => exportRunAutomatically(job, formats, {
         fetcher,
-        result: await fetchJobResults(job.id, fetcher) as ResultPayload,
-        ...resultExportSnapshot(job),
-        jobId: job.id,
-        jobStem: exportStemForJob(job),
-        hasRadiationImpedanceArtifact: job.has_radiation_impedance_artifact,
-        workspaceSubdirectory: exportSubdirectoryForJob(job),
-        designName: job.label ?? undefined,
         normalizationAngle: useSolveOptionsStore.getState().polar.normAngle,
         preferences,
-      }, formats), preferences.autoExportFormats),
+      }), preferences.autoExportFormats),
       markExported: async (job, files, formats, completedAt) => jobsSocket.patchMetadata(job.id, {
         exported_files: [...new Set([...(job.exported_files ?? []), ...files])],
         auto_export_formats: formats,

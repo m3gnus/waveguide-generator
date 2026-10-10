@@ -69,7 +69,10 @@ export async function ownedAutoExport(
     const attemptedAt = new Date().toISOString();
     const statuses: JobItem['auto_export_formats'] = {};
     for (const format of pending) {
-      const failure = result.failures.find((item) => item.format === format);
+      // A format can fail one channel and then be refused at publication; the
+      // refusal wins, because only it means files may already be on disk.
+      const failure = result.failures.find((item) => item.format === format && item.blocked)
+        ?? result.failures.find((item) => item.format === format);
       statuses[format] = failure
         ? { status: failure.blocked ? 'blocked' : 'failed', attempted_at: attemptedAt, reason: failure.reason }
         : { status: 'complete', attempted_at: attemptedAt };

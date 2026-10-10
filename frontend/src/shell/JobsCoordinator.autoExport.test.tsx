@@ -8,14 +8,14 @@ import { JobsCoordinator } from './JobsCoordinator';
 
 const mocks = vi.hoisted(() => ({
   fetchJobResults: vi.fn(),
-  runWorkspaceExportBundle: vi.fn(),
+  runAutomaticWorkspaceExport: vi.fn(),
   saveMeshArtifactToWorkspace: vi.fn(),
 }));
 
 vi.mock('../api/results', () => ({ fetchJobResults: mocks.fetchJobResults }));
 vi.mock('../results/exporters', () => ({
   saveMeshArtifactToWorkspace: mocks.saveMeshArtifactToWorkspace,
-  runWorkspaceExportBundle: mocks.runWorkspaceExportBundle,
+  runAutomaticWorkspaceExport: mocks.runAutomaticWorkspaceExport,
 }));
 vi.mock('../jobs/useCapabilities', () => ({
   useCapabilities: () => ({
@@ -86,7 +86,7 @@ describe('completed-job auto-export naming', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
     mocks.fetchJobResults.mockResolvedValue({ frequencies: [100] });
-    mocks.runWorkspaceExportBundle.mockImplementation(async (context: ExportContext) => ({
+    mocks.runAutomaticWorkspaceExport.mockImplementation(async (context: ExportContext) => ({
       files: [`${context.jobStem}.csv`],
       failures: [],
     }));
@@ -114,13 +114,19 @@ describe('completed-job auto-export naming', () => {
   it('uses the completed job identity for each bundle and its persisted filenames', async () => {
     await act(async () => { root.render(<JobsCoordinator><span>ready</span></JobsCoordinator>); });
     await act(async () => {
-      await vi.waitFor(() => expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(mocks.runAutomaticWorkspaceExport).toHaveBeenCalledTimes(2));
       await vi.waitFor(() => expect(finishes()).toHaveLength(2));
     });
 
-    const baseNames = mocks.runWorkspaceExportBundle.mock.calls.map(([context]) =>
+    const baseNames = mocks.runAutomaticWorkspaceExport.mock.calls.map(([context]) =>
       (context as ExportContext).jobStem);
     expect(baseNames).toEqual(['101_260808_horn_v01', '102_260808_horn_v02']);
+    // Into each run's own exports folder: the run archive owns the run folder.
+    expect(mocks.runAutomaticWorkspaceExport.mock.calls.map(([context]) =>
+      (context as ExportContext).workspaceSubdirectory)).toEqual([
+      '260808_horn_v01/101_260808_horn_v01/exports',
+      '260808_horn_v02/102_260808_horn_v02/exports',
+    ]);
 
     expect(finishes().map(({ body }) => body.files)).toEqual([['101_260808_horn_v01.csv'], ['102_260808_horn_v02.csv']]);
     expect(jobsSocket.patchMetadata).not.toHaveBeenCalled();
@@ -134,7 +140,7 @@ describe('completed-job auto-export naming', () => {
       channels: { 'drive-hf': { frequencies: [100] }, 'drive-mf': { frequencies: [100] } },
     };
     mocks.fetchJobResults.mockResolvedValue(wrapped);
-    mocks.runWorkspaceExportBundle.mockResolvedValue({
+    mocks.runAutomaticWorkspaceExport.mockResolvedValue({
       files: ['103_260808_horn_v03-drive-hf.csv', '103_260808_horn_v03-drive-mf.csv'],
       failures: [],
     });
@@ -145,7 +151,7 @@ describe('completed-job auto-export naming', () => {
       await vi.waitFor(() => expect(finishes()).toHaveLength(1));
     });
 
-    expect(mocks.runWorkspaceExportBundle).toHaveBeenCalledWith(
+    expect(mocks.runAutomaticWorkspaceExport).toHaveBeenCalledWith(
       expect.objectContaining({ result: wrapped }),
       ['csv'],
     );

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { exportStemForJob, exportTitleSlug } from './exportNaming';
+import { autoExportSubdirectoryForJob, exportStemForJob, exportSubdirectoryForJob, exportTitleSlug } from './exportNaming';
 
 describe('job export naming', () => {
   it('always leads with the permanent run number', () => {
@@ -22,5 +22,11 @@ describe('job export naming', () => {
 
   it('uses the design family, without a UUID, for historical jobs with no title', () => {
     expect(exportStemForJob({ run_number: 9, label: null, config_summary: { formula_type: 'OSSE' } })).toBe('9_OSSE');
+  });
+
+  it('gives automatic export a folder of its own inside the run folder the archive owns', () => {
+    const job = { run_number: 9, label: null, config_summary: { formula_type: 'OSSE' } };
+    expect(exportSubdirectoryForJob(job)).toBe('OSSE/9_OSSE');
+    expect(autoExportSubdirectoryForJob(job)).toBe('OSSE/9_OSSE/exports');
   });
 });

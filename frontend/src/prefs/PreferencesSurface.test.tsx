@@ -247,6 +247,11 @@ describe('preferences surfaces', () => {
     expect(host.textContent).not.toContain('leaves nothing behind');
   });
 
+  it('says automatic exports have a folder of their own beside the run archive', async () => {
+    await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
+    expect(host.textContent).toContain('Automatic exports go in that run’s exports folder, beside the run archive.');
+  });
+
   it('offers automatic result cleanup off by default and says what turning it on does', async () => {
     await act(async () => { root.render(<ResultsPreferencesSurface/>); await Promise.resolve(); });
     const cleanup = [...host.querySelectorAll('label.ui-check')]

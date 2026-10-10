@@ -45,8 +45,16 @@ export function buildDesignRecord(job: JobItem): WorkspaceTextFile {
   };
 }
 
-/** One run's record: what was solved, from what, with which settings. */
-export function buildRunRecord(job: JobItem): WorkspaceTextFile {
+/**
+ * One run's record: what was solved, from what, with which settings.
+ *
+ * `nameOf` maps an artifact's usual filename to the one it was written under,
+ * for the rare archive that had to move a file aside (`ARCHIVE_DISPLACED_FOLDER`).
+ */
+export function buildRunRecord(
+  job: JobItem,
+  nameOf: (filename: string) => string = (filename) => filename,
+): WorkspaceTextFile {
   if (job.run_number === null) throw new Error('A run number is required to archive a solve');
   const cad = job.cad_source ?? null;
   return {
@@ -83,10 +91,10 @@ export function buildRunRecord(job: JobItem): WorkspaceTextFile {
       },
       mesh: job.mesh_stats ?? null,
       artifacts: {
-        mesh: job.has_mesh_artifact ? `${exportStemForJob(job)}.msh` : null,
+        mesh: job.has_mesh_artifact ? nameOf(`${exportStemForJob(job)}.msh`) : null,
         radiationImpedance: job.has_radiation_impedance_artifact ? {
-          matrix: `${exportStemForJob(job)}_radiation_impedance.npz`,
-          curves: `${exportStemForJob(job)}_radiation_impedance.csv`,
+          matrix: nameOf(`${exportStemForJob(job)}_radiation_impedance.npz`),
+          curves: nameOf(`${exportStemForJob(job)}_radiation_impedance.csv`),
           bytes: job.radiation_impedance_artifact_bytes ?? null,
           units: 'Pa*s/m^3',
           phaseTimeConvention: 'engineering_exp_plus_jwt',

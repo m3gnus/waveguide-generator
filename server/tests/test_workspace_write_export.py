@@ -2028,3 +2028,112 @@ def test_multipart_without_a_subdirectory_or_a_destination_is_refused(
 
     assert caught.value.status_code == 422
     assert not list(workspace.iterdir())
+
+
+# The run archive and automatic export, as the frontend now lays them out:
+# the archive owns `<design>/<run>`, automatic export writes one request per
+# format into `<design>/<run>/exports` (`frontend/src/jobs/exportNaming.ts`).
+# Both use names built from the same run stem, and the JSON and report differ
+# in their timestamps, which is what made one of them refuse the other while
+# they shared a folder.
+_ARCHIVE_SET = [
+    ("9_OSSE.json", '{"timestamp": "completed"}'),
+    ("9_OSSE.csv", "frequency,spl\n100,90\n"),
+    ("9_OSSE_report.html", "<html>completed</html>"),
+]
+_EXPORT_FORMATS = [
+    [("9_OSSE.step", "step bytes")],
+    [("9_OSSE.json", '{"timestamp": "now"}')],
+    [("9_OSSE.csv", "frequency,spl\n100,90\n")],
+    [("9_OSSE_report.html", "<html>now</html>")],
+]
+
+
+@pytest.mark.parametrize("archive_first", [True, False], ids=["archive-first", "export-first"])
+def test_the_run_archive_and_automatic_export_never_refuse_each_other(
+    tmp_path: Path, archive_first: bool
+) -> None:
+    state, workspace = selected_state(tmp_path)
+
+    def archive() -> None:
+        call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="OSSE/9_OSSE",
+                existing="confirm",
+                members=[{"relative_path": name, "text": text} for name, text in _ARCHIVE_SET],
+            ),
+        )
+
+    def export() -> None:
+        for members in _EXPORT_FORMATS:
+            call(
+                state,
+                workspace_api.WriteExportRequest(
+                    subdirectory="OSSE/9_OSSE/exports",
+                    existing="merge_identical",
+                    members=[{"relative_path": name, "text": text} for name, text in members],
+                ),
+            )
+
+    for step in (archive, export) if archive_first else (export, archive):
+        step()
+
+    run = workspace / "OSSE" / "9_OSSE"
+    for name, text in _ARCHIVE_SET:
+        assert (run / name).read_text() == text
+    for members in _EXPORT_FORMATS:
+        for name, text in members:
+            assert (run / "exports" / name).read_text() == text
+
+
+def test_an_archive_into_a_folder_an_older_export_wrote_moves_only_the_taken_names(
+    tmp_path: Path,
+) -> None:
+    """What `writeArchiveMembers` relies on, in the Workspace itself.
+
+    A run folder written by an earlier version may hold that version's
+    automatic export under the archive's names. `confirm` must name exactly
+    those, write nothing, and leave the file alone; the archive then writes
+    its copies of them under `archive/` with `merge_identical`, which a retry
+    repeats as a no-op.
+    """
+
+    state, workspace = selected_state(tmp_path)
+    run = workspace / "OSSE" / "9_OSSE"
+    run.mkdir(parents=True)
+    (run / "9_OSSE.json").write_text('{"timestamp": "an older export"}')
+
+    refused = call(
+        state,
+        workspace_api.WriteExportRequest(
+            subdirectory="OSSE/9_OSSE",
+            existing="confirm",
+            members=[{"relative_path": name, "text": text} for name, text in _ARCHIVE_SET],
+        ),
+    )
+
+    assert isinstance(refused, JSONResponse) and refused.status_code == 409
+    body = json.loads(refused.body)
+    assert body["code"] == "export_collision"
+    assert body["paths"] == [str(run.resolve() / "9_OSSE.json")]
+    assert sorted(path.name for path in run.iterdir()) == ["9_OSSE.json"]
+
+    moved = [
+        {"relative_path": f"archive/{name}" if name == "9_OSSE.json" else name, "text": text}
+        for name, text in _ARCHIVE_SET
+    ]
+    for _attempt in range(2):
+        written = call(
+            state,
+            workspace_api.WriteExportRequest(
+                subdirectory="OSSE/9_OSSE",
+                existing="merge_identical",
+                members=moved,
+            ),
+        )
+        assert not isinstance(written, JSONResponse)
+
+    assert (run / "9_OSSE.json").read_text() == '{"timestamp": "an older export"}'
+    assert (run / "archive" / "9_OSSE.json").read_text() == '{"timestamp": "completed"}'
+    assert (run / "9_OSSE.csv").read_text() == _ARCHIVE_SET[1][1]

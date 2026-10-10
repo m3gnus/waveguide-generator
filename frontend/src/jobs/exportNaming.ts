@@ -47,6 +47,27 @@ export function exportSubdirectoryForJob(
   return `${archiveFolderForJob(job)}/${exportStemForJob(job)}`;
 }
 
+/**
+ * The folder, inside a run's own folder, that automatic export writes to.
+ *
+ * The run archive owns the names in the run folder itself -- `<run>.json`,
+ * `<run>.csv`, `<run>_report.html` -- and builds them from the run's
+ * completion time so a retry is byte identical. Automatic export builds some
+ * of the same names from the current time. Sharing one folder made whichever
+ * wrote second meet a file "with different content", which a background write
+ * rightly refuses to overwrite: archive first blocked every export format,
+ * export first blocked the archive. A folder of its own ends that for every
+ * format, whatever the user selects.
+ */
+export const AUTO_EXPORT_FOLDER = 'exports';
+
+/** Where automatic export writes a run's files: `<design>/<run>/exports`. */
+export function autoExportSubdirectoryForJob(
+  job: Pick<JobItem, 'run_number' | 'label' | 'config_summary' | 'cad_source'>,
+): string {
+  return `${exportSubdirectoryForJob(job)}/${AUTO_EXPORT_FOLDER}`;
+}
+
 /** Which side of the app produced a run, for the run record. */
 export function runSourceForJob(job: Pick<JobItem, 'config_summary'>): 'parametric' | 'cadlink' {
   return job.config_summary.geometry_type === 'imported' ? 'cadlink' : 'parametric';
