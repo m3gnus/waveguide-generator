@@ -32,6 +32,8 @@ import time
 import traceback
 from typing import Any
 
+from server.cadlink.build_flags import fem_regions_enabled
+
 
 PROTOCOL_VERSION = 1
 #: The parent's envelope is its own writing, but reading stdin without a bound
@@ -349,7 +351,7 @@ def _task_fem_region(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Tetrahedralise one declared FEM region (``fem-regions-v1``)."""
 
-    from server.cadlink.step_text import scan_step_text
+    from server.cadlink.intake.step_text import scan_step_text
     from server.mesh.fem_regions import build_fem_region_mesh
 
     payload = envelope.get("payload")
@@ -462,6 +464,8 @@ def main(argv: list[str] | None = None) -> int:
         task_name = str(envelope.get("task") or "")
         out_dir = Path(str(envelope.get("out_dir")))
         handler = _TASKS.get(task_name)
+        if task_name == "fem_region" and not fem_regions_enabled():
+            handler = None
         if handler is None:
             raise ChildTaskError(f"unknown isolated CAD task {task_name!r}")
         source = _verified_source(envelope)

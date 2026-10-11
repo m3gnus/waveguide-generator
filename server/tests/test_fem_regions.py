@@ -161,8 +161,11 @@ def test_matching_rejects_a_normal_that_disagrees_and_ambiguity():
         assign_faces(region, [flipped, twin])
 
 
-def test_the_isolated_child_meshes_a_region_and_keeps_typed_refusals(tmp_path):
-    from server.cadlink.isolated import build_fem_region_mesh_isolated
+def test_the_isolated_child_meshes_a_region_and_keeps_typed_refusals(tmp_path, monkeypatch):
+    from server.cadlink.build_flags import FEM_REGIONS_ENV
+    from server.cadlink.intake.isolated import build_fem_region_mesh_isolated
+
+    monkeypatch.setenv(FEM_REGIONS_ENV, "1")
 
     step = _write_step(tmp_path / "air.step")
     built = build_fem_region_mesh_isolated(step, _region())
@@ -176,7 +179,8 @@ def test_the_isolated_child_meshes_a_region_and_keeps_typed_refusals(tmp_path):
 
 
 def test_fem_regions_are_advertised_only_to_an_opted_in_build(monkeypatch):
-    from server.cadlink.fusion_delivery import FEM_REGIONS_ENV, capabilities
+    from server.cadlink.build_flags import FEM_REGIONS_ENV
+    from server.cadlink.fusion.fusion_delivery import capabilities
 
     monkeypatch.delenv(FEM_REGIONS_ENV, raising=False)
     assert "femRegions" not in capabilities()

@@ -38,6 +38,7 @@ from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
 from server.cadlink.ipc import IPC_SUBDIRECTORY, ipc_folder
+from server.cadlink.build_flags import fem_regions_enabled
 
 
 CAPABILITIES_FILENAME = "wg-capabilities.json"
@@ -72,12 +73,6 @@ AUTOMATIC_DOMAIN = 1
 # capability is advertised only to a development build that opts in; a
 # released WG must not invite a return it would then solve without its air.
 FEM_REGIONS = 1
-FEM_REGIONS_ENV = "WG2_FEM_REGIONS"
-
-
-def fem_regions_enabled() -> bool:
-    return os.environ.get(FEM_REGIONS_ENV, "").strip() == "1"
-
 # WG publishes the outcome of every request in its inbox as
 # ``.wg-solve-acks/<commandId>.json`` before it deletes the request
 # (``solve_command.write_acknowledgement``). The add-in reads it only when WG

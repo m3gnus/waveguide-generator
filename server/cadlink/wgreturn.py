@@ -16,6 +16,7 @@ from typing import Any, Mapping
 import unicodedata
 
 from server.cadlink import wglink_protocol as protocol
+from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.limits import MAX_STEP_INPUT_BYTES, MAX_WGRETURN_JSON_BYTES
 
 
@@ -274,6 +275,13 @@ def _portable_member_name(raw: str, path: str) -> tuple[str, tuple[str, ...]]:
 
 def validate_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
     """Validate the unchanged WG ingress contract through the shared profile."""
+    features = manifest.get("required_features")
+    if (
+        not fem_regions_enabled()
+        and isinstance(features, list)
+        and protocol.FEM_REGIONS_FEATURE in features
+    ):
+        _fail("$.required_features", f"unknown required feature(s): {protocol.FEM_REGIONS_FEATURE}")
     try:
         protocol.validate_structure(manifest, protocol.WG_INGRESS)
     except protocol.ProtocolValidationError as exc:

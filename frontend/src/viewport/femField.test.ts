@@ -10,6 +10,23 @@ import {
   type FemFieldPayload,
 } from './femField';
 
+describe('parked FEM field view', () => {
+  it('has no production importer or mount while the frontend has no FEM capability', () => {
+    // F9 owns the result route and capability wiring. Until then no production
+    // entry point may reach the experimental view or its payload decoder.
+    const sources = import.meta.glob('../**/*.{ts,tsx}', {
+      query: '?raw', import: 'default', eager: true,
+    });
+    const consumers = Object.entries(sources).filter(([path]) => (
+      !path.includes('.test.') && !path.endsWith('/FemFieldView.tsx') && !path.endsWith('/femField.ts')
+    ));
+    expect(consumers.length).toBeGreaterThan(0);
+    for (const [path, source] of consumers) {
+      expect(source, path).not.toMatch(/\bFemFieldView\b|['"][^'"]*\/femField['"]/);
+    }
+  });
+});
+
 // A 10 mm cube cut into six tetrahedra around its main diagonal (0 -> 6).
 const CORNERS = [
   [0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0],

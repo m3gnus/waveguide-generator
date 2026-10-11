@@ -45,6 +45,7 @@ import tempfile
 import threading
 from typing import Any, Iterator, Mapping, Sequence
 
+from server.cadlink.build_flags import FEM_REGIONS_ENV
 from server.cadlink.limits import (
     INSPECT_MEMORY_BYTES,
     INSPECT_TIMEOUT_S,
@@ -193,7 +194,7 @@ def child_environment(
         _WINDOWS_PASSTHROUGH
         if resolved == "Windows"
         else _POSIX_PASSTHROUGH + _LINKER_PASSTHROUGH
-    ) + _MEMORY_PASSTHROUGH
+    ) + _MEMORY_PASSTHROUGH + (FEM_REGIONS_ENV,)
     env = {name: source[name] for name in names if source.get(name)}
 
     scratch = str(staging / "tmp")

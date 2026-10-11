@@ -4,6 +4,13 @@ Status: proposed, 2026-10-11. Slices F1 to F5 are implemented on topic
 branches and tested; F6 onwards are open. Nothing is routed to a solver yet,
 and `femRegions` is advertised only when `WG2_FEM_REGIONS=1`.
 
+The same flag gates bundle admission and the isolated `fem_region` task. When
+unset, WG refuses `fem-regions-v1` as an unknown required feature before STEP
+inspection or meshing; it never silently solves only the exterior. The shared
+protocol remains flag-independent. The frontend has no FEM capability feed or
+result route yet, so `FemFieldView` has no production importer or mount, even
+in an opted-in backend. F9 owns that wiring; the public API remains unchanged.
+
 The aim is Boundary Lab's interior capability for geometry drawn in Fusion.
 Bounded air (a rear chamber, a port, a phase plug, a compression driver's
 front and rear cavities) is solved with tetrahedral FEM, coupled to WG's BEM

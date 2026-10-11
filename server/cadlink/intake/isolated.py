@@ -19,6 +19,7 @@ from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping
 
+from server.cadlink.build_flags import fem_regions_enabled
 from server.cadlink.intake.isolation import (
     INSPECT_BUDGET,
     MESH_BUDGET,
@@ -246,6 +247,9 @@ def build_fem_region_mesh_isolated(
     The same isolation as the exterior: the region STEP is CAD-authored bytes,
     so OCC opens it only in a disposable process, under the mesh budget.
     """
+
+    if not fem_regions_enabled():
+        raise ChildRefusal(MESH_STAGE, "declared FEM regions are disabled")
 
     try:
         with isolated_step_task(
