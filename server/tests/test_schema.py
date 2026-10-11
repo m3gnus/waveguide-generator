@@ -128,7 +128,7 @@ def test_expr_bounded_evaluator_preserves_numeric_ath_arithmetic(
     assert Expr.model_validate(raw).value == pytest.approx(expected)
 
 
-@pytest.mark.parametrize("raw", ["ceil(1.2)", "floor(1.2)", "log(10)", "exp(1)"])
+@pytest.mark.parametrize("raw", ["frexp(1.2)", "modf(1.2)", "unknown(10)", "sign(1)"])
 def test_expr_rejects_functions_the_pinned_mesher_cannot_execute(raw: str) -> None:
     with pytest.raises(ValidationError, match="unknown expression function"):
         Expr.model_validate(raw)
@@ -136,12 +136,13 @@ def test_expr_rejects_functions_the_pinned_mesher_cannot_execute(raw: str) -> No
 
 def test_expr_v1_only_function_error_explains_compatibility_limit() -> None:
     with pytest.raises(ValidationError) as exc_info:
-        Expr.model_validate("exp(1)")
+        Expr.model_validate("sign(1)")
 
     message = str(exc_info.value)
-    assert "unknown expression function 'exp'" in message
+    assert "unknown expression function 'sign'" in message
     assert "the geometry engine supports a fixed set of functions" in message
-    assert "abs, acos, asin, atan, atan2, cos, max, min, pow, sin, sqrt, tan" in message
+    from hornlab_mesher.profile_common import _EVAL_FUNCTIONS
+    assert ", ".join(sorted(_EVAL_FUNCTIONS)) in message
     assert "accepted by the v1 UI" in message
     assert "original-to-current compatibility limit" in message
 
@@ -153,7 +154,8 @@ def test_expr_unknown_function_error_does_not_claim_v1_compatibility() -> None:
     message = str(exc_info.value)
     assert "unknown expression function 'sqrtt'" in message
     assert "the geometry engine supports a fixed set of functions" in message
-    assert "abs, acos, asin, atan, atan2, cos, max, min, pow, sin, sqrt, tan" in message
+    from hornlab_mesher.profile_common import _EVAL_FUNCTIONS
+    assert ", ".join(sorted(_EVAL_FUNCTIONS)) in message
     assert "original-to-current compatibility limit" not in message
 
 

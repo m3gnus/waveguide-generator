@@ -14,12 +14,14 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
+from hornlab_mesher.profile_common import _EVAL_FUNCTIONS
 from pydantic import (
     BaseModel,
     BeforeValidator,
     ConfigDict,
     Field,
     RootModel,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -28,60 +30,10 @@ from pydantic import (
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 _CONFIG_BLOCK_START = re.compile(r"^[\w.:-]+\s*=\s*\{$")
 _LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
-_SAFE_FUNCTIONS = {
-    "abs": abs,
-    "acos": math.acos,
-    "asin": math.asin,
-    "atan": math.atan,
-    "atan2": math.atan2,
-    "cos": math.cos,
-    "max": max,
-    "min": min,
-    "pow": pow,
-    "sin": math.sin,
-    "sqrt": math.sqrt,
-    "tan": math.tan,
-}
-# These functions were accepted by the v1 UI but are not supported by the
-# pinned geometry engine. If this allowlist is ever widened, beware that v1
-# maps ``log`` to base-10 Math.log10 and ``ln`` to natural-log Math.log. Python's
-# ``math.log`` is natural log, so mapping v1's ``log`` to it would silently
-# compute the wrong geometry, which is worse than rejecting the expression.
-_V1_ONLY_FUNCTIONS = frozenset(
-    {
-        "acosh",
-        "asinh",
-        "atanh",
-        "cbrt",
-        "ceil",
-        "copysign",
-        "cosh",
-        "deg",
-        "exp",
-        "exp2",
-        "expm1",
-        "fabs",
-        "fdim",
-        "floor",
-        "fma",
-        "fmax",
-        "fmin",
-        "fmod",
-        "hypot",
-        "ln",
-        "log",
-        "log1p",
-        "log2",
-        "log10",
-        "rad",
-        "remainder",
-        "round",
-        "sign",
-        "sinh",
-        "tanh",
-        "trunc",
-    }
-)
+# Share scalar function implementations, including sf and C99 round, with the
+# geometry engine. Native v1 log/ln spellings are translated before evaluation.
+_SAFE_FUNCTIONS = dict(_EVAL_FUNCTIONS)
+_V1_ONLY_FUNCTIONS = frozenset({"ln", "sign", "fabs", "fmax", "fmin"})
 _SAFE_CONSTANTS = {"pi": math.pi, "e": math.e}
 _MAX_CONSTANT_EXPRESSION_CHARS = 16 * 1024
 _MAX_CONSTANT_EXPRESSION_NODES = 256
@@ -149,7 +101,7 @@ def _line_is_config_block_syntax(line: str) -> bool:
     return candidate == "}" or _CONFIG_BLOCK_START.fullmatch(candidate) is not None
 
 
-def _expression_candidate(raw: str) -> str:
+def _expression_candidate(raw: str, dialect: str = "ath") -> str:
     candidate = raw.strip()
     # Some v1 snapshots accidentally persisted Function#toString output. Its
     # return expression is still useful for validation and scalar recovery.
@@ -160,12 +112,16 @@ def _expression_candidate(raw: str) -> str:
         return "1"
     if candidate.lower() == "false":
         return "0"
-    return (
+    candidate = (
         candidate.replace("Math.PI", "pi")
         .replace("Math.E", "e")
         .replace("Math.", "")
         .replace("^", "**")
     )
+    if dialect == "wg-v1":
+        candidate = re.sub(r"\blog\s*(?=\()", "log10", candidate)
+        candidate = re.sub(r"\bln\s*(?=\()", "log", candidate)
+    return candidate
 
 
 def _validate_execution_node(node: ast.AST) -> None:
@@ -181,7 +137,7 @@ def _validate_execution_node(node: ast.AST) -> None:
         # (legacy Throat.Diameter round-trip tests use a/b/k). They cannot be
         # scalar-derived here, and an execution path reports them if the pinned
         # mesher cannot resolve them. Calls are stricter because accepting a
-        # known-incompatible function such as log()/ceil() creates a misleading
+        # known-incompatible function such as frexp()/modf() creates a misleading
         # locally-derived value for an expression guaranteed to fail downstream.
         return
     elif isinstance(node, ast.BinOp):
@@ -287,7 +243,7 @@ def _bounded_constant_node(node: ast.AST) -> float:
     return number
 
 
-def _validate_expression_source(raw: str) -> None:
+def _validate_expression_source(raw: str, dialect: str = "ath") -> None:
     """Reject expressions that are unsafe to forward to mesher evaluators."""
 
     candidate = raw.strip()
@@ -328,7 +284,7 @@ def _validate_expression_source(raw: str) -> None:
                 )
         elif character in ")]}":
             nesting = max(0, nesting - 1)
-    candidate = _expression_candidate(candidate)
+    candidate = _expression_candidate(candidate, dialect)
     if candidate.strip().lower() in {
         "undefined",
         "null",
@@ -399,7 +355,7 @@ def _validate_expression_source(raw: str) -> None:
                 )
 
 
-def _constant_expression_value(raw: str) -> float | None:
+def _constant_expression_value(raw: str, dialect: str = "ath") -> float | None:
     """Evaluate scalar-only ATH syntax without accepting arbitrary Python."""
 
     candidate = raw.strip()
@@ -412,7 +368,7 @@ def _constant_expression_value(raw: str) -> float | None:
             return None
         return value if math.isfinite(value) else None
 
-    candidate = _expression_candidate(candidate)
+    candidate = _expression_candidate(candidate, dialect)
     try:
         tree = ast.parse(candidate, mode="eval")
     except (RecursionError, SyntaxError, ValueError):
@@ -441,10 +397,14 @@ class Expr(StrictModel):
 
     value: float | None = None
     raw: str | None = None
+    dialect: Literal["ath", "wg-v1"] = Field(
+        default="ath", exclude_if=lambda value: value == "ath"
+    )
 
     @model_validator(mode="before")
     @classmethod
-    def _coerce(cls, value: Any) -> Any:
+    def _coerce(cls, value: Any, info: ValidationInfo) -> Any:
+        dialect = (info.context or {}).get("expression_dialect", "ath")
         if isinstance(value, cls):
             return value
         if isinstance(value, bool):
@@ -458,15 +418,21 @@ class Expr(StrictModel):
                 raise ValueError("numeric design values must be finite")
             return {"value": number, "raw": None}
         if isinstance(value, str):
-            _validate_expression_source(value)
-            return {"value": _constant_expression_value(value), "raw": value}
+            _validate_expression_source(value, dialect)
+            result = {"value": _constant_expression_value(value, dialect), "raw": value}
+            if dialect == "wg-v1" and re.search(r"\b(?:log|ln)\s*\(", value):
+                result["dialect"] = dialect
+            return result
         if isinstance(value, Mapping):
             result = dict(value)
             raw = result.get("raw")
             if isinstance(raw, str):
-                _validate_expression_source(raw)
+                dialect = result.get("dialect", dialect)
+                _validate_expression_source(raw, dialect)
                 if result.get("value") is None:
-                    result["value"] = _constant_expression_value(raw)
+                    result["value"] = _constant_expression_value(raw, dialect)
+                if dialect == "wg-v1" and re.search(r"\b(?:log|ln)\s*\(", raw):
+                    result["dialect"] = dialect
             return result
         return value
 
@@ -489,7 +455,7 @@ class Expr(StrictModel):
 
         if self.raw is None:
             return self
-        derived = _constant_expression_value(self.raw)
+        derived = _constant_expression_value(self.raw, self.dialect)
         if derived is None:
             # Parameterized ATH formulas intentionally carry the editor's
             # current numeric sample as a sidecar. The raw source remains the
@@ -514,7 +480,7 @@ class Expr(StrictModel):
         """Return mesher-compatible syntax without changing lossless ``raw``."""
 
         if self.raw is not None:
-            return _expression_candidate(self.raw)
+            return _expression_candidate(self.raw, self.dialect)
         return self.value
 
     def constant_value(self) -> float | None:
@@ -527,7 +493,7 @@ class Expr(StrictModel):
 
         if self.raw is None:
             return self.value
-        return _constant_expression_value(self.raw)
+        return _constant_expression_value(self.raw, self.dialect)
 
 
 def _resolution_expression(value: Any) -> Any:
@@ -580,7 +546,22 @@ class EnclosureConfig(StrictModel):
     back_resolution: ResolutionExpr | None = None
 
 
+class AthRoundoverConfig(StrictModel):
+    radius: float = Field(gt=0, allow_inf_nan=False)
+    segments: int = Field(default=5, ge=1)
+
+    @field_validator("segments", mode="before")
+    @classmethod
+    def _numeric_segments(cls, value: Any) -> Any:
+        # ATH accepts integral numeric spellings such as 6.0 and 6e0 too.
+        return float(value) if isinstance(value, str) else value
+
+
 class MeshConfig(StrictModel):
+    ath_roundover: AthRoundoverConfig | None = Field(default=None, exclude_if=lambda value: value is None)
+    ath_rear_shape: Literal[1, 3] | None = Field(default=None, exclude_if=lambda value: value is None)
+    ath_rear_front_offset: float | None = Field(default=None, ge=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
+    ath_rear_step: float | None = Field(default=None, gt=0, allow_inf_nan=False, exclude_if=lambda value: value is None)
     angular_segments: Expr | None = None
     corner_segments: Expr | None = None
     throat_segments: Expr | None = None
@@ -666,9 +647,12 @@ class DesignCommon(StrictModel):
     """Fields shared by all formula families and all v1 export sections."""
 
     formula: str
-    text_import_version: Literal["ath-2026-08c-v1"] | None = Field(
+    text_import_version: Literal["ath-2026-08c-v1", "ath-2026-09a-v2"] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    ath_axial_sampling_rule: Literal["ath-v2025-06", "ath-v2025-12+"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    ath_nac_present: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    ath_nac: int | None = Field(default=None, exclude_if=lambda value: value is None)
     scale: Expr | None = None
     throat_ext_angle: Expr | None = None
     throat_ext_length: Expr | None = None
@@ -683,6 +667,21 @@ class DesignCommon(StrictModel):
     output: OutputConfig = Field(default_factory=OutputConfig)
     extra_keys: dict[str, str] = Field(default_factory=dict)
     extra_blocks: dict[str, ConfigBlock] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _ath_controls(self) -> "DesignCommon":
+        if self.ath_nac is not None:
+            if self.ath_nac_present is False:
+                raise ValueError("NAC conflicts with _athNacPresent = 0")
+            if self.ath_nac_present is None:
+                object.__setattr__(self, "ath_nac_present", True)
+        mesh = self.mesh
+        if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
+            if self.text_import_version != "ath-2026-09a-v2":
+                raise ValueError("Mesh.Roundover / Mesh.RearShape = 3 require ath-2026-09a-v2")
+        if mesh.ath_rear_shape != 3 and (mesh.ath_rear_front_offset is not None or mesh.ath_rear_step is not None):
+            raise ValueError("Mesh.RearShape.FrontOffset/Step require Mesh.RearShape = 3")
+        return self
 
 
 class StretchDesign(DesignCommon):
@@ -908,6 +907,23 @@ class DesignConfig(RootModel[DesignVariant]):
         from .migrate import apply_migrations
 
         migrated, _applications = apply_migrations(value)
+        if migrated.get("text_import_version") is None:
+            # Old WG files documented base-10 log and natural ln. Retain the
+            # exact source while sending unambiguous function names downstream.
+            def native_logs(item: Any) -> Any:
+                if isinstance(item, str) and re.search(r"\b(?:log|ln)\s*\(", item):
+                    return {"raw": item, "dialect": "wg-v1"}
+                if isinstance(item, Mapping):
+                    if isinstance(item.get("raw"), str):
+                        if re.search(r"\b(?:log|ln)\s*\(", item["raw"]):
+                            return {**item, "dialect": "wg-v1"}
+                        return item
+                    return {key: native_logs(child) if key not in {"extra_keys", "extra_blocks"} else child
+                            for key, child in item.items()}
+                if isinstance(item, (list, tuple)):
+                    return [native_logs(child) for child in item]
+                return item
+            migrated = native_logs(migrated)
         if migrated.get("formula") not in {"OSSE", "R-OSSE"}:
             from .throat_stretch import coefficient
 

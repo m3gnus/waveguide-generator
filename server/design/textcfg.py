@@ -11,6 +11,7 @@ import ast
 import math
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING, Any, Literal, Mapping
 
 from pydantic import ValidationError
@@ -19,7 +20,7 @@ from server.contracts.canonical import canonical_ascii_json
 
 from .ath_import_defaults import apply_ath_import_defaults
 from .migrate import MigrationApplication, apply_migrations
-from .text_import import TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
+from .text_import import TEXT_IMPORT_VERSION, TEXT_IMPORT_VERSIONS, NATIVE_GEOMETRY_VERSION, GEOMETRY_STAMP_LABEL
 from .schema import (
     ConfigBlock,
     DesignConfig,
@@ -490,7 +491,7 @@ _ENCLOSURE_FLAT_PREFIX = "Mesh.Enclosure."
 
 
 def _enclosure(
-    blocks: Mapping[str, _RawBlock], flat: Mapping[str, str] | None = None
+    blocks: Mapping[str, _RawBlock], flat: Mapping[str, str] | None = None, *, v2: bool = False
 ) -> dict[str, Any] | None:
     block = blocks.get("Mesh.Enclosure")
     # ATH also spells the members as top-level dotted keys, which the mesher
@@ -516,7 +517,10 @@ def _enclosure(
             result[target] = block.items[source]
     if "Spacing" in block.items:
         parts = [part.strip() for part in block.items["Spacing"].split(",")]
-        for target, value in zip(("space_l", "space_t", "space_r", "space_b"), parts):
+        if v2 and len(parts) != 4:
+            raise TextConfigError("Mesh.Enclosure.Spacing must list four margins (+x, +y, -x, -y)")
+        order = ("space_r", "space_t", "space_l", "space_b") if v2 else ("space_l", "space_t", "space_r", "space_b")
+        for target, value in zip(order, parts):
             result[target] = value
     return result
 
@@ -712,7 +716,7 @@ _UNSUPPORTED_ATH_REASONS: dict[str, str] = {
     "Horn.Adapter": "the two-profile (Horn.Part) geometry is not implemented",
     "Throat.Ext.Ctrl": "the curved throat adapter is not implemented",
     "Rollback": "the rollback mouth termination is not implemented",
-    "Mesh.Roundover": "the mouth roundover is not implemented",
+    "Mesh.Roundover": "scalar form is unsupported: ATH requires a Radius/Segments block",
     "Profile": "a profile read from a point file is not implemented",
     "FusionRotaryProfile": "the rotary profile with flange and joint is not implemented",
     "BEE": "the LF enclosure is not implemented",
@@ -851,9 +855,11 @@ def _refuse_unsupported_ath_items(
                 add(key, _UNSUPPORTED_ATH_REASONS.get(
                     member, "this enclosure member is not implemented; WG reads Depth, "
                     "EdgeRadius, EdgeType, FrontResolution, BackResolution and Spacing"))
-        elif key == "Mesh.RearShape" and _ath_number(value) != 1.0:
-            add(key, f"Mesh.RearShape = {value} is not implemented; only the full rear (1) is")
+        elif key == "Mesh.RearShape" and _ath_number(value) not in {1.0, 3.0}:
+            add(key, f"Mesh.RearShape = {value} is not supported; only the full rear (1) and Opus rear (3) are implemented")
     for name, block in blocks.items():
+        if name == "Mesh.Roundover":
+            continue
         if inactive_rollback(name):
             continue
         reason = _ath_unsupported_reason(name)
@@ -918,7 +924,7 @@ _ATH_UNREAD_NOOP_VALUES = {"Rot": 0.0}
 # Blocks WG reads (or ATH ignores) in some layout; a profile block beside the
 # selected one, or a Mesh/Source section, is accounted for elsewhere.
 _ATH_READ_BLOCKS = frozenset(
-    {"OSSE", "R-OSSE", "ROSSE", "Mesh", "Source", "Mesh.Enclosure", "Morph", "MORPH", "GCurve", "GCURVE"}
+    {"OSSE", "R-OSSE", "ROSSE", "Mesh", "Source", "Mesh.Enclosure", "Mesh.Roundover", "Morph", "MORPH", "GCurve", "GCURVE"}
 )
 
 
@@ -1014,6 +1020,7 @@ def _build_payload(
     dialect: Literal["mwg", "ath"],
     ignored_profile: list[IgnoredSetting],
     refuse_unsupported: bool = False,
+    v2: bool = False,
 ) -> dict[str, Any]:
     from .throat_stretch import coefficient, text_number, validate_composition
 
@@ -1068,9 +1075,9 @@ def _build_payload(
     for key in ("Throat.Ext.Length", "Throat.Ext.Angle", "Slot.Length"):
         if key in flat:
             composition[key] = text_number(flat[key])
-    # The mesher uses an OSSE-block Rot before the top-level Rot. R-OSSE
-    # top-level Rot participates in refusal even though it is not a profile field.
-    if "Rot" in selected and formula == "OSSE":
+    # V1/native retain block Rot precedence. V2 ignores it. R-OSSE top-level
+    # Rot participates in refusal even though it is not a profile field.
+    if "Rot" in selected and formula == "OSSE" and not v2:
         composition["Rot"] = text_number(selected["Rot"])
     elif "Rot" in flat:
         composition["Rot"] = text_number(flat["Rot"])
@@ -1142,6 +1149,12 @@ def _build_payload(
         if formula_block:
             consumed_blocks.add(block_name)
             for key, value in formula_block.items.items():
+                if v2 and formula == "OSSE" and key == "Rot":
+                    ignored_profile.append(IgnoredSetting(
+                        key="OSSE.Rot", value=value,
+                        note="ATH ignores OSSE.Rot; use top-level Rot.",
+                    ))
+                    continue
                 # Active ATH profiles consume only the mesher's profile keys.
                 # Global Scale is top-level; R-OSSE Rot/Length are ignored in
                 # the block, even though their top-level copies can refuse.
@@ -1180,10 +1193,12 @@ def _build_payload(
                 else:
                     payload[key] = value
 
-    if active_stretch:
+    if active_stretch or v2:
         for key, target in profile_aliases:
-            if key in selected:
+            if key in selected and not (v2 and key == "Rot"):
                 payload[target] = selected[key]
+                if v2 and selected is flat:
+                    consumed_keys.add(key)
     if formula in {"OSSE", "R-OSSE"}:
         payload.update(stretch)
     consumed_keys.update(key for key in ("s1", "s2") if key in flat)
@@ -1199,9 +1214,9 @@ def _build_payload(
                 # A populated ATH OSSE block owns the formula parameters;
                 # Rot alone has the mesher's explicit top-level fallback.
                 block = blocks.get("OSSE")
-                if not block or not block.items or not active_stretch or key.startswith("GCurve.") or key.startswith("CircArc.") or (key == "Throat.Profile" and key not in block.items):
+                if not block or not block.items or (not active_stretch and not v2) or key.startswith("GCurve.") or key.startswith("CircArc.") or (key == "Throat.Profile" and key not in block.items):
                     _put(payload, path, flat[key])
-                elif key == "Rot" and "Rot" not in block.items:
+                elif key == "Rot" and (v2 or "Rot" not in block.items):
                     _put(payload, path, flat[key])
                 consumed_keys.add(key)
         if dialect != "ath" and "Throat.Diameter" in flat and (not active_stretch or (block_name is None and "r0" not in selected)):
@@ -1220,8 +1235,13 @@ def _build_payload(
             # V2025-12 and V2026-09a), and 0.7 widens the mouth by a fifth.
             payload.setdefault("a0", 0)
             payload.setdefault("s", 0.5)
+            if v2:
+                payload.setdefault("a", 45)
 
     if dialect == "ath" and formula in {"OSSE", "R-OSSE"}:
+        if v2 and formula == "OSSE" and block_name and "r0" in blocks[block_name].items:
+            if not re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?", blocks[block_name].items["r0"].strip()):
+                raise TextConfigError("OSSE.r0 must be a literal number; ATH reads only a leading number from expressions")
         if formula == "R-OSSE":
             # Selected R-OSSE controls own the profile even without active
             # stretch, including flat controls beside an empty selector.
@@ -1239,6 +1259,12 @@ def _build_payload(
             payload["r0"] = 12.7
         if "Throat.Diameter" in flat:
             consumed_keys.add("Throat.Diameter")
+        if v2 and formula == "R-OSSE":
+            for key, value in {"R": 200, "a": 40, "a0": 0, "r": .25, "m": .9, "b": .4, "q": 3.5}.items():
+                payload.setdefault(key, value)
+            target = payload.get("morph", {}).get("target_shape")
+            if target is not None and _ath_number(str(target)) != 0:
+                raise TextConfigError("R-OSSE Morph.TargetShape is unsupported: ATH changes the radial profile")
 
     if dialect == "ath" and formula != "FREEFORM":
         # ATH's Length is the nominal axial depth of the whole device, so
@@ -1258,16 +1284,53 @@ def _build_payload(
         consumed_blocks.update(name for name in ("GCurve", "GCURVE") if name in blocks)
         consumed_keys.update(key for key in flat if key.startswith(("GCurve.", "GCURVE.")))
 
-    enclosure = _enclosure(blocks, flat if dialect == "ath" and refuse_unsupported else None)
+    enclosure = _enclosure(blocks, flat if dialect == "ath" and (refuse_unsupported or v2) else None, v2=v2)
     if enclosure is not None:
         payload["enclosure"] = enclosure
         consumed_blocks.add("Mesh.Enclosure")
-        if dialect == "ath" and refuse_unsupported:
+        if dialect == "ath" and (refuse_unsupported or v2):
             consumed_keys.update(
                 key for key in flat
                 if key.startswith(_ENCLOSURE_FLAT_PREFIX)
                 and key[len(_ENCLOSURE_FLAT_PREFIX):] in _ATH_ENCLOSURE_MEMBERS
             )
+
+    if v2:
+        mesh = payload.setdefault("mesh", {})
+        for key, target in (("Mesh.RearShape", "ath_rear_shape"),
+                            ("Mesh.RearShape.FrontOffset", "ath_rear_front_offset"),
+                            ("Mesh.RearShape.Step", "ath_rear_step")):
+            if key in flat:
+                mesh[target] = _ath_number(flat[key])
+                if mesh[target] is None:
+                    raise TextConfigError(f"{key} must be a finite number")
+                consumed_keys.add(key)
+        if "Mesh.Roundover" in blocks:
+            block = blocks["Mesh.Roundover"]
+            unknown = [key for key in block.items if key not in {"Radius", "Segments"} and not key.startswith("_")]
+            if unknown or block.lines:
+                raise TextConfigError("unsupported Mesh.Roundover member(s): " + ", ".join(unknown or block.lines))
+            mesh["ath_roundover"] = {"radius": block.items.get("Radius"), "segments": block.items.get("Segments", 5)}
+            consumed_blocks.add("Mesh.Roundover")
+        if "NAC" in flat:
+            try:
+                number = Decimal(flat["NAC"])
+                if not number.is_finite() or number != number.to_integral_value():
+                    raise ValueError("expected an integer")
+                payload["ath_nac"] = int(number)
+            except (ValueError, InvalidOperation) as exc:
+                raise TextConfigError(f"NAC must be a finite integer, got {flat['NAC']!r}") from exc
+            payload["ath_nac_present"] = True
+            consumed_keys.add("NAC")
+            ignored_profile.append(IgnoredSetting(key="NAC", value=flat["NAC"], note="NAC presence preserves Mesh.AngularSegments without the CornerSegments addition; its value only controls ATH ring-spline splitting and is ignored."))
+        if mesh.get("ath_rear_shape") == 3:
+            mesh.setdefault("ath_rear_front_offset", 40)
+            mesh.setdefault("ath_rear_step", 25)
+
+    for key, target in (("_athAxialSamplingRule", "ath_axial_sampling_rule"), ("_athNacPresent", "ath_nac_present")):
+        if key in flat:
+            payload[target] = flat[key]
+            consumed_keys.add(key)
 
     payload["extra_keys"] = {key: value for key, value in flat.items() if key not in consumed_keys}
     payload["extra_blocks"] = {
@@ -1295,7 +1358,7 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     if not isinstance(text, str):
         raise TypeError("text must be a string")
     repeated: list[tuple[str, _RawBlock]] = []
-    flat, blocks, comments, raw_values = _lex(text, repeated)
+    flat, blocks, comments, raw_values = _lex(text.removeprefix("\ufeff"), repeated)
     for comment in comments:
         for match in _DESIGN_FORMAT_STAMP.finditer(comment):
             version = int(match.group(1))
@@ -1346,25 +1409,45 @@ def parse(text: str, *, migrate: bool = True) -> ParsedDesign:
     if len(versions) > 1:
         raise TextConfigError("conflicting geometry interpretation stamps")
     version = next(iter(versions), None)
-    if version is not None and version not in {TEXT_IMPORT_VERSION, NATIVE_GEOMETRY_VERSION}:
+    if version is not None and version not in {*TEXT_IMPORT_VERSIONS, NATIVE_GEOMETRY_VERSION}:
         raise TextConfigError(f"unsupported geometry interpretation {version!r}")
-    geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version == TEXT_IMPORT_VERSION else dialect
+    geometry_dialect = "mwg" if version == NATIVE_GEOMETRY_VERSION else "ath" if version in TEXT_IMPORT_VERSIONS else dialect
+    import_version = version if version in TEXT_IMPORT_VERSIONS else TEXT_IMPORT_VERSION if geometry_dialect == "ath" else None
     # Refuse only files that are ATH by their own text and carry no WG stamp. A WG-saved file that
     # carries the text-import geometry stamp is read with ATH geometry but keeps
     # native passthrough semantics, so it never becomes unopenable.
     payload = _build_payload(
         flat, blocks, dialect=geometry_dialect, ignored_profile=ignored_profile,
         refuse_unsupported=dialect == "ath" and version is None,
+        v2=import_version == TEXT_IMPORT_VERSION,
     )
-    if version == TEXT_IMPORT_VERSION or (version is None and dialect == "ath" and payload["formula"] != "FREEFORM"):
-        payload["text_import_version"] = TEXT_IMPORT_VERSION
-        if version is None:
+    if import_version is not None and payload["formula"] != "FREEFORM":
+        payload["text_import_version"] = import_version
+        if version is None and dialect == "ath":
             ignored_profile.extend(IgnoredSetting(*entry) for entry in apply_ath_import_defaults(payload))
+    if import_version == TEXT_IMPORT_VERSION:
+        from hornlab_mesher.text_import import ath_axial_sampling_rule
+        try:
+            rule, _echo = ath_axial_sampling_rule(text)
+        except ValueError as exc:
+            raise TextConfigError(str(exc)) from exc
+        payload.setdefault("ath_axial_sampling_rule", rule)
+        payload.setdefault("ath_nac_present", False)
     applications: list[MigrationApplication] = []
     if migrate:
         try:
             payload, applications = apply_migrations(payload)
         except (OverflowError, ValueError) as exc:
+            raise TextConfigError(str(exc)) from exc
+    mesh_payload = payload.get("mesh", {})
+    if mesh_payload.get("ath_roundover") is not None or mesh_payload.get("ath_rear_shape") == 3:
+        # The mesher owns the bounded combinations and their named diagnostics.
+        # This is config validation only; no surfaces or mesh jobs are built.
+        from hornlab_mesher.config_parser import parse_text_config
+        from hornlab_mesher.config_builder import build_geometry_params
+        try:
+            build_geometry_params(parse_text_config(text))
+        except ValueError as exc:
             raise TextConfigError(str(exc)) from exc
     try:
         design = DesignConfig.model_validate(payload)
@@ -1488,11 +1571,13 @@ def _serialize_freeform(lines: list[str], config: FreeformConfig) -> None:
     _block(lines, "Freeform.CrossSections", [], rows)
 
 
-def _serialize_enclosure(lines: list[str], config: Any) -> None:
+def _serialize_enclosure(lines: list[str], config: Any, *, v2: bool = False) -> None:
     if config is None:
         return
     spacing = None
     spaces = [config.space_l, config.space_t, config.space_r, config.space_b]
+    if v2:
+        spaces[0], spaces[2] = spaces[2], spaces[0]
     if any(value is not None for value in spaces):
         spacing = ",".join(_text(value) for value in spaces)
     _block(
@@ -1566,6 +1651,8 @@ def _serialize_canonical(
         f"; Waveguide Generator design-format: {_DESIGN_FORMAT}",
         f"; {GEOMETRY_STAMP_LABEL} {config.text_import_version or NATIVE_GEOMETRY_VERSION}",
     ]
+    if config.ath_axial_sampling_rule == "ath-v2025-06":
+        lines.append("; Ath version V2025-06")
     for comment in comments or []:
         if comment not in lines and "Generated:" not in comment and not _GEOMETRY_STAMP.match(comment):
             if _LINE_BREAK.search(comment) is not None or not comment.lstrip().startswith(";"):
@@ -1583,6 +1670,11 @@ def _serialize_canonical(
     if report is not None:
         _emit_block(lines, _REPORT_BLOCK, report)
     _line(lines, "Scale", config.scale)
+    _line(lines, "_athAxialSamplingRule", config.ath_axial_sampling_rule)
+    if config.ath_nac_present is not None:
+        _line(lines, "_athNacPresent", "1" if config.ath_nac_present else "0")
+    if config.ath_nac is not None:
+        _line(lines, "NAC", str(config.ath_nac))
 
     if isinstance(config, FreeformConfig):
         _serialize_freeform(lines, config)
@@ -1690,9 +1782,16 @@ def _serialize_canonical(
         ("Morph.AllowShrinkage", morph.allow_shrinkage),
     ):
         _line(lines, key, value)
-    _serialize_enclosure(lines, config.enclosure)
+    _serialize_enclosure(lines, config.enclosure, v2=config.text_import_version == TEXT_IMPORT_VERSION)
 
     mesh = config.mesh
+    if mesh.ath_roundover is not None:
+        _block(lines, "Mesh.Roundover", [("Radius", str(mesh.ath_roundover.radius)), ("Segments", str(mesh.ath_roundover.segments))])
+    for key, value in (("Mesh.RearShape", mesh.ath_rear_shape),
+                       ("Mesh.RearShape.FrontOffset", mesh.ath_rear_front_offset),
+                       ("Mesh.RearShape.Step", mesh.ath_rear_step)):
+        if value is not None:
+            _line(lines, key, str(value))
     for key, value in (
         ("Mesh.AngularSegments", mesh.angular_segments),
         ("Mesh.CornerSegments", mesh.corner_segments),

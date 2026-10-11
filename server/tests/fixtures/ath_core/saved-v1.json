@@ -1,0 +1,209 @@
+[
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nOSSE = {\n}\nCoverage.Angle = 35\nLength = 80\nTerm.s = .5\nThroat.Angle = 5\nThroat.Diameter = 2*(8)\nThroat.Profile = 1\nLength.Mode = total\nMesh.AngularSegments = 8\nMesh.LengthSegments = 8\nMesh.WallThickness = 3\nSimulation.SimType = 2\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 8.0,
+        "a": "35",
+        "a0": "5",
+        "_athLengthMode": "total",
+        "L": "80",
+        "s": ".5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": "3",
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {},
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nOSSE = {\n}\nThroat.Ext.Angle = 8\nThroat.Ext.Length = 4\nCoverage.Angle = 35\nLength = 80\nTerm.s = .5\nThroat.Angle = 5\nThroat.Diameter = 2*(8)\nThroat.Profile = 1\nRot = 7\nLength.Mode = total\nMesh.AngularSegments = 8\nMesh.LengthSegments = 8\nMesh.WallThickness = 3\nSimulation.SimType = 2\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 8.0,
+        "a": "35",
+        "a0": "5",
+        "throatExtLength": "4",
+        "throatExtAngle": "8",
+        "_athLengthMode": "total",
+        "L": "80",
+        "s": ".5",
+        "rot": "7",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": "3",
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {},
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nOSSE = {\n}\nCoverage.Angle = 35\nLength = 80\nTerm.s = .5\nThroat.Angle = 5\nThroat.Diameter = 2*(6+2)\nThroat.Profile = 1\nLength.Mode = total\nMesh.AngularSegments = 8\nMesh.LengthSegments = 8\nMesh.WallThickness = 3\nSimulation.SimType = 2\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 8.0,
+        "a": "35",
+        "a0": "5",
+        "_athLengthMode": "total",
+        "L": "80",
+        "s": ".5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": "3",
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {},
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nOSSE = {\n}\nCoverage.Angle = 35\nLength = 80\nTerm.s = .5\nThroat.Angle = 5\nThroat.Diameter = 2*(8)\nThroat.Profile = 1\nLength.Mode = total\nMesh.Enclosure = {\nDepth = 30\nSpacing = 11,12,13,14\n}\nMesh.AngularSegments = 8\nMesh.LengthSegments = 8\nMesh.WallThickness = 3\nSimulation.SimType = 2\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "enclosure",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 8.0,
+        "a": "35",
+        "a0": "5",
+        "_athLengthMode": "total",
+        "L": "80",
+        "s": ".5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": "3",
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {},
+      "gcurve": {},
+      "source": {},
+      "enclosure": {
+        "depth": 30.0,
+        "space_l": "11",
+        "space_t": "12",
+        "space_r": "13",
+        "space_b": "14"
+      },
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nOSSE = {\n}\nLength = 80\nTerm.s = 0.5\nThroat.Angle = 0\nThroat.Profile = 1\nLength.Mode = total\nMesh.AngularSegments = 8\nMesh.LengthSegments = 8\nSimulation.SimType = 2\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "OSSE",
+        "a0": "0",
+        "_athLengthMode": "total",
+        "L": "80",
+        "s": "0.5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": 5.0,
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {},
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nR-OSSE = {\nR = 80\n}\nLength.Mode = total\nMorph.TargetShape = 1\nMorph.TargetWidth = 300\nMorph.TargetHeight = 280\nMorph.AllowShrinkage = 1\nMesh.AngularSegments = 8\nMesh.LengthSegments = 8\nSimulation.SimType = 2\n",
+    "config": {
+      "formula": "R-OSSE",
+      "mode": "freestanding",
+      "profile": {
+        "formula": "R-OSSE",
+        "_athLengthMode": "total",
+        "R": "80"
+      },
+      "mesh": {
+        "angularSegments": "8",
+        "lengthSegments": "8",
+        "quadrants": 1234,
+        "wallThickness": 5.0,
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {
+        "morphTarget": "1",
+        "morphWidth": "300",
+        "morphHeight": "280",
+        "morphCorner": 35.0,
+        "morphAllowShrinkage": "1"
+      },
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  }
+]

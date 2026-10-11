@@ -384,7 +384,26 @@ GAP_STUDY_KEYS = {
 
 @pytest.mark.parametrize("family, base", [("OSSE", BASE), ("R-OSSE", RBASE)])
 @pytest.mark.parametrize("key", sorted(GAP_STUDY_KEYS))
-def test_every_gap_study_key_is_refused_by_name(family: str, base: str, key: str) -> None:
+def test_every_gap_study_key_has_transport_or_a_named_refusal(family: str, base: str, key: str) -> None:
+    # These three controls now have qualified v2 transport. Check their exact
+    # payloads here; the unsupported family composition still refuses by name.
+    if key in {"NAC", "Mesh.RearShape", "Mesh.Roundover"}:
+        from server.preview.translate import design_to_mesher_config
+        if key == "Mesh.Roundover" and family == "R-OSSE":
+            with pytest.raises(TextConfigError, match="Mesh.Roundover with R-OSSE"):
+                parse(base + GAP_STUDY_KEYS[key])
+            return
+        config = design_to_mesher_config(parse(base + GAP_STUDY_KEYS[key]).design)
+        assert config["_textImportVersion"] == "ath-2026-09a-v2"
+        if key == "NAC":
+            assert config["_athNacPresent"] is True
+        elif key == "Mesh.RearShape":
+            assert config["mesh"]["athRearShape"] == 3
+            assert config["mesh"]["athRearFrontOffset"] == 40
+            assert config["mesh"]["athRearStep"] == 25
+        else:
+            assert config["mesh"]["athRoundover"] == {"radius": 5, "segments": 5}
+        return
     with pytest.raises(TextConfigError, match="unsupported item") as caught:
         parse(base + GAP_STUDY_KEYS[key])
     assert key.split(".")[-1] in str(caught.value) or key in str(caught.value)

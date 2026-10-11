@@ -2579,6 +2579,16 @@ export interface components {
             phase_plugs?: components["schemas"]["PhasePlug"][];
             woofer?: components["schemas"]["SourceDocument"] | null;
         };
+        /** AthRoundoverConfig */
+        AthRoundoverConfig: {
+            /** Radius */
+            radius: number;
+            /**
+             * Segments
+             * @default 5
+             */
+            segments?: number;
+        };
         /** Attachment */
         Attachment: {
             /** Dimensions */
@@ -3706,6 +3716,12 @@ export interface components {
          *     not a scalar); ``raw`` is always sufficient for lossless serialization.
          */
         Expr: {
+            /**
+             * Dialect
+             * @default ath
+             * @enum {string}
+             */
+            dialect?: "ath" | "wg-v1";
             /** Raw */
             raw?: string | null;
             /** Value */
@@ -3847,6 +3863,12 @@ export interface components {
         };
         /** FreeformConfig */
         FreeformConfig: {
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
             /** Corner Grids */
             corner_grids?: components["schemas"]["CornerGrid"][];
             /** Coverage Mode */
@@ -3882,7 +3904,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: "ath-2026-08c-v1" | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
         };
@@ -4021,6 +4043,12 @@ export interface components {
             R?: components["schemas"]["Expr"] | null;
             a?: components["schemas"]["Expr"] | null;
             a0?: components["schemas"]["Expr"] | null;
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
             coverage_angle?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
@@ -4058,7 +4086,7 @@ export interface components {
             /** Termination */
             termination?: ("flat_baffle" | "rollback") | null;
             /** Text Import Version */
-            text_import_version?: "ath-2026-08c-v1" | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             theta1_deg?: components["schemas"]["Expr"] | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
@@ -4589,6 +4617,13 @@ export interface components {
             allow_large_mesh?: components["schemas"]["Expr"] | null;
             angular_segments?: components["schemas"]["Expr"] | null;
             aperture_resolution_scale?: components["schemas"]["Expr"] | null;
+            /** Ath Rear Front Offset */
+            ath_rear_front_offset?: number | null;
+            /** Ath Rear Shape */
+            ath_rear_shape?: (1 | 3) | null;
+            /** Ath Rear Step */
+            ath_rear_step?: number | null;
+            ath_roundover?: components["schemas"]["AthRoundoverConfig"] | null;
             corner_segments?: components["schemas"]["Expr"] | null;
             length_segments?: components["schemas"]["Expr"] | null;
             max_edge?: components["schemas"]["Expr"] | null;
@@ -4679,6 +4714,12 @@ export interface components {
             L?: components["schemas"]["Expr"] | null;
             a?: components["schemas"]["Expr"] | null;
             a0?: components["schemas"]["Expr"] | null;
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
             circ_arc_radius?: components["schemas"]["Expr"] | null;
             circ_arc_term_angle?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
@@ -4719,7 +4760,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: "ath-2026-08c-v1" | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
             throat_profile?: components["schemas"]["Expr"] | null;
@@ -5063,6 +5104,12 @@ export interface components {
             R?: components["schemas"]["Expr"] | null;
             a?: components["schemas"]["Expr"] | null;
             a0?: components["schemas"]["Expr"] | null;
+            /** Ath Axial Sampling Rule */
+            ath_axial_sampling_rule?: ("ath-v2025-06" | "ath-v2025-12+") | null;
+            /** Ath Nac */
+            ath_nac?: number | null;
+            /** Ath Nac Present */
+            ath_nac_present?: boolean | null;
             b?: components["schemas"]["Expr"] | null;
             /** Coverage Mode */
             coverage_mode?: string | null;
@@ -5099,7 +5146,7 @@ export interface components {
             slot_length?: components["schemas"]["Expr"] | null;
             source?: components["schemas"]["SourceConfig"];
             /** Text Import Version */
-            text_import_version?: "ath-2026-08c-v1" | null;
+            text_import_version?: ("ath-2026-08c-v1" | "ath-2026-09a-v2") | null;
             throat_ext_angle?: components["schemas"]["Expr"] | null;
             throat_ext_length?: components["schemas"]["Expr"] | null;
             tmax?: components["schemas"]["Expr"] | null;

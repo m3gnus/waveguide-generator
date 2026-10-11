@@ -383,6 +383,10 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "maxTriangles": _expr(mesh.max_triangles),
                 "allowLargeMesh": _expr(mesh.allow_large_mesh),
                 "maxEdge": _scaled_expr(mesh.max_edge, scale),
+                "athRoundover": mesh.ath_roundover.model_dump() if mesh.ath_roundover is not None else None,
+                "athRearShape": mesh.ath_rear_shape,
+                "athRearFrontOffset": mesh.ath_rear_front_offset,
+                "athRearStep": mesh.ath_rear_step,
                 "encFrontResolution": (
                     _first_number(root.enclosure.front_resolution)
                     if root.enclosure is not None
@@ -489,6 +493,29 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         )
     if root.text_import_version is not None:
         config["_textImportVersion"] = root.text_import_version
+    if root.ath_axial_sampling_rule is not None:
+        config["_athAxialSamplingRule"] = root.ath_axial_sampling_rule
+    if root.ath_nac_present is not None:
+        config["_athNacPresent"] = root.ath_nac_present
+    if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
+        feature = "Mesh.Roundover / Mesh.RearShape = 3"
+        if scale != 1:
+            raise ValueError(f"Scale with {feature} is unsupported: awaiting ATH probes")
+        if root.source.shape is not None and root.source.shape.constant_value() == 2:
+            raise ValueError(f"Source.Shape = 2 with {feature} is unsupported: awaiting ATH probes")
+        if root.enclosure is not None:
+            raise ValueError(f"{feature} with Mesh.Enclosure is unsupported")
+        if mode not in {"freestanding", "bare"}:
+            raise ValueError(f"{feature} requires free-standing or bare import topology")
+        from server.design.throat_stretch import text_number
+        from hornlab_mesher.config_builder import build_geometry_params
+
+        for key in ("slotLength", "rot", "throatExtLength", "throatExtAngle"):
+            if isinstance(config["profile"].get(key), str):
+                config["profile"][key] = text_number(config["profile"][key])
+        # Validate dictionary clients by the same named composition refusals as
+        # text clients before either preview or solve starts building surfaces.
+        build_geometry_params(config)
     return config
 
 

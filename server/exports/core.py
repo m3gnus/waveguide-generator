@@ -712,8 +712,19 @@ def _surface_grid_plan(design: DesignConfig) -> GridPlan:
     )
 
 
+def _refuse_ath_step(design: DesignConfig) -> None:
+    mesh = design.root.mesh
+    if mesh.ath_roundover is not None or mesh.ath_rear_shape == 3:
+        raise ValueError(
+            "STEP export of Mesh.Roundover / Mesh.RearShape = 3 imports is unsupported: "
+            "GEO spline/Coons patches cannot be exported by the OCC STEP writer; "
+            "faithful OCC ring patches, rear fan and shared-seam solid sewing are not implemented"
+        )
+
+
 def _build_step_sync(design_dump: dict[str, Any]) -> StepSurfaceResult:
     design = DesignConfig.model_validate(design_dump)
+    _refuse_ath_step(design)
     plan = _surface_grid_plan(design)
     if plan.warning:
         logger.warning("Surface STEP export sizing: %s", plan.warning)
@@ -751,6 +762,7 @@ async def build_step(design: DesignConfig) -> StepSurfaceResult:
 
 def _build_step_solid_sync(design_dump: dict[str, Any]) -> StepSolidResult:
     design = DesignConfig.model_validate(design_dump)
+    _refuse_ath_step(design)
     try:
         from hornlab_mesher.cad import write_step_from_config
     except ImportError as exc:
@@ -937,9 +949,48 @@ def _stl_grid_plan(design: DesignConfig) -> tuple[GridPlan, dict[str, Any]]:
     return plan, params
 
 
+def _build_ath_stl_mesh(design: DesignConfig) -> dict[str, Any]:
+    """Tessellate imported patches without changing lip chords or rear rings."""
+    from hornlab_mesher.preview.api import PreviewOptionsV1, build_preview_geometry
+
+    config = design_to_mesher_config(design)
+    config["mesh"]["verticalOffset"] = 0.0
+    geometry = build_preview_geometry(config, PreviewOptionsV1(
+        lod="fine", include_inner=True, include_outer=False,
+        include_enclosure=False, include_source_cap=False, include_rear_cap=False,
+        include_curvature=False, max_chord_error_mm=STL_CHORD_TOLERANCE_MM,
+    ))
+    inner = next(surface for surface in geometry.surfaces if surface.role == "horn.inner")
+    warnings = list(geometry.metadata.get("warnings", []))
+    fidelity = inner.metadata.get("fidelity", {})
+    measured = fidelity.get("max_chord_error_mm")
+    if fidelity.get("measurement_complete") is not True or measured is None or measured > STL_CHORD_TOLERANCE_MM:
+        warnings.append(
+            "STL tessellation did not reach the requested chord tolerance; "
+            "the authored ATH patches are retained at the achieved resolution."
+        )
+    triangles = len(inner.indices) // 3
+    if triangles > STL_TRIANGLE_CEILING:
+        warnings.append(
+            f"This STL has {triangles:,} triangles, above the "
+            f"{STL_TRIANGLE_CEILING:,} this export aims to stay under. It is "
+            "written in full; slicers may be slow to load it."
+        )
+    return {
+        "vertices": (np.asarray(inner.positions) * .001).reshape(-1).tolist(),
+        "indices": inner.indices.reshape(-1).astype(int).tolist(),
+        "surfaceTags": [1] * triangles,
+        "warnings": warnings,
+    }
+
+
 def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     """Mesh the export's own pinned grid, sized to a print-resolution chord."""
 
+    design = DesignConfig.model_validate(design_dump)
+    if design.root.mesh.ath_roundover is not None or design.root.mesh.ath_rear_shape == 3:
+        validate_export_segments(design)
+        return _build_ath_stl_mesh(design)
     try:
         from hornlab_mesher.config_builder import build_from_config
     except ImportError as exc:
@@ -951,7 +1002,6 @@ def _build_stl_mesh_sync(design_dump: dict[str, Any]) -> dict[str, Any]:
     # a parser that only runs when somebody exports geometry.
     import meshio
 
-    design = DesignConfig.model_validate(design_dump)
     plan, params = _stl_grid_plan(design)
     prepared = _prepared_design(design, grid=(plan.angular, plan.length))
     config = _stl_mesher_config(prepared)

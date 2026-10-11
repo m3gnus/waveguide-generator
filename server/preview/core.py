@@ -221,8 +221,9 @@ def preview_options(lod: Literal["coarse", "fine"], *, curvature: bool = True):
     takes chord-error, normal-step, and silhouette targets and *derives* its own
     azimuthal and axial sampling, overwriting ``mesh.angular_segments`` and
     ``mesh.length_segments`` in the config it is handed. Those design fields
-    therefore size the exported and solved mesh only, which is what the
-    "Surface sampling" section now says.
+    therefore size the exported and solved mesh only for ordinary profiles.
+    ATH lips and Opus rears additionally retain the authored grid at every LOD:
+    lip chord angles and rear ring selection depend on those segment counts.
 
     Do not forward them as ``PreviewOptionsV1`` overrides to make the old
     "live preview tessellation" label true. ``min_silhouette_segments`` is a
@@ -257,7 +258,7 @@ def preview_options(lod: Literal["coarse", "fine"], *, curvature: bool = True):
 #: ``hornlab_mesher.preview.api._lod_config`` assigns ``angular_segments`` and
 #: ``length_segments`` from the LOD preset and drops the camel-case aliases the
 #: translation emits, which is the same fact ``preview_options`` documents at
-#: length: these size the exported and solved mesh, never the viewport.
+#: length. Imported lips and Opus rears instead keep their authored grids.
 _PREVIEW_OVERWRITTEN_MESH_FIELDS = frozenset(
     {"angular_segments", "angularSegments", "length_segments", "lengthSegments"}
 )
@@ -274,6 +275,9 @@ def _cache_relevant_config(config: Mapping[str, Any]) -> Any:
 
     mesh = config.get("mesh")
     if not isinstance(mesh, Mapping):
+        return config
+    if mesh.get("athRoundover") or mesh.get("athRearShape") == 3:
+        # Lip chord angles and Opus ring selection depend on the authored grid.
         return config
     if not _PREVIEW_OVERWRITTEN_MESH_FIELDS.intersection(mesh):
         return config
