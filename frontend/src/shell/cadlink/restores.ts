@@ -315,6 +315,7 @@ export interface UseCadRestoresOptions {
   enterCadWorkspace(): void;
   manualSelectionAt: MutableRefObject<number | null>;
   projectOpenPending: MutableRefObject<boolean>;
+  initialChoiceOwed?: MutableRefObject<boolean>;
   refreshRef: MutableRefObject<(options?: RefreshOptions) => Promise<void>>;
   refusedForeignReturn: MutableRefObject<boolean>;
   returnListRequest: MutableRefObject<number>;
@@ -329,6 +330,7 @@ export function useCadRestores({
   enterCadWorkspace,
   manualSelectionAt,
   projectOpenPending,
+  initialChoiceOwed,
   refreshRef,
   refusedForeignReturn,
   returnListRequest,
@@ -340,8 +342,8 @@ export function useCadRestores({
   const restoringCadProject = useRef(false);
 
   useEffect(() => observeCadProjectLoads({
-    enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn, returnListRequest, seenReturnRevisions, setError, setStatus, selectBundleRef,
-  }), [enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn,
+    enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refreshRef, refusedForeignReturn, returnListRequest, seenReturnRevisions, setError, setStatus, selectBundleRef,
+  }), [enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refreshRef, refusedForeignReturn,
     returnListRequest, seenReturnRevisions, setError, setStatus]);
 
   useEffect(() => observeRememberedCadProject({
@@ -404,6 +406,7 @@ export function observeCadProjectLoads(integration: UseCadRestoresOptions): () =
     if (event.reason !== 'load') return;
     if (event.loadSource === 'cad-project-switch') {
       projectOpenPending.current = true;
+      if (integration.initialChoiceOwed) integration.initialChoiceOwed.current = true;
       manualSelectionAt.current = null;
       refusedForeignReturn.current = false;
       seenReturnRevisions.current = null;

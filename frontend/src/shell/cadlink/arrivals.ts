@@ -78,6 +78,8 @@ export interface CadReturnArrivalReaderIntegration {
   refusedForeignReturn: Ref<boolean>;
   returnListRequest: Ref<number>;
   seenReturnRevisions: Ref<Map<string, string> | null>;
+  /** Initial discovery can be deferred across listings while a receipt owns display. */
+  initialChoiceOwed: Ref<boolean>;
   deferredArrivalRevisions: Ref<Map<string, string>>;
   /** The explicit waiter owns selection, including after its poll settles. */
   awaitingReturn(): boolean;
@@ -101,7 +103,7 @@ export async function refreshCadReturnArrivals(
   const {
     autoIngestSelected, cadFolderConfigured, enterCadWorkspace, manualSelectionAt, noteCadActivity,
     projectOpenPending, refreshChannelDriverBases, refusedForeignReturn, returnListRequest,
-    seenReturnRevisions, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, sendOwnersKnown, ownsReturn,
+    seenReturnRevisions, initialChoiceOwed, deferredArrivalRevisions, awaitingReturn, awaitingReceiptDisplay, sendOwnersKnown, ownsReturn,
     setError, setStatus, setBundles, setLoading,
   } = integration;
   const background = options.background === true;
@@ -150,12 +152,17 @@ export async function refreshCadReturnArrivals(
       arrivalPrevious = deferredPrevious;
       deferredArrivalRevisions.current.clear();
     }
+    // An owed initial choice must let queued Sends finish first, even when a
+    // background poll also notices a new revision in the folder.
     const arrived = options.autoOpenNew && !deferNewArrivals && !awaitingReturn()
+      && !(initialChoiceOwed.current && awaitingReceiptDisplay())
       ? newestReturnArrival(response.items.filter((item) => !ownsReturn(item)), arrivalPrevious) : null;
     seenReturnRevisions.current = next;
     const currentDesignId = useDocumentStore.getState().identity?.designId;
-    const initial = previous === null && !awaitingReturn() && !awaitingReceiptDisplay()
-      && !useCadReturnStore.getState().selectedBundle
+    if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;
+    const canChooseInitial = initialChoiceOwed.current && !awaitingReturn() && !awaitingReceiptDisplay()
+      && !useCadReturnStore.getState().selectedBundle;
+    const initial = canChooseInitial
       ? response.items.find((item) => (
           item.readable && (
             currentDesignId
@@ -186,12 +193,16 @@ export async function refreshCadReturnArrivals(
         : (useCadReturnStore.getState().selectBundle(opened, destination, true), 'initial');
       void refreshChannelDriverBases().catch(() => undefined);
       importedMeshStore.beginIntent();
+      initialChoiceOwed.current = false;
     }
-    if (projectOpenPending.current) {
+    if (projectOpenPending.current && canChooseInitial) {
       projectOpenPending.current = false;
       setStatus(initial
         ? `Project design loaded. Selected the latest matching return from ${initial.documentName ?? initial.name}; prepare it to restore Simulation geometry.`
         : 'Project design loaded. No matching CAD return is available yet; return the project from Fusion or Onshape to prepare Simulation geometry.');
+    } else if (projectOpenPending.current && useCadReturnStore.getState().selectedBundle) {
+      // A receipt or another selection owner resolved the project choice.
+      projectOpenPending.current = false;
     }
     if (arrived) {
       if (projectMismatch) {
@@ -508,7 +519,7 @@ export function createCadReturnArrivalReader(
     manualSelectionAt: { current: null }, noteCadActivity: noop,
     projectOpenPending: { current: false }, refreshChannelDriverBases: async () => undefined,
     refusedForeignReturn: { current: false }, returnListRequest: { current: 0 },
-    seenReturnRevisions: { current: null }, deferredArrivalRevisions: { current: new Map() },
+    seenReturnRevisions: { current: null }, initialChoiceOwed: { current: true }, deferredArrivalRevisions: { current: new Map() },
     awaitingReturn: () => false, awaitingReceiptDisplay: () => false, sendOwnersKnown: () => true, ownsReturn: () => false,
     setError: noop, setStatus: noop, setBundles: noop, setLoading: noop,
     ...overrides,

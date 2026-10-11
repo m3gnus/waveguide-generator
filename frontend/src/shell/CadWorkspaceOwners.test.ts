@@ -495,3 +495,120 @@ it('coalesces a delayed initial hello with mount status and discovery reads stil
   statusRead.resolve(json(status())); returnRead.resolve(json({ items: [], cadFolderConfigured: true })); await flush();
   expect(useCadConnectionStore.getState().fusionStatus?.state).toBe('stale');
 });
+
+it.each(['project open', 'application switch'])('R3X defers initial selection through receipt retry backoff on %s', async (entry) => {
+  stop = mountCadWorkspaceOwners(); await flush();
+  if (entry === 'application switch') {
+    preferencesStore.setOnshapeAvailable(true);
+    preferencesStore.update({ cadApplication: 'onshape' }); await flush();
+  }
+  returns = [{ ...bundle, designIds: ['wgd_open'], modifiedAt: new Date(Date.now() - 600_000).toISOString() }];
+  const receipt = { ...sendReceipt(), bundle_path: 'wgreturn/other.wgreturn' };
+  receipts = [receipt];
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipt },
+    displayRetries: { 'receipt-1': { attempt: 1, nextAt: Date.now() + 30_000 } } });
+  if (entry === 'project open') {
+    useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+  } else preferencesStore.update({ cadApplication: 'fusion360' });
+  await flush();
+  expect(cadWorkspace.getSnapshot().bundles).toHaveLength(1);
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  expect(cadWorkspace.getSnapshot().status ?? '').not.toContain('No matching CAD return');
+  await vi.advanceTimersByTimeAsync(30_000); await flush();
+  expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('missing_source');
+  expect(Object.keys(cadReceiptsStore.getState().receipts)).toHaveLength(0);
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  if (entry === 'project open') expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
+});
+
+it('R3Y auto-open polls read fresh receipts before a late Send push', async () => {
+  const base = fetcher.getMockImplementation()!;
+  fetcher.mockImplementation((input, init) => String(input).endsWith('/fusion-status')
+    ? Promise.resolve(json(status({ addinInboxTransfer: false }))) : base(input, init));
+  stop = mountCadWorkspaceOwners(); await flush();
+  const receiptReads = () => fetcher.mock.calls.filter(([input]) => String(input).includes('/receipts?')).length;
+  await vi.advanceTimersByTimeAsync(2_000);
+  const before = receiptReads();
+  returns = [{ ...bundle, modifiedAt: new Date().toISOString() }]; receipts = [sendReceipt()];
+  await vi.advanceTimersByTimeAsync(8_000);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  channels.forEach((channel) => channel.operation({ kind: 'receive_snapshot' } as never)); await flush();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(calls('/api/cadlink/ingest')).toHaveLength(1);
+  expect(receiptReads()).toBeGreaterThan(before);
+  expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('accepted');
+  expect(cadWorkspace.getSnapshot().status).not.toMatch(/superseded|Discarded/);
+});
+
+it.each(['missing_source', 'unreadable', 'refused', 'superseded'] as const)(
+  'R3Z reload chooses an older matching return after an in-flight Send ends as %s', async (outcome) => {
+    const older = { ...bundle, bundlePath: 'wgreturn/older.wgreturn', name: 'older.wgreturn',
+      designIds: ['wgd_open'], modifiedAt: new Date(Date.now() - 600_000).toISOString() };
+    returns = [older]; receipts = [{ ...sendReceipt(), bundle_path: 'wgreturn/gone.wgreturn' }];
+    if (outcome === 'unreadable' || outcome === 'refused') {
+      returns.push({ ...bundle, bundlePath: 'wgreturn/gone.wgreturn', readable: outcome !== 'unreadable',
+        designIds: ['wgd_foreign'] });
+    }
+    cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipts[0] } });
+    const base = fetcher.getMockImplementation()!;
+    const first = deferred<Response>(); let listings = 0;
+    fetcher.mockImplementation((input, init) => String(input).endsWith('/returns') && ++listings === 1
+      ? first.promise : base(input, init));
+    stop = mountCadWorkspaceOwners(); await flush();
+    expect(cadWorkspace.getSnapshot().bundles).toHaveLength(returns.length);
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+    if (outcome === 'superseded') {
+      useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+      await flush();
+      expect(cadWorkspace.getSnapshot().status).not.toContain('No matching CAD return');
+    }
+    first.resolve(json({ items: returns, cadFolderConfigured: true })); await flush();
+    // Queue completion itself must refresh discovery; no polling timer is needed.
+    expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe(outcome);
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(older.bundlePath);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(older.bundlePath);
+    expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+  },
+);
+
+it('an external selection resolves the owed choice even if it is cleared before receipt drain', async () => {
+  returns = [{ ...bundle, designIds: ['wgd_open'] }]; receipts = [sendReceipt()];
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipts[0] },
+    displayRetries: { 'receipt-1': { attempt: 1, nextAt: Date.now() + 30_000 } } });
+  stop = mountCadWorkspaceOwners(); await flush();
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  useCadReturnStore.getState().selectBundle(returns[0]);
+  useCadReturnStore.getState().selectBundle(null);
+  cadReceiptsStore.getState().markFronted('receipt-1'); await flush();
+  await cadWorkspace.getSnapshot().refresh({ background: true }); await flush();
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});
+
+it('project open resolves its initial choice when receipt transport retries are exhausted', async () => {
+  stop = mountCadWorkspaceOwners(); await flush();
+  returns = [{ ...bundle, designIds: ['wgd_open'] }];
+  receipts = [{ ...sendReceipt(), bundle_path: 'wgreturn/other.wgreturn' }];
+  cadReceiptsStore.setState({ feedId: 'cutover', cursor: 1, receipts: { 'receipt-1': receipts[0] },
+    displayRetries: { 'receipt-1': { attempt: 1, nextAt: Date.now() + 5_000 } } });
+  const base = fetcher.getMockImplementation()!;
+  let failedReads = 0;
+  // Each retry's source read fails; discovery's own listings remain readable.
+  fetcher.mockImplementation((input, init) => String(input).endsWith('/returns')
+    && Object.values(cadReceiptsStore.getState().displayRetries).some((retry) => retry.nextAt <= Date.now())
+    && failedReads++ < 3 ? Promise.reject(new Error('offline')) : base(input, init));
+  useDesignStore.getState().replaceDesign(designForFamily('OSSE'), { loadSource: 'cad-project-switch' });
+  await flush();
+  expect(cadWorkspace.getSnapshot().status).not.toContain('No matching CAD return');
+  await vi.advanceTimersByTimeAsync(35_000); await flush();
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  expect(cadWorkspace.getSnapshot().status).not.toContain('No matching CAD return');
+  await vi.advanceTimersByTimeAsync(120_000); await flush();
+  expect(failedReads).toBe(3);
+  expect(cadReceiptsStore.getState().feedback['receipt-1'].outcome).toBe('display_failed');
+  expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(bundle.bundlePath);
+  expect(cadWorkspace.getSnapshot().status).toContain('Selected the latest matching return');
+  expect(calls('/api/cadlink/ingest')).toHaveLength(0);
+});

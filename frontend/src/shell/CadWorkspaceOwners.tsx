@@ -35,6 +35,7 @@ export function mountCadWorkspaceOwners(): () => void {
   const cadFolderConfigured = { current: null as boolean | null };
   const manualSelectionAt = { current: null as number | null };
   const projectOpenPending = { current: false };
+  const initialChoiceOwed = { current: !useCadReturnStore.getState().selectedBundle };
   const refusedForeignReturn = { current: false };
   const restoringCadProject = { current: false };
   const returnListRequest = { current: 0 };
@@ -49,6 +50,8 @@ export function mountCadWorkspaceOwners(): () => void {
   const claimedReturns = new Set<string>();
   let receiptDisplaysInFlight = 0;
   const fusionActive = () => mounted.current && preferencesStore.getSnapshot().cadApplication === 'fusion360';
+  const awaitingReceiptDisplay = () => receiptDisplaysInFlight > 0
+    || Object.keys(cadReceiptsStore.getState().receipts).length > 0;
   let activityRevision = 0;
   const activityListeners = new Set<() => void>();
   const changed = () => activityListeners.forEach((listener) => listener());
@@ -78,11 +81,10 @@ export function mountCadWorkspaceOwners(): () => void {
   }).catch(() => undefined); };
   const arrivals = createCadReturnArrivalReader({
     cadFolderConfigured, manualSelectionAt, projectOpenPending, refusedForeignReturn,
-    returnListRequest, seenReturnRevisions, autoIngestSelected, enterCadWorkspace,
+    returnListRequest, seenReturnRevisions, initialChoiceOwed, autoIngestSelected, enterCadWorkspace,
     refreshChannelDriverBases, noteCadActivity,
     awaitingReturn: () => waiter.getState().pullingFromFusion,
-    awaitingReceiptDisplay: () => receiptDisplaysInFlight > 0
-      || Object.keys(cadReceiptsStore.getState().receipts).length > 0,
+    awaitingReceiptDisplay,
     sendOwnersKnown: () => cadReceiptsStore.getState().loadedAt !== null,
     ownsReturn: (bundle) => Boolean((bundle.requestId && claimedReturns.has(bundle.requestId))
       || Object.values(cadReceiptsStore.getState().receipts).some((receipt) => receipt.bundle_path === bundle.bundlePath)
@@ -101,10 +103,10 @@ export function mountCadWorkspaceOwners(): () => void {
     try {
       const state = cadReceiptsStore.getState();
       // Pushes invalidate loadedAt by starting a read. Background listings can
-      // reuse a complete read briefly; explicit Refresh still rechecks the feed.
+      // reuse a complete read briefly when they cannot auto-open a new arrival.
       const fresh = state.loadedAt !== null && Date.now() - state.loadedAt < 30_000;
-      const read = firstReturnRead ? startupReceipts
-        : options?.background && fresh ? null : state.load();
+      const read = firstReturnRead && !options?.autoOpenNew ? startupReceipts
+        : options?.background && !options.autoOpenNew && fresh ? null : state.load();
       firstReturnRead = false; await read;
     } catch { sendOwnersKnown = false; }
     if (fusionActive()) await arrivals.refresh(sendOwnersKnown ? options
@@ -223,10 +225,21 @@ export function mountCadWorkspaceOwners(): () => void {
   const display = createReceiptDisplay({ enterCadWorkspace, reportViewportNotice, isActive: fusionActive,
     refuseAutomaticRestore: () => { refusedForeignReturn.current = true; },
     showIngestedMesh: showIngestedMeshInViewport, manualSelectionAt: () => manualSelectionAt.current });
+  let initialRefreshQueued = false;
+  const refreshOwedInitialChoice = () => {
+    if (initialRefreshQueued || !fusionActive() || !initialChoiceOwed.current || awaitingReceiptDisplay()) return;
+    initialRefreshQueued = true;
+    queueMicrotask(() => {
+      initialRefreshQueued = false;
+      if (fusionActive() && initialChoiceOwed.current && !awaitingReceiptDisplay()) {
+        void refreshReturns({ background: true });
+      }
+    });
+  };
   const displayReceipt: typeof display = async (receipt) => {
     receiptDisplaysInFlight += 1;
     try { return await display(receipt); }
-    finally { receiptDisplaysInFlight -= 1; }
+    finally { receiptDisplaysInFlight -= 1; refreshOwedInitialChoice(); }
   };
   let stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
   let application = preferencesStore.getSnapshot().cadApplication;
@@ -237,6 +250,7 @@ export function mountCadWorkspaceOwners(): () => void {
     const nextApplication = preferencesStore.getSnapshot().cadApplication;
     if (nextApplication !== application) {
       application = nextApplication;
+      initialChoiceOwed.current = !useCadReturnStore.getState().selectedBundle;
       actions.supersedePreparation(); waiter.supersede(); arrivals.cancel();
       stopDisplay(); stopDisplay = connectCadReceiptDisplay(displayReceipt, cadReceiptsStore, fusionActive);
       if (!fusionActive()) publish({ loading: false });
@@ -246,6 +260,7 @@ export function mountCadWorkspaceOwners(): () => void {
   };
   let context = '';
   const contextChanged = () => {
+    if (useCadReturnStore.getState().selectedBundle) initialChoiceOwed.current = false;
     const nextDesign = useDocumentStore.getState().identity?.designId;
     if (nextDesign !== designId) {
       designId = nextDesign; fusionInstance = onshapeInstance = null; onshapeRead += 1;
@@ -271,6 +286,7 @@ export function mountCadWorkspaceOwners(): () => void {
     }),
     useCadConnectionStore.subscribe((state) => publish({ fusionStatus: state.fusionStatus })),
     cadReceiptsStore.subscribe((state, previous) => {
+      if (Object.keys(previous.receipts).length > 0 && Object.keys(state.receipts).length === 0) refreshOwedInitialChoice();
       if (state.feedback === previous.feedback) return;
       const feedback = Object.values(state.feedback).at(-1);
       if (feedback) publish(feedback.outcome === 'accepted' || feedback.outcome === 'superseded'
@@ -280,7 +296,7 @@ export function mountCadWorkspaceOwners(): () => void {
     useCadDeliveryHealthStore.subscribe((state, previous) => {
       if (state.outboundOperations !== previous.outboundOperations) Object.values(state.outboundOperations).forEach(outbound.observeOperation);
     }), connectCadRecoveryNotices(),
-    observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, refusedForeignReturn,
+    observeCadProjectLoads({ enterCadWorkspace, manualSelectionAt, projectOpenPending, initialChoiceOwed, refusedForeignReturn,
       returnListRequest, seenReturnRevisions, refreshRef: { current: refreshReturns }, selectBundleRef: { current: selectBundle },
       setError: reportError, setStatus: reportStatus }),
     observeRememberedCadProject({ restoringCadProject, refusedForeignReturn, selectBundle, reportStatus }),

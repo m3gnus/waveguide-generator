@@ -237,3 +237,31 @@ it('rebuilds a workspace return explicitly against WGLink rather than the Onshap
   expect(requests).toHaveLength(1);
   expect(requests[0].bundleOrigin).toBe('wglink');
 });
+
+it.each(['matching', 'no match'])('holds project-open feedback until the deferred initial choice finds %s', async (result) => {
+  useDocumentStore.getState().setCadLink({ designId: 'wgd_open', lineageId: 'wgl_open', baseEditVersion: 1 }, 'current');
+  const matching = { ...bundle, designIds: ['wgd_open'] };
+  let pending = true;
+  const projectOpenPending = { current: true }; const initialChoiceOwed = { current: true };
+  const status = vi.fn(); const ingest = vi.fn();
+  const reader = createCadReturnArrivalReader({ projectOpenPending, initialChoiceOwed, setStatus: status,
+    autoIngestSelected: ingest, awaitingReceiptDisplay: () => pending },
+  async () => json({ cadFolderConfigured: true, items: result === 'matching' ? [matching] : [] }));
+  await reader.refresh(); await reader.refresh({ background: true });
+  expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+  expect(initialChoiceOwed.current).toBe(true);
+  expect(projectOpenPending.current).toBe(true);
+  expect(status).not.toHaveBeenCalled();
+  pending = false;
+  await reader.refresh({ background: true });
+  expect(projectOpenPending.current).toBe(false);
+  if (result === 'matching') {
+    expect(useCadReturnStore.getState().selectedBundle?.bundlePath).toBe(matching.bundlePath);
+    expect(initialChoiceOwed.current).toBe(false);
+    expect(status).toHaveBeenCalledWith(expect.stringContaining('Selected the latest matching return'));
+  } else {
+    expect(useCadReturnStore.getState().selectedBundle).toBeNull();
+    expect(status).toHaveBeenCalledWith(expect.stringContaining('No matching CAD return'));
+  }
+  expect(ingest).not.toHaveBeenCalled();
+});
