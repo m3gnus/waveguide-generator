@@ -152,3 +152,17 @@ def test_user_walls_and_synthetic_walls_compile_as_separate_boundaries(tmp_path,
     driven = system["components"][0]["boundary_ids"]
     assert ("boundary:fem:rear-chamber:walls" in driven) == (kind == "moving")
     assert "boundary:fem:rear-chamber:_walls" not in driven
+
+
+def test_nested_skin_cannot_be_compiled_as_unbounded_air(chamber):
+    region, domain = chamber
+    exterior = _exterior_from(domain)
+    faces = np.concatenate(list(exterior.groups.values()))
+    inner = exterior.points_mm * 0.1 + [10, 10, 5]
+    nested = ExteriorSurface(
+        np.concatenate([exterior.points_mm, inner]),
+        {**exterior.groups, "sealed-chamber": faces + len(exterior.points_mm)},
+        {**exterior.kinds, "sealed-chamber": {"kind": "rigid"}},
+    )
+    with pytest.raises(CoupledSystemError, match="Nested.*sealed chamber.*area.*enclosed"):
+        build_coupled_system(nested, [FemRegionInput(region, domain)])

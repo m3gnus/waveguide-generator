@@ -24,6 +24,8 @@ def orient_closed_surface(
     winding is propagated across shared edges, then each connected skin is
     flipped if needed so normals point into the enclosed body
     (``into_body=True``, outward from the exterior air) or out of it.
+    Nested closed skins refuse: they do not all border unbounded air, and a
+    sealed chamber needs an explicit modelling decision before coupling.
     """
 
     triangles = np.array(triangles, dtype=np.int64, copy=True)
@@ -32,6 +34,7 @@ def orient_closed_surface(
         for u, v in ((a, b), (b, c), (c, a)):
             edge_faces.setdefault((min(u, v), max(u, v)), []).append(face)
     visited = np.zeros(len(triangles), dtype=bool)
+    components = []
     for seed in range(len(triangles)):
         if visited[seed]:
             continue
@@ -55,6 +58,7 @@ def orient_closed_surface(
         # Orient each connected skin separately: unrelated bodies can arrive
         # with different OCC seed windings. Recentre for numerical stability.
         rows = np.asarray(component, dtype=np.int64)
+        components.append(rows)
         corners = points[triangles[rows]]
         corners = corners - corners[0, 0]
         signed_volume = (
@@ -63,4 +67,35 @@ def orient_closed_surface(
         outward = signed_volume > 0
         if outward == into_body:
             triangles[rows] = triangles[rows][:, [0, 2, 1]]
+    for rows in components:
+        inner = points[triangles[rows]]
+        probe = inner[0, 0]
+        for enclosing in components:
+            if enclosing is rows:
+                continue
+            outer = points[triangles[enclosing]]
+            if np.any(inner.min(axis=(0, 1)) < outer.min(axis=(0, 1))) or np.any(
+                inner.max(axis=(0, 1)) > outer.max(axis=(0, 1))
+            ):
+                continue
+            # The signed solid angle is +/-4*pi inside a closed skin, zero
+            # outside. Unlike a centroid test this also handles concave skins.
+            a, b, c = (outer[:, index] - probe for index in range(3))
+            la, lb, lc = (np.linalg.norm(v, axis=1) for v in (a, b, c))
+            numerator = np.einsum("ij,ij->i", a, np.cross(b, c))
+            denominator = (la * lb * lc + np.einsum("ij,ij->i", a, b) * lc
+                           + np.einsum("ij,ij->i", b, c) * la
+                           + np.einsum("ij,ij->i", c, a) * lb)
+            angle = 2 * np.arctan2(numerator, denominator).sum()
+            if abs(angle) > 2 * np.pi:
+                area = np.linalg.norm(
+                    np.cross(inner[:, 1] - inner[:, 0], inner[:, 2] - inner[:, 0]), axis=1
+                ).sum() / 2
+                location = inner.mean(axis=(0, 1))
+                raise ValueError(
+                    "Nested closed skin component (sealed chamber) at "
+                    f"{location.tolist()} mm, area {area:g} mm2, is enclosed by another "
+                    "component and does not border unbounded exterior air; declare or "
+                    "remove the sealed chamber before coupling."
+                )
     return triangles

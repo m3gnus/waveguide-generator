@@ -100,7 +100,10 @@ def _closed(points: np.ndarray, triangles: np.ndarray) -> np.ndarray:
             f"Coupled exterior is not closed: {open_edges(triangles)} open edges; "
             "every edge must bound exactly two triangles."
         )
-    oriented = orient_closed_surface(points, triangles, into_body=False)
+    try:
+        oriented = orient_closed_surface(points, triangles, into_body=False)
+    except ValueError as exc:
+        raise FemRegionMeshError(str(exc)) from exc
     directed = np.concatenate([oriented[:, [0, 1]], oriented[:, [1, 2]], oriented[:, [2, 0]]])
     if len(np.unique(directed, axis=0)) != len(directed):
         raise FemRegionMeshError("Coupled exterior has inconsistent interface winding.")
@@ -316,19 +319,16 @@ def build_coupled_mesh(
         exterior_surfaces = {
             tag for tag in exterior_surfaces if len(gmsh.model.getAdjacencies(2, tag)[0]) < 2
         }
+        source_descendants = {
+            name: set().union(*(descendants[(2, tag)] for tag in tags))
+            for name, tags in source_copies.items()
+        }
         exterior_groups: dict[str, set[int]] = {}
         kinds: dict[str, dict[str, str]] = {}
-        for name, tags in source_copies.items():
-            selected = set().union(*(descendants[(2, tag)] for tag in tags)) & exterior_surfaces
-            if not selected:
-                raise FemRegionMeshError(
-                    f"Exterior source {name!r} disappeared from the coupled skin."
-                )
-            exterior_groups[name] = selected
-            kinds[name] = dict(exterior_names[name]["kind"])
         prepared = []
         sizing = []
         air_owners: dict[int, str] = {}
+        region_volumes = []
         for region, original_volumes, _boundary_tags, assigned in region_data:
             volumes = sorted(set().union(*(descendants[(3, tag)] for tag in original_volumes)))
             if not volumes or material_volumes.intersection(volumes):
@@ -341,6 +341,18 @@ def build_coupled_mesh(
                         f"{_label(region)} overlaps FEM region {air_owners[volume]!r}."
                     )
                 air_owners[volume] = str(region.get("name", region["region_id"]))
+            region_volumes.append((region, volumes, assigned))
+        # Check all regions before assigning implicit walls or interfaces.
+        # A shared air/air face is neither a wall nor an exterior interface.
+        for tag in _boundary(gmsh, sorted(air_owners)):
+            adjacent = [int(v) for v in gmsh.model.getAdjacencies(2, tag)[0]]
+            owners = [air_owners[v] for v in adjacent if v in air_owners]
+            if len(owners) > 1:
+                raise FemRegionMeshError(
+                    f"FEM regions {owners[0]!r} and {owners[1]!r} touch at boundary "
+                    f"face {tag}; shared FEM air boundaries are unsupported in 0.3.6."
+                )
+        for region, volumes, assigned in region_volumes:
             boundary = _boundary(gmsh, volumes)
             groups = {
                 physical_name(region["region_id"], group["group_id"], group["kind"]): set().union(
@@ -348,6 +360,25 @@ def build_coupled_mesh(
                 )
                 for group in region["surface_groups"]
             }
+            moving = set().union(*(
+                groups[physical_name(region["region_id"], g["group_id"], g["kind"])]
+                for g in region["surface_groups"] if g["kind"] == "moving"
+            ))
+            for source, faces in source_descendants.items():
+                covered = faces & boundary
+                if not covered:
+                    continue
+                if covered - moving:
+                    raise FemRegionMeshError(
+                        f"Exterior source {source!r} is covered by {_label(region)} on faces "
+                        "not claimed by its moving group; unpaint or correct the source and diaphragm."
+                    )
+                raise FemRegionMeshError(
+                    f"Exterior source {source!r} is covered by {_label(region)}'s moving group; "
+                    "unsupported in 0.3.6: unpaint the source; the region's diaphragm group drives it."
+                )
+            if not any(g["kind"] == "interface" for g in region["surface_groups"]):
+                continue
             claimed = set().union(*groups.values())
             walls = boundary - claimed
             if walls:
@@ -363,6 +394,12 @@ def build_coupled_mesh(
                     )
                 sizing.append((tags, float(group["mesh_size_mm"]), float(region["mesh_size_mm"])))
                 if group["kind"] == "interface":
+                    if tags & free_surfaces:
+                        sheet = min(tags & free_surfaces)
+                        raise FemRegionMeshError(
+                            f"Assembly rigid sheet face {sheet} coincides with "
+                            f"{_label(region, group)} interface; remove the sheet or correct the interface."
+                        )
                     # A buried face is not an exterior interface. The air skin
                     # provides the shared surface; closure proves the rim joins.
                     if any(len(gmsh.model.getAdjacencies(2, tag)[0]) != 1 for tag in tags):
@@ -394,6 +431,14 @@ def build_coupled_mesh(
                     f"{_label(region)} has uncovered air boundary faces; the exterior is not closed by declared interfaces."
                 )
             prepared.append((region, volumes, boundary, groups))
+        for name, faces in source_descendants.items():
+            selected = faces & exterior_surfaces
+            if not selected:
+                raise FemRegionMeshError(
+                    f"Exterior source {name!r} disappeared from the coupled skin."
+                )
+            exterior_groups[name] = selected
+            kinds[name] = dict(exterior_names[name]["kind"])
         claimed_exterior = set().union(*exterior_groups.values())
         rigid = exterior_surfaces - claimed_exterior
         if rigid:
@@ -452,6 +497,8 @@ def build_coupled_mesh(
         gmsh.model.mesh.generate(2)
         # Existing 2D elements remain: do not regenerate an interface separately.
         gmsh.model.setVisibility([(3, tag) for tag in material_volumes], 0)
+        meshed_air = {v for _region, volumes, *_rest in prepared for v in volumes}
+        gmsh.model.setVisibility([(3, v) for v in air_owners if v not in meshed_air], 0)
         gmsh.option.setNumber("Mesh.MeshOnlyVisible", 1)
         gmsh.model.mesh.generate(3)
         if any(

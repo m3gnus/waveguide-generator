@@ -34,15 +34,21 @@ from server.tests.test_fem_regions import _region, _write_step
 SIZES = {"rigid_size_mm": 12, "transition_mm": 12, "source_size_mm": {}}
 
 
-def _write_assembly(path: Path, *, baffle=False, missing_wall=False, second_box=False) -> Path:
+def _write_assembly(
+    path: Path, *, baffle=False, missing_wall=False, second_box=False,
+    sealed_chamber=False, cavity_width=30, second_sealed=False,
+) -> Path:
     def build():
         import gmsh
 
         gmsh.model.add("ported-box")
         try:
-            outer = gmsh.model.occ.addBox(-2, -2, -2, 42, 34, 24)
-            cavity = gmsh.model.occ.addBox(0, 0, 0, 42, 30, 20)
+            outer = gmsh.model.occ.addBox(-2, -2, -2, 42, cavity_width + 4, 24)
+            cavity = gmsh.model.occ.addBox(0, 0, 0, 42, cavity_width, 20)
             material, _ = gmsh.model.occ.cut([(3, outer)], [(3, cavity)])
+            if sealed_chamber:
+                chamber = gmsh.model.occ.addBox(10, 5, -1.6, 10, 10, 0.8)
+                material, _ = gmsh.model.occ.cut(material, [(3, chamber)])
             if baffle:
                 plate = gmsh.model.occ.addBox(38, -15, -15, 2, 60, 50)
                 bore = gmsh.model.occ.addBox(37, 0, 0, 4, 30, 20)
@@ -54,6 +60,9 @@ def _write_assembly(path: Path, *, baffle=False, missing_wall=False, second_box=
             if second_box:
                 second = gmsh.model.occ.copy(material)
                 gmsh.model.occ.translate(second, 100, 0, 0)
+                if second_sealed:
+                    cap = gmsh.model.occ.addBox(140, -2, -2, 2, 34, 24)
+                    gmsh.model.occ.fuse(second, [(3, cap)])
             gmsh.model.occ.synchronize()
             gmsh.write(str(path))
         finally:
@@ -75,7 +84,8 @@ def _coupling_bundle(root: Path, **geometry):
     manifest["sources"] = []
     manifest["coordinate_system"]["solver_anchor_instance_id"] = None
     manifest["assembly"]["bbox_mm"] = (
-        [[-2, -15, -15], [40, 45, 35]] if geometry.get("baffle") else [[-2, -2, -2], [40, 32, 22]]
+        [[-2, -15, -15], [40, 45, 35]] if geometry.get("baffle")
+        else [[-2, -2, -2], [40, geometry.get("cavity_width", 30) + 2, 22]]
     )
     manifest["scope"]["included"] = [
         {
@@ -88,7 +98,7 @@ def _coupling_bundle(root: Path, **geometry):
     ]
     if geometry.get("second_box"):
         manifest["assembly"]["n_bodies_expected"] = 2
-        manifest["assembly"]["bbox_mm"][1][0] = 140
+        manifest["assembly"]["bbox_mm"][1][0] = 142 if geometry.get("second_sealed") else 140
         manifest["scope"]["included"].append(
             {
                 "object_id": "walls-2",
@@ -114,7 +124,8 @@ def _coupling_bundle(root: Path, **geometry):
 
 
 def _coupled(
-    bundle, manifest, region, *, mutate_recipe=None, normalisation=None, options=None, source=False
+    bundle, manifest, region, *, mutate_recipe=None, normalisation=None, options=None, source=False,
+    source_center=None, source_centers=None, extra_regions=(),
 ):
     assembly = bundle / manifest["assembly"]["file"]
     exterior = build_imported_mesh_isolated(
@@ -123,23 +134,27 @@ def _coupled(
     recipe = deepcopy(exterior["viewport_recipe"])
     if mutate_recipe:
         mutate_recipe(recipe)
-    member = manifest["files"][region["file"]]
     names = {}
     if source:
-        index = next(
+        centers = source_centers or [source_center if source_center is not None else [19, 15, -2]]
+        indices = [
             i
             for i, (center, _area) in enumerate(recipe["surface_order_reference"])
-            if np.allclose(center, [19, 15, -2])
-        )
+            if any(np.allclose(center, wanted) for wanted in centers)
+        ]
+        assert len(indices) == len(centers)
         names["wg-import-v1|source=outer-cone|role=LF"] = {
-            "indices": [index],
+            "indices": indices,
             "size_mm": 8,
             "kind": {"kind": "moving", "drive_channel_id": "drive-LF"},
         }
     return build_coupled_mesh_isolated(
         assembly,
-        [region],
-        members={region["region_id"]: {"path": str(bundle / region["file"]), **member}},
+        [region, *extra_regions],
+        members={
+            r["region_id"]: {"path": str(bundle / r["file"]), **manifest["files"][r["file"]]}
+            for r in (region, *extra_regions)
+        },
         recipe=recipe,
         expected_geometry_hash=exterior["transformed_geometry_hash"],
         normalisation_matrix=normalisation
@@ -193,7 +208,31 @@ def enabled(monkeypatch):
 def test_closed_shared_mesh_is_accepted_by_the_coupled_builder(tmp_path, baffle):
     bundle, manifest, region = _coupling_bundle(tmp_path / "returns", baffle=baffle)
     built = _coupled(bundle, manifest, region)
-    _system(built, region)
+    system, _domain = _system(built, region)
+    points, groups = read_coupled_exterior(built["exterior"]["msh_text"])
+    triangles = np.concatenate(list(groups.values()))
+    corners = points[triangles]
+    area = np.linalg.norm(
+        np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0]), axis=1
+    ).sum() / 2
+    volume = np.einsum("ij,ij->i", corners[:, 0], np.cross(corners[:, 1], corners[:, 2])).sum() / 6
+    # Material plus declared air fills the outer box, with the port closed.
+    # The finite baffle adds the part of its plate outside the box footprint.
+    assert area == pytest.approx(11080 if baffle else 6504)
+    assert volume == pytest.approx(38640 if baffle else 34272)
+    # Packing the single-component skin preserves the previous global winding.
+    import base64
+
+    packed = system["meshes"][0]["mesh_data"]
+    packed_points = np.frombuffer(base64.b64decode(packed["points"]["data"]), "<f8").reshape(-1, 3)
+    packed_faces = np.frombuffer(
+        base64.b64decode(packed["cells"][0]["connectivity"]["data"]), "<i8"
+    ).reshape(-1, 3)
+    packed_corners = packed_points[packed_faces]
+    packed_volume = np.einsum(
+        "ij,ij->i", packed_corners[:, 0], np.cross(packed_corners[:, 1], packed_corners[:, 2])
+    ).sum() / 6
+    assert packed_volume == pytest.approx(volume * 1e-9)
     assert (
         built["regions"][region["region_id"]]["normalisation_matrix"]
         == built["exterior"]["normalisation_matrix"]
@@ -277,27 +316,13 @@ def test_verified_extra_member_refuses_after_admission(tmp_path):
         _coupled(bundle, manifest, region)
 
 
-@pytest.mark.parametrize("option", [{"infinite_baffle": True}, {"ground_plane": {"enabled": True}}])
-def test_infinite_baffle_is_a_blocking_named_ingest_refusal(tmp_path, option):
+def test_ingest_domain_check_uses_only_received_domain_evidence(tmp_path):
     from server.cadlink.intake import ingest
 
-    bundle, _manifest_record, _region_record = _coupling_bundle(tmp_path / "returns")
-    from server.cadlink.store import CadLinkStore
-
-    store = CadLinkStore(tmp_path / "cadlink.db")
-    try:
-        with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*infinite baffle"):
-            ingest.ingest_bundle(
-                bundle,
-                SIZES,
-                [],
-                store,
-                tmp_path / "data",
-                prep_options=option,
-                defer_viewport=True,
-            )
-    finally:
-        store.close()
+    _bundle, manifest, _region_record = _coupling_bundle(tmp_path / "returns")
+    assert "Rear chamber" in ingest._refuse_fem_domain(manifest, {}, [])
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*reduced domain"):
+        ingest._refuse_fem_domain(manifest, {}, ["x"])
 
 
 def test_painted_exterior_face_keeps_its_ancestry_and_drive(tmp_path):
@@ -567,7 +592,8 @@ def test_region_and_exterior_share_rigid_translation_and_recentring(tmp_path):
     )
 
 
-def test_sheet_walls_and_air_skin_share_the_aperture_rim(tmp_path):
+@pytest.mark.parametrize("closed_port", [False, True], ids=["open-port", "coincident-rigid-sheet"])
+def test_sheet_walls_and_air_skin_share_the_aperture_rim(tmp_path, closed_port):
     from server.mesh.imported import _geometry_fingerprint, _import_occ_root_bodies
     from hornlab_mesher.step_import import gmsh_surface_geometries, gmsh_surface_tags
 
@@ -590,7 +616,8 @@ def test_sheet_walls_and_air_skin_share_the_aperture_rim(tmp_path):
                 if dim == 2 and np.allclose(gmsh.model.occ.getCenterOfMass(2, tag), [40, 15, 10])
             )
             gmsh.model.occ.remove([(3, box)], recursive=False)
-            gmsh.model.occ.remove([(2, port)], recursive=False)
+            if not closed_port:
+                gmsh.model.occ.remove([(2, port)], recursive=False)
             gmsh.model.occ.synchronize()
             gmsh.write(str(assembly))
         finally:
@@ -604,28 +631,36 @@ def test_sheet_walls_and_air_skin_share_the_aperture_rim(tmp_path):
             gmsh.model.remove()
 
     fingerprint, reference = _run_in_gmsh_session(write_fixture)
-    built = build_coupled_mesh_isolated(
-        assembly,
-        [region],
-        members={
-            region["region_id"]: {
-                "path": str(air),
-                "sha256": "sha256:" + hashlib.sha256(air.read_bytes()).hexdigest(),
-                "size_bytes": air.stat().st_size,
-            }
-        },
-        recipe={
-            "healing_options": [],
-            "normalisation_matrix": np.eye(4).tolist(),
-            "recentre_translation_mm": [0, 0, 0],
-            "surface_order_reference": reference,
-        },
-        expected_geometry_hash=fingerprint,
-        normalisation_matrix=np.eye(4).tolist(),
-        sizes=SIZES,
-        exterior_names={},
-    )
-    _system(built, region)
+
+    def build():
+        built = build_coupled_mesh_isolated(
+            assembly,
+            [region],
+            members={
+                region["region_id"]: {
+                    "path": str(air),
+                    "sha256": "sha256:" + hashlib.sha256(air.read_bytes()).hexdigest(),
+                    "size_bytes": air.stat().st_size,
+                }
+            },
+            recipe={
+                "healing_options": [],
+                "normalisation_matrix": np.eye(4).tolist(),
+                "recentre_translation_mm": [0, 0, 0],
+                "surface_order_reference": reference,
+            },
+            expected_geometry_hash=fingerprint,
+            normalisation_matrix=np.eye(4).tolist(),
+            sizes=SIZES,
+            exterior_names={},
+        )
+        return built
+
+    if closed_port:
+        with pytest.raises(FemRegionMeshError, match="rigid sheet face.*Rear chamber.*Port.*interface"):
+            build()
+    else:
+        _system(build(), region)
 
 
 def test_declared_rigid_walls_stay_separate_from_unclaimed_walls(tmp_path):
@@ -832,3 +867,168 @@ def test_coupled_mesh_writes_and_reads_only_inside_child_scratch(tmp_path, monke
     stats = built["regions"][region["region_id"]]["stats"]
     assert stats["tetrahedra"] > 0
     assert stats["surface_groups"]["_walls"]["triangle_count"] > 0
+
+
+def _add_region(bundle, manifest, *, origin=(40, 0, 0), interface=True):
+    second = deepcopy(manifest["scope"]["fem_regions"][0])
+    second.update(region_id="front-chamber", name="Front chamber", object_id="air-2",
+                  file="fem-regions/front-chamber.step")
+    for group in second["surface_groups"]:
+        for face in group["faces"]:
+            face["centroid_mm"] = (np.asarray(face["centroid_mm"]) + origin).tolist()
+            face["bbox_mm"] = (np.asarray(face["bbox_mm"]) + origin).tolist()
+        if group["kind"] == "interface" and not interface:
+            group["kind"] = "plane-wave-termination"
+    path = _write_step(bundle / second["file"], boxes=(origin,))
+    manifest["scope"]["fem_regions"].append(second)
+    manifest["files"][second["file"]] = {
+        "sha256": "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest(),
+        "size_bytes": path.stat().st_size, "media_type": "model/step", "purpose": "fem-region",
+    }
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    return second
+
+
+def test_ported_enclosure_with_sealed_chamber_is_a_blocking_ingest_refusal(tmp_path):
+    from server.cadlink.intake import ingest
+
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns", sealed_chamber=True)
+    with pytest.raises(FemRegionMeshError, match="Rear chamber.*Port.*Nested.*sealed chamber.*area"):
+        _coupled(bundle, manifest, region)
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Port.*Nested.*sealed chamber.*area") as caught:
+        _ingest(bundle, tmp_path)
+    assert caught.value.stage == "stage 7 meshing"
+
+
+def test_nested_closed_components_refuse_even_with_opposite_seed_windings():
+    from server.mesh.fem_coupling import _closed
+
+    outer = np.array([[0., 0., 0.], [10., 0., 0.], [0., 10., 0.], [0., 0., 10.]])
+    inner = outer * 0.1 + 1
+    surface = np.array([[0, 2, 1], [0, 1, 3], [1, 2, 3], [0, 3, 2]])
+    points = np.concatenate([outer, inner])
+    triangles = np.concatenate([surface, surface[:, [0, 2, 1]] + 4])
+    with pytest.raises(FemRegionMeshError, match="Nested.*sealed chamber.*mm.*area.*enclosed"):
+        _closed(points, triangles)
+
+
+@pytest.mark.parametrize("interface", [True, False], ids=["two-interface-regions", "interior-only-neighbour"])
+def test_touching_regions_refuse_by_both_names_before_implicit_walls(tmp_path, interface):
+    from server.cadlink.intake import ingest
+
+    bundle, manifest, first = _coupling_bundle(tmp_path / "returns", cavity_width=60)
+    second = _add_region(bundle, manifest, origin=(0, 30, 0), interface=interface)
+    with pytest.raises(FemRegionMeshError, match="Rear chamber.*Front chamber.*touch.*shared FEM air"):
+        _coupled(bundle, manifest, first, extra_regions=[second])
+    with pytest.raises(ingest.IngestRefusal, match="Rear chamber.*Front chamber.*touch.*shared FEM air") as caught:
+        _ingest(bundle, tmp_path)
+    assert caught.value.stage == "stage 7 meshing"
+    assert "uncovered air" not in str(caught.value)
+
+
+@pytest.mark.parametrize("partial", [False, True], ids=["fully-covered", "partly-covered"])
+def test_painted_source_covered_by_unclaimed_region_faces_refuses(tmp_path, partial):
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    region["surface_groups"][0]["kind"] = "rigid"
+    region["surface_groups"][0].pop("drive_channel_id")
+    # One source can paint several faces. The exterior face must not survive
+    # alone while its covered face silently becomes a rigid region wall.
+    centers = [[20, 15, 0], [19, 15, -2]] if partial else [[20, 15, 0]]
+    with pytest.raises(FemRegionMeshError, match="outer-cone.*Rear chamber.*not claimed.*moving group"):
+        _coupled(bundle, manifest, region, source=True, source_centers=centers)
+
+
+def test_painted_source_covered_by_diaphragm_refuses_with_remedy(tmp_path):
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    with pytest.raises(FemRegionMeshError, match="outer-cone.*Rear chamber.*unpaint the source; the region's diaphragm group drives it"):
+        _coupled(bundle, manifest, region, source=True, source_center=[20, 15, 0])
+
+
+def test_flag_off_uses_f6_wording_before_coupled_meshing(tmp_path, monkeypatch):
+    from server.cadlink.intake import ingest
+    from server.cadlink.wgreturn import read_wgreturn
+
+    bundle_path, _manifest_record, _region_record = _coupling_bundle(tmp_path / "returns")
+    bundle = read_wgreturn(bundle_path)
+    monkeypatch.delenv("WG2_FEM_REGIONS")
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("flag-off FEM must refuse before coupled meshing")
+
+    monkeypatch.setattr(ingest, "build_coupled_mesh_isolated", unexpected)
+    with pytest.raises(ingest.IngestRefusal, match="This return declares FEM regions; this Waveguide Generator has FEM regions turned off\\."):
+        ingest._mesh_coupled_regions(bundle, tmp_path, {}, SIZES, {}, [])
+
+
+def test_separate_interior_region_keeps_independent_f6_mesh(tmp_path):
+    bundle, manifest, first = _coupling_bundle(tmp_path / "returns", second_box=True, second_sealed=True)
+    second = _add_region(bundle, manifest, origin=(100, 0, 0), interface=False)
+    built = _coupled(bundle, manifest, first, extra_regions=[second])
+    assert set(built["regions"]) == {first["region_id"]}
+    record = _ingest(bundle, tmp_path)
+    assert {r["region_id"] for r in record["fem_regions"]} == {first["region_id"], second["region_id"]}
+    independent = next(r for r in record["fem_regions"] if r["region_id"] == second["region_id"])
+    assert read_verified_fem_region_mesh(record, second["region_id"]).startswith("$MeshFormat\n4.1")
+    assert independent["stats"]["tetrahedra"] > 0
+
+
+def test_part_of_a_single_painted_face_cannot_become_rigid(tmp_path):
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns", cavity_width=31)
+    region["surface_groups"][0]["kind"] = "rigid"
+    region["surface_groups"][0].pop("drive_channel_id")
+    with pytest.raises(FemRegionMeshError, match="outer-cone.*Rear chamber.*not claimed.*moving group"):
+        _coupled(bundle, manifest, region, source=True, source_center=[20, 15.5, 0])
+
+
+@pytest.mark.parametrize("moving,partial", [(False, False), (True, False), (False, True)],
+                         ids=["unclaimed-region-face", "diaphragm-remedy", "partial-coverage"])
+def test_covered_painted_source_is_a_named_blocking_ingest_finding(tmp_path, moving, partial):
+    from server.cadlink.intake import ingest
+    from server.mesh.imported import _import_occ_root_bodies
+    from hornlab_mesher.step_import import (
+        advanced_face_order, advanced_face_order_for_surfaces,
+        gmsh_surface_geometries, gmsh_surface_tags,
+    )
+
+    bundle, manifest, region = _coupling_bundle(tmp_path / "returns")
+    assembly = bundle / "assembly.step"
+
+    def address_floor():
+        import gmsh
+
+        gmsh.clear()
+        gmsh.model.add("source-address")
+        try:
+            _import_occ_root_bodies(gmsh, assembly)
+            surfaces = gmsh_surface_tags()
+            identifiers = advanced_face_order_for_surfaces(
+                assembly, surfaces, model_from_step=np.eye(4),
+                addressed_faces=advanced_face_order(assembly),
+            )
+            geometry = gmsh_surface_geometries(surfaces)
+            centers = [[20, 15, 0], [19, 15, -2]] if partial else [[20, 15, 0]]
+            return [(identifier, area) for identifier, (center, area) in zip(identifiers, geometry)
+                    if any(np.allclose(center, wanted) for wanted in centers)]
+        finally:
+            gmsh.model.remove()
+
+    faces = _run_in_gmsh_session(address_floor)
+    assert len(faces) == (2 if partial else 1)
+    identifiers, areas = zip(*faces)
+    if not moving:
+        region["surface_groups"][0]["kind"] = "rigid"
+        region["surface_groups"][0].pop("drive_channel_id")
+    manifest["sources"] = [{
+        "id": "outer-cone", "role": "LF", "instance_id": None, "required": True,
+        "default_drive_channel_id": "drive-LF",
+        "patch_policy": "explicit-disconnected" if partial else "single-connected",
+        "expected_connected_components": len(faces), "selectors": {"advanced_face_indices": list(identifiers)},
+        "observed": {"face_count": len(faces), "total_area_mm2": sum(areas),
+                     "per_face_area_mm2": list(areas), "bodies": ["walls"]},
+        "suggested_resolution_mm": 8,
+    }]
+    (bundle / "wgreturn.json").write_text(json.dumps(manifest))
+    message = "unpaint the source; the region's diaphragm group drives it" if moving else "not claimed.*moving group"
+    with pytest.raises(ingest.IngestRefusal, match=f"outer-cone.*Rear chamber.*{message}") as caught:
+        _ingest(bundle, tmp_path)
+    assert caught.value.stage == "stage 7 meshing"

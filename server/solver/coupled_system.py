@@ -277,11 +277,14 @@ def build_coupled_system(
         # would leave an empty row: keep only the referenced ones.
         exterior = compact_surface(exterior)
         surfaces = _ordered(exterior.groups)
-        exterior_triangles = orient_closed_surface(
-            exterior.points_mm,
-            np.concatenate([block for _name, block in surfaces]),
-            into_body=EXTERIOR_NORMALS_INTO_BODY,
-        )
+        try:
+            exterior_triangles = orient_closed_surface(
+                exterior.points_mm,
+                np.concatenate([block for _name, block in surfaces]),
+                into_body=EXTERIOR_NORMALS_INTO_BODY,
+            )
+        except ValueError as exc:
+            raise CoupledSystemError(str(exc)) from exc
         rows_so_far = 0
         oriented = []
         for group_name, block in surfaces:

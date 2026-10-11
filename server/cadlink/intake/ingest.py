@@ -2089,18 +2089,19 @@ def _refuse_fem_domain(manifest: Mapping[str, Any], options: Mapping[str, Any], 
     regions = manifest["scope"].get("fem_regions", [])
     if not regions:
         return ""
+    if not fem_regions_enabled():
+        raise IngestRefusal(
+            "stage 7 meshing",
+            "This return declares FEM regions; this Waveguide Generator has FEM regions turned off.",
+        )
     labels = "; ".join(
         f"FEM region {region['name']!r}" + "".join(
             f", group {group['name']!r}" for group in region["surface_groups"]
             if group["kind"] == "interface"
         ) for region in regions
     )
-    ground = options.get("ground_plane")
     if planes:
         raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions under a reduced domain are unsupported in 0.3.6.")
-    if (options.get("infinite_baffle") or options.get("acoustic_domain") == "infinite-baffle"
-            or (isinstance(ground, Mapping) and ground.get("enabled"))):
-        raise IngestRefusal("stage 7 meshing", f"{labels}: FEM regions with an infinite baffle are unsupported in 0.3.6.")
     return labels
 
 
@@ -2151,10 +2152,10 @@ def _mesh_coupled_regions(
                        "kind": {"kind": "moving", "drive_channel_id": source["default_drive_channel_id"]}}
     members = {region["region_id"]: {
         "path": str(bundle.members[region["file"]]), **bundle.manifest["files"][region["file"]],
-    } for region in interfaces}
+    } for region in regions}
     try:
         coupled = build_coupled_mesh_isolated(
-            bundle.assembly_path, interfaces, members=members, recipe=recipe,
+            bundle.assembly_path, regions, members=members, recipe=recipe,
             expected_geometry_hash=exterior["transformed_geometry_hash"],
             normalisation_matrix=exterior["normalisation"]["matrix"], sizes=sizes, exterior_names=names,
             expected_sha256=bundle.artifact_sha256, expected_size_bytes=bundle.artifact_size_bytes,
@@ -2167,7 +2168,7 @@ def _mesh_coupled_regions(
     digest = mesh_text_sha256(built["msh_text"])
     lookup_key = hashlib.sha256(_canonical({
         "pipeline_contract": "wg-import-coupled-v1", "assembly": bundle.artifact_sha256,
-        "regions": interfaces, "members": {r["file"]: bundle.manifest["files"][r["file"]] for r in interfaces},
+        "regions": regions, "members": {r["file"]: bundle.manifest["files"][r["file"]] for r in regions},
         "recipe": recipe, "sizes": sizes, "names": names, "mesher": mesher_identity(),
     })).hexdigest()
     key = hashlib.sha256(_canonical({"lookup_key": lookup_key, "sha256": digest})).hexdigest()

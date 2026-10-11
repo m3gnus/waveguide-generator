@@ -398,6 +398,8 @@ def _task_coupled_mesh(
     )
     artifacts = {"coupled.msh": _stage(out_dir, "coupled.msh", built["exterior"].pop("msh_text"))}
     for region in regions:
+        if not any(g["kind"] == "interface" for g in region["surface_groups"]):
+            continue  # Interior-only regions were included for geometry checks.
         name = f"region-{region['region_id']}.msh"
         artifacts[name] = _stage(out_dir, name, built["regions"][region["region_id"]].pop("msh_text"))
     return {"built": built}, artifacts

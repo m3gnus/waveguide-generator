@@ -303,6 +303,8 @@ def build_coupled_mesh_isolated(
                 raise ChildRefusal(MESH_STAGE, "the coupled mesh child returned no meshes")
             built["exterior"]["msh_text"] = outcome.artifacts["coupled.msh"].read_text(encoding="utf-8")
             for region in regions:
+                if not any(g["kind"] == "interface" for g in region["surface_groups"]):
+                    continue  # Interior-only regions participate in geometry checks, not this mesh.
                 built["regions"][region["region_id"]]["msh_text"] = outcome.artifacts[f"region-{region['region_id']}.msh"].read_text(encoding="utf-8")
             return built
     except ChildRefusal as exc:

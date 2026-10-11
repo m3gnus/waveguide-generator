@@ -165,7 +165,8 @@ from the coupled child, rather than independently meshed. Regions without an
 interface continue through the F6 child and retain its mesh contract.
 
 The isolated `coupled_mesh` task stages the assembly and every participating
-region STEP as read-only inputs, verifies each member's size and digest on
+region STEP as read-only inputs (including interior-only regions for overlap
+and touching-boundary checks), verifies each member's size and digest on
 both sides of the process boundary, and scans each STEP under existing budgets.
 The child replays the exterior's winning OCC healing recipe and verifies its
 geometry fingerprint. Region faces are matched in the export frame before
@@ -177,7 +178,14 @@ Painted assembly faces are copied as explicit fragment tools to preserve their
 ancestry when OCC otherwise omits constituent-face maps. The exterior skin is
 the boundary of material plus declared air: material/air interior faces are
 excluded, exposed interface faces are included under their FEM physical names,
-and free assembly wall sheets are retained. Thus an aperture's OCC face is
+and free assembly wall sheets are retained. A rigid sheet coinciding with an
+interface refuses rather than losing its closure. Nested closed skin components
+refuse with their location and area: a sealed chamber does not border unbounded
+exterior air and requires an explicit modelling decision. Touching regions
+refuse naming both regions rather than acquiring a silent rigid partition.
+Painted sources covered wholly or partly by a region refuse; when a diaphragm
+group owns the same faces, unpaint the source because the region's diaphragm
+group drives it. Thus an aperture's OCC face is
 shared by the FEM boundary and the BEM skin; its rim is joined to the material
 by fragmentation. A buried interface, missing shared face, overlapping regions,
 uncovered undeclared air face, open/nonmanifold skin or wrong interface winding
@@ -192,11 +200,15 @@ F6 meshes remain Gmsh 4.1. FEM triangles point away from their tetrahedra; each
 connected exterior skin points into exterior air. Interface winding must agree
 on both sides, with the same triangles and coordinates. Region and group sizes
 are forwarded without mesh-size limits; existing child resource budgets apply.
+The coupled skin uses the region/group mesh sizes and exterior rigid/source
+sizes, without the exterior-only mesh's transition grading (`transition_mm`).
+Finer region groups still blend back to their region size over three region sizes.
 
-Any declared region under an applied or declared reduced domain, or a requested
-infinite baffle/ground plane, refuses in ingest. A finite, explicitly modelled
-baffle is supported. F8 must also refuse reduced domains and ground planes at
-job admission, since a later solve setup can introduce them after ingest.
+Any declared region under an applied or declared reduced domain refuses in
+ingest. Ingest does not receive infinite-baffle or ground-plane solve settings;
+their domain refusal is enforced at F8 job admission. A finite, explicitly
+modelled baffle is supported. F8 must also refuse reduced domains at admission,
+since a later solve setup can introduce them after ingest.
 
 Qualification covers synthetic ported and finite-baffle boxes, closure,
 interface topology and winding, the compiled-system contract, verified storage,
