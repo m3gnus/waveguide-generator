@@ -496,3 +496,24 @@ def test_nonce_hmac_malformed_control_operation_refused(record, operation):
     request = {**r.hello_message(record), "op": operation}
     with pytest.raises(r.RecordRefused):
         r.auth_reply(record, request)
+
+
+@pytest.mark.parametrize("recorded, current, expected", [
+    ("darwin:1.000001", "darwin:1.000001", True),
+    ("darwin:1.000001", "darwin:1.000002", False),
+    ("posix:Mon Oct  5 10:00:00 2026", "posix:Mon Oct  5 10:00:00 2026", True),
+    ("posix:Mon Oct  5 10:00:00 2026", "posix:Mon Oct  5 10:00:01 2026", False),
+    # A record from before kernel identities can neither be confirmed nor refuted.
+    ("posix:Mon Oct  5 10:00:00 2026", "darwin:1.000001", None),
+    ("darwin:1.000001", None, None),
+])
+def test_same_start_identity_treats_legacy_macos_records_as_undecidable(recorded, current, expected):
+    assert r.same_start_identity(recorded, current) is expected
+
+
+def test_darwin_reader_failure_keeps_ps_path(monkeypatch):
+    def broken(pid):
+        raise AttributeError("no sysctl")
+
+    monkeypatch.setattr(r, "_darwin_kinfo", broken)
+    assert r._darwin_process(42) is False

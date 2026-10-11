@@ -53,7 +53,8 @@ def inspect_hosts(directory: Path, *, stop: bool = False) -> dict[str, Any]:
             if stop:
                 cleanup_host(record, record.key, effective, timeout=5.0)
                 found["still_alive"] = (registry.pid_alive(record.pid)
-                                        and registry.process_start_identity(record.pid) in {None, record.pid_start})
+                                        and registry.same_start_identity(
+                                            record.pid_start, registry.process_start_identity(record.pid)) is not False)
         except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
             answer["refused"].append({"record": path.name, "reason": str(exc)})
     return answer

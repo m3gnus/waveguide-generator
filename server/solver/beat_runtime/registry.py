@@ -302,6 +302,7 @@ def new_token() -> str:
 
 
 _DARWIN_KINFO_SIZE = 648  # struct kinfo_proc on 64-bit Darwin (arm64, x86_64)
+_darwin_sysctl: Any = None
 
 
 def _darwin_process(pid: int) -> tuple[str, str] | None | bool:
@@ -309,16 +310,29 @@ def _darwin_process(pid: int) -> tuple[str, str] | None | bool:
 
     Returns False when this ABI cannot be read, so the caller keeps ``ps``.
     """
+    try:
+        return _darwin_kinfo(pid)
+    except Exception:  # Any ctypes/loader surprise keeps the ps path.
+        return False
+
+
+def _darwin_kinfo(pid: int) -> tuple[str, str] | None | bool:
+    global _darwin_sysctl
     import ctypes
     import struct
 
     if ctypes.sizeof(ctypes.c_void_p) != 8:
         return False
-    libc = ctypes.CDLL(None, use_errno=True)
+    if _darwin_sysctl is None:
+        sysctl = ctypes.CDLL(None, use_errno=True).sysctl
+        sysctl.argtypes = [ctypes.POINTER(ctypes.c_int), ctypes.c_uint, ctypes.c_void_p,
+                           ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p, ctypes.c_size_t]
+        sysctl.restype = ctypes.c_int
+        _darwin_sysctl = sysctl
     mib = (ctypes.c_int * 4)(1, 14, 1, pid)  # CTL_KERN, KERN_PROC, KERN_PROC_PID
     buffer = ctypes.create_string_buffer(_DARWIN_KINFO_SIZE)
     size = ctypes.c_size_t(_DARWIN_KINFO_SIZE)
-    if libc.sysctl(mib, 4, buffer, ctypes.byref(size), None, ctypes.c_size_t(0)):
+    if _darwin_sysctl(mib, 4, buffer, ctypes.byref(size), None, 0):
         return False
     if size.value == 0:
         return None  # No such process.
@@ -351,6 +365,20 @@ def _posix_process(pid: int) -> tuple[str, str] | None:
     except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
         pass
     return None
+
+
+def same_start_identity(recorded: str | None, current: str | None) -> bool | None:
+    """True/False when comparable; None when the identity cannot decide.
+
+    A record written before macOS identities came from the kernel carries a
+    ``posix:`` (ps lstart) identity, which a ``darwin:`` reading can neither
+    confirm nor refute: that is uncertainty, like an unavailable identity.
+    """
+    if current is None or recorded is None:
+        return None
+    if recorded.startswith("posix:") and current.startswith("darwin:"):
+        return None
+    return current == recorded
 
 
 def process_start_identity(pid: int) -> str | None:

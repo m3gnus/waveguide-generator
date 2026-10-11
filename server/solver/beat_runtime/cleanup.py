@@ -12,7 +12,7 @@ from typing import Any
 from . import paths
 from .ipc import Endpoint, receive_frame, remaining_time, send_frame, validate_identifier
 from .registry import (
-    HostRecord, RecordRefused, SpawnLock, hello_message, pid_alive, process_start_identity,
+    HostRecord, RecordRefused, SpawnLock, hello_message, pid_alive, process_start_identity, same_start_identity,
     read_record, record_path, spawn_lock_path, unlink_record, validate_hello, validate_record,
 )
 
@@ -45,9 +45,8 @@ def connect_authenticated(
 def _same_process(record: HostRecord) -> bool:
     if not pid_alive(record.pid):
         return False
-    start = process_start_identity(record.pid)
-    # An unavailable identity is uncertainty, never authority to prune.
-    return start is None or start == record.pid_start
+    # An unavailable or undecidable identity is uncertainty, never authority to prune.
+    return same_start_identity(record.pid_start, process_start_identity(record.pid)) is not False
 
 
 def _require_lock(lock: SpawnLock, identifier: str, directory: Path | None) -> None:
