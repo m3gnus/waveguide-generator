@@ -34,7 +34,7 @@ export function useSolveClock(active = true): number {
  *
  * The backend's own stage names (`initializing`, `mesh`, `assemble`, `solve`,
  * `radiation_impedance`, `postprocess`, `cancelling`) are bookkeeping, not
- * user-facing words -- `server/jobs/runtime.py::_report_real_stage` and its
+ * user-facing words -- `server/jobs/runtime/core.py::_report_real_stage` and its
  * neighbours map engine-internal stages onto this small public set. This
  * module maps that set once more, onto the words a person watching a solve
  * actually wants.
@@ -360,7 +360,7 @@ export function resolveEngineLabel(engine: string | null | undefined): string | 
 /** The domain a job actually solved, not the one it was asked for:
  * `solve_options.symmetry` is the request ("auto" more often than not);
  * `config_summary.symmetry` is `symmetry_metadata` as
- * `server/jobs/runtime.py`'s `_config_summary`/resolution path recorded it,
+ * `server/jobs/runtime/`'s `_config_summary`/resolution path recorded it,
  * whose `resolved` field is the mode actually used ("half", "quarter", …). */
 function resolvedDomain(job: Pick<JobItem, 'config_summary'>): string | null {
   const symmetry = job.config_summary?.symmetry;

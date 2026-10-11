@@ -91,7 +91,7 @@ IB_FREQUENCIES = [1000.0, 4000.0]
 #: AUTO's preference order cannot hand the solve to an accelerator on a host
 #: that has one. Naming it does not rule out a substitution, though: the server
 #: still replaces a named engine it finds unavailable with what AUTO would have
-#: chosen (``resolve_submission`` in ``server/jobs/runtime.py``). What catches
+#: chosen (``resolve_submission`` in ``server/jobs/runtime/``). What catches
 #: a swap is this gate: it refuses to solve unless the application offers this
 #: row, and ``check_solve`` compares the contract below with what the solve
 #: reported.

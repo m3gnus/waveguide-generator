@@ -2402,7 +2402,7 @@ def test_failed_upgrade_relaunch_restores_only_this_transactions_snapshot(tmp_pa
 # Jobs restore regression cases use a stopped installation and actual SQLite
 # migrations; no real installation or data directory is touched.
 def _start_like_the_runtime(db):
-    """``JobRuntime.start()``'s store calls, in its order (server/jobs/runtime.py)."""
+    """``JobRuntime.start()``'s store calls, in its order (server/jobs/runtime/)."""
     from server.jobs import runtime as job_runtime
     from server.jobs.store import JobStore
     store = JobStore(db)

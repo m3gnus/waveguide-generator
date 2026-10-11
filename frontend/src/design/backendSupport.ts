@@ -19,7 +19,7 @@ export type BackendFeature =
   | 'infinite-baffle'
   /** Rigid ground-plane solves — ``server/solver/ground_plane.py``. */
   | 'ground-plane'
-  /** Solving ingested CAD geometry — ``server/jobs/runtime.py``. */
+  /** Solving ingested CAD geometry — ``server/jobs/runtime/``. */
   | 'imported-geometry';
 
 /** Human phrasing for the feature, as the object of "X does not support …". */

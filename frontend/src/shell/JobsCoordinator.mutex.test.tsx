@@ -562,7 +562,7 @@ describe('solve invocation mutex', () => {
   // control straight back to "Thickened waveguide (freestanding)": the browser
   // wrote BEMPP's 5 mm closed-wall default into the live document before
   // submitting. The server applies that default to the run's own copy
-  // (server/jobs/runtime.py `_apply_bempp_wall_default`), so pressing Solve
+  // (server/jobs/runtime/ `_apply_bempp_wall_default`), so pressing Solve
   // must leave the design exactly as the user left it -- on every engine.
   it.each(['bempp', 'metal', 'auto'])('does not edit the design when solving a bare shell on %s', async (engine) => {
     mocks.submitDesign.mockResolvedValue('job');

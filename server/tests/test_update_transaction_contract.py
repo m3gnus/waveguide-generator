@@ -4620,7 +4620,7 @@ def test_a_retry_needs_its_confirmation_and_lifts_nothing_it_does_not_name(
 # Contract §4.3: a job the update restart ends
 # ---------------------------------------------------------------------------
 
-#: What a job the update restart ended reads as (``server/jobs/runtime.py``).
+#: What a job the update restart ended reads as (``server/jobs/runtime/``).
 UPDATE_RESTART_STAGE = "Ended by the update restart"
 
 

@@ -59,7 +59,7 @@ the separate schema-2 status described in §2.2.
 
 The job runtime then took the latch too (§4.3). A job the restart ends reads as ended by
 the update restart, and no queued job starts under an approved restart: `JobRuntime` in
-`server/jobs/runtime.py`, and the interruption marks in `server/jobs/store.py`.
+`server/jobs/runtime/`, and the interruption marks in `server/jobs/store.py`.
 
 Still to do:
 
@@ -603,7 +603,7 @@ Before files are replaced, every running job has either finished or been cancell
 a recorded reason, such as "cancelled for the update restart". A job ended by the
 restart is never left reading as running, or as failed for no stated reason.
 
-In the code, `JobRuntime` (`server/jobs/runtime.py`) holds the server's latch (§4.2),
+In the code, `JobRuntime` (`server/jobs/runtime/`) holds the server's latch (§4.2),
 which `mount_jobs` passes it:
 
 - **A shutdown while a restart is approved is the update restart.** It marks each running

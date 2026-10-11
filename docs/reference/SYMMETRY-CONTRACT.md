@@ -109,7 +109,7 @@ plane, it lies on the negative side, or the plane is capped rather than open.
 
 Two readers must never disagree about which planes those are, so
 `server/solver/imported.imported_domain_planes` is the single resolver and both
-the submit gate (`server/jobs/runtime.py`) and the Metal entry
+the submit gate (`server/jobs/runtime/`) and the Metal entry
 (`server/solver/metal.py`) go through it. A reduced domain also cannot be
 combined with a rigid ground plane on the same plane: a mirror plane is touched
 and a floor is stood clear of, and an imported mesh cannot be re-cut the way

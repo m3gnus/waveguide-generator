@@ -405,7 +405,7 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
       setActionError(null);
       // Pressing Solve never edits the design. BEMPP's own closed-wall default
       // for a bare free-standing horn is applied by the server, on the copy it
-      // stores as the run's design and snapshot (server/jobs/runtime.py's
+      // stores as the run's design and snapshot (server/jobs/runtime/core.py's
       // `_apply_bempp_wall_default`). Doing it here as well used to rewrite the
       // live document: choosing "Bare shell" and pressing Solve flipped the
       // Outer body control back to "Thickened waveguide (freestanding)",

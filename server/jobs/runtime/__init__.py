@@ -9,6 +9,9 @@ strong task references port v1 ``server/services/job_runtime.py:23-41,92-208,
 import logging
 
 # Construct the shared logger before core loads to retain its original category.
+# These are re-exports: to monkeypatch a name, patch the submodule that defines
+# and uses it (usually ``server.jobs.runtime.core``); patching it here does not
+# reach code that looks it up in its own module.
 logger = logging.getLogger(__name__)
 
 from .core import (  # noqa: E402
