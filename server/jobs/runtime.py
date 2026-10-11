@@ -960,6 +960,7 @@ async def resolve_submission(
         )
 
     _refuse_removed_solver(request)
+    original_requested = request.options.engine
     request, cpu_fallback = await _accuracy_engine(request, engine_registry)
     engine_name = request.options.engine
     if engine_name not in SELECTABLE_ENGINE_NAMES:
@@ -991,6 +992,7 @@ async def resolve_submission(
         "formulation": "full-3d",
         "engine": engine_name,
         "accuracy": request.options.accuracy,
+        "requested": original_requested,
         "reason": (
             "explicit solver_mode='full_3d'"
             if solver_mode == "full_3d"

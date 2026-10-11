@@ -119,21 +119,42 @@ describe('solve and directivity control help', () => {
     expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(false);
   });
 
-  it.each(['short-range', 'short-list', 'baffle', 'ground', 'pending', 'refused'] as const)('explains the adaptive %s limitation without dropping a saved preference', (reason) => {
+  it.each(['short-range', 'short-list', 'baffle', 'ground'] as const)('explains the adaptive %s limitation and lets a saved preference be unticked', (reason) => {
     act(() => {
       useSolveOptionsStore.getState().setAdaptiveFrequencySampling(true);
       if (reason === 'short-range') useDesignStore.setState({ design: { ...useDesignStore.getState().design, simulation: { ...useDesignStore.getState().design.simulation, num_frequencies: 23 } } });
       if (reason === 'short-list') { useSolveOptionsStore.getState().setFrequencyMode('list'); useSolveOptionsStore.getState().setFrequencyListText('100 200 400'); }
       if (reason === 'baffle') useDesignStore.setState({ design: { ...useDesignStore.getState().design, simulation: { ...useDesignStore.getState().design.simulation, sim_type: 'infinite-baffle' } } });
       if (reason === 'ground') useSolveOptionsStore.getState().updateGroundPlane({ enabled: true });
-      if (reason === 'pending' || reason === 'refused') parametricPlan.current = { plan: null, isPending: reason === 'pending', error: reason === 'refused' ? 'No backend supports this geometry.' : null };
     });
     render(<SolveOptionsControls />);
     const checkbox = host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!;
-    expect(checkbox.disabled).toBe(true);
+    expect(checkbox.disabled).toBe(false);
     expect(checkbox.checked).toBe(true);
     expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain(
-      reason.startsWith('short') ? 'at least 24' : reason === 'baffle' ? 'free-standing' : reason === 'ground' ? 'ground plane' : reason === 'refused' ? 'No backend supports' : 'solve plan');
+      reason.startsWith('short') ? 'at least 24' : reason === 'baffle' ? 'free-standing' : 'ground plane');
+    act(() => checkbox.click());
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+  });
+
+  it.each(['pending', 'refused'] as const)('does not disable adaptive sampling or reuse unrelated %s text', (state) => {
+    parametricPlan.current = { plan: null, isPending: state === 'pending', error: state === 'refused' ? 'No backend supports this geometry.' : null };
+    queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+      engines: [{ name: 'beat-cpu', available: true }],
+      engineSelection: { default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'] },
+    });
+    render(<SolveOptionsControls />);
+    expect(host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!.disabled).toBe(false);
+    expect(host.querySelector('#adaptive-sampling-reason')).toBeNull();
+  });
+
+  it('keeps field plane data editable while capabilities and the first plan load', () => {
+    parametricPlan.current = { plan: null, error: null, isPending: true };
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    render(<DirectivityMapControls />);
+    expect(host.querySelector<HTMLInputElement>('#polar-field-plane')!.disabled).toBe(false);
+    expect(host.querySelector('#field-plane-support-reason')).toBeNull();
   });
 
   it('uses the CAD plan and CAD frequency count for adaptive sampling', () => {

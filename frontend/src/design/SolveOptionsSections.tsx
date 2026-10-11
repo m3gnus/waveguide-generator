@@ -222,12 +222,12 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   const count = store.frequencyMode === 'list'
     ? parseFrequencyList(store.frequencyListText).frequencies?.length ?? 0
     : mode === 'cad' ? importedCount : simulation.num_frequencies;
+  const adaptiveEngine = controlBackend.plan?.engine ?? controlBackend.capability?.name;
   const adaptiveReason = mode === 'parametric' && simulation.sim_type !== 'freestanding'
     ? 'Adaptive sampling requires a free-standing solve.'
     : store.groundPlane.enabled ? 'Adaptive sampling requires the ground plane to be off.'
     : count < 24 ? 'Adaptive sampling requires at least 24 frequencies.'
-    : !controlBackend.plan ? controlBackend.error ?? 'Resolve a solve plan to use adaptive sampling.'
-    : !controlBackend.plan.engine?.startsWith('beat-') && controlBackend.plan.engine !== 'beat'
+    : adaptiveEngine && !adaptiveEngine.startsWith('beat-') && adaptiveEngine !== 'beat'
       ? 'Adaptive sampling is BEAT only; choose a BEAT backend or Accurate.' : undefined;
   // For imported geometry the server says, per engine, whether it can take
   // this return, and where the user's choice resolves. Before a return is
@@ -266,7 +266,7 @@ export function SolveOptionsControls({ mode = 'parametric', ingestRecord = null,
   return <>
     <HelpTipRow className="select-row" text={accuracyHelp}><label htmlFor="solve-accuracy">Solve accuracy</label><select id="solve-accuracy" value={store.accuracy} onChange={(event) => store.setAccuracy(event.target.value as 'fast' | 'accurate')}><option value="fast">Fast</option><option value="accurate">Accurate</option></select></HelpTipRow>
     <AccuracyExplainer fastEngine={explainerFast} accurateEngine={explainerAccurate} />
-    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason)} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
+    <HelpTipRow className="toggle-row" text="BEAT exterior sweeps with at least 24 frequencies. Fits unsolved points to a 0.1 dB equivalent disagreement target. Completed native acquisition has gaps no wider than 1/6 octave. Narrow resonances can be missed when narrower than the largest solved-frequency gap; this spacing bound does not guarantee interpolation accuracy."><label htmlFor="adaptive-frequency-sampling">Adaptive frequency sampling (experimental)</label><input id="adaptive-frequency-sampling" type="checkbox" checked={store.adaptiveFrequencySampling} disabled={Boolean(adaptiveReason) && !store.adaptiveFrequencySampling} aria-describedby={adaptiveReason ? 'adaptive-sampling-reason' : undefined} onChange={(event) => store.setAdaptiveFrequencySampling(event.target.checked)} /></HelpTipRow>
     {adaptiveReason && <p id="adaptive-sampling-reason" className="section-note">{adaptiveReason}</p>}
     {store.accuracy === 'accurate' && !beatGpu && beatCpu && <p className="section-note" role="status">No BEAT GPU backend is ready; Accurate will use BEAT CPU.</p>}
     {store.engine !== 'auto' && <p className="section-note">Advanced engine override: {store.engine}. This engine takes precedence. Selecting Fast or Accurate clears the override.</p>}
@@ -603,9 +603,9 @@ export function SolvedWithReadout() {
 
 export function DirectivityMapControls({ effectiveDerivation }: { effectiveDerivation?: Record<string, unknown> } = {}) {
   const { capability } = useSolveControlBackend();
-  const fieldReason = capability?.field_traces === true ? undefined
-    : capability ? `${capability.label || engineDisplayName(capability.name)} does not advertise field plane data.`
-    : 'Checking field plane support…';
+  const fieldReason = capability && capability.field_traces !== true
+    ? `${capability.label || engineDisplayName(capability.name)} does not advertise field plane data.`
+    : undefined;
   const polar = useSolveOptionsStore((state) => state.polar);
   const update = useSolveOptionsStore((state) => state.updatePolar);
   const toggleAxis = useSolveOptionsStore((state) => state.toggleAxis);

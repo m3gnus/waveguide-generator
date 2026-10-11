@@ -8,7 +8,6 @@ import type { CadRealizedDimensions, CadRealizedParameter } from '../api/cadlink
 import { importedSubmissionBlocker, importedSubmissionNotices } from '../jobs/importedSubmission';
 import { postSymmetry, toSolveDesign, type SymmetryResolution } from '../jobs/actions';
 import { useActiveBackendCapability, useCapabilities, usePlannedBackendCapabilities } from '../jobs/useCapabilities';
-import { useSolveControlBackend } from '../jobs/useSolveControlBackend';
 import { backendLimitation, symmetryDomainLimitation } from './backendSupport';
 import { cadApplicationName, usePreferences } from '../prefs/preferences';
 import { CadCrossover } from './CrossoverSection';
@@ -573,17 +572,28 @@ function AutoSymmetryReadout({ design }: { design: DesignDocument }) {
 }
 
 function SolveDomainControl({ design }: { design: DesignDocument }) {
-  const { capability } = useSolveControlBackend('parametric');
+  const planned = usePlannedBackendCapabilities();
+  const selected = useActiveBackendCapability();
+  const engine = useSolveOptionsStore((state) => state.engine);
+  const candidates = engine === 'auto' ? planned : selected ? [selected] : [];
+  const accuracy = useSolveOptionsStore((state) => state.accuracy);
   const symmetry = useSolveOptionsStore((state) => state.symmetry);
   const setSymmetry = useSolveOptionsStore((state) => state.setSymmetry);
+  const limitation = (mode: SymmetryMode) => {
+    if (accuracy === 'accurate' && mode === 'half_xz') return 'Accurate cannot solve half xz domains. Choose Fast or another domain.';
+    if (!candidates.length || candidates.some((candidate) => !symmetryDomainLimitation(candidate, mode))) return undefined;
+    return engine === 'auto'
+      ? `No available engine in the automatic plan supports ${mode.replaceAll('_', ' ')} domains.`
+      : symmetryDomainLimitation(candidates[0], mode);
+  };
   return <div className="solve-domain-control" data-control-reveal-id={PARAMETRIC_CONTROLS.solveDomain.reveal.id}>
     <div className="select-row">
       <label htmlFor="solve-symmetry">Solve domain</label>
       <select id="solve-symmetry" value={symmetry} onChange={(event) => setSymmetry(event.target.value as SymmetryMode)}>
-        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => <option key={mode} value={mode} disabled={Boolean(symmetryDomainLimitation(capability, mode))}>{symmetryModeLabels[mode]}{symmetryDomainLimitation(capability, mode) ? ' · unsupported by this engine' : ''}</option>)}
+        {(Object.keys(symmetryModeLabels) as SymmetryMode[]).map((mode) => <option key={mode} value={mode} disabled={Boolean(limitation(mode))}>{symmetryModeLabels[mode]}{limitation(mode) ? ' · unsupported' : ''}</option>)}
       </select>
     </div>
-    {(Object.keys(symmetryModeLabels) as SymmetryMode[]).filter((mode) => symmetryDomainLimitation(capability, mode)).map((mode) => <small key={mode}>{symmetryDomainLimitation(capability, mode)}</small>)}
+    {(Object.keys(symmetryModeLabels) as SymmetryMode[]).filter((mode) => limitation(mode)).map((mode) => <small key={mode}>{limitation(mode)}</small>)}
     {symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
   </div>;
 }

@@ -62,6 +62,8 @@ def test_accurate_resolves_ready_beat_gpu_then_cpu(available: set[str], expected
     assert resolved.engine_name == expected
     assert resolved.request.options.accuracy == "accurate"
     assert resolved.symmetry_metadata["solver_plan"]["accuracy"] == "accurate"
+    assert resolved.symmetry_metadata["solver_plan"]["requested"] == "auto"
+    assert request.options.engine == "auto"
     if expected == "beat-cpu":
         assert resolved.symmetry_metadata["solver_plan"]["fallback_reason"] == (
             "Accurate ran on BEAT CPU because no GPU backend was ready"
@@ -94,6 +96,7 @@ def test_explicit_engine_overrides_accuracy_and_accurate_refuses_coupled_baffle(
     resolved = asyncio.run(resolve_submission(explicit, engine_registry))
     assert resolved.engine_name == "metal"
     assert resolved.request.options.accuracy == "fast"
+    assert resolved.symmetry_metadata["solver_plan"]["requested"] == "metal"
 
     baffle = _planner_request(sim_type="infinite-baffle")
     baffle.options.accuracy = "accurate"

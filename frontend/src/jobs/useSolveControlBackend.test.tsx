@@ -2,7 +2,8 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
-import { resetDesignStore } from '../stores/design';
+import { resetDesignStore, useDesignStore } from '../stores/design';
+import { DirectivityMapControls, SolveOptionsControls } from '../design/SolveOptionsSections';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { CAPABILITIES_QUERY_KEY } from './useCapabilities';
 import { useSolveControlBackend } from './useSolveControlBackend';
@@ -64,4 +65,45 @@ it('drops a stale plan while a changed engine is being resolved', async () => {
   await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
   await flushReact();
   expect(host.textContent).toBe('metal / metal');
+});
+
+it('keeps adaptive and field controls enabled through their own toggles, sweep edits and geometry debounce', async () => {
+  client.setQueryData(CAPABILITIES_QUERY_KEY, {
+    engines: [
+      { name: 'metal', available: true, field_traces: false },
+      { name: 'beat-cpu', available: true, field_traces: true },
+    ],
+    engineSelection: { default: 'auto', resolvedDefault: 'metal', full3dOrder: ['metal', 'beat-cpu'] },
+  });
+  const fetchMock = vi.fn(async () => new Response(JSON.stringify({ engine: 'beat-cpu', formulation: 'full-3d', reason: 'Geometry routing', eligibility_reasons: [] })));
+  vi.stubGlobal('fetch', fetchMock);
+  act(() => root.render(<QueryClientProvider client={client}><Subject /><SolveOptionsControls /><DirectivityMapControls /></QueryClientProvider>));
+  await flushReact();
+  const adaptive = host.querySelector<HTMLInputElement>('#adaptive-frequency-sampling')!;
+  const field = host.querySelector<HTMLInputElement>('#polar-field-plane')!;
+  expect(adaptive.disabled).toBe(false);
+  expect(field.disabled).toBe(false);
+  act(() => adaptive.click());
+  expect(adaptive.checked).toBe(true);
+  expect(adaptive.disabled).toBe(false);
+  expect(field.disabled).toBe(false);
+  expect(host.textContent).toContain('beat-cpu / pending');
+  act(() => field.click());
+  expect(field.disabled).toBe(false);
+  act(() => useSolveOptionsStore.getState().setFrequencySpacing('linear'));
+  expect(adaptive.disabled).toBe(false);
+  expect(field.disabled).toBe(false);
+  act(() => useDesignStore.setState({ design: { ...useDesignStore.getState().design, length: 150 } }));
+  expect(adaptive.disabled).toBe(false);
+  expect(field.disabled).toBe(false);
+  fetchMock.mockImplementation(async () => new Response(JSON.stringify({ engine: 'metal', formulation: 'full-3d', reason: 'New routing', eligibility_reasons: [] })));
+  await act(async () => { await vi.advanceTimersByTimeAsync(SOLVE_PLAN_DEBOUNCE_MS); });
+  await flushReact();
+  // A checked inactive preference can be removed; the settled field flag gates.
+  expect(adaptive.disabled).toBe(false);
+  expect(host.querySelector('#adaptive-sampling-reason')?.textContent).toContain('BEAT only');
+  expect(field.disabled).toBe(true);
+  act(() => adaptive.click());
+  expect(adaptive.checked).toBe(false);
+  expect(adaptive.disabled).toBe(true);
 });

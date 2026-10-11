@@ -116,7 +116,7 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   const engine = firstString(execution?.engine, job?.solve_execution?.engine,
     object(metadata('solve_execution'))?.engine, plan?.engine, metadata('solver_backend'), metadata('engine'), metadata('solver_mode'));
   if (engine) row(solve, 'Engine', engineDisplayName(engine));
-  const requested = firstString(substitution?.requested, plan?.requested, job?.solve_options?.engine);
+  const requested = firstString(plan?.requested, substitution?.requested, job?.solve_options?.engine);
   if (requested && (!engine || engineDisplayName(requested) !== engineDisplayName(engine))) row(solve, 'Requested engine', requested === 'auto' ? 'Automatic' : engineDisplayName(requested));
   row(solve, 'Routing', string(plan?.reason));
   row(solve, 'Fallback reason', firstString(job?.solve_execution?.fallback_reason,

@@ -164,6 +164,44 @@ describe('ParamPanel inventory UX', () => {
     expect(host.textContent).toContain('does not support half xz domains');
   });
 
+  it('allows Fast/Auto XZ half domains through BEMPP on a host without Metal, regardless of the current domain', async () => {
+    act(() => {
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+        engines: [
+          { name: 'metal', available: false, symmetry_domains: ['full', 'half', 'quarter'] },
+          { name: 'beat-cpu', available: true, symmetry_domains: ['full', 'half-yz', 'quarter'] },
+          { name: 'bempp', available: true, symmetry_domains: ['full', 'half', 'quarter'] },
+        ],
+        engineSelection: { default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['metal', 'beat-cpu', 'bempp'] },
+      });
+      useSolveOptionsStore.getState().setSymmetry('full');
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    const select = host.querySelector<HTMLSelectElement>('#solve-symmetry')!;
+    const xz = select.querySelector<HTMLOptionElement>('option[value="half_xz"]')!;
+    expect(xz.disabled).toBe(false);
+    act(() => {
+      select.value = 'half_xz';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    expect(useSolveOptionsStore.getState().symmetry).toBe('half_xz');
+    expect(xz.disabled).toBe(false);
+    act(() => useSolveOptionsStore.getState().setAccuracy('accurate'));
+    expect(xz.disabled).toBe(true);
+    expect(host.textContent).toContain('Accurate cannot solve half xz');
+    act(() => useSolveOptionsStore.getState().setAccuracy('fast'));
+    expect(xz.disabled).toBe(false);
+    await act(async () => {
+      queryClient.setQueryData(CAPABILITIES_QUERY_KEY, {
+        engines: [{ name: 'beat-cpu', available: true, symmetry_domains: ['full', 'half-yz', 'quarter'] }],
+        engineSelection: { default: 'auto', resolvedDefault: 'beat-cpu', full3dOrder: ['beat-cpu'] },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(xz.disabled).toBe(true);
+    expect(host.textContent).toContain('No available engine in the automatic plan');
+  });
+
   it('shows plain stretch controls for OSSE families and announces preview revisions on edits', () => {
     const stretchRow = () => host.querySelector<HTMLElement>('[data-parameter-id="common.s1"]');
     expect(stretchRow()).not.toBeNull();

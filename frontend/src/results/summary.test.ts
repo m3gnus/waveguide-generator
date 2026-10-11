@@ -509,6 +509,18 @@ it('keeps a completed run size when the live design changes', () => {
 });
 
 describe('execution and storage provenance', () => {
+  it('shows the original Accurate/Auto request ahead of the resolved stored options and substitution', () => {
+    const groups = summaryGroups({
+      result: { frequencies: [], metadata: { symmetry: { solver_plan: {
+        engine: 'beat-cpu', requested: 'auto',
+        engine_substitution: { requested: 'beat-cuda', resolved: 'beat-cpu', reason: 'CUDA unavailable' },
+      } } } },
+      job: job({ solve_options: { ...job().solve_options, engine: 'beat-cpu', accuracy: 'accurate' } }),
+    });
+    expect(row(groups, 'Solve', 'Requested engine')?.value).toBe('Automatic');
+    expect(row(groups, 'Solve', 'Fallback reason')?.value).toBe('CUDA unavailable');
+  });
+
   it('shows the executed backend, explicit request, fallback, precision and sampling outcome', () => {
     const result: ResultPayload = {
       frequencies: [100, 200, 400], frequency_status: ['solved', 'interpolated', 'solved'],
