@@ -138,7 +138,7 @@ describe('FREEFORM conversion of a rolled-back profile', () => {
       return url.startsWith('/api/export/profiles') ? new Response(exportCsv(rolledBack), { status: 200 }) : new Response('', { status: 404 });
     };
     const { design, notice } = await convertDesignToFreeform(designForFamily('R-OSSE'), fetcher as typeof fetch);
-    expect(requests).toEqual(['/api/design/convert?family=FREEFORM', '/api/export/profiles?kind=profiles']);
+    expect(requests).toEqual(['/api/export/profiles?kind=profiles']);
     expect(design.formula).toBe('FREEFORM');
     expect(design.profile_h!.points.at(-1)!.r).toBeCloseTo(125.08, 6);
     expect(notice).toContain('rolls back');

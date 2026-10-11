@@ -536,7 +536,17 @@ function load(): Preferences {
   return value;
 }
 
+function hasChartThemePreference(raw: string | null): boolean {
+  try {
+    const stored = JSON.parse(raw ?? '{}');
+    return Number.isInteger(stored.version) && stored.version >= 1 && stored.version <= STORAGE_VERSION
+      && typeof stored.preferences?.chartTheme === 'string' && Boolean(stored.preferences.chartTheme);
+  } catch { return false; }
+}
+
 class PreferenceStore {
+  private chartThemeStored = hasChartThemePreference(durableSettings.get('preferences'));
+  private serverChartTheme: string | null = null;
   private value = load();
   private readonly listeners = new Set<() => void>();
   /**
@@ -566,7 +576,15 @@ class PreferenceStore {
     this.listeners.forEach((listener) => listener());
   }
   subscribe = (listener: () => void): (() => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
+  /** Apply the server default without turning it into a saved user choice. */
+  setChartThemeDefault(theme: string): void {
+    this.serverChartTheme = theme;
+    if (this.chartThemeStored || this.value.chartTheme === theme) return;
+    this.value = { ...this.value, chartTheme: theme };
+    this.listeners.forEach((listener) => listener());
+  }
   update(patch: Partial<Preferences>): void {
+    if (patch.chartTheme) this.chartThemeStored = true;
     this.value = normalize({ ...this.value, ...patch });
     durableSettings.set('preferences', serialize(this.value));
     this.listeners.forEach((listener) => listener());
@@ -578,7 +596,11 @@ class PreferenceStore {
    * echoing it would race a change the user made while the request was out.
    */
   adoptDurable(raw: string | null): void {
+    this.chartThemeStored = hasChartThemePreference(raw);
     this.value = readPreferences(raw).value;
+    if (!this.chartThemeStored && this.serverChartTheme) {
+      this.value = { ...this.value, chartTheme: this.serverChartTheme };
+    }
     this.listeners.forEach((listener) => listener());
   }
   setChartType(index: number, chartType: ChartType): void {
@@ -619,6 +641,8 @@ class PreferenceStore {
   resetForTests(): void {
     // Tests exercise both CAD applications; the flag-off cases opt out explicitly.
     this.onshapeAvailable = true;
+    this.chartThemeStored = false;
+    this.serverChartTheme = null;
     this.value = {
       ...defaults,
       chartTypes: [...defaults.chartTypes],

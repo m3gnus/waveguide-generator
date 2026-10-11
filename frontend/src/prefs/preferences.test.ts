@@ -8,6 +8,18 @@ function job(id: string, rating: number | null, created: string, completed = cre
 
 describe('client preferences', () => {
   beforeEach(() => { localStorage.clear(); preferencesStore.resetForTests(); });
+  it('uses the theme default for profiles without a theme and preserves durable choices', () => {
+    preferencesStore.setChartThemeDefault('vellum');
+    preferencesStore.adoptDurable(JSON.stringify({ version: STORAGE_VERSION, preferences: { smoothing: '1/3' } }));
+    expect(preferencesStore.getSnapshot().chartTheme).toBe('vellum');
+    preferencesStore.adoptDurable(JSON.stringify({ version: STORAGE_VERSION, preferences: { chartTheme: 'console' } }));
+    expect(preferencesStore.getSnapshot().chartTheme).toBe('console');
+    preferencesStore.setChartThemeDefault('vellum');
+    expect(preferencesStore.getSnapshot().chartTheme).toBe('console');
+    preferencesStore.adoptDurable(null);
+    expect(preferencesStore.getSnapshot().chartTheme).toBe('vellum');
+  });
+
   it('persists the complete format selection and clamps the run sequence', () => {
     expect(EXPORT_FORMATS).toHaveLength(19);
     expect(CHART_TYPES).toHaveLength(20);

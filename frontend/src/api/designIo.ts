@@ -258,25 +258,13 @@ export interface FreeformConversion {
 }
 
 /**
- * Use a future server converter when present. Older servers convert from the
- * profile export instead, and failing that fall back to a two-anchor FREEFORM
+ * Convert the profile export locally, falling back to a two-anchor FREEFORM
  * document that preserves the current endpoints.
  */
 export async function convertDesignToFreeform(
   design: DesignDocument,
   fetcher: typeof fetch = fetch,
 ): Promise<FreeformConversion> {
-  const response = await fetcher('/api/design/convert?family=FREEFORM', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ design: serializeDesign(design) }),
-  });
-  if (response.ok) {
-    const body = await response.json() as { design?: Record<string, unknown> } | Record<string, unknown>;
-    return { design: hydrateDesignDocument(('design' in body ? body.design : body) as Record<string, unknown>) };
-  }
-  if (response.status !== 404 && response.status !== 405) throw new Error(await errorMessage(response));
-
   const profileText = await exportProfileCsv(design, fetcher);
   if (profileText !== null) {
     let converted: FreeformConversion | null = null;

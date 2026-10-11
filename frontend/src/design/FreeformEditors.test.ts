@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { convertDesignToFreeform, freeformFromProfileCsv } from '../api/designIo';
 import { designForFamily } from '../stores/design';
 import { normalizedImportedPoints, parsePointPaste, withStationShape } from './FreeformEditors';
@@ -24,20 +24,18 @@ describe('FREEFORM editor workflows', () => {
     expect(() => parsePointPaste('0 12.7\n50 30\n50 40\n120 140')).toThrow('strictly increasing');
   });
 
-  it('uses a server converter when available and falls back to endpoint-preserving conversion on older servers', async () => {
+  it('preserves endpoints and shared settings when the profile export is unavailable', async () => {
     const design = designForFamily('OSSE');
     design.simulation.f1 = 250;
-    const fallbackFetch = async () => new Response('', { status: 404 });
+    const fallbackFetch = vi.fn<typeof fetch>().mockResolvedValue(new Response('', { status: 503 }));
     const { design: fallback } = await convertDesignToFreeform(design, fallbackFetch as typeof fetch);
     expect(fallback.formula).toBe('FREEFORM');
     expect(fallback.length).toBe(design.L);
     expect(fallback.profile_h!.points).toEqual([{ t: 0, r: design.r0 }, { t: 1, r: 140 }]);
     expect(fallback.simulation.f1).toBe(250);
 
-    const converted = designForFamily('FREEFORM');
-    converted.profile_h!.points[1].r = 222;
-    const serverFetch = async () => new Response(JSON.stringify({ design: converted }), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    expect((await convertDesignToFreeform(design, serverFetch as typeof fetch)).design.profile_h!.points.at(-1)!.r).toBe(222);
+    expect(fallbackFetch).toHaveBeenCalledOnce();
+    expect(fallbackFetch.mock.calls[0][0]).toBe('/api/export/profiles?kind=profiles');
   });
 
   it('converts the existing server profile export into distinct H/V editable meridians', () => {
@@ -79,7 +77,7 @@ describe('FREEFORM editor workflows', () => {
     const convert = async (design: ReturnType<typeof designForFamily>, morphedExport: string) => {
       const profileRequests: number[] = [];
       const fetcher = async (url: string, init?: RequestInit) => {
-        if (url.startsWith('/api/design/convert')) return new Response('', { status: 405 });
+        expect(url).toBe('/api/export/profiles?kind=profiles');
         const target = (JSON.parse(String(init?.body)) as { design: { morph: { target_shape: number } } }).design.morph.target_shape;
         profileRequests.push(target);
         return new Response(target === 0 ? plainCsv : morphedExport, { status: 200 });

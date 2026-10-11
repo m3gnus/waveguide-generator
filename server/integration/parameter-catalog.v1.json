@@ -2668,7 +2668,7 @@
       "step": null,
       "precision": null,
       "options": [],
-      "description": "Preserved for ATH round-trip only — custom source contours are not implemented here. Any non-empty value stops both the viewport preview and the solve from meshing."
+      "description": "Legacy ATH Source.Contours is preserved for round-trip only; a non-empty value stops waveguide preview and solve meshing. For native custom contours, use “Edit source contour…” (Experimental) on the Geometry tab."
     },
     {
       "id": "enclosure.depth",
@@ -3732,7 +3732,7 @@
       "step": 1,
       "precision": 0,
       "options": [],
-      "description": "Preserved for ATH round-trip only. Use Z-map sampling to bias axial stations toward the throat."
+      "description": "Mesh.ThroatSegments has no effect on the mesh and is refused on ATH import. Preserved for round-trip only. Use Z-map sampling to bias axial stations toward the throat."
     },
     {
       "id": "mesh.throat_slice_density",

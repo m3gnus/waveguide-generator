@@ -235,6 +235,13 @@ describe('complete parameter registry', () => {
     expect(PARAMETER_REGISTRY.filter((item) => fieldMatchesQuery(item, 'tmax')).map((item) => item.id)).toEqual(['rosse.tmax']);
   });
 
+  it('points legacy source-contour users to the native Experimental editor', () => {
+    const text = PARAMETER_REGISTRY.find((item) => item.id === 'source.contours')!.description!;
+    expect(text).toContain('Legacy ATH Source.Contours');
+    expect(text).toContain('“Edit source contour…” (Experimental) on the Geometry tab');
+    expect(text).not.toContain('not implemented');
+  });
+
   it('documents ATH\'s omitted wall-thickness default', () => {
     expect(PARAMETER_REGISTRY.find((item) => item.id === 'mesh.wall_thickness')?.description).toContain('5 mm');
   });

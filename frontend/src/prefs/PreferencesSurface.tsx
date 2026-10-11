@@ -17,15 +17,29 @@ interface PreferencesSurfaceProps {
 /** Without an anchor the panel still opens, pinned to the top-left corner. */
 const NO_ANCHOR: RefObject<HTMLElement | null> = { current: null };
 
-function useThemes(): string[] {
-  const [themes, setThemes] = useState(['hornlab']);
+interface ChartTheme {
+  id: string;
+  label: string;
+  default?: boolean;
+}
+
+function useThemes(): ChartTheme[] {
+  const [themes, setThemes] = useState<ChartTheme[]>([{ id: 'hornlab', label: 'hornlab' }]);
   useEffect(() => {
     let live = true;
     void fetch('/api/themes').then(async (response) => {
       if (!response.ok) return;
-      const body = await response.json() as { themes?: Array<string | { id?: string; name?: string }> };
-      const ids = (body.themes ?? []).map((item) => typeof item === 'string' ? item : item.id ?? item.name ?? '').filter(Boolean);
-      if (live && ids.length) setThemes(ids);
+      const body = await response.json() as { themes?: Array<string | { id?: string; name?: string; label?: string; default?: boolean }>; default?: string };
+      const available = (body.themes ?? []).map((item): ChartTheme => {
+        if (typeof item === 'string') return { id: item, label: item };
+        const id = item.id ?? item.name ?? '';
+        return { id, label: item.label ?? id, default: item.default };
+      }).filter((item) => item.id);
+      if (live && available.length) {
+        setThemes(available);
+        const defaultId = body.default ?? available.find((item) => item.default)?.id;
+        if (defaultId && available.some((item) => item.id === defaultId)) preferencesStore.setChartThemeDefault(defaultId);
+      }
     }).catch(() => undefined);
     return () => { live = false; };
   }, []);
@@ -44,6 +58,8 @@ function ResultsPreferencesContent() {
   const autoFormatsNoteId = useId();
   const preferences = usePreferences();
   const themes = useThemes();
+  const themeOptions = themes.some((theme) => theme.id === preferences.chartTheme)
+    ? themes : [{ id: preferences.chartTheme, label: preferences.chartTheme }, ...themes];
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
     <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Files are saved under the Workspace folder, grouped as <code>&lt;design&gt;/&lt;run&gt;</code>, without browser download prompts. Automatic exports go in that run’s <code>exports</code> folder, beside the run archive.</p>
@@ -69,7 +85,7 @@ function ResultsPreferencesContent() {
       {/* "Match interface" is not a server theme: it resolves to console or
           vellum at export time so a figure leaves on the same ground as the
           window it was taken from. The server never sees the sentinel. */}
-      <label className="ui-field">Export theme<select aria-label="Chart theme" value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}><option value={MATCH_INTERFACE_THEME}>Match interface</option>{[...new Set([preferences.chartTheme, ...themes])].filter((theme) => theme !== MATCH_INTERFACE_THEME).map((theme) => <option key={theme}>{theme}</option>)}</select></label>
+      <label className="ui-field">Export theme<select aria-label="Chart theme" value={preferences.chartTheme} onChange={(event) => preferencesStore.update({ chartTheme: event.target.value })}><option value={MATCH_INTERFACE_THEME}>Match interface</option>{themeOptions.filter((theme) => theme.id !== MATCH_INTERFACE_THEME).map((theme) => <option key={theme.id} value={theme.id}>{theme.label}</option>)}</select></label>
     </div>
     <div className="preferences-checks">
       {/* On by default because the exported PNG has always drawn the phase:

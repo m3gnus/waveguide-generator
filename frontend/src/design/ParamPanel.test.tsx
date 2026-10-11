@@ -240,7 +240,7 @@ describe('ParamPanel inventory UX', () => {
     let resolveConversion!: (response: Response) => void;
     const conversion = new Promise<Response>((resolve) => { resolveConversion = resolve; });
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
-      if (String(input).startsWith('/api/design/convert')) return conversion;
+      if (String(input).startsWith('/api/export/profiles')) return conversion;
       return Promise.resolve(new Response('not found', { status: 404 }));
     }));
     const family = host.querySelector<HTMLSelectElement>('#family')!;
@@ -254,7 +254,7 @@ describe('ParamPanel inventory UX', () => {
     act(() => buttons().find((button) => button.textContent === 'Cancel')!.click());
 
     await act(async () => {
-      resolveConversion(new Response(JSON.stringify({ design: designForFamily('FREEFORM') }), { status: 200 }));
+      resolveConversion(new Response('# x_cm;y_cm;z_cm\n1;0;0\n14;0;12\n\n0;1;0\n0;14;12\n', { status: 200 }));
       await conversion;
       await Promise.resolve();
       await Promise.resolve();
@@ -331,6 +331,24 @@ describe('ParamPanel inventory UX', () => {
     expect(titles()).toEqual(['Frequency Sweep', 'Directivity Map', 'Source Definition', 'Solve options', 'Solve & export mesh', 'Output & Passthrough']);
     expect(host.querySelector('#solve-engine')).not.toBeNull();
     expect(host.querySelector('#solve-symmetry')).not.toBeNull();
+  });
+
+  it('shows inert imported mesh and ICW values read-only with reasons and preserves them on export', () => {
+    const imported = hydrateDesignDocument({ formula: 'ICW', curl: { value: .25, raw: '0.25' }, mesh: { throat_segments: 8 } });
+    act(() => useDesignStore.getState().loadDesign(imported));
+    const curl = host.querySelector<HTMLElement>('[data-parameter-id="icw.curl"]')!;
+    expect(curl.querySelector<HTMLInputElement>('input')!.disabled).toBe(true);
+    expect(curl.textContent).toContain('the ICW mesher does not read Curl');
+    expect(curl.textContent).toContain('Rollback curl angle');
+
+    act(() => root.render(withQueryClient(<ParamPanel tab="simulation" />)));
+    const throat = host.querySelector<HTMLElement>('[data-parameter-id="mesh.throat_segments"]')!;
+    expect(throat.querySelector<HTMLInputElement>('input')!.disabled).toBe(true);
+    expect(throat.textContent).toContain('Mesh.ThroatSegments has no effect on the mesh');
+    expect(throat.textContent).toContain('Z-map sampling');
+    const exported = serializeDesign(useDesignStore.getState().design);
+    expect(exported.curl).toEqual({ value: .25, raw: '0.25' });
+    expect((exported.mesh as Record<string, unknown>).throat_segments).toBe(8);
   });
 
   it('keeps Solve domain authoritative and demotes stored ATH quadrants to a read-only passthrough', () => {
