@@ -60,7 +60,7 @@ def test_fresh_install(tmp_path, isolated):
         assert app.state.cad_workspace.path() == root / 'cadlink'
     assert read_settings(f.settings_path)['rootPath'] == str(root)
     assert read_settings(f.data_dir / 'workspace_settings.json')['workspacePath'] == str(app.state.workspace.path())
-    assert read_settings(f.data_dir / 'cadlink_settings.json')['cadLinkPath'] == str(root / 'cadlink')
+    assert read_settings(f.data_dir / 'cadlink_settings.json').get('cadLinkPath') == (None if isolated else str(root / 'cadlink'))
 
 
 @pytest.mark.parametrize('cad_evidence', [False, True])
@@ -195,6 +195,43 @@ def addin_workspace_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize('capture', [None, {'captureDocument': False, 'captureMode': 'off', 'extra': 'keep'}])
+def test_upgrade_without_cad_choice_does_not_publish_missing_cad_mirror(tmp_path, caplog, capture):
+    module = addin_workspace_module()
+    data, runs = tmp_path / 'data', tmp_path / 'chosen-runs'
+    runs.mkdir()
+    write(data, 'workspace_settings.json', {'workspacePath': str(runs)})
+    if capture is not None:
+        write(data, 'cadlink_settings.json', capture)
+    app, root = setup(tmp_path)
+    hooks = {'system': 'Linux', 'environ': {'WG2_DATA_DIR': str(data)}, 'home': tmp_path}
+    mirror = {'schemaVersion': 1, **(capture or {})}
+    assert read_settings(data / 'cadlink_settings.json') == mirror
+    assert not (root / 'cadlink').exists()
+    assert module.workspace_root(**hooks) is None
+    assert module.missing_workspace(**hooks) is None
+    rollback = api.CadWorkspaceState(data, allow_adoption=False)
+    assert rollback.selected_path() is None
+    assert 'Persisted WGLink path is unavailable' not in caplog.text
+    restart(data, root)
+    assert read_settings(data / 'cadlink_settings.json') == mirror
+    # Polling and saving capture settings must not manufacture a CAD choice.
+    asyncio.run(endpoint(app, '/api/cad-workspace/path')())
+    app.state.cad_workspace.set_capture_mode('off' if capture else 'run')
+    assert 'cadLinkPath' not in read_settings(data / 'cadlink_settings.json')
+    assert module.missing_workspace(**hooks) is None
+    chosen = tmp_path / 'chosen-cad'
+    chosen.mkdir()
+    before_choice = read_settings(data / 'cadlink_settings.json')
+    app.state.cad_workspace.select(chosen)
+    assert read_settings(data / 'cadlink_settings.json') == {**before_choice, 'cadLinkPath': str(chosen)}
+    assert module.workspace_root(**hooks) == chosen
+    chosen.rmdir()
+    restart(data, root)
+    assert module.missing_workspace(**hooks) == chosen
+    assert not chosen.exists()
 
 
 def test_addin_reads_mirrors_before_and_after_root_change_and_rollback(tmp_path):
@@ -362,12 +399,21 @@ def test_windows_deep_export_still_accepted(tmp_path, monkeypatch):
     assert list(runs.iterdir()) == []
 
 
-@pytest.mark.parametrize('case', ['defaults', 'custom-runs', 'custom-cad', 'paired', 'unrelated', 'legacy', 'data-override', 'unmounted'])
-def test_upgrade_matrix_preserves_035_effective_folders_without_creating_content(tmp_path, case):
+@pytest.mark.parametrize('case', ['defaults', 'custom-runs', 'custom-cad', 'paired', 'unrelated', 'legacy', 'data-override', 'unmounted',
+                                 'cad-chosen-runs-never-created', 'cad-chosen-runs-never-created-windows-redirected',
+                                 'explicit-missing-default-runs'])
+def test_upgrade_matrix_preserves_035_effective_folders_without_creating_content(tmp_path, monkeypatch, case):
     data, default_root = tmp_path / 'data', tmp_path / 'Documents' / 'Waveguide Generator'
+    if case.endswith('windows-redirected'):
+        monkeypatch.setattr(paths, 'windows_documents_dir', lambda: tmp_path / 'OneDrive' / 'Documents')
+        default_root = paths.documents_root(system='Windows', environ={'USERPROFILE': str(tmp_path)}, home=tmp_path)
+        assert default_root == tmp_path / 'OneDrive' / 'Documents' / 'Waveguide Generator'
+        assert not paths.legacy_default_runs_dir(system='Windows', environ={'USERPROFILE': str(tmp_path)}, home=tmp_path).exists()
     implicit = data / 'workspace' if case == 'data-override' else default_root / 'runs'
     runs, cad = implicit, None
     legacy = tmp_path / 'output'
+    implicit_missing = case.startswith('cad-chosen-runs-never-created')
+    explicit_missing = case == 'explicit-missing-default-runs'
     if case == 'custom-runs':
         runs = tmp_path / 'custom-runs'
     elif case == 'custom-cad':
@@ -378,12 +424,14 @@ def test_upgrade_matrix_preserves_035_effective_folders_without_creating_content
         runs, cad = tmp_path / 'custom-runs', tmp_path / 'custom-cad'
     elif case == 'legacy':
         runs = cad = legacy
-    if case != 'unmounted':
+    elif implicit_missing or explicit_missing:
+        cad = tmp_path / 'custom-cad'
+    if case != 'unmounted' and not (implicit_missing or explicit_missing):
         (runs / 'previous-run').mkdir(parents=True)
         (runs / 'previous-run' / 'keep.txt').write_text('never move or delete')
-        if cad is not None:
-            (cad / 'wglink').mkdir(parents=True, exist_ok=True)
-    if case in {'custom-runs', 'paired', 'unrelated', 'unmounted'}:
+    if case != 'unmounted' and cad is not None:
+        (cad / 'wglink').mkdir(parents=True, exist_ok=True)
+    if case in {'custom-runs', 'paired', 'unrelated', 'unmounted'} or explicit_missing:
         write(data, 'workspace_settings.json', {'workspacePath': str(runs)})
     if cad is not None and case != 'legacy':
         write(data, 'cadlink_settings.json', {'cadLinkPath': str(cad), 'captureMode': 'project', 'captureDocument': True})
@@ -402,15 +450,28 @@ def test_upgrade_matrix_preserves_035_effective_folders_without_creating_content
     assert app.state.cad_workspace.selected_path() == (cad if case != 'unmounted' else None)
     if cad is not None:
         assert app.state.folders.effective('cadlink') == cad
-    if case == 'unmounted':
+    if case == 'unmounted' or explicit_missing:
         with pytest.raises(api.WorkspaceUnavailableError):
             app.state.workspace.path()
-    else:
+    elif not implicit_missing:
         assert app.state.workspace.path() == runs
     assert content() == before
-    # Repeated starts must be equally harmless.
+    if implicit_missing or explicit_missing:
+        assert not runs.exists()
+        request = api.WriteExportRequest(subdirectory='first-run/exports',
+                                         members=[{'relative_path': 'result.txt', 'text': 'exported'}])
+        response = asyncio.run(endpoint(app, '/api/workspace/write-export')(request))
+        if implicit_missing:
+            assert isinstance(response, dict), response.body
+            assert response['directory'] == str(runs / 'first-run' / 'exports')
+            assert (runs / 'first-run' / 'exports' / 'result.txt').read_text() == 'exported'
+        else:
+            assert response.status_code == 409
+            assert not runs.exists()
+    # Repeated starts preserve the content present after the first export.
+    before_restart = content()
     api.mount_workspace(FastAPIWithData(data), default_root=default_root, default_path=implicit)
-    assert content() == before
+    assert content() == before_restart
 
 
 def FastAPIWithData(data):

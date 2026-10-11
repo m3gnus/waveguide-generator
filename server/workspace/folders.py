@@ -101,6 +101,12 @@ class FolderRoot:
                 if selected is not None and str(selected) != str(self.root / name):
                     self.overrides[name] = selected
         self._cleanup_overrides()
+        # Keep the pre-publication distinction for this start: writing a
+        # rollback mirror does not turn 0.3.5's implicit default into a choice.
+        self.implicit_runs_path = (legacy_runs if not self.read_only
+                                   and not self.settings_path.exists()
+                                   and mirrors["runs"] is None
+                                   and self.effective("runs") == legacy_runs else None)
         if self.read_only:
             self.notice = ("Folder settings could not be read; folder changes are disabled for this start." if failed else
                            "This WG version uses the existing folder settings; folders.json has an unsupported schema.")
@@ -110,7 +116,7 @@ class FolderRoot:
             # fresh default, or an explicit caller's implicit output choice.
             if fresh and str(legacy_runs) == str(default_root / "runs"):
                 self._create_children()
-            elif create_implicit_runs and not payload and mirrors["runs"] is None and not self.effective("runs").exists():
+            elif create_implicit_runs and self.implicit_runs_path is not None and not self.effective("runs").exists():
                 self.effective("runs").mkdir(parents=True, exist_ok=True)
             self.persist()
 
@@ -151,7 +157,11 @@ class FolderRoot:
         for name, (file, key) in NAMES.items():
             payload = dict(settings[file])
             payload.setdefault("schemaVersion", 1)
-            payload[key] = str(self.effective(name))
+            # An absent, unchosen CAD child is still "nothing selected" for
+            # released WGLink and older WG. Preserve capture settings as-is.
+            if (name != "cadlink" or self.effective(name).is_dir()
+                    or name in self.overrides or stored_path(payload.get(key)) is not None):
+                payload[key] = str(self.effective(name))
             if payload != settings[file]:
                 self.writer(self.data_dir / file, payload)
         payload = {**self._extra, "schemaVersion": 1, "rootPath": str(self.root)}
@@ -171,6 +181,7 @@ class FolderRoot:
         if not chosen.is_dir():
             raise ValueError(f"Selected path is not a directory: {chosen}")
         previous, previous_overrides = self.root, dict(self.overrides)
+        self.implicit_runs_path = None
         self.root = chosen
         self._cleanup_overrides(selected=True)
         try:
@@ -189,6 +200,8 @@ class FolderRoot:
         if not chosen.is_dir():
             raise ValueError(f"Selected path is not a directory: {chosen}")
         previous_overrides = dict(self.overrides)
+        if name == "runs":
+            self.implicit_runs_path = None
         self.overrides[name] = chosen
         try:
             self.persist()

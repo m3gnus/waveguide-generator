@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.datastructures import UploadFile
 
 from server.platform.paths import data_paths, proposed_cadlink_dir, default_folder_root
-from server.workspace.folders import FolderRoot, read_folder_settings, read_settings
+from server.workspace.folders import FolderRoot, read_folder_settings, read_settings, stored_path
 from server.platform.process import background_process_kwargs
 from server.platform.acl_repair import Outcome, repair_path
 from server.platform.staging import publish_staging_directory
@@ -557,6 +557,8 @@ class WorkspaceState:
     def path(self) -> Path:
         if self.folders is not None:
             path = self.folders.effective("runs")
+            if path == self.folders.implicit_runs_path:
+                path.mkdir(parents=True, exist_ok=True)
             if not path.is_dir():
                 raise WorkspaceUnavailableError(path)
             return path
@@ -869,7 +871,9 @@ class CadWorkspaceState(WorkspaceState):
             self.CAPTURE_KEY: self._capture_mode != "off",
             self.CAPTURE_MODE_KEY: self._capture_mode,
         }
-        if self._selected is not None:
+        if self._selected is not None and (self.folders is None or self._selected.is_dir()
+                                          or "cadlink" in self.folders.overrides
+                                          or stored_path(payload.get(self.SETTINGS_KEY)) is not None):
             payload[self.SETTINGS_KEY] = str(self._selected)
         _write_json_atomic(self.settings_path, payload)
 
