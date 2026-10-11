@@ -8,6 +8,7 @@ import pytest
 
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.preview.translate import design_to_mesher_config
+from server.tests._ath_contract import assert_v2_refusal, saved_v1
 
 
 _DORMANT = ["s1 = 0\ns2 = .2", "s1 = .5\ns2 = 0", "s1 = .5", "s2 = .2"]
@@ -22,6 +23,10 @@ def _source(prefix, coeff, top):
 def test_inactive_rosse_keeps_base_family(prefix, coeff, monkeypatch):
     source = _source(prefix, coeff, "Length = 60\nThroat.Diameter = 12\n"
                      "Coverage.Angle = 30\nThroat.Angle = 5\nOS.k = 1")
+    if not prefix:
+        # Fresh ATH uses the mesher's strict populated ROSSE block semantics.
+        assert_v2_refusal(source)
+        source = saved_v1(source)
     parsed = parse(source)
     d = parsed.design
     assert d.formula == "OSSE"
@@ -56,6 +61,29 @@ def test_inactive_rosse_keeps_base_family(prefix, coeff, monkeypatch):
 @pytest.mark.parametrize("top", ["", "Coverage.Angle = 50", "Term.n = 6"])
 def test_dormant_rosse_uses_base_family_detection(prefix, coeff, top):
     source = _source(prefix, coeff, top)
+    if not prefix:
+        if top:
+            assert_v2_refusal(source)
+        else:
+            from hornlab_mesher.config_parser import parse_text_config
+            from hornlab_mesher.config_builder import build_geometry_params, build_point_grid_arrays
+            from hornlab_mesher.profile_common import eval_param
+
+            reference = parse_text_config(source)
+            actual = design_to_mesher_config(parse(source).design)
+            assert actual["formula"] == reference["formula"] == "R-OSSE"
+            for key, value in reference["profile"].items():
+                if key.startswith("_"):
+                    assert actual["profile"][key] == value
+                else:
+                    assert eval_param(actual["profile"][key]) == eval_param(value)
+            for config in (actual, reference):
+                config["mesh"] = {"wallThickness": 0, "angularSegments": 8, "lengthSegments": 8}
+            np.testing.assert_array_equal(
+                build_point_grid_arrays(build_geometry_params(actual)[0])["inner_grid"],
+                build_point_grid_arrays(build_geometry_params(reference)[0])["inner_grid"],
+            )
+        source = saved_v1(source)
     if not top:
         # Base never recognized ROSSE alone as a profile. A dormant coefficient
         # cannot make an otherwise unsupported document select a new family.

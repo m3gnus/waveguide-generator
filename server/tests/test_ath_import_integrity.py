@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from server.design.textcfg import TextConfigError, parse, serialize
 from server.design_io.api import open_design
 from server.preview.translate import design_to_mesher_config
+from server.tests._ath_contract import saved_v1
 
 FIXTURES = Path(__file__).parent / "fixtures" / "ath_integrity"
 
@@ -307,13 +308,31 @@ def _corpus_files() -> list[Path]:
 
 @pytest.mark.parametrize("path", _corpus_files(), ids=lambda p: p.name)
 def test_no_ath_corpus_file_is_refused_by_the_integrity_checks(path: Path) -> None:
+    source = path.read_text(errors="replace")
+    # Retain the original no-new-refusal assertions for saved v1 documents.
     try:
-        parse(path.read_text(errors="replace"))
+        parse(saved_v1(source))
     except TextConfigError as exc:
         # Files that are not designs, or that fail for older reasons, are not
         # this module's concern; only its own refusals count.
         assert "unsupported item" not in str(exc), f"{path.name}: {exc}"
         assert "appears more than once" not in str(exc), f"{path.name}: {exc}"
+    # Fresh v2 documents also obey the mesher's bounded import refusals.
+    from hornlab_mesher.config_parser import ConfigError, parse_text_config
+
+    try:
+        parse_text_config(source)
+    except ConfigError as reference:
+        with pytest.raises(TextConfigError) as actual:
+            parse(source)
+        if "Source.Contours" in str(reference):
+            # WG diagnoses contour sources before the final mesher validation.
+            assert "Source.Contours" in str(actual.value)
+            assert "contour-drawn (dome) sources are not implemented" in str(actual.value)
+        else:
+            assert str(actual.value) == str(reference)
+    else:
+        parse(source)
 
 
 RBASE = """R-OSSE = {

@@ -155,3 +155,34 @@ assert beat_imported.VELOCITY_TAG == 2
 """
     completed = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
     assert completed.returncode == 0, completed.stderr
+
+
+@pytest.mark.parametrize("error", ["ImportError", "OSError"])
+def test_design_preview_and_exports_import_without_the_optional_mesher(error) -> None:
+    script = f"""
+import builtins
+import math
+original = builtins.__import__
+attempts = []
+def guarded(name, *args, **kwargs):
+    if name.startswith("hornlab_mesher"):
+        attempts.append(name)
+        raise {error}("mesher unavailable")
+    return original(name, *args, **kwargs)
+builtins.__import__ = guarded
+from server.design import schema, textcfg, text_import
+from server.preview import core, translate
+from server.exports import api, core as exports_core
+assert attempts == []
+schema._validate_expression_source("sf(4,1,1,1,1,1,p)")
+assert attempts == []
+assert schema.Expr.model_validate("log(10)").constant_value() == math.log(10)
+expression = schema.Expr.model_validate("round(2.5)")
+assert expression.raw == "round(2.5)"
+assert expression.constant_value() is None
+assert attempts
+from server.design.throat_stretch import mesher_supports_stretch
+assert mesher_supports_stretch() is False
+"""
+    completed = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr

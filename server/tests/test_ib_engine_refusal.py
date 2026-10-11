@@ -131,7 +131,23 @@ def test_accurate_refusal_is_unchanged() -> None:
 
 
 def test_imported_ath_simtype_one_with_a_stored_beat_preference_is_refused() -> None:
-    parsed = textcfg.parse("Simulation.SimType = 1\nCoverage.Angle = 45\n")
+    from hornlab_mesher.config_parser import parse_text_config
+    from server.preview.translate import design_to_mesher_config
+    from server.tests._ath_contract import assert_v2_refusal, saved_v1
+
+    source = "Simulation.SimType = 1\nCoverage.Angle = 45\n"
+    assert_v2_refusal(source)
+    _assert_imported_beat_refusal(textcfg.parse(saved_v1(source)))
+    # V2 requires an authored Length; a valid fresh import keeps the same
+    # infinite-baffle engine refusal and agrees with the mesher's topology.
+    source += "Length = 160\n"
+    parsed = textcfg.parse(source)
+    assert parse_text_config(source)["simType"] == 1
+    assert design_to_mesher_config(parsed.design)["mode"] == "infinite-baffle"
+    _assert_imported_beat_refusal(parsed)
+
+
+def _assert_imported_beat_refusal(parsed) -> None:
     assert parsed.design.root.simulation.sim_type == "infinite-baffle"
     request = SolveRequest.model_validate(
         {

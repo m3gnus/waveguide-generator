@@ -14,7 +14,6 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from hornlab_mesher.profile_common import _EVAL_FUNCTIONS
 from pydantic import (
     BaseModel,
     BeforeValidator,
@@ -30,9 +29,51 @@ from pydantic import (
 _NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 _CONFIG_BLOCK_START = re.compile(r"^[\w.:-]+\s*=\s*\{$")
 _LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
-# Share scalar function implementations, including sf and C99 round, with the
-# geometry engine. Native v1 log/ln spellings are translated before evaluation.
-_SAFE_FUNCTIONS = dict(_EVAL_FUNCTIONS)
+# Validation must work before the optional geometry engine can be loaded.
+# Standard scalar functions remain usable on hosts without native libraries;
+# engine-specific implementations are loaded only when actually evaluated.
+_LOCAL_SCALAR_FUNCTIONS = {
+    "abs": abs, "min": min, "max": max, "pow": pow,
+    **{name: getattr(math, name) for name in (
+        "sqrt", "sin", "cos", "tan", "asin", "acos", "atan", "atan2",
+        "acosh", "asinh", "atanh", "ceil", "copysign", "cosh", "erf", "erfc",
+        "exp", "expm1", "floor", "fmod", "gamma", "hypot", "lgamma",
+        "log", "log10", "log1p", "log2", "nextafter", "remainder", "sinh",
+        "tanh", "trunc",
+    )},
+    "deg": math.degrees, "rad": math.radians,
+}
+_ENGINE_SCALAR_FUNCTIONS = frozenset({
+    "cbrt", "exp2", "fdim", "fma", "logb", "ldexp", "nearbyint",
+    "round", "scalbn", "sf",
+})
+
+
+class _ScalarFunctions(Mapping):
+    """Validate names locally and resolve implementations only on evaluation."""
+
+    def __iter__(self):
+        return iter(_LOCAL_SCALAR_FUNCTIONS.keys() | _ENGINE_SCALAR_FUNCTIONS)
+
+    def __len__(self):
+        return len(_LOCAL_SCALAR_FUNCTIONS) + len(_ENGINE_SCALAR_FUNCTIONS)
+
+    def __contains__(self, name):
+        return name in _LOCAL_SCALAR_FUNCTIONS or name in _ENGINE_SCALAR_FUNCTIONS
+
+    def __getitem__(self, name):
+        if name not in self:
+            raise KeyError(name)
+        try:
+            from hornlab_mesher.profile_common import _EVAL_FUNCTIONS
+        except (ImportError, OSError) as exc:
+            if name in _LOCAL_SCALAR_FUNCTIONS:
+                return _LOCAL_SCALAR_FUNCTIONS[name]
+            raise _NonConstantExpression from exc
+        return _EVAL_FUNCTIONS[name]
+
+
+_SAFE_FUNCTIONS = _ScalarFunctions()
 _V1_ONLY_FUNCTIONS = frozenset({"ln", "sign", "fabs", "fmax", "fmin"})
 _SAFE_CONSTANTS = {"pi": math.pi, "e": math.e}
 _MAX_CONSTANT_EXPRESSION_CHARS = 16 * 1024

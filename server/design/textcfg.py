@@ -444,19 +444,19 @@ def _numeric_or_expression_divide_by_two(value: str) -> Any:
         return f"({value}) / 2"
 
 
-def _formula(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock]) -> str:
+def _formula(flat: Mapping[str, str], blocks: Mapping[str, _RawBlock], *, v2: bool = False) -> str:
     if "FREEFORM" in blocks or "Freeform.Length" in flat or any(
         key.startswith("Freeform.") for key in blocks
     ):
         return "FREEFORM"
-    # ROSSE was historically an unconsumed passthrough block. Only effective
-    # stretch (both coefficients nonzero) opts it into the mesher's R-OSSE alias.
+    # Saved v1/native ROSSE was an unconsumed block unless stretch was active.
+    # Fresh v2 imports follow the mesher's R-OSSE alias even when dormant.
     from .throat_stretch import text_number
 
     alias = blocks.get("ROSSE")
-    if "R-OSSE" in blocks or (alias is not None and all(
+    if "R-OSSE" in blocks or (alias is not None and (v2 or all(
         text_number(alias.items.get(key, "0")) != 0 for key in ("s1", "s2")
-    )):
+    ))):
         return "R-OSSE"
     if "ICW" in blocks:
         return "ICW"
@@ -1025,7 +1025,7 @@ def _build_payload(
     from .throat_stretch import coefficient, text_number, validate_composition
 
     flat = dict(flat_source)
-    formula = _formula(flat, blocks)
+    formula = _formula(flat, blocks, v2=v2)
     # Validate every supplied occurrence, including sections ATH ignores.
     for items in (flat, *(block.items for block in blocks.values())):
         for key in ("s1", "s2"):

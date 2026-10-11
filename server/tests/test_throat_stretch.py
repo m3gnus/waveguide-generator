@@ -14,6 +14,7 @@ from server.design.throat_stretch import mesher_supports_stretch
 from server.design_io.api import open_design, serialize_design
 from server.integration.api import parameter_catalog
 from server.preview.translate import design_to_mesher_config
+from server.tests._ath_contract import assert_v2_refusal, saved_v1
 
 
 @pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])
@@ -83,9 +84,19 @@ def test_translation_preserves_coefficients_and_scales_after_profile(monkeypatch
     ("OSSE = {\nL = 160\n}\ns1 = .5\ns2 = .2", (None, None)),
 ])
 def test_ath_import_matches_mesher_coefficient_precedence(text, expected):
-    design = parse(text).design
+    design = parse(saved_v1(text)).design
     assert (design.root.s1, design.root.s2) == expected
     assert not {"s1", "s2"} & design.extra_keys.keys()
+    if "}\ns1" in text:
+        # V2 refuses unread top-level coefficients beside a populated block.
+        assert_v2_refusal(text)
+    else:
+        from hornlab_mesher.config_parser import parse_text_config
+
+        profile = parse_text_config(text)["profile"]
+        imported = parse(text).design
+        assert (imported.root.s1, imported.root.s2) == expected
+        assert (profile.get("s1"), profile.get("s2")) == expected
 
 
 @pytest.mark.parametrize("location", ["top", "selected", "ignored"])
@@ -113,9 +124,17 @@ def test_ath_composition_refusals(formula, extra, reason):
 
 
 def test_ath_rot_and_length_contract():
-    inside = parse("OSSE = {\nL = 160\ns1 = .5\ns2 = .2\nRot = 10\n}\nRot = 20").design
-    outside = parse("OSSE = {\nL = 160\ns1 = .5\ns2 = .2\n}\nRot = 10").design
+    inside_text = "OSSE = {\nL = 160\ns1 = .5\ns2 = .2\nRot = 10\n}\nRot = 20"
+    outside_text = "OSSE = {\nL = 160\ns1 = .5\ns2 = .2\n}\nRot = 10"
+    inside = parse(saved_v1(inside_text)).design
+    outside = parse(saved_v1(outside_text)).design
     assert inside.root.rotation.constant_value() == outside.root.rotation.constant_value() == 10
+    from hornlab_mesher.config_parser import parse_text_config
+
+    for text, rotation in ((inside_text, 20), (outside_text, 10)):
+        imported = parse(text)
+        assert imported.design.root.rotation.constant_value() == parse_text_config(text)["profile"]["rot"] == rotation
+    assert "OSSE.Rot" in {item.key for item in parse(inside_text).ignored_settings}
     with pytest.raises(TextConfigError, match="R-OSSE top-level Length"):
         parse("R-OSSE = {\nR = 200\ns1 = .5\ns2 = .2\n}\nLength = 180")
     with pytest.raises(TextConfigError, match="OSSE Slot.Length"):
@@ -180,11 +199,16 @@ def test_cli_import_refuses_invalid_stretch_before_meshing(tmp_path, monkeypatch
 
 @pytest.mark.parametrize("coefficients", ["s1 = 0\ns2 = 0", "s1 = 0\ns2 = .2", "s1 = .5\ns2 = 0"])
 def test_inactive_stretch_does_not_change_legacy_ath_parameter_precedence(coefficients):
-    old = parse("OSSE = {\nL = 160\nr0 = 12.7\n}\nLength = 180\nThroat.Diameter = 40").design
-    zero = parse(f"OSSE = {{\nL = 160\nr0 = 12.7\n{coefficients}\n}}\nLength = 180\nThroat.Diameter = 40").design
+    old_text = "OSSE = {\nL = 160\nr0 = 12.7\n}\nLength = 180\nThroat.Diameter = 40"
+    zero_text = f"OSSE = {{\nL = 160\nr0 = 12.7\n{coefficients}\n}}\nLength = 180\nThroat.Diameter = 40"
+    old = parse(saved_v1(old_text)).design
+    zero = parse(saved_v1(zero_text)).design
     # On the current pin dormant nonzero controls still need 0.2.4, so inspect
     # feature-off profile values here; the all-zero translation is identical.
     assert zero.root.L == old.root.L and zero.root.r0 == old.root.r0
+    # A fresh populated v2 block does not read the top-level diameter.
+    assert_v2_refusal(old_text)
+    assert_v2_refusal(zero_text)
 
 
 @pytest.mark.parametrize("namespace", ["GCurve", "GCURVE"])
@@ -225,10 +249,21 @@ def test_real_stretch_preserves_omitted_radial_dimensions(formula, scale):
 
 
 def test_ignored_top_level_coefficients_are_reported_to_the_user():
-    opened = asyncio.run(open_design("OSSE = {\nL = 160\n}\ns1 = .5\ns2 = .2"))
+    text = "OSSE = {\nL = 160\n}\ns1 = .5\ns2 = .2"
+    opened = asyncio.run(open_design(saved_v1(text)))
     assert "s1" not in opened["design"] and "s2" not in opened["design"]
     assert [row["key"] for row in opened["ignoredSettings"]] == ["s1", "s2"]
     assert all("ignored" in row["note"] for row in opened["ignoredSettings"])
+    assert_v2_refusal(text)
+    from fastapi import HTTPException
+    from hornlab_mesher.config_parser import ConfigError, parse_text_config
+
+    with pytest.raises(ConfigError) as reference:
+        parse_text_config(text)
+    with pytest.raises(HTTPException) as refusal:
+        asyncio.run(open_design(text))
+    assert refusal.value.status_code == 422
+    assert refusal.value.detail == {"type": "parse_error", "message": str(reference.value)}
 
 
 @pytest.mark.parametrize("formula", ["OSSE", "R-OSSE"])

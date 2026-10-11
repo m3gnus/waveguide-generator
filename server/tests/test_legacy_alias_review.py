@@ -2,6 +2,7 @@
 import pytest
 
 from server.design.textcfg import parse, serialize
+from server.tests._ath_contract import assert_v2_refusal, saved_v1
 
 
 @pytest.mark.parametrize("prefix", ["", "; MWG config\n"])
@@ -9,6 +10,9 @@ from server.design.textcfg import parse, serialize
 @pytest.mark.parametrize("top", ["Length = 180", "Length = 180\nCoverage.Angle = 40"])
 def test_zero_absent_alias_preserves_accepted_base_design(prefix, coefficients, top):
     text = prefix + "ROSSE = {\nR = 200\n" + coefficients + "\n}\n" + top
+    if not prefix:
+        assert_v2_refusal(text)
+        text = saved_v1(text)
     # Executed base 6db729c4 parses these documents as OSSE, keeping ROSSE.
     parsed = parse(text)
     design = parsed.design

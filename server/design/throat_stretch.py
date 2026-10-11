@@ -83,6 +83,6 @@ def mesher_supports_stretch() -> bool:
     # Package versions do not identify SHA pins: main can still declare 0.2.3.
     try:
         from hornlab_mesher.throat_stretch import stretch_coefficients
-    except ImportError:
+    except (ImportError, OSError):
         return False
     return callable(stretch_coefficients)
