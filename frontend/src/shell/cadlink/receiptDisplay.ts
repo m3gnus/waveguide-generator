@@ -1,4 +1,4 @@
-import { ingestReturn, listReturns } from '../../api/cadlink';
+import { CadLinkApiError, ingestReturn, listReturns } from '../../api/cadlink';
 import { useCadReturnStore } from '../../stores/cadReturn';
 import { useCadPreparationStore } from '../../stores/cadPreparation';
 import { cadReceiptsStore, type CadReceipt, type CadReceiptsStore, type ReceiptFeedback } from '../../stores/cadReceipts';
@@ -21,16 +21,22 @@ export interface ReceiptDisplay extends SolvedModelDisplay {
  */
 export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceiptsStore = cadReceiptsStore,
   fetcher: typeof fetch = fetch): (receipt: CadReceipt) => Promise<boolean> {
-  const alreadyFronted = Object.values(store.getState().receipts)
-    .filter((item) => store.getState().fronted.includes(item.receipt_id) && item.outcome !== 'refused');
-  let newestSequence = Math.max(0, ...alreadyFronted.map((item) => item.send_sequence ?? 0));
-  let newestSentAt = Math.max(0, ...alreadyFronted.map((item) => Date.parse(item.sent_at)));
+  let feedId = store.getState().feedId;
+  let newestSequence = store.getState().newestSequence;
+  let newestSentAt = store.getState().newestSentAt;
   let newestCursor = 0;
   const inFlight = new Map<string, Promise<boolean>>();
   const report = (receipt: CadReceipt, outcome: ReceiptFeedback['outcome'], message: string) => {
     store.getState().report(receipt.receipt_id, { outcome, message });
   };
   const run = async (receipt: CadReceipt): Promise<boolean> => {
+    if (feedId !== store.getState().feedId) {
+      feedId = store.getState().feedId;
+      newestSequence = store.getState().newestSequence;
+      newestSentAt = store.getState().newestSentAt;
+      newestCursor = 0;
+    }
+    const receiptFeed = feedId;
     const name = receipt.document_name ?? 'the model Fusion sent';
     if (receipt.outcome === 'refused') {
       report(receipt, 'refused', `Fusion sent ${name}, but WG could not take it: ${receipt.message ?? receipt.reason ?? 'refused'}`);
@@ -49,19 +55,25 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
     const document = useDocumentStore.getState();
     let generation = useCadReturnStore.getState().beginIngestIntent();
     const baselineViewport = importedMeshStore.beginIntent();
-    const current = () => receipt.cursor === newestCursor
+    const current = () => store.getState().feedId === receiptFeed && receipt.cursor === newestCursor
       && useDocumentStore.getState().identity === document.identity
       && useCadReturnStore.getState().isCurrentIngestIntent(generation)
       && importedMeshStore.isCurrentGeneration(baselineViewport);
     const superseded = () => {
+      if (store.getState().feedId !== receiptFeed) return true;
       report(receipt, 'superseded', `Received ${name}; your newer selection stays on screen.`);
       return true;
+    };
+    let phase: 'listing' | 'ingest' | 'display' = 'listing';
+    let transportFailed = false;
+    const transport: typeof fetch = async (...args) => {
+      try { return await fetcher(...args); } catch (error) { transportFailed = true; throw error; }
     };
     try {
       // Read the source even if a retained receipt says it was available. The
       // folder may have changed since the feed page was made. Never getIngest
       // or open a retained copy when the source entry has gone.
-      const listing = await listReturns(fetcher);
+      const listing = await listReturns(transport);
       if (!current()) return superseded();
       const bundle = listing.items.find((item) => item.bundlePath === receipt.bundle_path);
       if (!bundle || !bundle.readable) {
@@ -74,9 +86,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
         display.enterCadWorkspace();
         return true;
       }
-      if (returnBelongsToAnotherProject(bundle, document.identity?.designId)
-        || (receipt.project_id && document.identity?.lineageId
-          && receipt.project_id !== document.identity.lineageId)) {
+      if (returnBelongsToAnotherProject(bundle, document.identity?.designId)) {
         report(receipt, 'refused', `Received ${name}, but it belongs to another CAD-linked project. Open that project from File → CAD-linked designs.`);
         display.enterCadWorkspace();
         return true;
@@ -88,6 +98,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       const selected = useCadReturnStore.getState();
       generation = selected.beginIngestIntent();
       const skipped = new Set(selected.skippedSourceIds);
+      phase = 'ingest';
       const record = await ingestReturn({
         bundlePath: bundle.bundlePath, bundleOrigin: bundle.bundleOrigin ?? 'wglink',
         mesh: { rigidSizeMm: selected.rigidSizeMm, transitionMm: selected.transitionMm,
@@ -96,7 +107,7 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
         expectedDesignId: document.identity?.designId ?? null,
         expectedInstanceId: bundle.solverAnchorInstanceId ?? null,
         symmetryMode: useCadPreparationStore.getState().symmetryMode,
-      }, fetcher);
+      }, transport);
       if (!current()) return superseded();
       // A mutable folder entry must not substitute a different snapshot for
       // the one this receipt accepted. The ingest record is the verified hash.
@@ -107,26 +118,34 @@ export function createReceiptDisplay(display: ReceiptDisplay, store: CadReceipts
       }
       if (!useCadReturnStore.getState().applyIngest(record, generation)) return superseded();
       display.enterCadWorkspace();
-      await display.showIngestedMesh(record, name, display.reportViewportNotice, fetcher, baselineViewport);
+      phase = 'display';
+      await display.showIngestedMesh(record, name, display.reportViewportNotice, transport, baselineViewport);
       if (!current()) return superseded();
       report(receipt, 'accepted', `Received ${name} from Fusion 360.`);
       return true;
     } catch (error) {
       if (!current()) return superseded();
-      report(receipt, 'display_failed', `WG could not open ${name}: ${error instanceof Error ? error.message : String(error)}. Refresh CAD Link to try again.`);
+      const transient = transportFailed || phase === 'listing'
+        || (error instanceof CadLinkApiError && (error.status === 408 || error.status === 429 || (error.status ?? 0) >= 500));
+      const refusal = phase === 'ingest' && error instanceof CadLinkApiError && !transient;
+      report(receipt, refusal ? 'refused' : 'display_failed',
+        `WG could not open ${name}: ${error instanceof Error ? error.message : String(error)}. ${transient ? 'CAD Link will retry.' : 'Send it again from Fusion.'}`);
       display.enterCadWorkspace();
-      return false;
+      return !transient;
     }
   };
   return (receipt) => {
-    if (store.getState().fronted.includes(receipt.receipt_id)) return Promise.resolve(true);
-    const pending = inFlight.get(receipt.receipt_id);
+    if (store.getState().fronted.includes(receipt.receipt_id)
+      || (receipt.cursor <= store.getState().cursor && !store.getState().receipts[receipt.receipt_id])) return Promise.resolve(true);
+    const actionFeed = store.getState().feedId;
+    const key = `${actionFeed ?? 'pending'}:${receipt.receipt_id}`;
+    const pending = inFlight.get(key);
     if (pending) return pending;
     const action = run(receipt).then((completed) => {
-      if (completed) store.getState().markFronted(receipt.receipt_id);
+      if (completed && store.getState().feedId === actionFeed) store.getState().markFronted(receipt.receipt_id, receipt);
       return completed;
-    }).finally(() => { inFlight.delete(receipt.receipt_id); });
-    inFlight.set(receipt.receipt_id, action);
+    }).finally(() => { inFlight.delete(key); });
+    inFlight.set(key, action);
     return action;
   };
 }

@@ -725,9 +725,17 @@ class CadLinkStore:
                 if column not in operation_columns:
                     conn.execute(f"ALTER TABLE cad_operations ADD COLUMN {column} {declaration}")
             imported_ledger = _import_legacy_solve_ledger(conn, self.legacy_solve_ledger)
-            receipts.initialize(conn)
+            receipt_feed_created = receipts.initialize(conn)
+            self._receipt_feed_needs_sync = receipt_feed_created or getattr(self, "_receipt_feed_needs_sync", False)
             conn.execute(f"PRAGMA user_version = {STORE_FORMAT_VERSION}")
         self._initialized = True
+        if self._receipt_feed_needs_sync:
+            try:
+                self.make_durable()
+                self._receipt_feed_needs_sync = False
+            except BaseException:
+                self._initialized = False
+                raise
         if imported_ledger and self.legacy_solve_ledger is not None:
             _retire_legacy_solve_ledger(self.legacy_solve_ledger)
 

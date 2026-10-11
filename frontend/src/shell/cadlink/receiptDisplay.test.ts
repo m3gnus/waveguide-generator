@@ -102,7 +102,7 @@ describe('receipt-keyed Send display without the coordinator', () => {
   it('recovers and reports a refusal after reload with no job, operation store or coordinator', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const refused = receipt(1, { outcome: 'refused', reason: 'snapshot_invalid', message: 'invalid geometry' });
-    store.getState().merge({ receipts: [refused], cursor: 1, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: [refused], cursor: 1, has_more: false });
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
     const fetcher = serving();
     const display = renderer();
@@ -130,7 +130,7 @@ describe('receipt-keyed Send display without the coordinator', () => {
 
   it('a failed folder read stays pending with feedback and can succeed after reload', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
-    store.getState().merge({ receipts: [receipt()], cursor: 1, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: [receipt()], cursor: 1, has_more: false });
     const display = renderer();
     const failed = vi.fn().mockRejectedValue(new Error('folder offline'));
     await expect(createReceiptDisplay(display, store, failed)(receipt())).resolves.toBe(false);
@@ -138,7 +138,7 @@ describe('receipt-keyed Send display without the coordinator', () => {
     expect(store.getState().fronted).toEqual([]);
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
     await createReceiptDisplay(display, reloaded, serving())(receipt());
-    expect(reloaded.getState().fronted).toEqual(['send:1']);
+    expect(reloaded.getState().receipts).toEqual({});
     expect(display.showIngestedMesh).toHaveBeenCalledOnce();
   });
 
@@ -226,7 +226,7 @@ describe('receipt-keyed Send display without the coordinator', () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const display = renderer();
     const newer = receipt(1, { send_sequence: 20 });
-    store.getState().merge({ receipts: [newer], cursor: 1, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: [newer], cursor: 1, has_more: false });
     await createReceiptDisplay(display, store, serving())(newer);
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
     await createReceiptDisplay(display, reloaded, serving())(receipt(2, { send_sequence: 10 }));
@@ -259,5 +259,66 @@ describe('receipt-keyed Send display without the coordinator', () => {
     expect(display.showIngestedMesh).not.toHaveBeenCalled();
     expect(useCadReturnStore.getState().ingestRecord).toBeNull();
     expect(store.getState().feedback['send:1'].outcome).toBe('unreadable');
+  });
+});
+
+describe('receipt display review regressions', () => {
+  beforeEach(() => {
+    sessionStorage.clear(); localStorage.clear(); resetDocumentStore(); resetCadReturnStore();
+    resetDesignStore(); importedMeshStore.clear(); workspaceModeStore.setMode('parametric');
+  });
+
+  it('reports a deterministic ingest refusal once and still opens a later Send across reload', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const items = [receipt(1), receipt(2)];
+    store.getState().merge({ feed_id: 'feed-a', receipts: items, cursor: 2, has_more: false });
+    let ingests = 0;
+    const good = serving();
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (String(url) === '/api/cadlink/ingest' && ++ingests === 1)
+        return new Response(JSON.stringify({ detail: 'invalid geometry' }), { status: 422 });
+      return good(url, init);
+    });
+    const display = renderer();
+    const action = createReceiptDisplay(display, store, fetcher);
+    await expect(action(items[0])).resolves.toBe(true);
+    expect(store.getState().feedback['send:1'].outcome).toBe('refused');
+    expect(store.getState().feedback['send:1'].message).toContain('invalid geometry');
+    await expect(action(items[1])).resolves.toBe(true);
+    const reload = createCadReceiptsStore(sessionStorage, () => NOW);
+    await createReceiptDisplay(display, reload, fetcher)(items[0]);
+    expect(ingests).toBe(2);
+    expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+  });
+
+  it.each([503, 429])('keeps a transient ingest HTTP %s pending', async (status) => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const good = serving();
+    const fetcher = vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => String(url) === '/api/cadlink/ingest'
+      ? new Response(JSON.stringify({ detail: 'temporarily unavailable' }), { status }) : good(url, init));
+    await expect(createReceiptDisplay(renderer(), store, fetcher)(receipt())).resolves.toBe(false);
+    expect(store.getState().fronted).toEqual([]);
+  });
+
+  it('fronts an unexpected display exception instead of replaying ingestion forever', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const display = { ...renderer(), showIngestedMesh: vi.fn(async () => { throw new Error('invalid mesh'); }) };
+    const fetcher = serving();
+    const action = createReceiptDisplay(display, store, fetcher);
+    await expect(action(receipt())).resolves.toBe(true);
+    await action(receipt());
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(store.getState().feedback['send:1'].message).toContain('invalid mesh');
+  });
+
+  it('accepts a Fusion-native document with different lineage while a WG design is open', async () => {
+    useDocumentStore.setState({ identity: { designId: 'design-a', lineageId: 'project-a' } as never });
+    const parametric = editedParametricState();
+    const display = renderer();
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    await createReceiptDisplay(display, store, serving([{ ...bundle, designIds: [] }]))(receipt(1, { project_id: 'native-project' }));
+    expect(display.showIngestedMesh).toHaveBeenCalledOnce();
+    expect(store.getState().feedback['send:1'].outcome).toBe('accepted');
+    expect(parametricState()).toEqual(parametric);
   });
 });

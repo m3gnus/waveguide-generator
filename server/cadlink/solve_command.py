@@ -94,6 +94,7 @@ _unreadable_waits: dict[str, tuple[str, int]] = {}
 # Claims already refused (or reported unreadable) whose file is still there, by
 # claim name: reported once; afterwards only the delete is retried, quietly.
 _refused_claims: set[str] = set()
+_unreadable_reported: set[str] = set()
 # Refused claims whose acknowledgement file could not be written yet, by claim
 # name: (command id, reason). The delete waits for the acknowledgement.
 _pending_refusal_acks: dict[str, tuple[str, str, str | None, str | None]] = {}
@@ -1317,15 +1318,35 @@ def collect_solve_deliveries(
             except Exception:  # noqa: BLE001 - a notification never fails the delivery
                 logger.debug("Could not publish a delivered operation.", exc_info=True)
 
-    def refused(refusal: Mapping[str, Any]) -> None:
+    def refused(refusal: Mapping[str, Any], claim_id: str) -> dict[str, Any]:
         from .receipts import record_refusal
 
-        record_refusal(store, refusal)
+        # Persist the UUID rename before tying a durable receipt to it. A
+        # power cut must not restore the original slot with a different UUID.
+        if os.name != "nt":
+            if delivery.dir_fd is not None:
+                os.fsync(delivery.dir_fd)
+            else:
+                descriptor = os.open(claim.parent, os.O_RDONLY)
+                try:
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+        refusal = record_refusal(store, refusal, claim_id=claim_id)
         if refuse is not None:
             try:
                 refuse(refusal)
             except Exception:  # noqa: BLE001 - as above
                 logger.debug("Could not report a refused delivery.", exc_info=True)
+        return dict(refusal)
+
+    def consume(claim: Path, *, quiet: bool = False, dir_fd: int | None = None) -> bool:
+        if not _acknowledge(claim, quiet=quiet, dir_fd=dir_fd):
+            return False
+        from .receipts import forget_claim
+        # A valid delivery initializes the store through accept_delivery too.
+        forget_claim(store, claim.name)
+        return True
 
     _prune_acknowledgements_due(data_dir)
     with _DELIVERY_LOCK, _pinned_delivery_directories(data_dir) as (
@@ -1343,6 +1364,7 @@ def collect_solve_deliveries(
         for name in set(_unreadable_waits) - present:
             del _unreadable_waits[name]
         _refused_claims.intersection_update(present)
+        _unreadable_reported.intersection_update(present)
         for name in set(_pending_refusal_acks) - present:
             del _pending_refusal_acks[name]
         for name in set(_ack_failures) - present:
@@ -1365,7 +1387,7 @@ def collect_solve_deliveries(
                     )):
                         continue
                     del _pending_refusal_acks[delivery.path.name]
-                _acknowledge(delivery.path, quiet=True, dir_fd=delivery.dir_fd)
+                consume(delivery.path, quiet=True, dir_fd=delivery.dir_fd)
                 continue
             claim = (
                 delivery.path
@@ -1393,14 +1415,15 @@ def collect_solve_deliveries(
                         "Could not read the CAD Link request file %s (%s); it is kept and read again.",
                         name, payload.error,
                     )
-                if waited == UNREADABLE_PASSES:
+                if waited >= UNREADABLE_PASSES and claim.name not in _unreadable_reported:
                     refusal = inbox_refusal(
                         None, name,
                         f"WG could not read this request file for {waited} passes ({payload.error}). "
                         "It is kept and read again; if it stays, close whatever holds it.",
                     )
                     logger.warning("CAD Link request file %s: %s", name, refusal["reason"])
-                    refused(refusal)
+                    refused(refusal, claim.name + ":unreadable")
+                    _unreadable_reported.add(claim.name)
                 continue
             _unreadable_waits.pop(claim.name, None)
             if invalid is None:
@@ -1420,7 +1443,7 @@ def collect_solve_deliveries(
                     "Refused the CAD Link request file %s (%s): %s",
                     delivery.path.name, refusal["operationId"] or "no id", refusal["reason"],
                 )
-                refused(refusal)
+                refusal = refused(refusal, claim.name)
                 _retention_waits.pop(claim.name, None)
                 # The refusal is published before the request is deleted, when
                 # the request names an id to publish it under.
@@ -1438,7 +1461,7 @@ def collect_solve_deliveries(
                         )
                         _refused_claims.add(claim.name)
                         continue
-                if not _acknowledge(claim, dir_fd=delivery.dir_fd):
+                if not consume(claim, dir_fd=delivery.dir_fd):
                     # Held: reported once, the delete retried quietly each pass.
                     _refused_claims.add(claim.name)
                 continue
@@ -1467,7 +1490,7 @@ def collect_solve_deliveries(
                     )
                     if claim.name not in _ack_failures:
                         # Reported once, not again while only its acknowledgement waits.
-                        refused(inbox_refusal(payload, delivery.path.name, conflict_reason))
+                        refused(inbox_refusal(payload, delivery.path.name, conflict_reason), claim.name)
                 answer = _file_answer(command, accepted)
                 if (
                     accepted.retention == RETAIN_TRANSIENT
@@ -1491,14 +1514,14 @@ def collect_solve_deliveries(
                 outcome = json.loads(row.get("outcome_json") or "{}") if row else {}
                 if outcome.get("admission_retrying"):
                     reason += " " + outcome["admission_retrying"]
-                refused(inbox_refusal(payload, delivery.path.name, reason))
+                refused(inbox_refusal(payload, delivery.path.name, reason), claim.name)
                 if not write_acknowledgement(data_dir, command.command_id, ACK_REFUSED, reason=reason,
                                              manifest_sha256=command.manifest_sha256, kind=command.kind):
                     continue
                 _admission_waits.pop(claim.name, None)
                 if held is not None:
                     held.discard(command.command_id)
-                _acknowledge(claim, dir_fd=delivery.dir_fd)
+                consume(claim, dir_fd=delivery.dir_fd)
                 continue
             _admission_waits.pop(claim.name, None)
             if held is not None:
@@ -1512,7 +1535,7 @@ def collect_solve_deliveries(
                 continue
             # A delete that fails leaves the claim for the next poll, which
             # recovers the same operation and answers it then.
-            if _acknowledge(claim, dir_fd=delivery.dir_fd) and answer is not None:
+            if consume(claim, dir_fd=delivery.dir_fd) and answer is not None:
                 return {"command": command.payload(), "outcome": answer}
     return None
 

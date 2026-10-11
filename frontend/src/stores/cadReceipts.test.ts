@@ -12,7 +12,7 @@ const receipt = (cursor: number, overrides: Partial<CadReceipt> = {}): CadReceip
   manifest_sha256: 'sha256:m', document_name: 'Speaker', retained_copy: true, refusal: null, ...overrides,
 });
 const answer = (receipts: CadReceipt[], cursor = receipts.at(-1)?.cursor ?? 0, has_more = false) =>
-  new Response(JSON.stringify({ receipts, cursor, has_more }));
+  new Response(JSON.stringify({ feed_id: 'feed-a', receipts, cursor, has_more }));
 const flush = async () => { await vi.advanceTimersByTimeAsync(0); };
 
 function channel() {
@@ -66,14 +66,14 @@ describe('Send receipt cursor source, without a coordinator', () => {
     await flush();
     expect(display).toHaveBeenCalledTimes(1);
     expect(display.mock.calls[0]).toEqual([receipt(2)]);
-    expect(reloaded.getState().fronted).toEqual(['send:1', 'send:2']);
+    expect(reloaded.getState().receipts).toEqual({});
     stop();
   });
 
   it('does not forget fronted ids after more than 100 receipts or a reload', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const rows = Array.from({ length: 123 }, (_, i) => receipt(i + 1));
-    store.getState().merge({ receipts: rows, cursor: 123, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: rows, cursor: 123, has_more: false });
     rows.forEach((item) => store.getState().markFronted(item.receipt_id));
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
     const display = vi.fn(async (_receipt: CadReceipt) => true);
@@ -152,7 +152,7 @@ describe('Send receipt cursor source, without a coordinator', () => {
   it('restores a processed intake refusal to health after a reload and backend restart', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const refusal = { at: new Date(NOW).toISOString(), file: 'bad.json', operationId: null, reason: 'bad request' };
-    store.getState().merge({ receipts: [receipt(1, { receipt_id: 'intake:bad', outcome: 'refused', refusal })], cursor: 1, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: [receipt(1, { receipt_id: 'intake:bad', outcome: 'refused', refusal })], cursor: 1, has_more: false });
     store.getState().markFronted('intake:bad');
     resetCadDeliveryHealthStore();
     const reloaded = createCadReceiptsStore(sessionStorage, () => NOW);
@@ -178,17 +178,112 @@ describe('Send receipt cursor source, without a coordinator', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it('keeps a failed display pending and tries again when recovery merges a page', async () => {
+  it('keeps a failed display pending until its retry backoff ends', async () => {
     const store = createCadReceiptsStore(sessionStorage, () => NOW);
     const display = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const stop = connectCadReceiptDisplay(display, store);
-    store.getState().merge({ receipts: [receipt(1)], cursor: 1, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: [receipt(1)], cursor: 1, has_more: false });
     await flush();
     expect(store.getState().fronted).toEqual([]);
-    store.getState().merge({ receipts: [], cursor: 1, has_more: false });
+    store.getState().merge({ feed_id: 'feed-a', receipts: [], cursor: 1, has_more: false });
     await flush();
-    expect(store.getState().fronted).toEqual(['send:1']);
+    expect(store.getState().receipts['send:1']).toBeDefined();
+    expect(display).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(display).toHaveBeenCalledTimes(2);
     stop();
+  });
+});
+
+describe('receipt review regressions', () => {
+  beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(NOW); sessionStorage.clear(); resetCadDeliveryHealthStore(); });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  it('does not let a transient receipt block later Sends and bounds retries across pushes and reloads', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const display = vi.fn(async (item: CadReceipt) => item.cursor !== 1);
+    let stop = connectCadReceiptDisplay(display, store);
+    store.getState().merge({ feed_id: 'feed-a', receipts: [receipt(1), receipt(2)], cursor: 2, has_more: false });
+    await flush();
+    expect(display.mock.calls.map(([item]) => item.cursor)).toEqual([1, 2]);
+    for (let i = 0; i < 5; ++i) store.getState().merge({ feed_id: 'feed-a', receipts: [], cursor: 2, has_more: false });
+    await flush();
+    expect(display).toHaveBeenCalledTimes(2);
+    stop();
+    const reload = createCadReceiptsStore(sessionStorage, () => NOW);
+    stop = connectCadReceiptDisplay(display, reload);
+    await flush();
+    expect(display).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5_000 + 30_000 + 120_000);
+    expect(display.mock.calls.filter(([item]) => item.cursor === 1)).toHaveLength(4);
+    expect(reload.getState().receipts).toEqual({});
+    expect(reload.getState().feedback['send:1'].message).toContain('repeated transport failures');
+    reload.getState().merge({ feed_id: 'feed-a', receipts: [receipt(1), receipt(2)], cursor: 2, has_more: false });
+    await flush();
+    expect(display).toHaveBeenCalledTimes(5);
+    stop();
+  });
+
+  it('scopes saved cursors to the server feed and resets ordering when the database changes', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    store.getState().merge({ feed_id: 'feed-a', receipts: [receipt(100)], cursor: 100, has_more: false });
+    store.getState().markFronted('send:100');
+    const reload = createCadReceiptsStore(sessionStorage, () => NOW);
+    const fetcher = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ feed_id: 'feed-b', receipts: [], cursor: 100, has_more: false })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ feed_id: 'feed-b', receipts: [receipt(1)], cursor: 1, has_more: false })));
+    await reload.getState().load(fetcher);
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      '/api/cadlink/receipts?after=100&limit=50', '/api/cadlink/receipts?after=0&limit=50',
+    ]);
+    expect(reload.getState().feedId).toBe('feed-b');
+    expect(reload.getState().cursor).toBe(1);
+    expect(reload.getState().newestSequence).toBe(0);
+    expect(Object.keys(reload.getState().receipts)).toEqual(['send:1']);
+    const keys = Object.keys(sessionStorage);
+    expect(keys).toContain('wg2.cad.receipts.v2:feed-a');
+    expect(keys).toContain('wg2.cad.receipts.v2:feed-b');
+  });
+
+  it('prunes completed rows and bounds history under a storage quota, keeping shown-once after reload', async () => {
+    let saved = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => saved.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        if (value.length > 20_000) throw new Error('quota exceeded');
+        saved.set(key, value);
+      },
+    } as Storage;
+    const store = createCadReceiptsStore(storage, () => NOW);
+    const display = vi.fn(async () => true);
+    const stop = connectCadReceiptDisplay(display, store);
+    for (let i = 1; i <= 300; ++i) {
+      store.getState().merge({ feed_id: 'feed-a', receipts: [receipt(i)], cursor: i, has_more: false });
+      store.getState().report(`send:${i}`, { outcome: 'accepted', message: 'Received' });
+      await flush();
+    }
+    stop();
+    expect(store.getState().receipts).toEqual({});
+    expect(store.getState().fronted).toEqual([]);
+    expect(Object.keys(store.getState().feedback)).toHaveLength(20);
+    const reload = createCadReceiptsStore(storage, () => NOW);
+    expect(reload.getState().cursor).toBe(300);
+    reload.getState().merge({ feed_id: 'feed-a', receipts: [receipt(299), receipt(300)], cursor: 300, has_more: false });
+    const reloadStop = connectCadReceiptDisplay(display, reload);
+    await flush();
+    expect(display).toHaveBeenCalledTimes(300);
+    reloadStop();
+  });
+
+  it('skips and reports malformed rows, including a whole bad page, while advancing the server cursor', async () => {
+    const store = createCadReceiptsStore(sessionStorage, () => NOW);
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ feed_id: 'feed-a', receipts: [null, { ...receipt(2), design_ids: 2 }], cursor: 2, has_more: true })))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ feed_id: 'feed-a', receipts: [{ ...receipt(3), cursor: 500 }, receipt(4)], cursor: 4, has_more: false })));
+    await store.getState().load(fetcher);
+    expect(store.getState().cursor).toBe(4);
+    expect(Object.keys(store.getState().receipts)).toEqual(['send:4']);
+    expect(Object.values(store.getState().feedback)).toHaveLength(3);
+    expect(store.getState().recoveryError).toBeNull();
+    expect(fetcher.mock.calls[1]).toEqual(['/api/cadlink/receipts?after=2&limit=50']);
   });
 });

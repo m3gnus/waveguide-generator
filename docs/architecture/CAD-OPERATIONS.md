@@ -787,7 +787,7 @@ are under `frontend/src/` unless they start with `server/`. Tests are named as
 | 19 | Solve confirms the axis actually shown and reports a frame changed elsewhere | `stores/cadSolverFrame.ts`, `shell/JobsCoordinator.tsx` | *job* (axis passed explicitly) | the ingest-keyed frame store | `cadSolverFrame.test.ts`, `M1bSolveCard.test.tsx :: never solves along an axis the card did not show…` | — |
 | 20 | Only deliberate settings edits publish a project setup, with retries and correct-project flushing | `shell/cadSetupPublisher.ts`, `shell/Shell.tsx` | *re-homed* (not tied to a job) | `CadSetupPublisher` mounted in `shell/Shell.tsx`, using settings stores and its own save-feedback store | `cadSetupPublisher.test.ts :: mounts without the coordinator and publishes only deliberate edits, retrying and flushing the correct project`, `:: with the coordinator mounted publishes exactly once per deliberate edit`, `:: keeps save-failure feedback without the coordinator and clears it after a later edit saves`, `ParamPanel.test.tsx :: shows a publisher failure in the CAD mesh alert without the coordinator mounted` | — |
 | 21 | A compatible arrival keeps the project's solve settings; a changed inventory resets them | `stores/cadReturn.ts` | none | project/inventory profiles in `stores/cadReturn.ts`, consumed through its existing API by `shell/cadlink/receiptDisplay.ts` — **receipt half built, cut over in S5-7** | `cadReturn.test.ts :: carries the solve setup across a same-inventory arrival`, `:: resets fully when an arrival changes the source inventory` | `receiptDisplay.test.ts :: carries mesh, driver, channel and solve settings for a compatible project arrival through cadReturn`, `:: resets settings when the source inventory changes through cadReturn` |
-| 22 | A return for another project never replaces the parametric design or its undo history | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts` | none | selection policy keyed by design/project; `shell/cadlink/receiptDisplay.ts` checks receipt and folder identity without writing the parametric document — **receipt half built, cut over in S5-7** | `CadLinkCoordinator.test.tsx :: refuses an arriving return that names a design the open model is not`, `CadLinkCoordinator.sends.test.tsx :: displaying a new Send leaves the parametric design and its undo history as they were` | `receiptDisplay.test.ts :: a recovered receipt for another project leaves the parametric document, undo history and CAD selection intact`, `:: displaying a matching Send leaves the parametric design and undo history intact` |
+| 22 | A return for another project never replaces the parametric design or its undo history | `shell/cadlink/arrivals.ts`, `shell/cadlink/restores.ts` | none | selection policy keyed by design/project; `shell/cadlink/receiptDisplay.ts` checks folder design identity without writing the parametric document — **receipt half built, cut over in S5-7** | `CadLinkCoordinator.test.tsx :: refuses an arriving return that names a design the open model is not`, `CadLinkCoordinator.sends.test.tsx :: displaying a new Send leaves the parametric design and its undo history as they were` | `receiptDisplay.test.ts :: a recovered receipt for another project leaves the parametric document, undo history and CAD selection intact`, `:: displaying a matching Send leaves the parametric design and undo history intact` |
 | 23 | Entering an empty CAD mode reopens the remembered project only while still empty | `shell/cadlink/restores.ts` | none | project memory plus a guarded restore effect | `CadLinkCoordinator.test.tsx :: reopens the remembered CAD project when the mode comes back empty`, `:: never restores over a selection the listing already made` | late reads cannot overwrite a selection |
 | 24 | Opening an archived CAD run restores its ingest and setup; a late restore never overtakes a newer pick | `shell/cadlink/restores.ts` | partial (`cad_source`, `cad_setup` on the job) | a job-model restore action | `CadLinkCoordinator.test.tsx :: restores driver, crossover, mesh, and sweep inputs from a historical CAD run`, `:: keeps the newest archived CAD run…` | restore with the coordinator absent |
 | 25 | "Bring in geometry" joins repeated pulls, waits for the correlated return, reports refusal or timeout | `shell/cadlink/arrivals.ts`, `server/cadlink/api.py` | none (a correlation id, not a job) | a request-id return waiter | `CadLinkCoordinator.test.tsx :: resolves a pull with the exact correlated arrival and times the wait out`, `:: ends a pull the moment Fusion refuses it…` | settles once under manual supersession |
@@ -807,21 +807,48 @@ still reads only 50 terminal operations. The built receipt source walks every
 page, persists its cursor and pending receipts together per window, and resumes
 from that cursor across reloads and long outages. A failed page never advances the
 cursor. Jobs-channel Send/refusal pushes invalidate the feed; they never move its
-cursor. Intake refusals without operations reuse delivery health's bounded log
+cursor. Every page names a durable database `feed_id`; per-window persisted
+state is namespaced by that id. Changing data folders reloads the new feed from
+its own cursor and resets its display ordering. Completed receipts and their
+fronted ids are pruned through the fetched cursor; only pending receipts remain.
+Feedback and intake-refusal history each retain at most 20 entries, while scalar
+Send-order watermarks preserve selection fencing across reloads. Invalid receipt
+rows are reported and skipped; the page's authoritative cursor still advances.
+Intake refusals without operations reuse delivery health's bounded log
 and unseen state; receipt recovery restores the latest 20 after a backend restart.
 
 `cad_send_receipts` is additive, with no `user_version` bump. Its payload projects
 existing operation outcomes and snapshots; intake refusals are recorded before
-the existing push and file acknowledgement. A separate terminal insertion sequence
+the existing push and file acknowledgement. The store's durability checkpoint
+must succeed before publishing, acknowledging or consuming a refused claim.
+The claim rename is synced on POSIX before receipt persistence. Claim UUIDs key
+the original refusal, including its filename, reason and timestamp,
+so retries and restarts replay it. A monotonic subsecond timestamp also keeps
+separate claims of one filename distinct in delivery health. Replay records remain
+while their claims wait, even if the 20-entry intake log evicts their receipts;
+replaying an evicted claim does not insert it again. An unreadable claim retries
+failed receipt persistence after the pass threshold. A separate terminal insertion sequence
 is necessary because an early request may settle after later requests, and an
 operation-acceptance cursor would skip it. `send_sequence` separately fences display
 in request order, so late settlement cannot replace a newer Send. Existing terminal
-Sends are projected on store open, including those written by an older app.
+Sends are projected on store open and feed reads, including those written by an
+older app meanwhile. Backfill selects only unprojected terminal Sends; malformed
+operation JSON is logged and skipped per row. Feed availability reuses inventory
+and manifest hashes across pages, with source caches checked by path, size and
+mtime; a changed entry refreshes the evidence.
 Availability (`missing_source`, `unreadable`, or `retained_copy` when no folder is
 selected) is read-time evidence; the retained acceptance record and cursor stay
 immutable. `ingest_id` is normally null: Send retains without meshing or making a
 job, and receipt display uses the existing ingest/artifact display path. These
 modules are built beside the coordinator and are mounted only by tests until S5-7.
+
+Receipt display uses the coordinator's design-id rule: a return naming another WG
+design is refused; a Fusion-native return naming no WG design remains adoptable,
+even with a different project lineage. Deterministic ingest refusals and display
+failures are reported and completed once. Transport/service or listing failures
+stay pending with retries after 5, 30 and 120 seconds; exhaustion is reported and
+completed. Pending retries never block later Sends, and their backoff survives
+reloads and push invalidations.
 
 ## The `preparing` job status
 
