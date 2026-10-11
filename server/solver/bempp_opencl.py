@@ -391,10 +391,11 @@ class _ProbeHandle:
                     # A process the child started still holds the pipes: off
                     # Windows there is no job, and on Windows the job's
                     # terminate did not take it in time. That is no verdict
-                    # on the device, and raising here replaced the caller's verdict and wedged the
-                    # registry on "Checking OpenCL…". Cancel the blocked reads
-                    # so the readers end and the pipes can be closed; bounded,
-                    # it never waits on the other process.
+                    # on the device, and raising here replaced the caller's
+                    # verdict and wedged the registry on "Checking OpenCL…".
+                    # Cancel the blocked reads so the readers end and the
+                    # pipes can be closed; bounded, it never waits on the
+                    # other process.
                     from server.platform.process_tree import cancel_blocked_reads
 
                     stuck = cancel_blocked_reads(stuck)

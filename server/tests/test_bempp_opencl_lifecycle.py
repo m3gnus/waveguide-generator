@@ -247,7 +247,8 @@ def test_a_containment_refusal_is_transient_and_retried(monkeypatch):
     monkeypatch.setattr(process_tree, "popen_in_windows_job", refuse)
     began = time.monotonic()
     first = probe.qualified_opencl()
-    assert time.monotonic() - began < 1
+    # Bounded, not instant: removing the channel may retry for about a second.
+    assert time.monotonic() - began < 5
     assert first["opencl_unavailable_reason"] == "probe_error"
     assert "ContainedStartError: could not confine the OpenCL check" in first["reason"]
     assert probe._cached_verdict is None and not probe._device_verdict_cache

@@ -264,17 +264,18 @@ def test_popen_job_termination_kills_a_real_grandchild(tmp_path):
         while time.monotonic() < deadline:
             try:
                 grandchild = int(pid_file.read_text(encoding="utf-8"))
-                grandchild_handle = kernel32.OpenProcess(
-                    0x00100000 | 0x1000 | 0x0001, False, grandchild
-                )
-                assert grandchild_handle, "could not open the grandchild's process handle"
                 break
             except (OSError, ValueError):
                 time.sleep(0.05)
         assert grandchild is not None, "the child never reported its grandchild"
         # The file is written after the flushed line, so this read cannot wait
-        # for the sleeping grandchild to finish.
+        # for the sleeping grandchild to finish. Both reports must agree before
+        # a handle is opened, so a partial file read never names another pid.
         assert int(child.stdout.readline()) == grandchild
+        grandchild_handle = kernel32.OpenProcess(
+            0x00100000 | 0x1000 | 0x0001, False, grandchild
+        )
+        assert grandchild_handle, "could not open the grandchild's process handle"
         code = wintypes.DWORD()
         assert kernel32.GetExitCodeProcess(grandchild_handle, ctypes.byref(code))
         assert code.value == _STILL_ACTIVE, "the grandchild never became alive"

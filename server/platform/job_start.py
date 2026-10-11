@@ -38,7 +38,8 @@ and raises :class:`ContainedStartError`. The one start it does not suspend,
 an armed ``CreateProcess`` call of an unexpected shape, is started as asked
 and logged; :func:`start_in_windows_job` then confines it after the fact and
 returns ``None`` if that fails, without refusing (test doubles on Windows take
-the same unfired path). Running it uncontained is not a fallback: a
+the same unfired path); ``process_tree.popen_in_windows_job`` (the OpenCL
+check) refuses on that path instead. Running it uncontained is not a fallback: a
 mesher child or BEMPP worker outside every job, holding no
 ``WaveguideGeneratorRunning`` mutex either, can outlive a server that died
 unseen by the installer, which then replaces ``app/`` under it.

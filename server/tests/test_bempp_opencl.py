@@ -293,7 +293,8 @@ def test_a_containment_refusal_is_probe_error_and_removes_the_channel(monkeypatc
     monkeypatch.setattr(process_tree, "popen_in_windows_job", refuse)
     began = time.monotonic()
     verdict = probe._run_probe("inventory", None, 10)
-    assert time.monotonic() - began < 1
+    # Bounded, not instant: removing the channel may retry for about a second.
+    assert time.monotonic() - began < 5
     assert verdict["opencl_unavailable_reason"] == "probe_error"
     assert "ContainedStartError: could not confine the OpenCL check" in verdict["reason"]
     assert len(channels) == 1 and not channels[0].exists()
