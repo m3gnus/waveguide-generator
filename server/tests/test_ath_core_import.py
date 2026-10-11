@@ -72,7 +72,23 @@ def test_core_json_and_text_transport_match_direct_mesher_import_exactly():
         np.testing.assert_array_equal(getattr(solved, name), getattr(solve_reference, name))
 
 
-def test_saved_v1_dictionaries_and_arrays_are_bit_identical_to_pre_v2_wg():
+def _assert_same_geometry(actual, expected):
+    # The baseline was captured on macOS arm64; libm trig differs in the last bit
+    # on Linux and Windows (observed max relative difference 1.5e-15). Structure
+    # (shape, dtype, non-float values) stays exact; floats must agree to 1e-12 of
+    # the array's scale, far below any real change to the geometry.
+    actual, expected = np.asarray(actual), np.asarray(expected)
+    assert actual.shape == expected.shape and actual.dtype == expected.dtype
+    if expected.dtype.kind != 'f':
+        np.testing.assert_array_equal(actual, expected)
+        return
+    np.testing.assert_array_equal(np.isfinite(actual), np.isfinite(expected))
+    finite = np.isfinite(expected)
+    scale = float(np.max(np.abs(expected[finite]), initial=0.0))
+    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-12 * max(scale, 1.0))
+
+
+def test_saved_v1_dictionaries_and_arrays_match_pre_v2_wg_to_libm_precision():
     # Captured with WG 7ae5c2b1 before changing its parser or translator. These
     # fixed witnesses include omitted coefficients, asymmetric margins, block
     # Rot, extension rotation, an r0 expression and an R-OSSE morph. Scaled
@@ -94,11 +110,11 @@ def test_saved_v1_dictionaries_and_arrays_are_bit_identical_to_pre_v2_wg():
                 arrays = build_point_grid_arrays(params)
                 for name, value in arrays.items():
                     if isinstance(value, np.ndarray):
-                        np.testing.assert_array_equal(value, baseline[f'{i}_{name}'])
+                        _assert_same_geometry(value, baseline[f'{i}_{name}'])
                 if f'{i}_inner_points' in baseline:
                     geometry = resolve_geometry(config).geometry
                     for name in ('inner_points', 'outer_points'):
-                        np.testing.assert_array_equal(getattr(geometry, name), baseline[f'{i}_{name}'])
+                        _assert_same_geometry(getattr(geometry, name), baseline[f'{i}_{name}'])
 
 
 @pytest.mark.parametrize('echo,rule', [('', 'ath-v2025-12+'),
