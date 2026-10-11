@@ -608,6 +608,7 @@ function SolveDomainControl({ design }: { design: DesignDocument }) {
     {modes.filter((mode) => limitation(mode)).map((mode) => <small key={mode}>{limitation(mode)}</small>)}
     {nativeSymmetryLimitation(design.formula, symmetry) && <small className="field-error" role="alert">{nativeSymmetryLimitation(design.formula, symmetry)}</small>}
     {!native && symmetry === 'auto' && <AutoSymmetryReadout design={design} />}
+    {!native && resolveOuterBodyMode(design) === 'enclosure' && <small>Unequal reflected front/back quadrant sizes prevent that symmetry reduction.</small>}
     {native && <small>This native formula requires the full circular mesh domain.</small>}
   </div>;
 }
@@ -1241,6 +1242,12 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     </Section>;
   };
 
+  const sectionResetNotice = (family: DesignFamily) => design.cross_section
+    && (design.cross_section.exponent !== 2 || design.cross_section.aspect_ratio !== 1)
+    && (family === 'FREEFORM' || isNativeFamily(family))
+    ? `${family} uses its own section shape. The base cross-section exponent and aspect ratio were reset to 2 and 1.`
+    : null;
+
   const modelTypeSection = <Section
     title="Model Type"
     description="Select the horn family that defines the profile equation and its primary dimensions."
@@ -1253,7 +1260,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
         const family = event.target.value as DesignFamily;
         setConversionNotice(null);
         if (family === 'FREEFORM' && design.formula !== 'FREEFORM') setFreeformChoice(true);
-        else setFamily(family);
+        else { setFamily(family); setConversionNotice(sectionResetNotice(family)); }
       }}>
         <option>OSSE</option><option>R-OSSE</option><option>ICW</option><option>FREEFORM</option>
         {NATIVE_FAMILIES.map((family) => <option key={family}>{family}</option>)}
@@ -1264,7 +1271,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
     </div>}
     {freeformChoice && <div className="family-switch-choice" role="group" aria-label="Switch to FREEFORM">
       <b>Switch to FREEFORM</b><span>Choose how to initialize the editable profiles.</span>
-      <div><button onClick={() => { setFamily('FREEFORM'); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
+      <div><button onClick={() => { setFamily('FREEFORM'); setConversionNotice(sectionResetNotice('FREEFORM')); setFreeformChoice(false); }}>Start blank</button><button disabled={converting} onClick={() => {
         const conversion = ++conversionGeneration.current;
         const sourceRevision = useDesignStore.getState().designRevision;
         setConverting(true); setConversionError(null);
@@ -1276,7 +1283,7 @@ export function ParamPanel({ tab }: { tab: ParameterTab }) {
           }
           loadDesign(converted);
           // The choice closes on success, so the notice lives outside it.
-          setConversionNotice(notice ?? null);
+          setConversionNotice([notice, sectionResetNotice('FREEFORM')].filter(Boolean).join(' ') || null);
           setFreeformChoice(false);
         }).catch((error) => {
           if (conversion === conversionGeneration.current) setConversionError(error instanceof Error ? error.message : String(error));

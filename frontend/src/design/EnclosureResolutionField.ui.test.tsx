@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { expect, it, vi } from 'vitest';
 import { hydrateDesignDocument } from '../api/designIo';
-import { designForFamily, mergeDesignForFamily, serializeDesign } from '../stores/design';
+import { designForFamily, mergeDesignForFamily, resetDesignStore, serializeDesign, useDesignStore } from '../stores/design';
 import { EnclosureResolutionField, parseEnclosureResolution } from './EnclosureResolutionField';
 import { PARAMETER_REGISTRY, fieldIsVisible } from './parameterRegistry';
 
@@ -64,4 +64,15 @@ it('shows all imported quadrant spellings and commits a valid edited list', () =
     act(() => root.unmount());
     host.remove();
   }
+});
+
+it('undo restores imported quadrant spellings after editing a new resolution field', () => {
+  resetDesignStore();
+  const imported = hydrateDesignDocument({ formula:'OSSE', enclosure:{ depth:90, front_resolution:[{value:8,raw:'8.00'},{value:12,raw:'12.0'}] } });
+  useDesignStore.getState().loadDesign(imported);
+  useDesignStore.getState().updateValue('enclosure.front_resolution', [16,20,24,28]);
+  expect((serializeDesign(useDesignStore.getState().design).enclosure as Record<string, unknown>).front_resolution).toEqual([16,20,24,28]);
+  useDesignStore.getState().undo();
+  expect((serializeDesign(useDesignStore.getState().design).enclosure as Record<string, unknown>).front_resolution).toEqual([{value:8,raw:'8.00'},{value:12,raw:'12.0'}]);
+  resetDesignStore();
 });

@@ -360,6 +360,27 @@ def _recorded_resolved_quadrants(metadata: Mapping[str, Any]) -> int | None:
     return int(recorded)
 
 
+_ENCLOSURE_RESOLUTION_CONTRACT = "per-quadrant-v1"
+
+
+def _legacy_enclosure_resolution_changed(design: DesignConfig) -> bool:
+    from server.preview.translate import outer_body_mode
+
+    root = design.root
+    if outer_body_mode(root) != "enclosure" or root.enclosure is None:
+        return False
+    for field in ("front_resolution", "back_resolution"):
+        values = getattr(root.enclosure, field)
+        if not isinstance(values, tuple):
+            continue
+        # Old WG used only q1. All non-positive entries share mouth fallback.
+        numbers = [item.constant_value() for item in values]
+        effective = [number if number is not None and number > 0 else None for number in numbers]
+        if any(number != effective[0] for number in effective[1:]):
+            return True
+    return False
+
+
 def _solved_under_legacy_axial(results_text: str | None, axial_ids: Sequence[str]) -> bool:
     """Whether stored results do not show every axial channel solved per source axis.
 
@@ -1902,6 +1923,7 @@ class JobRuntime:
             assert imported is not None
             script_snapshot = imported.anchor_snapshot
         task_metadata: dict[str, Any] = {
+            "enclosure_resolution_contract": _ENCLOSURE_RESOLUTION_CONTRACT,
             "solve_accuracy": request.options.accuracy,
             "solver_plan": symmetry_metadata.get("solver_plan"),
             "log_tail": [],
@@ -3207,6 +3229,16 @@ class JobRuntime:
         # from this same field. Without replaying it here too, a job solved on a
         # quarter domain regenerates as a full-domain mesh: a different artifact,
         # not merely a differently-built one.
+        if (
+            metadata.get("enclosure_resolution_contract") != _ENCLOSURE_RESOLUTION_CONTRACT
+            and _legacy_enclosure_resolution_changed(design)
+        ):
+            raise JobMeshDiscardedError(
+                "Mesh artifact was discarded by retention and cannot be regenerated: "
+                "this job predates per-quadrant enclosure resolutions and used only "
+                "the first front/back value. Reopen the design and run a new solve "
+                "to use all quadrant values."
+            )
         resolved_quadrants = _recorded_resolved_quadrants(metadata)
         if resolved_quadrants is not None:
             design.root.mesh.quadrants = Expr(value=float(resolved_quadrants))

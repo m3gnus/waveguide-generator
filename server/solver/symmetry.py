@@ -219,6 +219,9 @@ def _resolve_symmetry_uncached(design: DesignConfig | Mapping[str, Any]) -> Symm
         params, _formula, mode = build_geometry_params(config)
         enclosure_resolutions: dict[str, list[float]] = {}
         if mode == "enclosure":
+            # Pinned mesher a515334 has no public density/list parser. Keep
+            # these private helpers aligned with its repeat-last and fallback
+            # contract when updating the mesher pin.
             from hornlab_mesher.config_builder import _mesh_density_from_config
             from hornlab_mesher.density import _parse_quadrant_resolutions
 

@@ -23,4 +23,13 @@ describe('public parameter catalog', () => {
     const committed = JSON.parse(new TextDecoder().decode(bytes));
     expect(buildParameterCatalog()).toEqual(committed);
   });
+
+  it('keeps v1 editor bounds non-null when a bounds object is present', () => {
+    for (const field of buildParameterCatalog().parameters) {
+      if (field.editor_bounds) {
+        expect(Number.isFinite(field.editor_bounds.minimum)).toBe(true);
+        expect(Number.isFinite(field.editor_bounds.maximum)).toBe(true);
+      }
+    }
+  });
 });

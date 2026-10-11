@@ -169,6 +169,66 @@ describe('ParamPanel inventory UX', () => {
     }
   });
 
+  it('disables base section controls only while an OSSE guiding curve is active', () => {
+    act(() => useDesignStore.getState().setFamily('OSSE'));
+    const sectionInput = () => host.querySelector<HTMLInputElement>('[data-parameter-id="cross_section.exponent"] input')!;
+    expect(sectionInput().disabled).toBe(false);
+    act(() => useDesignStore.getState().updateValues({ 'guiding_curve.curve_type': 1, 'guiding_curve.width': 100 }));
+    expect(sectionInput().disabled).toBe(true);
+    expect(host.textContent).toContain('Active guiding curves require cross-section exponent 2 and aspect ratio 1.');
+    act(() => useDesignStore.getState().updateValue('guiding_curve.width', 0));
+    expect(sectionInput().disabled).toBe(false);
+  });
+
+  it.each(['FREEFORM', 'OSSE-AXIAL'] as const)('announces the cross-section reset when switching to %s', (next) => {
+    act(() => useDesignStore.getState().updateValue('cross_section.exponent', 4));
+    const family = host.querySelector<HTMLSelectElement>('#family')!;
+    act(() => { family.value = next; family.dispatchEvent(new Event('change', { bubbles: true })); });
+    if (next === 'FREEFORM') {
+      const blank = [...host.querySelectorAll<HTMLButtonElement>('[aria-label="Switch to FREEFORM"] button')].find((button) => button.textContent === 'Start blank')!;
+      act(() => blank.click());
+    }
+    expect(host.querySelector('.conversion-notice')?.textContent).toContain('reset to 2 and 1');
+    expect(useDesignStore.getState().design.formula).toBe(next);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.cross_section?.exponent).toBe(4);
+  });
+
+  it('gates enclosure resolutions and commits rear clearance with undo and redo', () => {
+    const resolution = () => host.querySelector('[data-parameter-id="enclosure.front_resolution"]');
+    expect(resolution()).toBeNull();
+    act(() => useDesignStore.getState().updateValue('enclosure.depth', 90));
+    expect(resolution()).not.toBeNull();
+    const input = host.querySelector<HTMLInputElement>('[data-parameter-id="enclosure.depth_margin_mm"] input')!;
+    expect(Number(input.value)).toBe(1);
+    act(() => input.focus());
+    act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(input, '7');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect((serializeDesign(useDesignStore.getState().design).enclosure as Record<string, unknown>).depth_margin_mm).toBe(7);
+    act(() => useDesignStore.getState().undo());
+    expect(useDesignStore.getState().design.enclosure.depth_margin_mm).toBeUndefined();
+    act(() => useDesignStore.getState().redo());
+    expect(useDesignStore.getState().design.enclosure.depth_margin_mm).toBe(7);
+  });
+
+  it('shows the server quadrant veto in Auto-symmetry and beside Solve domain', () => {
+    act(() => {
+      useDesignStore.getState().updateValues({ 'enclosure.depth': 90, 'enclosure.front_resolution': [20,24,28,32] });
+      const body = JSON.stringify(serializeDesign(useDesignStore.getState().design));
+      queryClient.setQueryData(['symmetry', body], {
+        quadrants: 1234, xz: false, yz: false,
+        reasons: { xz: ['front_resolution quadrant sizes differ across the xz mirror'], yz: ['front_resolution quadrant sizes differ across the yz mirror'] },
+      });
+      root.render(withQueryClient(<ParamPanel tab="simulation" />));
+    });
+    expect(host.querySelector('.resolved-mode')?.textContent).toContain('Full domain');
+    expect(host.querySelector('.resolved-mode')?.textContent).toContain('quadrant sizes differ');
+    expect(host.querySelector('.solve-domain-control')?.textContent).toContain('Unequal reflected front/back quadrant sizes');
+  });
+
   it.each(['beat-cpu', 'beat-cuda'])('disables the unsupported XZ half domain for %s', (name) => {
     act(() => {
       useSolveOptionsStore.getState().setEngine(name);

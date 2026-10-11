@@ -177,7 +177,9 @@ def enclosure_resolution(value: ResolutionExpr | None) -> float | str | None:
     if value is None:
         return None
     values = value if isinstance(value, tuple) else (value,)
-    numbers = [_structural_number(item, "enclosure resolution") for item in values]
+    numbers = [item.constant_value() for item in values]
+    if any(number is None for number in numbers):
+        raise ValueError("Enclosure front/back resolutions require finite scalar numbers; replace expressions with one to four numbers before preview, solve or export")
     return numbers[0] if len(numbers) == 1 else ",".join(format(number, ".15g") for number in numbers)
 
 

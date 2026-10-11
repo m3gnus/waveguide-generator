@@ -117,10 +117,42 @@ def test_real_mesh_nondefault_controls(tmp_path, updates):
     assert result.n_vertices > 0
 
 
-@pytest.mark.parametrize('sizes', [[], [8,12,16,20,24], '8,p', float('nan')])
+@pytest.mark.parametrize('sizes', [[], [8,12,16,20,24], float('nan')])
 def test_invalid_resolution_lists_refuse_at_schema(sizes):
     with pytest.raises(ValidationError):
         design(enclosure={'front_resolution':sizes})
+
+
+@pytest.mark.parametrize('sizes', ['2*mr', {'raw':'mouth_res'}, '8,p'])
+def test_expression_resolutions_open_wg_files_but_refuse_translation(sizes):
+    root = design(enclosure={'depth':90, 'front_resolution':sizes})
+    saved = asyncio.run(serialize_design({'design':root.model_dump(mode='json')}))
+    opened = asyncio.run(open_design(saved['text']))
+    restored = DesignConfig.model_validate(opened['design'])
+    assert restored.root.enclosure.front_resolution == root.root.enclosure.front_resolution
+    with pytest.raises(ValueError, match='replace expressions with one to four numbers'):
+        design_to_mesher_config(restored)
+
+
+@pytest.mark.parametrize('panel', ['FrontResolution', 'BackResolution'])
+def test_ath_expression_resolution_opens_and_can_be_fixed(panel):
+    text = 'OSSE = {\nL = 60\n}\nMesh.Enclosure = {\nDepth = 90\n'+panel+' = 2*mr\n}\n'
+    opened = asyncio.run(open_design(text))
+    root = DesignConfig.model_validate(opened['design'])
+    with pytest.raises(ValueError, match='finite scalar numbers'):
+        design_to_mesher_config(root)
+    from server.design.schema import Expr
+    setattr(root.root.enclosure, 'front_resolution' if panel == 'FrontResolution' else 'back_resolution', Expr(value=20))
+    assert design_to_mesher_config(root)['mode'] == 'enclosure'
+
+
+def test_explicit_default_margin_preserves_translation_and_identity():
+    from server.cadlink.identity import design_hash
+    implicit = design(enclosure={'depth':90})
+    explicit = design(enclosure={'depth':90, 'depth_margin_mm':1})
+    assert explicit.model_dump(mode='json') == implicit.model_dump(mode='json')
+    assert design_to_mesher_config(explicit) == design_to_mesher_config(implicit)
+    assert design_hash(explicit) == design_hash(implicit)
 
 
 @pytest.mark.parametrize('margin', [-1, float('inf'), '7'])

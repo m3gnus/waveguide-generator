@@ -597,14 +597,10 @@ class EnclosureConfig(StrictModel):
     front_resolution: ResolutionExpr | None = None
     back_resolution: ResolutionExpr | None = None
 
-    @field_validator("front_resolution", "back_resolution")
+    @field_validator("depth_margin_mm")
     @classmethod
-    def _numeric_resolutions(cls, value: ResolutionExpr | None) -> ResolutionExpr | None:
-        if value is not None:
-            values = value if isinstance(value, tuple) else (value,)
-            if any(item.constant_value() is None for item in values):
-                raise ValueError("enclosure resolutions require finite scalar numbers")
-        return value
+    def _default_depth_margin(cls, value: float | None) -> float | None:
+        return None if value == 1 else value
 
 
 class AthRoundoverConfig(StrictModel):

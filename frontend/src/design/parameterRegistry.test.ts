@@ -214,12 +214,17 @@ describe('complete parameter registry', () => {
     osse.morph.target_shape = 0;
     osse.enclosure.depth = 0;
     osse.mesh.wall_thickness = 0;
-    for (const id of ['osse.a', 'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'enclosure.front_resolution', 'mesh.rear_resolution']) {
+    for (const id of ['osse.a', 'morph.target_width', 'morph.target_height', 'morph.corner_radius', 'morph.rate', 'morph.fixed_part', 'mesh.rear_resolution']) {
       const field = PARAMETER_REGISTRY.find((item) => item.id === id)!;
       expect(fieldIsVisible(field, osse), id).toBe(true);
       expect(field.disabledWhen?.(osse), id).toBeUndefined();
     }
     expect(fieldIsVisible(PARAMETER_REGISTRY.find((item) => item.id === 'enclosure.space_l')!, osse)).toBe(false);
+    for (const id of ['enclosure.front_resolution', 'enclosure.back_resolution']) {
+      const field = PARAMETER_REGISTRY.find((item) => item.id === id)!;
+      expect(fieldIsVisible(field, osse)).toBe(false);
+      expect(fieldIsVisible(field, { ...osse, enclosure: { ...osse.enclosure, depth: 90 } })).toBe(true);
+    }
     expect(fieldIsVisible(PARAMETER_REGISTRY.find((item) => item.id === 'mesh.wall_thickness')!, osse)).toBe(false);
   });
 

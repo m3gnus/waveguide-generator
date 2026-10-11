@@ -1514,26 +1514,12 @@
         "additionalProperties": false,
         "properties": {
           "maximum": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Maximum"
+            "title": "Maximum",
+            "type": "number"
           },
           "minimum": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Minimum"
+            "title": "Minimum",
+            "type": "number"
           }
         },
         "required": [

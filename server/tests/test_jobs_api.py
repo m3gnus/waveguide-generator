@@ -7,6 +7,8 @@ import sqlite3
 import threading
 from typing import Any
 
+import pytest
+
 from server.app import create_app
 from server.jobs import api as jobs_api
 from server.jobs.api import create_jobs_router
@@ -583,6 +585,62 @@ def test_discarded_mesh_regenerates_on_the_domain_the_job_solved(
             assert headers["x-wg2-mesh-regenerated"] == "1"
 
         assert rebuilt_quadrants == [1.0, 1234.0]
+        await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('sizes,depth,contract,stored,status', [
+    ([20,24,28,32],90,None,False,410),
+    ([20,20],90,None,False,200),
+    ([-1,0],90,None,False,200),
+    ([20,24],0,None,False,200),
+    ([20,24],90,'per-quadrant-v1',False,200),
+    ([20,24],90,None,True,200),
+])
+@pytest.mark.parametrize('panel', ['front_resolution', 'back_resolution'])
+def test_mesh_regeneration_guards_legacy_quadrant_resolution_semantics(
+    tmp_path, monkeypatch, sizes, depth, contract, stored, status, panel,
+) -> None:
+    import server.mesh.builder as mesh_builder
+
+    body = _solve_body(delay_ms=0)
+    request = SolveRequest.model_validate({**body, 'design': {
+        **body['design'], 'enclosure': {'depth':depth, panel:sizes},
+    }})
+    calls = []
+
+    async def fake_build(design, options, *, force_rebuild=False):
+        calls.append(design)
+        return {'msh_text':'regenerated'}
+
+    monkeypatch.setattr(mesh_builder, 'build_solver_mesh', fake_build)
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path)
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        row = _complete_job('legacy-resolution', request=request, mesh_discarded=not stored)
+        if stored:
+            row['task_metadata']['rating'] = 5
+        row['task_metadata']['symmetry'] = {'resolved_quadrants':1}
+        if contract:
+            row['task_metadata']['enclosure_resolution_contract'] = contract
+        store.create_job(row)
+        if stored:
+            store.store_mesh_artifact('legacy-resolution', 'original')
+        actual, raw, headers = await _request_with_headers(app, 'GET', '/api/mesh-artifact/legacy-resolution')
+        assert actual == status
+        if status == 410:
+            assert 'used only the first front/back value' in json.loads(raw)['detail']
+            assert calls == []
+            assert 'x-wg2-mesh-regenerated' not in headers
+        elif stored:
+            assert raw == b'original'
+            assert calls == []
+        else:
+            assert len(calls) == 1
+            assert calls[0].root.mesh.quadrants.constant_value() == 1
         await app.state.jobs_runtime.shutdown()
 
     asyncio.run(scenario())

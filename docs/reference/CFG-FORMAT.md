@@ -364,6 +364,10 @@ WG stores additional geometry controls in a `WG.Geometry` block in stamped
 WG design files, including rewritten ATH imports. The block has exactly one
 JSON `Payload`, with only `cross_section` and `depth_margin_mm` supported:
 
+ATH ignores `WG.Geometry`. Opening a saved WG `.cfg` in ATH therefore uses
+the default circular base section and default rear clearance, even when WG
+previews a non-default section or clearance.
+
 ```cfg
 WG.Geometry = {
 Payload = {"cross_section":{"exponent":4,"aspect_ratio":1.5},"depth_margin_mm":7}
@@ -385,3 +389,7 @@ q3 (-x,-y), q4 (+x,-y). Short lists repeat the last entry. Each non-positive
 entry uses the mouth resolution, matching the mesher. Every quadrant value
 reaches preview, solve and export; unequal reflected sizes disable the
 corresponding symmetry reduction.
+
+Older expression-valued resolutions remain loadable and editable. Preview,
+solve and export require one to four finite numbers and explain which
+unsupported expression must be replaced.

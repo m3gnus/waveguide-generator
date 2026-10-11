@@ -3742,14 +3742,32 @@
         "R-OSSE": 2,
         "ICW": 2
       },
-      "editor_bounds": {
-        "minimum": 0,
-        "maximum": null
-      },
+      "editor_bounds": null,
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Dimensionless superellipse exponent. 2 gives an ellipse; larger values make squarer sections. Sets the base section before morphing. Active guiding curves require exponent 2 and aspect ratio 1. FREEFORM uses its station outlines and native formulas require circular sections."
+      "description": "Dimensionless superellipse exponent. 2 gives an ellipse; larger values make squarer sections. Sets the base section before morphing. Active guiding curves require exponent 2 and aspect ratio 1. FREEFORM uses its station outlines and native formulas require circular sections.",
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE"
+          },
+          {
+            "path": "guiding_curve.curve_type",
+            "operator": "not_equals",
+            "value": 0
+          },
+          {
+            "path": "guiding_curve.width",
+            "operator": "not_equals",
+            "value": 0
+          }
+        ]
+      },
+      "disabled_reason": "Active guiding curves require cross-section exponent 2 and aspect ratio 1."
     },
     {
       "id": "cross_section.aspect_ratio",
@@ -3773,14 +3791,32 @@
         "R-OSSE": 1,
         "ICW": 1
       },
-      "editor_bounds": {
-        "minimum": 0,
-        "maximum": null
-      },
+      "editor_bounds": null,
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Dimensionless width-to-height scaling of the base section before morphing. 1 keeps equal extents for a scalar profile. Ellipses retain both mirror planes; rotated or azimuth-dependent profiles are checked by the mesher. Active guiding curves require ratio 1."
+      "description": "Dimensionless width-to-height scaling of the base section before morphing. 1 keeps equal extents for a scalar profile. Ellipses retain both mirror planes; rotated or azimuth-dependent profiles are checked by the mesher. Active guiding curves require ratio 1.",
+      "disabled_when": {
+        "operator": "all",
+        "conditions": [
+          {
+            "path": "formula",
+            "operator": "equals",
+            "value": "OSSE"
+          },
+          {
+            "path": "guiding_curve.curve_type",
+            "operator": "not_equals",
+            "value": 0
+          },
+          {
+            "path": "guiding_curve.width",
+            "operator": "not_equals",
+            "value": 0
+          }
+        ]
+      },
+      "disabled_reason": "Active guiding curves require cross-section exponent 2 and aspect ratio 1."
     },
     {
       "id": "enclosure.depth",
@@ -3839,10 +3875,7 @@
       "accepts_expression": false,
       "writable": true,
       "default_by_family": {},
-      "editor_bounds": {
-        "minimum": 0,
-        "maximum": null
-      },
+      "editor_bounds": null,
       "step": 0.1,
       "precision": 2,
       "options": [],
@@ -4121,7 +4154,12 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target element sizes in mm on the enclosure front baffle. Enter one value for every quadrant, or up to four comma-separated values: q1 (+x,+y), q2 (-x,+y), q3 (-x,-y), q4 (+x,-y). Short lists repeat their last value; 8,12 means 8,12,12,12. Non-positive entries use the mouth resolution. Unequal reflected quadrant sizes prevent that symmetry reduction."
+      "description": "Target element sizes in mm on the enclosure front baffle. Enter one value for every quadrant, or up to four comma-separated values: q1 (+x,+y), q2 (-x,+y), q3 (-x,-y), q4 (+x,-y). Short lists repeat their last value; 8,12 means 8,12,12,12. Non-positive entries use the mouth resolution. Unequal reflected quadrant sizes prevent that symmetry reduction.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
     },
     {
       "id": "enclosure.back_resolution",
@@ -4151,7 +4189,12 @@
       "step": 0.1,
       "precision": 2,
       "options": [],
-      "description": "Target element sizes in mm on the enclosure rear panel. Enter one value for every quadrant, or up to four comma-separated values: q1 (+x,+y), q2 (-x,+y), q3 (-x,-y), q4 (+x,-y). Short lists repeat their last value; 8,12 means 8,12,12,12. Non-positive entries use the mouth resolution. Unequal reflected quadrant sizes prevent that symmetry reduction."
+      "description": "Target element sizes in mm on the enclosure rear panel. Enter one value for every quadrant, or up to four comma-separated values: q1 (+x,+y), q2 (-x,+y), q3 (-x,-y), q4 (+x,-y). Short lists repeat their last value; 8,12 means 8,12,12,12. Non-positive entries use the mouth resolution. Unequal reflected quadrant sizes prevent that symmetry reduction.",
+      "visible_when": {
+        "path": "enclosure.depth",
+        "operator": "greater_than",
+        "value": 0
+      }
     },
     {
       "id": "mesh.angular_segments",

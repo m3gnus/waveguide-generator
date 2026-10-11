@@ -43,7 +43,12 @@ def test_parameter_catalog_is_versioned_unique_and_declarative() -> None:
     ParameterCatalog.model_validate(catalog)
     for field_id in ("cross_section.exponent", "cross_section.aspect_ratio", "enclosure.depth_margin_mm"):
         descriptor = next(field for field in catalog["parameters"] if field["id"] == field_id)
-        assert descriptor["editor_bounds"] == {"minimum": 0, "maximum": None}
+        assert descriptor["editor_bounds"] is None
+    for descriptor in catalog["parameters"]:
+        bounds = descriptor["editor_bounds"]
+        if bounds is not None:
+            assert isinstance(bounds["minimum"], (int, float))
+            assert isinstance(bounds["maximum"], (int, float))
 
 
 def test_design_schema_exposes_the_discriminated_families() -> None:

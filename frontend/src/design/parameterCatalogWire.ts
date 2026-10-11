@@ -36,7 +36,23 @@ function defaultValues(field: ParameterDefinition): Partial<Record<DesignFamily,
   }));
 }
 
+const CROSS_SECTION_CONDITIONS: FieldConditions = {
+  disabled_when: {
+    operator: 'all',
+    conditions: [
+      { path: 'formula', operator: 'equals', value: 'OSSE' },
+      { path: 'guiding_curve.curve_type', operator: 'not_equals', value: 0 },
+      { path: 'guiding_curve.width', operator: 'not_equals', value: 0 },
+    ],
+  },
+  disabled_reason: 'Active guiding curves require cross-section exponent 2 and aspect ratio 1.',
+};
+
 const FIELD_CONDITIONS: Record<string, FieldConditions> = {
+  'cross_section.exponent': CROSS_SECTION_CONDITIONS,
+  'cross_section.aspect_ratio': CROSS_SECTION_CONDITIONS,
+  'enclosure.front_resolution': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
+  'enclosure.back_resolution': { visible_when: { path: 'enclosure.depth', operator: 'greater_than', value: 0 } },
   'icw.L': { visible_when: { path: 'termination', operator: 'not_equals', value: 'rollback' } },
   'icw.R': {
     disabled_when: { path: 'coverage_angle', operator: 'greater_than', value: 0 },
@@ -104,9 +120,9 @@ function serializeField(field: ParameterDefinition) {
     accepts_expression: fieldAcceptsExpression(field),
     writable: field.kind !== 'indicator',
     default_by_family: defaultValues(field),
-    editor_bounds: field.min === undefined && field.max === undefined
+    editor_bounds: field.min === undefined || field.max === undefined
       ? null
-      : { minimum: field.min ?? null, maximum: field.max ?? null },
+      : { minimum: field.min, maximum: field.max },
     step: field.step ?? null,
     precision: field.precision ?? null,
     options: (field.options ?? []).map((option) => ({

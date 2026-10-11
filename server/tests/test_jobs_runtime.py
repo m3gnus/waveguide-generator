@@ -626,6 +626,7 @@ def test_completed_unrated_job_keeps_mesh_available_during_grace_window(
 
         job = await runtime.get_job(job_id)
         assert job["status"] == "complete"
+        assert runtime.store.get_job_row(job_id)["task_metadata"]["enclosure_resolution_contract"] == "per-quadrant-v1"
         assert job["has_mesh_artifact"] is True
         assert job["has_results"] is True
         assert job["solve_accuracy"] == "fast"

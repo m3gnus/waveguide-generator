@@ -2753,9 +2753,9 @@ export interface components {
         /** CatalogEditorBounds */
         CatalogEditorBounds: {
             /** Maximum */
-            maximum: number | null;
+            maximum: number;
             /** Minimum */
-            minimum: number | null;
+            minimum: number;
         };
         /** CatalogOption */
         CatalogOption: {
