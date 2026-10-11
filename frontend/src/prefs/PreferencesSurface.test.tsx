@@ -50,7 +50,7 @@ describe('preferences surfaces', () => {
     expect(host.textContent).toContain('Preferred manual export formats');
     expect(host.textContent).toContain('Automatic export formats');
     expect(host.textContent).toContain('Auto-export completed jobs');
-    expect(host.textContent).toContain('Auto-save solve mesh to Workspace');
+    expect(host.textContent).toContain('Auto-save solve mesh to Runs folder');
     const contourNames = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
       .find((input) => input.parentElement?.textContent?.includes('Show contour names'))!;
     expect(contourNames.checked).toBe(false);

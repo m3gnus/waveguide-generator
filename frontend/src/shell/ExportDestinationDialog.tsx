@@ -241,7 +241,7 @@ export function ExportDestinationDialog() {
         >{folder ?? (busy ? 'Reading the last folder used…' : 'No folder available')}</p>
         <p className="cad-settings-note">{destination?.remembered
           ? 'Where your last export went.'
-          : 'WG’s output folder, until an export goes somewhere else.'}</p>
+          : 'The Runs folder, until an export goes somewhere else.'}</p>
         <div className="settings-theme-options">
           <button disabled={busy} onClick={() => void choose()}><Icon name="folder"/>Choose folder…</button>
         </div>

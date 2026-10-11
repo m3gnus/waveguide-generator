@@ -27,7 +27,8 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from starlette.datastructures import UploadFile
 
-from server.platform.paths import data_paths, proposed_cadlink_dir
+from server.platform.paths import data_paths, proposed_cadlink_dir, default_folder_root, validate_windows_file_path
+from server.workspace.folders import FolderRoot
 from server.platform.process import background_process_kwargs
 from server.platform.acl_repair import Outcome, repair_path
 from server.platform.staging import publish_staging_directory
@@ -518,6 +519,7 @@ class WorkspaceState:
         self.legacy_defaults = tuple(
             Path(candidate).expanduser().resolve() for candidate in legacy_defaults
         )
+        self.folders: FolderRoot | None = None
         self._selected: Path | None = None
         self._loaded = False
         self._adopt_legacy_default()
@@ -584,13 +586,16 @@ class WorkspaceState:
         raw_path = str(payload.get("workspacePath") or "").strip()
         if not raw_path:
             return
-        candidate = Path(raw_path).expanduser().resolve()
+        candidate = Path(raw_path).expanduser().absolute()
         self._selected = candidate
         if not candidate.is_dir():
             logger.warning("Persisted workspace path is unavailable: %s", candidate)
 
     def select(self, path: Path) -> None:
-        resolved = path.expanduser().resolve()
+        if self.folders is not None:
+            self.folders.set_override("runs", path)
+            return
+        resolved = path.expanduser().absolute()
         if not resolved.is_dir():
             raise ValueError(f"Selected path is not a directory: {resolved}")
         _write_json_atomic(
@@ -734,7 +739,7 @@ class CadWorkspaceState(WorkspaceState):
             raw_path = str(payload.get("workspacePath") or "").strip()
             if not raw_path:
                 return
-            candidate = Path(raw_path).expanduser().resolve()
+            candidate = Path(raw_path).expanduser().absolute()
         except (OSError, ValueError, TypeError, json.JSONDecodeError, AttributeError):
             return
         if not candidate.is_dir() or not any(
@@ -784,14 +789,16 @@ class CadWorkspaceState(WorkspaceState):
         raw_path = str(payload.get(self.SETTINGS_KEY) or "").strip()
         if not raw_path:
             return
-        candidate = Path(raw_path).expanduser().resolve()
-        if candidate.is_dir():
-            self._selected = candidate
-        else:
+        candidate = Path(raw_path).expanduser().absolute()
+        self._selected = candidate
+        if not candidate.is_dir():
             logger.warning("Persisted WGLink path is unavailable: %s", candidate)
 
     def select(self, path: Path) -> None:
-        resolved = path.expanduser().resolve()
+        if self.folders is not None:
+            self.folders.set_override("cadlink", path)
+            return
+        resolved = path.expanduser().absolute()
         if not resolved.is_dir():
             raise ValueError(f"Selected path is not a directory: {resolved}")
         if not self._loaded:
@@ -901,7 +908,7 @@ def create_cad_workspace_router(state: CadWorkspaceState) -> APIRouter:
             payload.path
             if payload is not None
             else await asyncio.to_thread(
-                _select_workspace_folder, "Select WGLink folder", state.proposed_path
+                _select_workspace_folder, "Select WGLink folder", state.selected_path() or state._selected or state.proposed_path
             )
         )
         if selected:
@@ -982,6 +989,9 @@ def _write_export_sync(
             label = f"members[{index}].relative_path"
             segments = _path_segments(relative_path, label)
             destination = export_directory.joinpath(*segments).resolve()
+            validate_windows_file_path(destination)
+            staging_parent = export_directory if export_directory == workspace_root else export_directory.parent
+            validate_windows_file_path(staging_parent / (".wg2-export-staging-" + "0" * 12) / Path(*segments))
             _strictly_inside(destination, workspace_root, label)
             if destination == export_directory or export_directory not in destination.parents:
                 raise ValueError(f"{label} resolves outside the export subdirectory")
@@ -1413,23 +1423,75 @@ def create_workspace_router(
     return router
 
 
+def create_folder_root_router(folders: FolderRoot) -> APIRouter:
+    router = APIRouter(prefix="/api/folders", tags=["workspace"])
+
+    @router.get("/path")
+    async def root_path() -> dict[str, Any]:
+        return folders.info()
+
+    @router.post("/select")
+    async def root_select(payload: SelectWorkspaceRequest | None = None) -> dict[str, Any]:
+        selected = payload.path if payload is not None else await asyncio.to_thread(
+            _select_workspace_folder, "Select WG root folder", folders.root
+        )
+        if selected:
+            try:
+                folders.select(Path(selected))
+            except (OSError, ValueError) as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**folders.info(), "selected": bool(selected)}
+
+    @router.post("/open")
+    async def root_open() -> dict[str, Any]:
+        try:
+            folders.root.mkdir(parents=True, exist_ok=True)
+            subprocess.Popen(open_folder_command(folders.root), **background_process_kwargs())
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return folders.info()
+
+    return router
+
+
 def mount_workspace(
     application: FastAPI,
     *,
     default_path: Path | None = None,
     legacy_defaults: Sequence[Path] = (),
+    default_root: Path | None = None,
 ) -> WorkspaceState:
     state = WorkspaceState(
         Path(application.state.data_dir),
         default_path=default_path,
         legacy_defaults=legacy_defaults,
     )
+    cad_state = CadWorkspaceState(Path(application.state.data_dir))
+    folders = FolderRoot(
+        Path(application.state.data_dir),
+        default_root=default_root or default_folder_root(Path(application.state.data_dir)),
+        legacy_runs=state.default_path,
+        writer=_write_json_atomic,
+    )
+
+    def refresh() -> None:
+        for name, target in (("runs", state), ("cadlink", cad_state)):
+            target._loaded = False
+            target._selected = None
+            target.default_path = folders.effective(name)
+            if isinstance(target, CadWorkspaceState):
+                target.proposed_path = folders.effective(name)
+
+    folders.on_change = refresh
+    state.folders = cad_state.folders = folders
+    refresh()
+    application.state.folders = folders
     application.state.workspace = state
+    application.state.cad_workspace = cad_state
     destinations = ExportDestinationStore(state.settings_path.parent)
     application.state.export_destinations = destinations
+    application.include_router(create_folder_root_router(folders))
     application.include_router(create_workspace_router(state, destinations))
-    cad_state = CadWorkspaceState(Path(application.state.data_dir))
-    application.state.cad_workspace = cad_state
     application.include_router(create_cad_workspace_router(cad_state))
     return state
 

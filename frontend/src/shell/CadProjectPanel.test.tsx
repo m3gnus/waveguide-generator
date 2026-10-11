@@ -283,7 +283,7 @@ describe('CAD project history', () => {
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
       if (path === '/api/workspace/path') return json({ selected: true, path: stored });
-      if (path === '/api/workspace/select' && init?.method === 'POST') {
+      if (path === '/api/folders/select' && init?.method === 'POST') {
         stored = '/picked/projects';
         return json({ selected: true, path: stored });
       }
@@ -301,7 +301,7 @@ describe('CAD project history', () => {
     expect(menu.textContent).toContain('/exports');
 
     const open = [...menu.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('Open workspace folder'))!;
+      .find((button) => button.textContent?.includes('Open Runs folder'))!;
     await act(async () => { open.click(); await Promise.resolve(); });
     expect(globalThis.fetch).toHaveBeenCalledWith('/api/workspace/open', { method: 'POST' });
 
@@ -309,9 +309,9 @@ describe('CAD project history', () => {
     // output and WGLink folders use, so it works away from Chromium.
     act(() => host.querySelector<HTMLButtonElement>('.cad-overflow-trigger')!.click());
     const change = [...host.querySelectorAll<HTMLButtonElement>('.cad-overflow-menu button')]
-      .find((button) => button.textContent?.includes('Change workspace folder'))!;
+      .find((button) => button.textContent?.includes('Change WG root folder'))!;
     await act(async () => { change.click(); await Promise.resolve(); });
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/workspace/select', { method: 'POST' });
+    expect(globalThis.fetch).toHaveBeenCalledWith('/api/folders/select', { method: 'POST' });
     act(() => host.querySelector<HTMLButtonElement>('.cad-overflow-trigger')!.click());
     expect(host.querySelector<HTMLElement>('.cad-overflow-menu')!.textContent).toContain('/picked/projects');
   });

@@ -4,6 +4,7 @@ import { useRunNameSource } from '../jobs/runNameSource';
 import { EXPORT_FORMATS, GROUP_DELAY_UNITS, IMPEDANCE_DISPLAYS, MAP_REFERENCES, MATCH_INTERFACE_THEME, RESULT_PANEL_COUNTS, preferencesStore, usePreferences, type GroupDelayUnit, type ImpedanceDisplay, type JobSort, type MapReference } from './preferences';
 import { SMOOTHING_MODES, type SmoothingMode } from '../results/smoothing';
 import { Icon } from '../shell/icons';
+import { RootFolderControls } from '../shell/RootFolderControls';
 import { AnchoredPanel } from './AnchoredPanel';
 import { loadChartThemes, type ChartTheme } from './chartThemes';
 
@@ -38,7 +39,7 @@ export function ResultPanelCountControl() {
   </select></label>;
 }
 
-function ResultsPreferencesContent() {
+function ResultsPreferencesContent({ showFolders = true }: { showFolders?: boolean }) {
   const autoFormatsNoteId = useId();
   const preferences = usePreferences();
   const themes = useThemes();
@@ -46,7 +47,8 @@ function ResultsPreferencesContent() {
     ? themes : [{ id: preferences.chartTheme, label: preferences.chartTheme }, ...themes];
   return <section className="preferences-section">
     <h3 className="preferences-section-title">Results & export</h3>
-    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Files are saved under the Workspace folder, grouped as <code>&lt;design&gt;/&lt;run&gt;</code>, without browser download prompts. Automatic exports go in that run’s <code>exports</code> folder, beside the run archive.</p>
+    {showFolders && <div><h4>WG root folder</h4><RootFolderControls/></div>}
+    <p className="preferences-section-copy">Chart layout, processing, and automatic export defaults. Files are saved under the Runs folder, grouped as <code>&lt;design&gt;/&lt;run&gt;</code>, without browser download prompts. Automatic exports go in that run’s <code>exports</code> folder, beside the run archive.</p>
     <div className="preferences-grid">
       <ResultPanelCountControl/>
       <label className="ui-field">Smoothing<select aria-label="Smoothing" value={preferences.smoothing} onChange={(event) => preferencesStore.update({ smoothing: event.target.value as SmoothingMode })}>{SMOOTHING_MODES.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
@@ -92,14 +94,14 @@ function ResultsPreferencesContent() {
           job (server/jobs/retention.py). */}
       <label className="ui-check"><input type="checkbox" checked={preferences.autoCleanupResults} onChange={(event) => preferencesStore.update({ autoCleanupResults: event.target.checked })}/>Clean up old results automatically</label>
       <label className="ui-check"><input type="checkbox" checked={preferences.autoExportOnComplete} onChange={(event) => preferencesStore.update({ autoExportOnComplete: event.target.checked })}/>Auto-export completed jobs</label>
-      <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Workspace</label>
+      <label className="ui-check"><input type="checkbox" checked={preferences.autoDownloadMesh} onChange={(event) => preferencesStore.update({ autoDownloadMesh: event.target.checked })}/>Auto-save solve mesh to Runs folder</label>
     </div>
     {/* The two retentions must not be left to be discovered: results in the
-        run list are pruned only when automatic cleanup is on, the Workspace
+        run list are pruned only when automatic cleanup is on, the Runs
         folder never is. */}
     <p className="preferences-section-copy">{preferences.autoCleanupResults
       ? 'Results stay in the run list for 30 days, or until the run limit of 1,000 is passed — rating a run keeps it.'
-      : 'Results stay in the run list until you remove them.'} Archived runs are written to the Workspace folder and are kept until you delete them.{preferences.autoCleanupResults && !preferences.archiveRunsOnComplete && ' Archiving is off, so a solve you do not export leaves nothing behind.'}</p>
+      : 'Results stay in the run list until you remove them.'} Archived runs are written to the Runs folder and are kept until you delete them.{preferences.autoCleanupResults && !preferences.archiveRunsOnComplete && ' Archiving is off, so a solve you do not export leaves nothing behind.'}</p>
     <fieldset className="preferences-formats">
       <legend>Preferred manual export formats</legend>
       <p className="preferences-section-copy">Used by the Results toolbar Export button and each run’s primary Export action.</p>
@@ -116,14 +118,14 @@ function ResultsPreferencesContent() {
   </section>;
 }
 
-export function ResultsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef }: PreferencesSurfaceProps) {
+export function ResultsPreferencesSurface({ expanded = false, popover = false, onClose, anchorRef, showFolders = true }: PreferencesSurfaceProps & { showFolders?: boolean }) {
   if (popover) return <AnchoredPanel anchorRef={anchorRef ?? NO_ANCHOR} onClose={onClose} className="results-preferences-popover" label="Results and export preferences">
     <header><b>Results & export preferences</b><button type="button" aria-label="Close results preferences" onClick={onClose}><Icon name="close"/></button></header>
-    <div className="panel-preferences-scroll"><ResultsPreferencesContent/></div>
+    <div className="panel-preferences-scroll"><ResultsPreferencesContent showFolders={showFolders}/></div>
   </AnchoredPanel>;
   return <details open={expanded || undefined} className="preferences-surface">
     <summary style={{ color: 'var(--fg2)', cursor: 'pointer', fontSize: 'var(--text-micro)' }}>Results & export preferences</summary>
-    <ResultsPreferencesContent/>
+    <ResultsPreferencesContent showFolders={showFolders}/>
   </details>;
 }
 

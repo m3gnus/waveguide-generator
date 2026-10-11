@@ -163,7 +163,7 @@ export async function sendDesignToCad(
   if (!pathResponse.ok) throw new Error(await errorMessage(pathResponse));
   const workspace = await pathResponse.json() as { selected?: boolean; path?: string };
   if (!workspace.selected) {
-    throw new Error('Choose a WGLink folder in Settings → CAD Link before sending to Fusion.');
+    throw new Error('Check the WGLink folder in Settings → WG root folder before sending to Fusion.');
   }
 
   const response = await fetcher('/api/export/wglink', {

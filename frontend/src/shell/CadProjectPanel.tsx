@@ -256,14 +256,14 @@ function ProjectOverflowMenu({ project, onNotice, onError }: {
       aria-expanded={open}
       aria-haspopup="menu"
       aria-label="Project folders"
-      title="Project and workspace folders"
+      title="Project and Runs folders"
       onClick={() => setOpen((value) => !value)}
     >⋯</button>
     {open && <div role="menu" aria-label="Project folders" className="cad-project-menu cad-overflow-menu">
       {project && <button role="menuitem" title="Open this project's archive folder: every run's files, beside the captured Fusion documents." onClick={() => void reveal()}><Icon name="folder"/>Open project folder</button>}
-      <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the workspace folder every CAD project is archived under. The same folder as Settings → Workspace folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open workspace folder</button>
-      <button role="menuitem" disabled={folder.busy !== null} title="Choose a different workspace folder. Changes the same setting as Settings → Workspace folder." onClick={() => { setOpen(false); void folder.select(); }}>Change workspace folder…</button>
-      <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'No workspace folder selected' : 'Loading…')}</div>
+      <button role="menuitem" disabled={!folder.path || folder.busy !== null} title="Open the Runs folder every CAD project is archived under. Its effective path is shown in Settings → WG root folder." onClick={() => { setOpen(false); void folder.open(); }}><Icon name="folder"/>Open Runs folder</button>
+      <button role="menuitem" disabled={folder.busy !== null} title="Choose the WG root folder. Existing overrides and files are kept." onClick={() => { setOpen(false); void folder.select(); }}>Change WG root folder…</button>
+      <div className="cad-overflow-path" title={folder.path ?? undefined}>{folder.path ?? (folder.loaded ? 'Runs folder unavailable' : 'Loading…')}</div>
       {folder.error && <div className="cad-projects-folder-error" role="status">{folder.error}</div>}
     </div>}
   </div>;

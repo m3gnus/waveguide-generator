@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import ctypes
+import ntpath
+import uuid
 import os
 from pathlib import Path
 import platform
@@ -167,7 +170,7 @@ def documents_root(
 
     if os_name == "Windows":
         profile = env.get("USERPROFILE")
-        documents = (Path(profile) if profile else home_dir) / "Documents"
+        documents = windows_documents_dir() or ((Path(profile) if profile else home_dir) / "Documents")
     else:
         configured = env.get("XDG_DOCUMENTS_DIR")
         documents = Path(configured) if configured else home_dir / "Documents"
@@ -181,13 +184,7 @@ def default_runs_dir(**kwargs: object) -> Path:
 
 
 def proposed_cadlink_dir(**kwargs: object) -> Path:
-    """What the CAD-link folder picker starts on. Never an implicit fallback.
-
-    ``CadWorkspaceState`` deliberately has no default, because hiding the CAD
-    exchange somewhere implicit makes first-time setup impossible to understand
-    and lets an output-folder change disconnect Fusion. This only makes
-    accepting the obvious location one click instead of a decision.
-    """
+    """Default CAD exchange folder beneath the user-visible root."""
 
     return documents_root(**kwargs) / CADLINK_SUBDIRECTORY  # type: ignore[arg-type]
 
@@ -219,3 +216,65 @@ def ensure_data_layout(
     for path in (paths.root, paths.db, paths.logs, paths.locks, paths.workspace):
         path.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+def windows_documents_dir() -> Path | None:
+    """Ask Windows for Documents, including OneDrive/folder redirection."""
+    class GUID(ctypes.Structure):
+        _fields_ = [("data1", ctypes.c_uint32), ("data2", ctypes.c_uint16),
+                    ("data3", ctypes.c_uint16), ("data4", ctypes.c_ubyte * 8)]
+
+    identifier = GUID.from_buffer_copy(uuid.UUID("fdd39ad0-238f-46af-adb4-6c85480369c7").bytes_le)
+    output = ctypes.c_void_p()
+    try:
+        shell = ctypes.windll.shell32
+        ole = ctypes.windll.ole32
+        shell.SHGetKnownFolderPath.argtypes = [ctypes.POINTER(GUID), ctypes.c_uint32,
+                                               ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        shell.SHGetKnownFolderPath.restype = ctypes.c_long
+        ole.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+        if shell.SHGetKnownFolderPath(ctypes.byref(identifier), 0, None, ctypes.byref(output)) != 0:
+            return None
+        return Path(ctypes.wstring_at(output)) if output.value else None
+    except (AttributeError, OSError, ValueError):
+        return None
+    finally:
+        if output.value:
+            ole.CoTaskMemFree(output)
+
+
+def same_folder(left: str | os.PathLike[str], right: str | os.PathLike[str],
+                *, system: str | None = None) -> bool:
+    """Compare spelling first, then existing filesystem aliases; never rewrite it."""
+    module = ntpath if (system or platform.system()) == "Windows" else os.path
+    if module.normcase(module.normpath(str(left))) == module.normcase(module.normpath(str(right))):
+        return True
+    try:
+        return os.path.samefile(left, right)
+    except (OSError, ValueError):
+        return False
+
+
+def default_folder_root(data_dir: Path, *, isolated: bool = False, **kwargs: object) -> Path:
+    return data_dir / "workspace-root" if isolated else documents_root(**kwargs)
+
+
+def validate_folder_root(path: str | os.PathLike[str], *, system: str | None = None) -> None:
+    """Reserve Windows MAX_PATH space for nested run exports and staging names.
+
+    Project/run names are user supplied. Reserve 180 characters below runs for
+    their names plus export/member/staging components; never truncate a choice.
+    """
+    if (system or platform.system()) == "Windows":
+        units = len(ntpath.join(str(path), "runs").encode("utf-16-le")) // 2
+        if units + 180 >= 260:
+            raise ValueError("The WG root folder path is too long for Windows run files. "
+                             "Choose a shorter path (at most 74 characters) to leave room "
+                             "for project names, run names and exports.")
+
+
+def validate_windows_file_path(path: str | os.PathLike[str], *, system: str | None = None) -> None:
+    """Refuse a concrete run/member path before creating any files on Windows."""
+    if (system or platform.system()) == "Windows" and len(str(path).encode("utf-16-le")) // 2 >= 260:
+        raise ValueError("The run file path is too long for Windows. Choose a shorter "
+                         "WG root folder or shorter project and run names.")

@@ -1,21 +1,11 @@
+import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import {
   collisionFrom,
   writeConfirmingReplacements,
   type ConfirmReplacements,
 } from './exportDestination';
 
-/**
- * The one folder WG writes into: run exports and CAD project archives alike.
- *
- * A CAD project's archive is `<workspace>/<project>`, so "the projects folder"
- * and "the output folder" are the same setting seen from two panels. It is
- * exposed here once rather than fetched separately by each surface, so the two
- * can never show different paths.
- *
- * Selection happens on the server, in the native picker, exactly as v1 did: a
- * directory picker in the browser exists only in Chromium and would leave WG
- * unusable in every other browser and behind a remote host.
- */
+/** Effective Runs folder. Root changes are selected through /api/folders. */
 export interface WorkspaceFolder {
   path: string | null;
   selected: boolean;
@@ -26,7 +16,7 @@ async function errorMessage(response: Response): Promise<string> {
     const body = await response.json() as { detail?: unknown };
     if (typeof body.detail === 'string') return body.detail;
   } catch { /* the status is still worth reporting */ }
-  return `Workspace folder request failed (${response.status})`;
+  return `Runs folder request failed (${response.status})`;
 }
 
 async function read(response: Response): Promise<WorkspaceFolder> {
@@ -47,21 +37,25 @@ export async function openWorkspaceFolder(fetcher: typeof fetch = fetch): Promis
 }
 
 /**
- * Choose the folder, or accept one that was typed.
+ * Choose the WG root folder, returning the effective Runs folder.
  *
  * With no path the server opens its native picker; with one it takes the path
- * as given. The request carries no body in the first case so that a server
- * predating the typed form still answers it.
+ * as given. With no body the server starts the picker at the current root.
  */
 export async function selectWorkspaceFolder(
   path?: string,
   fetcher: typeof fetch = fetch,
 ): Promise<WorkspaceFolder> {
-  return read(await fetcher('/api/workspace/select', path ? {
+  const response = await fetcher('/api/folders/select', path ? {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path }),
-  } : { method: 'POST' }));
+  } : { method: 'POST' });
+  if (!response.ok) throw new Error(await errorMessage(response));
+  const payload = await response.json() as { selected?: boolean };
+  const folder = await getWorkspaceFolder(fetcher);
+  if (payload.selected) cadWorkspaceSelection.noteSelection(true);
+  return { ...folder, selected: payload.selected === true };
 }
 
 export interface OutputFolderWrite {

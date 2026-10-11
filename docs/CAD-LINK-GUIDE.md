@@ -31,12 +31,13 @@ WG and using the results viewer.
 3. Start Fusion. Under **Utilities → Scripts and Add-Ins → Add-Ins**, select
    **WGLink**, run it if needed, and tick **Run on Startup**. Its commands appear
    in the **WGLink** panel under **Utilities**. Keep only one WGLink registration.
-4. In WG, open **Settings → CAD Link** and choose the **WGLink folder**. Use a
-   stable local folder both applications can write; the picker suggests
-   `Documents/Waveguide Generator/cadlink`. WG creates `wglink/` for outgoing
-   bundles and `wgreturn/` for returns beneath it. WG and Fusion share this
-   setting; you do not set a second path in Fusion. This exchange folder is
-   separate from **Workspace**, which holds your saved run files.
+4. In WG, open **Settings → WG root folder**. The default is
+   `Documents/Waveguide Generator`: its `cadlink/` child is the **WGLink folder**,
+   containing `wglink/` for outgoing bundles and `wgreturn/` for returns. Its
+   `runs/` child is the **Runs folder**, containing run archives and captured CAD
+   documents. Earlier folder choices are kept as read-only overrides; choosing a
+   root moves no files. WG and Fusion share the mirrored WGLink folder setting,
+   so you do not set a second path in Fusion.
 5. Keep WG running while using **Send to WG** or **Solve in WG**. These commands
    hand a request to WG; they do not launch WG for you.
 

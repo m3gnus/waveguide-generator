@@ -1131,8 +1131,11 @@ def test_v1_task_scratch_is_never_adopted_as_an_export_folder(
         data_dir=data, workspace_dir=documents, solver_warmup=False
     )
 
-    assert application.state.workspace.selected_path() is None
-    assert application.state.workspace.path() == documents.resolve()
+    expected = data / "workspace-root" / "runs"
+    assert application.state.workspace.selected_path() == expected
+    assert application.state.workspace.path() == expected
+    assert application.state.folders.overrides == {}
+    assert (scratch / "task.manifest.json").read_text() == "{}"
 
 
 def test_workspace_select_accepts_a_typed_folder_without_the_native_picker(

@@ -6,14 +6,8 @@ import {
   type WorkspaceFolder,
 } from '../api/workspace';
 
-/**
- * One folder, shown in three places.
- *
- * Settings names it twice -- once as the output workspace, once as the folder
- * CAD projects are archived in -- and the CAD Link panel shows it beside the
- * project it belongs to. They are the same setting, so they share this state:
- * choosing a new folder in any of them must not leave the other two quoting the
- * old path until the dialog is next opened.
+/** Effective Runs folder shared by the run list and CAD project menu.
+ * Selecting changes the root while keeping migrated overrides in place.
  */
 export interface WorkspaceFolderStore extends WorkspaceFolder {
   /** Undefined until the first read answers; the surfaces say "Loading…". */

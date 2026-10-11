@@ -1,12 +1,7 @@
 import { retryBlockedExport } from '../jobs/autoExportOwner';
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { isActiveJobStatus, jobsSocket, type JobItem } from '../api/jobsSocket';
-import {
-  getWorkspaceFolder,
-  openWorkspaceFolder,
-  selectWorkspaceFolder,
-  type WorkspaceFolder,
-} from '../api/workspace';
+import { useWorkspaceFolder } from './WorkspaceFolderControls';
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign } from '../jobs/jobDesign';
@@ -27,55 +22,23 @@ import { cadJobOperationId } from '../jobs/cadSolve';
 import { CadSolveInputs } from './CadSolveInputs';
 import { SolveProgressView, useSolveClock } from './solveProgress';
 
-/**
- * The output folder, stated where runs are read rather than buried in settings.
- *
- * Every export -- automatic, run-result and File menu alike -- is written by
- * the backend into this one folder. The desktop window is a WebView2 host with
- * no download shelf, so nothing else in the application tells the user where a
- * file just went; an export that does not name its destination is
- * indistinguishable from one that silently failed.
- */
+/** Show the effective Runs folder and choose the shared WG root folder. */
 function OutputFolderBar() {
-  const [folder, setFolder] = useState<WorkspaceFolder | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    // A folder that cannot be read yet is not news: the button already reads
-    // "Choose output folder", which is the right affordance either way. Only a
-    // failure the user asked for is worth a message, and never as a
-    // `role="alert"` competing with the run errors in this same column.
-    void getWorkspaceFolder()
-      .then((value) => { if (!cancelled) setFolder(value); })
-      .catch(() => undefined);
-    return () => { cancelled = true; };
-  }, []);
-
-  async function run(action: () => Promise<WorkspaceFolder>) {
-    setBusy(true);
-    setError(null);
-    try { setFolder(await action()); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
-    finally { setBusy(false); }
-  }
-
-  const path = folder?.path ?? null;
+  const { path, busy, error, select, open } = useWorkspaceFolder();
   return <div className="jobs-output-folder">
     <Icon name="folder"/>
     <button
       className="jobs-output-folder-path"
-      disabled={busy}
-      title={path ? `Exports are written to ${path}. Click to choose a different folder.` : 'Choose where exports are written'}
-      onClick={() => void run(() => selectWorkspaceFolder())}
-    >{path ? middleEllipsis(path, 30) : 'Choose output folder…'}</button>
+      disabled={busy !== null}
+      title={path ? `Runs folder: ${path}. Click to choose the WG root folder; earlier choices stay as overrides.` : 'Choose the WG root folder'}
+      onClick={() => void select()}
+    >{path ? middleEllipsis(path, 30) : 'Choose WG root folder…'}</button>
     <button
       className="jobs-output-folder-open"
-      aria-label="Open output folder"
-      title="Open the output folder"
-      disabled={busy || !path}
-      onClick={() => void run(() => openWorkspaceFolder())}
+      aria-label="Open Runs folder"
+      title="Open the Runs folder"
+      disabled={busy !== null || !path}
+      onClick={() => void open()}
     ><Icon name="expand"/></button>
     {error && <span className="jobs-output-folder-error">{error}</span>}
   </div>;
@@ -322,7 +285,7 @@ const JobCard = memo(function JobCard({ job, now, selected, retryJob, onError, o
       {meshWarnings(job).map((warning) => <div key={warning} className="job-warning" title={warning}>{warning}</div>)}
       {Object.values(job.auto_export_formats).some((format) => format.status === 'blocked') && <div className="job-warning" role="status">
         Automatic export blocked: {[...new Set(Object.values(job.auto_export_formats).filter((format) => format.status === 'blocked').map((format) => format.reason))].join(' ')}
-        <p>Choose another Workspace folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
+        <p>Choose another WG root folder or resolve the existing files, then retry. Retry preserves existing files and does not overwrite them.</p>
         <button type="button" onClick={() => { void retryBlockedExport(job.id).catch((error) => onError(error instanceof Error ? error.message : String(error))); }}>Retry automatic export</button>
       </div>}
       <Rating job={job} onError={onError}/>

@@ -1,3 +1,4 @@
+import { resetWorkspaceFolderStore } from '../stores/workspaceFolder';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -889,12 +890,13 @@ describe('jobs panel run list', () => {
   });
 });
 
-describe('jobs panel output folder', () => {
+describe('jobs panel Runs folder', () => {
   let host: HTMLDivElement;
   let root: Root;
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    resetWorkspaceFolderStore();
     localStorage.clear();
     preferencesStore.resetForTests();
     host = document.createElement('div');
@@ -919,7 +921,7 @@ describe('jobs panel output folder', () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
       calls.push(String(input));
-      const chosen = calls.includes('/api/workspace/select');
+      const chosen = calls.includes('/api/folders/select');
       return new Response(
         JSON.stringify({ path: chosen ? 'C:/Chosen' : 'C:/Documents/WG', selected: chosen }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
@@ -932,7 +934,7 @@ describe('jobs panel output folder', () => {
     expect(folder.textContent).toBe('C:/Documents/WG');
 
     await act(async () => folder.click());
-    expect(calls).toContain('/api/workspace/select');
+    expect(calls).toContain('/api/folders/select');
     expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('C:/Chosen');
   });
 
@@ -941,7 +943,7 @@ describe('jobs panel output folder', () => {
 
     await act(async () => root.render(<JobsPanel/>));
 
-    expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('Choose output folder…');
+    expect(host.querySelector('.jobs-output-folder-path')?.textContent).toBe('Choose WG root folder…');
     // A folder that could not be read is not an alert: it must not crowd out
     // the run errors that share this column.
     expect(host.querySelector('.jobs-output-folder [role="alert"]')).toBeNull();

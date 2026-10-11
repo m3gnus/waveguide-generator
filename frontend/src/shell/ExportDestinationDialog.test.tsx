@@ -91,7 +91,7 @@ describe('the export destination dialog', () => {
     await ask();
 
     expect(document.querySelector('.export-dialog')?.textContent)
-      .toContain('WG’s output folder, until an export goes somewhere else.');
+      .toContain('The Runs folder, until an export goes somewhere else.');
   });
 
   it('opens the platform picker on request and offers what it returned', async () => {

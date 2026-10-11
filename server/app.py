@@ -49,7 +49,7 @@ from server.platform.acl_migration import (
     legacy_acl_repair_feedback,
     repair_legacy_acls,
 )
-from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, resolve_data_dir
+from server.platform.paths import DATA_DIR_ENV, app_root, default_runs_dir, default_folder_root, resolve_data_dir
 from shared.build_identity import build_identity, build_label
 from server.preview.service import mount_preview
 from server.settings import SettingsStore, mount_settings
@@ -549,7 +549,7 @@ def create_app(
     update_staging_root: str | Path | None = None,
     advertised_port: int | None = None,
 ) -> FastAPI:
-    """Assemble an app instance without creating persistent directories.
+    """Assemble the app and initialize folder mirrors under caller ownership.
 
     Explicit callers may set ``solver_warmup`` to exercise AUTO's selected
     physical solver in a background thread at boot. It defaults to off because
@@ -575,6 +575,41 @@ def create_app(
     application.state.started = started
     application.state.data_dir = resolved_data_dir
     application.state.advertised_port = advertised_port
+    isolated_data_dir = (
+        data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
+        if adopt_legacy_workspace is None else not adopt_legacy_workspace
+    )
+    if workspace_dir is not None:
+        resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
+        # Only the checkout's ``output`` is a former *export* destination. The
+        # data directory's ``workspace`` is v1 task scratch -- one UUID folder
+        # per migrated job, holding manifests and raw results -- and adopting
+        # that as somebody's export folder would bury their runs among hundreds
+        # of them, inside a directory Finder hides.
+        # A data override means isolation, so the checkout's output is not
+        # adopted either. ``create_app`` cannot tell an override from the
+        # launcher's ordinary resolved data root, so the launcher says which
+        # it is; embedded and test callers default to isolation.
+        adopt = (
+            not isolated_data_dir if adopt_legacy_workspace is None else adopt_legacy_workspace
+        )
+        legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,) if adopt else ()
+    elif not isolated_data_dir:
+        resolved_workspace_dir = default_runs_dir()
+        legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)
+    else:
+        # Argument and environment overrides isolate implicit output as well
+        # as application state. Saved workspace selections still take priority.
+        resolved_workspace_dir = resolved_data_dir / "workspace"
+        legacy_workspace_dirs = ()
+    # The production launcher holds InstanceLock here. Finish migration before
+    # the jobs runtime or any other router can consume user-visible paths.
+    workspace_state = mount_workspace(
+        application,
+        default_path=resolved_workspace_dir,
+        legacy_defaults=legacy_workspace_dirs,
+        default_root=default_folder_root(resolved_data_dir, isolated=isolated_data_dir),
+    )
     application.add_exception_handler(RequestValidationError, _request_validation_error)
     extra_ws_origins = parse_extra_websocket_origins(
         os.environ.get("WG2_EXTRA_WS_ORIGINS")
@@ -946,35 +981,6 @@ def create_app(
         settings=settings_store,
     )
     mount_integration(application)
-    isolated_data_dir = data_dir is not None or bool(os.environ.get(DATA_DIR_ENV))
-    if workspace_dir is not None:
-        resolved_workspace_dir = Path(workspace_dir).expanduser().resolve()
-        # Only the checkout's ``output`` is a former *export* destination. The
-        # data directory's ``workspace`` is v1 task scratch -- one UUID folder
-        # per migrated job, holding manifests and raw results -- and adopting
-        # that as somebody's export folder would bury their runs among hundreds
-        # of them, inside a directory Finder hides.
-        # A data override means isolation, so the checkout's output is not
-        # adopted either. ``create_app`` cannot tell an override from the
-        # launcher's ordinary resolved data root, so the launcher says which
-        # it is; embedded and test callers default to isolation.
-        adopt = (
-            not isolated_data_dir if adopt_legacy_workspace is None else adopt_legacy_workspace
-        )
-        legacy_workspace_dirs: tuple[Path, ...] = (LEGACY_WORKSPACE_DIR,) if adopt else ()
-    elif not isolated_data_dir:
-        resolved_workspace_dir = default_runs_dir()
-        legacy_workspace_dirs = (LEGACY_WORKSPACE_DIR,)
-    else:
-        # Argument and environment overrides isolate implicit output as well
-        # as application state. Saved workspace selections still take priority.
-        resolved_workspace_dir = resolved_data_dir / "workspace"
-        legacy_workspace_dirs = ()
-    workspace_state = mount_workspace(
-        application,
-        default_path=resolved_workspace_dir,
-        legacy_defaults=legacy_workspace_dirs,
-    )
     application.state.acl_repair_feedback = {"platform": "other", "roots": []}
 
     async def _repair_legacy_acls() -> None:

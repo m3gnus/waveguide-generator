@@ -491,10 +491,10 @@ until you answer, and cancelling leaves the folder exactly as it was. Files that
 are not there yet, and files that are already byte-identical, are not part of
 that question.
 
-This is separate from the output folder: choosing a destination for one export
-never moves the **Workspace folder** that runs, archives and CAD projects live
+This is separate from the WG root folder: choosing a destination for one export
+never moves the **Runs folder** that runs, archives and CAD projects live
 in. Automatic post-run export and the run archive are unaffected and never
-interrupt a solve with a dialog -- they keep writing into the Workspace folder.
+interrupt a solve with a dialog -- they keep writing into the Runs folder.
 The folder picker opens on the machine running WG. When that machine has no
 desktop session to open it on — a tunnelled or headless install — type the path
 under *Enter a folder path instead*.
@@ -539,10 +539,23 @@ To save the retained solve mesh as a Gmsh `.msh` file, enable **Settings → Job
 Auto-save solve mesh to Workspace**. It saves available job meshes in the Workspace
 folder automatically. The run archive also includes the exact retained solve mesh.
 
+### WG root folder
+
+Choose **Settings → WG root folder**, or use the same chooser in Results & export
+preferences. The default is `Documents/Waveguide Generator`, with the **WGLink
+folder** in `cadlink/` and the **Runs folder** in `runs/`. With an explicit data
+folder override, the default is `<data>/workspace-root`.
+
+Changing the root moves no files. Earlier choices that differ from its children
+are kept as read-only overrides, marked “kept from an earlier setup”. These
+folders are never consolidated or deleted. One-off export destinations remain
+independent. [Folder migration and rollback](architecture/FOLDERS.md) describes
+the compatibility mirrors that preserve choices when running an older version.
+
 ### The run archive
 
-Files are written to the **Workspace folder** — `Documents/Waveguide Generator/runs`
-unless another is chosen — grouped by design rather than by how the run was produced:
+Files are written to the **Runs folder** — `Documents/Waveguide Generator/runs`
+unless an earlier folder choice is kept — grouped by design rather than by how the run was produced:
 
 ```
 Documents/Waveguide Generator/

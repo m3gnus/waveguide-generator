@@ -717,7 +717,7 @@ describe('result exporters', () => {
       result: polar, jobStem: 'horn_1', preferences: preferencesStore.getSnapshot(), fetcher,
     }, ['polar_frd']);
 
-    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/workspace/path', '/api/workspace/select']);
+    expect(fetcher.mock.calls.map(([input]) => String(input))).toEqual(['/api/workspace/path', '/api/folders/select']);
     expect(bundle).toEqual({
       files: [], failures: [{ format: 'polar_frd', reason: 'Workspace selection was cancelled. No files were written.' }],
     });

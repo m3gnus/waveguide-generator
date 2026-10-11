@@ -103,9 +103,9 @@ def run_workspace_startup(application) -> None:
 
 
 def assert_isolated(application, probe, data: Path) -> None:
-    expected = data / "workspace"
+    expected = data / "workspace-root" / "runs"
     assert application.state.workspace.path() == expected
-    assert application.state.workspace.selected_path() is None
+    assert application.state.workspace.selected_path() == expected
     assert expected.is_dir()
     assert not (probe.home / "Documents").exists()
     assert probe.repaired == [(data, expected)]
@@ -113,7 +113,7 @@ def assert_isolated(application, probe, data: Path) -> None:
         path == probe.legacy or path.is_relative_to(probe.home / "Documents")
         for path in probe.enumerated
     )
-    assert not (data / "workspace_settings.json").exists()
+    assert json.loads((data / "workspace_settings.json").read_text())["workspacePath"] == str(expected)
 
 
 @pytest.mark.parametrize("source", ["argument", "environment"])
@@ -144,16 +144,16 @@ def test_data_override_with_explicit_workspace_default_skips_legacy_adoption(
         monkeypatch.delenv(DATA_DIR_ENV)
     else:
         monkeypatch.setenv(DATA_DIR_ENV, str(data))
-    expected = data / "exports"
+    expected = data / "workspace-root" / "runs"
     with forbid_access(isolated_startup.home / "Documents", isolated_startup.legacy):
         application = app_module.create_app(
             workspace_dir=expected, **({"data_dir": data} if source == "argument" else {}),
         )
         run_workspace_startup(application)
     assert application.state.workspace.path() == expected
-    assert application.state.workspace.selected_path() is None
+    assert application.state.workspace.selected_path() == expected
     assert isolated_startup.repaired == [(data, expected)]
-    assert not (data / "workspace_settings.json").exists()
+    assert json.loads((data / "workspace_settings.json").read_text())["workspacePath"] == str(expected)
 
 
 @pytest.mark.parametrize("source", ["argument", "environment", "absent", "empty"])
@@ -209,10 +209,10 @@ def test_launcher_startup_preserves_data_override_intent(
             isolated_startup.legacy if isolated_startup.legacy.exists()
             else isolated_startup.documents
         )
-        assert workspace.default_path == isolated_startup.documents
+        assert workspace.default_path == expected
         assert workspace.path() == expected
         assert workspace.selected_path() == (
-            isolated_startup.legacy if isolated_startup.legacy.exists() else None
+            isolated_startup.legacy if isolated_startup.legacy.exists() else isolated_startup.documents
         )
         assert isolated_startup.repaired == [(resolve_data_dir(), expected)]
 
@@ -230,12 +230,12 @@ def test_no_data_override_keeps_documents_and_legacy_adoption(
     monkeypatch.setenv("XDG_DATA_HOME", str(isolated_startup.home / ".local" / "share"))
     application = app_module.create_app()
     run_workspace_startup(application)
-    assert application.state.workspace.default_path == isolated_startup.documents
     expected = (
         isolated_startup.legacy if isolated_startup.legacy.exists()
         else isolated_startup.documents
     )
     assert application.state.workspace.path() == expected
+    assert application.state.workspace.default_path == expected
     assert isolated_startup.repaired == [(resolve_data_dir(), expected)]
 
 

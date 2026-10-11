@@ -645,7 +645,7 @@ async function writeManualPolarFrd(
   if (!pathResponse.ok) throw await responseError(pathResponse);
   let workspace = await pathResponse.json() as { selected?: boolean };
   if (!workspace.selected) {
-    const selectResponse = await fetcher('/api/workspace/select', { method: 'POST' });
+    const selectResponse = await fetcher('/api/folders/select', { method: 'POST' });
     if (!selectResponse.ok) throw await responseError(selectResponse);
     workspace = await selectResponse.json() as { selected?: boolean };
     if (!workspace.selected) throw new Error('Workspace selection was cancelled. No files were written.');
