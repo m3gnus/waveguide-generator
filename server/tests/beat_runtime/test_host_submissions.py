@@ -125,6 +125,9 @@ def test_idle_engine_termination_hang_is_bounded(launch):
     assert children[0].returncode == 0
     assert r.read_record(record.identifier, directory) is None
     assert events(key)[-1]['type'] == 'termination_hung'
+    # Bounded at the process level too: the host skipped interpreter shutdown.
+    log = r.log_path(record.identifier, r.private_directory(directory)).read_text(encoding='utf-8')
+    assert 'retirement failed; exiting without interpreter shutdown' in log
 
 
 def test_adoption_from_second_wg_process_preserves_provable_engine_identity(launch):

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+import contextlib
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+from types import SimpleNamespace as NS
 
 import pytest
 
@@ -257,3 +259,77 @@ def test_windows_owned_launcher_bootstrap_independent_of_executable_name(launch,
     monkeypatch.setattr(sys, 'executable', executable)
     monkeypatch.setattr(r, 'process_start_identity', lambda pid: 'host-start')
     assert spawn._bootstrap_record(raw, key, directory, 100, 'launcher-start') == record
+
+
+@pytest.fixture
+def contained_launch(launch, monkeypatch):
+    from server.platform import job_start, process_tree
+
+    key, directory, _ = launch
+    directory = r.private_directory(directory)
+    observed = []
+    state = NS(fired=True, job_present=True, denied=False, armed=False)
+    job = NS(close=lambda: observed.append(("close",)),
+             terminate=lambda: observed.append(("terminate",)))
+
+    @contextlib.contextmanager
+    def start(assign, *, required, subject):
+        observed.append(("arm", required, subject))
+        state.armed = True
+        state.assign = assign
+        state.started = job_start.JobStart()
+        try:
+            yield state.started
+        finally:
+            state.armed = False
+            observed.append(("disarm",))
+
+    def confine(handle, *, subject):
+        assert state.armed
+        observed.append(("assign", handle, subject))
+        return job if state.job_present else None
+
+    child = NS(pid=123, kill=lambda: observed.append(("kill",)),
+               wait=lambda timeout=None: observed.append(("wait", timeout)))
+
+    def popen(command, **kwargs):
+        assert state.armed
+        observed.append(("popen", command[-2:], kwargs["creationflags"]))
+        if state.denied and kwargs["creationflags"] & spawn.CREATE_BREAKAWAY_FROM_JOB:
+            raise OSError(13, "Access denied", None, 5)
+        if state.fired:
+            state.started.fired = True
+            state.started.job = state.assign(child.pid, 456)
+        return child
+
+    monkeypatch.setattr(job_start, "windows_job_start", start)
+    monkeypatch.setattr(process_tree, "confine_to_job_owned_by", confine)
+    monkeypatch.setattr(spawn.subprocess, "Popen", popen)
+    monkeypatch.setattr(spawn.threading, "Thread", lambda **kwargs: NS(start=lambda: None))
+    return key, directory, observed, state, child
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows launch containment")
+@pytest.mark.parametrize("denied", [False, True])
+def test_windows_launch_closes_server_job_copy_after_both_armed_attempts(contained_launch, denied):
+    key, directory, observed, state, child = contained_launch
+    state.denied = denied
+    assert spawn._launch(key, directory, 1800, 10) is child
+    expected = [("arm", True, "the BEAT host"),
+                ("popen", ["--job-breakaway", "granted"], 0x01000208)]
+    if denied:
+        expected.append(("popen", ["--job-breakaway", "refused"], 0x208))
+    assert observed == [*expected, ("assign", 456, "the BEAT host"), ("disarm",), ("close",)]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows launch containment")
+@pytest.mark.parametrize("fired,job_present", [(False, True), (True, False)])
+def test_windows_launch_refuses_an_unfired_or_jobless_start(contained_launch, fired, job_present):
+    from server.platform.job_start import ContainedStartError
+
+    key, directory, observed, state, _ = contained_launch
+    state.fired, state.job_present = fired, job_present
+    with pytest.raises(ContainedStartError, match="could not confine the BEAT host in a Windows job"):
+        spawn._launch(key, directory, 1800, 10)
+    assert observed[-3:] == [("disarm",), ("kill",), ("wait", 5)]
+    assert ("terminate",) not in observed

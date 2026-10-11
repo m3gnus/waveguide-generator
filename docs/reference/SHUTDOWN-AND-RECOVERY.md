@@ -139,6 +139,11 @@ host remains until idle exit. Child mode terminates. This is intentional, as
 recorded in `server/solver/beat_runtime/CHANGES.md`, PR 21 review round 1,
 “P3 Quit documentation”. The host's registry lives outside swept WG sessions.
 
+On Windows the official host has a kill-on-close job owned by its own stub
+and refuses to start without one; killing the stub ends the interpreter and
+its children. A failed bounded retirement hard-exits the host so interpreter
+shutdown cannot wait indefinitely on engine threads or hooks.
+
 On packaged Windows the official host is started with
 `CREATE_BREAKAWAY_FROM_JOB` added (`server/solver/beat_runtime/spawn.py`,
 `detached_options` and `_launch`), and the host records the outcome as

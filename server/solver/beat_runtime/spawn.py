@@ -93,12 +93,30 @@ def _launch(key: dict[str, Any], directory: Path, idle_timeout: float, timeout: 
         if os.name != "nt":
             process = popen(None)
         else:
+            from server.platform import job_start, process_tree
+
+            with job_start.windows_job_start(
+                lambda _pid, handle: process_tree.confine_to_job_owned_by(handle, subject="the BEAT host"),
+                required=True, subject="the BEAT host",
+            ) as started:
+                try:
+                    process = popen("granted")
+                except OSError as exc:
+                    if getattr(exc, "winerror", None) != ERROR_ACCESS_DENIED:
+                        raise
+                    process = popen("refused")
             try:
-                process = popen("granted")
-            except OSError as exc:
-                if getattr(exc, "winerror", None) != ERROR_ACCESS_DENIED:
-                    raise
-                process = popen("refused")
+                if not started.fired or started.job is None:
+                    with contextlib.suppress(Exception):
+                        process.kill()
+                    with contextlib.suppress(Exception):
+                        process.wait(timeout=5)
+                    raise job_start.ContainedStartError("could not confine the BEAT host in a Windows job")
+            finally:
+                if started.job is not None:
+                    # Only the stub keeps the job alive from here. Its exit,
+                    # including failed bootstrap cleanup, takes the whole tree.
+                    started.job.close()
     # Detached children still need reaping. This thread also covers failures,
     # idle exit and authenticated shutdown, even after start_host has returned.
     threading.Thread(target=process.wait, daemon=True, name=f"beat-host-reap-{process.pid}").start()

@@ -22,10 +22,14 @@ The two platforms need opposite ownership:
 :func:`confine_to_windows_job` itself is best-effort: it returns ``None`` when
 the job API is unavailable. What a caller does with that ``None`` is the
 caller's policy. The mesher child and the BEMPP worker start through
-``server/platform/job_start.py``, which refuses: a child outside every job also
-holds no ``WaveguideGeneratorRunning`` mutex, so it can outlive a dead server
-unseen by the installer. :func:`popen_in_windows_job` (the OpenCL check) and
+``server/platform/job_start.py``, which refuses: a child outside every job can
+outlive a dead server. When bundled, the mesher, BEMPP and sweep children hold
+``WaveguideGeneratorRunning`` through ``running_exclusion``, so the installer
+waits on such a child, but nothing would kill it.
+:func:`popen_in_windows_job` (the OpenCL check) and
 ``server.cadlink.isolation`` also refuse when no job can hold the child.
+The BEAT host uses :func:`confine_to_job_owned_by`: its stub owns the job,
+so killing the stub ends the interpreter; it refuses to start without one.
 """
 
 from __future__ import annotations
@@ -134,53 +138,7 @@ def confine_to_windows_job(
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         _declare_job_api(kernel32, ctypes, wintypes)
 
-        job = kernel32.CreateJobObjectW(None, None)
-        if not job:
-            raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
-
-        class _BasicLimits(ctypes.Structure):
-            _fields_ = [
-                ("PerProcessUserTimeLimit", ctypes.c_int64),
-                ("PerJobUserTimeLimit", ctypes.c_int64),
-                ("LimitFlags", wintypes.DWORD),
-                ("MinimumWorkingSetSize", ctypes.c_size_t),
-                ("MaximumWorkingSetSize", ctypes.c_size_t),
-                ("ActiveProcessLimit", wintypes.DWORD),
-                ("Affinity", ctypes.POINTER(ctypes.c_ulong)),
-                ("PriorityClass", wintypes.DWORD),
-                ("SchedulingClass", wintypes.DWORD),
-            ]
-
-        class _IoCounters(ctypes.Structure):
-            _fields_ = [
-                ("ReadOperationCount", ctypes.c_uint64),
-                ("WriteOperationCount", ctypes.c_uint64),
-                ("OtherOperationCount", ctypes.c_uint64),
-                ("ReadTransferCount", ctypes.c_uint64),
-                ("WriteTransferCount", ctypes.c_uint64),
-                ("OtherTransferCount", ctypes.c_uint64),
-            ]
-
-        class _ExtendedLimits(ctypes.Structure):
-            _fields_ = [
-                ("BasicLimitInformation", _BasicLimits),
-                ("IoInfo", _IoCounters),
-                ("ProcessMemoryLimit", ctypes.c_size_t),
-                ("JobMemoryLimit", ctypes.c_size_t),
-                ("PeakProcessMemoryUsed", ctypes.c_size_t),
-                ("PeakJobMemoryUsed", ctypes.c_size_t),
-            ]
-
-        limits = _ExtendedLimits()
-        limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-        if not kernel32.SetInformationJobObject(
-            job,
-            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-            ctypes.byref(limits),
-            ctypes.sizeof(limits),
-        ):
-            kernel32.CloseHandle(job)
-            raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+        job = _create_kill_on_close_job(kernel32, ctypes, wintypes)
 
         # PROCESS_SET_QUOTA | PROCESS_TERMINATE
         handle = kernel32.OpenProcess(0x0100 | 0x0001, False, int(pid))
@@ -202,6 +160,98 @@ def confine_to_windows_job(
             "to it next is the caller's policy.",
             subject,
             exc,
+        )
+        return None
+
+
+def _create_kill_on_close_job(kernel32: Any, ctypes: Any, wintypes: Any) -> Any:
+    """Create a job with kill-on-close as its only limit."""
+    class _BasicLimits(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64),
+            ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.POINTER(ctypes.c_ulong)),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_uint64),
+            ("WriteOperationCount", ctypes.c_uint64),
+            ("OtherOperationCount", ctypes.c_uint64),
+            ("ReadTransferCount", ctypes.c_uint64),
+            ("WriteTransferCount", ctypes.c_uint64),
+            ("OtherTransferCount", ctypes.c_uint64),
+        ]
+
+    class _ExtendedLimits(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _BasicLimits),
+            ("IoInfo", _IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    limits = _ExtendedLimits()
+    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise OSError(ctypes.get_last_error(), "CreateJobObjectW failed")
+    try:
+        if not kernel32.SetInformationJobObject(
+            job,
+            _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+            ctypes.byref(limits),
+            ctypes.sizeof(limits),
+        ):
+            raise OSError(ctypes.get_last_error(), "SetInformationJobObject failed")
+    except Exception:
+        with contextlib.suppress(Exception):
+            kernel32.CloseHandle(job)
+        raise
+    return job
+
+
+def confine_to_job_owned_by(process_handle: int, *, subject: str) -> WindowsJob | None:
+    """Confine a suspended process to a job whose last handle it will own.
+
+    The target's copy is non-inheritable: a launcher stub's interpreter joins
+    the job but cannot keep it alive after the stub exits. The caller closes
+    its own copy after startup, or terminates the job when startup fails.
+    """
+    if os.name != "nt":
+        return None
+    job = None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        _declare_job_api(kernel32, ctypes, wintypes)
+        job = _create_kill_on_close_job(kernel32, ctypes, wintypes)
+        if not kernel32.AssignProcessToJobObject(job, process_handle):
+            raise OSError(ctypes.get_last_error(), "AssignProcessToJobObject failed")
+        target = wintypes.HANDLE()
+        if not kernel32.DuplicateHandle(
+            kernel32.GetCurrentProcess(), job, process_handle, ctypes.byref(target),
+            0, False, 0x00000002,  # DUPLICATE_SAME_ACCESS
+        ):
+            raise OSError(ctypes.get_last_error(), "DuplicateHandle failed")
+        return WindowsJob(job, kernel32)
+    except Exception as exc:
+        if job is not None:
+            with contextlib.suppress(Exception):
+                kernel32.CloseHandle(job)
+        logger.warning(
+            "Could not confine %s in a Windows job object: %s. What happens "
+            "to it next is the caller's policy.", subject, exc,
         )
         return None
 
@@ -318,6 +368,13 @@ def _declare_job_api(kernel32: Any, ctypes: Any, wintypes: Any) -> None:
         wintypes.DWORD,
     ]
     kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = []
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.DuplicateHandle.argtypes = [
+        wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+        ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+    ]
+    kernel32.DuplicateHandle.restype = wintypes.BOOL
     kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     kernel32.OpenProcess.restype = wintypes.HANDLE
     kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
@@ -407,6 +464,7 @@ __all__ = [
     "adopt_process_group",
     "cancel_blocked_reads",
     "confine_to_windows_job",
+    "confine_to_job_owned_by",
     "kill_own_process_group",
     "kill_process_group",
     "popen_in_windows_job",

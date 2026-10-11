@@ -244,6 +244,7 @@ class WorkerHost:
         self._worker_instance = r.new_token()
         self._retire: RetireSignal | None = None
         self._ownership: StreamOwnership | None = None
+        self._retirement_failed = False
 
     def _build_engine(self) -> Any:
         return self._engine_factory(
@@ -409,6 +410,7 @@ class WorkerHost:
                 if not job.done.wait(max(0, deadline - time.monotonic())):
                     raise TimeoutError("BEAT cancelled startup did not retire")
             except BaseException as exc:
+                self._retirement_failed = True
                 self._log(f"startup retirement failed: {exc}")
                 self._fail_stop()
             return
@@ -422,6 +424,7 @@ class WorkerHost:
             if not job.done.wait(RETIREMENT_TIMEOUT):
                 raise TimeoutError("BEAT submission did not retire")
         except BaseException as exc:
+            self._retirement_failed = True
             self._log(f"cancellation retirement failed: {exc}")
             self._fail_stop()
 
@@ -657,11 +660,13 @@ class WorkerHost:
                 try:
                     bounded_call(self._ownership.shutdown)
                 except BaseException as exc:
+                    self._retirement_failed = True
                     self._log(f"ownership retirement failed: {exc}")
             if engine is not None:
                 try:
                     bounded_call(engine.terminate)
                 except BaseException as exc:
+                    self._retirement_failed = True
                     self._log(f"engine retirement failed: {exc}")
         finally:
             self._remove_own_record()
@@ -727,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
         # Refused: the host stays in an enclosing job and dies with it, so a
         # packaged Windows Quit kills it and the next start prunes its record.
         host._log(f"job breakaway: {args.job_breakaway}")
+    status = 0
     try:
         if args.ready:
             # The parent keeps spawn exclusion until this exact child is published.
@@ -752,10 +758,22 @@ def main(argv: list[str] | None = None) -> int:
                 r.write_record(host.bind(), directory)
         host.serve()
     except BaseException as exc:
+        status = 1
         host._log(f"host failed: {exc}")
         raise
     finally:
-        host.close()
+        try:
+            host.close()
+        except BaseException:
+            status = 1
+            raise
+        finally:
+            if host._retirement_failed:
+                # Engine threads or atexit hooks may still be stuck in the
+                # failed retirement, and interpreter finalization has no
+                # deadline. Exit with the status the host would have had.
+                host._log("retirement failed; exiting without interpreter shutdown")
+                os._exit(status)
     return 0
 
 

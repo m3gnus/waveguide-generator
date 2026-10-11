@@ -134,3 +134,82 @@ def test_elsewhere_blocked_readers_are_left_alone(monkeypatch):
     monkeypatch.setattr(process_tree, "os", NS(name="posix"))
     alive, gone = NS(is_alive=lambda: True), NS(is_alive=lambda: False)
     assert process_tree.cancel_blocked_reads([alive, gone]) == [alive]
+
+
+@pytest.fixture
+def owned_job_api(monkeypatch):
+    import ctypes
+
+    events = []
+    state = NS(failure=None)
+
+    def function(name, result):
+        def call(*args):
+            if name == "SetInformationJobObject":
+                events.append((name, args[0], args[1], args[2]._obj.BasicLimitInformation.LimitFlags))
+            elif name == "DuplicateHandle":
+                events.append((name, *args[:3], *args[4:]))
+                args[3]._obj.value = 999
+            else:
+                events.append((name, *args))
+            return 0 if state.failure == name else result
+        return call
+
+    kernel = NS(**{name: function(name, result) for name, result in {
+        "CreateJobObjectW": 700, "SetInformationJobObject": 1, "OpenProcess": 800,
+        "AssignProcessToJobObject": 1, "DuplicateHandle": 1, "GetCurrentProcess": -1,
+        "TerminateJobObject": 1, "CloseHandle": 1,
+    }.items()})
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *args, **kwargs: kernel, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 5, raising=False)
+    monkeypatch.setattr(process_tree, "os", NS(name="nt"))
+    return events, state, kernel
+
+
+def test_stub_owned_job_uses_only_kill_on_close_and_noninheritable_target_handle(owned_job_api):
+    import ctypes
+    from ctypes import wintypes
+
+    events, _, kernel = owned_job_api
+    job = process_tree.confine_to_job_owned_by(123, subject="the stub")
+    assert isinstance(job, process_tree.WindowsJob)
+    assert events == [
+        ("CreateJobObjectW", None, None), ("SetInformationJobObject", 700, 9, 0x2000),
+        ("AssignProcessToJobObject", 700, 123), ("GetCurrentProcess",),
+        ("DuplicateHandle", -1, 700, 123, 0, False, 2),
+    ]
+    assert kernel.GetCurrentProcess.restype is wintypes.HANDLE
+    assert kernel.DuplicateHandle.argtypes == [
+        wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.HANDLE),
+        wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+    ]
+    job.close()
+    assert events[-1] == ("CloseHandle", 700)
+    assert sum(event[0] == "CloseHandle" for event in events) == 1
+    assert not any(event[0] == "TerminateJobObject" for event in events)
+
+
+def test_stub_owned_job_can_still_terminate_the_tree(owned_job_api):
+    events, _, _ = owned_job_api
+    job = process_tree.confine_to_job_owned_by(123, subject="the stub")
+    job.terminate()
+    job.close()
+    assert events[-2:] == [("TerminateJobObject", 700, 1), ("CloseHandle", 700)]
+
+
+@pytest.mark.parametrize("failure", [
+    "CreateJobObjectW", "SetInformationJobObject", "AssignProcessToJobObject", "DuplicateHandle",
+])
+def test_stub_owned_job_failure_closes_only_the_created_job(owned_job_api, failure, caplog):
+    events, state, _ = owned_job_api
+    state.failure = failure
+    assert process_tree.confine_to_job_owned_by(123, subject="the stub") is None
+    assert [event for event in events if event[0] == "CloseHandle"] == (
+        [] if failure == "CreateJobObjectW" else [("CloseHandle", 700)]
+    )
+    assert "Could not confine the stub" in caplog.text
+
+
+def test_stub_owned_job_is_windows_only(monkeypatch):
+    monkeypatch.setattr(process_tree, "os", NS(name="posix"))
+    assert process_tree.confine_to_job_owned_by(123, subject="the stub") is None
