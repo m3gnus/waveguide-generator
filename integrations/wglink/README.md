@@ -33,17 +33,29 @@ See the [CAD Link guide](../../docs/CAD-LINK-GUIDE.md) for the user workflow.
 
 To review and advance the pin:
 
-1. Land and test the compatible change in `hornlab-fusion-addin`.
-2. Update the full commit and `addinVersion` in `source.json`.
+1. Land and test the compatible change in [`wglink`](https://github.com/m3gnus/wglink).
+2. Update the full commit and manifest `addinVersion` in `source.json`. Update
+   `server/cadlink/wglink_protocol.source.json` to the same repository and commit,
+   and verify its SHA-256 against the upstream protocol file. If its bytes changed,
+   review compatibility and copy it byte-for-byte to `server/cadlink/wglink_protocol.py`.
+   Update the endpoint oracle's `PROVENANCE.json` `addin_commit` to the package pin.
+   Keep `wg_commit` at the WG baseline that generated those fixtures; regenerate
+   with `server/tests/tools/generate_cadlink_endpoint_oracle.py --regenerate` only
+   when the endpoint contract changes, updating the packaged-pair baseline assertion
+   too. Verify shared fixtures against upstream and re-copy changed files with an
+   updated `MANIFEST.sha256`.
 3. Build from a checkout at that exact commit:
 
    ```sh
    python3 scripts/build_wglink_package.py \
-     --source-root ../hornlab-fusion-addin \
+     --source-root ../wglink \
      --output /tmp/wglink.zip
    ```
 
-4. Run `server/tests/test_wglink_package.py` and the upstream WGLink tests.
+4. Run `server/tests/test_wglink_package.py`, `test_wglink_packaged_pair.py`,
+   `test_wglink_shared_protocol.py` and the upstream WGLink tests. The WG pair tests
+   accept `WGLINK_SOURCE_GIT="$(pwd)/../wglink"` for an offline Git source and fetch the pinned
+   commit into a temporary checkout.
 5. Rehearse the platform path with `--wglink-archive /tmp/wglink.zip`.
 
 For WGLink development, keep using the upstream symlink installer. The WG

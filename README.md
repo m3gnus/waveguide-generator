@@ -102,5 +102,5 @@ pinned by commit in [pins.json](pins.json). They are AGPL-3.0-or-later too,
 except `hornlab-beat-bem`, which is **GPL-3.0-or-later** because it includes
 the solver from [boundary-lab](https://github.com/m3gnus/boundary-lab). The two
 licenses are compatible. The Fusion add-in (WGLink) comes from the
-AGPL-3.0-or-later `hornlab-fusion-addin` repository, at the commit recorded in
+AGPL-3.0-or-later `wglink` repository, at the commit recorded in
 [`integrations/wglink/source.json`](integrations/wglink/source.json).

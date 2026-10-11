@@ -242,7 +242,7 @@ def test_geometry_oracle_without_solver(name: str, tmp_path: Path):
 def test_pinned_writer_bundle_request_claim_and_ingest(packaged: Path, tmp_path: Path):
     with (
         _from_package(packaged, "wglink_return.py") as writer,
-        _from_package(packaged, "wglink_watch.py") as watcher,
+        _from_package(packaged, "wglink_inbox.py") as watcher,
     ):
         fixture = CORPUS / "automatic-full.wgreturn"
         step = (fixture / "assembly.step").read_bytes()
@@ -493,7 +493,7 @@ def test_the_loader_refuses_a_foreign_protocol_module(tmp_path: Path, monkeypatc
 
 
 def test_pinned_addin_file_exchange_in_a_separate_process(packaged: Path, tmp_path: Path):
-    """The exact shipped writer falls back to files even with a stale endpoint."""
+    """The exact shipped add-in exchanges files even with a stale endpoint."""
     from server.cadlink.fusion_delivery import advertise_fusion_delivery
     from server.cadlink.fusion_return import publish_return_request
     from server.cadlink.fusion_outcomes import settle_from_heartbeat
@@ -507,18 +507,18 @@ def test_pinned_addin_file_exchange_in_a_separate_process(packaged: Path, tmp_pa
     shutil.copytree(CORPUS / 'automatic-full.wgreturn', bundle)
     advertise_fusion_delivery(data)
     ipc = ipc_folder(data)
-    # An old endpoint alone must never enable the pinned add-in's live path.
+    # A stale endpoint must not affect the pinned add-in's file channels.
     (ipc / 'wg-endpoint.json').write_text(json.dumps({'liveProtocol': 1}))
     script = '''
 import json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import wglink_watch as watch
-import wglink_live as live
+import wglink_inbox as inbox
+import wglink_handoff as handoffs
+import wglink_status as status
+assert not (Path(sys.argv[1]) / 'wglink_watch.py').exists()
+assert not (Path(sys.argv[1]) / 'wglink_live.py').exists()
 ipc, workspace, bundle = map(Path, sys.argv[2:5])
-assert not live.advertises_live(ipc)
-assert live.produce_solve(ipc, bundle_path=bundle, workspace_root=workspace,
-                         return_id='wgr_1', healthy=True, solve_files=watch) is None
 mode = sys.argv[5]
 if mode == 'produce':
     import hashlib
@@ -527,25 +527,25 @@ if mode == 'produce':
                       bundle_relative=bundle.relative_to(workspace).as_posix(),
                       manifest_sha256='sha256:' + hashlib.sha256((bundle / 'wgreturn.json').read_bytes()).hexdigest(),
                       requested_at='2026-10-11T10:00:00Z')
-        path, payload = watch.plan_wg_request(ipc, **fields)
+        path, payload = inbox.plan_wg_request(ipc, **fields)
         assert payload['schemaVersion'] == 4 and payload['kind'] == kind
-        assert watch.write_wg_request(ipc, **fields) == path
+        assert inbox.write_wg_request(ipc, **fields) == path
         assert json.loads(path.read_text()) == payload
 else:
-    assert watch.read_acknowledgement(ipc, 'pinned-process')[0] == 'accepted'
-    assert watch.read_acknowledgement(ipc, 'pinned-send')[0] == 'accepted'
-    request = watch.next_return_request(ipc, session_id='pinned-session')
+    assert inbox.read_acknowledgement(ipc, 'pinned-process')[0] == 'accepted'
+    assert inbox.read_acknowledgement(ipc, 'pinned-send')[0] == 'accepted'
+    request = handoffs.next_return_request(ipc, session_id='pinned-session')
     assert request is not None and request.request_id == 'pinned-return'
-    claimed = watch.claim_request(request)
-    assert claimed is not None and watch.claim_request(request) is None
-    assert watch.acknowledge_return_request(claimed)
+    claimed = handoffs.claim_request(request)
+    assert claimed is not None and handoffs.claim_request(request) is None
+    assert handoffs.acknowledge_return_request(claimed)
     for operation_id in ('pinned-insert', 'pinned-update'):
-        handoff = watch.next_pending_handoff(ipc, bundle_root=workspace / 'wglink')
+        handoff = handoffs.next_pending_handoff(ipc, bundle_root=workspace / 'wglink')
         assert handoff is not None and handoff.operation_id == operation_id
-        claimed = watch.claim_request(handoff)
-        assert claimed is not None and watch.acknowledge_handoff(claimed)
-    assert watch.next_pending_handoff(ipc, bundle_root=workspace / 'wglink') is None
-    watch.write_fusion_status(ipc, session_id='pinned-session', adapter_version='0.2.1', document_name=None, links=[],
+        claimed = handoffs.claim_request(handoff)
+        assert claimed is not None and handoffs.acknowledge_handoff(claimed)
+    assert handoffs.next_pending_handoff(ipc, bundle_root=workspace / 'wglink') is None
+    status.write_fusion_status(ipc, session_id='pinned-session', adapter_version='0.2.1', document_name=None, links=[],
         diagnostics={'lastRequest': {'channel': 'returnRequest', 'correlationId': 'pinned-return', 'outcome': 'failed'}})
 '''
     def child(mode):

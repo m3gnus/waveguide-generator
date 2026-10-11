@@ -301,7 +301,7 @@ def _fetch_package(root: Path, state: Path, *, offline_only: bool = False) -> Pa
 
     cached.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="wg2-wglink-source-") as temporary:
-        source = Path(temporary) / "hornlab-fusion-addin"
+        source = Path(temporary) / "wglink"
         commands = (
             ["git", "init", "--quiet", str(source)],
             # The package is content-addressed and, once a release ships it, it

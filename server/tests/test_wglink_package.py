@@ -108,7 +108,7 @@ def test_setup_choice_is_exclusive_with_addin_actions(other: list[str]) -> None:
 
 
 def _source(tmp_path: Path, commit: str) -> Path:
-    root = tmp_path / "hornlab-fusion-addin"
+    root = tmp_path / "wglink"
     addin = root / "fusion-addins" / "WGLink"
     (addin / "resources" / "insert").mkdir(parents=True)
     (root / "scripts").mkdir()
@@ -130,7 +130,7 @@ def _source(tmp_path: Path, commit: str) -> Path:
 def _spec(commit: str) -> dict[str, object]:
     return {
         "schema": 1,
-        "repository": "https://example.invalid/hornlab-fusion-addin.git",
+        "repository": "https://example.invalid/wglink.git",
         "commit": commit,
         "license": "AGPL-3.0-or-later",
         "addinVersion": "0.1.1",

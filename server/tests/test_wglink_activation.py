@@ -67,7 +67,7 @@ def _isolated(monkeypatch, tmp_path: Path) -> None:
 def _spec(pin: str) -> dict[str, object]:
     return {
         "schema": 1,
-        "repository": "https://example.invalid/hornlab-fusion-addin.git",
+        "repository": "https://example.invalid/wglink.git",
         "commit": pin,
         "license": "AGPL-3.0-or-later",
         "addinVersion": "0.1.1",
@@ -1053,7 +1053,7 @@ def _load(path: Path, name: str):
 def _real_package(base: Path, root: Path, pin: str) -> Path:
     """Build a real, verifiable WGLink package for ``pin`` and pin ``root`` to it."""
 
-    source = base / "hornlab-fusion-addin"
+    source = base / "wglink"
     addin = source / "fusion-addins" / "WGLink"
     (addin / "resources" / "insert").mkdir(parents=True)
     (source / "scripts").mkdir()

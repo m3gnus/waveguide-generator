@@ -95,7 +95,7 @@ may name only `x0` and `y0` — the planes `imported_symmetry_from_cut_planes`
 can express. `evidence` records what the writer measured on the bodies it
 exported, per declared plane, and must still support the claim: geometry on the
 positive side, none beyond tolerance on the negative side. The counterpart
-writer and its own validation are `hornlab-fusion-addin`
+writer and its own validation are `wglink`
 `fusion-addins/WGLink/wglink_return.py` and `wglink_send.plan_domain`.
 
 The declaration is not believed on its own. Ingestion keeps two sets of planes

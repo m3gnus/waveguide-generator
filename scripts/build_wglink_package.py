@@ -79,7 +79,7 @@ def _git_head(source_root: Path) -> str:
     head = completed.stdout.strip().lower()
     if completed.returncode != 0 or SOURCE_COMMIT_RE.fullmatch(head) is None:
         raise PackageError(
-            f"Could not identify the hornlab-fusion-addin checkout at {source_root}"
+            f"Could not identify the wglink checkout at {source_root}"
         )
     return head
 
@@ -143,7 +143,7 @@ def build_package(
     expected_commit = str(spec.get("commit", "")).lower()
     if observed_commit != expected_commit:
         raise PackageError(
-            "Refusing to package an unpinned hornlab-fusion-addin checkout: "
+            "Refusing to package an unpinned wglink checkout: "
             f"expected {expected_commit}, found {observed_commit}"
         )
 

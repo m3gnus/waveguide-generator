@@ -118,7 +118,7 @@ def test_observation_fingerprint_equality(addin: Path):
 
 
 def test_development_writer_reader_claim_and_ingest(addin: Path, tmp_path: Path):
-    with _from_package(addin, "wglink_return.py") as writer, _from_package(addin, "wglink_watch.py") as watcher:
+    with _from_package(addin, "wglink_return.py") as writer, _from_package(addin, "wglink_inbox.py") as watcher:
         data = tmp_path / "data"
         data.mkdir()
         ipc = ipc_folder(data, create=True)
