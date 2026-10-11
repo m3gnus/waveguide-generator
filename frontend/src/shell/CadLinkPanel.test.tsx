@@ -2530,6 +2530,7 @@ describe('CadLinkPanel', () => {
     resetCadCoordinationForTests('off');
     await act(async () => { root.render(<CadCoordinationNote/>); });
     expect(host.textContent).toContain('Background coordination: off');
+    expect(host.textContent).not.toContain('WG2_CAD_COORDINATION');
     resetCadCoordinationForTests();
   });
 

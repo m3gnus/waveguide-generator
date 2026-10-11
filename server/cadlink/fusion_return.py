@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Mapping
@@ -12,10 +12,10 @@ import uuid
 from fastapi import APIRouter, HTTPException, Request
 
 from .fusion_delivery import (
-    DELIVERY_VERSION, IPC_SUBDIRECTORY, RETURN_REQUESTS,
-    addin_delivery_version, publish_fusion_request,
+    IPC_SUBDIRECTORY, RETURN_REQUESTS,
+    publish_fusion_request,
 )
-from .fusion_outcomes import adapter_outcome
+from .fusion_outcomes import settle_return_from_file, settle_abandoned_file_returns
 from .operations import CANCELLED, REQUEST_RETURN, TERMINAL_STATES, request_digest
 from .store import CadLinkStore
 
@@ -139,7 +139,8 @@ __all__ = [
 router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
 
-def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str) -> dict[str, Any] | None:
+def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str, *,
+                        workspace_root: Path | None = None) -> dict[str, Any] | None:
     """Read one file-transport result by its exact request id.
 
     Geometry success is proved by the returns listing, never by an adapter's
@@ -150,44 +151,17 @@ def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str) ->
     The five-second future tolerance is deliberately tighter than
     fusion_status.FUSION_STATUS_MAX_SKEW (one minute): command outcomes need no
     presence grace period. This exact command evidence remains usable after the
-    presence heartbeat has aged out.
+    presence heartbeat has aged out. With a configured workspace, a lost file
+    outcome is also bounded once all correlated file activity has gone.
     """
     row = store.get_operation(request_id)
     if row is None or row["kind"] != REQUEST_RETURN:
         return None
     if row["state"] not in TERMINAL_STATES:
-        marker = data_dir / IPC_SUBDIRECTORY / ".fusion-status.json"
-        try:
-            if marker.is_symlink() or marker.stat().st_size > 256 * 1024:
-                raise ValueError("Unsafe Fusion status file")
-            report = json.loads(marker.read_text(encoding="utf-8"))
-            if not isinstance(report, dict):
-                raise ValueError("Invalid Fusion status")
-            updated = datetime.fromisoformat(str(report.get("updatedAt", "")).replace("Z", "+00:00"))
-            if (report.get("schemaVersion") != 1 or report.get("cadApplication") != "fusion360"
-                    or (addin_delivery_version(report) or 0) < DELIVERY_VERSION
-                    or updated.tzinfo is None or updated > datetime.now(timezone.utc) + timedelta(seconds=5)):
-                raise ValueError("Unsupported Fusion status")
-            diagnostics = report.get("diagnostics")
-            if not isinstance(diagnostics, dict):
-                raise ValueError("Invalid Fusion diagnostics")
-            recent = diagnostics.get("recentOutcomes", [])
-            candidates = [item for item in recent if isinstance(item, dict)
-                          and item.get("channel") == "returnRequest" and item.get("requestId") == request_id] if isinstance(recent, list) else []
-            last = diagnostics.get("lastRequest")
-            if isinstance(last, dict) and last.get("channel") == "returnRequest" and last.get("correlationId") == request_id:
-                candidates.append(last)
-            if candidates:
-                outcome = candidates[-1].get("outcome")
-                if outcome in {"refused", "failed", "superseded", "discarded", "applied"}:
-                    state, reason, recorded = adapter_outcome(row, outcome)
-                    changed = store.record_outcome(request_id, int(row["attempt_generation"]), state,
-                                                   reason=reason, outcome=recorded)
-                    if changed is not None:
-                        store.make_durable()
-                    row = store.get_operation(request_id) or row
-        except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
-            pass  # Missing or invalid evidence never implies refusal or success.
+        settle_return_from_file(store, row, data_dir / IPC_SUBDIRECTORY)
+        settle_abandoned_file_returns(store, data_dir / IPC_SUBDIRECTORY, workspace_root,
+                                      only_operation_id=request_id)
+        row = store.get_operation(request_id) or row
     outcome = json.loads(row.get("outcome_json") or "{}")
     return {"requestId": request_id, "state": row["state"], "reason": row.get("reason"),
             "message": outcome.get("message")}
@@ -196,7 +170,9 @@ def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str) ->
 @router.get("/return-requests/{request_id}")
 async def get_return_request(request_id: str, request: Request) -> dict[str, Any]:
     state = request.app.state
-    result = await asyncio.to_thread(read_return_request, Path(state.data_dir), state.cadlink_store, request_id)
+    workspace = getattr(state, "cad_workspace", None)
+    result = await asyncio.to_thread(read_return_request, Path(state.data_dir), state.cadlink_store, request_id,
+                                    workspace_root=workspace.selected_path() if workspace is not None else None)
     if result is None:
         raise HTTPException(status_code=404, detail="Unknown Fusion return request")
     return result

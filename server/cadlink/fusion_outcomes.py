@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from server.contracts.canonical import canonical_ascii_json
@@ -13,6 +14,7 @@ from server.contracts.canonical import canonical_ascii_json
 from .operations import (
     ACCEPTED,
     CANCELLED,
+    CANCEL_REQUESTED,
     INSERT_LINK,
     MUTATING_KINDS,
     PROCESSING,
@@ -415,9 +417,9 @@ def settle_abandoned_live_claims(
     store.initialize()
     with store._lock:
         rows = [dict(row) for row in store._connect().execute(
-            "SELECT * FROM cad_operations WHERE state = ? AND claim_json IS NOT NULL "
+            "SELECT * FROM cad_operations WHERE state IN (?, ?) AND claim_json IS NOT NULL "
             + ("AND operation_id = ? " if only_operation_id else ""),
-            (PROCESSING,) + ((only_operation_id,) if only_operation_id else ()),
+            (PROCESSING, CANCEL_REQUESTED) + ((only_operation_id,) if only_operation_id else ()),
         ).fetchall()]
     changed = 0
     for row in rows:
@@ -442,5 +444,115 @@ def settle_abandoned_live_claims(
     return changed
 
 
+def settle_return_from_file(
+    store: CadLinkStore, row: Mapping[str, Any], ipc: Path, *, now: datetime | None = None,
+) -> dict[str, Any] | None:
+    """Persist exact return outcomes, including an old command-time report."""
+    request_id = str(row["operation_id"])
+    marker = ipc / ".fusion-status.json"
+    try:
+        if marker.is_symlink() or marker.stat().st_size > 256 * 1024:
+            raise ValueError("Unsafe Fusion status file")
+        report = json.loads(marker.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            raise ValueError("Invalid Fusion status")
+        updated = datetime.fromisoformat(str(report.get("updatedAt", "")).replace("Z", "+00:00"))
+        if (report.get("schemaVersion") != 1 or report.get("cadApplication") != "fusion360"
+                or (type(report.get("deliveryVersion")) is not int or report["deliveryVersion"] < FUSION_REQUEST_DELIVERY_VERSION)
+                or updated.tzinfo is None or updated > (now or datetime.now(timezone.utc)) + timedelta(seconds=5)):
+            raise ValueError("Unsupported Fusion status")
+        diagnostics = report.get("diagnostics")
+        if not isinstance(diagnostics, dict):
+            raise ValueError("Invalid Fusion diagnostics")
+        recent = diagnostics.get("recentOutcomes", [])
+        candidates = [item for item in recent if isinstance(item, dict)
+                      and item.get("channel") == "returnRequest" and item.get("requestId") == request_id] if isinstance(recent, list) else []
+        last = diagnostics.get("lastRequest")
+        if isinstance(last, dict) and last.get("channel") == "returnRequest" and last.get("correlationId") == request_id:
+            candidates.append(last)
+        if candidates:
+            outcome = candidates[-1].get("outcome")
+            if outcome in {"refused", "failed", "superseded", "discarded", "applied"}:
+                state, reason, recorded = adapter_outcome(row, outcome)
+                changed = store.record_outcome(request_id, int(row["attempt_generation"]), state,
+                                               reason=reason, outcome=recorded)
+                if changed is not None:
+                    store.make_durable()
+                return changed
+    except (OSError, UnicodeError, ValueError, TypeError, OverflowError):
+        pass  # Missing or invalid evidence never implies refusal or success.
+    return None
+
+
+def settle_abandoned_file_returns(
+    store: CadLinkStore, ipc: Path, workspace_root: Path | None, *,
+    now: datetime | None = None, only_operation_id: str | None = None,
+) -> int:
+    """Bound a lost return result after all of its file activity has gone.
+
+    The pinned add-in overwrites lastRequest and deletes a completed claim.
+    Never infer success or retry an export. Pending publication, an add-in
+    claim, or a correlated export (including its staging directory) prevents
+    timeout. Without a configured exchange folder we cannot check that fence.
+    """
+    try:
+        available = workspace_root is not None and workspace_root.is_dir()
+    except OSError:
+        available = False
+    if not available:
+        return 0
+    assert workspace_root is not None
+    checked_at = now or datetime.now(timezone.utc)
+    store.initialize()
+    with store._lock:
+        rows = [dict(row) for row in store._connect().execute(
+            "SELECT * FROM cad_operations WHERE kind = ? AND state IN (?, ?) "
+            + ("AND operation_id = ? " if only_operation_id else ""),
+            (REQUEST_RETURN, PROCESSING, CANCEL_REQUESTED)
+            + ((only_operation_id,) if only_operation_id else ()),
+        ).fetchall()]
+    changed = 0
+    for row in rows:
+        try:
+            claim = json.loads(row.get("claim_json") or "{}")
+            updated = datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00"))
+            if (not isinstance(claim, Mapping) or claim.get("liveSessionId")
+                    or updated.tzinfo is None or checked_at - updated < LEGACY_LIVE_CLAIM_MAX_AGE):
+                continue
+            exact = settle_return_from_file(store, row, ipc, now=checked_at)
+            if exact is not None:
+                changed += 1
+                continue
+            operation_id = str(row["operation_id"])
+            visible = _visible_request(ipc, row)
+            # iterdir propagates permission errors; glob may hide them and
+            # mistake an unreadable claim directory for completed work.
+            if not ipc.is_dir():
+                continue
+            paths = list(visible.parent.iterdir()) if visible.parent.exists() else []
+            if any(path.name == visible.name
+                   or (path.name.endswith(".tmp") and path.name.startswith(
+                       (f".{visible.name}.", f".wg-withdraw-{visible.name}.")))
+                   or (path.name.startswith(f".wglink-claim-{operation_id}-") and path.suffix == ".json")
+                   for path in paths):
+                continue
+            # WGLink names both the final export and its temporary/reservation
+            # paths with the sanitized correlation id, before exporting starts.
+            safe_id = re.sub(r"[\\/:\x00-\x1f]", "_", operation_id).strip().rstrip(".") or "Untitled"
+            returns = workspace_root / "wgreturn"
+            if returns.exists() and any(f"-{safe_id}" in path.name for path in returns.iterdir()):
+                continue
+        except (OSError, TypeError, ValueError):
+            continue  # An unreadable path is not evidence that work has stopped.
+        value = _record(store, row, REJECTED, reason="adapter_failed", outcome={
+            "message": "The Fusion return request was interrupted and reported no outcome."
+        })
+        changed += value is not None
+    if changed:
+        store.make_durable()
+    return changed
+
+
 __all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "LEGACY_LIVE_CLAIM_MAX_AGE",
-           "adapter_outcome", "settle_from_heartbeat", "settle_abandoned_live_claims"]
+           "adapter_outcome", "settle_from_heartbeat", "settle_abandoned_live_claims",
+           "settle_abandoned_file_returns", "settle_return_from_file"]

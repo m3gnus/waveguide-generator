@@ -1,13 +1,8 @@
 /**
- * WG's CAD coordination gate (server/cadlink/coordination.py).
- *
- * The server reads it once at start-up; the page learns it from the CAD
- * returns listing it reads at mount, so no request exists only to ask.
- * Explicit `on` runs the CAD returns listing and the Fusion-status read on
- * their adaptive clocks. `off` stops both unless CAD work is in flight;
- * operation changes still arrive as `cadOperation` pushes on the jobs socket.
- * Until the server answers, `unknown` behaves as `off`, as does a response
- * without a recognized coordination value.
+ * Compatibility observation policy learned from the CAD returns listing.
+ * WG always reports `off`: idle file transport needs no routine status reads.
+ * The `on` value remains understood for older servers. Until a listing answers,
+ * `unknown` behaves as `off`; moving CAD work still enables observations.
  */
 export type CadCoordination = 'unknown' | 'on' | 'off';
 

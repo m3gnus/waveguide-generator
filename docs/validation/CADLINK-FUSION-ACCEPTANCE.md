@@ -109,17 +109,16 @@ As of this writing Phases 4 and 5 (items 1-4) are **not** recommended for the
 release does ship them, add and complete these rows before calling that
 release's CAD Link surface accepted:
 
-- Live-session reconnect, token refresh, and the outbox fallback, each
-  exercised at least once with a real network interruption.
-- The add-in's loaded identity is what WG expects after a live-session
-  handshake: `addinRefresh.loadedIdentity` in the Fusion status names the
-  commit Fusion loaded, with `matchesPin` true for the pinned add-in.
-- The live endpoint file is private to the user (on Windows, readable by no
-  other account), and a second process that binds WG's port after WG quits
-  is not trusted by the add-in (it stays on file delivery).
-- A mixed pairing (one side on the live-session transport, the other still on
-  file-based v3 delivery) behaves per the compatibility notes in the CAD Link
-  plan, not by accident.
+- The packaged pair exchanges Send and Solve as schema-4 inbox files when WG
+  advertises `solveCommandDelivery: 4`, and reads acknowledgements through files.
+  A stale endpoint must not enable HTTP delivery or prevent fresh capabilities.
+- The add-in's loaded identity comes from `.fusion-status.json`:
+  `addinRefresh.loadedIdentity.addinVersion` names the loaded version. A commit
+  and `matchesPin` are checked only if that file actually reports a source commit;
+  managed heartbeats may leave both unknown.
+- Lost return completions settle after the bounded grace period when no request,
+  claim or correlated export path remains, including a cancelled request. Exact
+  file outcomes and document evidence take precedence over timeout.
 - Each update-journal phase (`prepare` → `apply` → `verify`) interrupted in
   turn, confirming the timeline marker is restored and the recorded phase
   matches what actually happened.

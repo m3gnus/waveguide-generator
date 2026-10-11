@@ -58,7 +58,10 @@ from .fusion_status import (
     read_fusion_status,
 )
 from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
-from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims
+from .fusion_outcomes import (
+    FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims,
+    settle_abandoned_file_returns,
+)
 from .fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
@@ -770,7 +773,8 @@ async def get_delivery_status(request: Request) -> dict[str, Any]:
 @router.get("/returns")
 async def list_returns(request: Request) -> dict[str, Any]:
     workspace: WorkspaceState = request.app.state.cad_workspace
-    # Compatibility for clients that still read this retired gate.
+    # Compatibility observation policy still read by the frontend scheduler;
+    # idle file transport always reports off, independent of environment.
     coordination = "off"
     selected = workspace.selected_path()
     if selected is None:
@@ -928,6 +932,9 @@ async def fusion_status(
             ipc_folder(Path(request.app.state.data_dir)),
         )
     await asyncio.to_thread(settle_abandoned_live_claims, store)
+    await asyncio.to_thread(settle_abandoned_file_returns, store,
+                            ipc_folder(Path(request.app.state.data_dir)),
+                            request.app.state.cad_workspace.selected_path())
     status = await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
@@ -2179,6 +2186,8 @@ async def post_reconcile_cad_operation(
             only_operation_id=operation_id,
         )
     await asyncio.to_thread(settle_abandoned_live_claims, store, only_operation_id=operation_id)
+    await asyncio.to_thread(settle_abandoned_file_returns, store, ipc_folder(Path(state.data_dir)),
+                            state.cad_workspace.selected_path(), only_operation_id=operation_id)
     current = await asyncio.to_thread(store.get_operation, operation_id)
     assert current is not None
     return ManualSolveOperationResponse(operation=operation_summary(current))
@@ -2632,6 +2641,9 @@ def mount_cadlink(application: FastAPI) -> None:
                 ipc_folder(Path(application.state.data_dir)),
             )
         await asyncio.to_thread(settle_abandoned_live_claims, application.state.cadlink_store)
+        await asyncio.to_thread(settle_abandoned_file_returns, application.state.cadlink_store,
+                                ipc_folder(Path(application.state.data_dir)),
+                                application.state.cad_workspace.selected_path())
         await asyncio.to_thread(
             expire_unstarted_insert_handoffs,
             Path(application.state.data_dir),

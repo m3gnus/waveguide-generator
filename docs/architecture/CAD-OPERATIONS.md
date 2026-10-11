@@ -781,7 +781,7 @@ under `frontend/src/` unless they start with `server/`.
 | 7 | Sends accepted before the page connected, or during an outage, are discovered | none | `server/cadlink/receipts_api.py`, cursor feed `stores/cadReceipts.ts` | `cadReceipts.test.ts` cursor paging, overlap, failed-page recovery and push/resync tests; `test_cad_receipts.py` |
 | 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` job/client-request-keyed claims | `JobsCoordinator.mutex.test.tsx`; `M1Acceptance.test.tsx :: makes no second job and no second result…` |
 | 9 | A pinned result stays until the new run has results; Results is revealed once, only if the user has not navigated | yes | `api/results.ts`, `shell/ResultsPanel.tsx`, `shell/solveAttention.ts` | `ResultsPanel.transition.test.tsx`, `solveAttention.test.tsx` |
-| 10 | Idle CAD work makes no routine reads; events and moving work resume them | none | `shell/cadObservation.ts` uses moving requests/CAD jobs, including published and restored Insert/Update operations. WG reports the retired coordination gate as off; the environment switch is gone. Listing changes and Sends reset the quiet clock; coarse job notifications do not. Mount wake and an overlapping hello share reads; hidden/Onshape mounts clear model loading | `cadObservation.test.ts` idle/off, moving jobs, parked requests, hidden pages and legacy discovery; `CadWorkspaceOwners.test.ts` outbound cadence, startup coalescing and initial loading; `cadObservation.test.ts` listing/Send quiet resets; `:: on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock` |
+| 10 | Idle CAD work makes no routine reads; events and moving work resume them | none | `shell/cadObservation.ts` uses moving requests/CAD jobs, including published and restored Insert/Update operations. WG reports the retired coordination gate as off; the environment switch is gone. Older add-ins without inbox Send still need folder discovery; the pin uses schema-4 Send. Listing changes and Sends reset the quiet clock; coarse job notifications do not. Mount wake and an overlapping hello share reads; hidden/Onshape mounts clear model loading | `cadObservation.test.ts` idle/off, moving jobs, parked requests, hidden pages and legacy discovery; `CadWorkspaceOwners.test.ts` outbound cadence, startup coalescing and initial loading; `cadObservation.test.ts` listing/Send quiet resets; `:: on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock` |
 | 11 | A held Fusion status ages into "last report" and a superseded read cannot drive an action | none | `stores/cadConnection.ts` owns status TTL, bounded command reads and read/context generations; `shell/cadWorkflowView.ts` projects last reports | `cadConnection.test.ts` TTL/overlapping reads, hanging command timeout and command-slot cancellation tests |
 | 12 | The model view shows the solver mesh at once and swaps in the full tessellation when ready | none (before a solve) | `shell/cadlink/artifactLoader.ts` | `artifactLoader.test.ts :: shows the solver artifact immediately and recovers a missed readiness event by a bounded re-read`; `artifactLoader.mirroredDisplay.test.tsx` |
 | 13 | The solver-mesh view shows the exact verified solve triangles in its own slot | none | `shell/cadlink/artifactLoader.ts`, `viewport/importedMeshStore.ts` | `artifactLoader.test.ts :: fetches only the verified solve triangles into its own slot and caches by ingest`; `artifactLoader.mirroredDisplay.test.tsx` |
@@ -804,7 +804,8 @@ under `frontend/src/` unless they start with `server/`.
 | 30 | A newly actionable request fronts CAD Link only while the user has not navigated away | partial (solve gates: jobs; recovery: row 16) | `shell/solveAttention.ts :: useJobAttention` and `useRecoveryNoticeAttention`; only command submission arms mutation attention | `solveAttention.recovery.test.tsx` submission/navigation/active-document fences; `solveAttention.test.tsx` job attention |
 
 Every retired coordinator test maps to a covering new-owner test (row numbers above); the mapping was checked in review.
-Every retired test maps to a covering test and a guarantee row.
+The deleted HTTP transport tests do not retire cancellation, recovery or
+deduplication guarantees; file-transport replacement coverage is recorded below.
 
 The row-17 editable-design entry points are File → Send to CAD
 (`design/DesignFileMenu.tsx`), the parametric panel (`design/ParamPanel.tsx`),
@@ -1562,6 +1563,11 @@ ships.
 
 ## Capability file
 
+`GET /api/cadlink/returns` retains `coordination: "off"` as a compatibility
+observation policy consumed by the frontend scheduler. It is constant; the old
+server gate and `WG2_CAD_COORDINATION` switch no longer exist. Clients also treat
+a missing field as off. Older-server `on` responses remain understood.
+
 WG tells the add-in which delivery version it reads, which WG-bound request schema it
 reads, and which optional return features
 it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomically at
@@ -1590,10 +1596,13 @@ every start:
   `sourceIdentity`; an add-in states it only when WG advertises it.
 - **No `liveProtocol` is advertised.** WG removes a stale `wg-endpoint.json`
   at startup and exchanges CAD requests only through files. The shipped WGLink 0.2.1
-  pin therefore uses its file path, even if an old endpoint remains. Send is
-  discovered through the returns listing; Solve uses schema-3 request files.
+  pin therefore uses its file path, even if an old endpoint remains. With this
+  WG advertising `solveCommandDelivery: 4`, Send (`receive_snapshot`) and Solve
+  (`prepare_and_solve`) both use schema-4 inbox files. Capabilities are published
+  before endpoint cleanup; a locked endpoint or a directory at that name logs
+  a cleanup warning without preventing publication.
   `test_wglink_packaged_pair.py` checks the exact pinned writer, including an
-  exchange in a separate process for Solve, acknowledgements, Insert/Update,
+  exchange in a separate process for Send, Solve, acknowledgements, Insert/Update,
   return requests and the file heartbeat.
 
 - **Reading it.** A reader ignores fields it does not know. A missing or unreadable file,
@@ -1673,13 +1682,30 @@ claim, if any, already owns delivery, and a terminal operation must never run tw
 
 **Legacy HTTP claims.** No new HTTP session or claim can be created.
 An older WG may have persisted `claim_json` with a `liveSessionId` and left the
-operation `processing` at `adapter-received`, `queued-for-fusion` or `executing`.
+operation `processing` or `cancel_requested` at `adapter-received`,
+`queued-for-fusion` or `executing`.
 After file evidence is checked, startup, status reads and explicit reconciliation
 settle those attempts once their last persisted progress is 30 minutes old.
 Insert/Update becomes `recovery_required`, never repeated; a return request is
-rejected with `adapter_failed` and an interrupted message. Recent claims and
-file claims are untouched. Exact document evidence can still settle a mutation
+rejected with `adapter_failed` and an interrupted message; a user cancellation
+settles as `cancelled`. Recent live claims are untouched. Exact document evidence
+can still settle a mutation
 before or after the timeout. Recovery notices retain dismissal semantics.
+The lost-completion cancellation guarantee remains required after deletion of
+`test_cadlink_live_requests.py`; it is covered by
+`test_cad_file_transport.py::test_cancelled_legacy_return_with_lost_completion_settles_durably`.
+
+**File return claims.** After exact heartbeat outcomes are checked, status reads,
+startup, reconciliation and the exact return-outcome route reject a file-claimed
+return request whose last persisted progress is at least 30 minutes old and whose
+file evidence is gone. The result is `adapter_failed` with an interrupted message,
+or `cancelled` if the user cancelled it. WG never guesses success or repeats the
+export. A visible/staged/withdrawn request, a `.wglink-claim-` file, or a correlated
+export directory, reservation or staging path prevents settlement. The configured
+exchange folder must be available to check these fences. Insert/Update file claims
+continue to require document evidence. Coverage:
+`test_fusion_return.py::test_overwritten_last_request_file_return_settles_after_bound_and_restart`
+and `::test_file_return_timeout_preserves_every_progressing_path`.
 
 **Heartbeat outcome mapping.** WG reads only a fresh heartbeat with
 `deliveryVersion >= 3` from `.fusion-status.json`: the one
@@ -1706,7 +1732,8 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 
 `recentOutcomes` is a 16-item ring. `lastRequest` is one overwritten slot, matched by
 `correlationId` (the operation ID for WG-produced requests); WG logs its correlation
-and attempt IDs once per change. Missing that slot never authorizes a guessed outcome.
+and attempt IDs once per change. Missing that slot never proves success; a return
+request with no remaining file activity is bounded as described above.
 
 **What can be lost.** A request withdrawn as superseded never runs, by design. A power
 loss keeps a later write but not an earlier one, because WG does not flush the folders

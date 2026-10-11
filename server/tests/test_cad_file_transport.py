@@ -380,3 +380,107 @@ def test_file_heartbeat_rejects_invalid_stale_or_future_reports(tmp_path, case):
         _status(tmp_path, updatedAt=(now + FUSION_STATUS_MAX_SKEW + timedelta(seconds=10)).isoformat())
     assert select_heartbeat(tmp_path, now) == (None, None)
     assert addin_update.loaded_addin_identity(tmp_path) is None
+
+
+def test_cancelled_legacy_return_with_lost_completion_settles_durably(tmp_path):
+    store = CadLinkStore.for_data_dir(tmp_path)
+    operation_id = _legacy(store, 'request_return')
+    assert store.request_cancel(operation_id)['state'] == 'cancel_requested'
+    with store._lock, store._transaction() as conn:
+        conn.execute('UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?',
+                     ((NOW - LEGACY_LIVE_CLAIM_MAX_AGE).isoformat(), operation_id))
+    assert settle_abandoned_live_claims(store, now=NOW) == 1
+    assert store.get_operation(operation_id)['state'] == 'cancelled'
+    assert settle_abandoned_live_claims(store, now=NOW) == 0
+    store.close()
+    reopened = CadLinkStore.for_data_dir(tmp_path)
+    assert reopened.get_operation(operation_id)['state'] == 'cancelled'
+    reopened.close()
+
+
+@pytest.mark.parametrize('endpoint_kind', ['locked', 'directory'])
+def test_capabilities_publish_before_stale_endpoint_cleanup(tmp_path, monkeypatch, caplog, endpoint_kind):
+    from pathlib import Path
+    from server.cadlink import fusion_delivery
+
+    folder = ipc_folder(tmp_path, create=True)
+    endpoint = folder / 'wg-endpoint.json'
+    capability_file = folder / 'wg-capabilities.json'
+    capability_file.write_text(json.dumps({'schemaVersion': 1, 'fusionRequestDelivery': 3}))
+    if endpoint_kind == 'directory':
+        endpoint.mkdir()
+    else:
+        endpoint.write_text('{"liveProtocol":1}')
+    unlink = Path.unlink
+    attempts = []
+
+    def fail_cleanup(path, *args, **kwargs):
+        if path == endpoint:
+            # Assert the new contract is already visible at the cleanup attempt.
+            attempts.append(json.loads(capability_file.read_text()))
+            if endpoint_kind == 'locked':
+                raise PermissionError('endpoint is held open')
+        return unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', fail_cleanup)
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+    assert attempts == [capabilities()]
+    assert json.loads(capability_file.read_text()) == capabilities()
+    assert endpoint.exists()
+    assert 'Could not remove' in caplog.text
+    assert 'Could not advertise' not in caplog.text
+
+
+def test_endpoint_cleanup_still_runs_after_capability_write_failure(tmp_path, monkeypatch, caplog):
+    from server.cadlink import fusion_delivery
+
+    endpoint = ipc_folder(tmp_path, create=True) / 'wg-endpoint.json'
+    endpoint.write_text('{"liveProtocol":1}')
+
+    def fail_write(*args, **kwargs):
+        raise PermissionError('capabilities is held open')
+
+    monkeypatch.setattr(fusion_delivery, '_write_json', fail_write)
+    fusion_delivery.advertise_fusion_delivery(tmp_path)
+    assert not endpoint.exists()
+    assert 'Could not advertise' in caplog.text
+
+
+@pytest.mark.parametrize('entrypoint', ['startup', 'return-api', 'status', 'reconcile'])
+def test_file_return_lost_slot_settlement_is_wired_to_backend_entrypoints(tmp_path, entrypoint):
+    from server.cadlink import api
+    from server.cadlink.fusion_return import get_return_request
+
+    app = create_app(data_dir=tmp_path)
+    workspace = tmp_path / 'workspace'
+    workspace.mkdir()
+    app.state.cad_workspace.select(workspace)
+    operation_id = _legacy(app.state.cadlink_store, 'request_return', claim=False)
+    ipc_folder(tmp_path, create=True)  # Startup published the machine-local IPC folder.
+    request = SimpleNamespace(app=app)
+    try:
+        if entrypoint == 'startup':
+            handler = next(h for h in app.router.on_startup if h.__name__ == 'advertise_fusion_delivery_on_startup')
+            asyncio.run(handler())
+        elif entrypoint == 'return-api':
+            assert asyncio.run(get_return_request(operation_id, request))['state'] == 'rejected'
+        elif entrypoint == 'status':
+            payload = api.FusionStatusRequest.model_validate({'design': {'formula': 'OSSE', 'L': 120, 'a': 45}})
+            asyncio.run(api.fusion_status(payload, request))
+        else:
+            asyncio.run(post_reconcile_cad_operation(operation_id, request))
+        assert app.state.cadlink_store.get_operation(operation_id)['state'] == 'rejected'
+        assert app.state.cadlink_store.get_operation(operation_id)['reason'] == 'adapter_failed'
+    finally:
+        app.state.cadlink_store.close()
+
+
+def test_returns_retains_constant_off_policy_for_frontend_clients(tmp_path, monkeypatch):
+    from server.cadlink.api import list_returns
+
+    monkeypatch.setenv('WG2_CAD_COORDINATION', 'on')
+    app = create_app(data_dir=tmp_path)
+    try:
+        assert asyncio.run(list_returns(SimpleNamespace(app=app)))['coordination'] == 'off'
+    finally:
+        app.state.cadlink_store.close()

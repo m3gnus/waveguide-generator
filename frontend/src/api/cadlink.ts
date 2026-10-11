@@ -61,8 +61,8 @@ export interface CadReturnBundle {
 export interface CadReturnListing {
   items: CadReturnBundle[];
   cadFolderConfigured: boolean;
-  /** WG's CAD coordination gate (server/cadlink/coordination.py); an absent
-   * or unrecognized value leaves clock-driven coordination off. */
+  /** Compatibility observation policy: current WG always reports off.
+   * An absent or unrecognized value also leaves idle observations off. */
   coordination?: 'on' | 'off';
 }
 

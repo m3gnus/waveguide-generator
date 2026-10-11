@@ -791,7 +791,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             # Only with a launcher to hand off to: the staging root it accepts.
             update_staging_root=_update_staging_root(args, os.environ),
-            # The live CAD Link endpoint file names the port reserved above.
+            # Retain the launcher port argument for compatibility.
             advertised_port=port,
         )
         # ``getattr`` twice: an embedder's or a test's stand-in app need not

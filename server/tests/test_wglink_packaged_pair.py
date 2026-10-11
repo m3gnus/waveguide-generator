@@ -521,10 +521,19 @@ assert live.produce_solve(ipc, bundle_path=bundle, workspace_root=workspace,
                          return_id='wgr_1', healthy=True, solve_files=watch) is None
 mode = sys.argv[5]
 if mode == 'produce':
-    watch.write_solve_request(ipc, command_id='pinned-process', return_id='wgr_1',
-                              bundle_path=bundle, workspace_root=workspace)
+    import hashlib
+    for kind, command_id in (('receive_snapshot', 'pinned-send'), ('prepare_and_solve', 'pinned-process')):
+        fields = dict(kind=kind, command_id=command_id, return_id='wgr_1',
+                      bundle_relative=bundle.relative_to(workspace).as_posix(),
+                      manifest_sha256='sha256:' + hashlib.sha256((bundle / 'wgreturn.json').read_bytes()).hexdigest(),
+                      requested_at='2026-10-11T10:00:00Z')
+        path, payload = watch.plan_wg_request(ipc, **fields)
+        assert payload['schemaVersion'] == 4 and payload['kind'] == kind
+        assert watch.write_wg_request(ipc, **fields) == path
+        assert json.loads(path.read_text()) == payload
 else:
     assert watch.read_acknowledgement(ipc, 'pinned-process')[0] == 'accepted'
+    assert watch.read_acknowledgement(ipc, 'pinned-send')[0] == 'accepted'
     request = watch.next_return_request(ipc, session_id='pinned-session')
     assert request is not None and request.request_id == 'pinned-return'
     claimed = watch.claim_request(request)
@@ -537,7 +546,7 @@ else:
         assert claimed is not None and watch.acknowledge_handoff(claimed)
     assert watch.next_pending_handoff(ipc, bundle_root=workspace / 'wglink') is None
     watch.write_fusion_status(ipc, session_id='pinned-session', adapter_version='0.2.1', document_name=None, links=[],
-        diagnostics={'recentOutcomes': [{'channel': 'returnRequest', 'requestId': 'pinned-return', 'outcome': 'failed'}]})
+        diagnostics={'lastRequest': {'channel': 'returnRequest', 'correlationId': 'pinned-return', 'outcome': 'failed'}})
 '''
     def child(mode):
         result = subprocess.run([sys.executable, '-c', script, str(packaged), str(ipc), str(workspace), str(bundle), mode],
@@ -557,11 +566,16 @@ else:
         harness.run_pass()
         first = store.get_operation('pinned-process')
         assert first is not None and first['kind'] == 'prepare_and_solve'
+        sent = store.get_operation('pinned-send')
+        assert sent is not None and sent['kind'] == 'receive_snapshot'
+        assert sent['state'] == 'accepted' and sent['job_id'] is None
+        assert sent['setup_revision_id'] is None and sent['snapshot_json'] is not None
         # Receipt is durable and a repeated pinned file is the same operation.
         child('produce')
         harness.run_pass()
         assert store.get_operation('pinned-process')['request_digest'] == first['request_digest']
-        assert len(store.list_operations()) == 1
+        assert len(store.list_operations()) == 2
+        assert store.get_operation('pinned-send')['request_digest'] == sent['request_digest']
         publish_return_request(data, store, session_id='pinned-session', design_id='wgd_1',
                                document_id='fusion:doc-1', instance_id='instance-1',
                                expected_return_state_hash='sha256:state', request_id='pinned-return')

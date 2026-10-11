@@ -256,3 +256,107 @@ def test_production_cadlink_mount_exposes_exact_file_return_outcome(tmp_path):
     finally:
         client.close()
         store.close()
+
+
+def _lost_file_return(tmp_path, *, cancelled=False, age=None):
+    from datetime import datetime, timedelta, timezone
+
+    store, path, request_id = _request(tmp_path)
+    workspace = tmp_path / 'workspace'
+    (workspace / 'wgreturn').mkdir(parents=True)
+    # Fusion consumed the request and its failed/refused lastRequest was
+    # overwritten before WG could read it. No recentOutcomes survives.
+    path.unlink()
+    store.claim(request_id, 0)
+    if cancelled:
+        store.request_cancel(request_id)
+    with store._lock, store._transaction() as conn:
+        conn.execute('UPDATE cad_operations SET updated_at = ? WHERE operation_id = ?',
+                     ((datetime.now(timezone.utc) - (age or timedelta(hours=1))).isoformat(), request_id))
+    _report(tmp_path, request_id='other', outcome='applied')
+    return store, path, request_id, workspace
+
+
+@pytest.mark.parametrize('cancelled,state', [(False, 'rejected'), (True, 'cancelled')])
+def test_overwritten_last_request_file_return_settles_after_bound_and_restart(tmp_path, cancelled, state):
+    from server.cadlink.fusion_return import read_return_request
+
+    store, _path, request_id, workspace = _lost_file_return(tmp_path, cancelled=cancelled)
+    store.close()
+    store = CadLinkStore.for_data_dir(tmp_path)
+    result = read_return_request(tmp_path, store, request_id, workspace_root=workspace)
+    assert result['state'] == state
+    if not cancelled:
+        assert result['reason'] == 'adapter_failed' and 'interrupted' in result['message']
+    assert store.get_operation(request_id)['attempt_generation'] == 1
+    store.close()
+    store = CadLinkStore.for_data_dir(tmp_path)
+    assert read_return_request(tmp_path, store, request_id, workspace_root=workspace) == result
+    store.close()
+
+
+@pytest.mark.parametrize('progress', ['recent', 'visible', 'publication', 'withdrawal', 'claim', 'export', 'staging', 'reservation', 'unknown-folder'])
+def test_file_return_timeout_preserves_every_progressing_path(tmp_path, progress):
+    from datetime import timedelta
+    from server.cadlink.fusion_return import read_return_request
+
+    store, path, request_id, workspace = _lost_file_return(tmp_path, age=timedelta(seconds=1) if progress == 'recent' else None)
+    if progress == 'visible':
+        path.write_text('{}')
+    elif progress == 'publication':
+        path.with_name(f'.{request_id}.json.new.tmp').write_text('{}')
+    elif progress == 'withdrawal':
+        path.with_name(f'.wg-withdraw-{request_id}.json.new.tmp').write_text('{}')
+    elif progress == 'claim':
+        path.with_name(f'.wglink-claim-{request_id}-abc.json').write_text('{}')
+    elif progress in {'export', 'staging', 'reservation'}:
+        name = {'export': f'model-{request_id}.wgreturn',
+                'staging': f'.model-{request_id}.wgreturn.tmp-abc',
+                'reservation': f'.model-{request_id}.wgreturn.reserve'}[progress]
+        (workspace / 'wgreturn' / name).mkdir()
+    assert read_return_request(tmp_path, store, request_id,
+                               workspace_root=None if progress == 'unknown-folder' else workspace)['state'] == 'processing'
+    store.close()
+
+
+def test_exact_return_outcome_wins_before_file_timeout(tmp_path):
+    from server.cadlink.fusion_return import read_return_request
+
+    store, _path, request_id, workspace = _lost_file_return(tmp_path)
+    _report(tmp_path, outcome='refused')
+    assert read_return_request(tmp_path, store, request_id, workspace_root=workspace)['reason'] == 'adapter_refused'
+    store.close()
+
+
+def test_old_exact_command_evidence_wins_over_bulk_file_timeout(tmp_path):
+    from server.cadlink.fusion_outcomes import settle_abandoned_file_returns
+    from server.cadlink.fusion_delivery import ipc_folder
+
+    store, _path, request_id, workspace = _lost_file_return(tmp_path)
+    _report(tmp_path, outcome='refused', updatedAt='2026-01-01T00:00:00Z')
+    assert settle_abandoned_file_returns(store, ipc_folder(tmp_path), workspace) == 1
+    assert store.get_operation(request_id)['reason'] == 'adapter_refused'
+    store.close()
+
+
+@pytest.mark.parametrize('folder', ['workspace', 'requests', 'returns'])
+def test_unavailable_file_progress_folder_never_implies_timeout(tmp_path, monkeypatch, folder):
+    from pathlib import Path
+    from server.cadlink.fusion_return import read_return_request
+
+    store, path, request_id, workspace = _lost_file_return(tmp_path)
+    (workspace / 'wgreturn').mkdir(exist_ok=True)
+    if folder == 'workspace':
+        workspace = workspace / 'missing'
+    else:
+        blocked = path.parent if folder == 'requests' else workspace / 'wgreturn'
+        iterdir = Path.iterdir
+
+        def unreadable(self):
+            if self == blocked:
+                raise PermissionError('folder unavailable')
+            return iterdir(self)
+
+        monkeypatch.setattr(Path, 'iterdir', unreadable)
+    assert read_return_request(tmp_path, store, request_id, workspace_root=workspace)['state'] == 'processing'
+    store.close()

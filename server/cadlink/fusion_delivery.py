@@ -522,10 +522,16 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
                 len(removed),
                 ", ".join(sorted(removed)),
             )
-        (folder / "wg-endpoint.json").unlink(missing_ok=True)
         _write_json(folder / CAPABILITIES_FILENAME, capabilities(solve_delivery=solve_delivery))
     except OSError as exc:
         logger.warning("Could not advertise WG's Fusion delivery version: %s", exc)
+
+    # A locked endpoint on Windows must not leave an older capability file in
+    # place. The add-in chooses files from capabilities even if this remains.
+    try:
+        (ipc_folder(data_dir) / "wg-endpoint.json").unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("Could not remove WG's stale Fusion endpoint: %s", exc)
 
 
 __all__ = [
