@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import os
-from pathlib import Path
 
 import numpy as np
 import pytest
