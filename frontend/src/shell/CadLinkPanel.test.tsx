@@ -1975,6 +1975,44 @@ describe('CadLinkPanel', () => {
     expect(host.querySelector('.cad-solver-unavailable.cad-alert-notice[role="status"]')).toBeTruthy();
   });
 
+  it('does not claim no engine can solve a CAD model when BEAT · Metal is offered', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/api/capabilities')) return json({
+        engines: [
+          { name: 'metal', available: false, reason: 'No Metal device', version: null, fast_paths: [], geometry_sources: ['parametric'] },
+          { name: 'beat-metal', available: true, reason: null, version: null, fast_paths: [], geometry_sources: ['parametric'] },
+        ],
+      });
+      return json(record);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).endsWith('/api/capabilities'))).toBe(true));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(host.querySelector('.cad-solver-unavailable')).toBeNull();
+    expect(host.textContent).not.toContain('No engine here');
+  });
+
+  it('says no engine can solve a CAD model when none that could is available', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+      if (path.endsWith('/returns')) return json(listing);
+      if (path.endsWith('/fusion-status')) return json(closedFusion);
+      if (path.endsWith('/api/capabilities')) return json({
+        engines: [
+          { name: 'metal', available: false, reason: 'No Metal device', version: null, fast_paths: [], geometry_sources: ['parametric'] },
+          { name: 'beat-metal', available: false, reason: 'No Metal device', version: null, fast_paths: [], geometry_sources: ['parametric'] },
+        ],
+      });
+      return json(record);
+    }));
+    await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
+    await vi.waitFor(() => expect(host.querySelector('.cad-solver-unavailable')).toBeTruthy());
+    expect(host.textContent).toContain('No engine here can solve this CAD model');
+  });
+
   it('shows the connection state with its settings link and the symmetric outbound action', async () => {
     await act(async () => { root.render(<CadLinkTestSurface/>); await Promise.resolve(); await Promise.resolve(); });
     const card = host.querySelector('.cad-link-card')!;

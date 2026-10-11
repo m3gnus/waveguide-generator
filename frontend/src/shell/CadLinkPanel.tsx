@@ -13,7 +13,7 @@ import { polarConfigFromUi, useSolveOptionsStore } from '../stores/solveOptions'
 import { useDocumentStore } from '../stores/document';
 import { designNameSlug, UNTITLED_SLUG } from '../stores/designName';
 import { useCapabilities } from '../jobs/useCapabilities';
-import { declaresImportedGeometry } from '../design/backendSupport';
+import { choosableForImportedGeometry } from '../design/backendSupport';
 import { useImportedSolvePlan } from '../jobs/useImportedSolvePlan';
 import {
   cadLinkCoordinatorBridge,
@@ -665,14 +665,15 @@ export function CadLinkPanel() {
   const workflow = onshape ? onshapeWorkflowView(onshapeStatus) : fusionWorkflowView(fusionStatus);
   // Imported geometry is solved only by an engine that declares it (runtime.py
   // `resolve_imported_submission`): Metal, and BEAT's CPU backend, which every
-  // desktop platform provisions. Where none of them is available the whole
+  // desktop platform provisions. BEAT · Metal is offered too (the engine select
+  // uses the same `choosableForImportedGeometry`), so it counts here. Where none of them is available the whole
   // round trip still works as a CAD workflow and only the solve is out of
   // reach, so this states the boundary up front instead of hiding the panel or
   // letting someone discover it after exporting and preparing the model.
   // Once a return is prepared, the server's per-engine verdict on it decides;
   // before that, only what each engine declares.
   const { engines: solverEngines, isLoading: capabilitiesLoading } = useCapabilities();
-  const importedEngines = solverEngines.filter(declaresImportedGeometry);
+  const importedEngines = solverEngines.filter(choosableForImportedGeometry);
   const planVerdicts = useImportedSolvePlan(true).plan?.engines ?? null;
   const importedSolverUnavailable = planVerdicts
     ? !planVerdicts.some((verdict) => verdict.solves)
