@@ -154,6 +154,7 @@ static void log_test_wait_result(DWORD wait, ULONGLONG elapsed) {
     if (n <= 0 || !durable_write(marker, data, (DWORD)n, 0)) ExitProcess(3);
 }
 '''
+    assert code.count("static int log_write(") == 1
     code = code.replace("static int log_write(", pause + "\nstatic int log_write(", 1)
     assert code.count("    /* Both leaves are proven") == 1
     code = code.replace("    /* Both leaves are proven", '    log_test_pause(L"locked");\n    /* Both leaves are proven', 1)

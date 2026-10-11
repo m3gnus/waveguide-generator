@@ -286,14 +286,13 @@ def changed_natives(native: Path, tmp_path_factory: pytest.TempPathFactory):
     return variants
 
 
-@pytest.fixture(scope="module")
-def pausing_native(native: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Instrument only the private test compile, around the real Win32 I/O."""
-    repo = tmp_path_factory.mktemp("pausing-native")
-    source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
-    source.parent.mkdir(parents=True)
-    code = (ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()
-    pause = r'''
+def _inject(code: str, anchor: str, insertion: str) -> str:
+    """Insert before an anchor that must occur exactly once, so drift fails loudly."""
+    assert code.count(anchor) == 1, f"pause anchor drifted: {anchor!r}"
+    return code.replace(anchor, insertion + anchor, 1)
+
+
+_TEST_PAUSE = r'''
 static void test_pause(const wchar_t *target, const wchar_t *stage) {
     wchar_t wanted[64], kind[64], marker[1024], temporary[1024]; DWORD written; HANDLE file;
     const wchar_t *leaf = wcsrchr(target, L'\\');
@@ -309,16 +308,35 @@ static void test_pause(const wchar_t *target, const wchar_t *stage) {
     for (;;) Sleep(1000);
 }
 '''
-    code = code.replace("static int hook_write(", pause + "\nstatic int hook_write(", 1)
+
+
+def _pausing_source(code: str) -> str:
+    """The launcher source with one test pause before each interruption point."""
+    code = _inject(code, "static int hook_write(", _TEST_PAUSE + "\n")
     begin = code.index("static int hook_write(")
     end = code.index("static int hook_temp_name(", begin)
-    part = code[begin:end].replace("    ok = WriteFile", "    test_pause(target, L\"created\");\n    ok = WriteFile", 1)
-    part = part.replace("    if (ok) ok = SetFileInformationByHandle", "    if (ok) test_pause(target, L\"flushed\");\n    if (ok) ok = SetFileInformationByHandle", 1)
-    part = part.replace("    if (!CloseHandle(h))", "    if (ok) test_pause(target, L\"cleared\");\n    if (!CloseHandle(h))", 1)
-    source.write_text(code[:begin] + part + code[end:])
-    code = source.read_text().replace("    if (equal_files(public_path, self)) return 0;",
-                                    "    test_pause(public_path, L\"entry\");\n    if (equal_files(public_path, self)) return 0;", 1)
-    source.write_text(code)
+    part = _inject(code[begin:end], "    ok = WriteFile", "    test_pause(target, L\"created\");\n")
+    part = _inject(part, "    if (ok) ok = SetFileInformationByHandle", "    if (ok) test_pause(target, L\"flushed\");\n")
+    part = _inject(part, "    if (!CloseHandle(h))", "    if (ok) test_pause(target, L\"cleared\");\n")
+    code = code[:begin] + part + code[end:]
+    # Before the hook-only exit; its return value is free to change.
+    return _inject(code, "    if (equal_files(public_path, self)) return ",
+                   "    test_pause(public_path, L\"entry\");\n")
+
+
+def test_every_test_pause_lands_once_in_the_current_launcher() -> None:
+    code = _pausing_source((ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text())
+    for stage in ("created", "flushed", "cleared", "entry"):
+        assert code.count(f'test_pause(target, L"{stage}")') + code.count(f'test_pause(public_path, L"{stage}")') == 1, stage
+
+
+@pytest.fixture(scope="module")
+def pausing_native(native: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Instrument only the private test compile, around the real Win32 I/O."""
+    repo = tmp_path_factory.mktemp("pausing-native")
+    source = repo / build_bundle.WINDOWS_NATIVE_SOURCE
+    source.parent.mkdir(parents=True)
+    source.write_text(_pausing_source((ROOT / build_bundle.WINDOWS_NATIVE_SOURCE).read_text()))
     hook = (ROOT / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).read_bytes() + b"\n# interruption candidate\n"
     (repo / build_bundle.WINDOWS_NATIVE_HOOK_SOURCE).write_bytes(hook)
     target = repo / "helper.exe"
