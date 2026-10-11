@@ -150,7 +150,7 @@ def test_a_received_solve_waits_while_the_consumer_is_off_and_moves_once_it_runs
 ) -> None:
     """Confirms the hypothesis for 093de99b/186d2953, with a positive control.
 
-    Delivered live (``deliver_live``, what the route calls) into a WG whose
+    Accepted through the file delivery function into a WG whose
     consumer is off, a solve is accepted and stays ``received``: nothing else
     ever lists it. The same delivery with the consumer on leaves ``received``
     within a pass.
@@ -163,13 +163,13 @@ def test_a_received_solve_waits_while_the_consumer_is_off_and_moves_once_it_runs
     application, data_dir, workspace = app_for(tmp_path)
     bundle_path, manifest = _write_return(workspace)
     item = solve_command.DeliveredItem(
-        operation_id="op-live", kind=PREPARE_AND_SOLVE, bundle_path=bundle_path,
+        operation_id="op-file", kind=PREPARE_AND_SOLVE, bundle_path=bundle_path,
         manifest_sha256=manifest, return_id="wgr_1",
     )
     store = application.state.cadlink_store
 
     def deliver() -> None:
-        solve_command.deliver_live(
+        solve_command.accept_delivery(
             store, item,
             retain=lambda operation_id: preparation.retain_operation_snapshot(
                 store, data_dir, workspace.resolve(), operation_id
@@ -181,9 +181,9 @@ def test_a_received_solve_waits_while_the_consumer_is_off_and_moves_once_it_runs
     else:
         run_loop(
             application, 10, before=deliver,
-            until=lambda _status: store.get_operation("op-live")["state"] != "received",
+            until=lambda _status: store.get_operation("op-file")["state"] != "received",
         )
-    state = store.get_operation("op-live")["state"]
+    state = store.get_operation("op-file")["state"]
     if consumer == "off":
         assert state == "received"
     else:
@@ -191,20 +191,6 @@ def test_a_received_solve_waits_while_the_consumer_is_off_and_moves_once_it_runs
     store.close()
 
 
-def test_the_live_route_refuses_while_the_consumer_is_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A delivery the consumer will never run is refused, retryably, not parked."""
-
-    from server.tests.test_cadlink_live_deliveries import _item, wg
-    from server.tests.test_cadlink_live_session import _code
-
-    monkeypatch.setenv(CAD_DELIVERY_ENV, "0")
-    with wg(tmp_path, consumer=False) as app:
-        bundle_path, manifest = _write_return(app.workspace)
-        response = app.deliver(app.token(), _item(bundle_path, manifest))
-        assert response.status_code == 409, response.text
-        assert _code(response) == "delivery_consumer_disabled"
-        assert response.json()["error"]["retryable"] is True
-        assert app.ids() == []
 
 
 @pytest.mark.parametrize("consumer", ["off", "on"])

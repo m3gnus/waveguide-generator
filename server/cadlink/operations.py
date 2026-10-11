@@ -57,10 +57,8 @@ STAGE_VALIDATING = "validating"
 STAGE_PREPARING_MESH = "preparing-mesh"
 STAGE_READY = "ready"
 STAGE_SUBMITTED = "submitted"
-# Where a WG-produced Fusion request stands once the add-in claimed it over the
-# live protocol (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7): received by
-# the adapter at the claim, then queued for Fusion's main thread, then executing.
-# They move exactly one step at a time within one attempt; the outcome follows.
+# Persisted stages from legacy HTTP claims. Keep these values readable for
+# file evidence settlement and bounded interruption recovery after an upgrade.
 STAGE_ADAPTER_RECEIVED = "adapter-received"
 STAGE_QUEUED_FOR_FUSION = "queued-for-fusion"
 STAGE_EXECUTING = "executing"

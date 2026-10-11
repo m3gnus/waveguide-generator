@@ -63,7 +63,6 @@ def _forget_process_state() -> None:
     solve_command._retention_waits.clear()
     solve_command._unreadable_waits.clear()
     solve_command._refused_claims.clear()
-    solve_command._live_waits.clear()
 
 
 @pytest.fixture(autouse=True)

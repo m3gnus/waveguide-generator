@@ -21,7 +21,7 @@ from typing import Any
 import pytest
 
 from server.cadlink import ingest as ingest_module
-from server.cadlink import preparation, solve_command
+from server.cadlink import preparation
 from server.cadlink.preparation import PreparationInput, operation_summary, prepare_operation
 from server.cadlink.solver_frame import CONTRACT, confirm_frame
 
@@ -766,20 +766,19 @@ def test_the_delivery_loop_reaches_the_frame_gate(real, monkeypatch) -> None:
     assert harness.delivery_pass() == []
 
 
-def test_a_live_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
-    """The HTTP delivery route (CADLINK-LIVE-PROTOCOL.md section 8) meets the same gate."""
+def test_a_file_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
+    """The request inbox meets the solver frame gate."""
 
     from server.cadlink.api import _preparation_context
-    from test_cadlink_live_deliveries import _item, wg
+    from server.tests.cad_file_harness import wg
+    from server.tests.test_cad_solve_delivery import _file
 
     monkeypatch.setattr(ingest_module, "build_imported_mesh_isolated", Recording())
-    getattr(solve_command, "_live_waits", {}).clear()
     with wg(tmp_path) as app:
         step = b"STEP authored"
         bundle_path, manifest_sha = _write(app.workspace, "authored", _authored(step), step)
-        token = app.token()
-        delivered = app.deliver(token, _item(bundle_path, manifest_sha))
-        assert delivered.status_code == 200, delivered.text
+        _file(app.data_dir, "op-1", bundle_path, manifest_sha)
+        assert app.run_pass() == ["op-1"]
 
         revision = _revision(app.store, _setup())
 
@@ -807,7 +806,6 @@ def test_a_live_delivery_reaches_the_frame_gate(tmp_path, monkeypatch) -> None:
 
         ready = asyncio.run(prepare(False))
         assert (ready["state"], ready["reason"]) == ("needs_user_input", "ready_to_solve"), ready
-    getattr(solve_command, "_live_waits", {}).clear()
 
 
 def test_post_ingest_meshes_an_authored_model_in_its_confirmed_frame(real, monkeypatch) -> None:

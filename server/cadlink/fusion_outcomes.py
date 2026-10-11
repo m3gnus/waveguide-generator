@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 from pathlib import Path
@@ -20,6 +21,7 @@ from .operations import (
     REJECTED,
     REQUEST_RETURN,
     STAGE_EXECUTING,
+    FUSION_STAGES,
     UPDATE_LINK,
 )
 from .store import CadLinkStore
@@ -219,9 +221,7 @@ def _delivery_still_pending(ipc: Path, row: Mapping[str, Any]) -> bool:
     )
 
 
-#: Outcomes the add-in reports for a Fusion request, by either transport: the
-#: heartbeat's ``recentOutcomes``/``lastRequest`` and a live completion
-#: (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7).
+#: Outcomes the add-in reports in the file heartbeat diagnostics.
 ADAPTER_OUTCOMES = (
     "applied", "reconciled", "refused", "superseded", "discarded", "recoveryRequired", "failed",
 )
@@ -238,9 +238,8 @@ def adapter_outcome(
 ) -> tuple[str, str | None, dict[str, Any]]:
     """What the store records when the add-in reports ``outcome`` for ``row``.
 
-    Returns ``(state, reason, outcome)``. One mapping for the heartbeat and
-    for a live completion. A mutation is accepted only as reconciled, with
-    ``evidence`` equal to its own operation and export ids; ``failed`` leaves
+    Returns ``(state, reason, outcome)``. A mutation is accepted only as
+    reconciled, with ``evidence`` equal to its own operation and export ids; ``failed`` leaves
     a mutation that was executing ``recovery_required``. Raises ``ValueError``
     for an outcome that does not apply to the operation's kind.
     """
@@ -304,7 +303,6 @@ def settle_from_heartbeat(
 ) -> int:
     """Record evidence and adapter outcomes without inferring a missed result."""
 
-    # Read-model code must also work after removal of the live transport.
     # Delivery schema 3 is the file protocol, independent of its publisher.
     version = heartbeat.get("deliveryVersion")
     if type(version) is not int or version < FUSION_REQUEST_DELIVERY_VERSION:
@@ -359,7 +357,7 @@ def settle_from_heartbeat(
             continue
 
         recent = _recent(heartbeat, row)
-        if recent in ("superseded", "discarded"):
+        if recent in ("superseded", "discarded") or (row["kind"] == REQUEST_RETURN and recent in {"refused", "failed"}):
             value = _record_adapter_outcome(store, row, recent)
         elif recent == "reconciled" and row["kind"] in MUTATING_KINDS and _export_id(row) and document_matches:
             value = _record_adapter_outcome(
@@ -377,8 +375,8 @@ def settle_from_heartbeat(
 
         last = _last(heartbeat, row)
         last_outcome = _operation_id(last.get("outcome")) if last is not None else None
-        if last_outcome == "refused":
-            value = _record_adapter_outcome(store, row, "refused")
+        if last_outcome == "refused" or (last_outcome == "failed" and row["kind"] == REQUEST_RETURN):
+            value = _record_adapter_outcome(store, row, last_outcome)
             changed += value is not None
             continue
         if last_outcome == "applied" and row["kind"] == REQUEST_RETURN:
@@ -392,7 +390,57 @@ def settle_from_heartbeat(
         elif row["state"] == PROCESSING:
             # A missed single-slot lastRequest is deliberately not guessed.
             logger.debug("Fusion operation %s is still awaiting an outcome.", operation_id)
+    if changed:
+        store.make_durable()
     return changed
 
 
-__all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "adapter_outcome", "settle_from_heartbeat"]
+# Give an old add-in's startup journal reconciliation a bounded grace period.
+LEGACY_LIVE_CLAIM_MAX_AGE = timedelta(minutes=30)
+
+
+def settle_abandoned_live_claims(
+    store: CadLinkStore, *, now: datetime | None = None,
+    only_operation_id: str | None = None,
+) -> int:
+    """Stop waiting for expired HTTP claims, without repeating a CAD mutation.
+
+    Run after file evidence settlement: an exact completion wins before timeout.
+    The persisted claim distinguishes legacy HTTP attempts from file requests.
+    Updated time includes the last recorded stage progress; restarts never reset
+    the bound. Mutation safety does not infer that an unreported attempt stopped
+    before touching Fusion, even if its last stage was adapter-received.
+    """
+    checked_at = now or datetime.now(timezone.utc)
+    store.initialize()
+    with store._lock:
+        rows = [dict(row) for row in store._connect().execute(
+            "SELECT * FROM cad_operations WHERE state = ? AND claim_json IS NOT NULL "
+            + ("AND operation_id = ? " if only_operation_id else ""),
+            (PROCESSING,) + ((only_operation_id,) if only_operation_id else ()),
+        ).fetchall()]
+    changed = 0
+    for row in rows:
+        if row["kind"] not in FUSION_KINDS or row.get("stage") not in FUSION_STAGES:
+            continue
+        try:
+            claim = json.loads(row["claim_json"])
+            updated = datetime.fromisoformat(str(row["updated_at"]).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if (not isinstance(claim, Mapping) or not claim.get("liveSessionId")
+                or updated.tzinfo is None or checked_at - updated < LEGACY_LIVE_CLAIM_MAX_AGE):
+            continue
+        message = "The legacy Fusion live request was interrupted and reported no outcome."
+        if row["kind"] in MUTATING_KINDS:
+            value = _record(store, row, RECOVERY_REQUIRED, outcome={"message": message})
+        else:
+            value = _record(store, row, REJECTED, reason="adapter_failed", outcome={"message": message})
+        changed += value is not None
+    if changed:
+        store.make_durable()
+    return changed
+
+
+__all__ = ["ADAPTER_OUTCOMES", "FUSION_KINDS", "LEGACY_LIVE_CLAIM_MAX_AGE",
+           "adapter_outcome", "settle_from_heartbeat", "settle_abandoned_live_claims"]

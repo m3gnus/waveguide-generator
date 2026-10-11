@@ -384,18 +384,20 @@ def test_bound_pending_cancel_never_submits_and_replays_stop_after_commit(h, mon
 
 def test_startup_recovers_retention_before_accepting_a_persisted_delivery(h):
     import shutil
-    _received(h)
-    h.runtime._ensure_prep_lane = lambda: None
+    bundle, manifest = _received(h)
+    from test_cad_preparation import _deliver_file
+    delivery = _deliver_file(h, bundle, manifest) / "cmd-1.json"
     from server.cadlink import solve_command
-    solve_command._live_waits["cmd-1"] = solve_command._LiveWait(True, None)
+    claim = delivery.with_name(solve_command.CLAIM_PREFIX + "retention.json")
+    delivery.rename(claim)
+    h.runtime._ensure_prep_lane = lambda: None
     missing = h.workspace.with_name("unmounted")
     h.workspace.rename(missing)
     assert h._loop.run(sweep_pending_solves(h.context())) == 0
     assert h.row()["state"] == "received" and h.row()["snapshot_json"] is None
     assert h.jobs_store.latest_cad_job("cmd-1") is None
     missing.rename(h.workspace)
-    from server.cadlink import solve_command
-    solve_command._live_waits.clear()
+    claim.unlink()
     assert h._loop.run(sweep_pending_solves(h.context())) == 1
     assert h.row()["state"] == "accepted" and h.row()["snapshot_json"] is not None
     shutil.rmtree(h.workspace)
@@ -481,7 +483,6 @@ def test_replay_stops_an_existing_keyed_job_when_the_ledger_still_requests_cance
 @pytest.mark.parametrize("press", [False, True])
 @pytest.mark.parametrize("state", ["received", "processing", "needs_user_input"])
 def test_missing_return_after_bound_is_visibly_refused_and_dismissal_never_replays(h, press, state):
-    from server.cadlink import solve_command
     from server.cadlink.preparation import run_delivery_pass
     bundle, _ = _received(h)
     if state != "received":
@@ -491,8 +492,6 @@ def test_missing_return_after_bound_is_visibly_refused_and_dismissal_never_repla
     original = h.workspace / bundle
     hidden = original.with_name("gone")
     original.rename(hidden)
-    # An expired HTTP hold, including a client that never retries.
-    solve_command._live_waits["cmd-1"] = solve_command._LiveWait(False, 0)
     async def flow():
         if press:
             result = await api.post_prepare_cad_operation("cmd-1", api.PrepareOperationRequest(wait=True), _request(h))
@@ -654,8 +653,7 @@ def test_prepare_of_manual_solve_with_missing_copy_keeps_damaged_copy_remedy(h):
     assert len(h.ingest.calls) == 1 and h.submitted == []
 
 
-@pytest.mark.parametrize("hold", ["live", "claim"])
-def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monkeypatch, hold):
+def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monkeypatch):
     import shutil
     from server.cadlink import solve_command
     from server.cadlink.preparation import run_delivery_pass
@@ -671,11 +669,8 @@ def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monk
     original = h.workspace / bundle
     hidden = original.with_name("gone")
     original.rename(hidden)
-    if hold == "live":
-        monkeypatch.setattr(solve_command, "_live_waits", {"cmd-1": solve_command._LiveWait(True, None)})
-    else:
-        delivery = _deliver_file(h, bundle, manifest) / "cmd-1.json"
-        delivery.rename(delivery.with_name(solve_command.CLAIM_PREFIX + "dismiss.json"))
+    delivery = _deliver_file(h, bundle, manifest) / "cmd-1.json"
+    delivery.rename(delivery.with_name(solve_command.CLAIM_PREFIX + "dismiss.json"))
     async def dismiss():
         assert await sweep_pending_solves(h.context()) == 0
         assert h.row()["state"] == "received"  # Startup still respects the hold.
@@ -684,7 +679,6 @@ def test_dismissal_joins_existing_terminal_job_even_while_delivery_waits(h, monk
         assert h.row()["job_id"]
         assert h.jobs_store.latest_cad_job("cmd-1") is None
         hidden.rename(original)
-        solve_command._live_waits.clear()
         assert await sweep_pending_solves(h.context()) == 0
         await run_delivery_pass(h.context(), spawn=lambda *_: None)
         assert h.jobs_store.latest_cad_job("cmd-1") is None

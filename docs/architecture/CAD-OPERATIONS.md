@@ -39,7 +39,7 @@ and exact-id return waiter on reconnect.
 
 ## Operation kinds
 
-| Kind | Target: what it addresses | Inputs: immutable references | Needs a live CAD session |
+| Kind | Target: what it addresses | Inputs: immutable references | Needs a current Fusion file report |
 | --- | --- | --- | --- |
 | `receive_snapshot` | `{}` | `{bundle_path, manifest_sha256}` | No |
 | `prepare_and_solve` | `{}` | `{return_id, bundle_path, manifest_sha256}` | No |
@@ -55,8 +55,8 @@ and exact-id return waiter on reconnect.
 - **`expected_baseline`** is `{kind: "document_signature_hash", value}`: the
   document-wide signature the adapter reported when WG prepared the request.
 - **`destination`** is exactly `{kind, value}`. Its kind is `document`, whose
-  value is the active document ID from a live version-3 heartbeat, or
-  `new_document`, whose value is the request ID. With no live heartbeat WG
+  value is the active document ID from a fresh version-3 file heartbeat, or
+  `new_document`, whose value is the request ID. With no fresh file heartbeat WG
   requests a new document rather than guessing a stale destination.
 - **Exact targets.** A request that addresses an existing instance (`request_return`,
   `update_link`) names that instance exactly. "The one matching link in this design" is
@@ -70,8 +70,7 @@ and exact-id return waiter on reconnect.
 - **Solves and snapshots** address nothing in CAD, so their target is empty and
   everything they need is an input. Later inputs join under a new digest version: a
   snapshot id and a setup revision for a solve, and an import intent for a received
-  snapshot. A received snapshot's one producer is a delivery over HTTP (see "Delivery
-  over HTTP"); it records no intent yet.
+  snapshot. A received snapshot's producer is the file request inbox; it records no intent yet.
 
 ## Identity
 
@@ -182,7 +181,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `baseline_conflict` | `rejected` | The document no longer matches the expected baseline, and there is no evidence that this operation already applied |
 | `target_not_exact` | `rejected` | The target does not resolve to exactly one instance |
 | `snapshot_invalid` | `rejected` | The snapshot fails verification, or no longer matches the operation's inputs |
-| `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Delivery over HTTP"). Sending it again is a new operation |
+| `snapshot_unavailable` | `rejected` | A received snapshot's bundle stayed unreadable for 24 hours (see "Snapshot settlement through files"). Sending it again is a new operation |
 | `setup_required` | `needs_user_input` | The settings named or recorded cannot be used, or WG's defaults cannot solve a first-time model (a source with no suggested mesh size); a CAD-authored model never borrows the open project's |
 | `findings_need_review` | `needs_user_input` | The preparation has blocking findings not yet approved on that preparation |
 | `frame_confirmation_required` | `needs_user_input` | An unlinked (CAD-authored) snapshot whose project has not confirmed the solver frame it was prepared in and for which WG is not confident of its own (see "Unlinked solver frame") |
@@ -199,7 +198,7 @@ A command is accepted only once its identity, digest, target and inputs are comm
 | `publication_failed` | `cancelled` | The operation was stored but its request file could not be published |
 | `adapter_refused` | `rejected` | Fusion explicitly refused this exact request and no document evidence says it applied |
 | `adapter_not_started` | `cancelled` | Fusion discarded a leftover claim with neither evidence nor an applying mark |
-| `adapter_failed` | `rejected` | Fusion reported over the live protocol that the request failed before it changed the document (a mutation that failed while executing is `recovery_required` instead) |
+| `adapter_failed` | `rejected` | Fusion reported in its file heartbeat that the request failed before it changed the document (a mutation that failed while executing is `recovery_required` instead) |
 
 The three rejections are final because a refreshed baseline, target or snapshot is a new
 operation. Every `needs_user_input` code keeps the operation, and another
@@ -667,7 +666,7 @@ old preparation implementation and unused solve columns stay until Stage 5.
 
 Received snapshots are retained and settled by the ledger, never prepared.
 The delivery loop still reports a missing folder, restart latch, failed or hung
-pass; live delivery holds and bounded retention are unchanged. The consumer-off
+pass; bounded file retention is unchanged. The consumer-off
 switch still declines intake and advertises no solve-delivery capability.
 
 ## Preparation identity
@@ -782,7 +781,7 @@ under `frontend/src/` unless they start with `server/`.
 | 7 | Sends accepted before the page connected, or during an outage, are discovered | none | `server/cadlink/receipts_api.py`, cursor feed `stores/cadReceipts.ts` | `cadReceipts.test.ts` cursor paging, overlap, failed-page recovery and push/resync tests; `test_cad_receipts.py` |
 | 8 | A solve's job is claimed and its label advanced once, despite duplicates, reloads or a lost response | *job* | `jobs/cadSolve.ts`, `shell/JobsCoordinator.tsx` job/client-request-keyed claims | `JobsCoordinator.mutex.test.tsx`; `M1Acceptance.test.tsx :: makes no second job and no second result…` |
 | 9 | A pinned result stays until the new run has results; Results is revealed once, only if the user has not navigated | yes | `api/results.ts`, `shell/ResultsPanel.tsx`, `shell/solveAttention.ts` | `ResultsPanel.transition.test.tsx`, `solveAttention.test.tsx` |
-| 10 | With coordination off, idle CAD work makes no routine reads; events and moving work resume them | none | `shell/cadObservation.ts`: coordination off uses moving requests/CAD jobs, including published and restored Insert/Update operations; coordination on keeps the base rate only in CAD mode, with Fusion running, or during a pull. Listing changes and Sends reset the quiet clock; coarse job notifications do not. Mount wake and an overlapping hello share reads; hidden/Onshape mounts clear model loading | `cadObservation.test.ts` idle/off, moving jobs, parked requests, hidden pages and legacy discovery; `CadWorkspaceOwners.test.ts` outbound cadence, startup coalescing and initial loading; `cadObservation.test.ts` listing/Send quiet resets; `:: on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock` |
+| 10 | Idle CAD work makes no routine reads; events and moving work resume them | none | `shell/cadObservation.ts` uses moving requests/CAD jobs, including published and restored Insert/Update operations. WG reports the retired coordination gate as off; the environment switch is gone. Listing changes and Sends reset the quiet clock; coarse job notifications do not. Mount wake and an overlapping hello share reads; hidden/Onshape mounts clear model loading | `cadObservation.test.ts` idle/off, moving jobs, parked requests, hidden pages and legacy discovery; `CadWorkspaceOwners.test.ts` outbound cadence, startup coalescing and initial loading; `cadObservation.test.ts` listing/Send quiet resets; `:: on: moving jobs and coarse notifications do not hold the base rate or reset the quiet clock` |
 | 11 | A held Fusion status ages into "last report" and a superseded read cannot drive an action | none | `stores/cadConnection.ts` owns status TTL, bounded command reads and read/context generations; `shell/cadWorkflowView.ts` projects last reports | `cadConnection.test.ts` TTL/overlapping reads, hanging command timeout and command-slot cancellation tests |
 | 12 | The model view shows the solver mesh at once and swaps in the full tessellation when ready | none (before a solve) | `shell/cadlink/artifactLoader.ts` | `artifactLoader.test.ts :: shows the solver artifact immediately and recovers a missed readiness event by a bounded re-read`; `artifactLoader.mirroredDisplay.test.tsx` |
 | 13 | The solver-mesh view shows the exact verified solve triangles in its own slot | none | `shell/cadlink/artifactLoader.ts`, `viewport/importedMeshStore.ts` | `artifactLoader.test.ts :: fetches only the verified solve triangles into its own slot and caches by ingest`; `artifactLoader.mirroredDisplay.test.tsx` |
@@ -834,15 +833,13 @@ settles the waiter. S5-2's receipt feed projects received snapshots and cannot
 prove the outcome of a `request_return`. The narrow
 `GET /api/cadlink/return-requests/{request_id}` router in `fusion_return.py` reads
 bounded `.fusion-status.json` diagnostics by exact id and persists refusal or
-adapter completion in the existing request record. It never consults the live
-registry, and adapter completion alone cannot settle geometry. `mount_cadlink`
+adapter completion in the existing request record. Adapter completion alone
+cannot settle geometry. `mount_cadlink`
 mounts this router. The waiter selects the pulled return and starts its preparation;
 Bring in and solve joins that same preparation. Automatic arrival discovery yields
 while a pull is pending and excludes its claimed correlation ids after settlement.
-File delivery has a default no-op notifier hook;
-`live.api.mount_live` registers its wake hint while that layer is mounted.
-S5-8 removes this registration together with `live/`; importing the file owner
-never loads that layer.
+The backend consumes the request inbox;
+Fusion consumes handoff/return request files and publishes `.fusion-status.json`.
 The standalone waiter joins presses even before publication finishes, owns its
 60-second deadline and active polling, exposes exact awaited ids plus `refresh`
 for reconnect recovery, and unsubscribes/stops on settlement or disposal. Each
@@ -1290,8 +1287,7 @@ asked" or silently invents a new request ID.
    when the file is already gone, or on Windows while its writer still holds it open.
 2. **Read** the claim. What the rename took is the request.
 3. **Persist** it: accept the operation, or recover the one it repeats, as in the
-   delivery table above. A delivery over HTTP is accepted by the same code, with the
-   same digest (see "Delivery over HTTP").
+   delivery table above. A repeated file is compared by the same digest.
 4. **Retain** the snapshot the operation names in WG's own storage (see "Preparation").
    - Retained, or never retainable as it is named (malformed, changed since the command,
      outside the WGLink folder): go on. Preparation refuses a return that cannot be
@@ -1447,51 +1443,16 @@ later files wait for the next pass.
   preparation retains it; one that no longer matches its command is `rejected`
   (`snapshot_invalid`).
 
-**Delivery over HTTP.** A WGLink with a live session delivers the same item by
-`POST /api/cadlink/live/deliveries` (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 8)
-instead of writing the file. It names the bundle by reference in the WGLink folder, as the
-file does, and is `prepare_and_solve` or `receive_snapshot`.
+**Snapshot settlement through files.** A received snapshot is retained, then
+claimed and recorded `accepted`; one that can never be retained as named is
+`rejected` (`snapshot_invalid`). Nothing is ingested, meshed or solved. It is
+never accepted before WG holds its bytes. Startup and each delivery pass reach
+all unsettled snapshots, including those left `processing` after a crash. A
+new generation fences a late outcome from an earlier attempt.
 
-- **One acceptance.** The file pass and the route accept through one function: the same
-  digest (`requestedAt` is transport on both), the same conflict rule, taken from the
-  store's result. One operation delivered by file and over HTTP, in either order or at
-  once, is accepted once and prepared once; one consumer in the process accepts at a time.
-- **Retained before the answer.** The route answers 200 (`created` or `recovered`) once
-  the snapshot is retained, or once it can never be retained as named (preparation then
-  refuses it). A return that cannot be read now is answered 503 and retried by the
-  add-in. The first such answer sets a deadline 30 s later; a retry at or after it is
-  acknowledged (200), and a solve is admitted as a job. Preparation refuses it at
-  `validating` with `preparation_failed` and the specific return-unavailable message,
-  as a file claim does after its passes. Prepare after the bound has the same visible
-  outcome. A refused or dismissed job is never rerun by a delivery pass. The deadline
-  is remembered for five minutes past it; a retry later than that starts a new 30 s bound.
-- **Held while in flight.** Before the route accepts, it records a hold on the operation,
-  apart from the file claims' waits. The hold ends with a 200. A 503 keeps it until its
-  deadline, after which the operation is no longer held (the delivery pass may start it)
-  even before the retry arrives. A conflict (409), a busy store or an error leaves the
-  hold as it was before that delivery, so a conflicting delivery never releases another
-  one's 503 hold. A delivery pass lists `received` operations first and reads the holds
-  after, so it never starts an operation whose delivery is still being accepted or
-  retained. The holds are in memory: a restart forgets them, and the add-in's retry is
-  recovered by digest.
-- **A received snapshot** is retained, then claimed and recorded `accepted`; one that can
-  never be retained as named is `rejected` (`snapshot_invalid`); one that cannot be read
-  now is not claimed and gets no outcome. Nothing is ingested, meshed or solved. It is
-  never `accepted` before WG holds its bytes.
-- **Unsettled snapshots.** A received snapshot left `received` (WG stopped between
-  acceptance and outcome, or the return was not readable within the bound) or
-  `processing` (a settler claimed it, and WG stopped or the store refused its outcome) is
-  settled the same way at startup and at the start of each delivery pass with a WGLink
-  folder, and by the add-in's retry. Every such operation is reached, however many stay
-  unreadable, and one a delivery holds is skipped. Settling claims the operation again,
-  so the new generation takes it over and a late outcome from the earlier claim is
-  refused. The route never answers 200 for a snapshot still `received` or `processing`
-  except at the 30 s bound; the settlement finishes it after.
-- **Bounded wait for a snapshot.** The first time a received snapshot's bundle is found
-  unreadable is stored with the operation (`snapshot_unreadable_since`), so a restart
-  does not reset it. Once it has stayed unreadable for 24 hours the operation is
-  `rejected` (`snapshot_unavailable`) and logged. Sending it again from Fusion is a new
-  operation with a new ID.
+The first unreadable time is persisted as `snapshot_unreadable_since`, so a
+restart does not reset the bound. After 24 hours the snapshot is rejected with
+`snapshot_unavailable`. Sending again creates a new operation ID.
 
 ## Solve-command compatibility
 
@@ -1531,7 +1492,7 @@ decision, 2026-09-13: no older add-in is supported, and WG always uses the add-i
 ships.
 
 - **WG refuses an older add-in.** The add-in reports its version in the heartbeat as
-  `deliveryVersion`. A live heartbeat without it, or below 3, gives the status
+  `deliveryVersion`. A file heartbeat without it, or below 3, gives the status
   `addin_outdated`, and WG reads nothing more from it. WG publishes no return request to
   such an add-in (HTTP 409 with the remedy), and refuses its solve commands (see
   "Solve-command delivery"). The UI names the remedy, from what WG's startup did about
@@ -1582,13 +1543,12 @@ ships.
     registration, one from another folder, or one not set to run on startup is reported
     with the status (`addinRefresh.registration`).
   - "Activated" means Fusion's next start loads the new copy, never that it runs it.
-    What Fusion actually loaded is the identity WGLink reports when it registers a live
-    session (`docs/reference/CADLINK-LIVE-PROTOCOL.md`), with `matchesPin` saying whether
-    its commit is the pinned one; a mismatch is reported, not refused. The status poll
-    reports it at response time as `addinRefresh.loadedIdentity`
-    (`addin_update.loaded_addin_identity`), and `null` while no live session is valid. It
-    appears only where the status already carries `addinRefresh`: an outdated add-in, or an
-    activation decision other than "disabled".
+    A fresh `.fusion-status.json` reports the loaded `adapterVersion`, exposed as
+    `addinRefresh.loadedIdentity.addinVersion`. Development builds may report
+    `diagnostics.source.sourceCommit`; WG reports that commit and `matchesPin`
+    only when present. Managed file heartbeats do not identify a commit, so both
+    fields remain unknown. A missing or stale heartbeat yields `null`. An installed
+    marker alone never proves what Fusion loaded.
 - **What an older WG left is removed.** At every start WG removes the single slots
   `.fusion-return-request.json` and `.fusion-handoff.json`, their records
   (`.legacy-slot.json`), and request files of another schema. No add-in this WG talks to
@@ -1608,7 +1568,7 @@ it accepts, in `<data dir>/ipc/wglink/wg-capabilities.json`. WG writes it atomic
 every start:
 
 ```json
-{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "solveAcknowledgement": 1, "fusionRequestDelivery": 3, "sourceIdentity": 1, "liveProtocol": 1, "documentUp": 1}
+{"schemaVersion": 1, "producer": "waveguide-generator", "solveCommandDelivery": 4, "solveAcknowledgement": 1, "fusionRequestDelivery": 3, "sourceIdentity": 1, "documentUp": 1}
 ```
 
 - **`solveAcknowledgement: 1`** means WG publishes the outcome of every request in its
@@ -1628,10 +1588,13 @@ every start:
   the roll of an unlinked model's solver frame (see "Unlinked solver frame"). The
   feature and the field are required together. Read by the same rules as
   `sourceIdentity`; an add-in states it only when WG advertises it.
-- **`liveProtocol: 1`** means this WG serves live protocol 1 at the address in
-  `wg-endpoint.json` (`docs/reference/CADLINK-LIVE-PROTOCOL.md`). An add-in goes live only
-  when WG advertises it, read by the same rules; anything else means "use the files". It
-  is additive: the files above keep working, with or without a live session.
+- **No `liveProtocol` is advertised.** WG removes a stale `wg-endpoint.json`
+  at startup and exchanges CAD requests only through files. The shipped WGLink 0.2.1
+  pin therefore uses its file path, even if an old endpoint remains. Send is
+  discovered through the returns listing; Solve uses schema-3 request files.
+  `test_wglink_packaged_pair.py` checks the exact pinned writer, including an
+  exchange in a separate process for Solve, acknowledgements, Insert/Update,
+  return requests and the file heartbeat.
 
 - **Reading it.** A reader ignores fields it does not know. A missing or unreadable file,
   a `schemaVersion` the reader does not know, or a value that is not an integer read as
@@ -1708,18 +1671,19 @@ claim, if any, already owns delivery, and a terminal operation must never run tw
    then delete the claim, whatever the outcome.
 4. **A return request runs only in the session it names** (`sessionId`).
 
-**Or over the live protocol.** A live add-in takes the same requests through
-`/api/cadlink/live/requests` (`docs/reference/CADLINK-LIVE-PROTOCOL.md`, section 7): WG
-hides the visible file under `.<requestId>.json.live-<claimId>.tmp`, claims the operation
-(`processing`, stage `adapter-received`, the claim recorded in `claim_json`), then deletes
-the hidden file. The file is the mutual-exclusion token, so a request is taken exactly
-once, by whichever transport renames it first. The add-in then reports the stages
-`queued-for-fusion` and `executing` and the outcome, fenced on its installation and the
-attempt generation, with the heartbeat's outcome mapping below.
+**Legacy HTTP claims.** No new HTTP session or claim can be created.
+An older WG may have persisted `claim_json` with a `liveSessionId` and left the
+operation `processing` at `adapter-received`, `queued-for-fusion` or `executing`.
+After file evidence is checked, startup, status reads and explicit reconciliation
+settle those attempts once their last persisted progress is 30 minutes old.
+Insert/Update becomes `recovery_required`, never repeated; a return request is
+rejected with `adapter_failed` and an interrupted message. Recent claims and
+file claims are untouched. Exact document evidence can still settle a mutation
+before or after the timeout. Recovery notices retain dismissal semantics.
 
 **Heartbeat outcome mapping.** WG reads only a fresh heartbeat with
-`deliveryVersion >= 3`, live or file: the one `fusion_status.select_heartbeat` chooses
-(`docs/reference/CADLINK-LIVE-PROTOCOL.md`, section 6), and in a status poll the same one
+`deliveryVersion >= 3` from `.fusion-status.json`: the one
+`fusion_status.select_heartbeat` reads, and in a status poll the same one
 the status reports. Document link evidence is considered before every reported
 outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 `accepted`. `document.applyingOperation.operationId` settles only Insert/Update as
@@ -1735,7 +1699,8 @@ outcome; an exact `operationId` plus `exportId` settles a mutation as reconciled
 | `recentOutcomes: notTaken` (`_pickup_check`, `_startup_pickup_check`) | ignored for Fusion-bound rows |
 | `lastRequest: refused` (`_apply_pending_return_request`, `_apply_pending_handoff`) | `rejected` / `adapter_refused`, unless document evidence already accepted it |
 | `lastRequest: applied` (`_apply_pending_return_request`, `_apply_pending_handoff`) | accepts a return request; a mutation still requires document evidence |
-| `lastRequest: failed` (`_apply_pending_return_request`, `_apply_pending_handoff`) | logged and left `processing` |
+| `recentOutcomes` or `lastRequest: failed` for a return request | `rejected` / `adapter_failed`, also at startup and status settlement without polling the return route |
+| `lastRequest: failed` for Insert/Update | awaits document evidence; an expired legacy HTTP claim becomes `recovery_required` |
 | `lastRequest: running` (`_begin_request`) | left `processing` |
 | `lastRequest: requested` (`_submit_to_wg`) | ignored for Fusion-bound rows |
 

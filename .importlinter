@@ -42,8 +42,6 @@ ignore_imports =
     # cadlink -> updates: existing upward dependency.
     # Legacy use: UPDATE_RESTART_PENDING.
     server.cadlink.api -> server.updates.restart
-    # Legacy use: UPDATE_RESTART_PENDING.
-    server.cadlink.live.deliveries -> server.updates.restart
     # design -> cadlink: existing upward dependency.
     # Legacy use: CadLink.
     server.design.textcfg -> server.cadlink.identity

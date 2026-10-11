@@ -6,7 +6,7 @@ and an optional operation id, this writes one zip holding:
 
 - ``fusion-status.json``, ``wg-capabilities.json`` and ``wg-endpoint.json``:
   the contents of ``.fusion-status.json``, ``wg-capabilities.json`` and the
-  live session's ``wg-endpoint.json`` under the data
+  legacy ``wg-endpoint.json`` under the data
   directory's own ``ipc/wglink`` folder (``server/cadlink/fusion_status.py``,
   ``server/cadlink/fusion_delivery.py`` -- this is WG-internal signaling,
   rooted at the application data directory itself, not at the user-chosen
@@ -35,17 +35,12 @@ anything that starts an event loop or touches a live WG process, so it is
 safe to run against a data directory belonging to a WG that is currently
 running.
 
-WG prefers a live HTTP heartbeat over the file one when a fresh one exists
-(``server.cadlink.fusion_status.select_heartbeat``), but the live
-heartbeat lives only in that WG process's in-memory ``LiveRegistry``
-(``server/cadlink/live/registry.py``) -- it is never written to a file, and a
-WG restart forgets it. This collector is read-only and runs out of process,
-so it never calls a running WG over HTTP and can never observe which
-transport was selected. Rather than guess or stay silent about that gap, both
-``collect_evidence`` and the zip's ``manifest.json`` carry a ``notes`` list
-that says so explicitly and points at the one place that does know: WG's own
-``POST /api/cadlink/fusion-status`` response, whose ``heartbeatTransport``
-field names ``"live"``, ``"file"``, or ``null``.
+WG reads heartbeats only from ``.fusion-status.json``. The collector captures
+that file without evaluating its freshness at the time a running WG read it.
+The ``notes`` list therefore points at ``POST /api/cadlink/fusion-status``:
+its ``heartbeatTransport`` is ``"file"`` for a fresh report, or ``null``.
+A legacy ``wg-endpoint.json``, if present, is diagnostic evidence only; WG
+removes it at startup and the capability file does not enable HTTP sessions.
 """
 
 from __future__ import annotations
@@ -69,7 +64,6 @@ import zipfile
 # never used to locate the ipc/wglink signaling files above.
 from server.cadlink.fusion_delivery import CAPABILITIES_FILENAME, HANDOFFS, RETURN_REQUESTS, ipc_folder
 from server.cadlink.fusion_status import FUSION_STATUS_FILENAME
-from server.cadlink.live.endpoint import ENDPOINT_FILENAME
 from server.platform.paths import data_paths
 
 
@@ -84,20 +78,15 @@ CADLINK_SETTINGS_KEY = "cadLinkPath"
 _REDACTED_KEY_TOKENS = ("token", "secret", "password")
 _REDACTED_PLACEHOLDER = "*** redacted ***"
 
-# Static, not derived from the data directory: this collector can never know
-# the live-vs-file answer offline, regardless of what it finds on disk (see
-# the module docstring). ``fusion-status.json`` above is always the file
-# transport's payload; it has no ``heartbeatTransport`` field of its own --
-# that field only exists on WG's own /fusion-status answer.
-_LIVE_HEARTBEAT_TRANSPORT_NOTE = (
-    "This collector is read-only and runs offline, out of process: it never "
-    "calls a running WG over HTTP, so it cannot know whether the freshest "
-    "heartbeat came by the live transport or the file one. The live "
-    "heartbeat lives only in WG's in-process LiveRegistry and is "
-    "never persisted to a file this collector can read; fusion-status.json "
-    "above is always the file transport's payload. See WG's own answer to "
-    "POST /api/cadlink/fusion-status -- its heartbeatTransport field names "
-    "\"live\", \"file\", or null."
+# Keep collecting a leftover endpoint for upgrade diagnostics. It is never
+# advertised or used for transport by this server.
+LEGACY_ENDPOINT_FILENAME = "wg-endpoint.json"
+
+_FILE_HEARTBEAT_TRANSPORT_NOTE = (
+    "fusion-status.json is the file heartbeat captured at collection time. "
+    "This offline collector does not establish whether a running WG selected "
+    "a fresh report. See POST /api/cadlink/fusion-status: heartbeatTransport "
+    "is \"file\" for a fresh report or null when none is available."
 )
 
 # A cap against a hand-placed or unrotated log; the application log itself is
@@ -169,7 +158,7 @@ def _read_json_member(path: Path) -> dict[str, Any]:
 def collect_ipc_files(data_dir: Path) -> dict[str, Any]:
     """``.fusion-status.json``, ``wg-capabilities.json`` and ``wg-endpoint.json``, redacted.
 
-    Both live under ``<data_dir>/ipc/wglink`` -- the application data
+    All reside under ``<data_dir>/ipc/wglink`` -- the application data
     directory, not the user-chosen CAD-link exchange folder (see the module
     docstring).
     """
@@ -178,8 +167,8 @@ def collect_ipc_files(data_dir: Path) -> dict[str, Any]:
     return {
         "fusionStatus": _read_json_member(folder / FUSION_STATUS_FILENAME),
         "wgCapabilities": _read_json_member(folder / CAPABILITIES_FILENAME),
-        # The live session endpoint; its ``registrationSecret`` is redacted.
-        "wgEndpoint": _read_json_member(folder / ENDPOINT_FILENAME),
+        # Leftover endpoint evidence; its ``registrationSecret`` is redacted.
+        "wgEndpoint": _read_json_member(folder / LEGACY_ENDPOINT_FILENAME),
     }
 
 
@@ -284,8 +273,8 @@ def collect_evidence(data_dir: Path, *, operation_id: str | None = None) -> dict
         "serverLog": collect_server_log(data_dir, operation_id=operation_id),
         # Caveats about this bundle that are true regardless of what was
         # found on disk. See the module docstring and
-        # ``_LIVE_HEARTBEAT_TRANSPORT_NOTE``.
-        "notes": [_LIVE_HEARTBEAT_TRANSPORT_NOTE],
+        # ``_FILE_HEARTBEAT_TRANSPORT_NOTE``.
+        "notes": [_FILE_HEARTBEAT_TRANSPORT_NOTE],
     }
 
 

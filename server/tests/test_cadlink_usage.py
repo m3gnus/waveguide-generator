@@ -59,7 +59,7 @@ def test_atomic_write_failure_preserves_previous_record(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("kind", [PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT])
-@pytest.mark.parametrize("transport", ["inbox", "live"])
+@pytest.mark.parametrize("transport", ["inbox", "acceptance"])
 def test_accepted_delivery_records_usage(tmp_path, kind, transport):
     from server.tests.test_cad_solve_delivery import _file
     data = tmp_path / "data"
@@ -68,9 +68,9 @@ def test_accepted_delivery_records_usage(tmp_path, kind, transport):
     item = solve_command.DeliveredItem("delivery", kind, "wgreturn/model.wgreturn", manifest, "wgr_1")
     try:
         assert not usage.cadlink_in_use(data_dir=data, owned_addin=False)
-        if transport == "live":
-            result = solve_command.deliver_live(store, item, retain=lambda _: None)
-            assert result.status == solve_command.LIVE_ACCEPTED
+        if transport == "acceptance":
+            result = solve_command.accept_delivery(store, item, retain=lambda _: None)
+            assert result.result == "created"
         else:
             extras = {} if kind == PREPARE_AND_SOLVE else {"kind": kind}
             path = _file(data, "delivery", item.bundle_path, manifest, schema=4 if kind == RECEIVE_SNAPSHOT else 3, **extras)
@@ -86,7 +86,7 @@ def test_accepted_delivery_records_usage(tmp_path, kind, transport):
         store.close()
 
 
-@pytest.mark.parametrize("transport", ["inbox", "live"])
+@pytest.mark.parametrize("transport", ["inbox", "acceptance"])
 def test_a_usage_record_that_cannot_be_written_never_fails_the_delivery(
     tmp_path, monkeypatch, caplog, transport
 ):
@@ -105,9 +105,9 @@ def test_a_usage_record_that_cannot_be_written_never_fails_the_delivery(
     monkeypatch.setattr(usage, "record_usage", held)
     try:
         with caplog.at_level("WARNING", logger=solve_command.logger.name):
-            if transport == "live":
-                result = solve_command.deliver_live(store, item, retain=lambda _: None)
-                assert result.status == solve_command.LIVE_ACCEPTED
+            if transport == "acceptance":
+                result = solve_command.accept_delivery(store, item, retain=lambda _: None)
+                assert result.result == "created"
             else:
                 _file(data, "delivery", item.bundle_path, manifest)
                 solve_command.collect_solve_deliveries(data, store)
@@ -127,7 +127,7 @@ def test_direct_operation_and_conflicting_delivery_grant_nothing(tmp_path):
                                solve_command.request_digest(first.kind, target, inputs), target, inputs)
         assert not usage.cadlink_in_use(data_dir=tmp_path, owned_addin=False)
         conflict = solve_command.DeliveredItem("delivery", RECEIVE_SNAPSHOT, "wgreturn/other.wgreturn", first.manifest_sha256)
-        assert solve_command.deliver_live(store, conflict, retain=lambda _: None).status == solve_command.LIVE_CONFLICT
+        assert solve_command.accept_delivery(store, conflict, retain=lambda _: None).result == "conflict"
         assert not usage.cadlink_in_use(data_dir=tmp_path, owned_addin=False)
     finally:
         store.close()

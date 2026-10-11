@@ -17,7 +17,7 @@ export interface CadOperationSummary {
   state: string;
   /** "Preparation": `received`, `validating`, `preparing-mesh`, `ready`, `submitted`.
    * A Fusion-bound request claimed live: `adapter-received`, `queued-for-fusion`,
-   * `executing` (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7). */
+   * `executing` (docs/architecture/CAD-OPERATIONS.md, "Legacy HTTP claims"). */
   stage: string | null;
   /** A reason code ("Outcomes"), or null. */
   reason: string | null;

@@ -219,7 +219,7 @@ def test_wg_advertises_its_delivery_versions_at_startup(
     _run_cadlink_startup(data_dir, workspace)
 
     # ``sourceIdentity`` tells the add-in it may declare source-identity-v1;
-    # ``liveProtocol`` that this WG serves the live session protocol. The WG
+    # The WG
     # request inbox reads schema 4 (a Send as well as a Solve); Fusion-bound
     # requests stay version 3 (M1 transfer contract, C3).
     assert _read(_ipc(data_dir) / CAPABILITIES) == {
@@ -229,7 +229,6 @@ def test_wg_advertises_its_delivery_versions_at_startup(
         "solveAcknowledgement": 1,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
-        "liveProtocol": 1,
         "documentUp": 1,
         "automaticDomain": 1,
     }

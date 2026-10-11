@@ -1,4 +1,4 @@
-"""The WGLink shipped at source.json is a live writer for this WG reader."""
+"""The WGLink shipped at source.json is the writer for this WG file reader."""
 
 from __future__ import annotations
 
@@ -490,3 +490,95 @@ def test_the_loader_refuses_a_foreign_protocol_module(tmp_path: Path, monkeypatc
             pass
     assert sys.modules["wglink_protocol"] is foreign
     assert "_wglink_pinned_wglink_return" not in sys.modules
+
+
+def test_pinned_addin_file_exchange_in_a_separate_process(packaged: Path, tmp_path: Path):
+    """The exact shipped writer falls back to files even with a stale endpoint."""
+    from server.cadlink.fusion_delivery import advertise_fusion_delivery
+    from server.cadlink.fusion_return import publish_return_request
+    from server.cadlink.fusion_outcomes import settle_from_heartbeat
+    from server.cadlink.fusion_status import select_heartbeat
+    from server.exports.cad_handoff import publish_fusion_handoff
+    from server.tests.test_cad_fusion_operations import _result
+
+    data, workspace = tmp_path / 'data', tmp_path / 'workspace'
+    bundle = workspace / 'wgreturn/pinned.wgreturn'
+    bundle.parent.mkdir(parents=True)
+    shutil.copytree(CORPUS / 'automatic-full.wgreturn', bundle)
+    advertise_fusion_delivery(data)
+    ipc = ipc_folder(data)
+    # An old endpoint alone must never enable the pinned add-in's live path.
+    (ipc / 'wg-endpoint.json').write_text(json.dumps({'liveProtocol': 1}))
+    script = '''
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import wglink_watch as watch
+import wglink_live as live
+ipc, workspace, bundle = map(Path, sys.argv[2:5])
+assert not live.advertises_live(ipc)
+assert live.produce_solve(ipc, bundle_path=bundle, workspace_root=workspace,
+                         return_id='wgr_1', healthy=True, solve_files=watch) is None
+mode = sys.argv[5]
+if mode == 'produce':
+    watch.write_solve_request(ipc, command_id='pinned-process', return_id='wgr_1',
+                              bundle_path=bundle, workspace_root=workspace)
+else:
+    assert watch.read_acknowledgement(ipc, 'pinned-process')[0] == 'accepted'
+    request = watch.next_return_request(ipc, session_id='pinned-session')
+    assert request is not None and request.request_id == 'pinned-return'
+    claimed = watch.claim_request(request)
+    assert claimed is not None and watch.claim_request(request) is None
+    assert watch.acknowledge_return_request(claimed)
+    for operation_id in ('pinned-insert', 'pinned-update'):
+        handoff = watch.next_pending_handoff(ipc, bundle_root=workspace / 'wglink')
+        assert handoff is not None and handoff.operation_id == operation_id
+        claimed = watch.claim_request(handoff)
+        assert claimed is not None and watch.acknowledge_handoff(claimed)
+    assert watch.next_pending_handoff(ipc, bundle_root=workspace / 'wglink') is None
+    watch.write_fusion_status(ipc, session_id='pinned-session', adapter_version='0.2.1', document_name=None, links=[],
+        diagnostics={'recentOutcomes': [{'channel': 'returnRequest', 'requestId': 'pinned-return', 'outcome': 'failed'}]})
+'''
+    def child(mode):
+        result = subprocess.run([sys.executable, '-c', script, str(packaged), str(ipc), str(workspace), str(bundle), mode],
+                                capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    from server.app import create_app
+    from server.tests.cad_file_harness import Wg
+    application = create_app(data_dir=data)
+    application.state.cad_workspace.select(workspace)
+    application.state.jobs_runtime._ensure_prep_lane = lambda: None
+    application.state.jobs_runtime._ensure_scheduler = lambda: None
+    harness = Wg(application, data, workspace)
+    store = harness.store
+    try:
+        child('produce')
+        harness.run_pass()
+        first = store.get_operation('pinned-process')
+        assert first is not None and first['kind'] == 'prepare_and_solve'
+        # Receipt is durable and a repeated pinned file is the same operation.
+        child('produce')
+        harness.run_pass()
+        assert store.get_operation('pinned-process')['request_digest'] == first['request_digest']
+        assert len(store.list_operations()) == 1
+        publish_return_request(data, store, session_id='pinned-session', design_id='wgd_1',
+                               document_id='fusion:doc-1', instance_id='instance-1',
+                               expected_return_state_hash='sha256:state', request_id='pinned-return')
+        handoff_bundle = workspace / 'wglink/pinned.wglink'
+        handoff_bundle.mkdir(parents=True)
+        result = _result(handoff_bundle)
+        publish_fusion_handoff(data, workspace, store, result, request_id='pinned-insert')
+        publish_fusion_handoff(data, workspace, store, result, request_id='pinned-update',
+                               expected_document_id='fusion:doc-1', expected_instance_id='instance-1',
+                               expected_return_state_hash='sha256:state')
+        child('consume')
+        heartbeat, transport = select_heartbeat(data)
+        assert transport == 'file' and heartbeat['adapterVersion'] == PIN['addinVersion']
+        settle_from_heartbeat(store, heartbeat, ipc)
+        assert store.get_operation('pinned-return')['state'] == 'rejected'
+        assert store.get_operation('pinned-return')['reason'] == 'adapter_failed'
+    finally:
+        import asyncio
+        asyncio.run(application.state.jobs_runtime.shutdown())
+        store.close()

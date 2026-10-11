@@ -140,7 +140,7 @@ router = APIRouter(prefix="/api/cadlink", tags=["cadlink"])
 
 
 def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str) -> dict[str, Any] | None:
-    """Read one file-transport result, independent of live sessions and clocks.
+    """Read one file-transport result by its exact request id.
 
     Geometry success is proved by the returns listing, never by an adapter's
     completion report. The bounded status file can prove refusal for this exact
@@ -149,8 +149,8 @@ def read_return_request(data_dir: Path, store: CadLinkStore, request_id: str) ->
     allowed: they carry an exact id and never claim current document presence.
     The five-second future tolerance is deliberately tighter than
     fusion_status.FUSION_STATUS_MAX_SKEW (one minute): command outcomes need no
-    presence grace period. Do not import fusion_status here; it loads live
-    heartbeat selection, which this file-only owner must remain independent of.
+    presence grace period. This exact command evidence remains usable after the
+    presence heartbeat has aged out.
     """
     row = store.get_operation(request_id)
     if row is None or row["kind"] != REQUEST_RETURN:

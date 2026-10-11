@@ -59,8 +59,8 @@ def _json(value: object) -> Mapping[str, Any]:
 def file_evidence(data_dir: Path, *, for_loudness: bool = False) -> Mapping[str, Any] | None:
     """Fresh evidence settles; the last command-driven report only stays loud.
 
-    Keep this reader local: fusion_status imports the live registry, which is
-    removed in S5-8. A missing/stale report never erases durable recovery.
+    Freshness controls settlement; a missing/stale report never erases
+    durable recovery.
     """
     path = data_dir / "ipc" / "wglink" / ".fusion-status.json"
     try:

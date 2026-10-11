@@ -209,7 +209,7 @@ def test_dismissal_rejects_ids_without_an_accepted_mutation(tmp_path, notice_id)
 def test_evidence_request_directories_match_the_delivery_channels(tmp_path):
     import ast
     from server.cadlink.fusion_outcomes import _visible_request
-    # Read the constants without importing their live-dependent publisher.
+    # Read the file transport constants without assembling the application.
     source = Path(__file__).parents[1] / "cadlink" / "fusion_delivery.py"
     channels = {node.targets[0].id: ast.literal_eval(node.value.args[0])
                 for node in ast.parse(source.read_text()).body
@@ -242,29 +242,17 @@ def test_routes_read_status_file_without_live_layer(tmp_path):
     response = asyncio.run(post_dismiss_recovery_notice("mutation", request))
     assert response.dismissed and not response.repaired
     assert asyncio.run(get_recovery_notices(request)).notices == []
-    # Neither direct nor transitive recovery imports include the live layer.
-    import ast
-    from server.cadlink import recovery_api, fusion_outcomes
-    for module in (recovery_api, fusion_outcomes):
-        tree = ast.parse(Path(module.__file__).read_text())
-        assert not any(isinstance(node, ast.ImportFrom) and node.module and "live" in node.module.split(".") for node in ast.walk(tree))
     store.close()
 
 
-def test_recovery_imports_and_routes_work_when_live_imports_are_forbidden(tmp_path):
+def test_recovery_routes_work_in_a_separate_process(tmp_path):
     store = CadLinkStore.for_data_dir(tmp_path)
     accept(store)
     report(tmp_path)
     store.close()
     script = """
-import importlib.abc
 import sys
 from pathlib import Path
-class NoLive(importlib.abc.MetaPathFinder):
-    def find_spec(self, fullname, path, target=None):
-        if fullname == 'server.cadlink.live' or fullname.startswith('server.cadlink.live.'):
-            raise AssertionError('Recovery imported the live transport')
-sys.meta_path.insert(0, NoLive())
 from server.cadlink.recovery_api import recovery_notices, dismiss_recovery_notice
 from server.cadlink.store import CadLinkStore
 store = CadLinkStore.for_data_dir(Path(sys.argv[1]))

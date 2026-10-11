@@ -13,10 +13,8 @@ import time
 from typing import Awaitable, Callable
 
 from fastapi import FastAPI, Request
-from fastapi.exception_handlers import request_validation_exception_handler
-from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -28,7 +26,6 @@ from server.diagnostics.api import CLIENT_LOG_PATH, MAX_CLIENT_LOG_BODY_BYTES
 from server.diagnostics.capabilities import capabilities_payload
 from server.cadlink import mount_cadlink, mount_onshape
 from server.cadlink.build_flags import onshape_enabled
-from server.cadlink.coordination import CAD_COORDINATION_ENV, read_cad_coordination
 from server.design_io import mount_design_io
 from server.source_editor import mount_source_editor
 from server.drivers import mount_drivers
@@ -90,7 +87,7 @@ _WORKSPACE_EXPORT_PATH = "/api/workspace/write-export"
 #: lines somebody opened the log to find under megabytes of the ones they did
 #: not. None of the five says anything after the first time it is read: the
 #: health probe, the shell document, and the three CAD-link pollers all mean
-#: "still here" -- as does the live add-in's heartbeat, added since.
+#: "still here".
 #:
 #: Keyed by method as well as path so a route that is idle chatter one way and
 #: a real action the other keeps its voice. The chatter itself is being fixed
@@ -102,8 +99,6 @@ QUIET_REQUEST_ROUTES: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/cadlink/solve-command"),
         ("GET", "/api/cadlink/returns"),
         ("POST", "/api/cadlink/fusion-status"),
-        # The add-in's live heartbeat, every 4 s while a session is up.
-        ("POST", "/api/cadlink/live/heartbeat"),
     }
 )
 
@@ -500,45 +495,6 @@ class _HashedAssetStaticFiles(StaticFiles):
 #: CAD document that copies tens of megabytes -- and it is refused before its
 #: handler runs, so the return stays on disk exactly as it was.
 RESTART_GATED_POSTS = frozenset({"/api/cadlink/ingest", "/api/source-editor/export", "/api/source-editor/assembly/ingest", "/api/source-editor/assembly/export"})
-#: Routes whose invalid requests answer 400 ``invalid_request`` without echoing
-#: any input (docs/reference/CADLINK-LIVE-PROTOCOL.md). FastAPI's default 422
-#: repeats the offending values, and a live request can carry a token or proof.
-LIVE_VALIDATION_PREFIX = "/api/cadlink/live/"
-#: The body ceiling of every live route (a route may set its own exact-path
-#: limit). Registration is a few kilobytes; nothing live needs megabytes.
-MAX_LIVE_REQUEST_BODY_BYTES = 64 * 1024
-#: The heartbeat posted over HTTP is the file heartbeat's object, so it gets
-#: the file reader's ceiling (``fusion_status._MAX_STATUS_BYTES``).
-LIVE_HEARTBEAT_PATH = LIVE_VALIDATION_PREFIX + "heartbeat"
-MAX_LIVE_HEARTBEAT_BODY_BYTES = 256 * 1024
-
-
-async def _request_validation_error(request: Request, exc: Exception) -> Response:
-    if not isinstance(exc, RequestValidationError) or not request.url.path.startswith(
-        LIVE_VALIDATION_PREFIX
-    ):
-        return await request_validation_exception_handler(request, exc)  # type: ignore[arg-type]
-    # Where and what kind, never the value: no ``input``, ``msg`` or ``ctx``.
-    # An unknown key's location ends in the key itself, which the client chose,
-    # so it is reported at its parent object instead.
-    errors = []
-    for error in exc.errors():
-        kind = str(error.get("type", ""))
-        loc = [part if isinstance(part, (int, str)) else str(part) for part in error.get("loc", ())]
-        if kind == "extra_forbidden" and loc:
-            loc = loc[:-1]
-        errors.append({"loc": loc, "type": kind})
-    return JSONResponse(
-        status_code=400,
-        content=error_envelope(
-            code="invalid_request",
-            stage="cadlink-live",
-            message="The request is not valid.",
-            details={"errors": errors},
-        ),
-    )
-
-
 def create_app(
     *,
     data_dir: str | Path | None = None,
@@ -557,10 +513,8 @@ def create_app(
     shutdown. The production launcher passes true only for an explicit
     ``WG2_SOLVER_WARMUP=1`` diagnostic opt-in.
 
-    ``advertised_port`` is the loopback port the launcher reserved for this
-    app. Only with it does startup publish ``wg-endpoint.json``, the live CAD
-    Link endpoint file (``server/cadlink/live``); a test, an embedder or the
-    OpenAPI generator serves no socket and publishes nothing.
+    ``advertised_port`` is retained for launcher compatibility. CAD Link
+    exchanges requests through files and publishes no HTTP endpoint.
     """
 
     if advertised_port is not None and (
@@ -620,14 +574,6 @@ def create_app(
     )
     engine_registry = EngineRegistry(detector=detect_engines)
     application.state.engine_registry = engine_registry
-    # Read once, here, for the life of the process (server/cadlink/coordination.py).
-    application.state.cad_coordination = read_cad_coordination()
-    logging.getLogger("wg").info(
-        "Waveguide Generator %s application initialized; CAD coordination %s (%s)",
-        BUILD,
-        application.state.cad_coordination,
-        CAD_COORDINATION_ENV,
-    )
     # The SPA is 2.27 MB of JavaScript and 187 kB of CSS.  Even on loopback that
     # is worth compressing: it gzips to roughly a quarter of the bytes, and the
     # same middleware covers the multi-hundred-kB results payloads.  500 bytes
@@ -646,10 +592,7 @@ def create_app(
         path_limits={
             _WORKSPACE_EXPORT_PATH: MAX_EXPORT_REQUEST_BODY_BYTES,
             CLIENT_LOG_PATH: MAX_CLIENT_LOG_BODY_BYTES,
-            LIVE_HEARTBEAT_PATH: MAX_LIVE_HEARTBEAT_BODY_BYTES,
         },
-        prefix_limits={LIVE_VALIDATION_PREFIX: MAX_LIVE_REQUEST_BODY_BYTES},
-        envelope_prefixes={LIVE_VALIDATION_PREFIX: "cadlink-live"},
     )
     # One persistent owner thread services every gmsh call.  Prewarming here
     # retains the v1 off-main-thread ``interruptible=False`` invariant from

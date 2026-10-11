@@ -23,7 +23,7 @@ from server.jobs.models import SolveRequest
 from .operations import PREPARE_AND_SOLVE, TERMINAL_STATES
 from .preparation import (PreparationInput, _publish, _submission_refusal_reason, submission_key,
                           retain_operation_snapshot, record_job_acceptance, RETAINED, RETAIN_TRANSIENT)
-from .solve_command import live_held_operation_ids, waiting_claim_operation_ids
+from .solve_command import waiting_claim_operation_ids
 from .solver_frame import frame_provenance, record_solved_frame_provenance
 
 
@@ -139,7 +139,7 @@ async def _admit_operation_solve(ctx, operation_id, press, *, manual, schedule, 
         return row.get("job_id") if row else None
     cancelled = row["state"] in {"cancel_requested", "cancelled"}
     if retention == RETAIN_TRANSIENT and not cancelled and not delivery_released:
-        waiting = live_held_operation_ids() | await asyncio.to_thread(waiting_claim_operation_ids, ctx.data_dir)
+        waiting = await asyncio.to_thread(waiting_claim_operation_ids, ctx.data_dir)
         if operation_id in waiting:
             if press is not None:
                 raise ValueError("The delivered return is still being retained. Wait for delivery to finish, then press Prepare again with these settings.")
@@ -221,9 +221,8 @@ async def sweep_pending_solves(ctx: Any) -> int:
                                       after_rowid=cursor, limit=100)
         if not page:
             return changed
-        held = live_held_operation_ids()
         for cursor, row in page:
-            if not row.get("legacy") and row["operation_id"] not in held:
+            if not row.get("legacy"):
                 job_id = await accept_operation_solve_isolated(ctx, str(row["operation_id"]))
                 if job_id is not None:
                     changed += 1

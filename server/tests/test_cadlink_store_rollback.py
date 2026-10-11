@@ -270,10 +270,10 @@ def _populate(store: CadLinkStore, design_id: str) -> None:
     store.accept_operation(
         "fusion-request", REQUEST_RETURN, request_digest(REQUEST_RETURN, target, inputs), target, inputs
     )
-    assert store.claim_fusion_request(
-        "fusion-request", 0,
-        {"installationId": "inst-1", "sessionId": "session-1", "claimId": "claim-1"},
-    ) == 1
+    with store._lock, store._transaction() as conn:
+        conn.execute("UPDATE cad_operations SET state = 'processing', stage = 'adapter-received', "
+                     "attempt_generation = 1, claim_json = ? WHERE operation_id = 'fusion-request'",
+                     (json.dumps({"installationId": "inst-1", "liveSessionId": "session-1", "claimId": "claim-1"}),))
 
     store.record_legacy_outcome("cmd-legacy", kind=PREPARE_AND_SOLVE, state=ACCEPTED, job_id="job-0")
 

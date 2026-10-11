@@ -119,7 +119,6 @@ from .solve_command import (
     RETAINED,
     SolveOutcomeConflict,
     collect_solve_deliveries,
-    live_held_operation_ids,
     record_outcome,
 )
 from .store import BindingConflict, CadLinkStore, StaleAttempt
@@ -555,15 +554,9 @@ def settle_snapshot_operation(
 
 
 def settle_received_snapshots(ctx: PreparationContext) -> list[str]:
-    """Settle the unsettled snapshots nobody is delivering now. Returns those settled.
+    """Settle file snapshots left received or processing after a crash.
 
-    What a delivery over HTTP left ``received`` or ``processing`` -- WG
-    stopped, or the store refused, between acceptance and outcome; a return
-    not readable within the live bound -- is settled here
-    (``settle_snapshot_operation``), at startup and on each delivery pass with
-    a WGLink folder. Every such row is reached, page by page, however many stay
-    unreadable. Each page is listed first and the live holds read after, so a
-    snapshot still being delivered is never settled from under its delivery.
+    Every unsettled row is reached, however many bundles remain unreadable.
     A store error on one row is logged and the rest go on.
     """
 
@@ -578,11 +571,8 @@ def settle_received_snapshots(ctx: PreparationContext) -> list[str]:
         )
         if not page:
             break
-        held = live_held_operation_ids()
         for cursor, row in page:
             operation_id = str(row["operation_id"])
-            if operation_id in held:
-                continue
             try:
                 settle_snapshot_operation(ctx.store, ctx.data_dir, ctx.workspace_root, operation_id)
                 current = ctx.store.get_operation(operation_id)
@@ -1852,9 +1842,8 @@ async def run_delivery_pass(
     starts, and delivered files stay on disk for after the restart. Once the
     latch is down, the solves it held at submission are queued again first,
     with or without a WGLink folder. Received snapshots nobody is delivering
-    are settled first (``settle_received_snapshots``). An operation a delivery
-    over HTTP holds is not started: the received rows are listed first and the
-    live holds read after them. Returns the operations this pass started.
+    are settled first (``settle_received_snapshots``). Persisted file claims
+    still awaiting retention hold their operation. Returns what the pass started.
     """
 
     if ctx.runtime is not None:
@@ -1882,8 +1871,8 @@ async def run_delivery_pass(
         collect_solve_deliveries,
         ctx.data_dir,
         ctx.store,
-        # A snapshot is settled as it is retained, exactly as the live route
-        # does; any other kind is only retained.
+        # A snapshot is settled as it is retained before file acknowledgement.
+        # Other kinds are retained before job admission.
         retain=lambda operation_id: settle_snapshot_operation(
             ctx.store, ctx.data_dir, ctx.workspace_root, operation_id
         ),
@@ -1900,9 +1889,6 @@ async def run_delivery_pass(
         ctx.store.list_operations,
         kind=PREPARE_AND_SOLVE, states={RECEIVED}, oldest_first=True, limit=100,
     )
-    # After the listing, never before: a live hold is recorded before its
-    # operation commits, so every listed row still being delivered is in it.
-    held |= live_held_operation_ids()
     started: list[str] = []
     for row in rows:
         operation_id = str(row["operation_id"])
@@ -1980,7 +1966,6 @@ async def _job_delivery_pass(ctx: PreparationContext, *, running: Any, note: Any
                                       after_rowid=cursor, limit=100)
         if not page:
             break
-        held |= live_held_operation_ids()
         for cursor, row in page:
             op = str(row["operation_id"])
             if not row.get("legacy") and op not in held and op not in running:

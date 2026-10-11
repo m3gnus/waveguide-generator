@@ -1,12 +1,7 @@
 """Read the short-lived document heartbeat published by WGLink in Fusion.
 
-The heartbeat arrives on two transports: the ``.fusion-status.json`` file
-WGLink always writes, and, while the add-in holds a live session, the same
-object posted over HTTP (``docs/reference/CADLINK-LIVE-PROTOCOL.md``, section
-6). :func:`select_heartbeat` is the one place that chooses between them, and
-every reader goes through it: a fresh live heartbeat of a current session,
-else a fresh file heartbeat, else none. Both are held to the same validation
-and the same freshness window.
+The single transport is `.fusion-status.json`; all readers select the same
+validated file report and share it with evidence settlement.
 
 The heartbeat is presence information, not a source of CAD geometry or design
 truth.  WG still computes the current design hash itself and only uses the
@@ -29,7 +24,6 @@ from typing import Any, Mapping
 from server.contracts.canonical import canonical_ascii_json
 
 from server.cadlink.fusion_delivery import DELIVERY_VERSION, addin_delivery_version
-from server.cadlink.live.registry import registry_for
 from server.platform.process import background_process_kwargs
 
 
@@ -234,7 +228,6 @@ def _link_name(value: object) -> str | None:
 #: more than these two processes on one machine should ever need.
 FUSION_STATUS_MAX_SKEW = timedelta(minutes=1)
 
-HEARTBEAT_LIVE = "live"
 HEARTBEAT_FILE = "file"
 
 #: Why a heartbeat object is not usable (:func:`heartbeat_problem`).
@@ -266,7 +259,7 @@ def heartbeat_updated_at(payload: Mapping[str, Any]) -> datetime | None:
 def heartbeat_problem(payload: object, checked_at: datetime | None = None) -> tuple[str, str] | None:
     """Why a heartbeat object is unusable at ``checked_at`` (default: now), or None.
 
-    The validation both transports share: heartbeat schema 1 from Fusion with
+    File heartbeat validation: heartbeat schema 1 from Fusion with
     an ``updatedAt`` inside the freshness window (``FUSION_STATUS_TTL`` old at
     most, ``FUSION_STATUS_MAX_SKEW`` in the future at most). Returns
     ``(HEARTBEAT_INVALID | HEARTBEAT_STALE, field)``. The delivery version is
@@ -300,21 +293,11 @@ def _read_file_heartbeat(data_dir: Path) -> object:
 
 
 def select_heartbeat(data_dir: Path, now: datetime | None = None) -> SelectedHeartbeat:
-    """The heartbeat every reader uses, and which transport it came by.
+    """A fresh file heartbeat and its transport, or none.
 
-    The live heartbeat of a session that is current in this data directory's
-    registry wins while it is fresh; otherwise a fresh file heartbeat; otherwise
-    none. A data directory without a running WG has no registry, so only its
-    file is read. One status answer selects once and hands the result to every
-    step that needs it.
+    One status answer selects once and shares that evidence with settlement.
     """
-
     checked_at = now or _utc_now()
-    registry = registry_for(data_dir)
-    if registry is not None:
-        live = registry.current_heartbeat()
-        if live is not None and heartbeat_problem(live, checked_at) is None:
-            return live, HEARTBEAT_LIVE
     payload = _read_file_heartbeat(data_dir)
     if payload is not None and heartbeat_problem(payload, checked_at) is None:
         return payload, HEARTBEAT_FILE  # type: ignore[return-value]
@@ -328,14 +311,6 @@ def settleable_heartbeat(selected: SelectedHeartbeat) -> Mapping[str, Any] | Non
     if payload is None or int(addin_delivery_version(payload) or 0) < DELIVERY_VERSION:
         return None
     return payload
-
-
-def read_live_fusion_heartbeat(
-    data_dir: Path, *, now: datetime | None = None
-) -> Mapping[str, Any] | None:
-    """Return a fresh version-3 heartbeat from either transport, or None without guessing."""
-
-    return settleable_heartbeat(select_heartbeat(data_dir, now))
 
 
 def _fingerprint_hash(value: object) -> str | None:
@@ -910,7 +885,6 @@ __all__ = [
     "FUSION_STATUS_TTL",
     "HEARTBEAT_FILE",
     "HEARTBEAT_INVALID",
-    "HEARTBEAT_LIVE",
     "HEARTBEAT_STALE",
     "SelectedHeartbeat",
     "FUSION_CLOSED",
@@ -925,7 +899,6 @@ __all__ = [
     "heartbeat_now",
     "heartbeat_problem",
     "heartbeat_updated_at",
-    "read_live_fusion_heartbeat",
     "read_fusion_status",
     "select_heartbeat",
     "settleable_heartbeat",

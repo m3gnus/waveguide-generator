@@ -1,7 +1,6 @@
 """The WG request inbox under the M1 transfer contract: C4 visibility, C5 idempotence, C7 push.
 
-A request reaches WG by file (the inbox) or live (``POST .../deliveries``), in
-either order or both. Whatever the path, one ``operationId`` with one digest is
+A request reaches WG through the file inbox. one ``operationId`` with one digest is
 one operation; a different request under the same id is refused visibly and the
 stored operation is left as it is. Every row the inbox creates, recovers or
 refuses is pushed on the jobs channel, and a refusal with no row of its own is
@@ -24,16 +23,9 @@ from server.cadlink.operations import PREPARE_AND_SOLVE, RECEIVE_SNAPSHOT
 from server.cadlink.solve_command import collect_solve_deliveries
 from server.tests.test_cad_inbox_stall import FIXTURES, V4_NO_KIND, V4_SNAPSHOT, V4_SOLVE, app_for, drop, fixture
 from server.tests.test_cad_preparation import _write_return
-from server.tests.test_cadlink_live_deliveries import _snapshot_digest, wg
+from server.tests.cad_file_harness import _snapshot_digest, wg
 
 
-def _live_body(payload: dict[str, Any]) -> dict[str, Any]:
-    """The same request as a live delivery body: the fields the route takes."""
-
-    body = {key: payload[key] for key in ("operationId", "kind", "bundlePath", "manifestSha256", "requestedAt")}
-    if payload["kind"] == PREPARE_AND_SOLVE:
-        body["returnId"] = payload["returnId"]
-    return body
 
 
 def _snapshot_request(bundle_path: str, manifest: str) -> dict[str, Any]:
@@ -68,37 +60,12 @@ def test_file_then_file_is_one_operation(tmp_path: Path, make) -> None:
         assert app.run_pass(running=set(started)) == []
 
 
-@pytest.mark.parametrize("make", [_snapshot_request, _solve_request], ids=["snapshot", "solve"])
-def test_file_then_live_is_one_operation(tmp_path: Path, make) -> None:
-    with wg(tmp_path) as app:
-        bundle_path, manifest = _write_return(app.workspace)
-        request = make(bundle_path, manifest)
-        drop(app.data_dir, request)
-        app.run_pass()
-        response = app.deliver(app.token(), _live_body(request))
-        assert response.status_code == 200, response.text
-        assert response.json()["result"] == "recovered"
-        assert app.ids() == [request["operationId"]]
 
 
-@pytest.mark.parametrize("make", [_snapshot_request, _solve_request], ids=["snapshot", "solve"])
-def test_live_then_file_is_one_operation_and_one_start(tmp_path: Path, make) -> None:
-    with wg(tmp_path) as app:
-        bundle_path, manifest = _write_return(app.workspace)
-        request = make(bundle_path, manifest)
-        response = app.deliver(app.token(), _live_body(request))
-        assert response.status_code == 200 and response.json()["result"] == "created", response.text
-        drop(app.data_dir, request)
-        started = app.run_pass()
-        assert app.ids() == [request["operationId"]]
-        # A solve is started once, and a snapshot is never prepared.
-        assert started == ([request["operationId"]] if request["kind"] == PREPARE_AND_SOLVE else [])
-        # The loop tracks what it started (``running``); nothing is started twice.
-        assert app.run_pass(running=set(started)) == []
 
 
 def test_a_v4_snapshot_file_is_settled_as_it_is_taken(tmp_path: Path) -> None:
-    """A Send by file is accepted and settled, as the live route settles one."""
+    """A Send by file is accepted and settled, before acknowledgement."""
 
     with wg(tmp_path) as app:
         bundle_path, manifest = _write_return(app.workspace)

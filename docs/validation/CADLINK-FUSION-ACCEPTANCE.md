@@ -1,8 +1,8 @@
-# CAD Link live acceptance checklist
+# CAD Link Fusion acceptance checklist
 
 For the release owner. This is the walk-through that a local test suite cannot
 do for you: it runs against a real Fusion 360 and a real, packaged WG
-candidate, and it is what closes the "live-Fusion acceptance still owed" gap
+candidate, and it is what closes the "Fusion acceptance still owed" gap
 named in `hornlab-policy/archive/261001-plan-cleanup/CADLINK-ARCHITECTURE-PLAN.md` and
 `hornlab-policy/archive/261001-plan-cleanup/CADLINK-M1-M4-TRIAGE.md`. It does not replace
 `server/tests` or `scripts/tests`, which cover the same contracts against
@@ -40,16 +40,10 @@ blank until you run the step; do not mark a row done from memory.
   `manifest.json` rather than crashing the collector. See its module
   docstring for exactly what each zip member is and where it comes from.
 
-  `manifest.json`'s `notes` always carries one caveat worth reading before
-  you file a heartbeat-related row: WG prefers a live HTTP heartbeat over
-  the file one when a fresh one exists, but that live
-  heartbeat lives only in the running WG's memory. This collector is
-  read-only and offline, so it cannot tell you which transport was in
-  effect for a given step -- check `POST /api/cadlink/fusion-status`'s
-  `heartbeatTransport` field on the running WG at the time
-  (`docs/reference/CADLINK-LIVE-PROTOCOL.md`, section 6) instead of
-  inferring it from `fusion-status.json` in the zip, which is always the
-  file transport's payload.
+  `manifest.json`'s `notes` explains that `fusion-status.json` is the
+  file heartbeat captured at collection time. It does not prove that the
+  running WG selected a fresh report: check `POST /api/cadlink/fusion-status`'s
+  `heartbeatTransport` field (`"file"` or `null`) at the time of the step.
 
 ## Run record
 

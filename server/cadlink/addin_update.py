@@ -99,7 +99,7 @@ from server.cadlink.fusion_status import (
     fusion_process_state,
     read_fusion_status,
 )
-from server.cadlink.live.registry import registry_for
+from server.cadlink.fusion_status import select_heartbeat
 from server.cadlink.usage import cadlink_in_use
 from server.platform.paths import app_root, resolve_data_dir
 from server.platform.warmup import DRAIN_TIMEOUT_SECONDS, BackgroundWarmup
@@ -373,21 +373,26 @@ def _describe(build: object) -> str:
 
 
 def loaded_addin_identity(data_dir: Path | None = None) -> dict[str, Any] | None:
-    """The build WGLink says it actually loaded, or ``None``.
+    """Identity reported by a fresh file heartbeat, without inferring a commit.
 
-    WGLink captures its build identity when it loads and reports it when it
-    registers a live session (``server/cadlink/live``); that report, not the
-    marker on disk, is what "active" means. It is the identity of the latest
-    registered session of this data directory's running WG that is still
-    valid, with ``matchesPin`` saying whether its commit is the one this WG
-    pins. A pin mismatch is reported, never refused. Without a data directory,
-    a running WG or a valid session it is ``None``, and an activated verdict
-    means only that Fusion's next start loads the copy WG installed -- never
-    that Fusion is running it.
+    Managed add-ins report adapterVersion but no source commit. Development
+    builds may also report diagnostics.source.sourceCommit. Missing details
+    stay unknown; the installed marker cannot prove what Fusion loaded.
     """
-
-    registry = registry_for(data_dir)
-    return registry.loaded_identity() if registry is not None else None
+    if data_dir is None:
+        return None
+    payload, _transport = select_heartbeat(data_dir)
+    if payload is None:
+        return None
+    version = payload.get("adapterVersion")
+    if not isinstance(version, str) or not version:
+        return None
+    diagnostics = payload.get("diagnostics")
+    source = diagnostics.get("source") if isinstance(diagnostics, Mapping) else None
+    commit = source.get("sourceCommit") if isinstance(source, Mapping) else None
+    commit = commit if isinstance(commit, str) and commit else None
+    return {"addinVersion": version, "sourceCommit": commit,
+            "matchesPin": commit == pinned_commit(app_root()) if commit else None}
 
 
 # -- The start being confirmed ------------------------------------------------

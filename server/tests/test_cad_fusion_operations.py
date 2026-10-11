@@ -36,7 +36,7 @@ def _result(bundle: Path, export_id: str = "wge_1") -> dict[str, object]:
 
 
 def test_capabilities_advertise_source_identity_without_changing_delivery() -> None:
-    """``sourceIdentity`` and ``liveProtocol`` are additive: the schema and the
+    """``sourceIdentity`` is additive: the schema and the
     Fusion-bound delivery version stay put. Solve delivery is 4: the WG request
     inbox reads requests that name their kind (M1 transfer contract, C3)."""
 
@@ -47,13 +47,11 @@ def test_capabilities_advertise_source_identity_without_changing_delivery() -> N
         "solveAcknowledgement": 1,
         "fusionRequestDelivery": 3,
         "sourceIdentity": 1,
-        "liveProtocol": 1,
         "documentUp": 1,
         "automaticDomain": 1,
     }
     # An integer, as the add-in reads every capability value; never a bool.
     assert type(fusion_delivery.capabilities()["sourceIdentity"]) is int
-    assert type(fusion_delivery.capabilities()["liveProtocol"]) is int
     # ``documentUp``: WG reads ``document-up-v1`` (the CAD document's up axis).
     assert type(fusion_delivery.capabilities()["documentUp"]) is int
     # ``automaticDomain``: WG reads ``domain-automatic-v1`` (M1c-auto).

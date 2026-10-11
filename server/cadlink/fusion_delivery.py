@@ -37,20 +37,6 @@ from typing import Any, Callable, Literal, Mapping
 from server.platform.exclusive_rename import take_by_rename
 from server.platform.private_paths import ensure_private_directory
 
-# File delivery is independent of the optional live transport. The live layer
-# registers its wake hint when mounted; without it, files need no notification.
-def _no_request_notifier(_data_dir: Path) -> None:
-    """Files need no notification when no live transport is mounted."""
-
-
-_request_notifier: Callable[[Path], None] = _no_request_notifier
-
-
-def set_request_notifier(notifier: Callable[[Path], None]) -> None:
-    global _request_notifier
-    _request_notifier = notifier
-
-
 IPC_SUBDIRECTORY = Path("ipc") / "wglink"
 CAPABILITIES_FILENAME = "wg-capabilities.json"
 CAPABILITIES_SCHEMA_VERSION = 1
@@ -79,10 +65,6 @@ DOCUMENT_UP = 1
 # ``domain_interpretation.py``). The add-in writes them only when WG advertises
 # this; an older WG refuses the unknown required feature, visibly.
 AUTOMATIC_DOMAIN = 1
-# WG serves the live session protocol, version 1, at the address in
-# ``wg-endpoint.json`` (``server/cadlink/live``). The add-in goes live only when
-# WG advertises this; otherwise it keeps to the files above.
-LIVE_PROTOCOL = 1
 # WG publishes the outcome of every request in its inbox as
 # ``.wg-solve-acks/<commandId>.json`` before it deletes the request
 # (``solve_command.write_acknowledgement``). The add-in reads it only when WG
@@ -147,7 +129,6 @@ def capabilities(*, solve_delivery: bool = True) -> dict[str, Any]:
         "solveAcknowledgement": SOLVE_ACKNOWLEDGEMENT,
         "fusionRequestDelivery": FUSION_REQUEST_DELIVERY,
         "sourceIdentity": SOURCE_IDENTITY,
-        "liveProtocol": LIVE_PROTOCOL,
         "documentUp": DOCUMENT_UP,
         "automaticDomain": AUTOMATIC_DOMAIN,
     }
@@ -396,8 +377,6 @@ def publish_fusion_request(
             if outcome != "removed":
                 continue
             withdrawn.append(operation_id)
-    # A live long poll may be waiting for exactly this (a hint; it rescans too).
-    _request_notifier(data_dir)
     # The request id is the operation id: it follows the request through the
     # add-in's heartbeat and outcomes (CAD-OPERATIONS.md, "WG-produced Fusion requests").
     logger.info(
@@ -454,12 +433,11 @@ def recover_staged_fusion_requests(
     this hidden file proves the interruption happened between acceptance and
     publication. Existing visible requests and add-in claims always win.
 
-    A live claim hides a request under the same pattern,
+    A legacy HTTP claim hid a request under the same pattern,
     ``.<requestId>.json.live-<claimId>.tmp``, before it claims the operation
     in the store. Interrupted before that claim, the row is still ``received``
     and the request is restored; interrupted after it, the row is not, and the
-    hidden file is deleted -- as is one whose operation was cancelled meanwhile
-    (docs/reference/CADLINK-LIVE-PROTOCOL.md, section 7).
+    hidden file is deleted -- as is one whose operation was cancelled meanwhile.
     """
 
     recovered: list[str] = []
@@ -498,8 +476,6 @@ def recover_staged_fusion_requests(
                 os.replace(temporary, own)
                 recovered.append(operation_id)
                 logger.info("Recovered staged Fusion request %s at startup.", operation_id)
-    if recovered:
-        _request_notifier(data_dir)
     return tuple(recovered)
 
 
@@ -546,6 +522,7 @@ def advertise_fusion_delivery(data_dir: Path, *, solve_delivery: bool = True) ->
                 len(removed),
                 ", ".join(sorted(removed)),
             )
+        (folder / "wg-endpoint.json").unlink(missing_ok=True)
         _write_json(folder / CAPABILITIES_FILENAME, capabilities(solve_delivery=solve_delivery))
     except OSError as exc:
         logger.warning("Could not advertise WG's Fusion delivery version: %s", exc)
@@ -561,7 +538,6 @@ __all__ = [
     "INSERT_HANDOFF_TTL",
     "LEGACY_RECORD_FILENAME",
     "LEGACY_SLOT_FILENAMES",
-    "LIVE_PROTOCOL",
     "PublishedRequest",
     "RETURN_REQUESTS",
     "SCHEMA_VERSION",

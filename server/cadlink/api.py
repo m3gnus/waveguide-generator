@@ -50,7 +50,6 @@ from server.workspace.archive import (
 )
 
 from .addin_update import last_refresh, loaded_addin_identity, poll_activation
-from .coordination import COORDINATION_OFF
 from .delivery_status import delivery_status
 from .fusion_status import (
     ADDIN_OUTDATED_MESSAGE,
@@ -59,7 +58,7 @@ from .fusion_status import (
     read_fusion_status,
 )
 from .fusion_status import heartbeat_now, select_heartbeat, settleable_heartbeat
-from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat
+from .fusion_outcomes import FUSION_KINDS, settle_from_heartbeat, settle_abandoned_live_claims
 from .fusion_delivery import (
     advertise_fusion_delivery,
     expire_unstarted_insert_handoffs,
@@ -67,7 +66,6 @@ from .fusion_delivery import (
     recover_staged_fusion_requests,
 )
 from .fusion_return import publish_return_request
-from .live.api import mount_live
 from .ingest import (
     IngestRefusal,
     build_deferred_viewport,
@@ -772,9 +770,8 @@ async def get_delivery_status(request: Request) -> dict[str, Any]:
 @router.get("/returns")
 async def list_returns(request: Request) -> dict[str, Any]:
     workspace: WorkspaceState = request.app.state.cad_workspace
-    # WG's coordination gate (``coordination.py``) rides on the listing the
-    # frontend reads at mount, so learning it costs no request of its own.
-    coordination = getattr(request.app.state, "cad_coordination", COORDINATION_OFF)
+    # Compatibility for clients that still read this retired gate.
+    coordination = "off"
     selected = workspace.selected_path()
     if selected is None:
         return {"items": [], "cadFolderConfigured": False, "coordination": coordination}
@@ -916,8 +913,8 @@ async def fusion_status(
         record_expired=lambda operation_id: _record_expired_insert(store, operation_id),
     )
     # One selection at one instant for this answer: settlement and the status
-    # below see the same heartbeat, whichever transport it came by, even if the
-    # file changes or the heartbeat ages out while settlement runs.
+    # below see the same file heartbeat, even if it changes or ages out while
+    # settlement runs.
     checked_at = heartbeat_now()
     selected_heartbeat = await asyncio.to_thread(
         select_heartbeat, Path(request.app.state.data_dir), checked_at
@@ -930,6 +927,7 @@ async def fusion_status(
             heartbeat,
             ipc_folder(Path(request.app.state.data_dir)),
         )
+    await asyncio.to_thread(settle_abandoned_live_claims, store)
     status = await asyncio.to_thread(
         read_fusion_status,
         Path(request.app.state.data_dir),
@@ -956,7 +954,7 @@ async def fusion_status(
     if status.get("state") == "addin_outdated" or (
         report is not None and report.get("verdict") != "disabled"
     ):
-        # What the add-in reported loading in its live session, now -- not the
+        # What the add-in reported in its file heartbeat, now -- not the
         # snapshot the activation pass stored when it decided.
         status["addinRefresh"] = report
         if report is not None:
@@ -2180,6 +2178,7 @@ async def post_reconcile_cad_operation(
             ipc_folder(Path(state.data_dir)),
             only_operation_id=operation_id,
         )
+    await asyncio.to_thread(settle_abandoned_live_claims, store, only_operation_id=operation_id)
     current = await asyncio.to_thread(store.get_operation, operation_id)
     assert current is not None
     return ManualSolveOperationResponse(operation=operation_summary(current))
@@ -2632,6 +2631,7 @@ def mount_cadlink(application: FastAPI) -> None:
                 heartbeat,
                 ipc_folder(Path(application.state.data_dir)),
             )
+        await asyncio.to_thread(settle_abandoned_live_claims, application.state.cadlink_store)
         await asyncio.to_thread(
             expire_unstarted_insert_handoffs,
             Path(application.state.data_dir),
@@ -2641,9 +2641,6 @@ def mount_cadlink(application: FastAPI) -> None:
         )
 
     application.router.add_event_handler("startup", advertise_fusion_delivery_on_startup)
-    # After the capability file that advertises ``liveProtocol``: the live
-    # session's registry, and its endpoint file when the launcher named a port.
-    mount_live(application)
     application.router.add_event_handler("startup", _recover_on_startup(application))
     application.router.add_event_handler("startup", _deliver_solve_commands(application))
     application.router.add_event_handler(

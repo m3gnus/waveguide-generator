@@ -1,7 +1,7 @@
 """Contracts for the read-only CAD Link evidence collector.
 
 ``scripts/cadlink_evidence.py`` is read by the release owner's clean-room
-checklist (``docs/validation/CADLINK-LIVE-ACCEPTANCE.md``) after each step, so
+checklist (``docs/validation/CADLINK-FUSION-ACCEPTANCE.md``) after each step, so
 its two promises matter more than its convenience: it must never write to the
 data directory it is reading, and it must never crash on a step where
 something -- the add-in has not run yet, no operation has been published --
@@ -188,21 +188,15 @@ def test_session_token_and_registration_secret_keys_are_redacted() -> None:
     }
 
 
-# --- live heartbeat transport summary -------------------------------------
+# --- file heartbeat transport summary -------------------------------------
 
 
-def test_evidence_notes_the_live_heartbeat_transport_is_unknown_offline(tmp_path: Path) -> None:
-    """The collector cannot see WG's in-memory ``LiveRegistry``: it
-    runs offline, out of process, so it can never know whether the freshest
-    heartbeat came by the live HTTP transport or the file one. That must be
-    recorded, not silently omitted -- the bundle's ``notes`` says so and
-    points at ``/fusion-status``'s ``heartbeatTransport`` field.
-    """
-
-    data_dir = tmp_path / "data"
-    evidence = cadlink_evidence.collect_evidence(data_dir)
+def test_evidence_notes_file_heartbeat_freshness_is_not_established_offline(tmp_path: Path) -> None:
+    """The captured file is evidence; selection and freshness belong to WG."""
+    evidence = cadlink_evidence.collect_evidence(tmp_path / "data")
     assert any("heartbeatTransport" in note for note in evidence["notes"])
-    assert any("live" in note and "file" in note for note in evidence["notes"])
+    assert any('"file"' in note and "null" in note for note in evidence["notes"])
+    assert all('"live"' not in note for note in evidence["notes"])
 
 
 def test_manifest_carries_the_notes_without_unzipping_every_member(tmp_path: Path) -> None:
