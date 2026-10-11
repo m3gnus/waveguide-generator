@@ -10,7 +10,7 @@ import {
 import { compareSelection } from '../api/results';
 import { DesignAvailabilityNotice, RerunButton } from '../jobs/DesignAvailability';
 import { canLoadJobDesign } from '../jobs/jobDesign';
-import { showJobModel } from '../jobs/showJobModel';
+import { selectJob } from '../jobs/selectJob';
 import { canExportRun, RunExportControl } from '../jobs/RunExportControl';
 import { nextRunLabel } from '../jobs/runNaming';
 import { useRunNameSource } from '../jobs/runNameSource';
@@ -125,27 +125,7 @@ function Rating({ job, onError }: { job: JobItem; onError: (message: string) => 
   </div>;
 }
 
-/**
- * Selecting a run shows it: its results drive the charts and its design snapshot
- * goes back into the viewport. Both stores are set synchronously so the row
- * expands on the same frame as the click; the results payload is served from
- * the LRU cache and the geometry preview catches up behind it.
- *
- * Showing the model always goes through `showJobModel`, which also puts the
- * workspace into the run's owning mode — so selecting a parametric run from
- * CAD Link mode brings the parametric workspace back with it, exactly as an
- * imported run selected from parametric mode brings CAD Link back.
- */
-export function selectJob(job: JobItem): void {
-  // A finished run whose results were cleaned up is still the selected run: the
-  // dock says so instead of leaving the previous run's charts under its card.
-  if (job.has_results || job.status === 'complete') compareSelection.setPrimary(job.id);
-  // Nothing readable to show for a cleaned-up run: select it, and stop there.
-  if (job.status === 'complete' && !job.has_results && !canLoadDesign(job)) return;
-  // Undoable: browsing runs must not be able to discard the working design.
-  if (job.config_summary.geometry_type !== 'imported' && !canLoadDesign(job)) return;
-  void showJobModel(job);
-}
+export { selectJob };
 
 /** The stage the passive-cardioid radiation-impedance campaign reports under. */
 export const RADIATION_IMPEDANCE_STAGE = 'radiation_impedance';

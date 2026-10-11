@@ -937,6 +937,17 @@ solve scheduler, prepares it (`server/jobs/cad_preparation.py`). The lane is the
 - **The operation routes.** `operation_summary` for a solve is derived from its job
   (`job_operation_view`).
 
+## Opening a run by link
+
+Every run, however it was started (WG, the CLI, a Fusion-launched solve), can be opened
+in WG at `http://127.0.0.1:<port>/?job=<job_id>`. This is the stable way to point at one
+run. Once the jobs list has loaded, WG selects that run exactly as a click on its card
+does (a run still going is selected so its progress shows, and its charts follow when it
+finishes), then removes `job` from the address bar so a reload does not repeat it. An id
+this data folder does not know shows a plain notice and selects nothing. The handling is
+`openLinkedJob` in `frontend/src/jobs/jobDeepLink.ts`, started from `JobsCoordinator`.
+A link by Fusion operation id (`cadOperation=`) is not supported yet.
+
 ## Retention
 
 Cleanup never removes what a pending operation references. Retained snapshots and meshes

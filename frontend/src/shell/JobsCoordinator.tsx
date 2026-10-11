@@ -3,6 +3,7 @@ import { ownedAutoExport } from '../jobs/autoExportOwner';
 import { exportRunAutomatically } from '../jobs/autoExportRun';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { jobsSocket, type JobItem } from '../api/jobsSocket';
+import { clearJobLink, jobIdFromLink, openLinkedJob } from '../jobs/jobDeepLink';
 import { compareSelection } from '../api/results';
 import { createSetupRevision, getSetupRevision, putProjectSetup, type CadOperationSummary, type CadSolveSetup } from '../api/cadOperations';
 import { CadLinkApiError, type CadReturnIngestRecord } from '../api/cadlink';
@@ -259,7 +260,14 @@ export async function refreshedArchiveJob(job: JobItem): Promise<JobItem> {
 }
 
 export function JobsCoordinator({ children, now = systemNow }: { children: ReactNode; now?: () => Date }) {
-  const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
+  const jobsSnapshot = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot);
+  const jobs = jobsSnapshot.jobs;
+  const jobsLoaded = jobsSnapshot.cursor !== null;
+  // `?job=<id>` is the stable link to one run (CLI, Fusion, bookmarks). Read
+  // once at start-up; handled as soon as the list has loaded, then dropped
+  // from the address bar so a reload does not re-trigger it.
+  const linkedJobId = useRef<string | null | undefined>(undefined);
+  if (linkedJobId.current === undefined) linkedJobId.current = jobIdFromLink(window.location.search);
   // This component owns the jobs socket, so it is where a reconnect is visible.
   useCapabilityRefreshOnReconnect(useSyncExternalStore(jobsSocket.subscribe, jobsConnection, jobsConnection));
   useLegacyBeatEngineMigration();
@@ -608,6 +616,13 @@ export function JobsCoordinator({ children, now = systemNow }: { children: React
   }, []);
 
   const reportError = useCallback((message: string) => setActionError(message), []);
+  useEffect(() => {
+    const id = linkedJobId.current;
+    if (!id || !jobsLoaded) return;
+    linkedJobId.current = null;
+    openLinkedJob(id, jobs, reportError);
+    clearJobLink();
+  }, [jobs, jobsLoaded, reportError]);
   useEffect(() => {
     publishBridge({ run, runImported, solveCurrentCadImport, retry, reportError, actionError });
     return () => publishBridge({
