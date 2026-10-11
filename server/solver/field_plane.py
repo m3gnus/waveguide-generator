@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import struct
 import tempfile
+import threading
 from typing import Any
 
 import numpy as np
@@ -33,6 +34,7 @@ from .combine import (
 from .field_traces_store import (
     ArtifactCorrupt,
     ArtifactMissing,
+    BEAT_FIELD_TRACE_BACKEND,
     BEMPP_FIELD_TRACE_BACKEND,
     FieldTraceBackend,
     METAL_FIELD_TRACE_BACKEND,
@@ -105,6 +107,10 @@ def _field_backend_status(backend: FieldTraceBackend) -> Mapping[str, Any]:
         from .bempp import bempp_status
 
         return bempp_status()
+    if backend == BEAT_FIELD_TRACE_BACKEND:
+        from .beat_field import field_status
+
+        return field_status()
     raise ArtifactCorrupt(f"field-trace backend {backend!r} is unsupported")
 
 
@@ -128,6 +134,10 @@ def _require_field_backend(backend: FieldTraceBackend) -> None:
 
 def _load_field_backend(backend: FieldTraceBackend) -> _FieldBackendAPI:
     _require_field_backend(backend)
+    if backend == BEAT_FIELD_TRACE_BACKEND:
+        from .beat_field import evaluate_exterior_from_traces, load_mesh
+
+        return _FieldBackendAPI(load_mesh, evaluate_exterior_from_traces)
     package_name = (
         "hornlab_metal_bem"
         if backend == METAL_FIELD_TRACE_BACKEND
@@ -348,10 +358,18 @@ class FieldPlaneService:
             await lease.release()
             raise
         isolated = traces[6] == BEMPP_FIELD_TRACE_BACKEND
+        cancelled = threading.Event()
+
+        def check_cancelled() -> None:
+            if cancelled.is_set():
+                raise FieldPlaneTimedOut("BEAT field evaluation cancelled")
+
         if isolated:
             operation = _isolated_bempp_field({"traces": traces, "points": points})
         else:
-            operation = asyncio.to_thread(self._evaluate_sync, job_id, row, request, points)
+            options = ({"cancellation_callback": check_cancelled}
+                       if traces[6] == BEAT_FIELD_TRACE_BACKEND else {})
+            operation = asyncio.to_thread(self._evaluate_sync, job_id, row, request, points, **options)
         work = asyncio.create_task(operation, name=f"wg2-field-plane-{request.request_id}")
         try:
             evaluation = await asyncio.wait_for(
@@ -359,6 +377,7 @@ class FieldPlaneService:
                 timeout=self.timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
+            cancelled.set()
             if isolated:
                 await lease.release()  # wait_for has killed/reaped the native worker
             else:
@@ -367,6 +386,7 @@ class FieldPlaneService:
                 f"Field evaluation exceeded {self.timeout_seconds:g} seconds"
             ) from exc
         except asyncio.CancelledError:
+            cancelled.set()
             if isolated:
                 await lease.release()
             else:
@@ -399,6 +419,8 @@ class FieldPlaneService:
         row: Mapping[str, Any],
         request: FieldPlaneRequest,
         points: NDArray[np.float64],
+        *,
+        cancellation_callback: Callable[[], None] | None = None,
     ) -> FieldPlaneEvaluation:
         (
             mesh_text,
@@ -425,6 +447,8 @@ class FieldPlaneService:
         evaluation_kwargs: dict[str, Any] = {"symmetry_plane": symmetry_plane}
         if backend == METAL_FIELD_TRACE_BACKEND:
             evaluation_kwargs["check_open_edges"] = True
+        if backend == BEAT_FIELD_TRACE_BACKEND:
+            evaluation_kwargs["cancellation_callback"] = cancellation_callback
         evaluated = backend_api.evaluate_exterior_from_traces(
             mesh,
             frequency_hz,

@@ -101,7 +101,8 @@ class SolveSession:
 
     def submit(self, client: ManagedWorker, payload: Mapping[str, Any], *,
                negotiate: Callable[[dict | None, dict, str], Any] | None = None,
-               status_callback: Callable[[str], None] | None = None) -> None:
+               status_callback: Callable[[str], None] | None = None,
+               operation: str = "solve") -> None:
         if self.request_path is None or self._submitted or self._closed:
             raise RuntimeError("Session must be entered and submitted only once")
         self._submitted = True
@@ -122,10 +123,12 @@ class SolveSession:
             lease.start(status_callback=status_callback)
             self._check()
             if negotiate is not None:
-                negotiate(lease.client.worker_info, request, "solve")
+                negotiate(lease.client.worker_info, request, operation)
             self._check()
-            self._stream = lease.submit(self.request_path, **(
-                {"status_callback": status_callback} if status_callback is not None else {}))
+            options = {"status_callback": status_callback} if status_callback is not None else {}
+            if operation != "solve":
+                options["operation"] = operation
+            self._stream = lease.submit(self.request_path, **options)
         except BaseException as exc:
             if not self._cancel.is_set() and isinstance(exc, (HostError, OSError)):
                 from .readiness import probe_cache_clear

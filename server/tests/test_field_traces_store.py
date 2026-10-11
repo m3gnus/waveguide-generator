@@ -11,6 +11,7 @@ from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.solver.field_traces_store import (
     ArtifactCorrupt,
+    BEAT_FIELD_TRACE_BACKEND,
     BEMPP_FIELD_TRACE_BACKEND,
     FIELD_TRACES_VERSION,
     FieldTraceArtifact,
@@ -145,7 +146,7 @@ def test_field_trace_round_trip_preserves_offsets_dtype_and_geometry_hash(
 
 
 @pytest.mark.parametrize(
-    "backend", [METAL_FIELD_TRACE_BACKEND, BEMPP_FIELD_TRACE_BACKEND]
+    "backend", [METAL_FIELD_TRACE_BACKEND, BEMPP_FIELD_TRACE_BACKEND, BEAT_FIELD_TRACE_BACKEND]
 )
 def test_field_trace_backend_round_trip(tmp_path: Path, backend: str) -> None:
     stored = write_field_traces(
