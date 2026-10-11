@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { resetCadDeliveryHealthStore, useCadDeliveryHealthStore } from './cadDeliveryHealth';
 import { getCadOperation, isPendingCadOperation, listCadOperations, type CadDeliveryStatus, type CadInboxRefusal, type CadOperationSummary } from '../api/cadOperations';
 import { CadLinkApiError } from '../api/cadlink';
 import { jobsSocket, type JobsSocketManager } from '../api/jobsSocket';
@@ -71,17 +72,26 @@ export const useCadOperationsStore = create<CadOperationsState>((set, get) => ({
   refusals: [],
   unseenRefusals: 0,
   deliveryStatus: null,
-  setDeliveryStatus: (status) => set({ deliveryStatus: status }),
+  // Transitional writes keep older operation clients compatible. Health never reads this store.
+  setDeliveryStatus: (status) => {
+    set({ deliveryStatus: status });
+    useCadDeliveryHealthStore.getState().setStatus(status);
+  },
   recoveryError: null,
-  setRecoveryError: (message) => { if (get().recoveryError !== message) set({ recoveryError: message }); },
+  setRecoveryError: (message) => {
+    useCadDeliveryHealthStore.setState({ recoveryError: message });
+    if (get().recoveryError !== message) set({ recoveryError: message });
+  },
   addinStatusRevision: 0,
   noteAddinStatusChanged: () => set({ addinStatusRevision: get().addinStatusRevision + 1 }),
   recordRefusal: (refusal) => {
+    useCadDeliveryHealthStore.getState().mergeRefusals([refusal]);
     const held = get().refusals;
     if (held.some((item) => refusalKey(item) === refusalKey(refusal))) return;
     set({ refusals: [refusal, ...held].slice(0, RECENT_REFUSALS), unseenRefusals: get().unseenRefusals + 1 });
   },
   mergeRefusals: (refusals) => {
+    useCadDeliveryHealthStore.getState().mergeRefusals(refusals);
     const known = new Set(get().refusals.map(refusalKey));
     const fresh = refusals.filter((item) => !known.has(refusalKey(item)));
     if (!fresh.length) return;
@@ -344,6 +354,7 @@ export function connectCadOperations(
 }
 
 export function resetCadOperationsStore(): void {
+  resetCadDeliveryHealthStore();
   loadGeneration += 1;
   appliedDuringLoad.clear();
   useCadOperationsStore.setState({ operations: {}, refusals: [], unseenRefusals: 0, deliveryStatus: null, recoveryError: null, addinStatusRevision: 0 });

@@ -1,3 +1,4 @@
+import { useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { jobsSocket } from '../api/jobsSocket';
 import { compareSelection } from '../api/results';
@@ -270,7 +271,7 @@ export function AttentionNotices() {
   useSyncExternalStore(workspaceNavigation.subscribe, workspaceNavigation.getSnapshot, workspaceNavigation.getSnapshot);
   const mode = useSyncExternalStore(workspaceModeStore.subscribe, workspaceModeStore.getSnapshot, workspaceModeStore.getSnapshot).mode;
   const operations = useCadOperationsStore((state) => state.operations);
-  const unseenRefusals = useCadOperationsStore((state) => state.unseenRefusals);
+  const unseenRefusals = useCadDeliveryHealthStore((state) => state.unseenRefusals);
   const readyRun = useReadyRun();
   const jobs = useSyncExternalStore(jobsSocket.subscribe, jobsSocket.getSnapshot, jobsSocket.getSnapshot).jobs;
   const waiting = [

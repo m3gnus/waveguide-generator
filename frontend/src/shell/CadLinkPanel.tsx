@@ -1,3 +1,4 @@
+import { useCadSetupPublisherStore } from './cadSetupPublisher';
 import { ExperimentalBadge } from '../design/ExperimentalBadge';
 import { useId, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useEffect } from 'react';
@@ -553,7 +554,7 @@ export function CadLinkPanel() {
     ingesting,
     ingestError,
     sendingToFusion,
-    error,
+    error: coordinatorError,
     errorDiagnostics,
     status,
     viewportNotice,
@@ -561,6 +562,8 @@ export function CadLinkPanel() {
     onshapeStatus,
     onshapeConnection,
   } = cadCoordinator;
+  const setupError = useCadSetupPublisherStore((state) => state.error);
+  const error = coordinatorError ?? setupError;
   const addinNotice = addinReply === null ? null
     : fusionStatus !== addinReply.under && fusionStatus?.addinRefresh
       ? fusionStatus.addinRefresh.detail

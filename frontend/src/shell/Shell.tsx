@@ -5,6 +5,8 @@ import { StatusBar } from './StatusBar';
 import { TopBar } from './TopBar';
 import { Workspace } from './Workspace';
 import { CadLinkCoordinator } from './CadLinkCoordinator';
+import { CadSetupPublisher } from './cadSetupPublisher';
+import { CadDeliveryHealthDataSource } from './CadDeliveryHealth';
 import { JobsCoordinator } from './JobsCoordinator';
 import { useDocumentTitle } from './useDocumentTitle';
 
@@ -26,5 +28,5 @@ export function Shell() {
       previewSocket.stop();
     };
   }, []);
-  return <><CadLinkCoordinator/><JobsCoordinator><div className="app-shell"><TopBar onResetLayout={() => setResetKey((value) => value + 1)}/><Workspace resetKey={resetKey}/><StatusBar/></div></JobsCoordinator></>;
+  return <><CadSetupPublisher/><CadDeliveryHealthDataSource/><CadLinkCoordinator/><JobsCoordinator><div className="app-shell"><TopBar onResetLayout={() => setResetKey((value) => value + 1)}/><Workspace resetKey={resetKey}/><StatusBar/></div></JobsCoordinator></>;
 }

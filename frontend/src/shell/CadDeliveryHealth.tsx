@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
-import { getDeliveryStatus, type CadDeliveryStatus, type CadOperationSummary } from '../api/cadOperations';
-import { useCadOperationsStore } from '../stores/cadOperations';
+import { useEffect, useRef } from 'react';
+import type { CadDeliveryStatus } from '../api/cadOperations';
+import { connectCadDeliveryHealth, refreshCadDeliveryHealth, useCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
 import { usePanelVisible } from './panelVisibility';
+
+export { WAITING_READ_MS } from '../stores/cadDeliveryHealth';
 
 /** A pass that started this long ago and has not finished is reported as stuck. */
 export const HUNG_PASS_MS = 15_000;
-/** How often the status is read while a request waits to be taken. */
-export const WAITING_READ_MS = 5_000;
 
 export interface DeliveryHealthLine {
   tone: 'blocked' | 'waiting';
@@ -51,55 +51,30 @@ export function deliveryHealthLines(status: CadDeliveryStatus | null, now: numbe
   return lines;
 }
 
-const waitingToBeTaken = (operations: Record<string, CadOperationSummary>) => Object.values(operations)
-  .some((operation) => operation.state === 'received');
+/** Mount once beside the other shell services, independently of the panel or coordinator. */
+export function CadDeliveryHealthDataSource() {
+  useEffect(() => connectCadDeliveryHealth(), []);
+  return null;
+}
 
-/**
- * The consumer's state and recent refusals, in the CAD Link panel.
- *
- * Read on mount, when a refusal arrives, and every few seconds only while a
- * request waits to be taken -- in flight, which is when the answer matters --
- * never on a standing clock.
- */
+/** The consumer's state and recent refusals, in the CAD Link panel. */
 export function CadDeliveryHealth({ now = Date.now }: { now?: () => number }) {
-  const operations = useCadOperationsStore((state) => state.operations);
-  const refusals = useCadOperationsStore((state) => state.refusals);
-  const unseen = useCadOperationsStore((state) => state.unseenRefusals);
+  const status = useCadDeliveryHealthStore((state) => state.status);
+  const refusals = useCadDeliveryHealthStore((state) => state.refusals);
+  const unseen = useCadDeliveryHealthStore((state) => state.unseenRefusals);
   const visible = usePanelVisible();
-  const [read, setRead] = useState<{ status: CadDeliveryStatus; at: number } | null>(null);
-  const pushed = useCadOperationsStore((state) => state.deliveryStatus);
-  const [pushedAt, setPushedAt] = useState(0);
-  const waiting = waitingToBeTaken(operations);
-  // The newer of what was read and what the server pushed since.
-  useEffect(() => { if (pushed) setPushedAt(now()); }, [pushed, now]);
-  const status = pushed && (!read || pushedAt >= read.at) ? pushed : read?.status ?? null;
-
+  const wasVisible = useRef(false);
   useEffect(() => {
-    let current = true;
-    const read = () => {
-      void getDeliveryStatus().then((next) => {
-        if (!current) return;
-        setRead({ status: next, at: now() });
-        useCadOperationsStore.getState().mergeRefusals(next.recentRefusals ?? []);
-      }).catch(() => undefined);
-    };
-    read();
-    const timer = waiting ? window.setInterval(read, WAITING_READ_MS) : null;
-    return () => {
-      current = false;
-      if (timer !== null) window.clearInterval(timer);
-    };
-    // Re-read on the events that can change it: the panel coming into view,
-    // a refusal, work starting or ending. The server also pushes a declined
-    // reason or a stuck pass as it happens (cadDeliveryStatus).
-  }, [waiting, refusals.length, visible, now]);
+    if (visible && !wasVisible.current) refreshCadDeliveryHealth();
+    wasVisible.current = visible;
+  }, [visible]);
 
   // Seeing the list is what acknowledges it.
   useEffect(() => {
-    if (visible && unseen) useCadOperationsStore.getState().acknowledgeRefusals();
+    if (visible && unseen) useCadDeliveryHealthStore.getState().acknowledgeRefusals();
   }, [unseen, visible]);
 
-  const recoveryError = useCadOperationsStore((state) => state.recoveryError);
+  const recoveryError = useCadDeliveryHealthStore((state) => state.recoveryError);
   const lines = [
     ...deliveryHealthLines(status, now()),
     ...(recoveryError ? [{ tone: 'waiting' as const, text: recoveryError }] : []),

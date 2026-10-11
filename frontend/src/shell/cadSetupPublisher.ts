@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { create } from 'zustand';
 import { exteriorModeBlocker } from '../jobs/importedSubmission';
 import {
   putProjectSetup,
@@ -275,4 +277,16 @@ export function startCadSetupPublisher(
     if (retrying) clearTimeout(retrying.timer);
     retrying = null;
   };
+}
+
+/** Save feedback remains available when the CAD coordinator is absent. */
+export const useCadSetupPublisherStore = create<{ error: string | null }>(() => ({ error: null }));
+
+export function CadSetupPublisher() {
+  useEffect(() => startCadSetupPublisher({
+    onSaveState: (state) => useCadSetupPublisherStore.setState({
+      error: state === 'failed' ? 'Settings not saved. Edit a setting to retry.' : null,
+    }),
+  }), []);
+  return null;
 }

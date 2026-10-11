@@ -2,14 +2,29 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CadDeliveryStatus, CadOperationSummary } from '../api/cadOperations';
+import { jobsSocket, type CadOperationListener } from '../api/jobsSocket';
+import { resetCadDeliveryHealthStore } from '../stores/cadDeliveryHealth';
+import { Shell } from './Shell';
 import type { FusionCadStatus } from '../api/cadlink';
 import { resetCadOperationsStore, useCadOperationsStore } from '../stores/cadOperations';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { CadDeliveryHealth, deliveryHealthLines, HUNG_PASS_MS, WAITING_READ_MS } from './CadDeliveryHealth';
+import { CadDeliveryHealth, CadDeliveryHealthDataSource, deliveryHealthLines, HUNG_PASS_MS, WAITING_READ_MS } from './CadDeliveryHealth';
 import { fusionWorkflowView } from './cadWorkflowView';
 import { AttentionNotices, cadSourceLine } from './TopBar';
 import { PanelVisibilityContext, type PanelVisibility } from './panelVisibility';
 import { bindWorkspaceNavigation, publishVisiblePanels, resetWorkspaceNavigationForTests } from './workspaceNavigation';
+
+vi.mock('./CadLinkCoordinator', async (original) => ({
+  ...await original<typeof import('./CadLinkCoordinator')>(), CadLinkCoordinator: () => null,
+}));
+vi.mock('./JobsCoordinator', async (original) => ({
+  ...await original<typeof import('./JobsCoordinator')>(), JobsCoordinator: () => null,
+}));
+vi.mock('./Workspace', async (original) => ({ ...await original<typeof import('./Workspace')>(), Workspace: () => null }));
+vi.mock('./StatusBar', () => ({ StatusBar: () => null }));
+vi.mock('./TopBar', async (original) => ({
+  ...await original<typeof import('./TopBar')>(), TopBar: () => null,
+}));
 
 const NOW = Date.parse('2026-09-21T12:00:00Z');
 
@@ -66,15 +81,20 @@ describe('the CAD Link panel section', () => {
   let root: Root;
   let reads: number;
   let answer: CadDeliveryStatus;
+  let listener: CadOperationListener;
+  let listed: CadOperationSummary[];
 
   beforeEach(() => {
     (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.useFakeTimers();
     resetCadOperationsStore();
+    vi.spyOn(jobsSocket, 'subscribeCadOperations').mockImplementation((next) => { listener = next; return vi.fn(); });
     reads = 0;
+    listed = [];
     answer = status();
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      reads += 1;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes('/operations')) return new Response(JSON.stringify({ operations: listed }));
+      if (String(input).endsWith('/delivery')) reads += 1;
       return new Response(JSON.stringify(answer), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }));
     host = document.createElement('div');
@@ -85,14 +105,58 @@ describe('the CAD Link panel section', () => {
   afterEach(() => {
     act(() => root.unmount());
     host.remove();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     vi.useRealTimers();
     resetCadOperationsStore();
   });
 
   const mount = async () => {
-    await act(async () => { root.render(<CadDeliveryHealth now={() => NOW}/>); await vi.advanceTimersByTimeAsync(10); });
+    await act(async () => { root.render(<><CadDeliveryHealthDataSource/><CadDeliveryHealth now={() => NOW}/></>); await vi.advanceTimersByTimeAsync(10); });
   };
+
+  it.each([
+    ['disabled', status({ consumer: 'disabled' }), 'WG2_CAD_DELIVERY=0'],
+    ['declining', status({ declined: 'No CAD Link folder is selected.' }), 'No CAD Link folder is selected.'],
+    ['hung', status({ passHung: true }), 'has not finished a pass since'],
+    ['healthy idle', status(), ''],
+  ])('the shell owns %s delivery health without the coordinator or operation store', async (_name, projection, text) => {
+    resetCadDeliveryHealthStore();
+    answer = projection;
+    // No coordinator mounts or subscribes. Only the shell service can deliver this projection.
+    await act(async () => { root.render(<><Shell/><CadDeliveryHealth now={() => NOW}/></>); await vi.advanceTimersByTimeAsync(10); });
+    expect(host.textContent).toEqual(text ? expect.stringContaining(text) : '');
+    expect(useCadOperationsStore.getState().deliveryStatus).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10 * WAITING_READ_MS); });
+    expect(reads).toBe(1);
+    await act(async () => {
+      listener.deliveryStatus!(status({ declined: 'Restart is approved.' }));
+    });
+    expect(host.textContent).toContain('Restart is approved.');
+    expect(reads).toBe(1);
+  });
+
+  it('recovers waiting intake without the coordinator and stops its clock when the request is taken', async () => {
+    listed = [{ operationId: 'waiting-1', state: 'received', attemptGeneration: 0, updatedAt: null } as CadOperationSummary];
+    answer = status({ declined: 'Restart is approved.' });
+    await act(async () => { root.render(<><Shell/><CadDeliveryHealth now={() => NOW}/></>); await vi.advanceTimersByTimeAsync(10); });
+    expect(host.textContent).toContain('Restart is approved.');
+    const atMount = reads;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS); });
+    expect(reads).toBe(atMount + 3);
+    await act(async () => {
+      listener.operation({ ...listed[0], state: 'processing', attemptGeneration: 1 });
+      // An obsolete received message cannot start the clock again.
+      listener.operation(listed[0]);
+      // A reconnect listing taken before that push must not revive waiting either.
+      listener.resync();
+      await vi.advanceTimersByTimeAsync(10);
+    });
+    const afterTaken = reads;
+    await act(async () => { await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS); });
+    expect(reads).toBe(afterTaken);
+    expect(useCadOperationsStore.getState().operations).toEqual({});
+  });
 
   it('reads once while nothing waits, and not on a clock', async () => {
     await mount();
@@ -108,8 +172,8 @@ describe('the CAD Link panel section', () => {
       jobId: null, attemptGeneration: 0, setupRevisionId: null, preparationId: null, snapshot: null, legacy: false,
       createdAt: null, updatedAt: null,
     };
-    act(() => { useCadOperationsStore.getState().apply(waiting); });
     await mount();
+    act(() => listener.operation(waiting));
     await act(async () => { await vi.advanceTimersByTimeAsync(3 * WAITING_READ_MS); });
     expect(reads).toBeGreaterThanOrEqual(3);
     expect(host.textContent).toContain('about to restart');
@@ -119,7 +183,7 @@ describe('the CAD Link panel section', () => {
     await mount();
     expect(host.textContent).toBe('');
     await act(async () => {
-      useCadOperationsStore.getState().setDeliveryStatus(status({
+      listener.deliveryStatus!(status({
         passStartedAt: '2026-09-21T11:59:40Z', lastPassCompletedAt: '2026-09-21T11:59:39Z', passHung: true,
       }));
       await vi.advanceTimersByTimeAsync(10);
@@ -137,7 +201,7 @@ describe('the CAD Link panel section', () => {
       subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     };
     await act(async () => {
-      root.render(<PanelVisibilityContext.Provider value={visibility}><CadDeliveryHealth now={() => NOW}/></PanelVisibilityContext.Provider>);
+      root.render(<><CadDeliveryHealthDataSource/><PanelVisibilityContext.Provider value={visibility}><CadDeliveryHealth now={() => NOW}/></PanelVisibilityContext.Provider></>);
       await vi.advanceTimersByTimeAsync(10);
     });
     const atMount = reads;

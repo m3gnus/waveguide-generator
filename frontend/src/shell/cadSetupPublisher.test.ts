@@ -1,4 +1,11 @@
+import { act, createElement } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { jobsSocket } from '../api/jobsSocket';
+import { resetCadOperationsStore } from '../stores/cadOperations';
+import { resetCadCoordinationForTests } from '../api/cadCoordination';
+import { Shell } from './Shell';
+import { useCadSetupPublisherStore } from './cadSetupPublisher';
 import type { CadReturnBundle, CadReturnIngestRecord } from '../api/cadlink';
 import { resetCadPreparationStore, useCadPreparationStore } from '../stores/cadPreparation';
 import { resetCadReturnStore, useCadReturnStore } from '../stores/cadReturn';
@@ -6,6 +13,18 @@ import { resetDocumentStore } from '../stores/document';
 import { resetSolveOptionsStore, useSolveOptionsStore } from '../stores/solveOptions';
 import { workspaceModeStore } from '../stores/workspaceMode';
 import { buildCadProjectSetup, startCadSetupPublisher } from './cadSetupPublisher';
+
+const app = vi.hoisted(() => ({ coordinatorMounted: false }));
+vi.mock('./CadLinkCoordinator', async (original) => {
+  const actual = await original<typeof import('./CadLinkCoordinator')>();
+  return { ...actual, CadLinkCoordinator: () => app.coordinatorMounted ? createElement(actual.CadLinkCoordinator) : null };
+});
+vi.mock('./JobsCoordinator', async (original) => ({
+  ...await original<typeof import('./JobsCoordinator')>(), JobsCoordinator: () => null,
+}));
+vi.mock('./TopBar', () => ({ TopBar: () => null }));
+vi.mock('./Workspace', () => ({ Workspace: () => null }));
+vi.mock('./StatusBar', () => ({ StatusBar: () => null }));
 
 const bundle: CadReturnBundle = {
   name: 'speaker.wgreturn',
@@ -403,5 +422,109 @@ describe('CAD setup publisher: what an edit not yet sent does', () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(calls).toHaveLength(2);
     stop();
+  });
+});
+
+describe('shell-owned CAD setup publisher', () => {
+  let host: HTMLDivElement;
+  let root: Root;
+  let calls: Array<{ lineageId: string; setup: { geometry: { exterior_only: boolean } } }>;
+  let failures: number;
+  let healthReads: number;
+
+  beforeEach(() => {
+    (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.useFakeTimers();
+    localStorage.clear();
+    resetCadReturnStore();
+    resetCadPreparationStore();
+    resetDocumentStore();
+    resetSolveOptionsStore();
+    resetCadOperationsStore();
+    resetCadCoordinationForTests('off');
+    useCadSetupPublisherStore.setState({ error: null });
+    workspaceModeStore.setMode('cad');
+    app.coordinatorMounted = false;
+    calls = [];
+    failures = 0;
+    healthReads = 0;
+    vi.spyOn(jobsSocket, 'subscribeCadOperations').mockReturnValue(() => undefined);
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input);
+      if (path.endsWith('/delivery')) healthReads += 1;
+      if (path.endsWith('/project-setups')) {
+        calls.push(JSON.parse(String(init?.body)));
+        if (failures-- > 0) throw new Error('offline');
+      }
+      if (path.includes('/operations')) return json({ operations: [] });
+      if (path.endsWith('/returns')) return json({ items: [], cadFolderConfigured: false, coordination: 'off' });
+      if (path.endsWith('/fusion-status')) return json({ running: false, state: 'addin_offline' });
+      return json({ consumer: 'running', recentRefusals: [] });
+    }));
+    host = document.createElement('div');
+    document.body.append(host);
+    root = createRoot(host);
+  });
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    resetCadCoordinationForTests();
+    workspaceModeStore.setMode('parametric');
+  });
+  const advance = async (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+  const mount = async () => act(async () => { root.render(createElement(Shell)); await vi.advanceTimersByTimeAsync(10); });
+
+  it('mounts without the coordinator and publishes only deliberate edits, retrying and flushing the correct project', async () => {
+    await mount();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    ingest('wgl_a');
+    await advance(2_000);
+    expect(calls).toEqual([]);
+    failures = 1;
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await advance(800);
+    expect(calls).toHaveLength(1);
+    await advance(1_000);
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toEqual(calls[0]);
+    useCadReturnStore.getState().setExteriorOnly(false);
+    await advance(100);
+    useCadReturnStore.getState().selectBundle(null, null);
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_b');
+    await advance(2_000);
+    expect(calls.map(({ lineageId }) => lineageId)).toEqual(['wgl_a', 'wgl_a', 'wgl_a']);
+    expect(calls[2].setup.geometry.exterior_only).toBe(false);
+  });
+
+  it('with the coordinator mounted publishes exactly once per deliberate edit', async () => {
+    app.coordinatorMounted = true;
+    await mount();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    await advance(2_000);
+    expect(calls).toEqual([]);
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await advance(2_000);
+    expect(calls).toHaveLength(1);
+    useCadReturnStore.getState().setExteriorOnly(false);
+    await advance(2_000);
+    expect(calls).toHaveLength(2);
+    expect(calls.map(({ setup }) => setup.geometry.exterior_only)).toEqual([true, false]);
+    expect(healthReads).toBe(1);
+  });
+
+  it('keeps save-failure feedback without the coordinator and clears it after a later edit saves', async () => {
+    await mount();
+    useCadReturnStore.getState().selectBundle(bundle, 'wgl_a');
+    failures = 3;
+    useCadReturnStore.getState().setExteriorOnly(true);
+    await advance(6_000);
+    expect(calls).toHaveLength(3);
+    expect(useCadSetupPublisherStore.getState().error).toBe('Settings not saved. Edit a setting to retry.');
+    useCadReturnStore.getState().setExteriorOnly(false);
+    await advance(800);
+    expect(useCadSetupPublisherStore.getState().error).toBeNull();
   });
 });

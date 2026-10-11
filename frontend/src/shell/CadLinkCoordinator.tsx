@@ -36,7 +36,6 @@ import { createImportedMeshScene } from '../viewport/importedMesh';
 import { displaySymmetry } from '../api/domainDecision';
 import { importedMeshStore } from '../viewport/importedMeshStore';
 import { parseMSH } from '../viewport/mshParser';
-import { startCadSetupPublisher } from './cadSetupPublisher';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { recordOnScreenSettings } from './cadOnScreenSettings';
 import { workspaceNavigation } from './workspaceNavigation';
@@ -121,7 +120,6 @@ interface CadLinkCoordinatorSnapshot {
   selectOnshapeInstance(instanceId: string): void;
 }
 
-const SETTINGS_NOT_SAVED = 'Settings not saved. Edit a setting to retry.';
 const unavailable = async () => { throw new Error('CAD Link coordinator is unavailable'); };
 const unavailableRefreshOnshape = async (_committed?: DesignIdentity) => unavailable();
 let bridgeSnapshot: CadLinkCoordinatorSnapshot = {
@@ -1310,16 +1308,6 @@ export function CadLinkCoordinator() {
   }, 'Recorded these settings for the model’s project. Preparing and solving it; its run appears in the Jobs rail once it is submitted.'),
   [actOnOperation]);
 
-  // Fusion's solve commands are the backend's (CAD-OPERATIONS.md, "Delivery"):
-  // it collects each one, prepares it from its project's recorded setup and
-  // reports on the jobs channel. This client records that setup as the user
-  // edits it, and follows the operations.
-  useEffect(() => startCadSetupPublisher({
-    onSaveState: (state) => setError((current) => {
-      if (state === 'failed') return current ?? SETTINGS_NOT_SAVED;
-      return current === SETTINGS_NOT_SAVED ? null : current;
-    }),
-  }), []);
   useEffect(() => {
     const disconnect = connectCadOperations();
     void useCadOperationsStore.getState().load().catch(() => undefined);
