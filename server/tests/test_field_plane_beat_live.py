@@ -25,9 +25,14 @@ from server.tests.test_field_plane import _body, _request
 from server.tests.test_field_traces_store import _job
 
 
-pytestmark = [pytest.mark.slow, pytest.mark.real_runtime,
+# Match the existing native solver qualification convention.
+_pytest_config = getattr(pytest.mark, "_config", None)
+if _pytest_config is not None:
+    _pytest_config.addinivalue_line("markers", "live: real native solver qualification")
+
+pytestmark = [pytest.mark.live, pytest.mark.slow, pytest.mark.real_runtime,
               pytest.mark.skipif(os.environ.get("WG2_RUN_LIVE") != "1",
-                                 reason="set WG2_RUN_LIVE=1 for real BEAT field qualification")]
+                                 reason="set WG2_RUN_LIVE=1 and select -m live for real BEAT field qualification")]
 
 
 @pytest.fixture
@@ -64,7 +69,7 @@ def _mesh(request):
                                         lambda *_args: None))["msh_text"]
 
 
-def _compare_finished_result(tmp_path, result, native, layout, solve_request, *, imported=False):
+def _compare_finished_result(tmp_path, result, native, layout, solve_request, *, imported=False, metal_api=None):
     artifact = result.pop("_field_traces")
     result.pop("_field_trace_unavailable_reason", None)
     result.pop("_channel_bases_npz", None)
@@ -85,6 +90,7 @@ def _compare_finished_result(tmp_path, result, native, layout, solve_request, *,
         service = app.state.jobs_runtime.field_plane_service
         row = store.get_job_row("real-beat")
         errors = []
+        independent_errors = []
         try:
             for index, frequency in enumerate(native.frequencies_hz):
                 body = _body(f"polar-{index}", frequency_index=index,
@@ -98,6 +104,25 @@ def _compare_finished_result(tmp_path, result, native, layout, solve_request, *,
                 assert np.all(spl_error < .5), spl_error
                 assert np.all(phase_error < 3.), phase_error
                 errors.append((float(frequency), float(np.max(spl_error)), float(np.max(phase_error))))
+                if metal_api is not None:
+                    # Read the persisted Pa / Pa/m traces through the same
+                    # loader used for the interactive field, without solving
+                    # again or changing signs, units or time conventions.
+                    traces = service._load_response_traces("real-beat", row, request)
+                    path = tmp_path / "independent.msh"
+                    path.write_text(traces[0], encoding="utf-8")
+                    mesh = metal_api.load_mesh(path, native_symmetry_plane=traces[3])
+                    independent = await asyncio.to_thread(
+                        metal_api.evaluate_exterior_from_traces, mesh, traces[1], traces[2],
+                        traces[4], traces[5], points, symmetry_plane=traces[3], check_open_edges=True)
+                    assert np.isfinite(independent).all() and np.all(np.abs(independent) > 0)
+                    spl_error = np.abs(20 * np.log10(np.abs(actual) / np.abs(independent)))
+                    phase_error = np.abs(np.angle(actual / independent, deg=True))
+                    independent_errors.append((float(frequency), float(np.max(spl_error)), float(np.max(phase_error))))
+                    print(f"BEAT/Metal persisted-trace agreement: symmetry={artifact.symmetry_plane}, "
+                          f"points={len(points)}, (Hz, max dB, max degrees)={independent_errors[-1]}")
+                    assert np.all(spl_error < .5), spl_error
+                    assert np.all(phase_error < 3.), phase_error
                 # Compare images across both sides, including diagonal points,
                 # independently of the polar arc's symmetric range.
                 for axis in ((0, 1) if artifact.symmetry_plane == "yz+xz" else
@@ -131,6 +156,24 @@ def test_parametric_polar_arc_matches_persisted_field_at_every_point(workers, tm
     result = beat.solve_beat_from_msh_text(mesh, context, backend="cpu", _worker_manager=workers,
                                          _native_result_callback=lambda _channel, native: captured.append(native))
     _compare_finished_result(tmp_path, result, captured[0], compiled.layout, request)
+
+
+@pytest.mark.parametrize("quadrants", [1234, 14, 1])
+def test_persisted_beat_artifact_agrees_with_independent_metal(workers, tmp_path, quadrants):
+    metal_api = pytest.importorskip("hornlab_metal_bem")
+    from server.solver.metal import metal_status
+
+    status = metal_status()
+    if not status["available"]:
+        pytest.skip(status["reason"])
+    request = _parametric_request(quadrants)
+    mesh = _mesh(request)
+    context = SolverContext.from_request(request, solver_mode="full_3d")
+    compiled = build_parametric_request(mesh, context, backend="cpu", surface_traces=True)
+    captured = []
+    result = beat.solve_beat_from_msh_text(mesh, context, backend="cpu", _worker_manager=workers,
+                                         _native_result_callback=lambda _channel, native: captured.append(native))
+    _compare_finished_result(tmp_path, result, captured[0], compiled.layout, request, metal_api=metal_api)
 
 
 def test_imported_rotated_translated_cad_frame_matches_persisted_field(workers, tmp_path):

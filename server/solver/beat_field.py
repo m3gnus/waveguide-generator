@@ -17,7 +17,7 @@ from .beat_adapter.mesh import SurfaceMesh, read_surface
 from .beat_adapter.request import _image_frame
 from .beat_runtime import readiness
 from .beat_runtime.manager import get_manager
-from .beat_runtime.session import SolveSession
+from .beat_runtime.session import SessionCancelled, SolveSession
 from .field_traces_store import ArtifactCorrupt
 
 
@@ -35,6 +35,8 @@ def field_status() -> Mapping[str, Any]:
 
 def load_mesh(path: Path, *, native_symmetry_plane: str | None = None) -> SurfaceMesh:
     """Preserve the original metre-frame node and triangle row ordering."""
+    # native_symmetry_plane is part of the common loader API; BEAT applies
+    # images during evaluation, so mesh loading must not expand or reorder it.
     try:
         return read_surface(Path(path).read_text(encoding="utf-8"))
     except ValueError as exc:
@@ -69,6 +71,7 @@ def evaluate_exterior_from_traces(
     mesh: SurfaceMesh, frequency_hz: float, k_real: float,
     pressure_p1: Any, neumann_dp0: Any, points_m: Any, *,
     symmetry_plane: str | None = None,
+    ground_plane: str | None = None,
     cancellation_callback: Callable[[], None] | None = None,
 ) -> np.ndarray:
     """Run BEAT's own potential evaluator, without solving the boundary again.
@@ -78,8 +81,14 @@ def evaluate_exterior_from_traces(
     solutions, so the field operation takes them unchanged. CAD traces belong
     to the ingested mesh: rotate mesh and points together only for a Y image.
     """
-    from .field_plane import FieldPlaneUnsupported
+    from .field_plane import FieldPlaneEvaluationFailed, FieldPlaneUnsupported
 
+    if ground_plane is not None:
+        raise FieldPlaneUnsupported(
+            "BEAT field evaluation does not support a rigid ground plane.",
+            code="unsupported_ground_plane",
+            remedy="Turn the ground plane off and re-solve.",
+        )
     status = field_status()
     if not status["available"]:
         raise FieldPlaneUnsupported(f"BEAT field runtime is unavailable: {status['reason']}")
@@ -104,6 +113,9 @@ def evaluate_exterior_from_traces(
     key = hashlib.sha256(vertices.tobytes() + np.asarray(mesh.faces, dtype="<i8").tobytes()).hexdigest()
     try:
         contract = importlib.import_module("beat_engine.beat_contract.worker")
+    except ImportError as exc:
+        raise FieldPlaneUnsupported(f"BEAT field runtime is unavailable: {exc}") from exc
+    try:
         with SolveSession(cancellation_callback=cancellation_callback) as session:
             directory = session.directory
             assert directory is not None
@@ -141,5 +153,7 @@ def evaluate_exterior_from_traces(
                 raise RuntimeError("BEAT field evaluation ended without a completed pressure result")
             session.raise_callback_error()
             return result
-    except (ImportError, OSError, ValueError, RuntimeError) as exc:
-        raise FieldPlaneUnsupported(f"BEAT field evaluation unavailable: {exc}") from exc
+    except SessionCancelled:
+        raise
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise FieldPlaneEvaluationFailed(f"BEAT field evaluation failed: {exc}") from exc

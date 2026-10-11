@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import threading
 from types import SimpleNamespace
 
 import numpy as np
@@ -25,7 +26,11 @@ def runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(temp_session, "_active_root", str(tmp_path))
     monkeypatch.setattr(beat_field, "field_status", lambda: dict(available=True, backend="cpu"))
     state = SimpleNamespace(requests=[], arrays=[], operations=[], negotiated=[], mutate=None,
-                            failed=False, incomplete=False, duplicate=False, cancelled=False)
+                            failed=False, incomplete=False, duplicate=False, cancelled=False,
+                            block=False, entered=threading.Event(), release=threading.Event(),
+                            retirements=0, start_hook=None, probe_clears=[])
+    monkeypatch.setattr(beat_field.readiness, "probe_cache_clear",
+                        lambda **kwargs: state.probe_clears.append(kwargs))
 
     class Stream:
         def __init__(self, iterator):
@@ -41,7 +46,8 @@ def runtime(monkeypatch, tmp_path):
         worker_info = {"type": "ready"}
 
         def ensure_started(self):
-            pass
+            if state.start_hook is not None:
+                state.start_hook()
 
         def submit(self, path, *, operation, status_callback=None):
             wire = json.loads(path.read_text())
@@ -57,6 +63,11 @@ def runtime(monkeypatch, tmp_path):
             state.arrays.append(arrays)
 
             def events():
+                if state.block:
+                    state.entered.set()
+                    assert state.release.wait(2)
+                    if state.retirements:
+                        raise OSError("field worker terminated")
                 if state.cancelled:
                     while not Path(wire["cancel_path"]).exists():
                         # The session's cancellation monitor owns the marker.
@@ -65,7 +76,7 @@ def runtime(monkeypatch, tmp_path):
                     yield dict(type="cancelled")
                     return
                 if state.failed:
-                    yield dict(type="failed", error="field operation unavailable")
+                    yield dict(type="failed", error="field kernel failed")
                     return
                 values = np.full(len(arrays["points_m"]), arrays["boundary_pressure"][0], dtype="<c8")
                 (path.parent / "field.bin").write_bytes(values.tobytes())
@@ -83,7 +94,8 @@ def runtime(monkeypatch, tmp_path):
             return Stream(events())
 
         def terminate(self):
-            pass
+            state.retirements += 1
+            state.release.set()
 
     def negotiate(info, request, operation):
         state.negotiated.append(operation)
@@ -96,6 +108,7 @@ def runtime(monkeypatch, tmp_path):
     monkeypatch.setattr(beat_field.importlib, "import_module", lambda name:
                         contract if name == "beat_engine.beat_contract.worker" else original_import(name))
     client = ManagedWorker(Worker(), "child")
+    state.client = client
     monkeypatch.setattr(beat_field, "get_manager", lambda: SimpleNamespace(get_worker=lambda backend: client))
     yield state
     client.close(detach=False)
@@ -225,7 +238,7 @@ def test_invalid_field_results_do_not_return_pressure(runtime, tmp_path, failure
     path = tmp_path / "mesh.msh"
     path.write_text(MESH_TEXT)
     artifact = _artifact()
-    with pytest.raises(field_plane.FieldPlaneUnsupported, match="BEAT field evaluation unavailable"):
+    with pytest.raises(field_plane.FieldPlaneEvaluationFailed, match="BEAT field evaluation failed"):
         beat_field.evaluate_exterior_from_traces(beat_field.load_mesh(path), 1000., 18.3,
                                                artifact.channels[0].pressure_p1[0], artifact.channels[0].neumann_dp0[0],
                                                [[2., 3., 4.]])
@@ -257,6 +270,180 @@ def test_timeout_cancels_only_the_owned_beat_field_session(runtime, tmp_path):
                 await asyncio.wait_for(asyncio.gather(*service._background_tasks), timeout=2)
             assert not app.state.jobs_runtime.metal_permit.field_running
             assert not list(tmp_path.glob("wg2-beat-solve-*"))
+        finally:
+            await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+    assert runtime.probe_clears == []
+
+
+@pytest.mark.parametrize("stage", ["admission", "startup"])
+def test_deadline_before_submission_preserves_probe_cache(runtime, monkeypatch, tmp_path, stage):
+    # Force the reviewed race: only submit's synchronous checks observe the
+    # deadline, before the monitor can set the session's cancellation flag.
+    monkeypatch.setattr(beat_field.SolveSession, "_start_monitor", lambda self: None)
+    clock = SimpleNamespace(now=0.)
+    monkeypatch.setattr(field_plane, "time", SimpleNamespace(monotonic=lambda: clock.now))
+    owner = runtime.client.acquire(lambda: None) if stage == "admission" else None
+    if stage == "admission":
+        acquire = runtime.client.acquire
+
+        def expire_then_acquire(check):
+            clock.now = 2.
+            return acquire(check)
+        monkeypatch.setattr(runtime.client, "acquire", expire_then_acquire)
+    else:
+        def start():
+            clock.now = 2.
+        runtime.start_hook = start
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path / "data")
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(store, "deadline", backend=BEAT_FIELD_TRACE_BACKEND)
+        service = app.state.jobs_runtime.field_plane_service
+        service.timeout_seconds = 1.
+        try:
+            status, _, _ = await _request(app, "/api/results/deadline/field-plane", _body())
+            assert status == 504
+            await asyncio.wait_for(asyncio.gather(*service._background_tasks), timeout=2)
+            assert not app.state.jobs_runtime.metal_permit.field_running
+        finally:
+            runtime.release.set()
+            await app.state.jobs_runtime.shutdown()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        if owner is not None:
+            owner.close()
+    assert runtime.requests == runtime.probe_clears == []
+    assert runtime.retirements == 0
+    assert not list(tmp_path.glob("wg2-beat-solve-*"))
+
+
+@pytest.mark.parametrize("expires", [False, True])
+def test_superseded_field_drains_warm_worker_but_keeps_deadline(runtime, tmp_path, expires):
+    runtime.block = True
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path / "data")
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(store, "drag", backend=BEAT_FIELD_TRACE_BACKEND)
+        service = app.state.jobs_runtime.field_plane_service
+        service.timeout_seconds = .1 if expires else 2.
+        first = asyncio.create_task(service.evaluate("drag", FieldPlaneRequest.model_validate(_body("first"))))
+        try:
+            assert await asyncio.to_thread(runtime.entered.wait, 1)
+            first.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await first
+            assert app.state.jobs_runtime.metal_permit.field_running
+            if expires:
+                await asyncio.wait_for(asyncio.gather(*service._background_tasks), timeout=2)
+                assert runtime.retirements == 1
+            else:
+                newest = asyncio.create_task(service.evaluate("drag", FieldPlaneRequest.model_validate(_body("newest"))))
+                while not app.state.jobs_runtime.metal_permit.field_pending:
+                    await asyncio.sleep(0)
+                # Outlast the old cancellation grace to prove it is drained.
+                await asyncio.sleep(.35)
+                assert runtime.retirements == 0
+                runtime.release.set()
+                evaluated = await asyncio.wait_for(newest, timeout=2)
+                assert np.isfinite(evaluated.pressure).all()
+                await asyncio.gather(*service._background_tasks)
+                assert runtime.operations == ["bem_field", "bem_field"]
+            assert runtime.probe_clears == []
+            assert not app.state.jobs_runtime.metal_permit.field_running
+            assert not list(tmp_path.glob("wg2-beat-solve-*"))
+        finally:
+            runtime.release.set()
+            await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("failure", ["failed", "nonfinite", "startup"])
+def test_evaluation_failures_return_500_not_unavailable(runtime, tmp_path, failure):
+    runtime.failed = failure == "failed"
+    if failure == "nonfinite":
+        def mutate(event):
+            directory = next(tmp_path.glob("wg2-beat-solve-*"))
+            (directory / "field.bin").write_bytes(np.full(event["values_binary"]["shape"], np.nan, dtype="<c8").tobytes())
+        runtime.mutate = mutate
+    if failure == "startup":
+        def start():
+            raise OSError("worker connection failed")
+        runtime.start_hook = start
+
+    async def scenario():
+        app = create_app(data_dir=tmp_path / "data")
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        _create_job(store, "failed", backend=BEAT_FIELD_TRACE_BACKEND)
+        try:
+            status, raw, _ = await _request(app, "/api/results/failed/field-plane", _body())
+            assert status == 500
+            detail = json.loads(raw)["detail"]
+            assert "BEAT field evaluation failed" in detail
+            assert "unavailable" not in detail
+        finally:
+            await app.state.jobs_runtime.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_missing_contract_is_unavailable(runtime, monkeypatch, tmp_path):
+    def missing(name):
+        raise ImportError("BEAT worker contract missing")
+    monkeypatch.setattr(beat_field.importlib, "import_module", missing)
+    path = tmp_path / "mesh.msh"
+    path.write_text(MESH_TEXT)
+    artifact = _artifact()
+    with pytest.raises(field_plane.FieldPlaneUnsupported, match="runtime is unavailable.*contract missing"):
+        beat_field.evaluate_exterior_from_traces(beat_field.load_mesh(path), 1000., 18.3,
+                                               artifact.channels[0].pressure_p1[0], artifact.channels[0].neumann_dp0[0],
+                                               [[2., 3., 4.]])
+
+
+@pytest.mark.parametrize("plane", ["yz", "xz", "xy"])
+def test_ground_plane_is_explicitly_unsupported(runtime, tmp_path, plane):
+    path = tmp_path / "mesh.msh"
+    path.write_text(MESH_TEXT)
+    artifact = _artifact()
+    with pytest.raises(field_plane.FieldPlaneUnsupported, match="rigid ground plane") as failure:
+        beat_field.evaluate_exterior_from_traces(beat_field.load_mesh(path), 1000., 18.3,
+                                               artifact.channels[0].pressure_p1[0], artifact.channels[0].neumann_dp0[0],
+                                               [[2., 3., 4.]], ground_plane=plane)
+    assert failure.value.code == "unsupported_ground_plane"
+    assert runtime.requests == []
+
+
+@pytest.mark.parametrize("multi", [False, True])
+def test_retained_ground_plane_job_cannot_silently_evaluate_free_field(runtime, monkeypatch, tmp_path, multi):
+    async def scenario():
+        app = create_app(data_dir=tmp_path / "data")
+        store = app.state.jobs_runtime.store
+        store.initialize()
+        create_job = store.create_job
+
+        def with_ground(job):
+            job["config_json"]["options"] = dict(ground_plane=dict(enabled=True, axis="y", height_m=1.))
+            return create_job(job)
+        monkeypatch.setattr(store, "create_job", with_ground)
+        _create_job(store, "ground", backend=BEAT_FIELD_TRACE_BACKEND, multi=multi)
+        try:
+            status, raw, _ = await _request(app, "/api/results/ground/field-plane",
+                                          _body(response_id="channel:left" if multi else "channel:default"))
+            assert status == 422
+            payload = json.loads(raw)
+            assert payload["code"] == "unsupported_ground_plane"
+            assert "rigid ground plane" in payload["message"]
+            assert payload["remedy"] == "Turn the ground plane off and re-solve."
+            assert runtime.requests == []
         finally:
             await app.state.jobs_runtime.shutdown()
 

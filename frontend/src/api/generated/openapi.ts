@@ -8805,6 +8805,15 @@ export interface operations {
                     "application/json": components["schemas"]["FieldPlaneUnavailableResponse"] | components["schemas"]["FieldPlaneStringErrorResponse"] | components["schemas"]["FieldPlaneValidationErrorResponse"];
                 };
             };
+            /** @description Field evaluation failed to produce a valid pressure result */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FieldPlaneStringErrorResponse"];
+                };
+            };
         };
     };
     read_settings_api_settings_get: {

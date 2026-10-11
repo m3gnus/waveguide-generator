@@ -14627,6 +14627,16 @@
               }
             },
             "description": "Invalid field-plane selection, unsupported solve with an actionable remedy, or invalid request body"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldPlaneStringErrorResponse"
+                }
+              }
+            },
+            "description": "Field evaluation failed to produce a valid pressure result"
           }
         },
         "summary": "Field Plane"

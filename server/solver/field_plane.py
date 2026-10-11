@@ -16,6 +16,7 @@ from pathlib import Path
 import struct
 import tempfile
 import threading
+import time
 from typing import Any
 
 import numpy as np
@@ -26,6 +27,7 @@ from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.temp_session import temporary_directory_root
 
+from .beat_runtime.session import SessionCancelled
 from .combine import (
     expand_legacy_channels,
     normalize_channel,
@@ -88,6 +90,10 @@ class FieldPlaneInvalidSelection(ValueError):
 
 class FieldPlaneTimedOut(TimeoutError):
     """The configured field evaluation deadline elapsed."""
+
+
+class FieldPlaneEvaluationFailed(RuntimeError):
+    """The field runtime failed to produce a valid pressure result."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -358,11 +364,14 @@ class FieldPlaneService:
             await lease.release()
             raise
         isolated = traces[6] == BEMPP_FIELD_TRACE_BACKEND
-        cancelled = threading.Event()
+        timed_out = threading.Event()
+        deadline = time.monotonic() + self.timeout_seconds
 
         def check_cancelled() -> None:
-            if cancelled.is_set():
-                raise FieldPlaneTimedOut("BEAT field evaluation cancelled")
+            if timed_out.is_set() or time.monotonic() >= deadline:
+                # A caller deadline is not an OSError from the worker. In
+                # particular, it must not invalidate BEAT's readiness caches.
+                raise SessionCancelled("BEAT field evaluation timed out")
 
         if isolated:
             operation = _isolated_bempp_field({"traces": traces, "points": points})
@@ -377,7 +386,7 @@ class FieldPlaneService:
                 timeout=self.timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
-            cancelled.set()
+            timed_out.set()
             if isolated:
                 await lease.release()  # wait_for has killed/reaped the native worker
             else:
@@ -386,11 +395,19 @@ class FieldPlaneService:
                 f"Field evaluation exceeded {self.timeout_seconds:g} seconds"
             ) from exc
         except asyncio.CancelledError:
-            cancelled.set()
             if isolated:
                 await lease.release()
             else:
+                # Drain a superseded BEAT field and discard it, keeping the
+                # warm worker/cache. Its original deadline still bounds it.
                 self._release_when_finished(work, lease)
+            raise
+        except SessionCancelled as exc:
+            await lease.release()
+            if traces[6] == BEAT_FIELD_TRACE_BACKEND and time.monotonic() >= deadline:
+                raise FieldPlaneTimedOut(
+                    f"Field evaluation exceeded {self.timeout_seconds:g} seconds"
+                ) from exc
             raise
         except BaseException:
             await lease.release()
@@ -434,6 +451,15 @@ class FieldPlaneService:
         ) = self._load_response_traces(job_id, row, request)
         if backend == BEMPP_FIELD_TRACE_BACKEND:
             raise RuntimeError("BEMPP field evaluation must run in the isolated worker")
+        if backend == BEAT_FIELD_TRACE_BACKEND:
+            config = row.get("config_json") or {}
+            ground = config.get("options", {}).get("ground_plane", {})
+            if ground.get("enabled"):
+                raise FieldPlaneUnsupported(
+                    "BEAT field evaluation does not support a rigid ground plane.",
+                    code="unsupported_ground_plane",
+                    remedy="Turn the ground plane off and re-solve.",
+                )
         backend_api = _load_field_backend(backend)
         geometry_sha256 = mesh_text_sha256(mesh_text)
         mesh = self._cached_mesh(
@@ -867,6 +893,7 @@ __all__ = [
     "FIELD_PLANE_RESPONSE_VERSION",
     "FIELD_PLANE_TIMEOUT_ENV",
     "FieldPlaneEvaluation",
+    "FieldPlaneEvaluationFailed",
     "FieldPlaneInvalidSelection",
     "FieldPlaneJobIncomplete",
     "FieldPlaneJobNotFound",

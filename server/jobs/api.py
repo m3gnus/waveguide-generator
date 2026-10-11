@@ -40,6 +40,7 @@ from server.jobs.retention import settings_auto_cleanup_policy
 from server.settings.store import SettingsStore
 from server.solver.errors import RecombineError
 from server.solver.field_plane import (
+    FieldPlaneEvaluationFailed,
     FieldPlaneInvalidSelection,
     FieldPlaneJobIncomplete,
     FieldPlaneJobNotFound,
@@ -800,6 +801,10 @@ def create_jobs_router(
         "/api/results/{job_id}/field-plane",
         response_model=None,
         responses={
+            500: {
+                "model": FieldPlaneStringErrorResponse,
+                "description": "Field evaluation failed to produce a valid pressure result",
+            },
             422: {
                 "model": FieldPlane422Response,
                 "description": (
@@ -866,6 +871,8 @@ def create_jobs_router(
                 status_code=504,
                 detail={"code": "evaluation_timeout", "message": str(exc)},
             ) from exc
+        except FieldPlaneEvaluationFailed as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
         return Response(
             content=encode_field_plane_response(job_id, body, evaluated),
             media_type="application/octet-stream",
