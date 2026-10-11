@@ -333,14 +333,17 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
 
         if not mesher_supports_stretch():
             raise ValueError("nonzero throat stretch s1/s2 needs mesher 0.2.4")
-    # Use the mesher's post-profile scale for active stretch: scaling its plain
-    # bounded coefficients would change their validity (s2 is inverse length).
-    profile_scale = 1.0 if s1 != 0 and s2 != 0 else scale
+    current_import = root.text_import_version == "ath-2026-09a-v2"
+    active_stretch = s1 != 0 and s2 != 0
+    # ATH scales the finished profile, including implicit morph extents rounded
+    # in authored units. Pre-scaling changes those extents. Active stretch also
+    # needs post-profile scaling because s2 is inverse length.
+    profile_scale = 1.0 if current_import or active_stretch else scale
     # ATH treats an omitted wall thickness as 5 mm for normal simulations and
     # 0 mm for infinite-baffle simulations. Keep the document field nullable
     # for lossless CFG round-trips and apply that default only at translation.
     # Current imports keep mesh dimensions in mm; saved v1 retains its scaling.
-    mesh_scale = 1.0 if root.text_import_version == "ath-2026-09a-v2" else scale
+    mesh_scale = 1.0 if current_import else scale
     wall_thickness = effective_wall_thickness(root) * mesh_scale
     if root.mesh.quadrants is not None:
         _structural_number(root.mesh.quadrants, "mesh.quadrants")
@@ -353,8 +356,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
     morph = root.morph
     morph_corner = morph.corner_radius
     if root.text_import_version is not None and morph.target_shape is not None and morph_corner is None:
-        # Imported ATH defaults are in authored units. Most profiles bake Scale
-        # into their dimensions here; active stretch instead retains post-scale.
+        # Imported ATH defaults are in authored units, like explicit corners.
         morph_corner = Expr(value=35)
     config: dict[str, Any] = {
         "formula": root.formula,
@@ -382,7 +384,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                 "apertureResolutionScale": _expr(mesh.aperture_resolution_scale),
                 "maxTriangles": _expr(mesh.max_triangles),
                 "allowLargeMesh": _expr(mesh.allow_large_mesh),
-                "maxEdge": _scaled_expr(mesh.max_edge, scale),
+                "maxEdge": _scaled_expr(mesh.max_edge, mesh_scale),
                 "athRoundover": mesh.ath_roundover.model_dump() if mesh.ath_roundover is not None else None,
                 "athRearShape": mesh.ath_rear_shape,
                 "athRearFrontOffset": mesh.ath_rear_front_offset,
@@ -397,7 +399,7 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
                     if root.enclosure is not None
                     else None
                 ),
-                "verticalOffset": _scaled_expr(mesh.vertical_offset, scale),
+                "verticalOffset": _scaled_expr(mesh.vertical_offset, mesh_scale),
                 "surfaceFit": acoustic_surface_fit(root),
                 "scaleToMetres": True,
             }
@@ -421,15 +423,16 @@ def design_to_mesher_config(design: DesignConfig) -> dict[str, Any]:
         "source": _clean(
             {
                 "sourceShape": _source_shape(root.source.shape),
-                "sourceRadius": _scaled_expr(root.source.radius, scale),
+                "sourceRadius": _scaled_expr(root.source.radius, mesh_scale),
                 "sourceCurv": _expr(root.source.curvature),
             }
         ),
     }
-    if s1 != 0 and s2 != 0:
-        config["profile"].update(s1=s1, s2=s2)
+    if current_import or active_stretch:
         config["scale"] = scale
-        if scale != 1.0:
+    if active_stretch:
+        config["profile"].update(s1=s1, s2=s2)
+        if scale != 1.0 and not current_import:
             from hornlab_mesher.config_builder import build_geometry_params
 
             # Legacy translation leaves omitted length fields at the mesher's

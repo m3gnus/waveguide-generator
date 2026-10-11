@@ -140,7 +140,7 @@ def assert_inactive_physical_parity(source):
     translated = params(design_to_mesher_config(design))
     expected_grid = build_point_grid_arrays(direct)["inner_grid"]
     translated_grid = build_point_grid_arrays(translated)["inner_grid"]
-    # Inactive WG pre-scales lengths; the reader scales the evaluated profile.
+    # Both import paths scale the evaluated profile.
     # Budget 64 binary64 rounding steps at the grid's physical extent. This
     # absolute bound also covers coordinates near zero; no relative allowance.
     budget_mm = 64 * np.finfo(np.float64).eps * max(1, float(np.abs(expected_grid).max()))
@@ -167,12 +167,12 @@ def test_raw_ath_constant_diameter_grid_and_saved_reader_parity(
     design = parse(source).design
     expected_radius = 10 if explicit_radius else 14 if diameter == "28" else 11
     assert design.root.r0.value == expected_radius
-    # Inactive translation folds global Scale into profile dimensions; active
-    # ATH keeps the raw radius and applies Scale when constructing the grid.
-    assert params(design_to_mesher_config(design))["r0"] == expected_radius * (1 if active else scale)
+    # Current ATH imports keep authored dimensions and scale the finished grid.
+    assert params(design_to_mesher_config(design))["r0"] == expected_radius
+    assert params(design_to_mesher_config(design))["scale"] == scale
     if family == "R-OSSE":
         assert design.root.R.value == 200
-        assert params(design_to_mesher_config(design))["R"] == 200 * (1 if active else scale)
+        assert params(design_to_mesher_config(design))["R"] == 200
     if active:
         assert_parity(source)
     else:

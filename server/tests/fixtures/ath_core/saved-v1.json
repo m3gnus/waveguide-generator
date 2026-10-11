@@ -241,5 +241,85 @@
       "source": {},
       "_textImportVersion": "ath-2026-08c-v1"
     }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: ath-2026-08c-v1\nScale = 0.7\nOSSE = {\n}\nCoverage.Angle = 50 - 15*sin(p)^2\nLength = 120\nTerm.n = 4\nTerm.q = 0.995\nTerm.s = 0.5\nThroat.Angle = 10\nThroat.Diameter = 2*(12.7)\nThroat.Profile = 1\nOS.k = 1\nLength.Mode = total\nMorph.CornerRadius = 18\nMorph.FixedPart = 0.2\nMorph.Rate = 3\nMorph.TargetShape = 1\nMesh.AngularSegments = 32\nMesh.LengthSegments = 20\nMesh.Quadrants = 1234\nMesh.WallThickness = 0\nOutput.STL = 0\nOutput.MSH = 0\nSimulation.SimType = 2\nNAC = 10\nOutput.ABECProject = 0\nGridExport:g = {\nExportProfiles = 1\nExportSlices = 0\nScale = 1\nDelimiter = \";\"\nFileExtension = \"csv\"\nSeparateFiles = 0\n}\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "bare",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 8.889999999999999,
+        "a": "50 - 15*sin(p)**2",
+        "a0": "10",
+        "k": "1",
+        "q": "0.995",
+        "_athLengthMode": "total",
+        "L": 84.0,
+        "n": "4",
+        "s": "0.5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "32",
+        "lengthSegments": "20",
+        "quadrants": 1234,
+        "wallThickness": 0.0,
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {
+        "morphTarget": "1",
+        "morphCorner": 12.6,
+        "morphRate": "3",
+        "morphFixed": "0.2"
+      },
+      "gcurve": {},
+      "source": {},
+      "_textImportVersion": "ath-2026-08c-v1"
+    }
+  },
+  {
+    "text": "; Parameter config\n; Waveguide Generator design-format: 2\n; Waveguide Generator geometry-interpretation: native-v1\nScale = 0.7\nOSSE = {\n}\nCoverage.Angle = 50 - 15*sin(p)^2\nLength = 120\nTerm.n = 4\nTerm.q = 0.995\nTerm.s = 0.5\nThroat.Angle = 10\nThroat.Diameter = 2*(12.7)\nThroat.Profile = 1\nOS.k = 1\nMorph.CornerRadius = 18\nMorph.FixedPart = 0.2\nMorph.Rate = 3\nMorph.TargetShape = 1\nMesh.AngularSegments = 32\nMesh.LengthSegments = 20\nMesh.Quadrants = 1234\nMesh.WallThickness = 0\nOutput.STL = 0\nOutput.MSH = 0\nSimulation.SimType = 2\nNAC = 10\nOutput.ABECProject = 0\nGridExport:g = {\nExportProfiles = 1\nExportSlices = 0\nScale = 1\nDelimiter = \";\"\nFileExtension = \"csv\"\nSeparateFiles = 0\n}\n",
+    "config": {
+      "formula": "OSSE",
+      "mode": "bare",
+      "profile": {
+        "formula": "OSSE",
+        "r0": 8.889999999999999,
+        "a": "50 - 15*sin(p)**2",
+        "a0": "10",
+        "k": "1",
+        "q": "0.995",
+        "L": 84.0,
+        "n": "4",
+        "s": "0.5",
+        "throatProfile": "1"
+      },
+      "mesh": {
+        "angularSegments": "32",
+        "lengthSegments": "20",
+        "quadrants": 1234,
+        "wallThickness": 0.0,
+        "surfaceFit": "interpolate",
+        "scaleToMetres": true
+      },
+      "cross_section": {
+        "exponent": 2.0,
+        "aspectRatio": 1.0
+      },
+      "morph": {
+        "morphTarget": "1",
+        "morphCorner": 12.6,
+        "morphRate": "3",
+        "morphFixed": "0.2"
+      },
+      "gcurve": {},
+      "source": {}
+    }
   }
 ]

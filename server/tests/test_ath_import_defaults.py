@@ -233,7 +233,8 @@ def test_import_scale_keeps_wall_and_resolutions_in_millimetres(explicit_wall: b
     assert float(imported["mesh"]["wallThickness"]) == 5
     for key, value in [("throatResolution", 3), ("mouthResolution", 7), ("rearResolution", 9)]:
         assert float(imported["mesh"][key]) == value
-    assert imported["profile"]["L"] == 180
+    assert float(imported["profile"]["L"]) == 120
+    assert imported["scale"] == 1.5
 
     native = DesignConfig(design.root.model_copy(update={"text_import_version": None}))
     translated = design_to_mesher_config(native)
@@ -258,7 +259,10 @@ def test_v2_defaults_compose_without_changing_native_or_saved_v1(stamp, wall, or
     for design in (parsed.design, parse(serialize(parsed.design)).design,
                    DesignConfig.model_validate_json(parsed.design.model_dump_json())):
         config = design_to_mesher_config(design)
-        assert config['profile']['L'] == 180
+        assert float(config['profile']['L']) * config.get('scale', 1) == 180
+        if stamp in (None, 'ath-2026-09a-v2'):
+            assert float(config['profile']['L']) == 120
+            assert config['scale'] == 1.5
         assert float(config['mesh']['wallThickness']) == wall
         for key, value in [('throatResolution', 3), ('mouthResolution', 7), ('rearResolution', 9)]:
             assert float(config['mesh'][key]) == value * wall / 5

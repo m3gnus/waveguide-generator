@@ -481,7 +481,7 @@ def test_tritonia_reference_import_translates_to_mesher_config() -> None:
     ]
     assert config["morph"] == {
         "morphTarget": "1",
-        "morphCorner": 12.636,
+        "morphCorner": "18",
         "morphRate": "3",
         "morphFixed": "0.0",
     }

@@ -22,8 +22,10 @@ output starts with:
 The geometry interpretation is persisted independently of the lexical dialect.
 Imported omitted `Morph.CornerRadius` uses ATH's 35 mm authored default when a
 morph target is supplied. Translation applies the same profile scale as an
-explicit corner dimension; active throat stretch retains the existing final
-scale path. Native omitted corners retain their native default.
+explicit corner dimension. Current v2 imports send authored profile, morph,
+and guiding-curve dimensions plus `scale` to the mesher, which scales the
+finished geometry. Implicit rectangular morph extents are derived and rounded
+before Scale is applied. Native omitted corners retain their native default.
 Native authored documents use `native-v1`; external ATH imports without a stamp
 use the bounded `ath-2026-09a-v2` interpretation. Saved `ath-2026-08c-v1`
 designs retain their earlier geometry and defaults. Rewritten imports retain their
@@ -55,8 +57,10 @@ encode arbitrary explicit overrides unless its precedence is also defined.
 Fresh v2 imports default to infinite baffle when no simulation type or enclosure
 members are stated. Imported polar blocks default to mouth origin for a baffle
 and throat origin otherwise; `WG.Solve.ObservationOrigin` overrides this.
-Scale changes profile dimensions while wall thickness and throat, mouth, and
-rear mesh resolutions remain in millimetres. Native and saved v1 designs keep
+Scale changes profile dimensions while wall thickness, throat, mouth, and
+rear mesh resolutions, and `Mesh.MaxEdge` remain in millimetres. Placement
+(`Mesh.VerticalOffset`) and `Source.Radius` retain their authored values at the
+mesher boundary. Native and saved v1 designs keep
 their previous scaling and origin defaults. Fresh imports are checked with the
 mesher's profile parser and geometry parameter builder; a populated OSSE block
 must provide its own length, even when a flat `Length` is present. WG parks its

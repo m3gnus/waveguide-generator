@@ -1035,9 +1035,14 @@ def _build_sync(
             float(np.max(np.einsum("ij,ij->i", edge, edge))),
         )
     max_edge_mm = math.sqrt(max_edge_squared) * 1000.0
+    # Current ATH imports keep mesh lengths in millimetres; the realized edge
+    # guard must use the same units as the translated mesh configuration.
     scale = (
         _strict_scalar(root_scale, 1.0, "scale")
-        if (root_scale := design.root.scale)
+        if (
+            (root_scale := design.root.scale)
+            and design.root.text_import_version != "ath-2026-09a-v2"
+        )
         else 1.0
     )
     max_edge_guard_mm = (

@@ -75,7 +75,8 @@ def test_core_json_and_text_transport_match_direct_mesher_import_exactly():
 def test_saved_v1_dictionaries_and_arrays_are_bit_identical_to_pre_v2_wg():
     # Captured with WG 7ae5c2b1 before changing its parser or translator. These
     # fixed witnesses include omitted coefficients, asymmetric margins, block
-    # Rot, extension rotation, an r0 expression and an R-OSSE morph.
+    # Rot, extension rotation, an r0 expression and an R-OSSE morph. Scaled
+    # implicit morph witnesses (saved v1 and native) were captured at a4ff0c14.
     records = json.loads((FIXTURES / 'saved-v1.json').read_text())
     with np.load(FIXTURES / 'saved-v1.npz') as baseline:
         for i, record in enumerate(records):
@@ -84,7 +85,11 @@ def test_saved_v1_dictionaries_and_arrays_are_bit_identical_to_pre_v2_wg():
                            parse(serialize(saved)).design):
                 config = design_to_mesher_config(design)
                 assert config == record['config']
-                assert config['_textImportVersion'] == 'ath-2026-08c-v1'
+                if saved.root.text_import_version is None:
+                    assert 'geometry-interpretation: native-v1' in record['text']
+                    assert '_textImportVersion' not in config
+                else:
+                    assert config['_textImportVersion'] == 'ath-2026-08c-v1'
                 params, _, _ = build_geometry_params(config)
                 arrays = build_point_grid_arrays(params)
                 for name, value in arrays.items():
