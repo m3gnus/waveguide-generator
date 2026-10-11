@@ -568,7 +568,6 @@ def create_app(
         create_implicit_runs=isolated_data_dir or workspace_dir is not None,
         explicit_runs=workspace_dir is not None,
     )
-    application.add_exception_handler(RequestValidationError, _request_validation_error)
     extra_ws_origins = parse_extra_websocket_origins(
         os.environ.get("WG2_EXTRA_WS_ORIGINS")
     )

@@ -452,7 +452,7 @@ def test_file_return_lost_slot_settlement_is_wired_to_backend_entrypoints(tmp_pa
     from server.cadlink.fusion_return import get_return_request
 
     app = create_app(data_dir=tmp_path)
-    workspace = tmp_path / 'workspace'
+    workspace = tmp_path / 'cadlink-folder'  # <data>/workspace is the runs folder
     workspace.mkdir()
     app.state.cad_workspace.select(workspace)
     operation_id = _legacy(app.state.cadlink_store, 'request_return', claim=False)
