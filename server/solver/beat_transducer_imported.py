@@ -113,6 +113,15 @@ def package_sweep(
     geometry = request.geometry
     context = SolverContext.from_imported_request(request, quadrants=1234, source_motion="axial")
     layout, frequencies = compiled.layout, sweep.frequencies_hz
+    from .official_beat import engine_version
+
+    solver_engine = {
+        "engine": f"beat-{compiled.wire['solver_options']['bem_backend']}",
+        "provider": "official",
+        "package": "beat-engine",
+        "package_version": engine_version(),
+        "device": compiled.wire["solver_options"]["bem_backend"],
+    }
     config = SimpleNamespace(
         observation=SimpleNamespace(
             distance_m=context.polar_config["distance"],
@@ -164,6 +173,7 @@ def package_sweep(
             start_time=started,
             metadata={
                 "solver_backend": f"beat-{compiled.wire['solver_options']['bem_backend']}",
+                "solver_engine": solver_engine,
                 "drive_channel_id": channel.id,
                 "source_ids": list(channel.source_ids),
                 "phase_time_convention": PHASE_TIME_CONVENTION,
@@ -201,8 +211,8 @@ def package_sweep(
                     "peak_mm": max(excursion, default=0.0),
                     "quantity": "one_way_peak_displacement",
                 },
-                "warnings": [],
-                "mmd_correction_g": 0.0,
+                # Native v3 reports neither warnings nor a mass correction.
+                # Keep unavailable diagnostics absent rather than inventing zero.
             },
             beat_transducer={
                 "version": 1,
@@ -232,6 +242,7 @@ def package_sweep(
             "channels": channels,
             "frequencies": frequencies.tolist(),
             "metadata": {
+                "solver_engine": solver_engine,
                 "beat_transducer_contract": 1,
                 "cancelled": sweep.cancelled,
                 "requested_frequency_count": sweep.requested_frequency_count,

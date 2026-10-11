@@ -3770,6 +3770,44 @@ def _verdicts(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {entry["name"]: entry for entry in plan["engines"]}
 
 
+def test_driver_mass_refused_in_plan_and_submission_without_a_job(tmp_path: Path) -> None:
+    registry = _DeclaredRegistry(_metal(), _beat_cpu())
+    sources = [
+        {"id": source, "required": source != "source-c",
+         "observed": {"total_area_mm2": 21000.0}}
+        for source in ("source-a", "source-b", "source-c")
+    ]
+
+    async def check() -> None:
+        runtime, ingest_id, _ = await _runtime_fixture(
+            tmp_path, {"sources": sources}, mesh_text=_POSITIVE_MESH
+        )
+        runtime.engine_registry = registry
+        request = _request(ingest_id, drive_channels=[
+            {"id": "left", "source_ids": ["source-a", "source-b"]},
+            {"id": "right", "source_ids": ["source-c"], "driver": {
+                "sd_cm2": 210.0, "bl_t_m": 10.5, "re_ohm": 5.3,
+                "mms_g": 1.0, "cms_m_per_n": 4e-4, "rms_kg_per_s": 1.2,
+            }},
+        ])
+        try:
+            plan = await runtime.plan_imported(request)
+            assert plan["engine"] is None
+            assert plan["code"] == "driver_mass_invalid"
+            assert "Channel 'right'" in plan["reason"]
+            assert "exceeds 50%" in plan["reason"]
+            assert "Verify Sd in cm2 and Mms in grams" in plan["reason"]
+            assert all(entry["stage"] == "request" for entry in plan["engines"])
+            with pytest.raises(ImportedSolveRefusal) as refused:
+                await runtime.submit(request)
+            assert str(refused.value) == plan["reason"]
+            assert runtime.store.list_jobs() == ([], 0)
+        finally:
+            await runtime.shutdown()
+
+    asyncio.run(check())
+
+
 def _open_half_observations(*, negative: bool, rigid_cut: bool = True, wg_cut: bool = False) -> dict[str, Any]:
     return {
         "domain_interpretation": {

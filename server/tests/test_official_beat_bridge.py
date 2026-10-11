@@ -191,7 +191,8 @@ def runtime(monkeypatch, tmp_path):
 @pytest.mark.parametrize("backend", ["cpu", "metal", "cuda", "rocm"])
 @pytest.mark.parametrize("motion", ["normal", "axial"])
 @pytest.mark.parametrize("adaptive", [False, True])
-def test_parametric_production(runtime, backend, motion, adaptive):
+def test_parametric_production(runtime, monkeypatch, backend, motion, adaptive):
+    monkeypatch.setattr(bridge, "engine_version", lambda: "1.2.3")
     frames, progress = [], []
     context = _context(source_motion=motion, num_frequencies=24 if adaptive else 3,
                        adaptive_frequency_sampling=adaptive)
@@ -203,6 +204,8 @@ def test_parametric_production(runtime, backend, motion, adaptive):
         result_callback=lambda i, frame: frames.append((i, frame)), progress_callback=progress.append,
     )
     assert response["metadata"]["engine"] == "beat-engine"
+    assert response["metadata"]["solver_engine"]["provider"] == "official"
+    assert response["metadata"]["solver_engine"]["package_version"] == "1.2.3"
     assert response["metadata"]["beat"]["precision"] == "single"
     assert response["frequencies"] == sorted(response["frequencies"])
     assert len(response["frequencies"]) == context.num_frequencies
@@ -234,7 +237,8 @@ def test_auto_production_uses_hbb_backend_order(runtime, monkeypatch, available,
 @pytest.mark.parametrize("adaptive", [False, True])
 @pytest.mark.parametrize("axial", [False, True])
 @pytest.mark.parametrize("backend", ["cpu", "cuda", "rocm"])
-def test_imported_production(runtime, adaptive, axial, backend):
+def test_imported_production(runtime, monkeypatch, adaptive, axial, backend):
+    monkeypatch.setattr(bridge, "engine_version", lambda: "1.2.3")
     msh = cad.MESH_Z if axial else cad.MESH
     request = cad._request(drive_channels=[
         {"id": "left", "source_ids": ["source-a", "source-b"], "motion": "axial" if axial else "normal"},
@@ -251,6 +255,10 @@ def test_imported_production(runtime, adaptive, axial, backend):
         result_callback=lambda i, frame: frames.append((i, frame)),
     )
     assert result["channel_order"] == ["left", "right"]
+    assert result["metadata"]["solver_engine"]["provider"] == "official"
+    assert result["metadata"]["solver_engine"]["package_version"] == "1.2.3"
+    assert all(channel["metadata"]["solver_engine"]["provider"] == "official"
+               for channel in result["channels"].values())
     assert set(result["channels"]) == {"left", "right"}
     assert "impedance" not in result["channels"]["left"]
     assert "impedance" in result["channels"]["right"]
@@ -384,7 +392,17 @@ def test_selector_off_calls_hbb_and_never_imports_engine(monkeypatch, tmp_path, 
     assert package.solves
     metadata = result["metadata"]
     assert (metadata["solver_engine"]["package"] if imported else metadata["engine"]) == "hornlab-beat-bem"
+    assert metadata["solver_engine"]["provider"] == "hbb"
+    assert metadata["solver_engine"]["package_version"] is None
     assert not any(name.startswith("beat_engine") for name in imports)
+    # Compare the pre-switch physics snapshot after checking the added provenance.
+    if imported:
+        metadata["solver_engine"].pop("provider")
+        for channel in result["channels"].values():
+            assert channel["metadata"]["solver_engine"]["provider"] == "hbb"
+            channel["metadata"].pop("solver_engine")
+    else:
+        metadata.pop("solver_engine")
     expected = json.loads((Path(__file__).parent / "beat_adapter/fixtures/hbb_production.json").read_text())
     key = ("imported" if imported else "parametric") + ("_adaptive" if adaptive else "")
     assert_production_snapshot(result, expected[key], key, Path(__file__).parent / "beat_adapter/fixtures")

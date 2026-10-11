@@ -116,6 +116,13 @@ export function summaryGroups(_context: SummaryContext): SummaryGroup[] {
   const engine = firstString(execution?.engine, job?.solve_execution?.engine,
     object(metadata('solve_execution'))?.engine, plan?.engine, metadata('solver_backend'), metadata('engine'), metadata('solver_mode'));
   if (engine) row(solve, 'Engine', engineDisplayName(engine));
+  const solverEngine = object(metadata('solver_engine'));
+  const provider = string(solverEngine?.provider);
+  if (provider) {
+    const version = string(solverEngine?.package_version);
+    const providerName = provider === 'official' ? 'Official BEAT' : provider === 'hbb' ? 'Legacy HBB' : provider;
+    row(solve, 'BEAT provider', `${providerName}${version ? ` · ${version}` : ''}`);
+  }
   const requested = firstString(plan?.requested, substitution?.requested, job?.solve_options?.engine);
   if (requested && (!engine || engineDisplayName(requested) !== engineDisplayName(engine))) row(solve, 'Requested engine', requested === 'auto' ? 'Automatic' : engineDisplayName(requested));
   row(solve, 'Routing', string(plan?.reason));

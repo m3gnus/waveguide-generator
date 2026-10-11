@@ -26,7 +26,8 @@ from typing import Any
 
 import numpy as np
 
-from hornlab_sim.methods import bandpass, driver_coupling
+from hornlab_sim.methods import bandpass, driver_coupling, radiation_impedance
+from hornlab_sim.methods.driver_coupling import MMD_CORRECTION_WARN
 
 from server.contracts.conventions import engineering_to_solver, solver_to_engineering
 from server.contracts import DriverSpec
@@ -65,6 +66,25 @@ def self_impedance_from_surface_average(
     omega = _TWO_PI * np.asarray(frequencies_hz, dtype=np.float64)
     raw = np.asarray(surface_pressure_avg_raw, dtype=np.complex128).reshape(-1)
     return solver_to_engineering(-1j * omega * raw) / float(area_m2)
+
+
+def validate_driver_mass(spec: DriverSpec) -> None:
+    """Check mass before meshing with the pinned coupling model's own guard.
+
+    Free-air mass depends on Sd/Mms and air density, not the solved load.
+    hornlab-sim currently exposes this check only through its private helper.
+    """
+
+    driver = hornlab_driver(spec)
+    try:
+        driver_coupling._effective_mmd(
+            driver, driver.derive(), radiation_impedance.RHO_AIR
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"{exc}. Verify Sd in cm2 and Mms in grams against the driver "
+            "datasheet, or supply the manufacturer's Mmd instead of Mms."
+        ) from exc
 
 
 def one_way_peak_excursion_mm(cone_excursion_m: np.ndarray) -> np.ndarray:
@@ -140,6 +160,7 @@ def channel_drive_scaling(
     """
 
     frequencies = np.asarray(frequencies_hz, dtype=np.float64).reshape(-1)
+    validate_driver_mass(spec)
     if float(area_m2) <= 0.0 or not np.isfinite(float(area_m2)):
         raise ValueError("driver coupling requires a positive finite source area")
     z_self = self_impedance_from_surface_average(
@@ -173,10 +194,12 @@ def channel_drive_scaling(
             f"{spec.xmax_mm:g} mm at {drive_voltage_v:g} V"
         )
     mmd_correction_g = coupled.mmd_correction_kg * 1.0e3
-    if mmd_correction_g:
+    if coupled.diagnostics["mmd_correction_fraction"] >= MMD_CORRECTION_WARN:
         warnings.append(
             f"Mms was converted to Mmd by subtracting {mmd_correction_g:.3f} g "
-            "of free-air radiation mass"
+            "of free-air radiation mass "
+            f"({coupled.diagnostics['mmd_correction_fraction']:.1%} of Mms); "
+            "verify Sd/Mms against the driver datasheet"
         )
     payload: dict[str, Any] = {
         "drive_voltage_v": float(drive_voltage_v),

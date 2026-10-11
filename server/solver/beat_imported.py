@@ -1230,6 +1230,13 @@ def solve_imported_beat_from_msh_text(
                 beat_engine_name(backend): status,
             },
             "engine": "beat-engine" if official else "hornlab-beat-bem",
+            "solver_engine": {
+                "engine": beat_engine_name(backend),
+                "provider": "official" if official else "hbb",
+                "package": "beat-engine" if official else "hornlab-beat-bem",
+                "package_version": status.get("version"),
+                "device": backend,
+            },
             "phase_time_convention": PHASE_TIME_CONVENTION,
             "mesh_validation": {
                 "mode": context.mesh_validation_mode,
@@ -1334,6 +1341,7 @@ def solve_imported_beat_from_msh_text(
         "solve_path": "full-3d",
         "solver_engine": {
             "engine": beat_engine_name(backend),
+            "provider": "official" if official else "hbb",
             "package": "beat-engine" if official else "hornlab-beat-bem",
             "package_version": status.get("version"),
             "device": backend,

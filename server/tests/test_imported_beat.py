@@ -389,6 +389,10 @@ def test_each_channel_is_solved_once_on_one_merged_tag_in_beats_frame(
         0.0,
     ]
     assert response["metadata"]["solver_engine"]["engine"] == "beat-cpu"
+    assert response["metadata"]["solver_engine"]["provider"] == "hbb"
+    assert response["metadata"]["solver_engine"]["package_version"] == "0.1.0"
+    assert response["channels"]["left"]["metadata"]["solver_engine"]["provider"] == "hbb"
+    assert response["channels"]["left"]["metadata"]["solver_engine"]["package_version"] == "0.1.0"
     assert response["metadata"]["solver_engine"]["formulation"] == "burton_miller"
     assert response["metadata"]["beat_solver_frame"]["rotation_rows"] == rotation.tolist()
     assert response["channels"]["left"]["metadata"]["beat"]["merged_source_tags"] == [
@@ -803,7 +807,7 @@ def test_parametric_beat_uses_fixed_quadrature_and_shared_phase_tag(
     monkeypatch.setattr(
         beat,
         "beat_backend_statuses",
-        lambda: {backend: {"available": True, "reason": "ok", "backend": backend}},
+        lambda: {backend: {"available": True, "reason": "ok", "backend": backend, "version": "0.1.0"}},
     )
     context = SolverContext(design=None, frequency_range=(100.0, 1000.0), num_frequencies=3)
     msh = Path(beat.__file__).with_name("warmup_mesh.msh").read_text()
@@ -812,6 +816,8 @@ def test_parametric_beat_uses_fixed_quadrature_and_shared_phase_tag(
     assert {solve["config"].beat_backend for solve in recording_beat.solves} == {backend}
     assert {solve["config"].regular_quadrature_mode for solve in recording_beat.solves} == {"fixed"}
     assert response["metadata"]["phase_time_convention"] == PHASE_TIME_CONVENTION
+    assert response["metadata"]["solver_engine"]["provider"] == "hbb"
+    assert response["metadata"]["solver_engine"]["package_version"] == "0.1.0"
 
 
 def test_hbb_options_can_still_override_the_quadrature_mode(recording_beat, monkeypatch) -> None:

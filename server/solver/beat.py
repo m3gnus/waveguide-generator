@@ -919,6 +919,13 @@ def solve_beat_from_msh_text(
         "solver_backend": "beat",
         "solver_mode": "full_3d",
         "engine": "beat-engine" if official else "hornlab-beat-bem",
+        "solver_engine": {
+            "engine": beat_engine_name(backend),
+            "provider": "official" if official else "hbb",
+            "package": "beat-engine" if official else "hornlab-beat-bem",
+            "package_version": status.get("version"),
+            "device": backend,
+        },
         "phase_time_convention": PHASE_TIME_CONVENTION,
         "beat_backend": backend,
         "device_interface": {

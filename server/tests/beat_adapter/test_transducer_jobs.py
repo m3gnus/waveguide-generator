@@ -152,6 +152,7 @@ def test_job_route_keeps_rms_pressure_all_coupled_traces_and_matrix(solid, recor
     from server.solver import official_beat
 
     monkeypatch.setattr(jobs, "official_selected", lambda: True)
+    monkeypatch.setattr(official_beat, "engine_version", lambda: "1.2.3")
     captured, partial = [], []
 
     def solve(compiled, **kwargs):
@@ -187,6 +188,10 @@ def test_job_route_keeps_rms_pressure_all_coupled_traces_and_matrix(solid, recor
     assert channel["spl_on_axis"]["spl"][0] == pytest.approx(20 * np.log10(abs(2 + 3j) / 20e-6))
     assert channel["impedance"]["imaginary"][0] > 0  # one conversion to engineering convention
     assert channel["metadata"]["impedance_units"] == "ohms"
+    assert result["metadata"]["solver_engine"]["provider"] == "official"
+    assert channel["metadata"]["solver_engine"]["package_version"] == "1.2.3"
+    assert "warnings" not in channel["metadata"]["driver"]
+    assert "mmd_correction_g" not in channel["metadata"]["driver"]
     trace = channel["metadata"]["beat_transducer"]
     assert trace["transducer_ids"] == ["transducer:driver", "transducer:shorted"]
     assert len(trace["velocity_rms_m_per_s"][0]) == 2

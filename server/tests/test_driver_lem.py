@@ -13,6 +13,7 @@ from server.solver.driver_lem import (
     hornlab_driver,
     one_way_peak_excursion_mm,
     self_impedance_from_surface_average,
+    validate_driver_mass,
 )
 
 
@@ -184,6 +185,38 @@ def test_driver_label_passes_through_to_the_metadata_payload() -> None:
 def test_driver_label_defaults_to_none_and_strips_blank_to_none() -> None:
     assert _spec().label is None
     assert _spec(label="   ").label is None
+
+
+@pytest.mark.parametrize("fraction", [0.2, 0.3 - 1e-6, 0.3 + 1e-6, 0.49])
+def test_radiation_mass_warning_uses_the_coupling_threshold(fraction) -> None:
+    from hornlab_sim.methods import driver_coupling, radiation_impedance
+
+    driver = hornlab_driver(_spec(mmd_g=None, mms_g=100.0))
+    _, correction, _ = driver_coupling._effective_mmd(
+        driver, driver.derive(), radiation_impedance.RHO_AIR
+    )
+    spec = _spec(mmd_g=None, mms_g=correction * 1000 / fraction)
+    validate_driver_mass(spec)
+    _, payload = channel_drive_scaling(
+        np.array([100.0]), np.array([0.1 + 0.05j]), 0.021,
+        spec, drive_voltage_v=2.83, rg_ohm=0.0,
+    )
+    assert payload["mmd_correction_g"] == pytest.approx(correction * 1000)
+    warnings = [message for message in payload["warnings"] if "radiation mass" in message]
+    assert bool(warnings) == (fraction >= driver_coupling.MMD_CORRECTION_WARN)
+
+
+@pytest.mark.parametrize("count", [1, 2])
+def test_mass_refusal_is_load_independent_and_actionable(count) -> None:
+    spec = _spec(mmd_g=None, mms_g=1.0, count=count)
+    with pytest.raises(ValueError, match="exceeds 50%.*Verify Sd in cm2.*Mmd"):
+        validate_driver_mass(spec)
+    with pytest.raises(ValueError, match="exceeds 50%.*Verify Sd in cm2.*Mmd"):
+        channel_drive_scaling(
+            np.array([100.0]), np.array([0j]), 0.021,
+            spec, drive_voltage_v=2.83, rg_ohm=0.0,
+        )
+    validate_driver_mass(_spec(mmd_g=1.0, count=count))
 
 
 def test_excursion_converts_rms_phasor_magnitude_to_one_way_peak_mm() -> None:

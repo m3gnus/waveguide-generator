@@ -201,6 +201,9 @@ this environment variable:
   Remove that prefix to return to official, then restart WG.
 
 Unset or empty selects official; `WG2_BEAT_PROVIDER=official` also works.
+New BEAT runs record the provider and, when available, its package version.
+The Simulation Summary shows **BEAT provider** beside **Engine**, so saved runs
+retain which runtime produced them after the environment setting changes.
 The rollback switch remains available until CPU and Metal performance is
 proven as fast as HBB or faster; it is not removed in this release. Official and HBB runtime caches and worker registries are
 separate. The upgrade leaves your existing HBB runtime on disk for rollback:
@@ -593,6 +596,13 @@ matched case-insensitively against a fixed alias table (`Sd_cm2`/`Sd`, `Bl_Tm`/`
 value that was not actually in the file. Rows for the same brand and model that only
 differ by impedance become one driver with an impedance-variant list. The folder is
 rescanned automatically whenever its files change, or on request through the API.
+
+For driver-coupled CAD solves, WG converts Mms to Mmd using hornlab-sim's free-air
+radiation mass. Corrections reaching 30% of Mms produce a result warning;
+corrections above 50% are refused in the solve plan before a job is submitted.
+Check Sd in cm² and Mms in grams against the datasheet, or enter the manufacturer's
+Mmd instead. Exterior transducers use their explicit Mmd model and native BEAT
+diagnostics; unavailable correction or warning fields are omitted from results.
 
 ## Reporting a problem
 
