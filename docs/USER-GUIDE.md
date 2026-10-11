@@ -1,6 +1,6 @@
 # Waveguide Generator user guide
 
-Status: current overview, verified against the application on 2026-08-20.
+Status: current overview, verified against the application on 2026-10-11.
 
 ## Launching
 
@@ -30,6 +30,22 @@ Edits update the live preview. Viewer controls change the display, not the desig
 parameters. A solve always receives a revisioned design snapshot, so later editor changes
 cannot alter an existing run.
 
+### Experimental source editors
+
+The **Geometry** tab offers **Edit source contour…** and **Edit horn + woofer
+assembly…**. Both are **Experimental**. In the source-contour editor, start from
+a flat, dome or cone shape, draw lines, or edit points and arcs in the drawing
+and table. Assign moving or rigid patches and their drive weights, then save a
+reusable source preset or export a STEP + mesh bundle. Dimensions are in mm.
+
+The assembly editor places the horn and optional woofer in a shared enclosure.
+Edit their contours, enclosure dimensions and source positions, and add phase
+plugs or annular vanes while checking the passage clearances. **Prepare assembly
+in WG** selects the validated mesh and its physical source channels in the
+imported workspace, with Metal selected as the supported native contour engine.
+You can also export the assembly STEP + mesh or save and load its draft. Draft
+edits are remembered; preparing creates a fixed geometry snapshot for solving.
+
 ## Solve, jobs, and results
 
 New designs and default sweeps start at 50 Hz with 32 points (was 400 Hz with 20); the sweep end is unchanged. New parametric designs end at 16 kHz. CAD retains its 20 kHz end and four points per octave (36 points). Sparse headless requests keep their 20 kHz end and now also default to 32 points.
@@ -40,6 +56,19 @@ Choose the backend or leave it on automatic selection, set the frequency and pol
 options, then run the design. Automatic symmetry evaluates the actual geometry and
 uses the smallest valid domain. The stored job records the requested and resolved
 choices without rewriting the design file.
+
+**Solve options** disables controls the selected or automatically resolved engine
+cannot use and explains why. Check those reasons after changing engines or
+simulation type. The **Simulation Summary** records the engine that actually ran,
+the requested engine when it differs, routing and any fallback reason. BEAT runs
+also show their provider, package version and precision when those were recorded.
+
+**Adaptive frequency sampling** in Solve options is **Experimental** and available
+only for BEAT, with at least 24 output frequencies, a free-standing
+solve and the ground plane off. It solves selected frequencies and interpolates
+others, retaining the requested output grid and adding coverage solves as needed.
+Completed acquisition leaves gaps no wider than 1/6 octave, but narrow resonances
+can still be missed; use a fully solved sweep when checking them.
 
 Jobs remain available after their panel is closed. Completed results can be compared,
 smoothed, rendered as response/directivity/impedance/beam plots, rated, reopened, or
@@ -58,6 +87,51 @@ driven in phase. Results settings choose real/imaginary versus magnitude/phase i
 show the same referenced phase trace over the on-axis SPL chart that appears in its PNG
 export. Partial solves keep usable samples and show their warnings and failed-frequency
 diagnostics.
+
+**Settings → Results → Export theme** chooses the chart theme; the results
+preferences popover offers the same choice. **Match interface** follows the light
+or dark interface when exporting. Until you choose a theme, WG uses the server's
+chart theme default, including for automatic exports. Your explicit choice is
+remembered and takes precedence over that default.
+
+### Crossover and combined output
+
+For imported geometry with multiple drive channels, open **Simulation → Crossover**.
+**Combined output** adds a filtered, time-aligned sum alongside the individual
+channels and is on by default for two or more channels. **Basic** sets each
+adjacent pair's crossover frequency, filter family and slope, with automatic or
+manual level matching and time alignment. **Advanced** edits each channel's
+high-pass, low-pass, gain, delay and polarity.
+
+Select **Combined** or an individual channel in the results. When a completed run
+retains the required pressure bases and has the same channels, crossover edits
+update its combined result without another acoustic solve. Keep filter corners
+inside the solved frequency band; the section explains when it cannot apply an
+edit. The individual channel results remain available for comparison.
+
+The **Maximum Output** chart belongs to the Combined view. It draws the system's
+maximum SPL, each member's ceiling when used alone, and the response at the shown
+level so you can read the headroom. Supply driver Xmax or rated power, or an
+amplifier limit, then solve to obtain these small-signal swept-sine ceilings. The
+chart names the limiting channel and limit; missing ratings leave no known ceiling
+for that member. These curves do not predict large-signal compression or distortion.
+
+### Viewing an acoustic field plane
+
+Before solving, leave **Keep field plane data** enabled under **Directivity Map**.
+Supported Metal, BEMPP and BEAT results can retain the surface traces needed for
+this view. Select a completed run matching the geometry currently in the viewport,
+then click **Acoustic field plane overlay** in the viewport toolbar. Older runs or
+runs without retained traces need another solve with this option enabled.
+
+Use the plane's handles to move, rotate or resize it, and the legend's frequency
+slider or Hz field to choose a frequency. Switch between SPL, normalized SPL,
+phase and instantaneous pressure; the play button animates pressure. Hover over
+the plane to inspect a sample, lock the colour range to compare frequencies, or
+clip the model to the plane to see inside it. Multi-channel results also offer
+system and member responses. Adaptive results identify solved and interpolated
+frequencies; interpolated fields use reconstructed traces and can miss narrow
+resonances.
 
 ### Where the microphone is, and what "normalized" means
 
@@ -445,7 +519,8 @@ silently forked into a second bundle that diverges from the linked CAD document 
 reopen its current head from **CAD-linked designs** and send that.
 
 Each completed job has its own export menu. Current result formats include chart PNGs,
-on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, frequency CSV, full
+on-axis FRD, a horizontal/vertical FRD polar set for VituixCAD, electrical impedance
+ZMA (`.zma`), a VituixCAD project (`.vxp`), frequency CSV, full
 JSON, per-channel derived-acoustics CSV/JSON, a self-contained HTML run report, polar
 and impedance CSV, and a summary report. Imported CAD runs also expose their retained
 complex pressure basis per drive channel. Geometry/design formats use the job's stored
@@ -456,6 +531,13 @@ matrix for exact downstream work. **Send to CAD** is the first action in this me
 and sends that same stored snapshot. Failed formats are reported individually so
 successful files are not hidden. The current parametric design can also be sent from
 the top-left design menu under **Export → Send to CAD**.
+
+ZMA and VituixCAD project exports require driver-modelled electrical impedance.
+The `.vxp` export includes the FRD and ZMA files its project references.
+
+To save the retained solve mesh as a Gmsh `.msh` file, enable **Settings → Jobs →
+Auto-save solve mesh to Workspace**. It saves available job meshes in the Workspace
+folder automatically. The run archive also includes the exact retained solve mesh.
 
 ### The run archive
 
@@ -588,14 +670,16 @@ another add-in can reference the same payloads.
 
 ### Driver library
 
-WG ships no driver data of its own. Drop CSV files of Thiele/Small parameters into
+WG ships a driver library, mostly cone drivers with Thiele/Small data. Add your own
+CSV files of Thiele/Small parameters to
 `HornLab/driver-databases`, in the same per-platform application-support location as
 the application data directory above, and WG indexes them for search. Columns are
 matched case-insensitively against a fixed alias table (`Sd_cm2`/`Sd`, `Bl_Tm`/`Bl`,
 `Fs_Hz`/`Fs`, and so on); unrecognised columns are kept but never used to fill in a
 value that was not actually in the file. Rows for the same brand and model that only
 differ by impedance become one driver with an impedance-variant list. The folder is
-rescanned automatically whenever its files change, or on request through the API.
+rescanned automatically whenever its files change. **Settings → Driver library**
+shows the folder and indexed driver counts; click **Rescan** to refresh it manually.
 
 For driver-coupled CAD solves, WG converts Mms to Mmd using hornlab-sim's free-air
 radiation mass. Corrections above 30% of Mms produce a result warning;
