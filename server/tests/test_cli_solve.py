@@ -624,3 +624,41 @@ def test_a_refusal_outcome_is_the_last_line_even_with_a_message_in_flight(
     assert second == 1
     assert json.loads(lines[-1])["status"] == "refused"
     assert any(json.loads(line).get("marker") == "in-flight" for line in lines[:-1])
+
+
+class InterruptedEngine:
+    """Raises SIGINT once solving starts, then waits to be cancelled."""
+
+    name = "metal"
+
+    async def run(self, request, *, cancel_cb, stage_cb):
+        import signal
+        import threading
+
+        stage_cb("frequency_solve", 0.1, "Waiting for an interrupt")
+        threading.Timer(0.2, signal.raise_signal, (signal.SIGINT,)).start()
+        for _ in range(200):
+            cancel_cb()
+            await asyncio.sleep(0.05)
+        raise AssertionError("the solve was never interrupted")
+
+
+def test_in_process_sigint_cancels_and_exits_130(tmp_path: Path, capsys) -> None:
+    exit_code = main(
+        [
+            "solve",
+            str(_design(tmp_path)),
+            "--json-events",
+            "--data-dir",
+            str(tmp_path / "data"),
+        ],
+        engine_registry=EngineRegistry(
+            detector=lambda: [EngineInfo("metal", True, "test capability", "test")],
+            factory=lambda _name: InterruptedEngine(),
+        ),
+    )
+    messages = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+
+    assert exit_code == 130
+    assert messages[-1]["kind"] == "outcome"
+    assert messages[-1]["status"] == "interrupted"

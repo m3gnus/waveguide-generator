@@ -683,10 +683,15 @@ async def solve_path(
                             job = await runtime.get_job(job_id)
                             if exc.http_status != 400 or job["status"] not in _TERMINAL_STATUSES:
                                 raise
+                        job = await terminal_task
                     else:
+                        # In-process: shutdown closes the store the terminal
+                        # wait reads, so stop waiting first.
+                        terminal_task.cancel()
+                        await asyncio.gather(terminal_task, return_exceptions=True)
                         await runtime.shutdown()
                         shutdown_done = True
-                    job = await terminal_task
+                        job = {**job, "status": "cancelled"}
                 restore_sigint()
                 if job["status"] == "cancelled":
                     if ndjson:
