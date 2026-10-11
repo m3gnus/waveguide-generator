@@ -204,6 +204,8 @@ interface CadReturnState {
   projectLineageId: string | null;
   beginIngestIntent: () => number;
   isCurrentIngestIntent: (generation: number) => boolean;
+  /** Observe selection intent without superseding in-flight preparation. */
+  captureIngestIntent: () => number;
   /** Whether the record held is the one the newest intent applied: no ingest,
    * selection or edit has superseded it since, and none is in flight. */
   isIngestSettled: () => boolean;
@@ -217,6 +219,8 @@ interface CadReturnState {
   refreshSelectedBundle: (bundle: CadReturnBundle | null) => void;
   markIngestStale: (reason: string) => void;
   applyIngest: (record: CadReturnIngestRecord, generation: number) => boolean;
+  /** Restore an immutable job model without writing over a project's saved profile. */
+  restoreIngest: (record: CadReturnIngestRecord, generation: number, restored: Partial<CadReturnState>) => boolean;
   setSourceSize: (sourceId: string, value: number) => void;
   setRigidSize: (value: number) => void;
   setTransition: (value: number) => void;
@@ -983,6 +987,7 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
   ingestedBundleIdentity: null,
   ingestStaleReason: null,
   beginIngestIntent: supersedeIngestIntent,
+  captureIngestIntent: () => ingestIntentGeneration,
   isCurrentIngestIntent: (generation) => generation === ingestIntentGeneration,
   isIngestSettled: () => get().ingestRecord !== null && appliedIngestGeneration === ingestIntentGeneration,
   selectBundle: (selectedBundle, projectLineageId) => {
@@ -1101,6 +1106,12 @@ export const useCadReturnStore = create<CadReturnState>((set, get) => withEditSi
     set((state) => (
       state.ingestRecord ? { needsIngest: true, ingestStaleReason: reason } : {}
     ));
+  },
+  restoreIngest: (ingestRecord, generation, restored) => {
+    if (generation !== ingestIntentGeneration) return false;
+    appliedIngestGeneration = generation;
+    set({ ...restored, ingestRecord });
+    return true;
   },
   applyIngest: (ingestRecord, generation) => {
     if (generation !== ingestIntentGeneration) return false;

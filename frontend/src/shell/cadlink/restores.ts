@@ -25,7 +25,8 @@ import { rememberedCadProject } from '../../stores/cadProjectMemory';
 import { preferencesStore } from '../../prefs/preferences';
 import { workspaceModeStore } from '../../stores/workspaceMode';
 import { importedMeshStore } from '../../viewport/importedMeshStore';
-import type { RefreshOptions } from './arrivals';
+import { createCadArrivalActions, enterCadWorkspace, type RefreshOptions } from './arrivals';
+import { showIngestedMeshInViewport } from './artifactLoader';
 
 type CadHistorySetup = Pick<ReturnType<typeof useCadReturnStore.getState>,
   'sourceSizesMm' | 'rigidSizeMm' | 'transitionMm' | 'skippedSourceIds'
@@ -182,6 +183,8 @@ function restoreCadJobSolveOptions(job: JobItem): void {
 }
 
 export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): Promise<string[]> {
+  const selection = useCadReturnStore.getState().captureIngestIntent();
+  const documentLoad = currentDocumentLoad();
   const forms = useCadReturnStore.getState().channelDrivers;
   const saved = new Map(useDriverLibraryStore.getState().saved.map((driver) => [driver.id, driver]));
   const updates: Record<string, DriverBaseUpdate> = {};
@@ -201,10 +204,12 @@ export async function refreshChannelDriverBases(fetcher: typeof fetch = fetch): 
       xo_min_hz: typeof hit.xo_min_hz === 'number' && Number.isFinite(hit.xo_min_hz) ? hit.xo_min_hz : null,
     };
   }));
+  if (!useCadReturnStore.getState().isCurrentIngestIntent(selection)
+    || !isCurrentDocumentLoad(documentLoad)) return [];
   return useCadReturnStore.getState().refreshChannelDriverBases(updates);
 }
 
-interface CadJobRestoreIntegration {
+export interface CadJobRestoreIntegration {
   enterCadWorkspace(): void;
   reportStatus(message: string): void;
   reportViewportNotice(message: string | null): void;
@@ -220,9 +225,13 @@ interface CadJobRestoreIntegration {
 /** Recall the immutable ingestion, saved setup and viewport behind an archived CAD run. */
 export async function restoreCadJobModel(
   job: JobItem,
-  integration: CadJobRestoreIntegration,
+  overrides: Partial<CadJobRestoreIntegration> = {},
   fetcher: typeof fetch = fetch,
 ): Promise<boolean> {
+  const integration: CadJobRestoreIntegration = {
+    enterCadWorkspace, reportStatus: () => undefined, reportViewportNotice: () => undefined,
+    showIngestedMesh: showIngestedMeshInViewport, ...overrides,
+  };
   if (job.config_summary.geometry_type !== 'imported') return false;
   if (job.run_number === null) return false;
   const ingestId = job.cad_source?.ingest_id;
@@ -258,7 +267,7 @@ export async function restoreCadJobModel(
       ?? useCadReturnStore.getState().projectLineageId
       ?? rememberedCadProject();
     const projectDrivers = projectChannelDrivers(bundle, project);
-    useCadReturnStore.setState({
+    useCadReturnStore.getState().restoreIngest(record, selection, {
       selectedBundle: { ...bundle, readable: false, reason: 'Recalled from an archived run; the original return bundle is not active.' },
       ingestRecord: record,
       projectLineageId: project,
@@ -295,7 +304,7 @@ export async function restoreCadJobModel(
   }
 }
 
-interface UseCadRestoresOptions {
+export interface UseCadRestoresOptions {
   enterCadWorkspace(): void;
   manualSelectionAt: MutableRefObject<number | null>;
   projectOpenPending: MutableRefObject<boolean>;
@@ -323,7 +332,70 @@ export function useCadRestores({
 }: UseCadRestoresOptions) {
   const restoringCadProject = useRef(false);
 
-  useEffect(() => subscribeRevision((event) => {
+  useEffect(() => observeCadProjectLoads({
+    enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn, returnListRequest, seenReturnRevisions, setError, setStatus, selectBundleRef,
+  }), [enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn,
+    returnListRequest, seenReturnRevisions, setError, setStatus]);
+
+  useEffect(() => observeRememberedCadProject({
+    restoringCadProject, refusedForeignReturn,
+    selectBundle: (bundle, project) => selectBundleRef.current(bundle, project), reportStatus: setStatus,
+  }), [refusedForeignReturn, selectBundleRef, setStatus]);
+
+  return { restoringCadProject };
+}
+
+export interface RememberedCadProjectIntegration {
+  selectBundle(bundle: CadReturnBundle, project: string): void;
+  reportStatus(message: string): void;
+  isAllowed(): boolean;
+}
+
+/** Reopen only the empty CAD mode that initiated this read. Captured intent
+ * also fences a pick followed by a clear while the listing is delayed. */
+export async function restoreRememberedCadProject(
+  overrides: Partial<RememberedCadProjectIntegration> = {},
+  fetcher: typeof fetch = fetch,
+): Promise<boolean> {
+  const integration: RememberedCadProjectIntegration = {
+    selectBundle: (bundle, project) => createCadArrivalActions({}, fetcher).selectBundleAs(bundle, project, true),
+    reportStatus: () => undefined, isAllowed: () => true, ...overrides,
+  };
+  const lineage = rememberedCadProject();
+  const selection = useCadReturnStore.getState().captureIngestIntent();
+  const documentLoad = currentDocumentLoad();
+  const viewport = importedMeshStore.captureGeneration();
+  const empty = () => {
+    const current = useCadReturnStore.getState();
+    return !current.selectedBundle && !current.ingestRecord
+      && current.isCurrentIngestIntent(selection) && isCurrentDocumentLoad(documentLoad)
+      && importedMeshStore.isCurrentGeneration(viewport)
+      && workspaceModeStore.getSnapshot().mode === 'cad'
+      && preferencesStore.getSnapshot().cadApplication !== 'onshape' && integration.isAllowed();
+  };
+  if (!lineage || !empty()) return false;
+  try {
+    const [projects, returns] = await Promise.all([listCadProjects(fetcher), listReturns(fetcher)]);
+    if (!empty()) return false;
+    const project = projects.find((item) => item.lineageId === lineage);
+    if (!project) return false;
+    const bundle = newestReturnForProject(returns.items, project);
+    if (!bundle) return false;
+    integration.selectBundle(bundle, project.lineageId);
+    integration.reportStatus(`Reopened ${cadProjectName(project)}.`);
+    return true;
+  } catch {
+    // Remembered reopening is advisory; guidance for the empty mode remains.
+    return false;
+  }
+}
+
+export function observeCadProjectLoads(integration: UseCadRestoresOptions): () => void {
+  const {
+    enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn,
+    returnListRequest, seenReturnRevisions, setError, setStatus,
+  } = integration;
+  return subscribeRevision((event) => {
     if (event.reason !== 'load') return;
     if (event.loadSource === 'cad-project-switch') {
       projectOpenPending.current = true;
@@ -345,41 +417,34 @@ export function useCadRestores({
     useCadReturnStore.getState().markIngestStale(
       'The design was replaced after this CAD return was ingested. Re-ingest before solving.',
     );
-  }), [enterCadWorkspace, manualSelectionAt, projectOpenPending, refreshRef, refusedForeignReturn,
-    returnListRequest, seenReturnRevisions, setError, setStatus]);
+  });
+}
 
-  useEffect(() => {
-    const maybeRestore = () => {
-      if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
-      if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
-      if (restoringCadProject.current || refusedForeignReturn.current) return;
-      const lineage = rememberedCadProject();
-      if (!lineage) return;
-      const current = useCadReturnStore.getState();
-      if (current.selectedBundle || current.ingestRecord) return;
-      restoringCadProject.current = true;
-      void (async () => {
-        try {
-          const [projects, returns] = await Promise.all([listCadProjects(), listReturns()]);
-          const project = projects.find((item) => item.lineageId === lineage);
-          if (!project) return;
-          const bundle = newestReturnForProject(returns.items, project);
-          if (!bundle) return;
-          const latest = useCadReturnStore.getState();
-          if (latest.selectedBundle || latest.ingestRecord) return;
-          if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
-          selectBundleRef.current(bundle, project.lineageId);
-          setStatus(`Reopened ${cadProjectName(project)}.`);
-        } catch {
-          // Restoring is a convenience; empty-mode guidance remains honest.
-        } finally {
-          restoringCadProject.current = false;
-        }
-      })();
-    };
-    maybeRestore();
-    return workspaceModeStore.subscribe(maybeRestore);
-  }, [refusedForeignReturn, selectBundleRef, setStatus]);
-
-  return { restoringCadProject };
+export function observeRememberedCadProject({
+  restoringCadProject = { current: false }, refusedForeignReturn = { current: false },
+  selectBundle = (bundle, project) => createCadArrivalActions().selectBundleAs(bundle, project, true),
+  reportStatus = () => undefined,
+}: Partial<Pick<RememberedCadProjectIntegration, 'selectBundle' | 'reportStatus'>> & {
+  restoringCadProject?: { current: boolean };
+  refusedForeignReturn?: { current: boolean };
+} = {}): () => void {
+  let active = true;
+  const maybeRestore = () => {
+    if (workspaceModeStore.getSnapshot().mode !== 'cad') return;
+    if (preferencesStore.getSnapshot().cadApplication === 'onshape') return;
+    if (restoringCadProject.current || refusedForeignReturn.current) return;
+    const lineage = rememberedCadProject();
+    if (!lineage) return;
+    const current = useCadReturnStore.getState();
+    if (current.selectedBundle || current.ingestRecord) return;
+    restoringCadProject.current = true;
+    void restoreRememberedCadProject({
+      selectBundle: (bundle, project) => selectBundle(bundle, project),
+      reportStatus,
+      isAllowed: () => active && !refusedForeignReturn.current,
+    }).finally(() => { restoringCadProject.current = false; });
+  };
+  maybeRestore();
+  const stop = workspaceModeStore.subscribe(maybeRestore);
+  return () => { active = false; stop(); };
 }

@@ -1,9 +1,7 @@
+import { showIngestedMeshInViewport } from './cadlink/artifactLoader';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  CadLinkApiError,
   getFusionCadStatus,
-  ingestReturn,
-  listReturns,
   type CadReturnBundle,
   type CadReturnIngestRecord,
   type FusionCadStatus,
@@ -17,9 +15,8 @@ import {
   type CadOperationSummary,
 } from '../api/cadOperations';
 import type { WgLinkExportResponse } from '../api/designIo';
-import { getOnshapeConnection, getOnshapeStatus, returnOnshapeToWg, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
+import { getOnshapeConnection, getOnshapeStatus, type OnshapeConnection, type OnshapeStatus } from '../api/onshape';
 import { usePreferences } from '../prefs/preferences';
-import { useCadPreparationStore } from '../stores/cadPreparation';
 import { useCadReturnStore } from '../stores/cadReturn';
 import { useDesignStore } from '../stores/design';
 import { useDocumentStore, type DesignIdentity } from '../stores/document';
@@ -29,20 +26,15 @@ import { cadCoordinationOff, cadCoordinationStore } from '../api/cadCoordination
 import { agedFusionStatus, statusExpiresAt } from './cadWorkflowView';
 import { solveAttention } from './solveAttention';
 import { useSolveOptionsStore } from '../stores/solveOptions';
-import { rememberCadProject } from '../stores/cadProjectMemory';
 import { cadWorkspaceSelection } from '../stores/cadWorkspaceSelection';
 import { workspaceModeStore } from '../stores/workspaceMode';
-import { createImportedMeshScene } from '../viewport/importedMesh';
-import { displaySymmetry } from '../api/domainDecision';
-import { importedMeshStore } from '../viewport/importedMeshStore';
-import { parseMSH } from '../viewport/mshParser';
 import { jobsCoordinatorBridge } from './JobsCoordinator';
 import { recordOnScreenSettings } from './cadOnScreenSettings';
-import { workspaceNavigation } from './workspaceNavigation';
 import { useModalDialogFocus } from './dialogFocus';
 import {
+  createCadArrivalActions,
+  enterCadWorkspace,
   SupersededError,
-  returnBelongsToAnotherProject,
   useCadReturnArrivals,
   type RefreshOptions,
 } from './cadlink/arrivals';
@@ -271,290 +263,9 @@ function operationSubject(operationId: string): string {
  * that arrives while WG shows the parametric design is otherwise completely
  * invisible. The mode store adds the dock panel synchronously, which is why
  * the activation on the next line lands instead of returning false. */
-export function enterCadWorkspace(): void {
-  workspaceModeStore.setMode('cad');
-  workspaceNavigation.activate('cadlink');
-}
+export { enterCadWorkspace } from './cadlink/arrivals';
 
-interface FetchedMesh {
-  ok: boolean;
-  status: number;
-  text: string;
-}
-
-/** Mesh artifact fetches that have not settled yet, keyed by URL.
- *
- * Two independent triggers ask for the CAD scene the moment an ingestion
- * lands — the coordinator, and the viewport's own workspace effect — and a
- * display artifact is tens of megabytes. Sharing the in-flight request means
- * one download instead of two; the entry is dropped as soon as it settles, so
- * this coalesces concurrent callers without ever serving a stale body. */
-const inFlightMeshRequests = new Map<string, Promise<FetchedMesh>>();
-
-async function fetchMeshOnce(url: string, fetcher: typeof fetch): Promise<FetchedMesh> {
-  const existing = inFlightMeshRequests.get(url);
-  if (existing) return existing;
-  const request = (async (): Promise<FetchedMesh> => {
-    const response = await fetcher(url);
-    // 202 is "still being built", not a mesh; reading its body would only
-    // hand `parseMSH` an empty string to reject.
-    const text = response.ok && response.status !== 202 ? await response.text() : '';
-    return { ok: response.ok, status: response.status, text };
-  })();
-  inFlightMeshRequests.set(url, request);
-  try {
-    return await request;
-  } finally {
-    inFlightMeshRequests.delete(url);
-  }
-}
-
-const viewportMeshUrl = (ingestId: string): string =>
-  `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/viewport-mesh`;
-
-function cadDisplayScene(record: CadReturnIngestRecord, name: string, meshText: string) {
-  // The display tessellation is of the model as it arrived: whole for a model
-  // WG cut itself, the kept piece for one cut in CAD -- which is mirrored for
-  // display, so a reduced solve always shows the whole speaker.
-  const { solvedPlanes, cadCutPlanes } = displaySymmetry(record);
-  return createImportedMeshScene(
-    name,
-    parseMSH(meshText),
-    'cad',
-    record.ingest_id,
-    solvedPlanes,
-    {
-      fullDomain: true,
-      cadCutPlanes,
-      solvedTriangleCount: record.mesh?.stats.triangle_count,
-      artifactToken: record.viewport_mesh?.content_sha256 ?? `${record.ingest_id}:viewport`,
-    },
-  );
-}
-
-/** Slow recovery checks if the websocket notification was missed during a
- * disconnect. Normal pickup is event-driven. */
-const DISPLAY_UPGRADE_FALLBACK_DELAYS_MS = [10_000, 20_000, 30_000, 60_000];
-
-const displayUpgradesInFlight = new Set<string>();
-
-/** Swap the smooth display tessellation in behind an already-visible solve mesh.
- *
- * Deliberately not tied to the caller's intent generation. CAD Link
- * re-publishes an equal record on every Fusion poll and each of those bumps the
- * generation, so a wait that spans several seconds would be cancelled by
- * routine polling and never finish. What actually matters is whether the slot
- * and CAD Link still hold this ingestion, so that is what is checked: a newer
- * selection's viewport load is never cancelled by it. The swap also only
- * takes the viewport if the CAD model view still owns it, leaving a user who
- * switched to the solve-mesh view where they are. */
-/** Whether CAD Link has moved on from this ingestion: another return is
- * selected, or this one is being prepared again, so a viewport load for it
- * may be in flight. */
-function anotherSelectionInFlight(ingestId: string): boolean {
-  const current = useCadReturnStore.getState();
-  return current.ingestRecord
-    ? current.ingestRecord.ingest_id !== ingestId
-    : current.selectedBundle !== null;
-}
-
-function upgradeToDisplayMesh(
-  record: CadReturnIngestRecord,
-  name: string,
-  fetcher: typeof fetch,
-): void {
-  const ingestId = record.ingest_id;
-  if (displayUpgradesInFlight.has(ingestId)) return;
-  displayUpgradesInFlight.add(ingestId);
-  void (async () => {
-    let signalled = false;
-    let wake: (() => void) | null = null;
-    const unsubscribe = jobsSocket.subscribeCadViewportReady((readyIngestId) => {
-      if (readyIngestId !== ingestId) return;
-      signalled = true;
-      wake?.();
-    });
-    try {
-      for (const [attempt, delay] of DISPLAY_UPGRADE_FALLBACK_DELAYS_MS.entries()) {
-        // The first read immediately after subscribing closes the race where
-        // completion landed between the endpoint's 202 and this subscription.
-        if (attempt === 0) {
-          signalled = false;
-        } else if (signalled) {
-          signalled = false;
-        } else {
-          await new Promise<void>((resolve) => {
-            const timer = window.setTimeout(() => {
-              wake = null;
-              resolve();
-            }, delay);
-            wake = () => {
-              window.clearTimeout(timer);
-              resolve();
-            };
-          });
-          wake = null;
-          signalled = false;
-        }
-        if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) return;
-        let result: FetchedMesh;
-        try {
-          result = await fetchMeshOnce(viewportMeshUrl(ingestId), fetcher);
-        } catch {
-          continue;
-        }
-        if (result.status === 202) continue;
-        if (!result.ok) return;
-        if (importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) return;
-        // The slot keeps this ingestion until a newer selection's own scene
-        // lands; taking the intent meanwhile would cancel that load.
-        if (anotherSelectionInFlight(ingestId)) return;
-        try {
-          importedMeshStore.setCad(
-            cadDisplayScene(record, name, result.text),
-            importedMeshStore.beginIntent(),
-            workspaceModeStore.getSnapshot().mode === 'cad'
-              && importedMeshStore.getSnapshot().showing === 'cad',
-          );
-        } catch {
-          // The solve mesh already on screen is the same geometry.
-        }
-        return;
-      }
-    } finally {
-      unsubscribe();
-      displayUpgradesInFlight.delete(ingestId);
-    }
-  })();
-}
-
-/** Prefer the independently tessellated full CAD display artifact. Older
- * records and advisory display failures fall back to the exact solver mesh.
- *
- * A record may also publish before its display tessellation exists: that
- * tessellation is two thirds of a cold ingestion's wall clock, so waiting for
- * it would leave the viewport empty for several seconds after WG already knows
- * the geometry. The solve mesh is complete at that point and is the same
- * model, so it is shown immediately and quietly replaced when the smoother
- * artifact lands. */
-export async function showIngestedMeshInViewport(
-  record: CadReturnIngestRecord,
-  name: string,
-  onNotice?: (notice: string) => void,
-  fetcher: typeof fetch = fetch,
-  generation = importedMeshStore.beginIntent(),
-): Promise<void> {
-  const ingestId = record.ingest_id;
-  const available = importedMeshStore.getSnapshot().cad;
-  if (available?.ingestId === ingestId) {
-    if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCad(generation);
-    return;
-  }
-  let displayPending = false;
-  try {
-    const result = await fetchMeshOnce(viewportMeshUrl(ingestId), fetcher);
-    if (!importedMeshStore.isCurrentGeneration(generation)) return;
-    if (result.status === 202) {
-      displayPending = true;
-    } else if (result.ok) {
-      importedMeshStore.setCad(
-        cadDisplayScene(record, name, result.text),
-        generation,
-        workspaceModeStore.getSnapshot().mode === 'cad',
-      );
-      return;
-    } else if (result.status === 409) {
-      onNotice?.('The independent CAD viewport artifact failed verification. Showing the exact solver mesh instead.');
-    }
-  } catch {
-    // The independent display artifact is advisory; try the solver artifact.
-  }
-  if (!importedMeshStore.isCurrentGeneration(generation)) return;
-  try {
-    const result = await fetchMeshOnce(
-      `/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`,
-      fetcher,
-    );
-    if (result.ok && importedMeshStore.isCurrentGeneration(generation)) {
-      importedMeshStore.setCad(createImportedMeshScene(
-        name,
-        parseMSH(result.text),
-        'cad',
-        ingestId,
-        // Every plane the solver mirrors -- WG's own cuts and CAD cuts alike.
-        displaySymmetry(record).solvedPlanes,
-        {
-          solvedTriangleCount: record.mesh?.stats.triangle_count,
-          artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
-        },
-      ), generation, workspaceModeStore.getSnapshot().mode === 'cad');
-      if (displayPending) upgradeToDisplayMesh(record, name, fetcher);
-      return;
-    }
-  } catch {
-    // Neither artifact could be displayed; fall through to drop the old one.
-  }
-  // A scene left over from an earlier ingestion would keep claiming to be the
-  // geometry on screen — misleading on its own, and enough to refuse every
-  // later solve at the viewport-mismatch gate. An empty slot is honest.
-  if (importedMeshStore.isCurrentGeneration(generation)
-    && importedMeshStore.getSnapshot().cad !== null
-    && importedMeshStore.getSnapshot().cad?.ingestId !== ingestId) {
-    importedMeshStore.clear('cad');
-  }
-}
-
-/** Load the exact ingested solve mesh a CAD return will be solved on.
- *
- * The counterpart to `showIngestedMeshInViewport`: that one prefers the
- * independently tessellated display artifact, this one asks for the solver
- * artifact itself, so the mesh view shows the triangles the solver assembles
- * rather than a smooth stand-in. The record is immutable, so the fetched
- * scene is cached in its own slot and re-serves every later activation.
- */
-export async function showIngestedSolverMeshInViewport(
-  record: CadReturnIngestRecord,
-  name: string,
-  fetcher: typeof fetch = fetch,
-  generation = importedMeshStore.beginIntent(),
-): Promise<string | null> {
-  const ingestId = record.ingest_id;
-  const available = importedMeshStore.getSnapshot().cadSolver;
-  if (available?.ingestId === ingestId) {
-    if (workspaceModeStore.getSnapshot().mode === 'cad') importedMeshStore.showCadSolver(generation);
-    return null;
-  }
-  let response: Response;
-  try {
-    response = await fetcher(`/api/cadlink/ingest/${encodeURIComponent(ingestId)}/mesh`);
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-  if (!importedMeshStore.isCurrentGeneration(generation)) return null;
-  if (!response.ok) {
-    return response.status === 409
-      ? 'The ingested solve mesh failed verification and cannot be displayed.'
-      : `Could not read the ingested solve mesh (${response.status}).`;
-  }
-  try {
-    const meshText = await response.text();
-    if (!importedMeshStore.isCurrentGeneration(generation)) return null;
-    importedMeshStore.setCadSolver(createImportedMeshScene(
-      name,
-      parseMSH(meshText),
-      'cad',
-      ingestId,
-      displaySymmetry(record).solvedPlanes,
-      {
-        solvedTriangleCount: record.mesh?.stats.triangle_count,
-        artifactToken: record.mesh_content_sha256 ?? `${ingestId}:solver`,
-      },
-    ), generation, importedMeshStore.getSnapshot().showing === 'cadSolver');
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error.message : String(error);
-  }
-}
+export { showIngestedMeshInViewport, showIngestedSolverMeshInViewport } from './cadlink/artifactLoader';
 
 /** Restore the immutable model and setup behind an archived CAD run. */
 export function showCadJobModel(
@@ -940,11 +651,7 @@ export function CadLinkCoordinator() {
 
   const selectOnshapeInstance = useCallback((instanceId: string) => {
     if (instanceId === selectedOnshapeInstanceId) return;
-    useCadReturnStore.getState().beginIngestIntent();
-    importedMeshStore.beginIntent();
-    ingestRequest.current += 1;
-    ingestAbortController.current?.abort();
-    setIngesting(false);
+    actions().supersedePreparation();
     setSelectedOnshapeInstanceId(instanceId);
     setOnshapeStatus(null);
   }, [selectedOnshapeInstanceId]);
@@ -984,106 +691,23 @@ export function CadLinkCoordinator() {
     return () => { stopJobs(); stopClaims(); };
   }, [reportViewportNotice]);
 
+  const actions = () => createCadArrivalActions({
+    ingestRequest, ingestAbortController, mounted, manualSelectionAt, manualSelections,
+    refusedForeignReturn, restoringCadProject, sendIntent,
+    setIngesting, setIngestError, setError, setStatus, setViewportNotice, setBundles,
+    reportViewportNotice, enterCadWorkspace, autoIngestSelected, rereadDrivers: () => rereadDrivers(),
+    noteCadActivity, refresh, autoSelectBundleRef,
+    fusionInstanceId: () => fusionStatus?.link?.instanceId ?? null,
+    onshapeInstanceId: () => selectedOnshapeInstanceId,
+  });
+
   /** Ingest the selected return and hand back the verified record.
    *
    * The panel button wants a void action that reports into the panel; a
    * composed action (pull, ingest, solve) has to know whether the record
    * exists before it can gate a solve on it. This is the composable half:
    * it reports the same feedback and then throws or returns the record. */
-  const ingestSelected = useCallback(async (): Promise<CadReturnIngestRecord> => {
-    const current = useCadReturnStore.getState();
-    if (!current.selectedBundle) throw new Error('Select a CAD return before preparing a simulation.');
-    if (current.selectedBundle.bundleOrigin === 'native') throw new Error('Edit the native source assembly and prepare it again.');
-    // This intent covers the ingest record itself. The viewport has a separate
-    // token because its follow-up artifact fetch can be superseded independently.
-    const ingestGeneration = current.beginIngestIntent();
-    const request = ++ingestRequest.current;
-    ingestAbortController.current?.abort();
-    const abortController = new AbortController();
-    ingestAbortController.current = abortController;
-    // Intent starts before the network request. A later viewport choice must
-    // win even when this ingest's mesh fetch eventually completes.
-    const viewportGeneration = importedMeshStore.beginIntent();
-    setIngesting(true); setIngestError(null); setError(null); setStatus(null); setViewportNotice(null);
-    try {
-      const skipped = new Set(current.skippedSourceIds);
-      const record = await ingestReturn({
-        bundlePath: current.selectedBundle.bundlePath,
-        // A workspace listing item has no origin and is a WGLink return; an
-        // Onshape return carries its own. The server resolves each against
-        // its own root, so this is the only thing that has to be dispatched.
-        bundleOrigin: current.selectedBundle.bundleOrigin ?? 'wglink',
-        mesh: {
-          rigidSizeMm: current.rigidSizeMm,
-          transitionMm: current.transitionMm,
-          sourceSizeMm: Object.fromEntries(Object.entries(current.sourceSizesMm).filter(([id]) => !skipped.has(id))),
-        },
-        skippedSourceIds: current.skippedSourceIds,
-        areaDriftOverrides: current.areaDriftOverrides,
-        expectedDesignId: useDocumentStore.getState().identity?.designId ?? null,
-        expectedInstanceId: (() => {
-          const bundle = current.selectedBundle;
-          const instances = bundle.instances ?? [];
-          const liveInstanceId = fusionStatus?.link?.instanceId ?? null;
-          if (liveInstanceId && instances.some((item) => item.instanceId === liveInstanceId)) {
-            return liveInstanceId;
-          }
-          const anchor = bundle.solverAnchorInstanceId ?? null;
-          return anchor && instances.some((item) => item.instanceId === anchor)
-            ? anchor
-            : null;
-        })(),
-        symmetryMode: useCadPreparationStore.getState().symmetryMode,
-      }, fetch, abortController.signal);
-      if (!useCadReturnStore.getState().applyIngest(record, ingestGeneration)) {
-        const superseded = 'Discarded a completed ingest because its selected return or design was superseded. Rebuild the mesh for the current state.';
-        if (request === ingestRequest.current && mounted.current) setStatus(superseded);
-        throw new SupersededError(superseded);
-      }
-      if (request === ingestRequest.current && mounted.current) {
-        rememberCadProject(record.project?.lineage_id);
-        const origin = current.selectedBundle.bundleOrigin === 'onshape' ? 'Onshape' : 'Fusion';
-        setStatus(`Received ${current.selectedBundle.documentName || current.selectedBundle.name} from ${origin}.`);
-        // Before the display, so the viewport adopts the CAD slot rather than
-        // loading it invisibly behind the parametric design.
-        enterCadWorkspace();
-        // Awaited rather than fired and forgotten: the solve gate refuses an
-        // ingestion whose mesh is not the one on screen, so a composed
-        // pull/ingest/solve that raced this fetch failed on every return after
-        // the first with a viewport-mismatch the user could not act on.
-        await showIngestedMeshInViewport(
-          record,
-          current.selectedBundle.documentName || current.selectedBundle.name,
-          reportViewportNotice,
-          fetch,
-          viewportGeneration,
-        );
-      }
-      return record;
-    } catch (reason) {
-      if (reason instanceof SupersededError) throw reason;
-      if (!useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        const superseded = 'Discarded an ingest response because its selected return or design was superseded. Rebuild the mesh for the current state.';
-        if (request === ingestRequest.current && mounted.current) setStatus(superseded);
-        throw new SupersededError(superseded);
-      }
-      const message = reason instanceof Error ? reason.message : String(reason);
-      if (request === ingestRequest.current && mounted.current) {
-        const structured = reason instanceof CadLinkApiError ? reason.areaDriftSources : [];
-        structured.forEach(current.flagAreaDrift);
-        if (!structured.length) {
-          const drift = /source ['"]([^'"]+)['"] area drift/i.exec(message);
-          if (drift) current.flagAreaDrift(drift[1]);
-        }
-        setError(message);
-        setIngestError(message);
-      }
-      throw reason instanceof Error ? reason : new Error(message);
-    } finally {
-      if (ingestAbortController.current === abortController) ingestAbortController.current = null;
-      if (request === ingestRequest.current && mounted.current) setIngesting(false);
-    }
-  }, [fusionStatus?.link?.instanceId, reportViewportNotice]);
+  const ingestSelected = useCallback(async (): Promise<CadReturnIngestRecord> => actions().ingestSelected(), [fusionStatus?.link?.instanceId, reportViewportNotice]);
   ingestSelectedRef.current = ingestSelected;
 
   /** Re-read restored drivers from the library, and say so when the numbers
@@ -1099,31 +723,7 @@ export function CadLinkCoordinator() {
    * advances both generations, then a fresh ingest aborts any older request;
    * late fetch implementations that ignore abort are still rejected by the
    * store generation before they can publish a record or viewport scene. */
-  const selectBundleAs = useCallback((
-    bundle: CadReturnBundle,
-    projectLineageId: string | null | undefined,
-    automatic: boolean,
-  ) => {
-    if (returnBelongsToAnotherProject(bundle, useDocumentStore.getState().identity?.designId)) {
-      refusedForeignReturn.current = true;
-      setError(`That return belongs to another CAD-linked project. Open it from File → CAD-linked designs first.`);
-      enterCadWorkspace();
-      return;
-    }
-    // A selection the user made themselves is the acknowledgement a standing
-    // refusal was waiting for, and newer intent than any return already sent;
-    // the restore's own selection is neither, and nor is displaying a Send.
-    if (!automatic && !restoringCadProject.current) {
-      refusedForeignReturn.current = false;
-      manualSelectionAt.current = Date.now();
-      manualSelections.current += 1;
-    }
-    useCadReturnStore.getState().selectBundle(bundle, projectLineageId);
-    rereadDrivers();
-    importedMeshStore.beginIntent();
-    enterCadWorkspace();
-    autoIngestSelected();
-  }, [autoIngestSelected, rereadDrivers]);
+  const selectBundleAs = useCallback((bundle: CadReturnBundle, projectLineageId: string | null | undefined, automatic: boolean) => actions().selectBundleAs(bundle, projectLineageId, automatic), [autoIngestSelected, rereadDrivers]);
   const selectBundle = useCallback(
     (bundle: CadReturnBundle, projectLineageId?: string | null) => selectBundleAs(bundle, projectLineageId, false),
     [selectBundleAs],
@@ -1137,76 +737,7 @@ export function CadLinkCoordinator() {
     await ingestSelected().catch(() => undefined);
   }, [ingestSelected]);
 
-  const returnFromOnshape = useCallback(async () => {
-    if (!identity?.designId) throw new Error('Send this design to Onshape before returning it.');
-    let ingestGeneration = useCadReturnStore.getState().beginIngestIntent();
-    const request = ++ingestRequest.current;
-    ingestAbortController.current?.abort();
-    const viewportGeneration = importedMeshStore.beginIntent();
-    setIngesting(true); setError(null); setStatus(null); setViewportNotice(null);
-    try {
-      const result = await returnOnshapeToWg(
-        identity.designId, fetch, selectedOnshapeInstanceId,
-      );
-      // Translation may finish after a project/model change or a newer return.
-      // Check the original intent before selection creates a fresh generation.
-      if (!mounted.current || request !== ingestRequest.current
-        || !useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) return;
-      const sources = result.ingest.sources.map((source) => ({
-        id: source.id,
-        role: source.role,
-        required: source.required,
-        suggestedResolutionMm: source.suggested_resolution_mm,
-        defaultDriveChannelId: source.default_drive_channel_id,
-      }));
-      const bundle: CadReturnBundle = {
-        name: result.bundle.name,
-        // Both halves travel together, and neither is a filesystem location:
-        // the path is relative and the origin says which permitted area it is
-        // relative to. Keeping the origin here is what lets Rebuild mesh
-        // re-ingest this return -- the local mesh controls are displayed for
-        // it, and without the origin the request is refused as a WGLink path.
-        bundlePath: result.bundle.bundlePath,
-        bundleOrigin: result.bundle.bundleOrigin ?? 'onshape',
-        modifiedAt: result.ingest.created_at,
-        readable: true,
-        documentName: result.bundle.documentName,
-        requestId: null,
-        sourceCount: result.bundle.sourceCount,
-        instanceCount: result.bundle.instanceCount,
-        designIds: [identity.designId],
-        sources,
-      };
-      const state = useCadReturnStore.getState();
-      // Same-inventory Onshape iterations keep the user's solve setup too.
-      state.selectArrivedBundle(bundle);
-      ingestGeneration = state.beginIngestIntent();
-      if (!useCadReturnStore.getState().applyIngest(result.ingest, ingestGeneration)) {
-        setStatus('Discarded the Onshape return because the selected design changed.');
-        return;
-      }
-      setBundles([bundle]);
-      setStatus(`Returned and ingested ${result.bundle.documentName ?? result.bundle.name} from Onshape.`);
-      // The CAD Link panel only exists inside the CAD workspace, and the
-      // ingested return is now the solve truth — enter the mode that owns it.
-      enterCadWorkspace();
-      await showIngestedMeshInViewport(
-        result.ingest,
-        result.bundle.documentName ?? result.bundle.name,
-        reportViewportNotice,
-        fetch,
-        viewportGeneration,
-      );
-    } catch (reason) {
-      if (mounted.current && request === ingestRequest.current
-        && useCadReturnStore.getState().isCurrentIngestIntent(ingestGeneration)) {
-        setError(reason instanceof Error ? reason.message : String(reason));
-      }
-      throw reason;
-    } finally {
-      if (request === ingestRequest.current && mounted.current) setIngesting(false);
-    }
-  }, [identity?.designId, reportViewportNotice, selectedOnshapeInstanceId]);
+  const returnFromOnshape = useCallback(async () => actions().returnFromOnshape(), [identity?.designId, reportViewportNotice, selectedOnshapeInstanceId]);
 
   /** Ask Fusion for its current geometry, prepare it, and start the solve.
    *
@@ -1390,51 +921,7 @@ export function CadLinkCoordinator() {
   // -- never replaces a newer arrival, and nothing replaces a return the user
   // selected after the display began (review F3).
   const sendIntent = useRef<{ acceptedSeq: number | null; sentAt: number; picks: number } | null>(null);
-  const displaySend = useCallback(async (operation: CadOperationSummary) => {
-    const bundlePath = operation.snapshot?.bundlePath;
-    if (!bundlePath) return;
-    const sentAt = Date.parse(operation.createdAt ?? operation.updatedAt ?? '');
-    const order = Number.isFinite(sentAt) ? sentAt : 0;
-    const acceptedSeq = Number.isSafeInteger(operation.acceptedSeq) ? Number(operation.acceptedSeq) : null;
-    const heldIntent = sendIntent.current;
-    if (heldIntent !== null && (
-      (acceptedSeq !== null && heldIntent.acceptedSeq !== null && acceptedSeq < heldIntent.acceptedSeq)
-      || (acceptedSeq === null && heldIntent.acceptedSeq !== null)
-      || (acceptedSeq === null && heldIntent.acceptedSeq === null && order <= heldIntent.sentAt)
-    )) return;
-    const intent = { acceptedSeq, sentAt: order, picks: manualSelections.current };
-    sendIntent.current = intent;
-    const superseded = () => sendIntent.current !== intent || manualSelections.current !== intent.picks;
-    noteCadActivity();
-    await refresh({ background: true, autoOpenNew: true }).catch(() => undefined);
-    if (superseded()) return;
-    if (useCadReturnStore.getState().selectedBundle?.bundlePath === bundlePath) {
-      enterCadWorkspace();
-      return;
-    }
-    // A return the user picked by hand after this was sent stays selected,
-    // as the listing's own arrival rule keeps it.
-    if (manualSelectionAt.current !== null && Number.isFinite(sentAt) && manualSelectionAt.current > sentAt) {
-      const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
-      setStatus(`Received ${name} from Fusion 360. You selected another return after it was sent, so that one stays selected; select ${name} from the return list to use it.`);
-      return;
-    }
-    const listed = await listReturns().catch(() => null);
-    if (superseded()) return;
-    const bundle = listed?.items.find((item) => item.bundlePath === bundlePath && item.readable);
-    if (bundle) {
-      // Automatic: displaying a Send is not the user's pick.
-      autoSelectBundleRef.current(bundle, undefined, true);
-      return;
-    }
-    // Accepted, and WG holds its copy, but there is nothing here to open: said,
-    // not left as a Send that silently did nothing.
-    const name = operation.snapshot?.documentName ?? 'the model Fusion sent';
-    setStatus(listed === null
-      ? `Received ${name} from Fusion 360, but WG could not read the WGLink folder to open it. Refresh CAD Link to try again.`
-      : `Received ${name} from Fusion 360, but it is no longer in the WGLink folder, so WG cannot open it here. Send it again from Fusion.`);
-    enterCadWorkspace();
-  }, [noteCadActivity, refresh]);
+  const displaySend = useCallback(async (operation: CadOperationSummary) => actions().displaySend(operation), [noteCadActivity, refresh]);
   useEffect(() => {
     if (onshape) return undefined;
     const handle = (operations: Record<string, CadOperationSummary>) => {

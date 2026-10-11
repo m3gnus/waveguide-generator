@@ -44,12 +44,24 @@ class ImportedMeshStore {
     return this.generation;
   }
 
+  captureGeneration(): number {
+    return this.generation;
+  }
+
   isCurrentGeneration(generation: number): boolean {
     return generation === this.generation;
   }
 
   setCad(scene: ImportedMeshScene, generation = this.beginIntent(), activate = true): boolean {
     return this.setSlot('cad', scene, generation, activate);
+  }
+
+  /** Upgrade only the retained model artifact, without superseding a newer
+   * viewport choice or a solver-slot load already in flight. */
+  replaceCadArtifact(ingestId: string, scene: ImportedMeshScene, activate = false): boolean {
+    if (this.value.cad?.ingestId !== ingestId || scene.ingestId !== ingestId) return false;
+    this.publish({ ...this.value, cad: scene, showing: activate ? 'cad' : this.value.showing });
+    return true;
   }
 
   /** Publish the CAD solve artifact. Like the parametric solver slot it loads
