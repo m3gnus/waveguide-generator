@@ -27,7 +27,6 @@ from server.jobs.store import JobStore
 from server.mesh.artifact import mesh_text_sha256
 from server.platform.temp_session import temporary_directory_root
 
-from .beat_runtime.session import SessionCancelled
 from .combine import (
     expand_legacy_channels,
     normalize_channel,
@@ -366,12 +365,19 @@ class FieldPlaneService:
         isolated = traces[6] == BEMPP_FIELD_TRACE_BACKEND
         timed_out = threading.Event()
         deadline = time.monotonic() + self.timeout_seconds
+        if traces[6] == BEAT_FIELD_TRACE_BACKEND:
+            # Imported here, not at module load: under the HBB rollback the
+            # official runtime package must stay unloaded (import isolation).
+            from .beat_runtime.session import SessionCancelled
+            cancelled: type[BaseException] | tuple[()] = SessionCancelled
+        else:
+            cancelled = ()
 
         def check_cancelled() -> None:
             if timed_out.is_set() or time.monotonic() >= deadline:
                 # A caller deadline is not an OSError from the worker. In
                 # particular, it must not invalidate BEAT's readiness caches.
-                raise SessionCancelled("BEAT field evaluation timed out")
+                raise cancelled("BEAT field evaluation timed out")
 
         if isolated:
             operation = _isolated_bempp_field({"traces": traces, "points": points})
@@ -402,7 +408,7 @@ class FieldPlaneService:
                 # warm worker/cache. Its original deadline still bounds it.
                 self._release_when_finished(work, lease)
             raise
-        except SessionCancelled as exc:
+        except cancelled as exc:
             await lease.release()
             if traces[6] == BEAT_FIELD_TRACE_BACKEND and time.monotonic() >= deadline:
                 raise FieldPlaneTimedOut(
