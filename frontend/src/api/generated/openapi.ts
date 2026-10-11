@@ -1587,6 +1587,23 @@ export interface paths {
         patch: operations["patch_job_metadata_api_jobs__job_id__metadata_patch"];
         trace?: never;
     };
+    "/api/jobs/{job_id}/requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Job Requests */
+        get: operations["job_requests_api_jobs__job_id__requests_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs/{job_id}/retry": {
         parameters: {
             query?: never;
@@ -4273,6 +4290,14 @@ export interface components {
             script_snapshot?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /**
+         * JobRequestsResponse
+         * @description The same request stages used by the CLI's artifact bundle.
+         */
+        JobRequestsResponse: {
+            effective_request: components["schemas"]["SolveRequest"];
+            execution_request: components["schemas"]["SolveRequest"];
         };
         /** JobStatusResponse */
         JobStatusResponse: {
@@ -8460,6 +8485,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MetadataResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    job_requests_api_jobs__job_id__requests_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                job_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JobRequestsResponse"];
                 };
             };
             /** @description Validation Error */
